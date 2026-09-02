@@ -330,6 +330,136 @@ def _bundle_cases() -> list[dict[str, Any]]:
                 "work_unit_id": "4" * 64,
             },
         ),
+        (
+            "whitespace_only_optional_fields",
+            {
+                # Python strips `type`, `parent_id` and `epic_id` BEFORE the
+                # truthiness test, but NOT `title`/`description`. So a
+                # whitespace-only type contributes nothing, while a
+                # whitespace-only title is kept and then collapsed to "" by
+                # truncation -- an asymmetry that is easy to normalise away.
+                # Without the pre-strip, an orphan "Type: " line appears.
+                # 0x1f is used deliberately: TrimSpace does not remove it.
+                "issue_ids": ["linear:WS1", "linear:WS2", "linear:WS3"],
+                "pr_ids": [],
+                "commit_ids": [],
+                "work_item_map": {
+                    "linear:WS1": {
+                        "title": "real title",
+                        "description": "",
+                        "type": "  \x1f \t ",
+                        "parent_id": "   ",
+                        "epic_id": "\x1f",
+                    },
+                    # Whitespace-only title, which IS kept before truncation.
+                    "linear:WS2": {"title": "   \x1f  ", "description": ""},
+                    # Parent/epic ids that strip to something real and ARE found.
+                    "linear:WS3": {
+                        "title": "third",
+                        "description": "",
+                        "parent_id": " \x1fP1\x1f ",
+                        "epic_id": " E1 ",
+                        "labels": ["", "  ", "kept"],
+                    },
+                },
+                "pr_map": {},
+                "commit_map": {},
+                "parent_titles": {"P1": "Parent title"},
+                "epic_titles": {"E1": "Epic title"},
+                "work_unit_id": "d" * 64,
+            },
+        ),
+        # --- commit MESSAGE line boundaries: the field axis, not just the value ---
+        # Found by mutation testing: replacing SplitLines with a newline-only
+        # split left every other case passing, because the separator bytes in
+        # the corpus all sat in an issue TITLE. _commit_subject is the only
+        # caller of splitlines, so only a commit message exercises it.
+        (
+            "commit_message_non_newline_boundaries",
+            {
+                "issue_ids": [],
+                "pr_ids": [],
+                "commit_ids": [
+                    "repo@fs",
+                    "repo@gs",
+                    "repo@rs",
+                    "repo@vt",
+                    "repo@ff",
+                    "repo@nel",
+                    "repo@ls",
+                    "repo@ps",
+                    "repo@crlf",
+                    "repo@lead",
+                    "repo@usonly",
+                    "repo@allws",
+                ],
+                "work_item_map": {},
+                "pr_map": {},
+                "commit_map": {
+                    # Each boundary in the subject position: CPython stops at it,
+                    # a newline-only split swallows the rest of the message.
+                    "repo@fs": {"message": "subject\x1cbody line"},
+                    "repo@gs": {"message": "subject\x1dbody line"},
+                    "repo@rs": {"message": "subject\x1ebody line"},
+                    "repo@vt": {"message": "subject\x0bbody line"},
+                    "repo@ff": {"message": "subject\x0cbody line"},
+                    "repo@nel": {"message": "subject\x85body line"},
+                    "repo@ls": {"message": "subject\u2028body line"},
+                    "repo@ps": {"message": "subject\u2029body line"},
+                    # CRLF must count as ONE boundary, not two.
+                    "repo@crlf": {"message": "subject\r\n\r\nbody"},
+                    # Blank and whitespace-only leading lines are skipped, and
+                    # 0x1f is whitespace but NOT a boundary -- so it is stripped
+                    # from the line rather than ending it.
+                    "repo@lead": {"message": "\n  \t \n\x1fsubject\x1frest\nbody"},
+                    # 0x1f is whitespace but NOT a line boundary, so this first
+                    # line survives splitlines and .strip() reduces it to "" --
+                    # the subject is the SECOND line. A port using TrimSpace
+                    # (which does not strip 0x1f) would take "\x1f" as a truthy
+                    # subject, truncate it to "", and SET the commit key to an
+                    # empty string instead of omitting it. Key presence changes
+                    # input_hash, so this is a hash defect, not a cosmetic one.
+                    "repo@usonly": {"message": "\x1f\nreal subject"},
+                    # Whitespace-only throughout: no subject at all, so the key
+                    # must be absent rather than present-and-empty.
+                    "repo@allws": {"message": "\x1f\n \t \n\x1c\x1d"},
+                },
+                "parent_titles": {},
+                "epic_titles": {},
+                "work_unit_id": "b" * 64,
+            },
+        ),
+        (
+            "duplicate_ids_consume_the_cap",
+            {
+                # sorted(ids)[:MAX] is applied to the raw list INCLUDING
+                # duplicates, so repeats push distinct ids out of the window.
+                # Deduplicating first is the obvious tidy-up and changes which
+                # sources are included -- also found by mutation testing.
+                "issue_ids": ["linear:A"] * 5 + ["linear:B", "linear:C"],
+                "pr_ids": ["repo#1"] * 6 + ["repo#2"],
+                "commit_ids": ["repo@a"] * 12 + ["repo@b"],
+                "work_item_map": {
+                    "linear:A": {"title": "issue A", "description": ""},
+                    "linear:B": {"title": "issue B", "description": ""},
+                    "linear:C": {
+                        "title": "issue C -- dropped by the cap",
+                        "description": "",
+                    },
+                },
+                "pr_map": {
+                    "repo#1": {"title": "pr one", "body": ""},
+                    "repo#2": {"title": "pr two -- dropped by the cap", "body": ""},
+                },
+                "commit_map": {
+                    "repo@a": {"message": "commit a"},
+                    "repo@b": {"message": "commit b -- dropped by the cap"},
+                },
+                "parent_titles": {},
+                "epic_titles": {},
+                "work_unit_id": "c" * 64,
+            },
+        ),
         # --- truncation boundary, the axis the ASCII case above cannot reach ---
         # _truncate_text slices with `compact[:limit]`, which counts CODE
         # POINTS. A Go port using byte slicing keeps 280 BYTES: 93 CJK chars

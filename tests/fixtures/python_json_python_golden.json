@@ -512,6 +512,312 @@
       "handle_map": {
         "E1": [
           "issue",
+          "linear:WS1"
+        ],
+        "E2": [
+          "issue",
+          "linear:WS3"
+        ]
+      },
+      "input_hash": "478e544bc10d292f043920ab7d5f435ca3879ddc01ab1ac352e8049944bb4f06",
+      "inputs": {
+        "commit_ids": [],
+        "commit_map": {},
+        "epic_titles": {
+          "E1": "Epic title"
+        },
+        "issue_ids": [
+          "linear:WS1",
+          "linear:WS2",
+          "linear:WS3"
+        ],
+        "parent_titles": {
+          "P1": "Parent title"
+        },
+        "pr_ids": [],
+        "pr_map": {},
+        "work_item_map": {
+          "linear:WS1": {
+            "description": "",
+            "epic_id": "\u001f",
+            "parent_id": "   ",
+            "title": "real title",
+            "type": "  \u001f \t "
+          },
+          "linear:WS2": {
+            "description": "",
+            "title": "   \u001f  "
+          },
+          "linear:WS3": {
+            "description": "",
+            "epic_id": " E1 ",
+            "labels": [
+              "",
+              "  ",
+              "kept"
+            ],
+            "parent_id": " \u001fP1\u001f ",
+            "title": "third"
+          }
+        },
+        "work_unit_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "label": "whitespace_only_optional_fields",
+      "source_block_hex": "5b69737375655d2045310a7265616c207469746c650a0a5b69737375655d2045320a7468697264204c6162656c733a202c206b65707420506172656e743a20506172656e74207469746c6520457069633a2045706963207469746c65",
+      "source_texts_hex": {
+        "636f6d6d6974": {},
+        "6973737565": {
+          "6c696e6561723a575331": "7265616c207469746c65",
+          "6c696e6561723a575332": "",
+          "6c696e6561723a575333": "7468697264204c6162656c733a202c206b65707420506172656e743a20506172656e74207469746c6520457069633a2045706963207469746c65"
+        },
+        "7072": {}
+      },
+      "text_char_count": 68,
+      "text_source_count": 2
+    },
+    {
+      "handle_map": {
+        "E1": [
+          "commit",
+          "repo@crlf"
+        ],
+        "E10": [
+          "commit",
+          "repo@usonly"
+        ],
+        "E11": [
+          "commit",
+          "repo@vt"
+        ],
+        "E2": [
+          "commit",
+          "repo@ff"
+        ],
+        "E3": [
+          "commit",
+          "repo@fs"
+        ],
+        "E4": [
+          "commit",
+          "repo@gs"
+        ],
+        "E5": [
+          "commit",
+          "repo@lead"
+        ],
+        "E6": [
+          "commit",
+          "repo@ls"
+        ],
+        "E7": [
+          "commit",
+          "repo@nel"
+        ],
+        "E8": [
+          "commit",
+          "repo@ps"
+        ],
+        "E9": [
+          "commit",
+          "repo@rs"
+        ]
+      },
+      "input_hash": "5a337ccea53056495b715b091450deda32a5a879bdbb406de39a253131acbc36",
+      "inputs": {
+        "commit_ids": [
+          "repo@fs",
+          "repo@gs",
+          "repo@rs",
+          "repo@vt",
+          "repo@ff",
+          "repo@nel",
+          "repo@ls",
+          "repo@ps",
+          "repo@crlf",
+          "repo@lead",
+          "repo@usonly",
+          "repo@allws"
+        ],
+        "commit_map": {
+          "repo@allws": {
+            "message": "\u001f\n \t \n\u001c\u001d"
+          },
+          "repo@crlf": {
+            "message": "subject\r\n\r\nbody"
+          },
+          "repo@ff": {
+            "message": "subject\fbody line"
+          },
+          "repo@fs": {
+            "message": "subject\u001cbody line"
+          },
+          "repo@gs": {
+            "message": "subject\u001dbody line"
+          },
+          "repo@lead": {
+            "message": "\n  \t \n\u001fsubject\u001frest\nbody"
+          },
+          "repo@ls": {
+            "message": "subject\u2028body line"
+          },
+          "repo@nel": {
+            "message": "subject\u0085body line"
+          },
+          "repo@ps": {
+            "message": "subject\u2029body line"
+          },
+          "repo@rs": {
+            "message": "subject\u001ebody line"
+          },
+          "repo@usonly": {
+            "message": "\u001f\nreal subject"
+          },
+          "repo@vt": {
+            "message": "subject\u000bbody line"
+          }
+        },
+        "epic_titles": {},
+        "issue_ids": [],
+        "parent_titles": {},
+        "pr_ids": [],
+        "pr_map": {},
+        "work_item_map": {},
+        "work_unit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "label": "commit_message_non_newline_boundaries",
+      "source_block_hex": "5b636f6d6d69745d2045310a7375626a6563740a0a5b636f6d6d69745d2045320a7375626a6563740a0a5b636f6d6d69745d2045330a7375626a6563740a0a5b636f6d6d69745d2045340a7375626a6563740a0a5b636f6d6d69745d2045350a7375626a65637420726573740a0a5b636f6d6d69745d2045360a7375626a6563740a0a5b636f6d6d69745d2045370a7375626a6563740a0a5b636f6d6d69745d2045380a7375626a6563740a0a5b636f6d6d69745d2045390a7375626a6563740a0a5b636f6d6d69745d204531300a7265616c207375626a6563740a0a5b636f6d6d69745d204531310a7375626a656374",
+      "source_texts_hex": {
+        "636f6d6d6974": {
+          "7265706f4063726c66": "7375626a656374",
+          "7265706f406666": "7375626a656374",
+          "7265706f406673": "7375626a656374",
+          "7265706f406773": "7375626a656374",
+          "7265706f406c656164": "7375626a6563742072657374",
+          "7265706f406c73": "7375626a656374",
+          "7265706f406e656c": "7375626a656374",
+          "7265706f407073": "7375626a656374",
+          "7265706f407273": "7375626a656374",
+          "7265706f4075736f6e6c79": "7265616c207375626a656374",
+          "7265706f407674": "7375626a656374"
+        },
+        "6973737565": {},
+        "7072": {}
+      },
+      "text_char_count": 87,
+      "text_source_count": 11
+    },
+    {
+      "handle_map": {
+        "E1": [
+          "issue",
+          "linear:A"
+        ],
+        "E2": [
+          "issue",
+          "linear:B"
+        ],
+        "E3": [
+          "pr",
+          "repo#1"
+        ],
+        "E4": [
+          "commit",
+          "repo@a"
+        ]
+      },
+      "input_hash": "2c04ed53c495fa266a7b5f251daf4a120e383dccb62f1ea398cf27e589b9abf5",
+      "inputs": {
+        "commit_ids": [
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@a",
+          "repo@b"
+        ],
+        "commit_map": {
+          "repo@a": {
+            "message": "commit a"
+          },
+          "repo@b": {
+            "message": "commit b -- dropped by the cap"
+          }
+        },
+        "epic_titles": {},
+        "issue_ids": [
+          "linear:A",
+          "linear:A",
+          "linear:A",
+          "linear:A",
+          "linear:A",
+          "linear:B",
+          "linear:C"
+        ],
+        "parent_titles": {},
+        "pr_ids": [
+          "repo#1",
+          "repo#1",
+          "repo#1",
+          "repo#1",
+          "repo#1",
+          "repo#1",
+          "repo#2"
+        ],
+        "pr_map": {
+          "repo#1": {
+            "body": "",
+            "title": "pr one"
+          },
+          "repo#2": {
+            "body": "",
+            "title": "pr two -- dropped by the cap"
+          }
+        },
+        "work_item_map": {
+          "linear:A": {
+            "description": "",
+            "title": "issue A"
+          },
+          "linear:B": {
+            "description": "",
+            "title": "issue B"
+          },
+          "linear:C": {
+            "description": "",
+            "title": "issue C -- dropped by the cap"
+          }
+        },
+        "work_unit_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "label": "duplicate_ids_consume_the_cap",
+      "source_block_hex": "5b69737375655d2045310a697373756520410a0a5b69737375655d2045320a697373756520420a0a5b70725d2045330a7072206f6e650a0a5b636f6d6d69745d2045340a636f6d6d69742061",
+      "source_texts_hex": {
+        "636f6d6d6974": {
+          "7265706f4061": "636f6d6d69742061"
+        },
+        "6973737565": {
+          "6c696e6561723a41": "69737375652041",
+          "6c696e6561723a42": "69737375652042"
+        },
+        "7072": {
+          "7265706f2331": "7072206f6e65"
+        }
+      },
+      "text_char_count": 28,
+      "text_source_count": 4
+    },
+    {
+      "handle_map": {
+        "E1": [
+          "issue",
           "linear:CJK"
         ]
       },

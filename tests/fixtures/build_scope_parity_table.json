@@ -16640,5 +16640,6 @@
  ],
  "frozen_now": "2026-09-01T12:30:45.500000+00:00",
  "measured_on": "3.14.7",
+ "production_window_digest": "22b335257c98f5d1fe460a14d5a8159bd156eaf0e16f5e033e50a87ad59ea722",
  "schema": "build_scope_parity_table.v2"
 }

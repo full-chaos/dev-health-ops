@@ -34,13 +34,20 @@ only while it matches the shipped 3.14 line, and the header records which ran):
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
+import pathlib
 import platform
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-sys.path.insert(0, "/app/src")
+# APPEND, never insert(0): inserting put the container path AHEAD of an explicit
+# PYTHONPATH, so a stale /app/src could shadow the checkout the rot guard just
+# verified -- a green run against the wrong bridge (CHAOS-4837 round 1, P2).
+sys.path.append("/app/src")
 
 # A fixed instant so "now" defaults are reproducible. The Go differential uses
 # the same value for its own clock.
@@ -280,6 +287,65 @@ VALUES += [
 VALUES += [value for value in _RANGE_VALUES if value not in VALUES]
 
 
+# The production source this file COPIES, anchored by text rather than by line
+# number so the check survives unrelated edits above it.
+_PRODUCTION_SOURCE = "src/dev_health_ops/workers/work_graph_tasks.py"
+_REGION_START = "now = datetime.now(timezone.utc)"
+_REGION_END = "parsed_repo_id = uuid.UUID(repo_id) if repo_id else None"
+
+
+def _production_window_digest() -> str:
+    """Digest the production lines `_derive_window` reproduces.
+
+    # Why this exists
+
+    `_derive_window` COPIES six lines out of `run_work_graph_build` rather than
+    calling it, because the surrounding function opens a database. That copy is
+    invisible to every guard built on this file: change production's
+    `timedelta(days=30)` to 31 and this generator emits byte-identical output,
+    so the fixture stays "fresh" while the reference has moved. A review round
+    constructed exactly that (CHAOS-4837 round 1, P1).
+
+    Embedding this digest in the payload closes it WITHOUT a second mechanism:
+    if the production region changes, the digest changes, the regenerated
+    fixture differs, and the existing rot guard goes red saying REFERENCE
+    drift -- which is precisely what it means.
+
+    Anchored on TEXT, not line numbers, and it raises rather than returning a
+    sentinel if either anchor is missing: a digest that silently degrades to
+    "could not find it" is worse than no digest, because it reads as a check.
+    """
+    # The generator runs BOTH from the checkout (tests/fixtures/...) and from
+    # /tmp inside the api container, where the repo-relative walk lands on "/".
+    # Resolve the module through the import system instead of guessing a path:
+    # that is the same file the bridge itself would execute, in either place.
+    # Importing this module initialises Celery, which configures logging to
+    # STDOUT -- and stdout is the payload. Left unredirected it interleaved log
+    # lines into the JSON and produced a fixture that would not parse. Contain
+    # it rather than avoiding the import: resolving the module through the
+    # import system is what makes this work both in the checkout and in the
+    # container, where the generator runs from /tmp.
+    with contextlib.redirect_stdout(sys.stderr):
+        import dev_health_ops.workers.work_graph_tasks as production
+
+    path = pathlib.Path(production.__file__).resolve()
+    source = path.read_text(encoding="utf-8")
+    start = source.find(_REGION_START)
+    end = source.find(_REGION_END)
+    if start < 0 or end < 0:
+        raise SystemExit(
+            f"cannot locate the window-derivation region in {path}: "
+            f"start={start} end={end}. The anchors moved -- re-anchor this digest "
+            "and RE-VERIFY that _derive_window still reproduces production."
+        )
+    region = source[start : end + len(_REGION_END)]
+    # Comments and blank-line/indent churn are not behaviour; normalise them out
+    # so the digest reports SEMANTIC drift rather than reformatting.
+    region = re.sub(r"#.*", "", region)
+    region = " ".join(region.split())
+    return hashlib.sha256(region.encode("utf-8")).hexdigest()
+
+
 def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:
     """Reproduce `run_work_graph_build`'s window derivation, verbatim.
 
@@ -429,6 +495,7 @@ def main() -> int:
         json.dumps(
             {
                 "schema": "build_scope_parity_table.v2",
+                "production_window_digest": _production_window_digest(),
                 "frozen_now": FROZEN_NOW.isoformat(),
                 "measured_on": platform.python_version(),
                 "cases": measure(),

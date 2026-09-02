@@ -87,6 +87,73 @@ var enumeratedDivergences = map[string]divergence{
 		want:   "RAISES",
 		reason: "arbitrary single-character separator; same reasoning.",
 	},
+
+	// BASIC DATE crossed with an OFFSET. The value axis carried basic dates and
+	// it carried offsets, but never the two together -- and the Go layout table
+	// pairs offsets only with EXTENDED dates, so the crossing is exactly where a
+	// divergence could hide. It did. Eight values, sixteen failing rows (each
+	// value under both to_date and from_date), every one of them fail-closed.
+	//
+	// Enumerated rather than fixed, deliberately, and this is a CHOICE rather
+	// than an oversight: adding the eight layouts would be a behaviour change to
+	// the parser, and nothing in the tree writes a build scope with dates at all
+	// (the fixed producer persists `{}`), so the forms are unreachable. A loud
+	// refusal is the right failure for an unreachable input. If a producer ever
+	// starts emitting basic-format dates, these entries turn into the work item.
+	`"20260815T060708Z"`: {
+		want: "RAISES",
+		reason: "basic date with a zero offset: the reference accepts it and Go's offset layouts " +
+			"are all extended-date. Fail-closed and unreachable; see the block comment above.",
+	},
+	`"20260815T060708+00:00"`: {
+		want:   "RAISES",
+		reason: "basic date with a zero offset; same as the Z form.",
+	},
+	`"20260815T060708+0000"`: {
+		want:   "RAISES",
+		reason: "basic date, colon-less zero offset; same reasoning.",
+	},
+	`"20260815T060708+00"`: {
+		want:   "RAISES",
+		reason: "basic date, hour-only zero offset; same reasoning.",
+	},
+	`"20260815T0607+00:00"`: {
+		want:   "RAISES",
+		reason: "basic date at minute precision with a zero offset; same reasoning.",
+	},
+	`"20260815T060708+05:00"`: {
+		want: "RAISES",
+		reason: "basic date with a NON-ZERO offset. Refused for two independent reasons: the " +
+			"basic-date layout gap above, and the same non-zero-offset hazard already enumerated " +
+			"for the extended form -- strftime keeps the wall clock and discards the offset.",
+	},
+	`"20260815T060708-08:00"`: {
+		want:   "RAISES",
+		reason: "same as the +05:00 basic-date case.",
+	},
+	// This one is not a layout gap. It is the reference doing something a reader
+	// would never predict, and it is the strongest argument in this table for
+	// refusing rather than matching.
+	//
+	// `fromisoformat` accepts ANY single character as the date/time separator,
+	// so in "20260815+05:00" the `+` is read as the SEPARATOR and "05:00" as a
+	// wall-clock TIME -- not as an offset at all:
+	//
+	//	fromisoformat("20260815+05:00")  -> 2026-08-15T05:00:00   tzinfo=None
+	//	fromisoformat("20260815+00:00")  -> 2026-08-15T00:00:00   tzinfo=None
+	//	fromisoformat("20260815Z")       -> raises
+	//
+	// So a value that every reader parses as "midnight at UTC+5" becomes "05:00,
+	// timezone unknown", silently, and the window moves five hours. Matching the
+	// reference here would mean reproducing that reinterpretation on purpose.
+	// Refusing is fail-closed AND correct-by-intent, which is a rarer alignment
+	// than it sounds -- the other entries trade one for the other.
+	`"20260815+00:00"`: {
+		want: "RAISES",
+		reason: "the reference reads `+` as the date/time separator and \"00:00\" as a wall-clock " +
+			"time, yielding a NAIVE 2026-08-15T00:00:00 rather than an offset. Refused rather " +
+			"than reproduced; see the comment above.",
+	},
 	// NOTE: "2026-08-15T06:07:08.123" was listed here on the assumption that Go
 	// would refuse a fractional second its layout does not name. It does not —
 	// time.Parse accepts a fractional second immediately after seconds even when

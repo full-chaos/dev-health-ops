@@ -97,6 +97,21 @@ VALUES: list[Any] = [
     "2026-08-15T06:07:08+00:00:00",
     "2026-08-15T06:07:08+05:00",
     "2026-08-15T06:07:08-08:00",
+    # BASIC date crossed with an OFFSET. The value axis had basic dates and it
+    # had offsets, but never the two together -- and the Go layout table pairs
+    # offsets only with EXTENDED dates, so the combination is exactly where a
+    # divergence could hide. Asking "what was the same in every case?" of the
+    # offset rows answers: every one of them was an extended date.
+    "20260815T060708Z",
+    "20260815T060708+00:00",
+    "20260815T060708+0000",
+    "20260815T060708+00",
+    "20260815T0607+00:00",
+    "20260815T060708+05:00",
+    "20260815T060708-08:00",
+    # A basic DATE with an offset and no time at all. Recorded because the
+    # reference's handling of it is not what a reader would guess.
+    "20260815+00:00",
     "2026-08-15t06:07:08",
     "2026-08-15_06:07:08",
     "15/08/2026",

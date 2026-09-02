@@ -589,7 +589,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython)$' \
+        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -641,6 +641,18 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/max-component-nodes-magnitude"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: max_component_nodes magnitude golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding the interpreter's Unicode category Nd set -- the
+  # characters int() accepts -- and each one's decimal value. Both come from the
+  # deployed interpreter's unicode data and move on a Python upgrade with no
+  # diff here. The guard also covers the GENERATED Go table, because a stale
+  # table alongside a fresh fixture leaves the parser on the old set with the
+  # tests green.
+  proof_file="${proof_dir}/python-decimal-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python decimal-digit set did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

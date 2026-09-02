@@ -3,6 +3,7 @@ package units
 import (
 	"errors"
 	"math"
+
 	"os"
 	"strconv"
 	"strings"
@@ -126,90 +127,169 @@ func ResolveMaxComponentNodes(explicit *int) int {
 // Python's full numeric grammar in Go would be an unbounded and unverifiable
 // commitment; asserting equality of the resolved value is bounded and provable.
 // Pinned by TestResolveMaxComponentNodesMatchesPythonInt.
+// decimalDigitValue returns the numeric value of a CPython-decimal rune, or -1.
+//
+// CPython's int() accepts any character where str.isdecimal() is true --
+// Unicode category Nd, 760 code points -- not just ASCII '0'-'9'. So
+// int("５６７") is 567 and int("١٢٣") is 123. The value is NOT "code point
+// minus 0x30" outside ASCII; each run has its own zero.
+//
+// # WHY A GENERATED TABLE AND NOT unicode.IsDigit
+//
+// Two independent reasons, both found by measurement after simpler approaches
+// failed:
+//
+//  1. VERSION SKEW. Go's unicode tables and CPython's are versioned separately.
+//     Go 1.27 ships Unicode 17 and the reference interpreter reports 16, and
+//     they already DISAGREE: U+11DA0-U+11DA9 are Nd to Go and unassigned to
+//     Python. Using unicode.IsDigit would accept ten code points Python
+//     refuses, today, on this toolchain.
+//
+//  2. ABUTTING RUNS. An earlier version derived the value by walking back to
+//     the first non-digit. That is wrong wherever Nd runs touch:
+//     U+1D7CE..U+1D7FF is FIFTY contiguous mathematical digits, five abutting
+//     decades, so the walk-back crosses into the previous run and never
+//     terminates correctly. It also had an off-by-one that returned every value
+//     one too high -- parsePythonInt("١٢") gave 23 -- which still parses and
+//     still looks like a number, so only a comparison against the interpreter's
+//     own table caught it.
+//
+// pythonDecimalRuns is generated from the deployed interpreter by
+// tests/fixtures/generate_python_decimal_digits_golden.py, which also verifies
+// every run is exactly ten long and fails rather than emitting a table if that
+// stops holding.
+func decimalDigitValue(r rune) int {
+	// ASCII fast path: the overwhelmingly common case, and the first table
+	// entry, so the binary search below would find it anyway.
+	if r >= '0' && r <= '9' {
+		return int(r - '0')
+	}
+
+	low, high := 0, len(pythonDecimalRuns)-1
+	for low <= high {
+		middle := (low + high) / 2
+		run := pythonDecimalRuns[middle]
+		switch {
+		case r < run[0]:
+			high = middle - 1
+		case r > run[1]:
+			low = middle + 1
+		default:
+			return int(r - run[0])
+		}
+	}
+	return -1
+}
+
+// parsePythonInt models CPython's int(str) for the values this port reads from
+// configuration.
+//
+// Three Python behaviours that the obvious Go spelling gets wrong, each found
+// by measurement and each pinned by a corpus:
+//
+//  1. ACCEPT SET. int() takes any str.isdecimal() character, not just ASCII.
+//     Refusing a full-width or Arabic-Indic digit makes one plane use the
+//     configured cap and the other fall back to its default.
+//  2. DIGIT LIMIT. Above sys.get_int_max_str_digits() int() RAISES, so such a
+//     value must be refused rather than saturated -- and the limit counts
+//     CHARACTERS, not bytes. 4300 full-width digits is 4300 characters and
+//     12900 bytes; counting bytes would refuse a value Python accepts.
+//  3. RANGE. Below that limit but above MaxInt, Python parses a value Go
+//     cannot hold. Saturating is exact for this caller (see below).
 func parsePythonInt(raw string) (int, bool) {
+	// strings.TrimSpace, NOT pythonparity.Strip, and the difference is the whole
+	// point of TestNumericParsersRejectSeparatorsLikePythonNumerics: Python uses
+	// TWO whitespace rules and this is the NUMERIC one. str.strip() removes
+	// 0x1c-0x1f; int() and float() REJECT them:
+	//
+	//	" 150".strip() -> "150"      int(" 150")      -> 150
+	//	int("\x1c150")                                -> ValueError
+	//
+	// Go's TrimSpace happens to match the numeric rule exactly. Adopting
+	// pythonparity.Strip here "for consistency" would accept values Python
+	// refuses -- I made precisely that mistake while adding non-ASCII digit
+	// support, and the existing separator test did not catch it because its
+	// expected value was the fallback (150), which is indistinguishable from a
+	// successful parse of "150".
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return 0, false
 	}
 
+	runes := []rune(trimmed)
 	sign := ""
-	digits := trimmed
-	switch digits[0] {
+	switch runes[0] {
 	case '+':
-		digits = digits[1:]
+		runes = runes[1:]
 	case '-':
-		sign, digits = "-", digits[1:]
+		sign, runes = "-", runes[1:]
 	}
-	if digits == "" {
+	if len(runes) == 0 {
 		return 0, false
 	}
 
-	// PEP 515: an underscore must sit BETWEEN two digits. Rejecting leading,
-	// trailing and doubled underscores is what Python does, so a malformed
-	// value falls back to the default on both planes rather than on neither.
+	// Digits are normalised to ASCII as they are read, so the value can be
+	// handed to Atoi while the COUNT stays a count of characters.
 	var builder strings.Builder
-	builder.Grow(len(digits))
+	builder.Grow(len(runes))
+	digitCount := 0
 	previousWasDigit := false
-	for index := 0; index < len(digits); index++ {
-		character := digits[index]
-		switch {
-		case character >= '0' && character <= '9':
-			builder.WriteByte(character)
+	for index, r := range runes {
+		if value := decimalDigitValue(r); value >= 0 {
+			builder.WriteByte(byte('0' + value))
+			digitCount++
 			previousWasDigit = true
-		case character == '_':
-			if !previousWasDigit || index == len(digits)-1 {
+			continue
+		}
+		// PEP 515: an underscore must sit BETWEEN two digits. Underscores do
+		// NOT count toward the digit limit -- 4300 digits separated by
+		// underscores is 8599 characters and parses fine.
+		if r == '_' {
+			if !previousWasDigit || index == len(runes)-1 {
 				return 0, false
 			}
 			previousWasDigit = false
-		default:
-			return 0, false
+			continue
 		}
+		return 0, false
+	}
+	if digitCount == 0 {
+		return 0, false
 	}
 
-	// CPython refuses more than sys.get_int_max_str_digits() DIGITS. builder
-	// holds exactly the digits -- underscores were dropped and the sign was
-	// stripped above -- so its length is the quantity Python counts.
+	// CPython refuses more than sys.get_int_max_str_digits() DIGITS (3.11+, a
+	// DoS mitigation since decimal conversion is quadratic) and raises
+	// ValueError. This is counted in CHARACTERS, which is why digitCount is
+	// incremented per rune rather than taken from builder.Len() -- the two
+	// differ for every non-ASCII digit.
 	//
-	// This must be REFUSED, not saturated: Python raises here, so the caller
-	// falls back to its default. Saturating would hand back MaxInt for a value
-	// Python never accepted, which is the mirror image of the ErrRange defect
-	// below and just as divergent.
-	if builder.Len() > DefaultIntMaxStrDigits {
+	// It must be REFUSED, not saturated: Python raises, so the caller falls
+	// back to its default. Saturating would hand back MaxInt for a value
+	// Python never accepted, the mirror image of the range defect below.
+	if digitCount > DefaultIntMaxStrDigits {
 		return 0, false
 	}
 
 	parsed, err := strconv.Atoi(sign + builder.String())
 	if err != nil {
-		// A RANGE error is NOT the same as a malformed value, and collapsing
-		// the two is a real divergence (found by applying lane-4752-go's
-		// magnitude axis).
-		//
-		// Python's int() is unbounded, so INVESTMENT_MAX_COMPONENT_NODES set to
+		// A RANGE error is NOT a malformed value, and collapsing the two is a
+		// divergence: Python's int() is unbounded below the digit limit, so
 		// forty 1s parses to 10^40 -- a cap so large that NO component is ever
-		// split. Go's Atoi returns ErrRange, and treating that as "malformed"
-		// falls back to the default of 150, which splits aggressively. The two
-		// planes then mint completely different work_unit_ids for any org with
-		// a component above 150 nodes, which is the CHAOS-2775 split this port
-		// exists to reproduce.
+		// split -- while treating ErrRange as malformed falls back to 150 and
+		// splits aggressively. The planes then mint different work_unit_ids for
+		// any org with a component above 150 nodes.
 		//
-		// Saturating is EXACT here, not an approximation: a cap of 10^40 and a
-		// cap of MaxInt produce identical splitting decisions, because no
-		// component can contain more than MaxInt nodes. The unrepresentable
-		// value and the saturated one are indistinguishable for every reachable
-		// input.
+		// Saturating is EXACT for this caller rather than approximate: a cap of
+		// 10^40 and a cap of MaxInt split identically, because no component can
+		// hold more than MaxInt nodes. Sign is preserved so the caller's `< 1`
+		// check still rejects a huge NEGATIVE cap, as Python's does.
 		//
-		// Sign is preserved so the caller's `< 1` check still rejects a huge
-		// NEGATIVE cap, exactly as Python's does.
-		//
-		// The ErrRange test is currently unreachable-as-FALSE, and saying so is
-		// more useful than implying the test covers it: the loop above has
-		// already rejected every non-digit, so the string handed to Atoi is
-		// sign-plus-digits and can only fail with ErrRange, never ErrSyntax.
-		// Replacing this condition with a bare `err != nil` passes the whole
-		// suite (verified by mutation). It is kept explicit anyway, because it
-		// states the intent and because it stops being equivalent the moment
-		// the digit filter above is loosened -- at which point saturating a
-		// malformed value would be a silent, and much worse, defect.
+		// The ErrRange test is unreachable-as-FALSE today -- the loop above has
+		// rejected every non-digit, so Atoi can only fail with ErrRange, never
+		// ErrSyntax, and a bare `err != nil` passes the whole suite (verified by
+		// mutation). It is kept explicit because it states the intent and stops
+		// being equivalent the moment the loop is loosened, at which point
+		// saturating a malformed value would be far worse.
 		if errors.Is(err, strconv.ErrRange) {
 			if sign == "-" {
 				return math.MinInt, true

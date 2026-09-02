@@ -88,7 +88,7 @@ type JiraAtlassianWorkItemsResult struct {
 // provider path.  It is intentionally not a registry or activation hook.
 type JiraSprintReferenceSink func([]jiraSprintRow) error
 
-// JiraAtlassianRouteHandler is Jira's LIVE work-items route.
+// JiraAtlassianRouteHandler is Jira's WIRED work-items route.
 //
 // WIRING: cmd/dev-health-worker/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case constructs this handler
@@ -96,7 +96,18 @@ type JiraSprintReferenceSink func([]jiraSprintRow) error
 // as sink and readback and NewJiraWorkItemDeriver as Derived. Note this is the
 // handler jira actually runs -- JiraWorkItemsRouteHandler
 // (jira_work_items_route.go) is the one that is genuinely unconstructed, and
-// its "intentionally unregistered" comment is TRUE and must stay.
+// its own non-registration claim is TRUE and must stay. (Phrased without
+// quoting that claim verbatim on purpose: the drift guard treats an unmarked
+// quotation as an assertion, correctly, since scare quotes are how a live
+// falsehood would otherwise hide. It caught this very sentence.)
+//
+// WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
+// admits a canonical work-items unit only when the descriptor satisfies
+// RouteReady AND Plannable AND ExecutedProofSatisfied
+// (internal/scheduler/sync/planner.go:401-423); an attempted-but-unproven
+// executed-proof state returns `PlannedUnit{}, false` before BuildExecutor or
+// Execute is reached -- the condition that silently vetoed github/work-items
+// for two months under CHAOS-4060/CHAOS-4731.
 //
 // The superseded text read "JiraAtlassianRouteHandler is intentionally
 // unregistered. It is a complete provider-local route for parity and recovery

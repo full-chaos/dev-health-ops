@@ -90,11 +90,21 @@ type gitlabWorkItemsDeriver interface {
 // events, notes, links, and milestones while retaining the live
 // fetch_gitlab_work_items boundary for issue status/type normalization.
 //
-// WIRING: LIVE. cmd/dev-health-worker/provider_sync.go's
+// WIRING: WIRED. cmd/dev-health-worker/provider_sync.go's
 // `provider == "gitlab" && dataset == "work-items"` case constructs this
 // handler and assigns it to routeHandler, with
 // NewGitLabWorkItemFamilyClickHouseEffects as sink and readback and
 // NewGitLabWorkItemDeriver as Derived.
+//
+// WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
+// admits a canonical work-items unit only when the descriptor satisfies
+// RouteReady AND Plannable AND ExecutedProofSatisfied
+// (internal/scheduler/sync/planner.go:401-423); an attempted-but-unproven
+// executed-proof state returns `PlannedUnit{}, false` before BuildExecutor or
+// Execute is ever reached, which is precisely the condition that silently
+// vetoed github/work-items for two months under CHAOS-4060/CHAOS-4731. Whether
+// this route runs for a given org is a question about that gate and the org's
+// dataset selection, not about the wiring documented above.
 //
 // The superseded text read "The handler is intentionally not registered here.
 // Activation, alias watermarks, configuration loading, and deployment wiring

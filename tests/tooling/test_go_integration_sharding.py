@@ -1534,7 +1534,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # JiraWorkItemsRouteHandler is NOT reported wired -- its "intentionally
     # unregistered" comment is true and must stay). All three parse source with
     # go/ast and touch no database, so the integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1316
+    # codex round 2 (NOT CLEAN, 3x P2 EXECUTED) then showed the guard accepting
+    # a stale claim on a CONSTRUCTOR doc and on a type embedded two hops below a
+    # wired handler. Discovery now walks func docs and closes over struct fields
+    # to fixpoint, pinned by +1 ordinary test (1316 -> 1317):
+    # TestDriftGuardCoversConstructorDocsAndDeepFields. Parses source only, so
+    # the integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1317
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1551,7 +1557,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1316
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1317
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1618,7 +1624,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1316
+    assert len(selected_tests) == len(set(selected_tests)) == 1317
     assert set(selected_tests) == expected_tests
 
 

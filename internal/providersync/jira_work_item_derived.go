@@ -74,7 +74,7 @@ func jiraWorkItemRowsAsGitHub(rows jiraWorkItemRows) githubWorkItemRows {
 // The interface itself is not a registry or constructor-selection seam -- that
 // part of the original comment still holds -- but it is no longer inert:
 //
-// WIRING: LIVE. cmd/dev-health-worker/provider_sync.go's
+// WIRING: WIRED. cmd/dev-health-worker/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case (:375) constructs
 // JiraWorkItemDeriver through NewJiraWorkItemDeriver (:386) and injects it here
 // as JiraAtlassianRouteHandler{Derived: ...}; the effect sink and readback come
@@ -86,7 +86,7 @@ func jiraWorkItemRowsAsGitHub(rows jiraWorkItemRows) githubWorkItemRows {
 //
 // The dropped clause was "or activation seam", which read as "nothing has
 // activated this route". Kept visible as a correction rather than deleted
-// silently: the stale form made a live writer read as dead code (CHAOS-4731
+// silently: the stale form made a WIRED writer read as dead code (CHAOS-4731
 // lost time to exactly that).
 type jiraWorkItemsDeriver interface {
 	Derive(context.Context, Claim, jiraWorkItemRows, time.Time) (JiraWorkItemDerivedRows, error)

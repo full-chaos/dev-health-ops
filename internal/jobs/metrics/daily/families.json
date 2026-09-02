@@ -17,7 +17,7 @@
     {"name":"testops_test","python":"compute_test_metrics_daily","writes":["testops_test_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"testops_coverage","python":"compute_coverage_metrics_daily","writes":["testops_coverage_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"deploy","python":"compute_deploy_metrics_daily","writes":["deploy_metrics_daily"],"port":"pending","golden":"required"},
-    {"name":"incident","python":"compute_incident_metrics_daily","writes":["incident_metrics_daily"],"port":"pending","golden":"required"},
+    {"name":"incident","python":"compute_incident_metrics_daily","writes":["incident_metrics_daily"],"port":"go","golden":"required"},
     {"name":"ai_governance","python":"build_governance_rows_for_day","writes":["ai_policy_events","ai_governance_coverage_daily"],"port":"pending","golden":"required"},
     {"name":"ai_impact","python":"compute_ai_impact_metrics_daily","writes":["ai_impact_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"ai_workflow","python":"_extract_ai_workflow_for_day","writes":["ai_workflow_runs","ai_workflow_artifact_edges","ai_workflow_issue_edges"],"port":"pending","golden":"required"},

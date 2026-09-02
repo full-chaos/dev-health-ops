@@ -242,6 +242,25 @@ func teamRepoOwnershipResolutionArms() []TeamRepoOwnershipResolutionArm {
 	}
 }
 
+// IncidentValidFromGuardReason labels one operational_service_repository_mappings
+// row matched by IncidentExecutor's loader (CHAOS-4269/CHAOS-4295): whether
+// it already had a non-NULL valid_from (would have matched the OLD Python
+// `valid_from <= as_of` predicate too) or was only recovered by the NULL-OK
+// guard the fix adds. See IncidentValidFromGuardObserver's doc comment.
+type IncidentValidFromGuardReason string
+
+const (
+	IncidentValidFromGuardReasonSet           IncidentValidFromGuardReason = "valid_from_set"
+	IncidentValidFromGuardReasonNullRecovered IncidentValidFromGuardReason = "valid_from_null_recovered"
+)
+
+func incidentValidFromGuardReasons() []IncidentValidFromGuardReason {
+	return []IncidentValidFromGuardReason{
+		IncidentValidFromGuardReasonSet,
+		IncidentValidFromGuardReasonNullRecovered,
+	}
+}
+
 // TeamCatalogEntryPoint names which of the two Python team-autoimport call
 // sites CHAOS-4431's native/bridge dispatch decided for (they are NOT
 // equivalent -- see teamCatalogAutoimportBridge's doc comment,
@@ -889,6 +908,11 @@ type MetricsCollector struct {
 	// of rows produced by each identity resolution -- see
 	// TeamRepoOwnershipResolutionArm's doc comment.
 	teamRepoOwnershipResolutionArm map[TeamRepoOwnershipResolutionArm]uint64
+	// incidentValidFromGuardRows (CHAOS-4269/CHAOS-4295): per-reason counter
+	// of operational_service_repository_mappings rows IncidentExecutor's
+	// loader matched, split by whether the NULL-OK valid_from guard was
+	// load-bearing for that row -- see IncidentValidFromGuardObserver.
+	incidentValidFromGuardRows map[IncidentValidFromGuardReason]uint64
 	// teamCatalogDispatch/teamCatalogRowsWritten (CHAOS-4431): per-call
 	// dispatch outcome for the native/bridge team-catalog split, and rows a
 	// native collector actually wrote per destination table.
@@ -1002,6 +1026,7 @@ var _ DailyMetricsLeaseObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsDiscoveryObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsZeroRowsObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
+var _ IncidentValidFromGuardObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
@@ -1071,6 +1096,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
+		incidentValidFromGuardRows:           make(map[IncidentValidFromGuardReason]uint64, len(incidentValidFromGuardReasons())),
 		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
 		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
 		zeroUnitFinalizations:                make(map[zeroUnitFinalizationLabels]uint64),
@@ -1714,6 +1740,25 @@ func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivationResolutionA
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.teamRepoOwnershipResolutionArm[arm] += uint64(count)
+	return nil
+}
+
+// ObserveIncidentValidFromGuardRows records, per IncidentExecutor loader
+// call (CHAOS-4269/CHAOS-4295), how many matched
+// operational_service_repository_mappings rows fell into each
+// IncidentValidFromGuardReason. count must be >= 0; called once per reason
+// per loader call (even 0) so both series stay present regardless of which
+// reason actually matched.
+func (collector *MetricsCollector) ObserveIncidentValidFromGuardRows(reason IncidentValidFromGuardReason, count int) error {
+	if !slices.Contains(incidentValidFromGuardReasons(), reason) {
+		return errors.New("incident valid_from guard reason is not registered")
+	}
+	if count < 0 {
+		return errors.New("incident valid_from guard row count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.incidentValidFromGuardRows[reason] += uint64(count)
 	return nil
 }
 
@@ -2416,6 +2461,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
+	collector.writeIncidentValidFromGuard(&output)
 	collector.writeTeamCatalogDispatch(&output)
 	collector.writeTeamCatalogRowsWritten(&output)
 	collector.writeWorkGraphLease(&output)
@@ -2899,6 +2945,23 @@ func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *stri
 	for _, arm := range teamRepoOwnershipResolutionArms() {
 		writeUintSample(output, "dev_health_team_repo_ownership_derivation_resolution_arm_total",
 			[]metricLabel{{"arm", string(arm)}}, collector.teamRepoOwnershipResolutionArm[arm])
+	}
+}
+
+// writeIncidentValidFromGuard renders CHAOS-4269/CHAOS-4295's per-reason
+// counter: how many operational_service_repository_mappings rows
+// IncidentExecutor's loader matched thanks to the NULL-OK valid_from guard
+// versus how many already had valid_from set (would have matched the OLD,
+// buggy Python predicate too). A sustained zero on "valid_from_null_recovered"
+// after a deploy would mean the fix stopped mattering (every source now sets
+// valid_from); a sustained zero on "valid_from_set" is expected today --
+// map_issue_incidents, the only writer of mapping_kind="repository_derived",
+// never sets it.
+func (collector *MetricsCollector) writeIncidentValidFromGuard(output *strings.Builder) {
+	writeMetadata(output, "dev_health_incident_valid_from_guard_rows_total", "operational_service_repository_mappings rows IncidentExecutor's loader matched, by whether valid_from was set (would have matched the pre-fix Python predicate) or NULL (recovered only by the NULL-OK guard, CHAOS-4269).", "counter")
+	for _, reason := range incidentValidFromGuardReasons() {
+		writeUintSample(output, "dev_health_incident_valid_from_guard_rows_total",
+			[]metricLabel{{"reason", string(reason)}}, collector.incidentValidFromGuardRows[reason])
 	}
 }
 

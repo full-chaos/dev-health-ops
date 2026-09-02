@@ -222,6 +222,34 @@ func buildDailyWorker(
 						"error", repoUserCommitErr,
 					)
 				}
+				// CHAOS-4269/CHAOS-4295: incident carries a FIX, not just a
+				// port -- the Python compatibility bridge for this family is
+				// permanently zero-yield (active_incidents_query's
+				// valid_from predicate has no NULL-OK guard, and
+				// map_issue_incidents never sets valid_from). A refused
+				// executor here means the family STAYS BROKEN for every
+				// partition until the worker restarts with a healthy
+				// connection, not merely "computed a little slower" the way
+				// a refused team_wellbeing/repo_user_commit executor does --
+				// still fail-open by the same standing policy (one family
+				// degrading must never take another down), but worth this
+				// note for whoever reads this log line during an incident.
+				if incidentExecutor, incidentErr := daily.NewIncidentExecutor(clickhouseConnection); incidentErr == nil {
+					if guardObserver, ok := observer.(jobruntime.IncidentValidFromGuardObserver); ok {
+						incidentExecutor.SetValidFromGuardObserver(guardObserver)
+					}
+					nativeFamilies["incident"] = incidentExecutor
+				} else {
+					logger.Error(
+						"incident native executor refused; the family stays "+
+							"on the Python compatibility bridge, which is "+
+							"PERMANENTLY ZERO-YIELD for repository-derived "+
+							"incident mappings (CHAOS-4269) until this "+
+							"executor can be constructed. Every other "+
+							"daily-metrics family is unaffected.",
+						"error", incidentErr,
+					)
+				}
 				if len(nativeFamilies) > 0 {
 					handler.SetNativeFamilies(nativeFamilies)
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {

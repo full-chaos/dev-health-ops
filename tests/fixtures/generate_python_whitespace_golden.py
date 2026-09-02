@@ -79,6 +79,14 @@ GO_UNICODE_ISSPACE = {
 }
 
 
+def _int_pads_without_changing_value(char: str) -> bool:
+    """True when `char` may surround a numeral without altering int()'s result."""
+    try:
+        return int(char + "5" + char) == 5
+    except ValueError:
+        return False
+
+
 def main() -> None:
     isspace = [cp for cp in range(0x110000) if chr(cp).isspace()]
 
@@ -150,6 +158,25 @@ def main() -> None:
         for value in splitline_inputs
     ]
 
+    # THE THIRD RULE, now measured rather than only asserted.
+    #
+    # Comments in this port have long claimed that int()/float() REJECT
+    # 0x1c-0x1f while str.strip() removes them -- the reason parsePythonInt uses
+    # strings.TrimSpace and not pythonparity.Strip. That claim was never pinned
+    # by a corpus, only stated. Derive it.
+    #
+    # A character belongs to int()'s space set if it can PAD a number without
+    # changing its value. Digits and signs are excluded explicitly: `int(c+'5')`
+    # succeeds for any digit c, so a probe that forgets that derives a 787-entry
+    # "space set" that is mostly Nd (I made exactly that error first).
+    int_space = [
+        cp
+        for cp in range(0x110000)
+        if not chr(cp).isdecimal()
+        and chr(cp) not in "+-"
+        and _int_pads_without_changing_value(chr(cp))
+    ]
+
     # Bound as locals before going into the payload dict: indexing a
     # dict[str, object] hands mypy an `object`, which cannot be passed to hex().
     python_only = sorted(set(isspace) - GO_UNICODE_ISSPACE)
@@ -175,6 +202,10 @@ def main() -> None:
         ),
         "crlf_is_one_boundary": crlf_is_one_boundary,
         "splitlines_cases": splitline_cases,
+        # int()'s space set, and its deltas against the other two rules.
+        "int_space_code_points": int_space,
+        "isspace_only_vs_int_space": sorted(set(isspace) - set(int_space)),
+        "int_space_only_vs_isspace": sorted(set(int_space) - set(isspace)),
     }
 
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -189,6 +220,11 @@ def main() -> None:
     print(f"  go-only vs Python:          {[hex(c) for c in go_only]}")
     print(f"  split/isspace disagreements: {split_disagrees or 'none'}")
     print(f"  splitlines boundaries:      {len(splitlines_boundaries)}")
+    print(f"  int() space set:            {len(int_space)}")
+    print(
+        "  whitespace to str.strip() but NOT to int(): "
+        f"{[hex(c) for c in sorted(set(isspace) - set(int_space))]}"
+    )
     print(
         "  in isspace but NOT a line boundary: "
         f"{[hex(c) for c in sorted(set(isspace) - set(splitlines_boundaries))]}"

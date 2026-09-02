@@ -3024,3 +3024,63 @@ def test_compose_like_nouns_refuse_only_their_deploying_verb(
         f"{command!r}: refused={refused}, expected {expected_refused} "
         f"(images={images}, unknown={unknown})."
     )
+
+
+def test_exactly_one_workflow_declares_the_required_go_quality_job() -> None:
+    """CHAOS-4834's acceptance criterion, and the whole point of the change.
+
+    `go-quality` is a REQUIRED check. It used to be declared by TWO workflows --
+    go.yml (path-filtered, does the work) and go-quality-noop.yml (paths-ignore,
+    reports a vacuous success). Both write to the same required context, and
+    GitHub's `paths` fires when ANY changed file matches while `paths-ignore`
+    fires when ANY changed file does not, so **any mixed change set triggers
+    both**. The no-op finishes in seconds and the real gate takes minutes, so the
+    meaningless green always lands first.
+
+    Observed live on 2026-09-02 at 15:21Z (lane-4441, PR #2103, SHA 5508d9b4e):
+
+        33647995023  completed/success  Go (non-Go changes)   <- no-op, ALREADY GREEN
+        33647996503  queued             Go                    <- real workflow, not started
+
+    Widening the path list fixes which changes are *seen*; it does not remove the
+    duplicate producer. Only one workflow declaring the job does that -- and with
+    one producer there is no tie for the ruleset to break, which is why we never
+    had to determine whether it resolves several same-named contexts by
+    all-must-pass, latest-wins, or first-wins.
+    """
+    declaring = []
+    for path in _workflow_files():  # both .yml and .yaml, unlike the
+        # branch this was written on, which globbed one extension
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if "go-quality" in (document.get("jobs") or {}):
+            declaring.append(path.name)
+
+    assert declaring == ["go-quality.yml"], (
+        f"exactly one workflow may declare the required `go-quality` job; found {declaring}. "
+        "Two producers means the required context can be satisfied by whichever "
+        "reports first, which is not necessarily the one that ran the gate."
+    )
+
+
+def test_the_go_quality_job_always_reports() -> None:
+    """One producer is only safe if that producer cannot be filtered out.
+
+    If the single declaring workflow carried a `paths` filter, a non-Go change
+    would produce NO `go-quality` context at all and the required check would
+    block forever -- which is the problem the no-op existed to solve. Relevance is
+    decided inside the job instead, so the context always appears and says
+    honestly whether the gate ran.
+    """
+    document = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "go-quality.yml").read_text(encoding="utf-8")
+    )
+    on_block = document.get(True, document.get("on"))
+    for event in ("pull_request", "push"):
+        trigger = on_block.get(event) or {}
+        assert "paths" not in trigger, (
+            f"go-quality.yml must not filter {event} by paths: a filtered required "
+            "check never reports on the changes it filters out."
+        )
+        assert "paths-ignore" not in trigger, (
+            f"go-quality.yml must not filter {event} by paths-ignore either."
+        )

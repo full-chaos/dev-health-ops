@@ -1,4 +1,16 @@
-"""Authenticated internal bridge for dormant Go operational handlers."""
+"""Authenticated internal bridge invoked by LIVE Go operational handlers.
+
+CHAOS-4440: this module's own docstring previously said "dormant" — backwards.
+`operational.billing_notification`, `operational.webhook_delivery`, and
+`system.heartbeat` are registered and running in production today
+(`cmd/dev-health-worker/operational.go:120-167`); each route below is called
+from the Go handler that owns the durable row, the River attempt, and retry
+classification, while this bridge performs the compatibility side effect
+(email dispatch, webhook processing, telemetry POST) during coexistence. The
+`/pagerduty` route is a different shape: it reconciles one Go-owned Valkey
+stream delivery per call rather than a durable Postgres row — see
+`PagerDutyDelivery` below.
+"""
 
 from __future__ import annotations
 

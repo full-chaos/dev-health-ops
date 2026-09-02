@@ -71,10 +71,18 @@ func (loader *RecommendationsLoader) orgClause() string {
 func (loader *RecommendationsLoader) windowArguments(
 	teamID string, windowStart, windowEnd time.Time,
 ) map[string]any {
+	// The window bounds are bound as YYYY-MM-DD STRINGS, not time.Time.
+	//
+	// The columns are ClickHouse `Date`, and a time.Time is serialised for a
+	// {name:Date} parameter as a full DateTime literal, which the server
+	// rejects outright: "Cannot parse date here: toDateTime('2026-08-01
+	// 00:00:00') cannot be parsed as Date". Python's clickhouse-connect sends a
+	// bare date for a datetime.date, so the string form is also the closer
+	// mirror of what the reference puts on the wire.
 	arguments := map[string]any{
 		"team_id": teamID,
-		"start":   windowStart,
-		"end":     windowEnd,
+		"start":   windowStart.Format("2006-01-02"),
+		"end":     windowEnd.Format("2006-01-02"),
 	}
 	if loader.orgID != "" {
 		arguments["org_id"] = loader.orgID
@@ -143,16 +151,22 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 	throughputRaw := []*float64{}
 	for rows.Next() {
 		var day time.Time
-		var wipTotal, throughputTotal *float64
-		if err := rows.Scan(&day, &wipTotal, &throughputTotal); err != nil {
+		// sum() over a UInt32 column returns UInt64, not Float64. Python
+		// coerces it client-side with float(...), so the coercion happens here
+		// too rather than as a toFloat64() in the SQL -- changing the query
+		// text would put a difference between the two implementations exactly
+		// where this test is trying to prove there is none.
+		var wipSum, throughputSum uint64
+		if err := rows.Scan(&day, &wipSum, &throughputSum); err != nil {
 			return nil, nil, fmt.Errorf("scan wip/throughput: %w", err)
 		}
+		wipTotal, throughputTotal := float64(wipSum), float64(throughputSum)
 		// Both lists keep every row, NULL included as 0.0. This differs from
 		// cycle_time_by_day below, which DROPS null rows and so returns a
 		// shorter list. The asymmetry is the reference's and it is observable:
 		// list length decides the `len(x) < 2` guards in three rules.
-		wipRaw = append(wipRaw, wipTotal)
-		throughputRaw = append(throughputRaw, throughputTotal)
+		wipRaw = append(wipRaw, &wipTotal)
+		throughputRaw = append(throughputRaw, &throughputTotal)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
@@ -197,12 +211,15 @@ func (loader *RecommendationsLoader) loadReviewSignals(
 	// None. ClickHouse's avg() over an empty set returns one NULL row rather
 	// than zero rows, so both spellings arrive here as "absent".
 	if latencyRows.Next() {
-		var average *float64
+		// avg() over a non-Nullable Float64 column is itself non-Nullable and
+		// returns NaN for an empty set, which _safe_float turns into absent --
+		// so the empty case arrives here as NaN rather than as NULL.
+		var average float64
 		if scanErr := latencyRows.Scan(&average); scanErr != nil {
 			latencyRows.Close()
 			return 0, false, 0, false, fmt.Errorf("scan review latency: %w", scanErr)
 		}
-		latency, latencyKnown = safeFloat(average)
+		latency, latencyKnown = safeFloat(&average)
 	}
 	if closeErr := latencyRows.Close(); closeErr != nil {
 		return 0, false, 0, false, closeErr
@@ -229,11 +246,12 @@ func (loader *RecommendationsLoader) loadReviewSignals(
 	loads := []float64{}
 	for giniRows.Next() {
 		var authorEmail string
-		var totalReviews *float64
+		var totalReviews uint64
 		if scanErr := giniRows.Scan(&authorEmail, &totalReviews); scanErr != nil {
 			return 0, false, 0, false, fmt.Errorf("scan reviewer gini: %w", scanErr)
 		}
-		loads = append(loads, nullableToZero(totalReviews))
+		reviews := float64(totalReviews)
+		loads = append(loads, nullableToZero(&reviews))
 	}
 	if rowsErr := giniRows.Err(); rowsErr != nil {
 		return 0, false, 0, false, rowsErr
@@ -267,11 +285,11 @@ func (loader *RecommendationsLoader) loadReworkRatio(
 	defer rows.Close()
 
 	if rows.Next() {
-		var average *float64
+		var average float64
 		if scanErr := rows.Scan(&average); scanErr != nil {
 			return 0, false, fmt.Errorf("scan rework ratio: %w", scanErr)
 		}
-		value, known := safeFloat(average)
+		value, known := safeFloat(&average)
 		return value, known, rows.Err()
 	}
 	return 0, false, rows.Err()
@@ -326,12 +344,12 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 		return 0, false, nil, fmt.Errorf("load after-hours ratio: %w", err)
 	}
 	if afterHoursRows.Next() {
-		var average *float64
+		var average float64
 		if scanErr := afterHoursRows.Scan(&average); scanErr != nil {
 			afterHoursRows.Close()
 			return 0, false, nil, fmt.Errorf("scan after-hours ratio: %w", scanErr)
 		}
-		afterHours, afterHoursKnown = safeFloat(average)
+		afterHours, afterHoursKnown = safeFloat(&average)
 	}
 	if closeErr := afterHoursRows.Close(); closeErr != nil {
 		return 0, false, nil, closeErr
@@ -394,7 +412,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 	if half < 1 {
 		half = 1
 	}
-	arguments["mid"] = windowStart.AddDate(0, 0, half)
+	arguments["mid"] = windowStart.AddDate(0, 0, half).Format("2006-01-02")
 
 	complexityQuery := `
             SELECT

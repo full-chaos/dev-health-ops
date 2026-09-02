@@ -309,8 +309,24 @@ def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> s
     # fixture caught this docstring claiming (1) covered it when it did not.
     for arguments in re.findall(r"filepath\.Join\(([^)]*)\)", source):
         segments = re.findall(r'"([^"\n]*)"', arguments)
-        if len(segments) > 1 and segments[-1].endswith(_GO_DATA_SUFFIXES):
+        if segments and segments[-1].endswith(_GO_DATA_SUFFIXES):
+            # BOTH anchors again, and for the same reason as the plain literal
+            # above -- this is the shape that fix missed.
+            #
+            # The dominant spelling in this repo is
+            # `filepath.Join(repoRoot, "src", ..., "x.json")`: the FIRST segment
+            # is a VARIABLE, so the literal segments are repo-root-relative.
+            # Joining them onto the naming file's directory produced
+            # `cmd/query-api/src/dev_health_ops/...`, which does not exist, and
+            # the file was dropped -- invisible, while the literals sit in plain
+            # sight in the Go source.
+            #
+            # `len(segments) > 1` was also wrong: `filepath.Join(root, "x.json")`
+            # yields ONE literal and is exactly the variable-rooted shape that
+            # matters most. A single literal is now resolved against both
+            # anchors, which is what the plain-literal branch already does.
             add(base.joinpath(*segments))
+            add(anchor.joinpath(*segments))
 
         # (2) //go:embed — space-separated patterns, globs allowed.
     for directive in re.findall(r"//go:embed\s+(.+)", source):
@@ -554,6 +570,47 @@ def test_python_named_by_go_is_an_input(tmp_path: Path) -> None:
     assert "sink.py" in found, (
         "a Python file named by Go source was not treated as an input; the Go "
         f"test that reads it would skip on a PR that changed it. found={sorted(found)}"
+    )
+
+
+def test_a_variable_rooted_filepath_join_is_found(tmp_path: Path) -> None:
+    """`filepath.Join(repoRoot, "a", "b.json")` resolves against the ROOT.
+
+    This is the DOMINANT spelling in this repo and it was the third instance of
+    one root cause. The single-literal fix tried both anchors; the Join branch
+    still joined only onto the naming file's directory, so a variable-rooted
+    call produced `cmd/query-api/src/dev_health_ops/...` -- a path that does not
+    exist -- and the file vanished from the oracle while its segments sat in
+    plain sight in the Go source.
+
+    `src/dev_health_ops/api/graphql/go_api_operations.json` was reached exactly
+    this way from `cmd/query-api/query_route_mounted_log_test.go:188`, matched
+    no path filter, and was invisible to two rounds of review.
+
+    The single-segment case is covered deliberately: `filepath.Join(root,
+    "x.json")` yields ONE literal, and the old `len(segments) > 1` guard
+    skipped precisely the variable-rooted shape that matters most.
+    """
+    (tmp_path / "src" / "graphql").mkdir(parents=True)
+    (tmp_path / "src" / "graphql" / "ops.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "one.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / "cmd" / "api"
+    package.mkdir(parents=True)
+
+    multi = _resolve_named_files(
+        'p := filepath.Join(repoRoot, "src", "graphql", "ops.json")', package, tmp_path
+    )
+    assert "src/graphql/ops.json" in multi, (
+        "a variable-rooted multi-segment filepath.Join was not resolved against "
+        f"the repository root. found={sorted(multi)}"
+    )
+
+    single = _resolve_named_files(
+        'p := filepath.Join(root, "one.json")', package, tmp_path
+    )
+    assert "one.json" in single, (
+        "a variable-rooted SINGLE-segment filepath.Join was not resolved; the "
+        f"old len(segments) > 1 guard skipped exactly this shape. found={sorted(single)}"
     )
 
 

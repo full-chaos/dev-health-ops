@@ -149,7 +149,8 @@ func TestPreStepNameIsStable(t *testing.T) {
 // So this test exists to FAIL when the list changes. That is the point: whoever
 // appends has to come here, read the invariant, and state where their step
 // belongs relative to "issue_pr_links". lane-4752-go's edge producer straddles
-// it and therefore needs at least two entries, one on each side.
+// it — but only one of its halves lands in THIS list; see the note below and
+// buildPostStepOrder for why the other went to the post-step seam.
 func TestBuildPreStepOrderIsPinned(t *testing.T) {
 	want := []string{"issue_pr_links"}
 	got := buildPreStepOrder()
@@ -160,11 +161,14 @@ func TestBuildPreStepOrderIsPinned(t *testing.T) {
 				"If you are ADDING a step, read the ordering invariant on workgraph.NativePreStep "+
 				"first, then place it by this rule: a step that READS a table an earlier step WRITES "+
 				"goes after it.\n"+
-				"KNOWN PENDING (CHAOS-4766, lane-4766-go): `issue_issue_edges` registers BEFORE "+
-				"`issue_pr_links` — it does not read the mapping — giving "+
-				"[issue_issue_edges issue_pr_links]. A later PR of that lane ports "+
+				"NOTE (CHAOS-4766, lane-4766-go): `issue_issue_edges` does NOT appear here. It "+
+				"was expected to register before `issue_pr_links`, and it does not read the "+
+				"mapping, so that placement was correct by this rule — but Python's build() "+
+				"OVERWRITES what it writes (confidence=1.0 at builder.py:905, and "+
+				"work_graph_edges is ReplacingMergeTree(last_synced)), so it runs as a POST-step "+
+				"instead; see buildPostStepOrder. A later PR of that lane ports "+
 				"`_build_issue_pr_edges_from_fast_path`, which DOES read work_graph_issue_pr and "+
-				"therefore registers AFTER `issue_pr_links`.",
+				"therefore registers HERE, after `issue_pr_links`.",
 			got, want,
 		)
 	}

@@ -14,6 +14,40 @@ import (
 // finding its last nonzero fractional digit.
 const maxSignificantFractionPlace = 1074
 
+// expectedTailLawValueCount pins the size of the law's domain.
+//
+// Not a style assertion: every test in this file ranges over tailLawValues, so
+// emptying or shrinking it silently disables them all while they continue to
+// report ok. Raise this deliberately when adding a value -- the corpus overlap
+// test will then also require the new value to be pinned.
+const expectedTailLawValueCount = 12
+
+// tailLawValues is the domain the tail law is asserted over.
+//
+// DELIBERATELY EXCLUDES inf and nan: the law is "baseline + zero padding", and
+// precision is ignored for the non-finite values, so `format(inf, ".2000f")`
+// is "inf" rather than "inf" plus padding. Adding math.Inf(1) here would fail
+// confusingly rather than usefully -- the law does not apply, it is not that
+// the mirror is wrong.
+//
+// Every value here MUST also be pinned against CPython in the golden corpus at
+// precision 1074, or the law degrades from a parity claim to a
+// self-consistency one. TestTailLawValuesArePinnedByTheCorpus enforces that.
+var tailLawValues = []float64{
+	0.0,
+	math.Copysign(0, -1),
+	1.0,
+	-1.0,
+	0.1,
+	2.675,
+	5e-324,                  // smallest subnormal: the witness for 1074
+	1e-323,                  // two ulps up
+	2.2250738585072014e-308, // smallest normal
+	1.7976931348623157e308,  // max float
+	9007199254740992.0,      // 2**53
+	123456789.123456789,
+}
+
 // TestFormatFixedTailIsPureZeroPadding pins the LAW the precision tail obeys,
 // because the tail cannot be pinned by enumeration.
 //
@@ -43,20 +77,7 @@ const maxSignificantFractionPlace = 1074
 // to sample, and it needs no interpreter at test time, so it runs in the
 // ordinary unit suite rather than only under the live-oracle verb.
 func TestFormatFixedTailIsPureZeroPadding(t *testing.T) {
-	values := []float64{
-		0.0,
-		math.Copysign(0, -1),
-		1.0,
-		-1.0,
-		0.1,
-		2.675,
-		5e-324,                  // smallest subnormal: the witness for 1074
-		1e-323,                  // two ulps up
-		2.2250738585072014e-308, // smallest normal
-		1.7976931348623157e308,  // max float
-		9007199254740992.0,      // 2**53
-		123456789.123456789,
-	}
+	values := tailLawValues
 
 	// Deliberately includes precisions far past any fixture entry, including
 	// one past the old 1100 endpoint that the last round's mutant exploited.
@@ -117,4 +138,87 @@ func firstDifference(a, b string) int {
 		}
 	}
 	return limit
+}
+
+// TestTailLawValuesArePinnedByTheCorpus is what turns the tail law from a
+// self-consistency check into a parity claim.
+//
+// TestFormatFixedTailIsPureZeroPadding asserts Go(v, p) == Go(v, 1074) + zeros.
+// That compares Go against Go: if Go's own 1074-place rendering were wrong, it
+// would still pass. It is a PARITY claim only because the golden corpus
+// separately pins Go(v, 1074) against CPython for each of those values.
+//
+// Nothing enforced that overlap. The two lists -- this file's tailLawValues and
+// the generator's corpus inputs -- were independent, and 0.1 sat in one and not
+// the other, so eleven of twelve baselines were pinned and the twelfth was
+// pinned by nothing. It passed anyway (CHAOS-4870, found by lane-4441).
+//
+// The failure mode this closes is the invisible one: adding a thirteenth value
+// to tailLawValues that the corpus lacks silently unpins its baseline, the law
+// test keeps passing, and nothing anywhere says the coverage shrank.
+func TestTailLawValuesArePinnedByTheCorpus(t *testing.T) {
+	golden := loadFloatTextGolden(t)
+
+	pinned := make(map[uint64]bool, len(golden.Formats))
+	for _, entry := range golden.Formats {
+		if entry.Precision != maxSignificantFractionPlace || entry.Raises != "" {
+			continue
+		}
+		pinned[math.Float64bits(parsePythonFloatHex(t, entry.ValueHex))] = true
+	}
+
+	for _, value := range tailLawValues {
+		// Bitwise: -0.0 and +0.0 are different baselines and must be pinned
+		// separately, and == would treat them as one.
+		if !pinned[math.Float64bits(value)] {
+			t.Errorf("tailLawValues contains %v (bits %#016x) but the corpus does not pin it "+
+				"at precision %d, so the tail law's baseline for it is compared against "+
+				"nothing -- add it to the generator's _SPECIALS",
+				value, math.Float64bits(value), maxSignificantFractionPlace)
+		}
+	}
+
+	// A corpus that lost its 1074-precision entries entirely would make the
+	// loop above vacuous, so assert the oracle is non-empty rather than trust it.
+	// Both sides must be non-empty, and for different reasons.
+	//
+	// An empty corpus side makes the loop above vacuous. An empty tailLawValues
+	// makes EVERY test in this file vacuous -- TestFormatFixedTailIsPureZeroPadding
+	// and TestFormatFixedLengthGrowsWithPrecision both range over it, so clearing
+	// the list disables the law, the length check and this invariant at once,
+	// and all three still report ok. Verified by planting it.
+	//
+	// That is the defect class this whole PR exists to close, reproduced inside
+	// the fix: an enforcement that can be silently switched off is not an
+	// enforcement. The count is asserted against the domain's actual size rather
+	// than merely non-zero, so deleting values is as loud as clearing the list.
+	if len(pinned) == 0 {
+		t.Fatal("no corpus entries at precision 1074; this test would pass vacuously")
+	}
+	// Count DISTINCT bit patterns, not slice entries.
+	//
+	// Length alone is a proxy for coverage and it is evadable: replacing
+	// max-float with a second 0.0 keeps the slice at twelve, and both copies
+	// are already pinned in the corpus, so the size pin and the overlap loop
+	// both pass while the effective domain has quietly shrunk to eleven. That
+	// removes max-float's only exact tail-content check above the fixture's
+	// largest precision (its corpus rows stop at 1100; the law test reaches
+	// 5000), and the length-only test cannot see a same-length wrong padding
+	// byte. Verified by planting it: all three tests reported ok.
+	//
+	// Bit patterns rather than ==, for the same reason the generator uses them:
+	// +0.0 and -0.0 are two distinct baselines that == would merge into one.
+	distinct := make(map[uint64]struct{}, len(tailLawValues))
+	for _, value := range tailLawValues {
+		distinct[math.Float64bits(value)] = struct{}{}
+	}
+	if len(distinct) < expectedTailLawValueCount {
+		t.Fatalf("tailLawValues has %d entries but only %d DISTINCT values, expected "+
+			"at least %d: the law, the length check and this invariant all range over "+
+			"it, so shrinking the effective domain -- by deletion OR by duplicating an "+
+			"existing value -- disables coverage while every test still reports ok",
+			len(tailLawValues), len(distinct), expectedTailLawValueCount)
+	}
+	t.Logf("baselines pinned at precision %d: %d; law values checked: %d",
+		maxSignificantFractionPlace, len(pinned), len(tailLawValues))
 }

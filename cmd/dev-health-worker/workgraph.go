@@ -70,14 +70,14 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	}
 	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency}
 
-	buildPreSteps, preStepErr := workgraphBuildPreSteps(cfg, specs, observer, logger)
+	buildPreSteps, buildPostSteps, preStepErr := workgraphBuildPreSteps(cfg, specs, observer, logger)
 	if preStepErr != nil {
 		return workerFamily{}, preStepErr
 	}
 
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
-		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies, buildPreSteps); err != nil {
+		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies, buildPreSteps, buildPostSteps); err != nil {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		registered = append(registered, spec)
@@ -112,7 +112,7 @@ func workgraphCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client
 // a nil step for the same reason.
 func workgraphBuildPreSteps(
 	cfg config.Config, specs []jobruntime.HandlerSpec, observer jobruntime.Observer, logger *slog.Logger,
-) ([]workgraph.NativePreStep, error) {
+) ([]workgraph.NativePreStep, []workgraph.NativePostStep, error) {
 	declared := buildPreStepOrder()
 	buildSelected := false
 	for _, spec := range specs {
@@ -122,33 +122,33 @@ func workgraphBuildPreSteps(
 		}
 	}
 	if !buildSelected {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	connection, connectionErr := clickhousestore.Open(
 		context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
 	)
 	if connectionErr != nil {
-		return nil, errWorkerDependencyUnavailable
+		return nil, nil, errWorkerDependencyUnavailable
 	}
 	loader, loaderErr := issueprlinks.NewLoader(connection)
 	if loaderErr != nil {
-		return nil, errWorkerDependencyUnavailable
+		return nil, nil, errWorkerDependencyUnavailable
 	}
 	writer, writerErr := issueprlinks.NewWriter(connection)
 	if writerErr != nil {
-		return nil, errWorkerDependencyUnavailable
+		return nil, nil, errWorkerDependencyUnavailable
 	}
 	service, serviceErr := issueprlinks.NewService(loader, writer, logger)
 	if serviceErr != nil {
-		return nil, errWorkerDependencyUnavailable
+		return nil, nil, errWorkerDependencyUnavailable
 	}
 	if candidate, ok := observer.(issueprlinks.Observer); ok {
 		service.SetObserver(candidate)
 	}
 	step, stepErr := newIssuePRLinksPreStep(service)
 	if stepErr != nil {
-		return nil, errWorkerDependencyUnavailable
+		return nil, nil, errWorkerDependencyUnavailable
 	}
 	steps := []workgraph.NativePreStep{step}
 
@@ -157,14 +157,53 @@ func workgraphBuildPreSteps(
 	// construction, run in whatever position it happened to be appended, and
 	// the ordering invariant in NativePreStep would be violated silently.
 	if len(steps) != len(declared) {
-		return nil, errWorkerDependencyUnavailable
+		return nil, nil, errWorkerDependencyUnavailable
 	}
 	for index, name := range declared {
 		if steps[index].Name() != name {
-			return nil, errWorkerDependencyUnavailable
+			return nil, nil, errWorkerDependencyUnavailable
 		}
 	}
-	return steps, nil
+
+	// The post-step seam, on the SAME connection. It carries the identical
+	// constructed-vs-declared refusal, because a post-step that is constructed
+	// but not declared -- or declared and silently missing -- fails in the way
+	// this whole arrangement exists to prevent: the build succeeds and the rows
+	// carry Python's values.
+	edgeObserver, hasObserver := observer.(jobruntime.WorkGraphIssueEdgesObserver)
+	if !hasObserver {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	edgeStep, edgeStepErr := newIssueIssueEdgesPostStep(connection, edgeObserver)
+	if edgeStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	postSteps := []workgraph.NativePostStep{edgeStep}
+	declaredPost := buildPostStepOrder()
+	if len(postSteps) != len(declaredPost) {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	for index, name := range declaredPost {
+		if postSteps[index].Name() != name {
+			return nil, nil, errWorkerDependencyUnavailable
+		}
+	}
+	return steps, postSteps, nil
+}
+
+// buildPostStepOrder is the DECLARED order of the native POST-steps, and the
+// single place that order is decided. Same split as buildPreStepOrder: a pure
+// function a test can assert without a ClickHouse connection.
+//
+// `issue_issue_edges` is here rather than in buildPreStepOrder because Python's
+// stage OVERWRITES it -- see NativePostStep and the step's own doc. Its sibling
+// half, `issue_pr_edges_from_fast_path`, READS what issue_pr_links writes and
+// so belongs in the PRE-step order after it. That is the straddle
+// buildPreStepOrder's comment refers to: this lane's producer sits on both
+// sides of the mapping, and the two halves land in different seams for
+// different reasons.
+func buildPostStepOrder() []string {
+	return []string{"issue_issue_edges"}
 }
 
 // buildPreStepOrder is the DECLARED order of the native pre-steps that run
@@ -182,10 +221,10 @@ func buildPreStepOrder() []string {
 	return []string{"issue_pr_links"}
 }
 
-func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep) error {
+func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
-		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps...)
+		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps)
 		if err != nil {
 			return err
 		}

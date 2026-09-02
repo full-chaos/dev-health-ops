@@ -2,7 +2,14 @@ name: Go
 
 on:
   push:
-    branches: ['**']
+    # `main` only. On a feature branch this workflow's push and pull_request
+    # runs shared one concurrency group (CHAOS-4676's design, deliberate) and
+    # raced to cancel each other; the loser left a cancelled check-run carrying
+    # a required context name, blocking the merge with nothing failing
+    # (CHAOS-4814). Not firing on branches removes the twin rather than the
+    # arbitration, so 4676's "one authoritative run per branch tip" now holds
+    # because there is only one run.
+    branches: [main]
     paths:
       - '**/*.go'
       - '**/go.mod'
@@ -92,11 +99,16 @@ on:
   # CHAOS-3948 turned `push` off (see the concurrency block below for why)
   # and added this scheduled run against main's HEAD (`schedule` always
   # targets the default branch) as a fixed-cost, one-fan-out-a-day backstop
-  # so main still got some Go CI between merges. Push is enabled again above
-  # (owner-ratified), scoped to all branches like `pull_request`, so a
-  # branch with no open PR also gets gate coverage; this schedule stays as a
-  # cheap safety net regardless. `workflow_dispatch` above also gives a
-  # one-click way to run the full matrix against main on demand.
+  # so main still got some Go CI between merges.
+  #
+  # Push was later re-enabled across all branches, which is what produced the
+  # cancelled-twin race CHAOS-4814 traced; it is now scoped to `main` only.
+  # So a branch with no open PR gets NO Go run -- branch protection gates on
+  # the PR, so nothing merges unproven, but there is no pre-PR coverage and
+  # this schedule is not a substitute for it: `schedule` targets main's HEAD,
+  # never a feature branch. It backstops MAIN between merges, which is what
+  # CHAOS-3948 built it for. `workflow_dispatch` above gives a one-click way
+  # to run the full matrix against main on demand.
   schedule:
     - cron: '17 8 * * *'
 
@@ -117,17 +129,34 @@ concurrency:
   # pull_request/pull_request_target) and empty for push, so it falls
   # through to `github.ref_name` (the pushed branch name) there — the same
   # branch produces the same group key from either trigger.
+  #
+  # CHAOS-4814 amended HOW that single group is reached, not the group. The
+  # shared key was doing two jobs: bounding a branch to one live fan-out, and
+  # arbitrating between a push run and a pull_request run for the SAME commit.
+  # The second job cost more than it saved. Both events fired on every feature
+  # branch, they were created in the same second, and the loser left a CANCELLED
+  # check-run carrying a REQUIRED context name on the head commit -- branch
+  # protection then refused the merge while every workflow run reported success
+  # and `gh pr checks` showed green. Measured on #2110: 15 cancelled check-runs,
+  # BLOCKED, nothing failing. Racy rather than certain (#2115's twins both
+  # survived), which is why it read as flake for weeks.
+  #
+  # `push` is now restricted to `main`, so on a feature branch only
+  # `pull_request` fires and there is no twin to arbitrate. The invariant is
+  # unchanged and now holds trivially: ONE authoritative run per branch tip,
+  # because there is only one run. The group still bounds re-pushes and it still
+  # protects `main` and the merge queue below.
+  #
+  # Cost, stated plainly: a branch pushed with no PR open gets no Go run until
+  # the PR is opened. Branch protection gates on the PR, so nothing merges
+  # unproven -- what is lost is early feedback before a PR exists.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  # Live-proof commit for the push-then-PR-open/reopen ordering (round 6,
-  # CHAOS-4676): pushed while PR #2050 was closed, then the PR was reopened
-  # at this exact SHA with no further push, to prove the shared group
-  # cancels the earlier `push` run natively when `pull_request` arrives.
-  # PR/branch runs cancel their predecessor, in EITHER direction now, so a
-  # fast-follow push (or a PR opening moments after a no-PR push) never
-  # leaves two authoritative runs live on one SHA — whichever run GitHub
-  # starts second in the shared group cancels whichever was there first,
-  # regardless of which trigger fired which one. This bounds the workflow
-  # to ONE live fan-out per branch -- ~13 jobs, several at a 25-minute cap.
+  # Historical (round 6, CHAOS-4676): a live-proof commit demonstrated the
+  # shared group cancelling an earlier `push` run when `pull_request` arrived at
+  # the same SHA. That cross-event arbitration no longer occurs on feature
+  # branches, because `push` no longer fires there -- see CHAOS-4814 above. The
+  # group still bounds the workflow to ONE live fan-out per branch (~13 jobs,
+  # several at a 25-minute cap) by cancelling a superseded re-push.
   #
   # merge_group runs must not be cancelled: a burst of merges lands several
   # within the same group in quick succession, and with an unconditional

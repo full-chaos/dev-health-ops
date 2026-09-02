@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import math
 import platform
+import struct
 import sys
 import unicodedata
 
@@ -44,6 +45,7 @@ _SPECIALS = [
     -0.5,
     2.5,
     -2.5,
+    0.1,
     0.125,
     -0.125,
     0.375,
@@ -108,9 +110,18 @@ _NDIGITS = (
 # next value the author did not think of. Enumerate the small band exhaustively
 # and pin the boundaries instead.
 #
-# The accepted range is CPython's INT_MAX: format() takes a precision up to
-# 2147483647 and raises "ValueError: precision too big" at 2147483648
-# (measured). The huge accepted values are covered for NON-FINITE values only,
+# The accepted range is bounded by a C `int`, NOT by sys.maxsize: format()
+# takes a precision up to 2147483647 and raises "ValueError: precision too big"
+# at 2147483648 (measured).
+#
+# The distinction matters and was worth measuring rather than assuming, because
+# the fixture records sys.maxsize and it is tempting to read these boundary
+# cases as derived from it. They are not: on this build sys.maxsize is
+# 2**63-1 = 9223372036854775807 while the precision cap is 2**31-1. The cap
+# comes from the format-spec parser's C int, so a 32-bit build would move
+# sys.maxsize without moving this boundary. That is why the rot guard does not
+# compare sys.maxsize: it is recorded as environment provenance, and nothing
+# in this corpus depends on it (CHAOS-4870). The huge accepted values are covered for NON-FINITE values only,
 # where the output is 3 characters -- format(1.0, ".2147483647f") would build a
 # two-gigabyte string, so a corpus cannot hold it and this file must not try.
 _PRECISIONS = (
@@ -224,6 +235,44 @@ def main() -> None:
         9007199254740992.0,
         123456789.123456789,
     ]
+
+    # The tail_values list is a CLAIM about coverage, and until this assertion
+    # existed it was not an effective one. Membership here does not create a
+    # corpus entry -- the loop below only ADDS tail precisions to values that
+    # are already in `values`. 0.1 sat in this list while being absent from
+    # _SPECIALS and from the magnitude sweep, so it received no formats entry at
+    # any precision, and the Go law test's baseline for it was never pinned to
+    # CPython. 11 of 12 by luck (CHAOS-4870).
+    #
+    # Assert rather than document: a declared value that cannot be covered is a
+    # generator bug, and it must fail here rather than produce a corpus that
+    # quietly omits it.
+    # Compare by BIT PATTERN, not `==`. Python's -0.0 == 0.0 is True, so an
+    # equality check reports -0.0 as present whenever +0.0 is, and removing
+    # -0.0 from _SPECIALS produces a corpus with no negative-zero entry while
+    # this refusal accepts it (verified: generator exited 0, zero -0.0 rows).
+    #
+    # The Go half of this same enforcement already compares math.Float64bits.
+    # Using `==` here made the two halves of one guard disagree about what
+    # "the same value" means -- and signed zero is exactly the case the corpus
+    # exists to pin, since it survives into str() output as "-0.0".
+    def _bits(value: float) -> bytes:
+        return struct.pack("<d", value)
+
+    present = {_bits(existing) for existing in values if not math.isnan(existing)}
+    has_nan = any(math.isnan(existing) for existing in values)
+    missing_from_values = [
+        candidate
+        for candidate in tail_values
+        if not (has_nan if math.isnan(candidate) else _bits(candidate) in present)
+    ]
+    if missing_from_values:
+        raise SystemExit(
+            "tail_values entries are absent from the generated value set, so they "
+            f"would receive no corpus entry: {[float.hex(v) for v in missing_from_values]}. "
+            "Add them to _SPECIALS."
+        )
+
     for value in values:
         precisions = list(_PRECISIONS) + _REFUSED_PRECISIONS
         if any(

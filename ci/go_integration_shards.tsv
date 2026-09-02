@@ -16,6 +16,15 @@
 # assertions in them. Re-time it if that file grows. Longest-processing-time-first assignment keeps the two
 # non-dominant shards balanced while isolating that indivisible dominant
 # package under the unchanged 25-minute job budget.
+# internal/jobs/workgraph/edges (CHAOS-4766): ONE test, which takes a fresh
+# ClickHouse container and then applies the real migration chain via
+# chschema.Apply. Weighted by the header's own rule for container-dominated
+# packages -- scale with test count, not assertion count. 20s is ceil() of
+# internal/streamhandlers' per-test cost (113s / 8 tests = 14.1s, same
+# container-plus-migrations shape) plus margin, because a single test amortises
+# nothing. This is an ESTIMATE, not a measurement: re-time it from a completed
+# go-storage-integration runner and correct it, and re-time it if the file
+# gains tests.
 # cmd/query-api/internal/analytics (CHAOS-4730): un-denylisted (CHAOS-4643's
 # reason no longer held once the package got real Testcontainers coverage,
 # see ci/check_go.sh's INTEGRATION_DENYLIST comment). Weight 22s, ceil() of a
@@ -52,6 +61,7 @@ internal/jobs/pagerduty	9
 internal/jobs/report	33
 internal/jobs/system	12
 internal/jobs/workgraph	7
+internal/jobs/workgraph/edges	20
 internal/providerfoundation	12
 internal/providersync	1166
 internal/scheduler/fixed	143

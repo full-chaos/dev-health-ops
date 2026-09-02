@@ -253,6 +253,89 @@ class TestCapturedInputsAreSnapshots:
     of what it derives from. CHAOS-4803 carries the general form.
     """
 
+    class ByReferenceSink:
+        """The sink as it behaved BEFORE the fix: records what it hands over.
+
+        Re-created standalone rather than subclassing the real one — it is the
+        OLD behaviour, not a variant of the new, and writing it out makes the
+        single differing line (no copy) visible instead of buried in an override.
+
+        Standing this up beside the real sink is the point. A guard that only
+        asserts "the recorded value survived" passes identically whether the
+        snapshot works or whether nothing in the test ever exercised it: it
+        checks the implementation of the fix rather than the failure the fix
+        exists to prevent. Showing the old behaviour ACCEPTING the corruption is
+        what makes the new behaviour's rejection mean something.
+        """
+
+        def __init__(self, rows: list[dict]) -> None:
+            self._rows = rows
+            self.reads: list[list[dict]] = []
+
+        def query_dicts(self, query: str, params: dict) -> list[dict]:
+            self.reads.append(self._rows)  # the defect: recorded by reference
+            return self._rows
+
+    def test_the_old_by_reference_sink_accepts_a_corruption_the_new_one_rejects(
+        self, generator
+    ):
+        """CHAOS-4803: the demonstration, not just the mechanism.
+
+        A stub producer mutates a row in place — the shape of a Python regression
+        that corrupts `evidence` — and we derive the expected value from each
+        sink's recorded input, exactly as the Go oracle does. The by-reference
+        sink must derive the CORRUPTED value (and so accept the corrupted output);
+        the deep-copying sink must derive the ORIGINAL and reject it.
+        """
+
+        def stub_producer(sink):
+            """Reads, then rewrites the row in place before deriving evidence."""
+            rows = sink.query_dicts(SCOPED_READ, {})
+            for row in rows:
+                row["relationship_type_raw"] = "regression:oracle-blind"
+            # What the producer would emit, derived AFTER its own mutation.
+            return [
+                row["relationship_type_raw"] or row["relationship_type"] or "dependency"
+                for row in rows
+            ]
+
+        def fresh_row():
+            return {
+                "source_work_item_id": "linear:A",
+                "target_work_item_id": "linear:B",
+                "relationship_type": "relates_to",
+                "relationship_type_raw": "linear_relation:related",
+            }
+
+        # --- the old behaviour: the oracle is blinded ---
+        old_rows = [fresh_row()]
+        old_sink = self.ByReferenceSink(old_rows)
+        old_emitted = stub_producer(old_sink)
+        old_derived = [
+            row["relationship_type_raw"] or row["relationship_type"] or "dependency"
+            for row in old_sink.reads[0]
+        ]
+        assert old_emitted == old_derived, (
+            "the by-reference sink was expected to record the corrupted value, so that "
+            "deriving from it reproduces the corruption — if this fails the "
+            "demonstration is no longer demonstrating anything"
+        )
+        assert old_derived == ["regression:oracle-blind"]
+
+        # --- the current behaviour: the corruption is caught ---
+        new_rows = [fresh_row()]
+        new_sink = generator.RecordingSink(lambda statement, params: new_rows)
+        new_emitted = stub_producer(new_sink)
+        new_derived = [
+            row["relationship_type_raw"] or row["relationship_type"] or "dependency"
+            for row in new_sink.reads[0]
+        ]
+        assert new_derived == ["linear_relation:related"]
+        assert new_emitted != new_derived, (
+            "the deep-copying sink still derived the producer's corrupted value; the "
+            "oracle would accept a regression"
+        )
+
     def test_a_producer_mutation_does_not_reach_the_recorded_input(self, generator):
         row = {
             "source_work_item_id": "linear:A",

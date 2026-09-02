@@ -52,9 +52,37 @@ func TestFloatTextGoldenMatchesLivePython(t *testing.T) {
 		t.Fatalf("read committed golden: %v", err)
 	}
 
-	if string(regenerated) == string(committed) {
-		t.Logf("float-text golden matches the live interpreter: %s",
-			floatTextInterpreterOf(t, regenerated, "regenerated"))
+	// Compare the DATA and the RECORDED ENVIRONMENT separately, because they
+	// answer different questions and only one of them is under test.
+	//
+	// The data is what the Go mirrors are asserted against. The environment
+	// block exists to ATTRIBUTE a data mismatch, not to be one: this corpus is
+	// float formatting and rounding, which is IEEE-754 and exact-dtoa, so it is
+	// architecture-independent by construction -- unlike arithmetic, where
+	// arm64 FMA genuinely diverges (CHAOS-4818).
+	//
+	// An earlier version compared the whole document byte-for-byte and then
+	// attributed any difference to the interpreter. CI runs x86_64 while this
+	// corpus was generated on arm64, so `machine` and `maxsize` differ while
+	// every value is identical -- and the guard failed with "THE INTERPRETER
+	// MOVED", which was simply untrue: same CPython 3.14.7, same Unicode
+	// 16.0.0, different CPU. A guard that misnames its cause sends the reader
+	// to the wrong remedy, which for this one is "regenerate the fixture" --
+	// the harmful action.
+	committedData, committedEnvironment := splitFloatTextDocument(t, committed, "committed")
+	liveData, liveEnvironment := splitFloatTextDocument(t, regenerated, "regenerated")
+
+	if string(committedData) == string(liveData) {
+		if committedEnvironment != liveEnvironment {
+			// Worth saying out loud rather than passing silently: the corpus
+			// was produced somewhere else and still reproduces exactly, which
+			// is evidence FOR architecture independence, not a problem.
+			t.Logf("float-text golden reproduces exactly on a different environment "+
+				"(committed: %s; here: %s) -- expected, this corpus is architecture-independent",
+				committedEnvironment, liveEnvironment)
+		} else {
+			t.Logf("float-text golden matches the live interpreter: %s", liveEnvironment)
+		}
 		writeFloatTextProof(t, proofDirectory)
 		return
 	}
@@ -64,6 +92,30 @@ func TestFloatTextGoldenMatchesLivePython(t *testing.T) {
 	// value of this guard over a plain byte comparison.
 	committedInterpreter := floatTextInterpreterOf(t, committed, "committed")
 	liveInterpreter := floatTextInterpreterOf(t, regenerated, "regenerated")
+
+	// Reached only when the DATA differs. The environment block now explains
+	// that difference rather than causing it.
+	// Name what ACTUALLY differs. An architecture change reads as an
+	// "interpreter" change if the identity is compared as one opaque string,
+	// and the two call for different responses: a moved interpreter may
+	// justify regenerating, a moved CPU never does for this corpus.
+	if committedEnvironment != liveEnvironment && floatTextInterpreterCore(t, committed) == floatTextInterpreterCore(t, regenerated) {
+		t.Fatalf(`CAUSE: THE DATA DIFFERS, AND SO DOES THE ARCHITECTURE -- BUT THE INTERPRETER IS THE SAME.
+
+Committed: %s
+Here:      %s
+
+The CPython version, implementation and Unicode version are IDENTICAL; only the
+machine differs. This corpus is float formatting and rounding -- IEEE-754 and
+exact dtoa -- which is architecture-independent, so an architecture difference
+CANNOT explain a data difference here. Something else changed.
+
+Do NOT regenerate. Find the real cause: a hand-edited fixture, a generator
+change that was not regenerated, or a genuine architecture-dependent behaviour
+this corpus was not expected to contain (which would itself be the finding --
+compare against CHAOS-4818, where arm64 FMA does diverge, but for ARITHMETIC,
+not formatting).`, committedEnvironment, liveEnvironment)
+	}
 
 	if committedInterpreter != liveInterpreter {
 		t.Fatalf(`CAUSE: THE INTERPRETER MOVED, NOT THE FIXTURE.
@@ -167,4 +219,47 @@ func writeFloatTextProof(t *testing.T, proofDirectory string) {
 	if err := os.WriteFile(proof, []byte("executed"), 0o644); err != nil {
 		t.Fatalf("write proof marker: %v", err)
 	}
+}
+
+// splitFloatTextDocument separates the corpus DATA from the recorded
+// environment, so a mismatch in one is never reported as a mismatch in the
+// other.
+//
+// Returns the data re-serialised canonically (sorted keys, stable spacing) so
+// the comparison is on content rather than on whatever key order a particular
+// json library happened to emit.
+func splitFloatTextDocument(t *testing.T, document []byte, label string) (data []byte, environment string) {
+	t.Helper()
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(document, &parsed); err != nil {
+		t.Fatalf("decode %s golden: %v", label, err)
+	}
+	environment = floatTextInterpreterOf(t, document, label)
+	delete(parsed, "generating_interpreter")
+
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatalf("re-serialise %s golden data: %v", label, err)
+	}
+	return canonical, environment
+}
+
+// floatTextInterpreterCore returns only the fields that can change CPython's
+// float BEHAVIOUR -- version, implementation, Unicode -- deliberately excluding
+// the machine, which cannot for this corpus. Keeping them separate is what lets
+// the guard say "the CPU moved" rather than blaming the interpreter.
+func floatTextInterpreterCore(t *testing.T, document []byte) string {
+	t.Helper()
+	var parsed struct {
+		GeneratingInterpreter struct {
+			PythonVersion  string `json:"python_version"`
+			Implementation string `json:"implementation"`
+			UnicodeVersion string `json:"unicode_version"`
+		} `json:"generating_interpreter"`
+	}
+	if err := json.Unmarshal(document, &parsed); err != nil {
+		t.Fatalf("decode interpreter core: %v", err)
+	}
+	interpreter := parsed.GeneratingInterpreter
+	return interpreter.Implementation + " " + interpreter.PythonVersion + " (Unicode " + interpreter.UnicodeVersion + ")"
 }

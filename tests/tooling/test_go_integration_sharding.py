@@ -2897,67 +2897,119 @@ def test_every_compose_spelling_is_refused(command: str) -> None:
     )
 
 
-def test_no_orphaned_module_level_helpers() -> None:
-    """No helper in this file may be defined and never called.
+# Definitions in tests/tooling that are dead TODAY and not this ticket's to fix.
+# Asserted STILL ORPHANED, so the list cannot rot into a silent exemption.
+_KNOWN_ORPHANS: dict[str, frozenset[str]] = {
+    "test_aggregate_gate_results.py": frozenset(
+        {"_code_filter_patterns", "_job", "_steps"}
+    ),
+}
 
-    `_run_starts_containers` sat here defined-and-uncalled after the guards were
-    reduced for #2111 -- and survived a round of me asserting I had rewired it.
-    Dead code in a guard file is worse than absent code: it reads as protection,
-    and an audit counts it as coverage.
 
-    The control below guards the detector itself. An earlier hand-rolled version
-    of this check reported ten orphans because it miscounted single-call
-    functions; a detector with no control is a finding generator, not evidence.
+def _module_level_definitions_and_uses(tree: Any) -> tuple[set[str], set[str]]:
+    """(defined, used) for one parsed module.
+
+    `test_*` functions and pytest fixtures are excluded: pytest calls those, so
+    they are never referenced by name. Dunders are excluded.
     """
     import ast
 
-    source = Path(__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    defined = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("_")
-    }
-    # Module-level CONSTANTS too. The first version walked functions only, and
-    # `_DOCKER_PULLING_SUBCOMMANDS` went dead when the per-noun verb sets
-    # replaced it -- caught by CodeQL, not by this. A detector that watches one
-    # kind of definition reports "no orphans" while another kind rots, which is
-    # the reassuring-but-false answer this test exists to prevent.
+    defined: set[str] = set()
     for node in tree.body:
-        targets = []
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test_"):
+                continue
+            if any(
+                (isinstance(d, ast.Attribute) and d.attr == "fixture")
+                or (isinstance(d, ast.Name) and d.id == "fixture")
+                or (
+                    isinstance(d, ast.Call)
+                    and isinstance(d.func, ast.Attribute)
+                    and d.func.attr == "fixture"
+                )
+                for d in node.decorator_list
+            ):
+                continue
+            defined.add(node.name)
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else ([node.target] if isinstance(node, ast.AnnAssign) else [])
+        )
         defined |= {
-            t.id for t in targets if isinstance(t, ast.Name) and t.id.startswith("_")
+            t.id
+            for t in targets
+            if isinstance(t, ast.Name) and not t.id.startswith("__")
         }
+
     used = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        n.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
     }
-    used |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    used |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    used |= {
+        a.asname or a.name
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.Import, ast.ImportFrom))
+        for a in n.names
+    }
+    return defined, used
 
-    # CONTROL: a helper known to be called must be seen as called. If this fails
-    # the detector is broken and its orphan list means nothing.
-    assert "_ALLOWED_IMAGE_REGISTRIES" in used, (
-        "detector control failed: _ALLOWED_IMAGE_REGISTRIES is used by "
-        "_image_is_allowed but was not seen as used -- the constant half of "
-        "the orphan list cannot be trusted"
-    )
-    assert "_image_is_allowed" in used, (
-        "detector control failed: _image_is_allowed is called by "
-        "test_every_pulled_image_resolves_to_an_approved_registry but was not "
-        "seen as used -- the orphan list below cannot be trusted"
-    )
 
-    orphans = sorted(name for name in defined if name not in used)
-    assert not orphans, (
-        f"helper(s) defined and never called: {orphans}. Wire them in or delete "
-        "them -- an uncalled guard helper reads as protection while providing "
-        "none."
+def test_no_orphaned_module_level_definitions_in_tooling_tests() -> None:
+    """No definition in tests/tooling may be defined and never used.
+
+    HOISTED from one file to the directory. The per-file version watched only
+    the module it lived in, so a second guard file was entirely unwatched -- and
+    `SHARED_JOB_ID` went orphaned in that unwatched file within hours of the
+    detector shipping, when the test consuming it was removed. A detector that
+    watches one file reports "no orphans" for the whole directory.
+
+    The name filter widened with it: the first version required a leading
+    underscore, so `SHARED_JOB_ID` would have been invisible even in the file
+    already watched. Two blind spots, one symptom.
+    """
+    import ast
+
+    directory = Path(__file__).resolve().parent
+    offenders: list[str] = []
+    stale: list[str] = []
+    control_function = False
+    control_constant = False
+
+    for path in sorted(directory.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        defined, used = _module_level_definitions_and_uses(tree)
+
+        # CONTROLS, one per definition kind, on this module where both are known
+        # live. A control covering one kind certifies one kind while reading as
+        # certifying the detector -- which is how the constant half shipped blind.
+        if path.name == Path(__file__).name:
+            control_function = "_image_is_allowed" in used
+            control_constant = "_ALLOWED_IMAGE_REGISTRIES" in used
+
+        known = _KNOWN_ORPHANS.get(path.name, frozenset())
+        orphans = defined - used
+        offenders += [f"{path.name}: {n}" for n in sorted(orphans - known)]
+        stale += [f"{path.name}: {n}" for n in sorted(known - orphans)]
+
+    assert control_function, (
+        "detector control failed: a known-called function was not seen as used; "
+        "the function half of the orphan list cannot be trusted"
+    )
+    assert control_constant, (
+        "detector control failed: a known-used constant was not seen as used; "
+        "the constant half cannot be trusted"
+    )
+    assert not stale, (
+        "_KNOWN_ORPHANS is stale -- these are no longer orphaned; delete the "
+        f"entries rather than letting the list rot into a silent exemption:\n  {stale}"
+    )
+    assert not offenders, (
+        f"definition(s) defined and never used: {offenders}. Wire them in or "
+        "delete them -- an uncalled helper in a guard file reads as protection "
+        "while providing none."
     )
 
 

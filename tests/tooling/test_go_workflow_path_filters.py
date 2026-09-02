@@ -69,11 +69,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GO_WORKFLOW = REPO_ROOT / ".github/workflows/go.yml"
 
-# The job id both workflows declare. If these ever stop matching, the no-op no
-# longer satisfies the required check and this whole class evaporates -- which
-# would be a behaviour change worth noticing, hence the assertion below.
-SHARED_JOB_ID = "go-quality"
-
 
 def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text())

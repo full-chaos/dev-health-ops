@@ -53,8 +53,18 @@ class BillingReference(_StrictModel):
     # CHAOS-3952: Go's own copy of the durable row's idempotency key. Cross-
     # checked against the row itself so the two sides' identity can never
     # silently drift; the actual duplicate-send guard is the row's own
-    # completion fence (system_ops._mark_billing_notification_completed).
-    idempotency_key: str = Field(min_length=1, max_length=256)
+    # completion fence (system_ops._claim_billing_notification_completion).
+    # Optional, not required: a REQUIRED field on a strict (extra="forbid")
+    # bridge model is a rolling-deploy hazard — an old Go binary that omits
+    # it hits a 422 that http.go classifies as permanent (codex round 2,
+    # P1, EXECUTED), terminalizing the River job with no email ever sent.
+    # `send_billing_notification` itself already treats a missing key as
+    # "skip the cross-check" (see system_ops.py), so the wire contract
+    # matches. This does not cover new-Go-against-old-Python during a
+    # rollout (an old strict model rejects the unknown field outright) —
+    # that direction needs deploy ORDER (bridge before worker), not a code
+    # change here; see the PR's RISK-NOTES.
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class HeartbeatReference(_StrictModel):

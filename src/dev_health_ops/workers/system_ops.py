@@ -227,16 +227,12 @@ def send_billing_notification(
 
     try:
         run_async(fn(org_uuid))
-        if claimed_durable_notification_id:
-            _mark_billing_notification_completed(claimed_durable_notification_id)
-            BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(outcome="sent").inc()
-        return {"status": "sent", "email_type": email_type, "org_id": org_id}
     except Exception as exc:
         if claimed_durable_notification_id:
             # The claim above already reserved this row before the send was
-            # attempted; an ordinary send failure (the case self.retry()
-            # exists for) must release it, or the fence would permanently
-            # skip a delivery that never actually happened.
+            # attempted; the SEND ITSELF failed here, so nothing went out —
+            # release the claim, or the fence would permanently skip a
+            # delivery that never actually happened.
             _release_billing_notification_completion_claim(
                 claimed_durable_notification_id
             )
@@ -246,6 +242,31 @@ def send_billing_notification(
             self.max_retries + 1,
         )
         raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
+
+    # The send succeeded — the email is out and self.retry() must never run
+    # again for this notification (retrying now would duplicate it).
+    # Recording completion is bookkeeping ON TOP of that fact, not a gate on
+    # it: a failure writing `completed_at` here (codex round 2, P1, EXECUTED
+    # — a broad except around both the send and this write let a transient
+    # DB error on the write alone release the claim and duplicate the
+    # email on retry) must NOT release the claim and must NOT retry the
+    # task. The claim stays held with completed_at unset — exactly the
+    # "stale claim" state a later contention already classifies and
+    # surfaces (`stale_claim_detected`), which is the correct outcome here:
+    # the email went out, only the bookkeeping is stuck.
+    if claimed_durable_notification_id:
+        try:
+            _mark_billing_notification_completed(claimed_durable_notification_id)
+        except Exception:
+            logger.error(
+                "Billing notification sent but its completion fence write failed"
+            )
+            BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
+                outcome="sent_fence_write_failed"
+            ).inc()
+            return {"status": "sent", "email_type": email_type, "org_id": org_id}
+        BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(outcome="sent").inc()
+    return {"status": "sent", "email_type": email_type, "org_id": org_id}
 
 
 def _load_billing_notification(

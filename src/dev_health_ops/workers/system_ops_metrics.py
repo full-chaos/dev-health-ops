@@ -20,14 +20,19 @@ _prometheus: Any = load_prometheus()
 _meter: Any = load_otel_meter(__name__)
 
 # outcome labels:
-#   sent                  - claim won, dispatch performed, completed_at recorded
-#   duplicate_suppressed  - claim already held by a completed or in-flight
-#                           attempt; dispatch skipped
-#   stale_claim_detected  - claim held, no completion, older than
-#                           _STALE_CLAIM_THRESHOLD_SECONDS -- surfaced, not
-#                           acted on (no reaper/auto-resend in this PR)
-#   key_mismatch          - Go's idempotency_key disagreed with the durable
-#                           row's own; dropped before any claim attempt
+#   sent                    - claim won, dispatch performed, completed_at recorded
+#   sent_fence_write_failed - claim won, dispatch performed, but the
+#                             completed_at write itself failed -- the email
+#                             WAS sent; only completion bookkeeping is stuck.
+#                             Never released/retried (that would duplicate);
+#                             surfaces later as stale_claim_detected instead
+#   duplicate_suppressed    - claim already held by a completed or in-flight
+#                             attempt; dispatch skipped
+#   stale_claim_detected    - claim held, no completion, older than
+#                             _STALE_CLAIM_THRESHOLD_SECONDS -- surfaced, not
+#                             acted on (no reaper/auto-resend in this PR)
+#   key_mismatch            - Go's idempotency_key disagreed with the durable
+#                             row's own; dropped before any claim attempt
 BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL = build_counter(
     "devhealth_billing_notification_completion_fence_total",
     "Billing notification durable completion-fence outcomes by result",

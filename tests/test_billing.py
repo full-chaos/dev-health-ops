@@ -2068,6 +2068,64 @@ class TestBillingNotificationCompletionFence:
         assert result.get("already_sent") is True
         send_invoice_receipt.assert_not_called()
 
+    def test_post_send_fence_write_failure_does_not_release_the_claim_or_retry(self):
+        """Codex round 2, P1+P2 (both executed): the send SUCCEEDED here —
+        a broad try/except around both the send and the completion write
+        let a transient failure writing completed_at release the claim and
+        raise self.retry(), which would re-send an email that already went
+        out. The completion write is bookkeeping on top of a fact already
+        true, not a gate on it: its failure must be reported as its own
+        outcome and must neither release the claim nor retry the task."""
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        notification_id = str(uuid.uuid4())
+        key = "billing:fence-write-failure-key"
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        row = self._row(key)
+
+        def fake_mark_completed_raises(_id: str) -> None:
+            raise RuntimeError("transient database error writing completed_at")
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                side_effect=self._fake_load(row),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion",
+                side_effect=self._fake_claim(row),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._mark_billing_notification_completed",
+                side_effect=fake_mark_completed_raises,
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._release_billing_notification_completion_claim"
+            ) as release_claim,
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as send_invoice_receipt,
+        ):
+            task.push_request(id="billing-fence-write-failure", retries=0)
+            try:
+                result = task(
+                    durable_notification_id=notification_id, idempotency_key=key
+                )
+            finally:
+                task.pop_request()
+
+        # The email genuinely went out -- this call must not raise/retry.
+        assert send_invoice_receipt.call_count == 1
+        assert result["status"] == "sent"
+        assert result.get("already_sent") is not True
+        # Releasing here would let a retry send a SECOND email for a
+        # notification that already sent successfully.
+        release_claim.assert_not_called()
+        assert row["claimed_at"] is not None
+        assert row["completed_at"] is None
+
     def test_send_failure_releases_the_claim_so_a_retry_can_still_send(self):
         """Codex round 1, P1 (executed): claim-then-send means an ordinary
         transient send failure must release the claim, or the email is

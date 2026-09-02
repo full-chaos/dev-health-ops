@@ -434,15 +434,31 @@ def check_source_commit(root: Path, inventory: dict) -> tuple[list[str], str | N
     * the commit exists and HEAD does NOT descend from it, or it is not a
       40-hex sha at all -- ``STALE SOURCE COMMIT``, a hard failure;
     * the clone is SHALLOW and cannot answer -- either the object is absent, or
-      it is present but its history is cut at the shallow boundary so
-      ``--is-ancestor`` says "no" when the truthful answer is "cannot tell".
-      Both are returned as the second element, a NOTE the caller prints, never
-      an error. GitHub's default checkout is depth 1, so failing here would be a
-      false red on every CI run rather than a finding. This is a real narrowing
-      and it is the one hole in this check: in a shallow clone the stale case is
-      indistinguishable from the truncated case. Everywhere the history exists
-      -- local runs, and any job checked out with ``fetch-depth: 0`` -- it is a
-      hard check.
+      it is present but no merge base is reachable. Both are returned as the
+      second element, a NOTE the caller prints, never an error. GitHub's default
+      checkout is depth 1, so failing here would be a false red on every CI run
+      rather than a finding.
+
+    **The bound, stated exactly.** In a shallow clone a *negative* ancestry
+    answer carries no information, and the absence of a merge base is
+    irreducibly ambiguous: it means either "the connecting history was truncated
+    away" or "these histories are genuinely unrelated", and no local git signal
+    separates them -- a truly-an-ancestor commit hidden beyond the boundary and a
+    genuinely stale orphan present identical values for shallowness, object
+    presence, ``--is-ancestor``, ``merge-base``, and their own reachable depth.
+    So a stale ``source_commit`` that shares no history with HEAD is reported
+    UNVERIFIED, **not caught**. That is a deliberate choice of which way to be
+    wrong: never manufacture a false STALE, at the cost of not detecting that
+    one case. A *positive* answer is always trustworthy -- git found a path.
+
+    Divergence that the clone CAN prove is still a hard failure: when a merge
+    base is reachable the two histories connect in the retained graph, so "not an
+    ancestor" is conclusive (an abandoned side branch inside the fetched depth is
+    exactly that shape).
+
+    **Wherever this gate is wired into CI, check out with ``fetch-depth: 0``.**
+    With full history none of the above applies and it is an unconditional hard
+    check.
 
     The set-level guarantee does not depend on any of this: the gate re-derives
     every surface from the tree it is run against, so a green run is a
@@ -513,8 +529,9 @@ def check_source_commit(root: Path, inventory: dict) -> tuple[list[str], str | N
             # re-derive and re-stamp a provenance line that is already correct.
             return [], (
                 "SOURCE COMMIT UNVERIFIED: shallow clone, "
-                f"{commit[:12]} is present but its history is truncated, "
-                "ancestry not checked"
+                f"{commit[:12]} is present but no merge base is reachable -- "
+                "locally undecidable whether its history was truncated away or "
+                "is genuinely unrelated; ancestry not checked"
             )
         errors.append(
             f"STALE SOURCE COMMIT: HEAD does not descend from {commit[:12]}. The "

@@ -1839,7 +1839,7 @@ def test_shallow_ancestry_is_unverifiable_even_when_the_object_is_present(tmp_pa
     errors, note = checker.check_source_commit(clone, {"source_commit": first})
     assert errors == [], errors
     assert note is not None and "SOURCE COMMIT UNVERIFIED" in note, note
-    assert "truncated" in note, note
+    assert "undecidable" in note, note
 
 
 def test_shallow_still_reports_a_stale_commit_it_can_actually_disprove(tmp_path):
@@ -1901,6 +1901,75 @@ def test_shallow_still_reports_a_stale_commit_it_can_actually_disprove(tmp_path)
     errors, note = checker.check_source_commit(clone, {"source_commit": abandoned})
     assert any("does not descend" in e for e in errors), (errors, note)
     assert note is None, note
+
+
+def test_shallow_cannot_catch_a_stale_commit_with_no_shared_history(tmp_path):
+    """The documented LIMIT, pinned so it cannot regress silently.
+
+    This is not a claim of detection -- it asserts the opposite. A stale commit
+    sharing no history with HEAD is reported UNVERIFIED rather than caught,
+    because in a shallow clone "no merge base" is irreducibly ambiguous: it means
+    either "the connecting history was truncated away" or "these histories are
+    genuinely unrelated", and no local git signal separates the two. A
+    truly-an-ancestor commit hidden beyond the boundary (the test above) and this
+    genuinely stale orphan present IDENTICAL values for shallowness, object
+    presence, `--is-ancestor`, `merge-base`, and their own reachable depth.
+
+    So the rule is a deliberate choice of which way to be wrong: never manufacture
+    a false STALE, at the cost of missing this one case. Catching it would need a
+    non-local oracle (the forge's compare API) -- noted on CHAOS-4828 as the
+    option if this gate ever becomes a required check.
+    """
+    origin = _tiny_repo(tmp_path)
+    for text in ("b", "c"):
+        (origin / "f").write_text(f"{text}\n")
+        _git(origin, "commit", "-qam", text)
+    _git(origin, "checkout", "-q", "--orphan", "orph")
+    (origin / "g").write_text("orphan\n")
+    _git(origin, "add", "g")
+    _git(origin, "commit", "-qm", "orphan root")
+    unrelated = _git(origin, "rev-parse", "HEAD")
+    _git(origin, "checkout", "-q", "main")
+    for text in ("d", "e"):
+        (origin / "f").write_text(f"{text}\n")
+        _git(origin, "commit", "-qam", text)
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            "-b",
+            "main",
+            f"file://{origin}",
+            str(clone),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    # Fetched at FULL depth: the orphan's own history is complete. Nothing about
+    # this commit was truncated -- it simply shares no history with main.
+    subprocess.run(
+        ["git", "-C", str(clone), "fetch", "-q", "origin", "orph"],
+        check=True,
+        capture_output=True,
+    )
+    assert _git(clone, "rev-parse", "--is-shallow-repository") == "true"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(clone), "merge-base", unrelated, "HEAD"],
+            capture_output=True,
+        ).returncode
+        != 0
+    ), "fixture no longer reproduces: there must be no merge base"
+
+    errors, note = checker.check_source_commit(clone, {"source_commit": unrelated})
+    assert errors == [], errors
+    assert note is not None and "SOURCE COMMIT UNVERIFIED" in note, note
+    assert "undecidable" in note, note
 
 
 def test_the_committed_inventory_source_commit_is_an_ancestor_of_head():

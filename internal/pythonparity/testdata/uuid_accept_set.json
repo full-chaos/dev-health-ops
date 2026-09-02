@@ -1,0 +1,401 @@
+{
+ "cases": [
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7B9583EE-4D24-2BE7-4D09-34F815BEBDD7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee4d242be74d0934f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7B9583EE4D242BE74D0934F815BEBDD7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "00000000-0000-0000-0000-000000000000",
+   "uuid": "00000000-0000-0000-0000-000000000000",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{7b9583ee-4d24-2be7-4d09-34f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{{7b9583ee-4d24-2be7-4d09-34f815bebdd7}}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{{{7b9583ee-4d24-2be7-4d09-34f815bebdd7}}}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{7b9583ee4d242be74d0934f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "URN:UUID:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "Urn:Uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "urn:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:urn:uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:urn:uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:{7b9583ee-4d24-2be7-4d09-34f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:7b9583ee4d242be74d0934f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": " 7b9583ee-4d24-2be7-4d09-34f815bebdd7 ",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\t7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7\n",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "X7b9583ee-4d24-2be7-4d09-34f815bebdd7X",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "[7b9583ee-4d24-2be7-4d09-34f815bebdd7]",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "!7b9583ee-4d24-2be7-4d09-34f815bebdd7?",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd70",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "not-a-uuid",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "------------------------------------",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "7b-9583ee4d242be74d0934f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "-7b9583ee4d242be74d0934f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee4d242be74d0934f815bebdd7-",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f8-15bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7-b-9-5-8-3-e-e-4-d-2-4-2-b-e-7-4-d-0-9-3-4-f-8-1-5-b-e-b-d-d-7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "00000000-0000-0000-0000-000000000000",
+   "uuid": "00000000-0000-0000-0000-000000000000",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+   "uuid": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+   "uuid": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7urn:",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7uuid:",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "}}7b9583ee-4d24-2be7-4d09-34f815bebdd7{{",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "}7b9583ee-4d24-2be7-4d09-34f815bebdd7{",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11",
+   "uuid": "11111111-1111-1111-1111-111111111111",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661\u0661",
+   "uuid": "11111111-1111-1111-1111-111111111111",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff111111111111111111",
+   "uuid": "11111111-1111-1111-1111-111111111111",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21\u0f21",
+   "uuid": "11111111-1111-1111-1111-111111111111",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41\uff41",
+   "verdict": "REJECT"
+  },
+  {
+   "input": " 7b9583ee4d242be74d0934f815bebd ",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\t7b9583ee4d242be74d0934f815bebd\n",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u000b7b9583ee4d242be74d0934f815bebd\f",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\r7b9583ee4d242be74d0934f815bebd\u0085",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u00a07b9583ee4d242be74d0934f815bebd\u3000",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u16807b9583ee4d242be74d0934f815bebd\u2000",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u20287b9583ee4d242be74d0934f815bebd\u2029",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u202f7b9583ee4d242be74d0934f815bebd\u205f",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\u001c7b9583ee4d242be74d0934f815bebd\u001c",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\u200b7b9583ee4d242be74d0934f815bebd\u200b",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee4d242be 4d0934f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "+7b9583ee4d242be74d0934f815bebdd",
+   "uuid": "07b9583e-e4d2-42be-74d0-934f815bebdd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "-7b9583ee4d242be74d0934f815bebdd",
+   "verdict": "REJECT"
+  },
+  {
+   "input": " +7b9583ee4d242be74d0934f815bebd",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "+ 7b9583ee4d242be74d0934f815bebd",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "0x7b9583ee4d242be74d0934f815bebd",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "0X7b9583ee4d242be74d0934f815bebd",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "0x\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11\uff11",
+   "uuid": "00111111-1111-1111-1111-111111111111",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "0o7b9583ee4d242be74d0934f815bebd",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "0b7b9583ee4d242be74d0934f815bebd",
+   "uuid": "0b7b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "\u0660x7b9583ee4d242be74d0934f815bebd",
+   "uuid": "007b9583-ee4d-242b-e74d-0934f815bebd",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "0x0x7b9583ee4d242be74d0934f815be",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_11",
+   "uuid": "00000000-0000-0001-1111-111111111111",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "0x_7b9583ee4d242be74d0934f815beb",
+   "uuid": "0007b958-3ee4-d242-be74-d0934f815beb",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "0x__7b9583ee4d242be74d0934f815be",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "_7b9583ee4d242be74d0934f815bebdd",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee4d242be74d0934f815bebdd_",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "1__7b9583ee4d242be74d0934f815beb",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "+0x_7b9583ee4d242be74d0934f815be",
+   "uuid": "00007b95-83ee-4d24-2be7-4d0934f815be",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0\ud807\udde0",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde1\ud807\udde11111111111111111",
+   "verdict": "REJECT"
+  }
+ ],
+ "measured_on": "3.14.7",
+ "schema": "python_uuid_accept_set.v1"
+}

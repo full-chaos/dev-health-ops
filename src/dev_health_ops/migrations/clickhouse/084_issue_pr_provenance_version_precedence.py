@@ -241,11 +241,19 @@ def _table_exists(client, table: str) -> bool:
     can make a real, populated table look absent -- which would silently skip
     this migration rather than fail it.
 
-    A non-count answer RAISES. On a real server the answer is always 0 or 1, so
-    an unparseable cell means the client is not answering the question asked,
-    and continuing would rebuild -- or decline to rebuild -- on a fiction.
-    Production is not bent to accommodate a fake client; a fake that answers
-    every query with one canned row is the test's problem to fix.
+    Anything that is not exactly 0 or 1 RAISES. On a real server the answer is
+    always one of those, so any other value means the client is not answering the
+    question asked, and continuing would rebuild -- or decline to rebuild -- on a
+    fiction. Production is not bent to accommodate a fake client; a fake that
+    answers every query with one canned row is the test's problem to fix.
+
+    The check is `not in (0, 1)` rather than `> 0` deliberately. An earlier
+    version parsed the cell and returned `int(cell) > 0`, so an out-of-range
+    integer such as 7 came back as True WITHOUT raising -- while the error text
+    already promised "which is not 0 or 1". The message described a stricter
+    check than the code performed, which is worse than either being wrong alone:
+    a reader debugging an odd client would have trusted it and ruled out the one
+    thing that was still possible. Found by lane-ci-flakes.
     """
     res = client.query(f"EXISTS TABLE `{table}`")
     rows = getattr(res, "result_rows", None) or []
@@ -255,14 +263,22 @@ def _table_exists(client, table: str) -> bool:
             "answering the question asked. Refusing to guess whether the table "
             "is there."
         )
+    cell = rows[0][0]
     try:
-        return int(rows[0][0]) > 0
+        answer = int(cell)
     except (TypeError, ValueError) as exc:
         raise RuntimeError(
-            f"EXISTS TABLE `{table}` returned {rows[0][0]!r}, which is not 0 or "
-            "1. The client is not answering the question asked; refusing to "
-            "guess whether the table is there."
+            f"EXISTS TABLE `{table}` returned {cell!r}, which is not 0 or 1. "
+            "The client is not answering the question asked; refusing to guess "
+            "whether the table is there."
         ) from exc
+    if answer not in (0, 1):
+        raise RuntimeError(
+            f"EXISTS TABLE `{table}` returned {cell!r}, which is not 0 or 1. "
+            "The client is not answering the question asked; refusing to guess "
+            "whether the table is there."
+        )
+    return answer == 1
 
 
 def _engine_full(client, table: str) -> str:

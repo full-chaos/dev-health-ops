@@ -75,24 +75,40 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		return 0, fmt.Errorf("%w: partition %s repo_ids: %v", ErrInvalidState, partition.ID, err)
 	}
 
-	// job_daily.py builds repo_team_resolver/repo_names_by_id ONCE per run
-	// (build_repo_pattern_resolver(teams_data), discovered_repos) and
-	// passes the SAME pair into every family's compute call, testops
-	// included. Reuse the identical LoadWellbeingTeams/NewRepoPatternResolver/
-	// LoadRepoNames this package already built for team_wellbeing (CHAOS-4276)
-	// rather than a second implementation of the same query+resolver --
-	// codex adversarial review round 1 (CHAOS-4294) caught that testops_risk
-	// had NO team resolution at all in an earlier revision, silently
-	// dropping every repo-pattern-derived team_id to nil.
+	// job_daily.py builds repo_team_resolver ONCE per run
+	// (build_repo_pattern_resolver(teams_data)) and passes it into every
+	// family's compute call, testops included. Reuse the identical
+	// LoadWellbeingTeams/NewRepoPatternResolver this package already built
+	// for team_wellbeing (CHAOS-4276) rather than a second implementation of
+	// the same query+resolver -- codex adversarial review round 1
+	// (CHAOS-4294) caught that testops_risk had NO team resolution at all in
+	// an earlier revision, silently dropping every repo-pattern-derived
+	// team_id to nil.
 	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
 	if err != nil {
 		return 0, err
 	}
 	repoResolver := NewRepoPatternResolver(teams)
-	repoNamesByID, err := LoadRepoNames(ctx, executor.conn, run.OrganizationID, repoIDs)
-	if err != nil {
-		return 0, err
-	}
+
+	// repoName is DELIBERATELY the repo_id string, not the real synced repo
+	// name -- codex round 2 (P2, ARGUED then verified by direct code read)
+	// caught that the live bridge call site (worker_metrics.py:1749-1760)
+	// never passes repo_name to run_daily_metrics_job, so
+	// discover_repos(repo_id=repo_id, repo_name=None, ...) falls back to
+	// `full_name = repo_name or str(repo_id)` (job_daily.py:135) -- in
+	// PRODUCTION, repo_names_by_id[repo_id] IS the stringified UUID, never
+	// the real "org/repo" name, so repo_team_resolver.resolve(...) can never
+	// match a real pattern for THIS call path and the repo-pattern fallback
+	// is a live no-op. Loading the real name here (as an earlier revision
+	// did, via LoadRepoNames -- the same call TeamWellbeingExecutor makes)
+	// would make Go MORE accurate than live Python, not row-identical to
+	// it -- exactly the kind of "improvement" the standing rule forbids
+	// (reproduce Python's behavior, including its latent defects, don't fix
+	// them here; team-lead ruling 2026-09-01 on the pipeline_stability
+	// rolling-window issue applies identically to this one). Note: this
+	// means TeamWellbeingExecutor likely has the SAME divergence from live
+	// Python today -- flagged to team-lead, out of this ticket's scope to
+	// fix.
 
 	day := chDate(run.TargetDay)
 	start := day
@@ -106,7 +122,7 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 	var pipelineStability []testopsPipelineStabilityRow
 
 	for _, repoID := range repoIDs {
-		repoName := repoNamesByID[repoID.String()]
+		repoName := repoID.String()
 
 		pipelineRuns, err := loadTestopsPipelineRuns(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {

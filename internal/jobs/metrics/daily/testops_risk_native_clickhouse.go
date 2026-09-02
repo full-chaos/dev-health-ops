@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -435,21 +436,99 @@ func factorsJSON(fields []factorsJSONField) string {
 }
 
 // pythonFloatJSON mirrors how Python's json module serializes a float:
-// float.__repr__'s shortest round-trip decimal (David Gay's algorithm),
-// which is the same well-defined function of a double's bit pattern that
-// Go's strconv.FormatFloat(-1 precision, 'g') computes -- both are
-// "shortest decimal string that round-trips to this exact double", so they
-// agree for every value exercised by this package's tests. The one
-// necessary reshaping: Python always keeps a decimal point on a float
-// (json.dumps(5.0) -> "5.0", never "5"), and never emits Go's "e+" /
-// uppercase exponent form for the small magnitudes these factors take, so a
-// bare integer-looking mantissa gets ".0" appended.
+// float.__repr__'s SHORTEST round-trip decimal digit string (David Gay's
+// algorithm) -- the same well-defined function of a double's bit pattern
+// Go's strconv.FormatFloat(-1 precision) computes, so the DIGITS always
+// agree -- but Python and Go pick fixed-vs-scientific NOTATION by different
+// rules given those same digits. Go's 'g' verb switches to scientific once
+// the exponent reaches the shortest digit COUNT (e.g. 1_000_000.0, a single
+// significant digit, prints as "1e+06"); CPython's float_repr
+// (Objects/floatobject.c via pystrtod.c, mode 0) switches to scientific
+// only when the decimal exponent of the leading digit is < -4 or >= 16,
+// regardless of how many significant digits there are -- so 1_000_000.0
+// stays "1000000.0" and only reaches "1e+16"-style notation at 10**16.
+// Codex round 2 (P2, EXECUTED) caught the earlier strconv.FormatFloat('g',
+// -1, 64) implementation emitting "1e+06" for a value Python renders
+// "1000000.0" -- a real byte-level factors_json divergence for any
+// duration/queue-seconds value at or above 1e6. This reimplements Python's
+// OWN notation rule on top of Go's shortest-digit scientific form
+// (strconv.FormatFloat(value, 'e', -1, 64)) rather than trying to coax the
+// 'g'/'f' verbs into matching a different threshold.
 func pythonFloatJSON(value float64) string {
-	formatted := strconv.FormatFloat(value, 'g', -1, 64)
-	if !strings.ContainsAny(formatted, ".eE") {
-		formatted += ".0"
+	if value == 0 {
+		if math.Signbit(value) {
+			return "-0.0"
+		}
+		return "0.0"
 	}
-	return formatted
+	negative := value < 0
+	magnitude := value
+	if negative {
+		magnitude = -value
+	}
+	// Shortest round-trip scientific form, e.g. "1e+06", "1.234e+02",
+	// "9.42e+02" -- digits before 'e' are exactly Python's own dtoa digits.
+	scientific := strconv.FormatFloat(magnitude, 'e', -1, 64)
+	eIndex := strings.IndexByte(scientific, 'e')
+	mantissa := scientific[:eIndex]
+	exponent, err := strconv.Atoi(scientific[eIndex+1:])
+	if err != nil {
+		// Unreachable for a value strconv itself just formatted; fail soft
+		// to Go's own rendering rather than panic on a malformed parse.
+		formatted := strconv.FormatFloat(value, 'g', -1, 64)
+		if !strings.ContainsAny(formatted, ".eE") {
+			formatted += ".0"
+		}
+		return formatted
+	}
+	digits := strings.Replace(mantissa, ".", "", 1)
+
+	var rendered string
+	if exponent >= -4 && exponent < 16 {
+		rendered = pythonFixedNotation(digits, exponent)
+	} else {
+		rendered = pythonScientificNotation(digits, exponent)
+	}
+	if negative {
+		return "-" + rendered
+	}
+	return rendered
+}
+
+// pythonFixedNotation renders `digits` (the significant-digit string, no
+// sign, no decimal point) with its leading digit at decimal exponent `exp`
+// as plain fixed notation, matching CPython's format_float_short fixed-mode
+// branch -- always keeping a decimal point (json.dumps(5.0) -> "5.0").
+func pythonFixedNotation(digits string, exp int) string {
+	if exp >= 0 {
+		if len(digits) <= exp+1 {
+			return digits + strings.Repeat("0", exp+1-len(digits)) + ".0"
+		}
+		return digits[:exp+1] + "." + digits[exp+1:]
+	}
+	return "0." + strings.Repeat("0", -exp-1) + digits
+}
+
+// pythonScientificNotation renders `digits` at decimal exponent `exp` as
+// Python's json module would: lowercase "e", explicit sign, minimum
+// two-digit exponent (e.g. "1e-05", "1e+16"), matching CPython's
+// format_float_short scientific-mode branch.
+func pythonScientificNotation(digits string, exp int) string {
+	mantissa := digits[:1]
+	if len(digits) > 1 {
+		mantissa += "." + digits[1:]
+	}
+	sign := "+"
+	magnitude := exp
+	if magnitude < 0 {
+		sign = "-"
+		magnitude = -magnitude
+	}
+	exponentDigits := strconv.Itoa(magnitude)
+	if len(exponentDigits) < 2 {
+		exponentDigits = "0" + exponentDigits
+	}
+	return mantissa + "e" + sign + exponentDigits
 }
 
 // -----------------------------------------------------------------------

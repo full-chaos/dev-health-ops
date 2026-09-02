@@ -39,6 +39,16 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 	defer conn.Close()
 
 	for _, statement := range []string{
+		// ComputeFamily unconditionally calls LoadWellbeingTeams (reused
+		// from team_wellbeing, CHAOS-4276) to build the repo_team_resolver
+		// -- codex round 2 (P2, EXECUTED) caught this fixture omitting the
+		// teams table entirely, so the real production entry point this
+		// test claims to exercise never got past that first query. Same
+		// shape as wellbeing_native_executor_multi_repo_integration_test.go's
+		// own teams table.
+		`CREATE TABLE teams (
+    id String, name String, members Array(String), repo_patterns Array(String), org_id String
+) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		// Matches 000_raw_tables.sql's ci_pipeline_runs plus every column
 		// 029_testops_tables.sql ALTERs onto it.
 		`CREATE TABLE ci_pipeline_runs (

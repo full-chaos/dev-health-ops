@@ -2,6 +2,7 @@ package pythonparity
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"strconv"
@@ -42,6 +43,7 @@ type floatTextGolden struct {
 		IsNaN     bool   `json:"is_nan"`
 		Precision int    `json:"precision"`
 		Text      string `json:"text"`
+		Raises    string `json:"raises"`
 	} `json:"formats"`
 }
 
@@ -94,18 +96,30 @@ func parsePythonFloatHex(t *testing.T, text string) float64 {
 func TestRoundMatchesLivePythonGolden(t *testing.T) {
 	golden := loadFloatTextGolden(t)
 
-	checked := 0
+	checked, refusals := 0, 0
 	for _, entry := range golden.Rounds {
-		if entry.Raises != "" {
-			// The generator records a raising case rather than a value; the Go
-			// mirror has no exception channel, so such a case would need its
-			// own contract. None exist in the current corpus and the assertion
-			// below proves that stays true.
-			t.Fatalf("golden contains a raising round case (%s at ndigits=%d) that Round has no contract for",
-				entry.ValueHex, entry.NDigits)
-		}
 		value := parsePythonFloatHex(t, entry.ValueHex)
-		got := Round(value, entry.NDigits)
+		got, err := Round(value, entry.NDigits)
+
+		if entry.Raises != "" {
+			// CPython raised here, so the mirror must refuse rather than
+			// invent a value. Before this case existed in the corpus, Round
+			// returned +Inf for round(maxfloat, -308) and nothing could see it.
+			if err == nil {
+				t.Errorf("Round(%s, %d) = %v with no error; python raised %s",
+					entry.ValueHex, entry.NDigits, got, entry.Raises)
+			} else if !errors.Is(err, ErrRoundOverflow) {
+				t.Errorf("Round(%s, %d) failed with %v; want ErrRoundOverflow to mirror %s",
+					entry.ValueHex, entry.NDigits, err, entry.Raises)
+			}
+			refusals++
+			continue
+		}
+		if err != nil {
+			t.Errorf("Round(%s, %d) failed with %v; python returned a value",
+				entry.ValueHex, entry.NDigits, err)
+			continue
+		}
 
 		if entry.ResultIsNaN {
 			if !math.IsNaN(got) {
@@ -126,7 +140,14 @@ func TestRoundMatchesLivePythonGolden(t *testing.T) {
 		}
 		checked++
 	}
-	t.Logf("round cases checked: %d", checked)
+	// A corpus that lost its raising cases would still pass every assertion
+	// above by having nothing to refuse, so the count is asserted rather than
+	// merely logged.
+	if refusals == 0 {
+		t.Fatal("the corpus contains no case where CPython's round() raises; " +
+			"the overflow contract is untested and a regenerated fixture may have dropped it")
+	}
+	t.Logf("round cases checked: %d (of which refusals: %d)", checked, refusals)
 }
 
 func TestReprMatchesLivePythonGolden(t *testing.T) {
@@ -148,12 +169,37 @@ func TestReprMatchesLivePythonGolden(t *testing.T) {
 func TestFormatFixedMatchesLivePythonGolden(t *testing.T) {
 	golden := loadFloatTextGolden(t)
 
+	refusals := 0
 	for _, entry := range golden.Formats {
 		value := parsePythonFloatHex(t, entry.ValueHex)
-		if got := FormatFixed(value, entry.Precision); got != entry.Text {
+		got, err := FormatFixed(value, entry.Precision)
+
+		if entry.Raises != "" {
+			// Go reads a negative precision as "shortest representation" and
+			// would return a plausible string where CPython rejects the spec.
+			if err == nil {
+				t.Errorf("FormatFixed(%s, %d) = %q with no error; python raised %s",
+					entry.ValueHex, entry.Precision, got, entry.Raises)
+			} else if !errors.Is(err, ErrPrecisionMissing) {
+				t.Errorf("FormatFixed(%s, %d) failed with %v; want ErrPrecisionMissing to mirror %s",
+					entry.ValueHex, entry.Precision, err, entry.Raises)
+			}
+			refusals++
+			continue
+		}
+		if err != nil {
+			t.Errorf("FormatFixed(%s, %d) failed with %v; python returned %q",
+				entry.ValueHex, entry.Precision, err, entry.Text)
+			continue
+		}
+		if got != entry.Text {
 			t.Errorf("FormatFixed(%s, %d) = %q; python format(x, '.%df') = %q",
 				entry.ValueHex, entry.Precision, got, entry.Precision, entry.Text)
 		}
+	}
+	if refusals == 0 {
+		t.Fatal("the corpus contains no format case CPython rejects; " +
+			"the missing-precision contract is untested")
 	}
 }
 
@@ -181,7 +227,12 @@ func TestGoNativeRoundingDisagreesWithPython(t *testing.T) {
 	}
 
 	for _, testCase := range cases {
-		if got := Round(testCase.value, testCase.ndigits); got != testCase.python {
+		got, err := Round(testCase.value, testCase.ndigits)
+		if err != nil {
+			t.Errorf("Round(%v, %d) failed: %v", testCase.value, testCase.ndigits, err)
+			continue
+		}
+		if got != testCase.python {
 			t.Errorf("Round(%v, %d) = %v; python = %v", testCase.value, testCase.ndigits, got, testCase.python)
 		}
 

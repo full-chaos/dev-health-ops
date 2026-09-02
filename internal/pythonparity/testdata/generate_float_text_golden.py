@@ -68,8 +68,24 @@ _SPECIALS = [
 ]
 
 _MAGNITUDES = [1e-8, 1e-4, 1e-2, 1e0, 1e2, 1e5, 1e10, 1e15]
-_NDIGITS = [0, 1, 2, 3, 4, 6, 10, -1, -2]
-_PRECISIONS = [1, 2, 3]
+# ndigits deliberately reaches the band where round() RAISES. CPython's
+# OverflowError for the largest float is non-contiguous -- measured at
+# -308, -307, -306, -305, -304, -299, -298, -294, -293 and nowhere else in
+# -320..-291 -- so the corpus sweeps the whole neighbourhood rather than a
+# hand-picked value. A corpus that stopped at -2 (as the first version of this
+# file did) could not represent the raising case at all, and the Go mirror
+# silently returned +Inf there.
+_NDIGITS = (
+    [0, 1, 2, 3, 4, 6, 10, -1, -2, -3, -5]
+    + list(range(-320, -290))
+    + [-400, -401, 400, 401, 1000]
+)
+
+# Precision includes 0 and NEGATIVE values. Go reads a negative precision as
+# "shortest representation" and would happily return "1"; CPython's format spec
+# raises ValueError. Holding this axis to [1, 2, 3] is what let a mutant that
+# mishandled precision 0 pass both the frozen corpus and the live rot guard.
+_PRECISIONS = [0, 1, 2, 3, 6, -1, -2]
 
 
 def _values() -> list[float]:
@@ -95,7 +111,7 @@ def _round_entry(value: float, ndigits: int) -> dict[str, object] | None:
         result = round(value, ndigits)
     except (OverflowError, ValueError) as exc:
         return {
-            "value_hex": float.hex(value),
+            "value_hex": float.hex(value) if not math.isnan(value) else "nan",
             "ndigits": ndigits,
             "raises": type(exc).__name__,
         }
@@ -129,14 +145,19 @@ def main() -> None:
     formats = []
     for value in values:
         for precision in _PRECISIONS:
-            formats.append(
-                {
-                    "value_hex": float.hex(value) if not math.isnan(value) else "nan",
-                    "is_nan": math.isnan(value),
-                    "precision": precision,
-                    "text": format(value, f".{precision}f"),
-                }
-            )
+            entry: dict[str, object] = {
+                "value_hex": float.hex(value) if not math.isnan(value) else "nan",
+                "is_nan": math.isnan(value),
+                "precision": precision,
+            }
+            # A negative precision is not "shortest representation" to CPython,
+            # it is a malformed spec. Recording the raise is the only way the
+            # corpus can hold the Go mirror to refusing it too.
+            try:
+                entry["text"] = format(value, f".{precision}f")
+            except (ValueError, OverflowError) as exc:
+                entry["raises"] = type(exc).__name__
+            formats.append(entry)
 
     document = {
         "_marker": "recommendations-float-text-golden",

@@ -1,9 +1,32 @@
 package pythonparity
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"math/big"
 )
+
+// ErrRoundOverflow mirrors the OverflowError CPython's round() raises when the
+// rounded value cannot be represented as a float.
+//
+// It is a real, narrow, and NON-CONTIGUOUS band, which is why this is an error
+// rather than a modelled special case. Measured on CPython 3.14.7 for the
+// largest float, sweeping ndigits over -320..-291, the raising values are:
+//
+//	-308, -307, -306, -305, -304, -299, -298, -294, -293
+//
+// and no others -- rounding to the nearest 10**308 lands above the maximum
+// float, while rounding to the nearest 10**309 collapses to zero and is fine.
+// Whether a given (value, ndigits) pair overflows is a property of the exact
+// arithmetic, not of a range that could be hardcoded, so this implementation
+// detects the overflow in the conversion itself rather than predicting it.
+var ErrRoundOverflow = errors.New("pythonparity: rounded value too large to represent")
+
+// ErrPrecisionMissing mirrors the ValueError CPython raises for a format spec
+// with a negative precision: format(1.0, ".-1f") is "Format specifier missing
+// precision", not a shortest-representation request.
+var ErrPrecisionMissing = errors.New("pythonparity: format specifier missing precision")
 
 // Round mirrors CPython's two-argument builtin `round(value, ndigits)` for
 // floats.
@@ -47,14 +70,21 @@ import (
 // Callers in this codebase: every `round(x, N)` site feeding a
 // `recommendations_daily` evidence value, where the rounded number is
 // serialised into the stored `evidence_json` column.
-func Round(value float64, ndigits int) float64 {
+//
+// It returns an error rather than a float alone because CPython's round() has
+// a failure mode -- ErrRoundOverflow -- and a mirror with no failure channel
+// has to invent a value where the reference refuses. The invented value here
+// would be +Inf, which is not obviously wrong at a call site and would be
+// serialised into a stored column as the literal `Infinity`. A plausible wrong
+// number is worse than an error, so the signature carries the error.
+func Round(value float64, ndigits int) (float64, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return value
+		return value, nil
 	}
 	if value == 0 {
 		// Preserves -0.0. big.Rat has no signed zero, so the general path
 		// below could not return it.
-		return value
+		return value, nil
 	}
 
 	// Guard the exponent arithmetic. Beyond these bounds the requested decimal
@@ -64,17 +94,21 @@ func Round(value float64, ndigits int) float64 {
 	// big.Int at those magnitudes would allocate without changing the answer.
 	const maxDecimalExponent = 400
 	if ndigits > maxDecimalExponent {
-		return value
+		return value, nil
 	}
 	if ndigits < -maxDecimalExponent {
-		return math.Copysign(0, value)
+		return math.Copysign(0, value), nil
 	}
 
 	// Step 1: round the exact binary value to `ndigits` decimal places,
 	// breaking ties toward even.
 	exact := new(big.Rat).SetFloat64(value)
 	if exact == nil {
-		return value
+		// Unreachable: the non-finite inputs were returned above, and
+		// SetFloat64 fails only for those. Refusing rather than returning the
+		// input keeps the impossible case loud instead of plausible.
+		return 0, fmt.Errorf("%w: %v is not representable as an exact rational",
+			ErrRoundOverflow, value)
 	}
 	scale := decimalScale(ndigits)
 	scaled := new(big.Rat).Mul(exact, scale)
@@ -86,12 +120,23 @@ func Round(value float64, ndigits int) float64 {
 	result := new(big.Rat).SetInt(rounded)
 	result.Quo(result, scale)
 	out, _ := new(big.Float).SetPrec(200).SetRat(result).Float64()
+
+	// The finite input is the discriminator. big.Float reports an overflow by
+	// returning an infinity, and the input cannot have been one (those
+	// returned above), so an infinity here can only mean the rounded decimal
+	// left the float64 range -- exactly the case CPython raises on. Detecting
+	// it in the conversion rather than predicting it from ndigits is what
+	// makes this correct for the non-contiguous band documented on
+	// ErrRoundOverflow.
+	if math.IsInf(out, 0) {
+		return 0, fmt.Errorf("%w: round(%v, %d)", ErrRoundOverflow, value, ndigits)
+	}
 	if out == 0 {
 		// A value that rounded away to zero keeps the sign of its input, as
 		// CPython does; big.Rat discarded it.
-		return math.Copysign(0, value)
+		return math.Copysign(0, value), nil
 	}
-	return out
+	return out, nil
 }
 
 // decimalScale returns 10**ndigits as an exact rational, for negative ndigits

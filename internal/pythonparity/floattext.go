@@ -1,6 +1,7 @@
 package pythonparity
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -173,14 +174,25 @@ func buildExponentForm(digits string, decimalPointPosition int, negative bool) s
 // The specials are reachable on this path rather than theoretical: the
 // reference's `_safe_float` (recommendations/loader.py) strips NaN but PASSES
 // ±Inf through, so an infinite ratio can reach a rationale string.
-func FormatFixed(value float64, precision int) string {
+//
+// A NEGATIVE precision is refused rather than honoured. Go treats precision -1
+// as "shortest representation that round-trips", so `FormatFixed(1.0, -1)`
+// would return "1" -- a perfectly plausible string. CPython has no such mode
+// in this spec: `format(1.0, ".-1f")` raises
+// `ValueError: Format specifier missing precision`. Silently answering where
+// the reference refuses is the divergence that is hardest to notice, because
+// the output looks like a successful format rather than like a bug.
+func FormatFixed(value float64, precision int) (string, error) {
+	if precision < 0 {
+		return "", fmt.Errorf("%w: .%df", ErrPrecisionMissing, precision)
+	}
 	switch {
 	case math.IsNaN(value):
-		return "nan"
+		return "nan", nil
 	case math.IsInf(value, 1):
-		return "inf"
+		return "inf", nil
 	case math.IsInf(value, -1):
-		return "-inf"
+		return "-inf", nil
 	}
-	return strconv.FormatFloat(value, 'f', precision, 64)
+	return strconv.FormatFloat(value, 'f', precision, 64), nil
 }

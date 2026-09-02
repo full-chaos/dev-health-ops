@@ -464,7 +464,11 @@ def _write_inventory(root: Path, rows: list[dict]) -> Path:
     inventory = {
         "schema_version": "endpoint-profile.v1",
         "generated_at": "2026-09-01T00:00:00Z",
-        "source_commit": "0000000000000000000000000000000000000",
+        # 40 hex chars: check_source_commit rejects anything shorter as a
+        # placeholder. tmp_path is not a git repository, so ancestry is
+        # reported as unverifiable rather than checked -- which is the point
+        # of the note being a separate return value.
+        "source_commit": "0" * 40,
         "credential_class_source": "contracts/auth/v1/credential-classes.json",
         "rows": rows,
     }
@@ -1678,3 +1682,146 @@ def test_check_does_not_crash_on_a_malformed_top_level_credential_classes(tmp_pa
 # test_gate_fails_loudly_when_the_app_cannot_be_imported (the failure that
 # replaced it).
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Provenance: `source_commit` must name a commit this HEAD descends from
+# (team-lead, 2026-09-01 -- acr's ci/ops-contract.pin held a commit that was
+# never going to land on origin/main and nothing said so; the same class
+# exists for the ops inventory's own source_commit).
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _tiny_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "f").write_text("a\n")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-qm", "a")
+    return repo
+
+
+def test_source_commit_must_be_a_full_sha(tmp_path):
+    """acr's pin was the literal PLACEHOLDER-PENDING-OPS-MERGE-... string."""
+    repo = _tiny_repo(tmp_path)
+    errors, note = checker.check_source_commit(
+        repo, {"source_commit": "PLACEHOLDER-PENDING-OPS-MERGE"}
+    )
+    assert any("STALE SOURCE COMMIT" in e for e in errors), errors
+    assert note is None
+
+
+def test_source_commit_absent_from_the_repository_fails(tmp_path):
+    """The acr shape exactly: a well-formed sha for a commit that does not
+    exist in this history."""
+    repo = _tiny_repo(tmp_path)
+    errors, note = checker.check_source_commit(
+        repo, {"source_commit": "e57ca829f0ec" + "0" * 28}
+    )
+    assert any("STALE SOURCE COMMIT" in e and "not a commit" in e for e in errors), (
+        errors
+    )
+    assert note is None
+
+
+def test_source_commit_off_this_history_fails(tmp_path):
+    """A REAL commit that HEAD does not descend from -- an abandoned or
+    rebased branch. Distinct from the absent case: the object resolves, so
+    only an ancestry test catches it."""
+    repo = _tiny_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / "f").write_text("side\n")
+    _git(repo, "commit", "-qam", "side")
+    abandoned = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "f").write_text("main2\n")
+    _git(repo, "commit", "-qam", "main2")
+
+    errors, note = checker.check_source_commit(repo, {"source_commit": abandoned})
+    assert any("does not descend" in e for e in errors), errors
+    assert note is None
+
+    # ...and the ancestor case passes, so this is not just "everything fails".
+    first = _git(repo, "rev-list", "--max-parents=0", "HEAD")
+    assert checker.check_source_commit(repo, {"source_commit": first}) == ([], None)
+
+
+def test_source_commit_unverifiable_is_reported_not_passed_silently(tmp_path):
+    """A shallow clone (GitHub's default checkout depth) cannot tell the stale
+    case from the truncated one. That must SAY so rather than read as a
+    verified pass -- the note is a separate return value precisely so a caller
+    counting errors cannot mistake one for the other."""
+    origin = _tiny_repo(tmp_path)
+    (origin / "f").write_text("b\n")
+    _git(origin, "commit", "-qam", "b")
+    deep = _git(origin, "rev-list", "--max-parents=0", "HEAD")
+
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{origin}", str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true"
+
+    errors, note = checker.check_source_commit(shallow, {"source_commit": deep})
+    assert errors == [], errors
+    assert note is not None and "SOURCE COMMIT UNVERIFIED" in note, note
+
+
+def test_the_committed_inventory_source_commit_is_an_ancestor_of_head():
+    inventory = checker.load_json(_INVENTORY_PATH)
+    errors, _note = checker.check_source_commit(_REPO_ROOT, inventory)
+    assert errors == [], errors
+
+
+# ---------------------------------------------------------------------------
+# Discovery must not leave a partially-imported package behind (codex round 1,
+# P2). Found by adversarial review, then reproduced.
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_import_leaves_no_partial_package_resident(tmp_path):
+    """EXECUTED repro of the defect, then the guard.
+
+    `_import_context` used to purge on exit only when it had purged something
+    on entry. With nothing cached, a root whose `api/main.py` imports a helper
+    and THEN raises left `dev_health_ops`, `dev_health_ops.api` and
+    `dev_health_ops.api.helper` resident after `discover()` had already raised
+    -- a half-loaded tree a later import could reuse.
+    """
+    root = tmp_path / "repo"
+    api = root / "src" / "dev_health_ops" / "api"
+    api.mkdir(parents=True)
+    (root / "src" / "dev_health_ops" / "__init__.py").write_text("")
+    (api / "__init__.py").write_text("")
+    (api / "helper.py").write_text("MARKER = 'stale'\n")
+    (api / "main.py").write_text("from . import helper\n\nraise RuntimeError('boom')\n")
+
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_leak")
+    before = {
+        n
+        for n in sys.modules
+        if n == "dev_health_ops" or n.startswith("dev_health_ops.")
+    }
+    with pytest.raises(RuntimeError):
+        discoverer.discover(root)
+    after = {
+        n
+        for n in sys.modules
+        if n == "dev_health_ops" or n.startswith("dev_health_ops.")
+    }
+    assert after == before, sorted(after - before)
+    assert str((root / "src").resolve()) not in sys.path

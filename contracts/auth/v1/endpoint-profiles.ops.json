@@ -22745,7 +22745,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "GET,HEAD /docs [dev-health-ops-api]",
@@ -22786,7 +22791,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "GET,HEAD /docs/oauth2-redirect [dev-health-ops-api]",
@@ -22827,7 +22837,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "GET,HEAD /redoc [dev-health-ops-api]",
@@ -22868,7 +22883,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "GET /metrics [dev-health-ops-api]",
@@ -22909,7 +22929,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "GET /graphql [dev-health-ops-api]",
@@ -22976,7 +23001,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "POST /graphql [dev-health-ops-api]",
@@ -23043,7 +23073,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     },
     {
       "id": "WEBSOCKET /graphql [dev-health-ops-api]",
@@ -23111,7 +23146,12 @@
       "current_state_cache_behavior": null,
       "impersonation_policy": "subject_to_impersonation_override",
       "entitlement_requirement": null,
-      "disclosure_behavior": null
+      "disclosure_behavior": null,
+      "exposure": {
+        "reachability": "unknown",
+        "source": "Not consulted. No repository in this gate's read set contains the edge path-map, so whether this app-mounted route is reachable from outside cannot be read from any artifact available here (residual risk C1). Recorded as undetermined rather than inferred from the route being mounted, which the schema explicitly forbids.",
+        "observed_at": null
+      }
     }
   ]
 }

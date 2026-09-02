@@ -151,11 +151,30 @@ def _import_context(root: Path):
     for name in foreign:
         del sys.modules[name]
     sys.path.insert(0, str(src))
+    # Purge on the way out when we swapped roots (put the caller's modules
+    # back) OR when the import FAILED. A failure leaves a PARTIAL package tree
+    # resident -- `from . import helper` succeeded, then the module raised --
+    # and with nothing cached on entry there was no `foreign` set to trigger a
+    # cleanup, so the half-loaded tree survived for the next import to reuse.
+    # Executed repro before this: discovery against a root whose `api/main.py`
+    # imports a helper and then raises left `dev_health_ops`,
+    # `dev_health_ops.api` and `dev_health_ops.api.helper` in `sys.modules`
+    # after `discover()` had already raised.
+    #
+    # A SUCCESSFUL import with nothing foreign is deliberately left cached:
+    # those modules are this root's, they are what a subsequent run of the
+    # same root would import anyway, and re-importing `api.main` costs ~17s.
+    # A later run against a different root sees them as foreign and purges
+    # them, so the fast path cannot become a correctness problem.
+    purge = bool(foreign)
     try:
         yield
+    except BaseException:
+        purge = True
+        raise
     finally:
         sys.path[:] = saved_path
-        if foreign:
+        if purge:
             for name in [
                 n for n in sys.modules if n == PACKAGE or n.startswith(PACKAGE + ".")
             ]:

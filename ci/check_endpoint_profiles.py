@@ -163,6 +163,17 @@ Fails (exit 1, with a human-readable report) when:
       set is complete by construction and there is nothing left for a human
       to vouch for.
 
+  12. STALE SOURCE COMMIT -- the inventory's ``source_commit`` is not a
+      40-hex sha, names a commit absent from this repository, or names one
+      this HEAD does not descend from. An inventory anchored off this history
+      describes a tree nobody will read it against (acr's
+      ``ci/ops-contract.pin`` held a commit that was never going to land, and
+      nothing said so). In a SHALLOW clone the object is simply absent and the
+      stale case cannot be told from the truncated one: that is reported as
+      ``SOURCE COMMIT UNVERIFIED`` next to the verdict, never failed on --
+      GitHub's default checkout is depth 1, so failing there would be a false
+      red on every run. See ``check_source_commit``.
+
 ``issued_credential`` is deliberately kept three/four-valued, never
 collapsed: non-empty array (mints these -- every class_id validated, every
 anchor validated/drift-checked), ``[]`` (assessed, mints nothing -- valid,
@@ -220,6 +231,7 @@ import argparse
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -394,6 +406,91 @@ def _check_duplicate_class_ids(credential_classes: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def check_source_commit(root: Path, inventory: dict) -> tuple[list[str], str | None]:
+    """``source_commit`` must name a commit this repository's HEAD descends from.
+
+    The inventory declares the tree its rows were derived against. Nothing
+    stopped that from being a commit that does not exist here -- acr's
+    ``ci/ops-contract.pin`` held ``e57ca829f0ec...``, a commit that was never
+    going to land on ``origin/main``, and nothing said so. An inventory
+    anchored to a commit outside this history is decayed by construction: the
+    tree it describes is not the tree anyone will read it against.
+
+    Three outcomes, all explicit, none of them a silent pass:
+
+    * the commit exists and HEAD descends from it -- OK;
+    * the commit exists and HEAD does NOT descend from it, or it is not a
+      40-hex sha at all -- ``STALE SOURCE COMMIT``, a hard failure;
+    * the object is absent because this is a SHALLOW clone -- returned as the
+      second element, a NOTE the caller prints, never an error. GitHub's default checkout is depth 1, so failing here would
+      be a false red on every CI run rather than a finding. This is a real
+      narrowing and it is the one hole in this check: in a shallow clone the
+      stale case is indistinguishable from the truncated case. Everywhere the
+      history exists -- local runs, and any job checked out with
+      ``fetch-depth: 0`` -- it is a hard check.
+
+    The set-level guarantee does not depend on any of this: the gate re-derives
+    every surface from the tree it is run against, so a green run is a
+    statement about THAT tree whatever ``source_commit`` says. What this adds
+    is that the provenance line cannot quietly lie.
+
+    Returns ``(errors, note)``. The two are separate return values rather than
+    one list precisely so an unverifiable case can never be mistaken for a
+    verified one by a caller that only counts errors.
+    """
+    errors: list[str] = []
+    commit = inventory.get("source_commit") if isinstance(inventory, dict) else None
+    if not isinstance(commit, str) or not _SHA_RE.match(commit):
+        errors.append(
+            f"STALE SOURCE COMMIT: source_commit={commit!r} is not a 40-character "
+            "hex commit sha. It must name the exact ops commit these rows were "
+            "derived against (a placeholder or short sha cannot be verified)."
+        )
+        return errors, None
+
+    if _git(root, "rev-parse", "--git-dir").returncode != 0:
+        # Not a git repository at all -- a fixture tree, or an exported
+        # tarball. Nothing to check against; say so rather than implying a
+        # verification happened.
+        return [], (
+            "SOURCE COMMIT UNVERIFIED: not a git repository, ancestry not checked"
+        )
+
+    if _git(root, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+        shallow = _git(root, "rev-parse", "--is-shallow-repository").stdout.strip()
+        if shallow == "true":
+            return [], (
+                "SOURCE COMMIT UNVERIFIED: shallow clone, "
+                f"{commit[:12]} is not present, ancestry not checked"
+            )
+        errors.append(
+            f"STALE SOURCE COMMIT: {commit[:12]} is not a commit in this "
+            "repository. The inventory claims to have been derived against a "
+            "tree that does not exist here."
+        )
+        return errors, None
+
+    if _git(root, "merge-base", "--is-ancestor", commit, "HEAD").returncode != 0:
+        errors.append(
+            f"STALE SOURCE COMMIT: HEAD does not descend from {commit[:12]}. The "
+            "inventory is anchored to a commit off this history (an abandoned or "
+            "rebased branch) -- re-derive the rows and re-stamp source_commit."
+        )
+    return errors, None
+
+
 def _live_surface_map(discovered: dict) -> tuple[dict[tuple, dict], list[str]]:
     """Every surface the deployed apps and the served GraphQL schema actually
     serve, keyed by its DEPLOYED IDENTITY, plus any errors raised while
@@ -529,6 +626,14 @@ def check(
     inventory = load_json(inventory_path)
     schema = load_json(schema_path)
     credential_classes = load_json(credential_classes_path)
+
+    # Provenance: the commit these rows claim to have been derived against
+    # must be one this HEAD descends from. The note (shallow clone, or not a
+    # git repo) is deliberately NOT folded into `errors` -- see
+    # check_source_commit's docstring -- and is printed by main().
+    source_commit_errors, _source_commit_note = check_source_commit(root, inventory)
+    errors.extend(source_commit_errors)
+
     class_vocab = credential_class_vocabulary(credential_classes)
     errors.extend(_check_duplicate_class_ids(credential_classes))
 
@@ -1261,12 +1366,26 @@ def main(argv=None) -> int:
         held_rows = find_disclosure_hold_rows(raw_rows)
     except (OSError, json.JSONDecodeError):
         held_rows = []  # inventory itself is unreadable -- check() reports why
+        raw_inventory = {}
     if held_rows:
         print(
             f"DISCLOSURE-HOLD: {len(held_rows)} row(s) marked: {', '.join(held_rows)}"
         )
     else:
         print("DISCLOSURE-HOLD: 0 rows marked")
+
+    # Printed unconditionally, next to the DISCLOSURE-HOLD line and before the
+    # verdict: an inventory whose provenance could not be checked must SAY so
+    # in the same output a reader takes the verdict from, or "OK" reads as a
+    # stronger claim than it is.
+    try:
+        _, source_commit_note = check_source_commit(
+            root, raw_inventory if isinstance(raw_inventory, dict) else {}
+        )
+    except (OSError, subprocess.SubprocessError):
+        source_commit_note = "SOURCE COMMIT UNVERIFIED: git unavailable"
+    if source_commit_note:
+        print(source_commit_note)
 
     try:
         errors = check(

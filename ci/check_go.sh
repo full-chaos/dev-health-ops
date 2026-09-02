@@ -513,7 +513,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython)$' \
+        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython|TestRiskHotspotsOrderGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily/filehotspots
   ); then
     rm -rf -- "${proof_dir}"
@@ -541,6 +541,18 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/fma-followup-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4863: ComputeFileRiskHotspots' risk_score must not depend on
+  # iteration order. This generator does more than the others above -- it
+  # re-verifies at generation time that live Python's own output is still
+  # order-invariant across several separate python3 invocations per case,
+  # so a failure here can mean either Go drift OR that Python itself has
+  # become order-dependent (the generator's own stderr distinguishes them).
+  proof_file="${proof_dir}/risk-hotspots-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: risk-hotspots order-invariance golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

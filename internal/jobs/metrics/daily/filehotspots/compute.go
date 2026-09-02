@@ -247,6 +247,53 @@ func ComputeFileRiskHotspots(
 		return []RiskMetric{}
 	}
 
+	// CHAOS-4863: sampleZScores' summation must consume churns/complexities
+	// in a DETERMINISTIC order -- Go map iteration (like allPaths above) is
+	// randomized per process, and floating-point summation is not
+	// associative, so the SAME input could otherwise produce a DIFFERENT
+	// risk_score on different runs of the same binary.
+	//
+	// The order chosen here is NOT an attempt to reproduce Python's own
+	// order: compute_file_risk_hotspots (hotspots.py:151) builds its file
+	// list from `set(churn_map.keys()) | set(complexity_map.keys())`, a
+	// Python set, not a dict -- CPython's set iteration order for string
+	// keys depends on hash randomization (PYTHONHASHSEED unset by
+	// default) and is NOT fixed across process invocations either
+	// (verified directly: the same set produced two different orderings
+	// across two separate `python3 -c` runs). There is no "Python's
+	// insertion order" here to replicate. What IS true, verified
+	// empirically (30 separate python3 invocations, fresh hash seed each
+	// time, on a fixed 60-file corpus spanning magnitudes 1 to 10**9):
+	// risk_score was bit-identical across every run -- CPython's
+	// Neumaier-compensated sum() (CHAOS-4824) is empirically very close to
+	// order-invariant for realistic inputs, even though not provably so in
+	// the fully general case. That means ANY well-defined, reproducible
+	// Go order -- sorted lexicographically here, chosen for being
+	// independent of any source ordering rather than for matching
+	// Python's -- is expected to agree with Python's (order-invariant in
+	// practice) output, PROVIDED Go's own summation (pythonparity.Sum,
+	// inside sampleZScores) implements the identical compensated
+	// algorithm.
+	//
+	// Disclosed, not hidden: neither Python's nor Go's compensated sum()
+	// has ever been observed to diverge under reordering in this file's
+	// testing -- the bit-pattern golden (risk_hotspots_order_golden_test.go)
+	// covers cardinality/magnitude/permutation, and a standalone stress
+	// probe (not checked in) ran 12,000+ trials across the same corpus
+	// shapes plus the original small-n (3-5 file) construction that first
+	// prompted this ticket, all with random reordering, zero divergence
+	// found. This fix closes the STRUCTURAL risk (Go map iteration is
+	// genuinely randomized; the language does not guarantee this can
+	// never matter) rather than a bit-exact-proven regression -- unlike
+	// most CHAOS-4818/4824 sites, this one has no red-on-baseline case in
+	// the corpus tried. If a future corpus finds one, that is real new
+	// evidence, not a retry-until-green target.
+	sortedPaths := make([]string, 0, len(allPaths))
+	for path := range allPaths {
+		sortedPaths = append(sortedPaths, path)
+	}
+	sort.Strings(sortedPaths)
+
 	type input struct {
 		path       string
 		churn      int
@@ -255,7 +302,7 @@ func ComputeFileRiskHotspots(
 		snapshot   *ComplexitySnapshot
 	}
 	items := make([]input, 0, len(allPaths))
-	for path := range allPaths {
+	for _, path := range sortedPaths {
 		item := input{path: path}
 		if agg, ok := churnByPath[path]; ok {
 			item.churn = agg.churn

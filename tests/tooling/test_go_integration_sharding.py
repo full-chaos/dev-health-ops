@@ -106,12 +106,22 @@ def _pinned_clickhouse_image() -> str:
         "than the assertion"
     )
     image = match.group("image")
-    # A TAG, not a digest. ClickHouse tracks the 26.7 MINOR so patch upgrades
-    # apply -- ruled by chris (CHAOS-4854), the same policy CHAOS-4851 used for
-    # the CI service containers. Still required to name an image AND a
-    # reference, so a bare `clickhouse/clickhouse-server` is refused.
-    assert re.fullmatch(r"[^@\s]+:[^@\s]+|[^@\s]+@sha256:[0-9a-f]{64}", image), (
-        f"ClickHouseImage must name an image with a tag or digest, got {image!r}"
+    # A TAG, not a digest. ClickHouse tracks the 26 MAJOR so minor and patch
+    # upgrades apply -- ruled by chris (CHAOS-4854), the same policy CHAOS-4851
+    # used for the CI service containers.
+    #
+    # The REPOSITORY is fixed even so. An earlier revision asserted only
+    # `[^@\s]+:[^@\s]+|...`, i.e. "a reference of some kind", which blessed
+    # `:latest`, `clickhouse/other-image:26.7` and
+    # `quay.io/other/clickhouse-server:latest`. This helper feeds the pre-pull
+    # expectations below, so whatever it accepts is what the mirror assertions
+    # are then derived FROM -- a foreign registry accepted here would be
+    # asserted as correct rather than caught.
+    assert re.fullmatch(
+        r"clickhouse/clickhouse-server(:26(\.\d+)*|@sha256:[0-9a-f]{64})", image
+    ), (
+        "ClickHouseImage must be clickhouse/clickhouse-server pinned to a 26.x "
+        f"tag or a sha256 digest, got {image!r}"
     )
     return image
 

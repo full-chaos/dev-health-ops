@@ -1,10 +1,26 @@
 package containers
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go"
+)
+
+// clickHouseReference is the shape ClickHouseImage is allowed to take. The
+// repository is FIXED and only the 26.x version floats, per chris's CHAOS-4854
+// ruling ("It's major version MATCHING"). A digest stays legal so a future
+// re-pin needs no change here.
+//
+// The previous assertion was `strings.Contains(ClickHouseImage, ":")`. Relaxing
+// this image from a digest to a tag was a change to the VERSION predicate, but
+// collapsing to "contains a colon" dropped the IMAGE domain with it: it equally
+// accepted an empty tag, `:latest`, `: foo`, and
+// `quay.io/other/clickhouse-server:latest`. A foreign registry accepted here
+// then bypasses the ghcr mirror downstream.
+var clickHouseReference = regexp.MustCompile(
+	`^clickhouse/clickhouse-server(:26(\.\d+)*|@sha256:[0-9a-f]{64})$`,
 )
 
 func TestDependencyImagesAreDigestPinned(t *testing.T) {
@@ -19,8 +35,12 @@ func TestDependencyImagesAreDigestPinned(t *testing.T) {
 			t.Errorf("dependency image is not digest pinned: %s", image)
 		}
 	}
-	if !strings.Contains(ClickHouseImage, ":") {
-		t.Errorf("ClickHouse image must name an image and tag: %s", ClickHouseImage)
+	if !clickHouseReference.MatchString(ClickHouseImage) {
+		t.Errorf(
+			"ClickHouseImage = %q but must match %s: the repository is fixed and "+
+				"only the 26.x version floats",
+			ClickHouseImage, clickHouseReference,
+		)
 	}
 }
 

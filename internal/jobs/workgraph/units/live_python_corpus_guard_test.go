@@ -59,9 +59,17 @@ import (
 //
 // Both forms are matched now. A third form should be ADDED here rather than the
 // generator being rewritten to suit the matcher.
+// Both quote styles. Python treats '...' and "..." identically, so recognising
+// only double quotes made declaredOutputPath answer "no declaration" for a
+// perfectly ordinary single-quoted one -- which matters most in
+// TestExplicitCorpusPathsAreStillNeeded, where a false "no declaration" means a
+// stale explicit entry is never reported. RE2 has no backreferences, so the
+// single-quoted forms are separate patterns rather than a matched-quote group.
 var outputPathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`OUTPUT_PATH\s*=\s*Path\(__file__\)\.parent\s*/\s*"([^"]+)"`),
+	regexp.MustCompile(`OUTPUT_PATH\s*=\s*Path\(__file__\)\.parent\s*/\s*'([^']+)'`),
 	regexp.MustCompile(`OUTPUT\w*\s*=\s*Path\(__file__\)\.with_name\(\s*"([^"]+)"\s*\)`),
+	regexp.MustCompile(`OUTPUT\w*\s*=\s*Path\(__file__\)\.with_name\(\s*'([^']+)'\s*\)`),
 }
 
 // explicitCorpusPaths names generators whose corpus path cannot be INFERRED
@@ -149,6 +157,26 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
+	// A PROOF MARKER, because Go's package-level `ok` counts a SKIPPED test as
+	// passing. Without one, a skip and a run are indistinguishable in the only
+	// output most readers see -- which is not hypothetical: this guard skipped
+	// in my own local verification and reported `ok` while the ratchet was
+	// failing, and a codex round found what my green had hidden.
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	defer func() {
+		if t.Failed() {
+			return
+		}
+		if err := os.WriteFile(
+			filepath.Join(proofDirectory, "workgraph-units-corpus-discovery"),
+			[]byte("executed"), 0o644,
+		); err != nil {
+			t.Fatalf("write proof marker: %v", err)
+		}
+	}()
 
 	repoRoot := repositoryRootPath(t)
 	fixturesDirectory := filepath.Join(repoRoot, "tests", "fixtures")

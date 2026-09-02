@@ -641,6 +641,18 @@ check_live_python_oracles() {
   # work_unit_id addresses work_unit_investments (Go, once CHAOS-4441 lands) and
   # work_unit_membership (still Python until CHAOS-4282). A shared marker could
   # be satisfied by another guard while this one was filtered out of -run.
+  # The DISCOVERY guard's own marker. It walks tests/fixtures for generators and
+  # enforces the undiscoverable-corpus ratchet, and it SKIPS without
+  # DEV_HEALTH_LIVE_PYTHON_ORACLES=1 -- at which point Go's package-level `ok`
+  # counts the skip as a pass. Asserting the marker is what makes a skipped
+  # discovery guard fail the gate instead of passing it silently.
+  proof_file="${proof_dir}/workgraph-units-corpus-discovery"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: corpus discovery guard did not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   proof_file="${proof_dir}/workgraph-components-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: work-unit component golden rot guard did not compare against live Python\n' >&2

@@ -312,6 +312,20 @@ def _production_window_digest() -> str:
     production changes -> digest changes -> regenerated fixture differs -> the
     existing rot guard goes red saying REFERENCE drift.
 
+    # WHAT IS DIGESTED: the UNPARSED AST, not the source text
+
+    The region is parsed and re-emitted with `ast.unparse` before hashing, so
+    the digest is over the code's STRUCTURE. Formatting-only edits stay GREEN --
+    reflowing, quote style, comment text, `1e2` vs `100.0`, hex vs decimal --
+    while any behavioural change moves it. Verified by probe on review
+    (lane-4441): every semantics-preserving edit tried produced the same digest,
+    every behavioural one a different digest, and no semantic change was found
+    that it hides.
+
+    This matters because the alternative was a text digest, which turned the
+    guard RED for a comma changed to a semicolon in a docstring -- a false
+    positive that trains people to regenerate without reading.
+
     # Anchoring, and why it asserts so much
 
     The first version anchored on `now = datetime.now(timezone.utc)` and used a

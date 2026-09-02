@@ -1,0 +1,181 @@
+{
+ "cases": [
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7B9583EE-4D24-2BE7-4D09-34F815BEBDD7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee4d242be74d0934f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7B9583EE4D242BE74D0934F815BEBDD7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "00000000-0000-0000-0000-000000000000",
+   "uuid": "00000000-0000-0000-0000-000000000000",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{7b9583ee-4d24-2be7-4d09-34f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{{7b9583ee-4d24-2be7-4d09-34f815bebdd7}}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{{{7b9583ee-4d24-2be7-4d09-34f815bebdd7}}}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "{7b9583ee4d242be74d0934f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": "URN:UUID:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "Urn:Uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "urn:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:urn:uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:urn:uuid:7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:{7b9583ee-4d24-2be7-4d09-34f815bebdd7}",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "urn:uuid:7b9583ee4d242be74d0934f815bebdd7",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "error": "ValueError",
+   "input": " 7b9583ee-4d24-2be7-4d09-34f815bebdd7 ",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "\t7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7\n",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "X7b9583ee-4d24-2be7-4d09-34f815bebdd7X",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "[7b9583ee-4d24-2be7-4d09-34f815bebdd7]",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "!7b9583ee-4d24-2be7-4d09-34f815bebdd7?",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd70",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "not-a-uuid",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "",
+   "verdict": "REJECT"
+  },
+  {
+   "error": "ValueError",
+   "input": "------------------------------------",
+   "verdict": "REJECT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7urn:",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "7b9583ee-4d24-2be7-4d09-34f815bebdd7uuid:",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "}}7b9583ee-4d24-2be7-4d09-34f815bebdd7{{",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  },
+  {
+   "input": "}7b9583ee-4d24-2be7-4d09-34f815bebdd7{",
+   "uuid": "7b9583ee-4d24-2be7-4d09-34f815bebdd7",
+   "verdict": "ACCEPT"
+  }
+ ],
+ "measured_on": "3.14.7",
+ "schema": "python_uuid_accept_set.v1"
+}

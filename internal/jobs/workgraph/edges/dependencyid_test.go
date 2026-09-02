@@ -1,74 +1,116 @@
 package edges
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
 
-// The corpus is the audit's gate-1 table plus the boundary set. Every row states
-// what PYTHON does, measured against the deployed
-// `_parse_pr_dependency_source`, not what we believe it should do.
+// prDependencyIDParity decodes tests/fixtures/pr_dependency_id_parity.json —
+// the DEPLOYED `_parse_pr_dependency_source` called over a shape-varying corpus,
+// with its own output frozen.
 //
-// This function decides which pipeline owns a row, so a divergence is a row one
-// pipeline skips and the other never sees — with both conservation checks still
-// balancing. That is why the corpus is differential rather than illustrative.
-var pythonParityCorpus = []struct {
-	name     string
-	input    string
-	wantRepo string
-	wantPR   int
-	wantProv string
-	wantErr  error
-	// python records the observed behaviour of the deployed function, so a
-	// reader can see what this row is asserting parity WITH.
-	python string
-}{
-	{"github ordinary", "ghpr:owner/repo#5", "owner/repo", 5, ProviderGitHub, nil, "('owner/repo', 5, 'github')"},
-	{"gitlab ordinary", "gitlab:group/proj!42", "group/proj", 42, ProviderGitLab, nil, "('group/proj', 42, 'gitlab')"},
+// Generated, not written. The previous version carried Python's behaviour as
+// hand-transcribed strings: that asserts the author's transcription rather than
+// the reference, and a mistyped expectation is indistinguishable from a correct
+// one. Here the expectations ARE the reference's output.
+//
+// `raises` is a real recorded outcome, not an error in the harness — Python's
+// isdigit() accepts characters int() rejects and the conversion is unguarded
+// (CHAOS-4811). The corpus varies the SHAPE of the id (prefix present/absent/
+// miscased, separator absent or wrong-for-provider, slug empty or containing the
+// separator, number ASCII/non-ASCII-decimal/digit-but-not-decimal/signed/zero/
+// empty/whitespace), because a corpus varying only "valid vs invalid" misses
+// every character-class disagreement between isdigit(), int() and strconv.Atoi.
+type prDependencyIDParity struct {
+	Schema       string `json:"schema"`
+	Observations []struct {
+		Input     string `json:"input"`
+		Outcome   string `json:"outcome"`
+		Exception string `json:"exception"`
+		RepoSlug  string `json:"repo_slug"`
+		PRNumber  int    `json:"pr_number"`
+		Provider  string `json:"provider"`
+	} `json:"observations"`
+}
 
-	// --- the five that diverge from strconv.Atoi ---
-	{"negative rejected", "ghpr:o/r#-5", "", 0, "", nil, "None (isdigit False)"},
-	{"explicit plus rejected", "ghpr:o/r#+5", "", 0, "", nil, "None (isdigit False)"},
-	{"arabic-indic accepted", "ghpr:o/r#٥", "o/r", 5, ProviderGitHub, nil, "('o/r', 5, 'github')"},
-	{"fullwidth accepted", "ghpr:o/r#５", "o/r", 5, ProviderGitHub, nil, "('o/r', 5, 'github')"},
-	{"superscript is the deliberate divergence", "ghpr:o/r#²", "", 0, "", ErrMalformedPRID,
-		"RAISES ValueError -- aborts the whole build (CHAOS-4811)"},
-
-	// --- boundary set ---
-	{"not pr shaped", "linear:CHAOS-4766", "", 0, "", nil, "None (no prefix)"},
-	{"empty", "", "", 0, "", nil, "None"},
-	{"prefix only", "ghpr:", "", 0, "", nil, "None (no separator)"},
-	{"no separator", "ghpr:owner/repo", "", 0, "", nil, "None"},
-	{"empty slug", "ghpr:#5", "", 0, "", nil, "None (repo_slug empty)"},
-	{"empty number", "ghpr:o/r#", "", 0, "", nil, "None (isdigit('') False)"},
-	{"zero rejected", "ghpr:o/r#0", "", 0, "", nil, "None (pr_number <= 0)"},
-	{"whitespace number", "ghpr:o/r# 5", "", 0, "", nil, "None (isdigit False)"},
-	{"slug containing the separator", "ghpr:o/r#x#7", "o/r#x", 7, ProviderGitHub, nil,
-		"('o/r#x', 7, 'github') -- rsplit takes the LAST separator"},
-	{"gitlab separator inside a github id is not special", "ghpr:o/r!5", "", 0, "", nil, "None"},
+func loadPRIDParity(t *testing.T) prDependencyIDParity {
+	t.Helper()
+	path := filepath.Join(repositoryRootPath(t), "tests", "fixtures", "pr_dependency_id_parity.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pr-id parity corpus: %v", err)
+	}
+	var corpus prDependencyIDParity
+	if err := json.Unmarshal(raw, &corpus); err != nil {
+		t.Fatalf("decode pr-id parity corpus: %v", err)
+	}
+	if corpus.Schema != "pr_dependency_id_parity.v1" {
+		t.Fatalf("unexpected corpus schema %q", corpus.Schema)
+	}
+	// A silently-empty corpus would make every assertion below vacuous.
+	// json.Unmarshal of `null` into a slice succeeds and yields nil, so "no
+	// error" is not evidence that anything was decoded.
+	if len(corpus.Observations) == 0 {
+		t.Fatal("pr-id parity corpus decoded to zero observations")
+	}
+	return corpus
 }
 
 func TestParsePRDependencySourceMatchesPython(t *testing.T) {
-	for _, testCase := range pythonParityCorpus {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, err := ParsePRDependencySource(testCase.input)
-			if testCase.wantErr != nil {
-				if !errors.Is(err, testCase.wantErr) {
-					t.Fatalf("input %q: err = %v, want %v (python: %s)",
-						testCase.input, err, testCase.wantErr, testCase.python)
-				}
-				return
-			}
+	corpus := loadPRIDParity(t)
+	sawParsed, sawNone, sawRaises := 0, 0, 0
+
+	for _, observation := range corpus.Observations {
+		got, err := ParsePRDependencySource(observation.Input)
+		switch observation.Outcome {
+		case "parsed":
+			sawParsed++
 			if err != nil {
-				t.Fatalf("input %q: unexpected err %v (python: %s)", testCase.input, err, testCase.python)
+				t.Errorf("%q: Python parsed it, this port errored: %v", observation.Input, err)
+				continue
 			}
-			if got.RepoSlug != testCase.wantRepo || got.PRNumber != testCase.wantPR || got.Provider != testCase.wantProv {
-				t.Fatalf("input %q: got %+v, want {%s %d %s} (python: %s)",
-					testCase.input, got, testCase.wantRepo, testCase.wantPR, testCase.wantProv, testCase.python)
+			if got.RepoSlug != observation.RepoSlug || got.PRNumber != observation.PRNumber ||
+				got.Provider != observation.Provider {
+				t.Errorf("%q: got {%s %d %s}, Python gave {%s %d %s}",
+					observation.Input, got.RepoSlug, got.PRNumber, got.Provider,
+					observation.RepoSlug, observation.PRNumber, observation.Provider)
 			}
-		})
+		case "none":
+			sawNone++
+			if err != nil {
+				t.Errorf("%q: Python returned None (a silent skip), this port errored: %v",
+					observation.Input, err)
+				continue
+			}
+			if got.PRNumber != 0 {
+				t.Errorf("%q: Python returned None but this port claimed it as PR %d — the row "+
+					"would be skipped from the issue<->issue build and owned by neither pipeline",
+					observation.Input, got.PRNumber)
+			}
+		case "raises":
+			sawRaises++
+			// THE ONE RULED DIVERGENCE. Python raises an unguarded ValueError
+			// and aborts the whole org's build; this port rejects the single row
+			// with a named, counted reason.
+			if !errors.Is(err, ErrMalformedPRID) {
+				t.Errorf("%q: Python raises %s here; this port must reject it as "+
+					"ErrMalformedPRID, got err=%v", observation.Input, observation.Exception, err)
+			}
+		default:
+			t.Fatalf("%q: unknown recorded outcome %q", observation.Input, observation.Outcome)
+		}
 	}
+
+	// Each outcome class must be exercised, or the corpus has silently narrowed.
+	if sawParsed == 0 || sawNone == 0 || sawRaises == 0 {
+		t.Fatalf("corpus no longer covers every outcome: parsed=%d none=%d raises=%d",
+			sawParsed, sawNone, sawRaises)
+	}
+	t.Logf("reference-derived corpus: %d parsed, %d none, %d raises", sawParsed, sawNone, sawRaises)
 }
 
 // TestAtoiWouldDivergeInBothDirections pins WHY this package does not use

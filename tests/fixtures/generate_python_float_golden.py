@@ -205,6 +205,27 @@ def _string_cases() -> list[str]:
         "1.5d",
         "L1",
         "1L",
+        # THE CROSS PRODUCT of character class and magnitude.
+        #
+        # This corpus varied character class thoroughly at SHORT lengths and
+        # magnitude thoroughly in ASCII, and never both -- 3 long ASCII cases,
+        # 21 short non-ASCII cases, 0 that are both. Each axis covered, the
+        # intersection empty. Raised by lane-4752-go, whose corpus had the same
+        # shape for the same reason and whose discriminating input was 2151
+        # full-width digits (2151 runes, 6453 bytes).
+        #
+        # "Vary every axis" reads as satisfied by a corpus like that. The
+        # discriminating input lives in the product, and a rune-vs-byte or
+        # buffer-sizing defect in the Nd transform only shows up when a
+        # multi-byte character appears at length.
+        "\uff11" * 100,  # 100 full-width ones
+        "\uff10" * 400 + "\uff11",  # 401 full-width, leading zeros
+        "\uff19" * 400,  # 400 full-width nines
+        "\u0661" * 300,  # 300 Arabic-Indic ones
+        "\uff11" * 50 + "." + "\uff15" * 50,  # full-width with a fraction point
+        "\uff11" * 30 + "e" + "\uff11" * 3,  # full-width mantissa AND exponent
+        " " * 40 + "\uff11" * 40,  # leading run of spaces then digits
+        "\uff11" * 40 + "_" + "\uff11" * 40,  # underscore between full-width digits
         # Long inputs: digit-limit behaviour differs from int(), which has one.
         "1" * 100,
         "0." + "0" * 400 + "1",

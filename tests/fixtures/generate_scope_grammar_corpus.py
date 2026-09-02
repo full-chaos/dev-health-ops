@@ -23,6 +23,26 @@ CROSS PRODUCT of two grammars already enumerated separately — basic dates, and
 offsets. No one wrote the pair down. A generator over both produces it without
 anyone having the idea.
 
+# What this corpus CANNOT test
+
+Sharpened by lane-4441: *a golden can only test the layers between where its
+input was captured and where its output was compared.* This corpus captures the
+scope as JSON TEXT, so it covers JSON decoding inward -- which is why the lone
+surrogate case works -- and is BLIND to everything above that.
+
+Above it sits Postgres `jsonb`, which normalises before either plane reads:
+
+    '{"a":1,"a":2}'::jsonb  ->  {"a": 2}            duplicate keys collapse
+    '{"b":1,"a":2}'::jsonb  ->  {"a": 2, "b": 1}    keys reorder
+    '{"n":1e309}'::jsonb    ->  {"n": 1000...000}   float becomes exact numeric
+    '{"n":0e100}'::jsonb    ->  {"n": 0}
+
+Measured, not assumed. Key order is inert here (both planes decode into a
+mapping), and duplicate keys collapse identically on all three, but the numeric
+conversion is NOT inert: it changes which value the planes are handed. Anything
+that depends on the wire form rather than the stored form has to be tested
+against Postgres, not here.
+
 # What it does
 
 Composes scope documents from grammars rather than listing them, records the
@@ -169,8 +189,8 @@ MAGNITUDES: list[Any] = [
     0.0,
     -0.0,
     1e308,
-    # NOT 1e309. `json.loads("1e309")` yields `inf`, so the value IS reachable
-    # over the wire -- but `json.dumps(inf)` emits the bare token `Infinity`,
+    # NOT 1e309. `json.loads("1e309")` yields `inf`, and `json.dumps(inf)` emits
+    # the bare token `Infinity`,
     # which is not valid JSON and which Go's decoder refuses. Including it would
     # make this corpus file unreadable by the differential it feeds.
     #
@@ -181,6 +201,20 @@ MAGNITUDES: list[Any] = [
     # fromisoformat, and the Go adapter's float parse returns out-of-range
     # and then fails its not-a-string check -- so the case is covered by a
     # direct test rather than a corpus row it cannot survive.
+    #
+    # CORRECTION, measured after lane-4441 sharpened the oracle-blindness rule
+    # to "a golden can only test the layers between where its input was captured
+    # and where its output was compared": on the REAL path the value never
+    # reaches either plane as a float at all. The scope is stored as Postgres
+    # `jsonb`, which is `numeric`-backed, so `1e309` is expanded to an EXACT
+    # 310-digit integer before anything reads it:
+    #
+    #   '{"n":1e309}'::jsonb  ->  {"n": 1000...000}   (310 digits, finite)
+    #   '{"n":0e100}'::jsonb  ->  {"n": 0}
+    #
+    # So the infinity case is an artefact of reading the wire format directly,
+    # and the production-reachable shape is a large exact integer, which the
+    # MAGNITUDES axis already generates.
 ]
 MAGNITUDE_STRINGS: list[Any] = [str(value) for value in MAGNITUDES] + [
     "0" * 40,  # collapses to zero in both planes

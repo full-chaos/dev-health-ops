@@ -37,6 +37,271 @@
     "ok",
     "repaired"
   ],
+  "lower_cases": [
+    {
+      "input_codepoints": [
+        927,
+        916,
+        927,
+        931
+      ],
+      "lowered_codepoints": [
+        959,
+        948,
+        959,
+        962
+      ]
+    },
+    {
+      "input_codepoints": [
+        65,
+        931,
+        66
+      ],
+      "lowered_codepoints": [
+        97,
+        963,
+        98
+      ]
+    },
+    {
+      "input_codepoints": [
+        931,
+        65
+      ],
+      "lowered_codepoints": [
+        963,
+        97
+      ]
+    },
+    {
+      "input_codepoints": [
+        65,
+        931
+      ],
+      "lowered_codepoints": [
+        97,
+        962
+      ]
+    },
+    {
+      "input_codepoints": [
+        65,
+        931,
+        46,
+        66
+      ],
+      "lowered_codepoints": [
+        97,
+        963,
+        46,
+        98
+      ]
+    },
+    {
+      "input_codepoints": [
+        65,
+        931,
+        46
+      ],
+      "lowered_codepoints": [
+        97,
+        962,
+        46
+      ]
+    },
+    {
+      "input_codepoints": [
+        931
+      ],
+      "lowered_codepoints": [
+        963
+      ]
+    },
+    {
+      "input_codepoints": [
+        913,
+        931
+      ],
+      "lowered_codepoints": [
+        945,
+        962
+      ]
+    },
+    {
+      "input_codepoints": [
+        304
+      ],
+      "lowered_codepoints": [
+        105,
+        775
+      ]
+    },
+    {
+      "input_codepoints": [
+        304,
+        115,
+        116,
+        97,
+        110,
+        98,
+        117,
+        108
+      ],
+      "lowered_codepoints": [
+        105,
+        775,
+        115,
+        116,
+        97,
+        110,
+        98,
+        117,
+        108
+      ]
+    },
+    {
+      "input_codepoints": [
+        65,
+        304,
+        66
+      ],
+      "lowered_codepoints": [
+        97,
+        105,
+        775,
+        98
+      ]
+    },
+    {
+      "input_codepoints": [
+        8490
+      ],
+      "lowered_codepoints": [
+        107
+      ]
+    },
+    {
+      "input_codepoints": [
+        109,
+        111,
+        99,
+        8490
+      ],
+      "lowered_codepoints": [
+        109,
+        111,
+        99,
+        107
+      ]
+    },
+    {
+      "input_codepoints": [
+        8490,
+        101,
+        108,
+        118,
+        105,
+        110
+      ],
+      "lowered_codepoints": [
+        107,
+        101,
+        108,
+        118,
+        105,
+        110
+      ]
+    },
+    {
+      "input_codepoints": [
+        383
+      ],
+      "lowered_codepoints": [
+        383
+      ]
+    },
+    {
+      "input_codepoints": [
+        102,
+        97,
+        108,
+        383,
+        101
+      ],
+      "lowered_codepoints": [
+        102,
+        97,
+        108,
+        383,
+        101
+      ]
+    },
+    {
+      "input_codepoints": [
+        97,
+        98,
+        99
+      ],
+      "lowered_codepoints": [
+        97,
+        98,
+        99
+      ]
+    },
+    {
+      "input_codepoints": [
+        65,
+        66,
+        67
+      ],
+      "lowered_codepoints": [
+        97,
+        98,
+        99
+      ]
+    },
+    {
+      "input_codepoints": [],
+      "lowered_codepoints": []
+    },
+    {
+      "input_codepoints": [
+        32
+      ],
+      "lowered_codepoints": [
+        32
+      ]
+    },
+    {
+      "input_codepoints": [
+        49,
+        50,
+        51
+      ],
+      "lowered_codepoints": [
+        49,
+        50,
+        51
+      ]
+    },
+    {
+      "input_codepoints": [
+        223
+      ],
+      "lowered_codepoints": [
+        223
+      ]
+    },
+    {
+      "input_codepoints": [
+        7838
+      ],
+      "lowered_codepoints": [
+        223
+      ]
+    }
+  ],
   "model_cases": [
     {
       "bucket": "unknown",
@@ -935,6 +1200,45 @@
         116,
         117,
         115
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        65,
+        931,
+        66
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        931,
+        65
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        65,
+        931
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        65,
+        931,
+        46,
+        66
+      ]
+    },
+    {
+      "bucket": "other",
+      "input_codepoints": [
+        65,
+        931,
+        46
       ]
     },
     {

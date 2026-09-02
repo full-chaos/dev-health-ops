@@ -95,6 +95,45 @@ WHITESPACE_PROBES = [
 ]
 
 
+def _lower_cases() -> list[str]:
+    """Strings whose str.lower() is compared DIRECTLY against the Go port.
+
+    Position is an axis in its own right here. Final_Sigma depends on WHERE the
+    sigma sits, not on which rune it is, so a corpus can vary the character class
+    exhaustively and still hold position constant -- which is how lane-4752-go's
+    derived rot guard missed it while enumerating every multi-rune mapping the
+    interpreter reports.
+    """
+    return [
+        # --- sigma by position ---
+        "\u039f\u0394\u039f\u03a3",  # final
+        "A\u03a3B",  # medial, cased letter follows
+        "\u03a3A",  # initial
+        "A\u03a3",  # final
+        "A\u03a3.B",  # case-ignorable then a cased letter
+        "A\u03a3.",  # case-ignorable, nothing cased after
+        "\u03a3",  # alone: no preceding cased letter
+        "\u0391\u03a3",  # final after a Greek capital
+        # --- multi-rune and reaching-ASCII mappings ---
+        "\u0130",
+        "\u0130stanbul",
+        "A\u0130B",  # U+0130 -> two code points
+        "\u212a",
+        "moc\u212a",
+        "\u212aelvin",  # KELVIN -> ascii 'k'
+        "\u017f",
+        "fal\u017fe",  # LONG S: already lowercase
+        # --- controls that must be unchanged or plain ---
+        "abc",
+        "ABC",
+        "",
+        " ",
+        "123",
+        "\u00df",
+        "\u1e9e",
+    ]
+
+
 def _provider_cases() -> list[str]:
     cases = sorted(PROVIDERS)
     cases += [
@@ -128,6 +167,26 @@ def _provider_cases() -> list[str]:
         "UN\u212aNOWN",
         "fal\u017fe",
         "\u017ftatus",
+        # SIGMA POSITION is its own axis, distinct from character class.
+        # Final_Sigma depends on WHERE the sigma sits, not on which rune it
+        # is: capital sigma lowercases to the final form only when no cased
+        # letter follows (skipping case-ignorables). So a corpus can vary the
+        # rune exhaustively and still hold position constant.
+        #
+        # This corpus previously covered both forms only by accident --
+        # "\u039f\u0394\u039f\u03a3" happens to be final and
+        # "\u039f\u0394\u039f\u03a3-model" happens to be medial because a
+        # suffix was appended for unrelated reasons. Made deliberate here.
+        # Raised by lane-4752-go, whose derived rot guard enumerated every
+        # multi-rune lowercase mapping from the live interpreter and STILL
+        # missed final sigma, because it is a single-rune mapping that
+        # depends on position. Deriving a corpus from the reference removes
+        # the transcription risk, not the axis risk.
+        "A\u03a3B",  # medial: a cased letter follows -> medial sigma
+        "\u03a3A",  # initial
+        "A\u03a3",  # final: nothing follows -> final sigma
+        "A\u03a3.B",  # case-ignorable between sigma and a cased letter
+        "A\u03a3.",  # case-ignorable, nothing cased after -> still final
         # The lower() divergences, as provider strings.
         "ΟΔΟΣ",
         "İ",
@@ -229,6 +288,28 @@ def main() -> None:
         "categorization_statuses": sorted(CATEGORIZATION_STATUSES),
         "parse_statuses": sorted(PARSE_STATUSES),
         "validation_error_families": sorted(VALIDATION_ERROR_FAMILIES),
+        # str.lower() results DIRECTLY, not filtered through a bucket.
+        #
+        # The provider/model cases cannot test pythonLower's sigma handling at
+        # all: every sigma-bearing string is outside the ASCII allow-list under
+        # BOTH spellings, so it buckets to "other" either way. Verified by
+        # swapping the Go implementation to strings.ToLower -- zero provider
+        # subtests failed.
+        #
+        # That is this package's own gates-vs-transformations lesson landing on
+        # its test design. pythonLower is a TRANSFORMATION; ProviderBucket is a
+        # GATE that bounds its output to a fixed ASCII set. Testing the
+        # transformation only through the gate discards exactly the distinctions
+        # the transformation exists to preserve, and the containment argument
+        # that makes the x/text lookahead divergence acceptable is the same
+        # property that blinds the corpus to it.
+        "lower_cases": [
+            {
+                "input_codepoints": [ord(c) for c in case],
+                "lowered_codepoints": [ord(c) for c in case.lower()],
+            }
+            for case in _lower_cases()
+        ],
         "provider_cases": [
             {
                 "input_codepoints": [ord(c) for c in case],

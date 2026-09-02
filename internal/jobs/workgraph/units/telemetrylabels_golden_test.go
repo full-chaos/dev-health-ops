@@ -43,6 +43,11 @@ type telemetryLabelsGolden struct {
 		Result        string `json:"result"`
 	} `json:"bounded_cases"`
 
+	LowerCases []struct {
+		InputCodepoints   []int `json:"input_codepoints"`
+		LoweredCodepoints []int `json:"lowered_codepoints"`
+	} `json:"lower_cases"`
+
 	WhitespaceProbes []struct {
 		CodePoint     int  `json:"code_point"`
 		PythonIsSpace bool `json:"python_isspace"`
@@ -280,5 +285,72 @@ func TestSigmaFormCannotChangeABucket(t *testing.T) {
 					template, ModelBucket(medial), ModelBucket(final))
 			}
 		}
+	}
+}
+
+// TestPythonLowerMatchesPythonDirectly compares the TRANSFORMATION, not a bucket
+// derived from it.
+//
+// # WHY THIS EXISTS SEPARATELY FROM THE BUCKET TESTS
+//
+// ProviderBucket and ModelBucket cannot test pythonLower's sigma handling at
+// all. Every sigma-bearing string is outside the ASCII allow-list under both
+// spellings, so it lands in "other" either way.
+//
+// Measured, and the measurement had to be redone: swapping pythonLower to
+// strings.ToLower fails ZERO provider subtests while failing three of THIS
+// test's -- the final-sigma cases. The first attempt at that measurement was
+// worthless because removing the cases.Lower call orphaned the x/text imports,
+// so the package did not compile, and a grep for "FAIL:" counted zero. A
+// mutation that breaks the BUILD produces no test failures and reads exactly
+// like a surviving mutant. Fix the imports as part of the mutation, or the
+// harness reports the opposite of the truth.
+//
+// That is this package's own gates-vs-transformations distinction landing on its
+// test design. pythonLower is a transformation; the buckets are gates that bound
+// its output to a fixed ASCII set. Testing the transformation only through the
+// gate discards exactly the distinctions the transformation exists to preserve --
+// and the containment argument that makes the x/text lookahead divergence
+// acceptable is the very property that blinds the bucket corpus to it.
+//
+// POSITION is an explicit axis here. Final_Sigma depends on where the sigma sits,
+// not on which rune it is, so a corpus can vary character class exhaustively and
+// still hold position constant. lane-4752-go's derived rot guard enumerated every
+// multi-rune lowercase mapping the live interpreter reports and still missed
+// final sigma for exactly that reason: it is a single-rune mapping whose result
+// depends on context.
+func TestPythonLowerMatchesPythonDirectly(t *testing.T) {
+	golden := loadTelemetryLabelsGolden(t)
+
+	if len(golden.LowerCases) == 0 {
+		t.Fatal("no direct lower() cases in the corpus; pythonLower would be " +
+			"tested only through bucket functions that cannot observe its output")
+	}
+
+	var sigmaForms = map[rune]int{}
+	for _, testCase := range golden.LowerCases {
+		input := runesToString(testCase.InputCodepoints)
+		want := runesToString(testCase.LoweredCodepoints)
+		for _, r := range want {
+			if r == 'σ' || r == 'ς' {
+				sigmaForms[r]++
+			}
+		}
+		t.Run(strings.ToValidUTF8(input, "?"), func(t *testing.T) {
+			if got := pythonLower(input); got != want {
+				t.Errorf("pythonLower(%q) = %q, python = %q", input, got, want)
+			}
+		})
+	}
+
+	// The corpus must contain BOTH sigma forms, or it cannot distinguish a port
+	// that always emits one from a port that is correct.
+	if sigmaForms['σ'] == 0 || sigmaForms['ς'] == 0 {
+		t.Errorf(
+			"corpus contains %d medial and %d final sigma results; it needs both, "+
+				"or a port hard-coding either form passes. Position is the axis: "+
+				"a sigma is final only when no cased letter follows it",
+			sigmaForms['σ'], sigmaForms['ς'],
+		)
 	}
 }

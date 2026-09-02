@@ -195,11 +195,29 @@ func TestTailLawValuesArePinnedByTheCorpus(t *testing.T) {
 	if len(pinned) == 0 {
 		t.Fatal("no corpus entries at precision 1074; this test would pass vacuously")
 	}
-	if len(tailLawValues) < expectedTailLawValueCount {
-		t.Fatalf("tailLawValues has %d entries, expected at least %d: the law, the "+
-			"length check and this invariant all range over it, so shrinking it "+
-			"disables all three while every test still reports ok",
-			len(tailLawValues), expectedTailLawValueCount)
+	// Count DISTINCT bit patterns, not slice entries.
+	//
+	// Length alone is a proxy for coverage and it is evadable: replacing
+	// max-float with a second 0.0 keeps the slice at twelve, and both copies
+	// are already pinned in the corpus, so the size pin and the overlap loop
+	// both pass while the effective domain has quietly shrunk to eleven. That
+	// removes max-float's only exact tail-content check above the fixture's
+	// largest precision (its corpus rows stop at 1100; the law test reaches
+	// 5000), and the length-only test cannot see a same-length wrong padding
+	// byte. Verified by planting it: all three tests reported ok.
+	//
+	// Bit patterns rather than ==, for the same reason the generator uses them:
+	// +0.0 and -0.0 are two distinct baselines that == would merge into one.
+	distinct := make(map[uint64]struct{}, len(tailLawValues))
+	for _, value := range tailLawValues {
+		distinct[math.Float64bits(value)] = struct{}{}
+	}
+	if len(distinct) < expectedTailLawValueCount {
+		t.Fatalf("tailLawValues has %d entries but only %d DISTINCT values, expected "+
+			"at least %d: the law, the length check and this invariant all range over "+
+			"it, so shrinking the effective domain -- by deletion OR by duplicating an "+
+			"existing value -- disables coverage while every test still reports ok",
+			len(tailLawValues), len(distinct), expectedTailLawValueCount)
 	}
 	t.Logf("baselines pinned at precision %d: %d; law values checked: %d",
 		maxSignificantFractionPlace, len(pinned), len(tailLawValues))

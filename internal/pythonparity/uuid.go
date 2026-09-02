@@ -38,6 +38,81 @@
 // So this function is held to EXACT equivalence in both directions, and the
 // differential asserts both. A future contributor tempted to widen or narrow it
 // "to be safe" should be clear that safe is not defined here -- only exact is.
+//
+// # Two kinds of function live here, and they fail differently
+//
+// The polarity axis above is orthogonal to this one: a GATE can have either
+// polarity, and a TRANSFORMATION has neither.
+//
+// Some members are GATES. They partition inputs into accepted and rejected --
+// ParseUUID, parsePythonIntBase16. A gate has a direction to reason about, even
+// when (as above) which direction is dangerous depends on the caller.
+//
+// The rest are TRANSFORMATIONS. Sum and transformDecimalAndSpaceToASCII map
+// every input to some output, and there is no accept set to be conservative
+// about. "Close" has no meaning: a float differing in the last bit, or a digit
+// transformed to the wrong ASCII character, is simply a different answer, and the
+// direction of the difference carries no safety.
+//
+// This distinction earns its space because it predicts two things.
+//
+// It predicts the REVIEW QUESTION. For a gate the question is "which direction
+// does the divergence go?". For a transformation that question is malformed, and
+// asking it wastes a round. A comparator for Sum was once written as value
+// equality under a bitwise name, and the instinct that let it through was
+// gate-shaped: it was checked for accepting too much, when the only thing that
+// mattered was whether it distinguished -0.0 from 0.0. The corpus already
+// contained the case.
+//
+// It predicts the TEST STRATEGY, which is the load-bearing half. A hand-written
+// matrix is defensible for a gate: the boundary is the thing being tested and you
+// can enumerate near it. For a transformation the same matrix silently encodes
+// the AUTHOR'S MODEL of the reference. A curated UUID corpus stayed ASCII-only
+// and 32-hex-digits-only for four review rounds; an invalid-UTF-8 decode policy
+// was settled by listing three plausible behaviours, and all three were wrong.
+// Both are the same error: AN ENUMERATION OF HYPOTHESES IS NOT A MEASUREMENT OF
+// BEHAVIOUR. The only available claim for a transformation is exact agreement
+// over a corpus that varies the axes that matter, and the only honest way to get
+// it is to run both sides.
+//
+// And a transformation's failure is not merely different, it is INVISIBLE. A
+// gate's wrong answer eventually surfaces as a refused request or a written row.
+// Sum one ULP out surfaces as nothing at all, until a categorisation is re-billed
+// months later. That is why transformations need MORE measurement discipline than
+// gates rather than less.
+//
+// # The obvious Go primitive is wrong in a direction that depends on the site
+//
+// Whitespace and case are the two families where this bites hardest, because in
+// both the natural Go choice is wrong for one Python operation and exact for
+// another. Name which Python function a site ports before choosing.
+//
+// Whitespace -- Python has THREE classes:
+//
+//	str.isspace()      29 code points, includes U+001C-U+001F   str.strip()
+//	numeric parsers    25 code points, == Go's unicode.IsSpace  int(), float()
+//	str.splitlines()   10 boundaries, U+001C-U+001E but NOT U+001F
+//
+// So strings.TrimSpace is too NARROW for str.strip() and EXACT for int()/float().
+//
+// Case -- three relations, and Go's strings.ToLower is neither Python one:
+//
+//	str.lower()          full Unicode + SpecialCasing; final sigma is
+//	                     context-sensitive and U+0130 lowercases to TWO code
+//	                     points. Port with x/text cases.Lower(language.Und) --
+//	                     correct BY DESIGN, since CPython's str.lower() is
+//	                     locale-independent and never applies the Turkish or
+//	                     Lithuanian tailorings.
+//	C tolower on bytes   ASCII only. Used by CPython's own keyword matching
+//	                     (PyOS_strnicmp). Port with a hand-rolled A-Z fold.
+//	strings.ToLower      rune-wise Unicode; matches NEITHER. It maps U+0130 to
+//	                     'i', so it invents keyword matches CPython never makes.
+//
+// strings.EqualFold is a fourth relation (Unicode simple folding) and is unsafe
+// for any keyword containing 's' or 'k' -- exactly two ASCII letters are
+// reachable by a non-ASCII simple fold, 's' from U+017F and 'k' from U+212A.
+// Note the asymmetry: U+017F is already lowercase, so str.lower() reaches only
+// 'k' while folding reaches both.
 package pythonparity
 
 import (

@@ -1,16 +1,3 @@
-// Package pythonparity holds primitives that reproduce CPython semantics
-// exactly, for Go ports that must agree with a Python reference byte for byte.
-//
-// Each member exists because the obvious Go spelling DISAGREES with Python in a
-// way that is invisible in ordinary use and decisive at a boundary -- a sum that
-// is compensated rather than naive, a whitespace predicate that is a superset,
-// a JSON encoder with different separators and escaping.
-//
-// PROVISIONAL PACKAGE DOC. lane-pathb-go owns the canonical one, in uuid.go;
-// this file carries a doc only because the two PRs creating this package were
-// extracted off main in parallel and whichever lands first would otherwise
-// leave the package undocumented. When uuid.go lands, DELETE this comment
-// rather than merging the two -- see the note in that file.
 package pythonparity
 
 import "math"

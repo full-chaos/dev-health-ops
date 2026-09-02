@@ -46,11 +46,18 @@ produced an IDENTICAL edge_id set but differed in ``event_ts`` on 155 edges and
 rot guard REPLAYS frozen rows instead of regenerating -- and why a regeneration
 that differs only in ``event_ts``/``day``/``input_watermark`` is expected.
 
-READ-ONLY. The builder is constructed WITHOUT running ``__init__`` so that
-``sink.ensure_schema()`` -- the one write-capable call on the path -- never fires;
-the recording sink refuses every method except the reads and writes it captures;
-and the recording ClickHouse client records ``command()`` without executing it, so
-no mutation ever reaches the shared stack.
+READ-ONLY, enforced by the SERVER. The connection is opened with ``readonly=1``,
+so ClickHouse refuses any mutation with ``Code: 164 (READONLY)`` regardless of
+which object issued it. That is the control; the rest is defence in depth: the
+builder is constructed WITHOUT running ``__init__`` so ``sink.ensure_schema()``
+never fires, ``_refuse_non_read`` rejects a non-read before it is sent, the
+recording sink refuses every method except the reads and writes it captures, and
+the recording client records ``command()`` without executing it.
+
+Note what is NOT claimed: the object graph is not sealed. A bound method exposes
+its receiver via ``__self__``, a closure via ``__closure__``; hiding the sink in
+Python is a promise rather than a control, which is why the enforcement lives at
+the connection instead.
 """
 
 from __future__ import annotations
@@ -65,7 +72,12 @@ from typing import Any, cast
 
 sys.path.insert(0, "/app/src")
 
+import clickhouse_connect  # noqa: E402
+
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink  # noqa: E402
+from dev_health_ops.metrics.sinks.clickhouse.connection import (  # noqa: E402
+    clickhouse_client_kwargs,
+)
 from dev_health_ops.work_graph.builder import (  # noqa: E402
     BuildConfig,
     WorkGraphBuilder,
@@ -239,6 +251,32 @@ FROM_TS = datetime(2026, 8, 18, 12, 34, 56, 789000, tzinfo=timezone.utc)
 TO_TS = datetime(2026, 9, 1, 1, 2, 3, 456000, tzinfo=timezone.utc)
 
 
+def _read_only_sink(dsn: str) -> Any:
+    """A sink whose SERVER refuses to write, whatever the object graph allows.
+
+    Three rounds of adversarial review kept finding the same class here, and the
+    third one is the reason this exists: hiding the real sink is not achievable in
+    Python. Removing ``_inner`` still left ``self._read.__self__`` pointing at the
+    live ``ClickHouseMetricsSink``, and closing that would leave ``__closure__``,
+    then ``gc.get_referrers``. An object-graph barrier in this language is a
+    promise, not a control.
+
+    ``readonly=1`` moves the control to the server, where it is enforceable and
+    cannot be walked around: ClickHouse answers a mutation with
+    ``Code: 164 ... Cannot execute query in readonly mode`` no matter which object
+    issued it, while ordinary reads are unaffected (both verified against the
+    running instance). The SQL gate in ``_refuse_non_read`` stays as the near-side
+    check that fails fast with a legible message; this is the far-side one that
+    actually holds.
+    """
+    client = clickhouse_connect.get_client(
+        **clickhouse_client_kwargs(
+            dsn, settings={"max_query_size": 1 * 1024 * 1024, "readonly": 1}
+        )
+    )
+    return ClickHouseMetricsSink(dsn, client=client)
+
+
 def build_golden() -> dict[str, Any]:
     config = BuildConfig(
         dsn=os.environ["CLICKHOUSE_URI"],
@@ -246,7 +284,7 @@ def build_golden() -> dict[str, Any]:
         from_date=FROM_TS,
         to_date=TO_TS,
     )
-    sink = RecordingSink(ClickHouseMetricsSink(config.dsn).query_dicts)
+    sink = RecordingSink(_read_only_sink(config.dsn).query_dicts)
 
     # Deliberately NOT WorkGraphBuilder(config): __init__ calls
     # sink.ensure_schema(), which is write-capable. Construct the object and set

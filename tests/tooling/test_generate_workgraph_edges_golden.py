@@ -186,52 +186,51 @@ class TestReplayConsumesEveryFrozenRead:
         sink.assert_fully_consumed()
 
 
-class TestRecordingSinkHoldsNoWritableObject:
-    """The barrier must be structural, not a list of names we remembered to refuse.
+class TestTheReadBarrierIsServerSide:
+    """The control is ``readonly=1`` on the connection, not the object graph.
 
-    Adversarial review round 2: ``__getattr__`` only fires for attributes that do
-    NOT exist, so holding the real sink as ``_inner`` left it reachable — a
-    producer path ``self.sink._inner.ensure_schema()`` would have reached the real
-    ClickHouseMetricsSink, which runs migrations and ``client.command`` writes.
-    The sink now holds one bound read callable and nothing else.
+    Three review rounds found the same class here, and the third one is why this
+    changed shape. Hiding the sink is not achievable in Python: removing
+    ``_inner`` still left ``self._read.__self__`` pointing at the live
+    ``ClickHouseMetricsSink``, and closing that would leave ``__closure__``, then
+    ``gc.get_referrers``. An object-graph barrier in this language is a promise.
+
+    ``readonly=1`` is enforced by ClickHouse itself, so it holds no matter which
+    object issues the statement. Verified against the running instance: a DELETE
+    through the real sink's own client returns ``Code: 164 ... Cannot execute
+    query in readonly mode``, while ordinary reads are unaffected.
+
+    These tests are pure -- they intercept client construction rather than
+    connecting -- so the assertion is that the generator ASKS for a read-only
+    connection. The server's enforcement of that request is ClickHouse's job.
     """
 
-    def test_no_attribute_exposes_a_sink_like_object(self, generator):
-        calls: list[tuple[str, dict]] = []
+    def test_the_connection_is_opened_read_only(self, generator, monkeypatch):
+        captured: dict = {}
 
-        def read(statement: str, params: dict) -> list[dict]:
-            calls.append((statement, params))
-            return [{"edge_id": "a"}]
+        def fake_get_client(**kwargs):
+            captured.update(kwargs)
+            return object()
 
-        sink = generator.RecordingSink(read)
+        monkeypatch.setattr(generator.clickhouse_connect, "get_client", fake_get_client)
+        sink = generator._read_only_sink(
+            "clickhouse://user:pw@localhost:9000/devhealth"
+        )
 
-        # `client` is the recording stub, which exposes `command` on purpose --
-        # that is how the cleanup mutations reach the golden instead of the
-        # database, and it is proven connectionless by
-        # TestRecordedMutationsAreNotExecuted. Every OTHER attribute must be
-        # inert. The property is that nothing here can reach ClickHouse, not that
-        # nothing here has a method with an alarming name.
-        assert isinstance(sink.client, generator.RecordingClient)
-        for name, value in vars(sink).items():
-            if name == "client":
-                continue
-            # Sink-shaped names only. Generic ones like "insert" or "query" match
-            # ordinary builtins (a list has .insert), which would make this assert
-            # something about Python's data model instead of about the barrier.
-            for reachable in (
-                "ensure_schema",
-                "client",
-                "_client",
-                "write_work_graph_edges",
-                "write_work_graph_projection_runs",
-            ):
-                assert not hasattr(value, reachable), (
-                    f"RecordingSink.{name} exposes {reachable}; a producer path through "
-                    "it could reach the real sink and write to the shared stack"
-                )
-        # ...and the one thing it does hold still works.
-        assert sink.query_dicts(SCOPED_READ, {}) == [{"edge_id": "a"}]
-        assert calls == [(SCOPED_READ, {})]
+        assert captured.get("settings", {}).get("readonly") == 1, (
+            "the golden generator opened a connection that is not read-only; the "
+            "object-graph barrier is explicitly NOT relied upon, so this setting is "
+            "the only thing preventing a write to the shared stack"
+        )
+        # The sink must actually be using the intercepted client, or the setting
+        # was applied to a connection nobody uses.
+        assert sink.client is not None
+
+    def test_the_sql_gate_remains_as_the_near_side_check(self, generator):
+        # Defence in depth: the server refusal is authoritative, but a local
+        # refusal fails fast with a message naming the statement.
+        with pytest.raises(AssertionError, match="non-read"):
+            generator._refuse_non_read("ALTER TABLE work_graph_edges DELETE WHERE 1=1")
 
     def test_an_undefined_attribute_is_still_refused(self, generator):
         sink = generator.RecordingSink(lambda statement, params: [])

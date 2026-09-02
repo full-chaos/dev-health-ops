@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -130,30 +132,48 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse frozen_now: %v", err)
 	}
-	// Every event_ts an edge may legitimately carry, bound to the edge's OWN
-	// source rows rather than to the whole fixture.
+
+	// Permitted instants, keyed by the edge's OWN endpoints AND its own kind.
 	//
-	// Permitting any dependency's last_synced was not enough: rotating the
-	// timestamps across edges changes 2,053 of 3,548 values while every one of
-	// them remains "some dependency's instant", so a derivation that assigned the
-	// wrong freshness to an edge passed. Keying on the UNORDERED endpoint pair
-	// fixes that without needing _canonical_dependency (which is PR2's port and
-	// may swap source and target for blocker rows), and it is tight: 3,381 of
-	// 3,548 edges get exactly ONE permitted instant.
+	// Two earlier versions of this were too loose and were caught by review.
+	// Permitting any dependency's last_synced accepted a rotation across edges;
+	// keying on endpoints alone still let a `blocks` edge take the timestamp of a
+	// `relates` dependency between the same two issues.
 	//
-	// The residual 167 are edges whose endpoint pair carries more than one
-	// distinct last_synced -- which is CHAOS-4788 itself, the unmerged duplicate
-	// versions the producer reads without FINAL. The ambiguity is the defect's,
-	// not this test's, and narrowing further would mean asserting a value the
-	// producer does not deterministically choose.
-	type endpointPair struct{ low, high string }
-	pairKey := func(a, b string) endpointPair {
+	// Only the TYPE is needed here, not the direction, which is why this does not
+	// need _canonical_dependency (PR2's port, which may swap source and target for
+	// blocker rows): the key is the unordered pair, so a swap cannot change it.
+	type binding struct {
+		low, high string
+		edgeType  string
+	}
+	edgeTypeFor := func(relationship string) string {
+		switch strings.ToLower(relationship) {
+		// The blocker family is all forced to BLOCKS by _canonical_dependency.
+		case "blocks", "blocked_by", "is_blocked_by":
+			return EdgeTypeBlocks
+		case "is_related_to":
+			return EdgeTypeIsRelatedTo
+		case "duplicates":
+			return EdgeTypeDuplicates
+		case "is_duplicate_of":
+			return EdgeTypeIsDuplicateOf
+		case "parent", "is_parent_of":
+			return EdgeTypeParentOf
+		case "child", "is_child_of":
+			return EdgeTypeChildOf
+		default:
+			// DEPENDENCY_TYPE_MAP's fallback, which is what "relates_to" hits.
+			return EdgeTypeRelates
+		}
+	}
+	key := func(a, b, edgeType string) binding {
 		if a > b {
 			a, b = b, a
 		}
-		return endpointPair{a, b}
+		return binding{a, b, edgeType}
 	}
-	permittedByPair := map[endpointPair]map[int64]struct{}{}
+	permitted := map[binding]map[int64]struct{}{}
 	for index, dependency := range document.Dependencies {
 		source, err := document.String(dependency[0])
 		if err != nil {
@@ -163,19 +183,22 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dependency %d target: %v", index, err)
 		}
+		relationship, err := document.String(dependency[2])
+		if err != nil {
+			t.Fatalf("dependency %d relationship_type: %v", index, err)
+		}
 		lastSynced, err := document.Instant(dependency[5])
 		if err != nil {
 			t.Fatalf("dependency %d last_synced: %v", index, err)
 		}
-		key := pairKey(source, target)
-		if permittedByPair[key] == nil {
-			permittedByPair[key] = map[int64]struct{}{}
+		bindingKey := key(source, target, edgeTypeFor(relationship))
+		if permitted[bindingKey] == nil {
+			permitted[bindingKey] = map[int64]struct{}{}
 		}
-		permittedByPair[key][lastSynced.UnixNano()] = struct{}{}
+		permitted[bindingKey][lastSynced.UnixNano()] = struct{}{}
 	}
 
 	distinct := map[int64]struct{}{}
-	perRow := 0
 	boundExactly := 0
 	for index, edge := range document.Edges {
 		row, err := document.EdgeRow(edge)
@@ -188,46 +211,42 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 		if !row.LastSynced.Equal(frozenNow) {
 			t.Fatalf("edge %d last_synced %s is not the build clock %s", index, row.LastSynced, frozenNow)
 		}
-		if !row.EventTs.Equal(frozenNow) {
-			allowed, known := permittedByPair[pairKey(row.SourceID, row.TargetID)]
-			if !known {
-				t.Fatalf(
-					"edge %d (%s <-> %s) has no dependency row with those endpoints; it "+
-						"was not derived from this fixture's input",
-					index, row.SourceID, row.TargetID,
-				)
-			}
-			if _, ok := allowed[row.EventTs.UnixNano()]; !ok {
-				t.Fatalf(
-					"edge %d (%s <-> %s) carries event_ts %s, which belongs to a DIFFERENT "+
-						"dependency row — the timestamp is not bound to this edge's own source",
-					index, row.SourceID, row.TargetID, row.EventTs,
-				)
-			}
-			exactlyOne := 0
-			if len(allowed) == 1 {
-				exactlyOne = 1
-			}
-			boundExactly += exactlyOne
+		// No blanket exemption for the build clock. The producer falls back to it
+		// only for a row whose last_synced will not parse, and this fixture has
+		// none -- so an edge carrying it is a defect, not a special case. The
+		// previous version exempted them and a collapse of 3,547 of 3,548
+		// timestamps to the build clock passed every predicate.
+		if row.EventTs.Equal(frozenNow) {
+			t.Fatalf(
+				"edge %d carries the build clock as its event_ts; every dependency row in this "+
+					"fixture has a parseable last_synced, so nothing should reach that fallback",
+				index,
+			)
+		}
+		allowed, known := permitted[key(row.SourceID, row.TargetID, row.EdgeType)]
+		if !known {
+			t.Fatalf(
+				"edge %d (%s <-%s-> %s) has no dependency row with those endpoints and that kind; "+
+					"it was not derived from this fixture's input",
+				index, row.SourceID, row.EdgeType, row.TargetID,
+			)
+		}
+		if _, ok := allowed[row.EventTs.UnixNano()]; !ok {
+			t.Fatalf(
+				"edge %d (%s <-%s-> %s) carries event_ts %s, which belongs to a DIFFERENT "+
+					"dependency row — the timestamp is not bound to this edge's own source",
+				index, row.SourceID, row.EdgeType, row.TargetID, row.EventTs,
+			)
+		}
+		if len(allowed) == 1 {
+			boundExactly++
 		}
 		distinct[row.EventTs.UnixNano()] = struct{}{}
-		if !row.EventTs.Equal(frozenNow) {
-			perRow++
-		}
 		if want := DayFor(row.EventTs); !row.Day.Equal(want) {
 			t.Fatalf("edge %d day %s != toDate(event_ts) %s", index, row.Day, want)
 		}
 	}
-	if perRow == 0 {
-		t.Fatal(
-			"every event_ts equals the build clock, so this fixture cannot distinguish " +
-				"a per-row timestamp from a per-build one — the contract it is meant to pin",
-		)
-	}
-	// "At least one differs from the build clock" is too weak on its own: a golden
-	// in which all 3,548 edges shared ONE non-build instant would satisfy it, so a
-	// Python regression that collapsed dependency freshness to a constant would be
-	// accepted on regeneration. Require the timestamps to actually vary.
+
 	if len(distinct) < 2 {
 		t.Fatalf(
 			"all %d edges carry the same event_ts; a producer that collapsed per-row "+
@@ -235,18 +254,16 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 			len(document.Edges),
 		)
 	}
-	// The binding must actually pin most rows, or "bound to its own source" is a
-	// claim the fixture cannot support.
-	if boundExactly*4 < perRow*3 {
+	if boundExactly*4 < len(document.Edges)*3 {
 		t.Fatalf(
-			"only %d of %d per-row timestamps are pinned to a single permitted value; "+
-				"the binding is too loose to detect a misassigned event_ts",
-			boundExactly, perRow,
+			"only %d of %d timestamps are pinned to a single permitted value; the binding "+
+				"is too loose to detect a misassigned event_ts",
+			boundExactly, len(document.Edges),
 		)
 	}
 	t.Logf(
-		"event_ts: %d distinct values across %d edges; %d of %d per-row timestamps pinned to exactly one permitted instant",
-		len(distinct), len(document.Edges), boundExactly, perRow,
+		"event_ts: %d distinct across %d edges; %d pinned to exactly one permitted instant",
+		len(distinct), len(document.Edges), boundExactly,
 	)
 }
 
@@ -313,39 +330,126 @@ func TestVariantCExceptionListIsClosedAndNecessary(t *testing.T) {
 	t.Logf("exception exercised by %s", formatCounts(observed))
 }
 
-// TestCleanupMutationsArePagedAndOrgScoped pins the cleanup contract the port
-// must reproduce. The paging is not an optimisation: the candidate set is
-// unbounded in the org's size, and an unpaged IN-list works on this org and
-// fails on a larger one.
-func TestCleanupMutationsArePagedAndOrgScoped(t *testing.T) {
+// TestCleanupMutationsDeleteExactlyTheRecomputedCandidateSet derives the delete
+// set from the frozen INPUTS and requires the mutations to match it exactly.
+//
+// Checking only "at least two pages, each at most 1000" was not enough: dropping
+// the final 792-id page and regenerating the fixture's self-counts left every
+// assertion green while 792 legacy orientations survived in the table. Counts the
+// golden derives from itself cannot catch a golden that is wrong; the candidate
+// set has to be recomputed from the dependency rows and the existing ids.
+//
+// The candidate set is, per _delete_dependency_edge_candidates: every existing
+// native blocker edge id read from the cursor pages, plus — for each blocker
+// dependency row — BOTH endpoint directions crossed with BLOCKS, IS_BLOCKED_BY
+// and RELATES. That superset exists to catch every historical orientation a
+// legacy row may have written, which is exactly why a missing page is not
+// cosmetic.
+func TestCleanupMutationsDeleteExactlyTheRecomputedCandidateSet(t *testing.T) {
 	document := loadGolden(t)
+
+	candidates := map[string]struct{}{}
+	for pageIndex, page := range document.ExistingEdgeIDs {
+		for _, index := range page {
+			existing, err := document.String(index)
+			if err != nil {
+				t.Fatalf("existing edge id page %d: %v", pageIndex, err)
+			}
+			candidates[existing] = struct{}{}
+		}
+	}
+	blockerRows := 0
+	for index, dependency := range document.Dependencies {
+		relationship, err := document.String(dependency[2])
+		if err != nil {
+			t.Fatalf("dependency %d relationship_type: %v", index, err)
+		}
+		switch strings.ToLower(relationship) {
+		case "blocks", "blocked_by", "is_blocked_by":
+		default:
+			continue
+		}
+		source, err := document.String(dependency[0])
+		if err != nil {
+			t.Fatalf("dependency %d source: %v", index, err)
+		}
+		target, err := document.String(dependency[1])
+		if err != nil {
+			t.Fatalf("dependency %d target: %v", index, err)
+		}
+		if source == "" || target == "" {
+			continue
+		}
+		blockerRows++
+		for _, pair := range [][2]string{{source, target}, {target, source}} {
+			for _, edgeType := range []string{EdgeTypeBlocks, EdgeTypeIsBlockedBy, EdgeTypeRelates} {
+				candidates[EdgeID(NodeTypeIssue, pair[0], edgeType, NodeTypeIssue, pair[1])] = struct{}{}
+			}
+		}
+	}
+	if blockerRows == 0 {
+		t.Fatal("the fixture has no blocker dependency rows, so it cannot exercise the cleanup at all")
+	}
+	expected := make([]string, 0, len(candidates))
+	for id := range candidates {
+		expected = append(expected, id)
+	}
+	sort.Strings(expected)
+
+	// First mutation is the projection-run delete; the rest are the edge pages.
 	if len(document.Mutations) < 2 {
-		t.Fatalf("golden froze %d mutations; expected the projection delete plus at least one edge page", len(document.Mutations))
+		t.Fatalf("golden froze %d mutations; expected a projection delete plus edge pages", len(document.Mutations))
 	}
-	first := document.Mutations[0]
-	if want := "ALTER TABLE work_graph_projection_runs DELETE"; !contains(first.Statement, want) {
-		t.Fatalf("first mutation is %q, expected the projection-run delete", first.Statement)
+	if !contains(document.Mutations[0].Statement, "ALTER TABLE work_graph_projection_runs DELETE") {
+		t.Fatalf("first mutation is %q, expected the projection-run delete", document.Mutations[0].Statement)
 	}
-	edgePages := 0
-	for index, mutation := range document.Mutations[1:] {
+	deleted := make([]string, 0, len(expected))
+	for offset, mutation := range document.Mutations[1:] {
+		index := offset + 1
 		if !contains(mutation.Statement, "ALTER TABLE work_graph_edges DELETE") {
-			t.Fatalf("mutation %d is %q, expected an edge delete", index+1, mutation.Statement)
+			t.Fatalf("mutation %d is %q, expected an edge delete", index, mutation.Statement)
 		}
 		ids, ok := mutation.Parameters["edge_ids"].([]any)
 		if !ok {
-			t.Fatalf("mutation %d has no edge_ids array", index+1)
+			t.Fatalf("mutation %d has no edge_ids array", index)
 		}
 		if len(ids) > 1000 {
-			t.Fatalf("mutation %d deletes %d ids in one statement; the page size is 1000", index+1, len(ids))
+			t.Fatalf("mutation %d deletes %d ids in one statement; the page size is 1000", index, len(ids))
 		}
-		edgePages++
+		// Every page but the last must be full, or the producer stopped paging early.
+		if index < len(document.Mutations)-1 && len(ids) != 1000 {
+			t.Fatalf(
+				"mutation %d carries %d ids but is not the final page; a short page mid-run "+
+					"means the candidate set was truncated",
+				index, len(ids),
+			)
+		}
+		for _, raw := range ids {
+			id, ok := raw.(string)
+			if !ok {
+				t.Fatalf("mutation %d has a non-string edge id %#v", index, raw)
+			}
+			deleted = append(deleted, id)
+		}
 	}
-	if edgePages < 2 {
-		t.Fatal(
-			"the golden froze fewer than two edge-delete pages, so it cannot prove the port " +
-				"pages at all — regenerate against an org whose candidate set exceeds 1000 ids",
+
+	if len(deleted) != len(expected) {
+		t.Fatalf(
+			"the mutations delete %d ids but the candidate set recomputed from the frozen "+
+				"dependencies and existing ids has %d — a page is missing or extra",
+			len(deleted), len(expected),
 		)
 	}
+	for index := range expected {
+		if deleted[index] != expected[index] {
+			t.Fatalf(
+				"delete id %d is %s, recomputed candidate set has %s (the producer sorts the "+
+					"set before paging, so order is part of the contract)",
+				index, deleted[index], expected[index],
+			)
+		}
+	}
+
 	for index, mutation := range document.Mutations {
 		if !contains(mutation.Statement, "org_id = {org_id:String}") {
 			t.Fatalf("mutation %d is not org-scoped: %q", index, mutation.Statement)
@@ -357,6 +461,10 @@ func TestCleanupMutationsArePagedAndOrgScoped(t *testing.T) {
 			t.Fatalf("mutation %d does not wait for the mutation: %q", index, mutation.Statement)
 		}
 	}
+	t.Logf(
+		"cleanup: %d blocker rows + %d existing ids -> %d candidates across %d pages",
+		blockerRows, document.Counts["existing_edge_ids"], len(expected), len(document.Mutations)-1,
+	)
 }
 
 // TestValidateConfidenceRefusesUngroupableValues covers what the golden cannot:

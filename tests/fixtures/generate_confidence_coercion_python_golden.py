@@ -34,13 +34,15 @@ import math
 import pathlib
 import sys
 
+from dev_health_ops.work_graph.investment.components import _edge_confidence
+
 GOLDEN_PATH = (
     pathlib.Path(__file__).resolve().parent / "confidence_coercion_python_golden.json"
 )
 
 # Ordinary values, then every form known to separate the two parsers, then the
 # junk a mis-typed or mis-migrated column could realistically hold.
-CORPUS: list[str] = [
+STRING_CORPUS: list[str] = [
     # plain numbers
     "0",
     "1",
@@ -122,12 +124,55 @@ CORPUS: list[str] = [
 ]
 
 
-def coerce(value: str) -> str:
-    """Exactly components.py's string branch, rendered for JSON transport."""
-    try:
-        result = float(value)
-    except ValueError:
-        return "0.0"
+# The TYPE axis. The string corpus above varies VALUE only; every entry reaches
+# the same `isinstance(value, str)` branch. These reach the others, and the delta
+# between them is where a Go port written from the type signature goes wrong.
+#
+# `True` and `False` are the point of this list. Python's `bool` SUBCLASSES
+# `int`, so `_edge_confidence` checks `isinstance(value, bool)` BEFORE the
+# numeric branch specifically to stop `True` becoming 1.0 -- it coerces to 0.0.
+# A port that checks `int` first, or that relies on Go's type switch where
+# `bool` and numeric types are unrelated, inverts the meaning of every boolean
+# confidence. Until this list existed that case had no generated evidence at
+# all: it was asserted only by a hand-written Go table, which is the instrument
+# the corpus was introduced to replace.
+TYPE_CORPUS: list[object] = [
+    True,
+    False,
+    0,
+    1,
+    -3,
+    0.0,
+    0.5,
+    1.0,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    None,
+    [],
+    [1.0],
+    {},
+    {"confidence": 1.0},
+    (),
+    "0.5",
+]
+
+
+def coerce(value: object) -> str:
+    """Call the REFERENCE function, do not reimplement it.
+
+    An earlier revision of this generator reproduced ``_edge_confidence``'s
+    ``try: float(value) / except ValueError: return 0.0`` inline.  That made the
+    rot guard useless for its actual purpose: it byte-compares this generator's
+    output against the frozen file, so an imitation stays green while the real
+    function changes underneath it, and the frozen file then documents a rule
+    nothing enforces.  Importing it means the corpus is frozen against the
+    producer rather than against someone's reading of it (CHAOS-4803).
+
+    ``_edge_confidence`` takes the EDGE, not the value, so the value is wrapped
+    the way ``build_components`` would supply it.
+    """
+    result = _edge_confidence({"confidence": value})
     if math.isnan(result):
         return "nan"
     if math.isinf(result):
@@ -138,12 +183,27 @@ def coerce(value: str) -> str:
 def render() -> str:
     document = {
         "note": (
-            "Expectations are the return value of components.py's _edge_confidence "
-            "string branch (float(value), ValueError -> 0.0), produced by the "
-            "interpreter itself. Rendered as strings because inf and nan have no "
-            "JSON representation and are precisely the values under test."
+            "Expectations are the return value of components.py's _edge_confidence, "
+            "CALLED DIRECTLY rather than reimplemented -- an imitation would leave "
+            "the rot guard green while the real function changed underneath it. "
+            "Two axes: string_cases varies the VALUE inside the str branch; "
+            "type_cases varies the TYPE across branches, and carries repr() rather "
+            "than the value because JSON would erase the very thing under test. "
+            "The type axis exists for True/False: bool subclasses int in Python, so "
+            "the isinstance(value, bool) check runs BEFORE the numeric branch and "
+            "True coerces to 0.0, not 1.0."
         ),
-        "cases": [{"input": value, "expected": coerce(value)} for value in CORPUS],
+        "string_cases": [
+            {"input": value, "expected": coerce(value)} for value in STRING_CORPUS
+        ],
+        # repr() rather than the value itself: the type axis carries values with
+        # no JSON representation (inf, nan, tuples), and the POINT of these rows
+        # is which Python TYPE was passed, which JSON would erase by coercing
+        # True to true and () to [].
+        "type_cases": [
+            {"input_repr": repr(value), "expected": coerce(value)}
+            for value in TYPE_CORPUS
+        ],
     }
     return json.dumps(document, indent=1, sort_keys=True, ensure_ascii=True) + "\n"
 

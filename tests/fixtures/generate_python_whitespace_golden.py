@@ -13,6 +13,18 @@ This file replaces the assertion with the measurement itself, regenerated on
 demand and diffed by a rot guard, so a Python upgrade that adds a whitespace
 code point is caught by CI rather than by a divergent hash in production.
 
+PYTHON HAS THREE OVERLAPPING RULES HERE, NOT ONE
+------------------------------------------------
+  1. str.isspace() / .strip() / .split()  -- adds 0x1c-0x1f to Go's set
+  2. int() / float()                      -- REJECTS 0x1c-0x1f; Go's
+                                             strings.TrimSpace matches this one
+  3. str.splitlines()                     -- 0x1c, 0x1d, 0x1e but NOT 0x1f,
+                                             plus 0x0b, 0x0c, 0x85, U+2028/9
+
+Rules 1 and 3 are not nested: 0x1f is whitespace but not a line boundary. A
+port that shares a single predicate between them is wrong in one direction or
+the other, which is why all three sets are emitted here rather than derived.
+
 WHERE IT BITES BEYOND .strip()
 ------------------------------
 `evidence._truncate_text` collapses whitespace with `" ".join(value.split())`.
@@ -89,6 +101,55 @@ def main() -> None:
         if cp not in set(isspace) and ("a" + chr(cp) + "b").split() == ["a", "b"]
     ]
 
+    # str.splitlines() is a THIRD character class, distinct from both of the
+    # above. Notably it treats 0x1c-0x1e as line boundaries but NOT 0x1f, while
+    # str.isspace() accepts all four -- so the two sets are not nested and a
+    # port cannot share one predicate between them.
+    splitlines_boundaries = [
+        cp for cp in range(0x110000) if len(("a" + chr(cp) + "b").splitlines()) > 1
+    ]
+    # CRLF must count as ONE boundary, not two, or a Go port emits a spurious
+    # empty line between them.
+    crlf_is_one_boundary = "a\r\nb".splitlines() == ["a", "b"]
+
+    # Driven cases for the Go port: every boundary in isolation, the CRLF
+    # pair, boundaries at the start/end, runs of them, and the shapes
+    # _commit_subject actually meets. Expectations come from calling
+    # splitlines(), never from describing it.
+    splitline_inputs = [
+        "",
+        "a",
+        "a\nb",
+        "a\nb\nc",
+        "a\n",
+        "\na",
+        "\n",
+        "a\n\nb",
+        "a\r\nb",
+        "a\r\n",
+        "a\n\rb",
+        "a\r\rb",
+        "first\x1csecond",
+        "  leading\nreal subject\nbody",
+        "\x1c  \nreal subject\nbody",
+        "\t\n   \nsubject",
+        "修復\u2028バグ",
+        "a\x85b",
+        "a\x0bb\x0cc",
+        "a\x1cb\x1dc\x1ed",
+        "a\x1fb",
+    ] + [f"a{chr(cp)}b" for cp in splitlines_boundaries]
+    splitline_cases = [
+        {
+            "input_hex": value.encode("utf-8", "surrogatepass").hex(),
+            "lines_hex": [
+                line.encode("utf-8", "surrogatepass").hex()
+                for line in value.splitlines()
+            ],
+        }
+        for value in splitline_inputs
+    ]
+
     # Bound as locals before going into the payload dict: indexing a
     # dict[str, object] hands mypy an `object`, which cannot be passed to hex().
     python_only = sorted(set(isspace) - GO_UNICODE_ISSPACE)
@@ -105,6 +166,15 @@ def main() -> None:
         "go_only_code_points": go_only,
         "split_disagrees_with_isspace": split_disagrees,
         "split_splits_on_non_isspace": split_extra,
+        "splitlines_boundary_code_points": splitlines_boundaries,
+        "splitlines_only_code_points": sorted(
+            set(splitlines_boundaries) - set(isspace)
+        ),
+        "isspace_only_vs_splitlines_code_points": sorted(
+            set(isspace) - set(splitlines_boundaries)
+        ),
+        "crlf_is_one_boundary": crlf_is_one_boundary,
+        "splitlines_cases": splitline_cases,
     }
 
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -118,6 +188,11 @@ def main() -> None:
     print(f"  python-only vs Go:          {[hex(c) for c in python_only]}")
     print(f"  go-only vs Python:          {[hex(c) for c in go_only]}")
     print(f"  split/isspace disagreements: {split_disagrees or 'none'}")
+    print(f"  splitlines boundaries:      {len(splitlines_boundaries)}")
+    print(
+        "  in isspace but NOT a line boundary: "
+        f"{[hex(c) for c in sorted(set(isspace) - set(splitlines_boundaries))]}"
+    )
 
 
 if __name__ == "__main__":

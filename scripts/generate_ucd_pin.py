@@ -159,6 +159,52 @@ lines += [
     "const pythonWordClassRanges = `" + _rx(_word) + "`",
 ]
 
+# str.isdigit() is a THIRD class, and it is not `\d`.
+#
+# extract_flag_key_refs skips a key when key.isdigit() is true. That predicate is
+# Numeric_Type=Digit, which is a strict SUPERSET of the regex `\d` (category Nd)
+# by 128 runes -- superscripts U+00B2/B3/B9 and the Ethiopic digits among them.
+# Measured: 760 in both, 128 isdigit-only, 0 \d-only.
+#
+# A port reusing pythonIsDigit here would PROCESS a key Python SKIPS, e.g. a key
+# of four superscript twos. The two predicates look interchangeable and are not,
+# which is why this table exists rather than a reuse.
+_str_digit_only = _ranges(lambda c: c.isdigit() and not _re.match(r"\d", c))
+
+lines += (
+    [
+        "",
+        "// pythonStrDigitOnlyRanges holds the runes str.isdigit() accepts that the",
+        "// regex class `\\d` does not -- Numeric_Type=Digit minus category Nd.",
+        f"// {sum(hi - lo + 1 for lo, hi in _str_digit_only)} runes in {len(_str_digit_only)} ranges, UCD {unicodedata.unidata_version}.",
+        "//",
+        "// These two predicates are NOT interchangeable. extract_flag_key_refs skips a",
+        "// key when key.isdigit() is true; a port reusing the `\\d` predicate there",
+        "// would process a key Python skips.",
+        "var pythonStrDigitOnly = [][2]rune{",
+    ]
+    + [f"\t{{0x{lo:04X}, 0x{hi:04X}}}," for lo, hi in _str_digit_only]
+    + [
+        "}",
+        "",
+        "// pythonStrIsDigit reports whether Python's str.isdigit() is true for r.",
+        "func pythonStrIsDigit(r rune) bool {",
+        "\tif pythonIsDigit(r) {",
+        "\t\treturn true",
+        "\t}",
+        "\tif isPythonUnassigned(r) {",
+        "\t\treturn false",
+        "\t}",
+        "\tfor _, rng := range pythonStrDigitOnly {",
+        "\t\tif rng[0] <= r && r <= rng[1] {",
+        "\t\t\treturn true",
+        "\t\t}",
+        "\t}",
+        "\treturn false",
+        "}",
+    ]
+)
+
 out = Path("internal/jobs/workgraph/textrefs/ucdpin.go")
 out.write_text("\n".join(lines) + "\n")
 print(

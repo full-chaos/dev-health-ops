@@ -26477,5 +26477,989 @@
         ]
       }
     }
+  ],
+  "flag_key_cases": [
+    {
+      "id": "flagkey/plain",
+      "axis": "flag_keys",
+      "text": "we shipped checkout today",
+      "keys": [
+        "checkout"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0063",
+        "U+0068",
+        "U+0065",
+        "U+0063",
+        "U+006B",
+        "U+006F",
+        "U+0075",
+        "U+0074",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "checkout",
+          "raw_match": "checkout"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/absent",
+      "axis": "flag_keys",
+      "text": "nothing here",
+      "keys": [
+        "checkout"
+      ],
+      "codepoints": [
+        "U+006E",
+        "U+006F",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0068",
+        "U+0065",
+        "U+0072",
+        "U+0065"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/substring_rejected",
+      "axis": "flag_keys",
+      "text": "we are searching now",
+      "keys": [
+        "search"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0061",
+        "U+0072",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0065",
+        "U+0061",
+        "U+0072",
+        "U+0063",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+006E",
+        "U+006F",
+        "U+0077"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/hyphen_unit",
+      "axis": "flag_keys",
+      "text": "shipped checkout-v2 today",
+      "keys": [
+        "checkout-v2",
+        "checkout"
+      ],
+      "codepoints": [
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0063",
+        "U+0068",
+        "U+0065",
+        "U+0063",
+        "U+006B",
+        "U+006F",
+        "U+0075",
+        "U+0074",
+        "U+002D",
+        "U+0076",
+        "U+0032",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "checkout-v2",
+          "raw_match": "checkout-v2"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/hyphen_shorter_rejected",
+      "axis": "flag_keys",
+      "text": "shipped checkout-v2 today",
+      "keys": [
+        "checkout"
+      ],
+      "codepoints": [
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0063",
+        "U+0068",
+        "U+0065",
+        "U+0063",
+        "U+006B",
+        "U+006F",
+        "U+0075",
+        "U+0074",
+        "U+002D",
+        "U+0076",
+        "U+0032",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/dot_boundary",
+      "axis": "flag_keys",
+      "text": "flag a.b.c here",
+      "keys": [
+        "a.b"
+      ],
+      "codepoints": [
+        "U+0066",
+        "U+006C",
+        "U+0061",
+        "U+0067",
+        "U+0020",
+        "U+0061",
+        "U+002E",
+        "U+0062",
+        "U+002E",
+        "U+0063",
+        "U+0020",
+        "U+0068",
+        "U+0065",
+        "U+0072",
+        "U+0065"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/slash_boundary",
+      "axis": "flag_keys",
+      "text": "flag ns/key here",
+      "keys": [
+        "ns"
+      ],
+      "codepoints": [
+        "U+0066",
+        "U+006C",
+        "U+0061",
+        "U+0067",
+        "U+0020",
+        "U+006E",
+        "U+0073",
+        "U+002F",
+        "U+006B",
+        "U+0065",
+        "U+0079",
+        "U+0020",
+        "U+0068",
+        "U+0065",
+        "U+0072",
+        "U+0065"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/colon_boundary",
+      "axis": "flag_keys",
+      "text": "flag ns:key here",
+      "keys": [
+        "key"
+      ],
+      "codepoints": [
+        "U+0066",
+        "U+006C",
+        "U+0061",
+        "U+0067",
+        "U+0020",
+        "U+006E",
+        "U+0073",
+        "U+003A",
+        "U+006B",
+        "U+0065",
+        "U+0079",
+        "U+0020",
+        "U+0068",
+        "U+0065",
+        "U+0072",
+        "U+0065"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/registry_order",
+      "axis": "flag_keys",
+      "text": "beta then alpha",
+      "keys": [
+        "alpha",
+        "beta"
+      ],
+      "codepoints": [
+        "U+0062",
+        "U+0065",
+        "U+0074",
+        "U+0061",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+006E",
+        "U+0020",
+        "U+0061",
+        "U+006C",
+        "U+0070",
+        "U+0068",
+        "U+0061"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "alpha",
+          "raw_match": "alpha"
+        },
+        {
+          "flag_key": "beta",
+          "raw_match": "beta"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/first_match_only",
+      "axis": "flag_keys",
+      "text": "dupe and dupe again",
+      "keys": [
+        "dupe"
+      ],
+      "codepoints": [
+        "U+0064",
+        "U+0075",
+        "U+0070",
+        "U+0065",
+        "U+0020",
+        "U+0061",
+        "U+006E",
+        "U+0064",
+        "U+0020",
+        "U+0064",
+        "U+0075",
+        "U+0070",
+        "U+0065",
+        "U+0020",
+        "U+0061",
+        "U+0067",
+        "U+0061",
+        "U+0069",
+        "U+006E"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "dupe",
+          "raw_match": "dupe"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/overlap_after_bounded",
+      "axis": "flag_keys",
+      "text": "checkoutX checkout",
+      "keys": [
+        "checkout"
+      ],
+      "codepoints": [
+        "U+0063",
+        "U+0068",
+        "U+0065",
+        "U+0063",
+        "U+006B",
+        "U+006F",
+        "U+0075",
+        "U+0074",
+        "U+0058",
+        "U+0020",
+        "U+0063",
+        "U+0068",
+        "U+0065",
+        "U+0063",
+        "U+006B",
+        "U+006F",
+        "U+0075",
+        "U+0074"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "checkout",
+          "raw_match": "checkout"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/overlap_valid_inside_failed",
+      "axis": "flag_keys",
+      "text": "Xab ab ab",
+      "keys": [
+        "ab ab"
+      ],
+      "codepoints": [
+        "U+0058",
+        "U+0061",
+        "U+0062",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0020",
+        "U+0061",
+        "U+0062"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "ab ab",
+          "raw_match": "ab ab"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/overlap_control_no_prefix",
+      "axis": "flag_keys",
+      "text": "ab ab ab",
+      "keys": [
+        "ab ab"
+      ],
+      "codepoints": [
+        "U+0061",
+        "U+0062",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0020",
+        "U+0061",
+        "U+0062"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "ab ab",
+          "raw_match": "ab ab"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/overlap_plus_sign",
+      "axis": "flag_keys",
+      "text": "Xa+b a+b",
+      "keys": [
+        "a+b a+b"
+      ],
+      "codepoints": [
+        "U+0058",
+        "U+0061",
+        "U+002B",
+        "U+0062",
+        "U+0020",
+        "U+0061",
+        "U+002B",
+        "U+0062"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/too_short",
+      "axis": "flag_keys",
+      "text": "we shipped abc today",
+      "keys": [
+        "abc"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/exactly_min",
+      "axis": "flag_keys",
+      "text": "we shipped abcd today",
+      "keys": [
+        "abcd"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "abcd",
+          "raw_match": "abcd"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/len_runes_emoji",
+      "axis": "flag_keys",
+      "text": "we shipped ab\ud83d\ude00 today",
+      "keys": [
+        "ab\ud83d\ude00"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+1F600",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/len_runes_cjk",
+      "axis": "flag_keys",
+      "text": "we shipped ni3hao today",
+      "keys": [
+        "ni3hao"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+006E",
+        "U+0069",
+        "U+0033",
+        "U+0068",
+        "U+0061",
+        "U+006F",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "ni3hao",
+          "raw_match": "ni3hao"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/len_runes_cjk_short",
+      "axis": "flag_keys",
+      "text": "we shipped ab\u65e5 today",
+      "keys": [
+        "ab\u65e5"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+65E5",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/str_isdigit_ascii",
+      "axis": "flag_keys",
+      "text": "we shipped 1234 today",
+      "keys": [
+        "1234"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0031",
+        "U+0032",
+        "U+0033",
+        "U+0034",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/str_isdigit_superscript",
+      "axis": "flag_keys",
+      "text": "we shipped \u00b2\u00b2\u00b2\u00b2 today",
+      "keys": [
+        "\u00b2\u00b2\u00b2\u00b2"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+00B2",
+        "U+00B2",
+        "U+00B2",
+        "U+00B2",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/str_isdigit_ethiopic",
+      "axis": "flag_keys",
+      "text": "we shipped \u1369\u1369\u1369\u1369 today",
+      "keys": [
+        "\u1369\u1369\u1369\u1369"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+1369",
+        "U+1369",
+        "U+1369",
+        "U+1369",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/str_isdigit_mixed",
+      "axis": "flag_keys",
+      "text": "we shipped 12a4 today",
+      "keys": [
+        "12a4"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0031",
+        "U+0032",
+        "U+0061",
+        "U+0034",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "12a4",
+          "raw_match": "12a4"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/regex_meta_key",
+      "axis": "flag_keys",
+      "text": "flag a.b+c here",
+      "keys": [
+        "a.b+c"
+      ],
+      "codepoints": [
+        "U+0066",
+        "U+006C",
+        "U+0061",
+        "U+0067",
+        "U+0020",
+        "U+0061",
+        "U+002E",
+        "U+0062",
+        "U+002B",
+        "U+0063",
+        "U+0020",
+        "U+0068",
+        "U+0065",
+        "U+0072",
+        "U+0065"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "a.b+c",
+          "raw_match": "a.b+c"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/regex_meta_star",
+      "axis": "flag_keys",
+      "text": "flag a*bc here",
+      "keys": [
+        "a*bc"
+      ],
+      "codepoints": [
+        "U+0066",
+        "U+006C",
+        "U+0061",
+        "U+0067",
+        "U+0020",
+        "U+0061",
+        "U+002A",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0068",
+        "U+0065",
+        "U+0072",
+        "U+0065"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "a*bc",
+          "raw_match": "a*bc"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/whitespace_key",
+      "axis": "flag_keys",
+      "text": "we shipped abcd today",
+      "keys": [
+        "  abcd  "
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "abcd",
+          "raw_match": "abcd"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/empty_key",
+      "axis": "flag_keys",
+      "text": "we shipped abcd today",
+      "keys": [
+        ""
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/duplicate_keys",
+      "axis": "flag_keys",
+      "text": "we shipped abcd today",
+      "keys": [
+        "abcd",
+        "abcd"
+      ],
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "abcd",
+          "raw_match": "abcd"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/nonascii_boundary",
+      "axis": "flag_keys",
+      "text": "shipped \u00e9abcd today",
+      "keys": [
+        "abcd"
+      ],
+      "codepoints": [
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+00E9",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064",
+        "U+0020",
+        "U+0074",
+        "U+006F",
+        "U+0064",
+        "U+0061",
+        "U+0079"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/start_of_text",
+      "axis": "flag_keys",
+      "text": "abcd shipped",
+      "keys": [
+        "abcd"
+      ],
+      "codepoints": [
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "abcd",
+          "raw_match": "abcd"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/end_of_text",
+      "axis": "flag_keys",
+      "text": "shipped abcd",
+      "keys": [
+        "abcd"
+      ],
+      "codepoints": [
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "abcd",
+          "raw_match": "abcd"
+        }
+      ]
+    }
   ]
 }

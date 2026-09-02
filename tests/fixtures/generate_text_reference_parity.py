@@ -343,6 +343,102 @@ MULTI = [
 
 # The module-level compiled patterns, recorded per input so a failure names the
 # pattern that diverged rather than only the extractor that surfaced it.
+# The FLAG-KEY axis. Separate from every other axis because this extractor takes
+# a REGISTRY as a second argument, so a case is a (text, keys) pair rather than
+# a string -- a row in the main corpus could not express it.
+#
+# Three of Python's semantics here are not the ones a Go author reaches for, and
+# each group below exists to separate one of them:
+#
+#   len_runes    Python's len() counts CODE POINTS; Go's len() counts BYTES. A
+#                three-rune key that is six bytes is SKIPPED by Python and would
+#                be processed by a byte-length port.
+#   str_isdigit  Python skips a purely-numeric key using str.isdigit(), which is
+#                Numeric_Type=Digit -- a strict superset of the regex `\d` by 128
+#                runes. A key of four superscript twos is skipped by Python and
+#                would be processed by an Nd-based predicate.
+#   boundary     The class is `[\w./:-]`, so the hyphen is itself a boundary
+#                character and "checkout" must NOT match inside "checkout-v2".
+#   search_order Python returns keys in REGISTRY order, not order of appearance,
+#                and takes only the FIRST match per key.
+#   overlap      A first literal occurrence that fails the boundary check must
+#                not stop the search: Python's search() finds the first position
+#                where the whole pattern including both lookarounds holds.
+FLAG_KEY_CASES = [
+    ("plain", "we shipped checkout today", ["checkout"]),
+    ("absent", "nothing here", ["checkout"]),
+    ("substring_rejected", "we are searching now", ["search"]),
+    ("hyphen_unit", "shipped checkout-v2 today", ["checkout-v2", "checkout"]),
+    ("hyphen_shorter_rejected", "shipped checkout-v2 today", ["checkout"]),
+    ("dot_boundary", "flag a.b.c here", ["a.b"]),
+    ("slash_boundary", "flag ns/key here", ["ns"]),
+    ("colon_boundary", "flag ns:key here", ["key"]),
+    ("registry_order", "beta then alpha", ["alpha", "beta"]),
+    ("first_match_only", "dupe and dupe again", ["dupe"]),
+    ("overlap_after_bounded", "checkoutX checkout", ["checkout"]),
+    # These three separate the two ADVANCE strategies after a boundary-failed
+    # literal hit: step one byte, or skip the whole key. They differ only when a
+    # VALID match starts strictly INSIDE a failed one, which needs a
+    # self-overlapping key whose rune at the overlap point is not a boundary
+    # rune -- so the key must contain something outside [\w./:-], like a space.
+    #
+    # "checkoutX checkout" above does NOT separate them: its second occurrence
+    # starts after the first one ends, so both strategies find it. A mutant
+    # skipping the whole key survived that case, which is what sent me looking
+    # for one that could fail.
+    ("overlap_valid_inside_failed", "Xab ab ab", ["ab ab"]),
+    ("overlap_control_no_prefix", "ab ab ab", ["ab ab"]),
+    ("overlap_plus_sign", "Xa+b a+b", ["a+b a+b"]),
+    ("too_short", "we shipped abc today", ["abc"]),
+    ("exactly_min", "we shipped abcd today", ["abcd"]),
+    (
+        "len_runes_emoji",
+        "we shipped ab" + chr(0x1F600) + " today",
+        ["ab" + chr(0x1F600)],
+    ),
+    ("len_runes_cjk", "we shipped ni3hao today", ["ni3hao"]),
+    (
+        "len_runes_cjk_short",
+        "we shipped ab" + chr(0x65E5) + " today",
+        ["ab" + chr(0x65E5)],
+    ),
+    ("str_isdigit_ascii", "we shipped 1234 today", ["1234"]),
+    (
+        "str_isdigit_superscript",
+        "we shipped " + chr(0xB2) * 4 + " today",
+        [chr(0xB2) * 4],
+    ),
+    (
+        "str_isdigit_ethiopic",
+        "we shipped " + chr(0x1369) * 4 + " today",
+        [chr(0x1369) * 4],
+    ),
+    ("str_isdigit_mixed", "we shipped 12a4 today", ["12a4"]),
+    ("regex_meta_key", "flag a.b+c here", ["a.b+c"]),
+    ("regex_meta_star", "flag a*bc here", ["a*bc"]),
+    ("whitespace_key", "we shipped abcd today", ["  abcd  "]),
+    ("empty_key", "we shipped abcd today", [""]),
+    ("duplicate_keys", "we shipped abcd today", ["abcd", "abcd"]),
+    ("nonascii_boundary", "shipped " + chr(0xE9) + "abcd today", ["abcd"]),
+    ("start_of_text", "abcd shipped", ["abcd"]),
+    ("end_of_text", "shipped abcd", ["abcd"]),
+]
+
+
+def _flag_key_case(case_id, text, keys):
+    refs = tp.extract_flag_key_refs(text, keys)
+    return {
+        "id": case_id,
+        "axis": "flag_keys",
+        "text": text,
+        "keys": keys,
+        "codepoints": [f"U+{ord(ch):04X}" for ch in text],
+        "extract_flag_key_refs": [
+            {"flag_key": r.flag_key, "raw_match": r.raw_match} for r in refs
+        ],
+    }
+
+
 PATTERNS = {
     name: value for name, value in vars(tp).items() if isinstance(value, re.Pattern)
 }
@@ -497,6 +593,12 @@ def build_corpus() -> dict:
             for name, p in sorted(PATTERNS.items())
         },
         "cases": cases,
+        # Its own list: these carry a registry as well as a text, so they do not
+        # fit the shape every other case has.
+        "flag_key_cases": [
+            _flag_key_case(f"flagkey/{label}", text, keys)
+            for label, text, keys in FLAG_KEY_CASES
+        ],
     }
 
 

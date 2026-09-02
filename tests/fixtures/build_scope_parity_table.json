@@ -1,0 +1,161 @@
+{
+ "cases": [
+  {
+   "value": null,
+   "verdict": "DEFAULT"
+  },
+  {
+   "value": "",
+   "verdict": "DEFAULT"
+  },
+  {
+   "error": "ValueError",
+   "value": " ",
+   "verdict": "RAISES"
+  },
+  {
+   "error": "ValueError",
+   "value": "\t",
+   "verdict": "RAISES"
+  },
+  {
+   "error": "ValueError",
+   "value": "\n",
+   "verdict": "RAISES"
+  },
+  {
+   "error": "ValueError",
+   "value": "  \t ",
+   "verdict": "RAISES"
+  },
+  {
+   "iso": "2026-08-15T00:00:00",
+   "value": "2026-08-15",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T00:00:00",
+   "value": "20260815",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T00:00:00",
+   "value": "2026-W33-6",
+   "verdict": "PARSED"
+  },
+  {
+   "error": "ValueError",
+   "value": "2026-243",
+   "verdict": "RAISES"
+  },
+  {
+   "iso": "2026-08-15T06:07:00",
+   "value": "2026-08-15T06:07",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08",
+   "value": "2026-08-15T06:07:08",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08",
+   "value": "2026-08-15 06:07:08",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08.123000",
+   "value": "2026-08-15T06:07:08.123",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08+00:00",
+   "value": "2026-08-15T06:07:08Z",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08+00:00",
+   "value": "2026-08-15T06:07:08+00:00",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08+00:00",
+   "value": "2026-08-15T06:07:08+0000",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08+05:00",
+   "value": "2026-08-15T06:07:08+05:00",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08-08:00",
+   "value": "2026-08-15T06:07:08-08:00",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08",
+   "value": "2026-08-15t06:07:08",
+   "verdict": "PARSED"
+  },
+  {
+   "iso": "2026-08-15T06:07:08",
+   "value": "2026-08-15_06:07:08",
+   "verdict": "PARSED"
+  },
+  {
+   "error": "ValueError",
+   "value": "15/08/2026",
+   "verdict": "RAISES"
+  },
+  {
+   "error": "ValueError",
+   "value": "not-a-date",
+   "verdict": "RAISES"
+  },
+  {
+   "error": "ValueError",
+   "value": "2026-13-45",
+   "verdict": "RAISES"
+  },
+  {
+   "value": false,
+   "verdict": "DEFAULT"
+  },
+  {
+   "error": "TypeError",
+   "value": true,
+   "verdict": "RAISES"
+  },
+  {
+   "value": 0,
+   "verdict": "DEFAULT"
+  },
+  {
+   "error": "TypeError",
+   "value": 1,
+   "verdict": "RAISES"
+  },
+  {
+   "error": "TypeError",
+   "value": 123,
+   "verdict": "RAISES"
+  },
+  {
+   "value": [],
+   "verdict": "DEFAULT"
+  },
+  {
+   "value": {},
+   "verdict": "DEFAULT"
+  },
+  {
+   "error": "TypeError",
+   "value": [
+    "2026-08-15"
+   ],
+   "verdict": "RAISES"
+  }
+ ],
+ "schema": "build_scope_parity_table.v1"
+}

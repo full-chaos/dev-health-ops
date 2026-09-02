@@ -1,6 +1,7 @@
 package repouser
 
 import (
+	"math/big"
 	"sort"
 	"time"
 
@@ -141,36 +142,71 @@ func CodeOwnershipGini(repoID uuid.UUID, windowStats []CommitStatRow) float64 {
 	if len(windowStats) == 0 {
 		return 0.0
 	}
-	authorChurn := map[string]int{}
+	// CHAOS-4824 (rounds 1-4, codex): Python's Gini formula is EXACT integer
+	// arithmetic -- `churns` holds arbitrary-precision Python ints -- until
+	// ONE true division at the very end, `2*numerator/denominator`, which
+	// CPython computes as the correctly-rounded float64 nearest the exact
+	// rational. Converting churn totals to float64 (or even to a FIXED-WIDTH
+	// int64) at any EARLIER point loses precision or silently wraps in a way
+	// Python never does, and each earlier attempt here closed one
+	// construction while leaving a strictly more extreme one reachable:
+	// float64 terms (round 1: accumulated numerator crossing 2**53 across
+	// many representable per-author totals; round 2: a SINGLE author's own
+	// total exceeding 2**53 before summation began); then int64 accumulation
+	// of that same per-author total (round 4: 2.1 BILLION int32-max rows for
+	// one author overflows int64 and silently wraps negative, discarding the
+	// author entirely at the `> 0` filter below). Mirroring Python's
+	// conversion POINT instead of patching each construction: EVERY
+	// arithmetic step from the first row read to the final division is
+	// math/big.Int (or the one big.Rat-mediated division CPython's own
+	// int/int does), so there is no fixed-width integer or float anywhere
+	// upstream of it for a large construction to overflow or round.
+	authorChurn := map[string]*big.Int{}
 	for _, row := range windowStats {
 		if row.RepoID != repoID {
 			continue
 		}
 		identity := rawIdentity(row.AuthorEmail, row.AuthorName)
-		authorChurn[identity] += row.Additions + row.Deletions
+		rowChurn := new(big.Int).Add(big.NewInt(int64(row.Additions)), big.NewInt(int64(row.Deletions)))
+		if total, ok := authorChurn[identity]; ok {
+			total.Add(total, rowChurn)
+		} else {
+			authorChurn[identity] = rowChurn
+		}
 	}
-	churns := make([]float64, 0, len(authorChurn))
+	churns := make([]*big.Int, 0, len(authorChurn))
 	for _, churn := range authorChurn {
-		if churn > 0 {
-			churns = append(churns, float64(churn))
+		if churn.Sign() > 0 {
+			churns = append(churns, churn)
 		}
 	}
 	if len(churns) == 0 {
 		return 0.0
 	}
-	sort.Float64s(churns)
+	sort.Slice(churns, func(i, j int) bool { return churns[i].Cmp(churns[j]) < 0 })
 	n := len(churns)
 
-	var numerator, denominatorSum float64
-	for index, value := range churns {
-		numerator += float64(index+1) * value
-		denominatorSum += value
+	numerator := new(big.Int)
+	denominatorSum := new(big.Int)
+	term := new(big.Int)
+	for index, churn := range churns {
+		term.Mul(big.NewInt(int64(index+1)), churn)
+		numerator.Add(numerator, term)
+		denominatorSum.Add(denominatorSum, churn)
 	}
-	denominator := float64(n) * denominatorSum
-	if denominator == 0 {
+	denominator := new(big.Int).Mul(big.NewInt(int64(n)), denominatorSum)
+	if denominator.Sign() == 0 {
 		return 0.0
 	}
-	gini := (2*numerator)/denominator - float64(n+1)/float64(n)
+	numeratorTimes2 := new(big.Int).Mul(big.NewInt(2), numerator)
+	// 2*numerator/denominator, correctly rounded to the nearest float64 --
+	// matches CPython's int/int true division exactly, regardless of
+	// magnitude.
+	quotient, _ := new(big.Rat).SetFrac(numeratorTimes2, denominator).Float64()
+	// (n+1)/n: n is len(churns), always a small int far below 2**53, so a
+	// plain float64 division is already correctly rounded and identical to
+	// Python's -- no big.Rat needed for this term.
+	gini := quotient - float64(n+1)/float64(n)
 	if gini < 0 {
 		return 0.0
 	}

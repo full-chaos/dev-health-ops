@@ -1,5 +1,6 @@
 {
- "cases": [
+ "note": "Expectations are the return value of components.py's _edge_confidence, CALLED DIRECTLY rather than reimplemented -- an imitation would leave the rot guard green while the real function changed underneath it. Two axes: string_cases varies the VALUE inside the str branch; type_cases varies the TYPE across branches, and carries repr() rather than the value because JSON would erase the very thing under test. The type axis exists for True/False: bool subclasses int in Python, so the isinstance(value, bool) check runs BEFORE the numeric branch and True coerces to 0.0, not 1.0.",
+ "string_cases": [
   {
    "expected": "0.0",
    "input": "0"
@@ -273,5 +274,78 @@
    "input": "\u0661\u0662"
   }
  ],
- "note": "Expectations are the return value of components.py's _edge_confidence string branch (float(value), ValueError -> 0.0), produced by the interpreter itself. Rendered as strings because inf and nan have no JSON representation and are precisely the values under test."
+ "type_cases": [
+  {
+   "expected": "0.0",
+   "input_repr": "True"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "False"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "0"
+  },
+  {
+   "expected": "1.0",
+   "input_repr": "1"
+  },
+  {
+   "expected": "-3.0",
+   "input_repr": "-3"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "0.0"
+  },
+  {
+   "expected": "0.5",
+   "input_repr": "0.5"
+  },
+  {
+   "expected": "1.0",
+   "input_repr": "1.0"
+  },
+  {
+   "expected": "inf",
+   "input_repr": "inf"
+  },
+  {
+   "expected": "-inf",
+   "input_repr": "-inf"
+  },
+  {
+   "expected": "nan",
+   "input_repr": "nan"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "None"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "[]"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "[1.0]"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "{}"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "{'confidence': 1.0}"
+  },
+  {
+   "expected": "0.0",
+   "input_repr": "()"
+  },
+  {
+   "expected": "0.5",
+   "input_repr": "'0.5'"
+  }
+ ]
 }

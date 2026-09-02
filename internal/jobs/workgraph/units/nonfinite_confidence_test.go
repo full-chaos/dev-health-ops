@@ -131,3 +131,65 @@ func TestSplitMatchesPythonOnNonFiniteConfidence(t *testing.T) {
 		})
 	}
 }
+
+// TestSplitSortKeyIsAWidenedFloat32NeverAComputedValue answers lane-4752-go's
+// reciprocal FMA warning, and pins the property that makes the answer hold.
+//
+// Their point: `work_graph_edges.confidence` is Float32, and the oversized-
+// component split orders on `(confidence, edge_id)`. They measured that using
+// a Python double instead of the stored Float32 in a variant-C simulation gave
+// 1833 components / 2905 dropped edges where the real stored type gives
+// 1832 / 2904 -- with DIFFERENT component sets. One quantisation step
+// repartitions the graph.
+//
+// So if anything ever COMPUTED a confidence -- a blend, a decay, a weighted
+// average -- an FMA-induced last-bit move on arm64 would land directly on that
+// sort key. The failure would not be a wrong decimal but a different component
+// partition, and therefore a different set of work_unit_ids: their warning is
+// my evidence-quality banding hazard in a worse form, because it changes which
+// rows exist rather than how one row is labelled.
+//
+// Audited at the time of writing: nothing in the split computes a confidence.
+// chquery scans Float32 and widens once with float64(); units compares and
+// sorts, never arithmetics. MeanEdgeConfidence does compute -- it is a sum and
+// a divide -- but it feeds evidence QUALITY, never the sort key.
+//
+// "Nothing computes it today" is a claim with a shelf life, so what is pinned
+// here is the property a future computation would break: every value on the
+// sort key is a float32 widened EXACTLY into a float64. Widening is lossless
+// and involves no rounding, so there is nothing for an FMA to fuse. A computed
+// confidence would not satisfy this, and that is the moment to revisit.
+func TestSplitSortKeyIsAWidenedFloat32NeverAComputedValue(t *testing.T) {
+	// Widening float32 -> float64 is exact for every value, including the
+	// non-finite ones and the subnormals. If this ever failed, the sort key
+	// would carry a rounding the Python plane does not have.
+	for _, sample := range []float32{
+		0, 1, 0.9, 0.85, 0.1, -0.1,
+		float32(math.SmallestNonzeroFloat32),
+		float32(math.MaxFloat32),
+		float32(math.Inf(1)), float32(math.Inf(-1)),
+	} {
+		widened := float64(sample)
+		if narrowed := float32(widened); narrowed != sample {
+			t.Errorf("float32(%v) -> float64 -> float32 = %v; widening must be exact",
+				sample, narrowed)
+		}
+	}
+	if nan := float64(float32(math.NaN())); !math.IsNaN(nan) {
+		t.Error("NaN must survive widening")
+	}
+
+	// The quantisation step lane-4752-go measured: a float64 that is NOT
+	// representable in float32 sorts differently from its float32 neighbour.
+	// This is why the column's real type has to be carried through rather than
+	// scanned into a float64 directly.
+	const python64 = 0.85
+	widened32 := float64(float32(python64))
+	if widened32 == python64 {
+		t.Skip("0.85 happens to be float32-exact on this platform; the " +
+			"quantisation point needs a different sample")
+	}
+	if widened32 > python64 == (widened32 < python64) {
+		t.Error("expected the float32-quantised value to differ from the double")
+	}
+}

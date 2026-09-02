@@ -57,6 +57,32 @@ var ErrOrganizationScopeRequired = errors.New(
 // change any work_unit_id the two planes agree on: a run this function refuses
 // is a run Python would have executed unscoped, and there is no correct
 // unscoped answer to disagree about.
+// # FOUR RULES FOR IMPORTERS -- each is deliberate, none is obvious from the name
+//
+// This function is imported across lanes (lane-4752-go's workgraph.build entry
+// point, and any future native investment path), so the choices below are
+// stated rather than left to be inferred from the body. A copy that differs on
+// any of them means the two planes disagree about what "scoped" means, which is
+// the same class of defect the guard exists to prevent.
+//
+//  1. WHITESPACE-ONLY IS REFUSED, using Python's str.strip() rule -- which is
+//     WIDER than strings.TrimSpace. See pythonStrip: Go's unicode.IsSpace omits
+//     0x1c-0x1f, so a lone separator would otherwise be accepted as a scope
+//     Python refuses.
+//  2. THE ALL-ZERO UUID IS ACCEPTED. Python's rejection predicates run on the
+//     rendered string, and "00000000-0000-0000-0000-000000000000" is non-empty
+//     and therefore truthy. Excluding uuid.Nil here would reject rows Python
+//     maps -- a false negative that keeps read == mapped + rejected balanced and
+//     is invisible to every conservation check (CHAOS-4804).
+//  3. EXISTENCE IS NOT CHECKED. A well-formed but unknown org passes. Whether
+//     the org exists is the query's answer, not the guard's; refusing here would
+//     make this a NEW gate rather than the ported one.
+//  4. THERE IS NO allow_unscoped OR MOCK-PROVIDER ESCAPE HATCH, unlike Python's
+//     materialize.py:1179-1188. That divergence is deliberate and sits at the
+//     guard layer, so it cannot change any work_unit_id both planes produce: a
+//     run this refuses is one Python would have executed UNSCOPED, and there is
+//     no correct unscoped answer to disagree about. The absence is structural --
+//     the function takes only the org string, so there is no argument to flip.
 func RequireOrganizationScope(organizationID string) error {
 	// pythonStrip, not strings.TrimSpace — see its doc comment. A whitespace-only
 	// org is not a scope, and accepting one would reach the fetchers with a value

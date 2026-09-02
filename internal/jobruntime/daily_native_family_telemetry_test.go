@@ -40,6 +40,33 @@ func TestDailyMetricsNativeFamilyCountersReachTheExposition(t *testing.T) {
 	}
 }
 
+// TestDailyMetricsNativeFamilyAcceptsCICD pins cicd (CHAOS-4292) into the
+// closed dailyMetricsNativeFamilies allowlist -- a family flipped to
+// families.json's "go" without also being added here has EVERY
+// ObserveDailyMetricsNativeFamily("cicd", ...) call refused with "daily
+// metrics native family is not registered", silently losing the family's
+// outcome/rows-written/duration series (found in review before merge).
+func TestDailyMetricsNativeFamilyAcceptsCICD(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	if err := collector.ObserveDailyMetricsNativeFamily(
+		"cicd", DailyMetricsNativeFamilyOutcomeComputed, 4, 25*time.Millisecond,
+	); err != nil {
+		t.Fatalf("observe cicd: %v", err)
+	}
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		`worker_daily_metrics_native_family_outcome_total{family="cicd",outcome="computed"} 1`,
+		`worker_daily_metrics_native_family_rows_written_total{family="cicd"} 4`,
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q\nfull exposition:\n%s", want, exposition)
+		}
+	}
+}
+
 // TestDailyMetricsNativeFamilyIncludesFileHotspotsFamilies is CHAOS-4277's
 // telemetry registration proof (codex round 1 finding #2): dailyMetrics
 // NativeFamilies is a CLOSED allow-list, and computeNativeFamilies

@@ -532,16 +532,17 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // ComputeFamily runs through computeNativeFamilies exactly like every other
 // native family, but CHAOS-4295 gave incident its own SEPARATE telemetry
 // (incidentValidFromGuardRows) instead of also registering it here --
-// discovered while resolving this file's merge conflict against CHAOS-4295,
-// the exact same silent-telemetry-loss class this PR's own codex round 1
-// found and fixed for file_hotspots/file_risk_hotspots (a family absent
-// from this closed list gets ZERO generic outcome/rows/duration telemetry,
-// forever, since ObserveDailyMetricsNativeFamily's error is discarded at
-// its call site). Flagged to CHAOS-4295's owner; fixed here rather than
-// left broken since this exact line was already being resolved. "deploy"
-// (CHAOS-4293) and "work_item_state" (CHAOS-4278) added themselves
+// discovered independently while resolving this file's merge conflict
+// against CHAOS-4295, first by CHAOS-4292 (this PR, which also added the
+// registration-drift tests in cmd/dev-health-worker), then again by
+// CHAOS-4277 (file_hotspots/file_risk_hotspots) resolving the same merge --
+// the same silent-telemetry-loss class either PR's own codex rounds found
+// and fixed for their own new family (a family absent from this closed
+// list gets ZERO generic outcome/rows/duration telemetry, forever, since
+// ObserveDailyMetricsNativeFamily's error is discarded at its call site).
+// "deploy" (CHAOS-4293) and "work_item_state" (CHAOS-4278) added themselves
 // correctly -- included here from those merges.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "file_hotspots", "file_risk_hotspots"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "cicd", "file_hotspots", "file_risk_hotspots"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

@@ -158,6 +158,7 @@ func floatTextInterpreterOf(t *testing.T, document []byte, label string) string 
 			Implementation string `json:"implementation"`
 			UnicodeVersion string `json:"unicode_version"`
 			Machine        string `json:"machine"`
+			FloatReprStyle string `json:"float_repr_style"`
 		} `json:"generating_interpreter"`
 	}
 	if err := json.Unmarshal(document, &parsed); err != nil {
@@ -169,7 +170,9 @@ func floatTextInterpreterOf(t *testing.T, document []byte, label string) string 
 			"a fixture that does not record what produced it cannot be attributed", label)
 	}
 	return interpreter.Implementation + " " + interpreter.PythonVersion +
-		" (Unicode " + interpreter.UnicodeVersion + ", " + interpreter.Machine + ")"
+		" (Unicode " + interpreter.UnicodeVersion +
+		", float_repr_style " + interpreter.FloatReprStyle +
+		", " + interpreter.Machine + ")"
 }
 
 // floatTextLivePython resolves the project interpreter, preferring the
@@ -262,9 +265,20 @@ func splitFloatTextDocument(t *testing.T, document []byte, label string) (data [
 }
 
 // floatTextInterpreterCore returns only the fields that can change CPython's
-// float BEHAVIOUR -- version, implementation, Unicode -- deliberately excluding
-// the machine, which cannot for this corpus. Keeping them separate is what lets
-// the guard say "the CPU moved" rather than blaming the interpreter.
+// float BEHAVIOUR, deliberately excluding the machine, which cannot for this
+// corpus. Keeping them separate is what lets the guard say "the CPU moved"
+// rather than blaming the interpreter.
+//
+// float_repr_style is in here because it is behaviour-determining in the
+// strongest sense, and its absence was a real hole (CHAOS-4870, found by
+// lane-4441). The third verdict below asserts that architecture cannot explain
+// a data difference, on the grounds that formatting is IEEE-754 and exact dtoa.
+// That premise holds only while CPython uses its OWN dtoa: a build with
+// PY_NO_SHORT_FLOAT_REPR reports float_repr_style == "legacy" and defers
+// repr/format to the PLATFORM LIBC, at which point formatting genuinely is
+// platform-dependent and the premise is false. The fixture recorded that field
+// from the start -- and nothing read it, so it could move freely while the
+// guard kept asserting a premise it had invalidated.
 func floatTextInterpreterCore(t *testing.T, document []byte) string {
 	t.Helper()
 	var parsed struct {
@@ -272,11 +286,14 @@ func floatTextInterpreterCore(t *testing.T, document []byte) string {
 			PythonVersion  string `json:"python_version"`
 			Implementation string `json:"implementation"`
 			UnicodeVersion string `json:"unicode_version"`
+			FloatReprStyle string `json:"float_repr_style"`
 		} `json:"generating_interpreter"`
 	}
 	if err := json.Unmarshal(document, &parsed); err != nil {
 		t.Fatalf("decode interpreter core: %v", err)
 	}
 	interpreter := parsed.GeneratingInterpreter
-	return interpreter.Implementation + " " + interpreter.PythonVersion + " (Unicode " + interpreter.UnicodeVersion + ")"
+	return interpreter.Implementation + " " + interpreter.PythonVersion +
+		" (Unicode " + interpreter.UnicodeVersion +
+		", float_repr_style " + interpreter.FloatReprStyle + ")"
 }

@@ -83,7 +83,12 @@ func TestEdgeShapesGoldenMatchesLivePython(t *testing.T) {
 			"Regenerate with\n" +
 			"    PYTHONPATH=src python tests/fixtures/generate_evidence_json_edge_shapes_golden.py\n" +
 			"and port the change into internal/pythonparity in the SAME change set.\n" +
-			"The generator is deterministic (seeded) and needs only the standard library,\n" +
-			"so a diff is never environmental drift.",
+			"The generator is deterministic (seeded) and needs only the standard\n" +
+			"library, so a diff is a real behaviour change rather than a missing\n" +
+			"dependency. It is NOT a claim that a diff can never be environmental:\n" +
+			"this fixture froze interpreter metadata once, and a macOS build string\n" +
+			"versus a Linux one was reported here as ROT pointing at loader.py. The\n" +
+			"metadata is no longer frozen; if a future diff is confined to something\n" +
+			"other than the case data, suspect the document shape before the port.",
 	)
 }

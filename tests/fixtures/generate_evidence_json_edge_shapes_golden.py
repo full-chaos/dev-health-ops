@@ -36,7 +36,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import platform
 import struct
 import sys
 from datetime import date, datetime, timezone
@@ -197,21 +196,24 @@ def main() -> int:
             "302-shape real-row comparison carried zero -Infinity and no "
             "non-ASCII, so these were added synthetically to cover the gap"
         ),
-        "environment": {
-            # platform.python_version(), NOT sys.version.
-            #
-            # sys.version embeds the BUILD STRING -- "[Clang 21.0.0 ...]" on a
-            # developer Mac, "[GCC 13.3.0]" on the CI runner -- for the same
-            # 3.14.7 interpreter. Freezing it makes the fixture environment-
-            # specific, so the rot guard compares a macOS build against a Linux
-            # one and reports drift that is not drift. It did exactly that.
-            #
-            # The version is what matters here: float repr and json.dumps
-            # behaviour are properties of the interpreter version, not of the
-            # compiler that built it.
-            "python_version": platform.python_version(),
-            "float_repr_style": sys.float_repr_style,
-        },
+        # NO interpreter metadata is frozen here, deliberately.
+        #
+        # The rot guard compares the WHOLE FILE byte for byte, so anything
+        # recorded in this document becomes part of the comparison. An
+        # interpreter field therefore turns every interpreter difference into a
+        # reported "ROT" -- pointing at loader.py, when nothing rotted.
+        #
+        # That already fired once: `sys.version` embeds the build string, so a
+        # macOS-generated fixture could never match a Linux runner. Replacing it
+        # with the bare version narrowed the window but did not close it -- the
+        # live interpreter is UNPINNED (parityLivePython takes $PYTHON, else
+        # whatever `python3` resolves to), so CPython 3.14.8 reproduces the same
+        # incident on CPython's release schedule.
+        #
+        # The three pre-existing goldens in this package -- json, sum,
+        # whitespace -- record no interpreter metadata for this reason. This
+        # follows them. The interpreter is still printed to stdout when the
+        # generator is run by hand, where it is useful and harmless.
         "cases": cases,
     }
     text = json.dumps(document, indent=2, sort_keys=True) + "\n"

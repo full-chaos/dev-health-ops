@@ -7618,10 +7618,6 @@
     }
   ],
   "distinct_input_values": 476,
-  "environment": {
-    "float_repr_style": "short",
-    "python_version": "3.14.7"
-  },
   "note": "evidence_json is the output of the LIVE recommendation_to_record -> json.dumps path. Key order, the ', '/': ' separators and the float notation are all as the reference writes them.",
   "purpose": "dense 1e8..7e15 repr-band coverage for MarshalPythonJSONInsertionOrder (#2140)"
 }

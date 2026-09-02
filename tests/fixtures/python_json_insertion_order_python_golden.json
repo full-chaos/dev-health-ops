@@ -172,10 +172,5 @@
       "input_repr": "[1, 2, 3]",
       "name": "separators: multi-element list"
     }
-  ],
-  "generating_interpreter": {
-    "float_repr_style": "short",
-    "implementation": "CPython",
-    "python_version": "3.14.7"
-  }
+  ]
 }

@@ -162,11 +162,24 @@ def main() -> None:
             "', ' and ': ', allow_nan=True (so bare Infinity/-Infinity/NaN tokens). "
             "Floats render via float.__repr__."
         ),
-        "generating_interpreter": {
-            "python_version": platform.python_version(),
-            "implementation": platform.python_implementation(),
-            "float_repr_style": sys.float_repr_style,
-        },
+        # NO interpreter metadata is frozen here, deliberately.
+        #
+        # The rot guard compares the WHOLE FILE byte for byte, so anything
+        # recorded in this document becomes part of the comparison. An
+        # interpreter field therefore turns every interpreter difference into a
+        # reported "ROT" -- pointing at loader.py, when nothing rotted.
+        #
+        # That already fired once: `sys.version` embeds the build string, so a
+        # macOS-generated fixture could never match a Linux runner. Replacing it
+        # with the bare version narrowed the window but did not close it -- the
+        # live interpreter is UNPINNED (parityLivePython takes $PYTHON, else
+        # whatever `python3` resolves to), so CPython 3.14.8 reproduces the same
+        # incident on CPython's release schedule.
+        #
+        # The three pre-existing goldens in this package -- json, sum,
+        # whitespace -- record no interpreter metadata for this reason. This
+        # follows them. The interpreter is still printed to stdout when the
+        # generator is run by hand, where it is useful and harmless.
         "cases": rendered_cases,
     }
 

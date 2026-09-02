@@ -411,14 +411,39 @@ func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, stats 
 		}
 	}
 
+	// Python partitions with two INDEPENDENT comprehensions, not an if/else
+	// (components.py:244-250):
+	//
+	//	protected = [e for e in edges if conf(e) >= max_confidence]
+	//	droppable = [e for e in edges if conf(e) <  max_confidence]
+	//
+	// For a NaN confidence BOTH predicates are false, so the edge lands in
+	// NEITHER list and is silently excluded from grouping entirely. Writing this
+	// as `if >= { protected } else { droppable }` -- the obvious Go shape, and
+	// what this port did until codex round 1 on CHAOS-4441 PR1 -- routes NaN to
+	// droppable instead, changing which edges survive the split and therefore
+	// changing work_unit_ids. That is silent cross-table re-addressing, so the
+	// three-way branch is load-bearing and must not be "simplified" back.
+	//
+	// Reachable in production: work_graph_edges.confidence is a plain Float32,
+	// not a checked or nullable column, so a NaN can be stored and read back.
+	// Note also that a NaN reaching the max computation above poisons it --
+	// every `>` comparison against NaN is false, so maxConfidence becomes NaN
+	// and then EVERY edge falls out of both partitions and the component
+	// shatters into singletons. Python does exactly the same; both behaviours
+	// are pinned by TestSplitMatchesPythonOnNonFiniteConfidence.
 	protected := make([]Edge, 0, len(edges))
 	droppable := make([]Edge, 0, len(edges))
 	for _, edge := range edges {
-		if edge.Confidence >= maxConfidence {
+		switch {
+		case edge.Confidence >= maxConfidence:
 			protected = append(protected, edge)
-			continue
+		case edge.Confidence < maxConfidence:
+			droppable = append(droppable, edge)
+		default:
+			// Neither comparison holds: NaN. Excluded from kept_edges, exactly
+			// as Python's two comprehensions exclude it.
 		}
-		droppable = append(droppable, edge)
 	}
 	sort.SliceStable(droppable, func(left, right int) bool {
 		if droppable[left].Confidence != droppable[right].Confidence {

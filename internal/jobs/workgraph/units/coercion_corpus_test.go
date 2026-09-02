@@ -80,14 +80,34 @@ func TestConfidenceFromStringMatchesPythonCorpus(t *testing.T) {
 	// direction. Deleting the case would hide the divergence; asserting it pins
 	// the boundary.
 	//
-	// Python's float() accepts non-ASCII decimal digits. Replicating Python's
-	// full numeric grammar in Go is an unbounded and unverifiable commitment,
-	// whereas the parity harness asserting that both planes coerced to the same
-	// value is bounded and provable, and catches this residual along with any
-	// other. See the same argument on parsePythonInt in constants.go.
-	knownDivergence := map[string]string{
-		"\u0661\u0662": "python accepts non-ASCII decimal digits (float(\"\u0661\u0662\") == 12.0); Go does not",
-	}
+	// THIS MAP IS NOW EMPTY, AND THAT IS THE POINT OF KEEPING IT.
+	//
+	// It held one entry: Python's float() accepts non-ASCII decimal digits, so
+	// float("\u0661\u0662") is 12.0 while Go scored 0.0. The recorded reason for
+	// accepting it was that "replicating Python's full numeric grammar in Go is
+	// an unbounded and unverifiable commitment, whereas the parity harness
+	// asserting that both planes coerced to the same value is bounded and
+	// provable".
+	//
+	// That judgement was wrong, and it is worth saying how rather than quietly
+	// deleting it. The grammar is BOUNDED: the accepted digit set is Unicode
+	// category Nd as the DEPLOYED interpreter reports it, emitted as a generated
+	// table by generate_python_decimal_digits_golden.py, so it is a fixed list
+	// rather than an open-ended commitment to Unicode. And it is VERIFIABLE:
+	// ParsePythonFloat is checked bit-for-bit against 102 measured cases in
+	// python_float_python_golden.json. The estimate of the cost was wrong, not
+	// the principle -- "unbounded" was an assumption about the work, made
+	// without pricing it.
+	//
+	// The residual mattered. A confidence of 0.0 where Python has 12.0 changes
+	// which edges the split protects, which changes component membership, which
+	// mints a different work_unit_id. "Accepted divergence" was the right
+	// bookkeeping and the wrong disposition.
+	//
+	// The map stays so the next genuinely-accepted divergence has a home, and so
+	// a future reader sees that an entry here is a decision to be revisited
+	// rather than a permanent fact.
+	knownDivergence := map[string]string{}
 
 	for _, testCase := range golden.StringCases {
 		t.Run(strconv.Quote(testCase.Input), func(t *testing.T) {

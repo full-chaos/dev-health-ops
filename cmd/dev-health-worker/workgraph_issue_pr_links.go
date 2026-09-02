@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -366,10 +367,26 @@ func splitTrailingOffset(value string) (body string, offsetSeconds int, ok bool)
 	return value, 0, false
 }
 
+// offsetSpelling is the exact set of offset spellings `fromisoformat` accepts:
+// ±HH, ±HHMM, ±HHMMSS, ±HH:MM and ±HH:MM:SS. Colons are permitted only in the
+// separated forms and only in those positions.
+//
+// Written as an exact pattern because the first version of this function
+// STRIPPED colons before counting digits, which made "+00:", "+0:0", "+:00",
+// "+::00", "+00::" and "+00:00:" all parse as a zero offset. The reference
+// rejects every one of them, so Go accepted six malformed values the bridge
+// refuses -- the dangerous direction, since this step writes before the bridge
+// validates. Found by a review round constructing malformed suffixes; the
+// generated grid could not find it, because the grid varies only WELL-FORMED
+// offsets. Well-formedness is its own axis and the grid did not have it.
+var offsetSpelling = regexp.MustCompile(`^[+-]\d{2}(\d{2}(\d{2})?|:\d{2}(:\d{2})?)?$`)
+
 // parseOffsetSeconds reads a signed offset in any spelling fromisoformat
-// accepts: ±HH, ±HHMM, ±HH:MM, ±HHMMSS, ±HH:MM:SS.
+// accepts. The magnitude is NOT range-checked here: the reference requires
+// |offset| < 24h, but every non-zero offset is refused by the caller anyway, so
+// an out-of-range one is refused for a reason that reaches the same verdict.
 func parseOffsetSeconds(text string) (int, bool) {
-	if len(text) < 3 {
+	if !offsetSpelling.MatchString(text) {
 		return 0, false
 	}
 	sign := 1
@@ -377,9 +394,6 @@ func parseOffsetSeconds(text string) (int, bool) {
 		sign = -1
 	}
 	digits := strings.ReplaceAll(text[1:], ":", "")
-	if len(digits) != 2 && len(digits) != 4 && len(digits) != 6 {
-		return 0, false
-	}
 	total := 0
 	for offset := 0; offset < len(digits); offset += 2 {
 		part, err := strconv.Atoi(digits[offset : offset+2])

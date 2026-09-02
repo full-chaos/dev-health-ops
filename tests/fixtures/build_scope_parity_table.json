@@ -2806,6 +2806,342 @@
    }
   },
   {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+0:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+::00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00::"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00:00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+0:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08++00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00:00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08-24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+99:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:08+01:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T06:07:08+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:08+01:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+0:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+::00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+00::"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+00:00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+00000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+0:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+00:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708++00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+00:00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708-24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "20260815T060708+99:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "20260815T060708+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:08+01:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "20260815T060708+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-16T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-08-15T06:07:08+01:00"
+   }
+  },
+  {
    "case": "field:from_date",
    "scope": {
     "from_date": null
@@ -5538,6 +5874,342 @@
    }
   },
   {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+0:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+::00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00::"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00:00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+0:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08++00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00:00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08-24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+99:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T06:07:08+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+0:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+::00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+00::"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+00:00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+00000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+0:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+00:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708++00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+00:00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708-24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "20260815T060708+99:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "20260815T060708+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "20260815T060708+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-15T06:07:08+01:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
    "case": "field:repo_id",
    "scope": {
     "repo_id": null
@@ -7644,6 +8316,330 @@
    "error": "ValueError",
    "scope": {
     "repo_id": "20260815_060708.123-08:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+0:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+::00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00::"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00:00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+0:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08++00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00:00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08-24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+99:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T06:07:08+00:59:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+0:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+::00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00::"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00:00:"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00000"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+0:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00:0"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708++00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00:00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708-24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+99:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "20260815T060708+00:59:60"
    },
    "stage": "window",
    "verdict": "RAISES"
@@ -10696,6 +11692,438 @@
    }
   },
   {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+0:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+::00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00::"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00:00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+0:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08++00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00:00:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08-24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+99:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T06:07:08+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+0:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+::00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00::"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00:00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+0:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708++00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00:00:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708-24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+99:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "20260815T060708+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
    "case": "field:heuristic_confidence",
    "scope": {
     "heuristic_confidence": null
@@ -13461,6 +14889,438 @@
    "case": "field:heuristic_confidence",
    "scope": {
     "heuristic_confidence": "20260815_060708.123-08:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+0:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+::00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00::"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00:00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+0:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08++00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00:00:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08-24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+99:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T06:07:08+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+0:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+::00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00::"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00:00:"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00000"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+0:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00:0"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708++00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00:00:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708-24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+99:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "20260815T060708+00:59:60"
    },
    "verdict": "RUNS",
    "window": {

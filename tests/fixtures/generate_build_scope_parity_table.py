@@ -146,6 +146,47 @@ _TIME_FORMS = {
 }
 _OFFSETS = ["", "Z", "+00:00", "+0000", "+00", "+00:00:00", "+05:00", "-08:00"]
 
+# OFFSET WELL-FORMEDNESS, the axis the grid did not have.
+#
+# `_OFFSETS` varies which VALID offset is used. It never varies whether the
+# offset is valid at all, so every cell of the cross-product had a well-formed
+# suffix -- and a review round walked straight into the gap by constructing
+# malformed ones. A Go implementation that stripped colons before counting
+# digits read "+00:", "+0:0", "+:00", "+::00", "+00::" and "+00:00:" as a zero
+# offset and ACCEPTED all six, which the reference rejects: the dangerous
+# direction, in a step that writes before the bridge validates.
+#
+# The lesson is the same one that produced the grid, one level up. Crossing the
+# valid spellings closed the layout family and left "is it a spelling at all?"
+# untested, because a cross-product only varies the axes it is given.
+#
+# Crossed with two bodies rather than the whole grid: well-formedness is a
+# property of the suffix, and the body's form was already shown independent.
+_MALFORMED_OFFSETS = [
+    "+00:",
+    "+0:0",
+    "+:00",
+    "+::00",
+    "+00::",
+    "+00:00:",
+    "+0",
+    "+000",
+    "+00000",
+    "+0:00",
+    "+00:0",
+    "++00:00",
+    "+00:00:00:00",
+    # Out of range rather than misspelled: the reference requires |offset| < 24h.
+    "+24:00",
+    "-24:00",
+    "+99:00",
+    # In range but non-zero via carry, which the reference ACCEPTS: "+00:60" is
+    # one hour. Included so the corpus records that too.
+    "+00:60",
+    "+00:59:60",
+]
+_MALFORMED_BODIES = ["2026-08-15T06:07:08", "20260815T060708"]
+
 
 def _datetime_grid() -> list[str]:
     """Every date x separator x time x offset combination, deduplicated."""
@@ -181,6 +222,12 @@ VALUES += [
 # re-derives several of them (the "t" and "_" separators among them), and a
 # duplicate row would make the corpus look broader than it is.
 VALUES += [value for value in _datetime_grid() if value not in VALUES]
+VALUES += [
+    body + offset
+    for body in _MALFORMED_BODIES
+    for offset in _MALFORMED_OFFSETS
+    if body + offset not in VALUES
+]
 
 
 def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:

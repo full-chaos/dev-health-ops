@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import contextlib
 import hashlib
 import json
 import pathlib
@@ -346,26 +345,38 @@ def _production_window_digest() -> str:
     rather than degrading: an ambiguous anchor is exactly the condition that
     made the first version silently wrong, so it is now the loudest failure.
     """
-    # Importing this module initialises Celery, which configures logging to
-    # STDOUT -- and stdout is the payload. Left unredirected it interleaved log
-    # lines into the JSON and produced a fixture that would not parse. Contain
-    # it rather than avoiding the import: resolving the module through the
-    # import system is what makes this work both in the checkout and in the
-    # container, where the generator runs from /tmp.
+    # Resolve the production file WITHOUT executing it.
     #
-    # This is durable BEYOND the import window, and only by luck of how logging
-    # works -- worth stating so nobody "simplifies" it. `logging` binds its
-    # handler to the stream OBJECT `sys.stderr` pointed at during the redirect,
-    # so later logging in measure() still goes to stderr after the block exits.
-    # Had it stored the NAME `sys.stdout` and looked it up lazily, this would
-    # have covered only the import and the payload would be corrupted later.
-    # Verified on review (lane-4441): root handler is ['stderr'] after the
-    # block, post-import logging writes 0 lines to stdout, and an exception
-    # raised inside the redirect PROPAGATES with sys.stdout restored.
-    with contextlib.redirect_stdout(sys.stderr):
-        import dev_health_ops.workers.work_graph_tasks as production
+    # The first version imported `dev_health_ops.workers.work_graph_tasks`
+    # directly, which initialises Celery, OpenTelemetry and SQLAlchemy. That
+    # worked in a lane venv and FAILED IN CI, where those are not installed:
+    #
+    #   regenerate the scope parity table through live Python: exit status 1:
+    #   opentelemetry packages not installed - No module named 'opentelemetry'
+    #
+    # It also made a fixture GENERATOR depend on the runtime dependencies of the
+    # code it only needs to READ, which is a dependency it has no business
+    # having. `importlib.util.find_spec` is not a fix either -- measured, it
+    # imports the parent package and executes the module anyway.
+    #
+    # The top-level package alone pulls ZERO heavy dependencies (measured), and
+    # its `__file__` still anchors us to whichever copy of dev_health_ops the
+    # bridge itself would import -- which was the whole reason for resolving
+    # through the import system rather than walking relative paths. So: import
+    # the package, derive the path, never execute the module.
+    import dev_health_ops
 
-    path = pathlib.Path(production.__file__).resolve()
+    path = (
+        pathlib.Path(dev_health_ops.__file__).resolve().parent
+        / "workers"
+        / "work_graph_tasks.py"
+    )
+    if not path.is_file():
+        raise SystemExit(
+            f"the production module is not at {path}; the layout moved -- "
+            "re-anchor this digest and RE-VERIFY that _derive_window still "
+            "reproduces production."
+        )
     source = path.read_text(encoding="utf-8")
 
     if source.count(_ENCLOSING) != 1:

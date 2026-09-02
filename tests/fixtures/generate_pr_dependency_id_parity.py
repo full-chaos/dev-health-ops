@@ -81,6 +81,27 @@ def observe(value: str) -> dict:
     }
 
 
+# MAGNITUDE. Added after codex round 1 found a P2 this corpus could not see:
+# every positive id here was small (the largest was 42), so a Go-side bound at
+# 1<<31 rejected `ghpr:o/r#3000000000` as malformed while the reference parsed
+# it happily. Python's ints are arbitrary-precision, so magnitude is NEVER a
+# rejection reason -- there is no large value `int()` refuses.
+#
+# The all-zero entries matter as much as the huge ones: `int(...) > 0` is FALSE
+# for them, so the reference returns None (a silent skip), which no bounded
+# conversion distinguishes from "too large to represent".
+CORPUS += [
+    "ghpr:o/r#2147483647",  # int32 max
+    "ghpr:o/r#2147483648",  # int32 max + 1
+    "ghpr:o/r#3000000000",  # the round-1 failing input
+    "ghpr:o/r#9223372036854775807",  # int64 max
+    "ghpr:o/r#9223372036854775808",  # int64 max + 1: real to Python, not representable in Go
+    "ghpr:o/r#" + "9" * 40,  # far beyond any fixed-width integer
+    "ghpr:o/r#" + "0" * 40,  # not positive -> None, not an error
+    "ghpr:o/r#0",  # the same rule at length 1
+    "ghpr:o/r#" + "9" * 40 + "\u00b2",  # huge AND non-decimal: int() still raises
+]
+
 # ENDPOINT_CORPUS varies the third axis: WHICH FIELD carries the value.
 #
 # The single-value corpus above cannot see this axis at all. builder.py:871-874

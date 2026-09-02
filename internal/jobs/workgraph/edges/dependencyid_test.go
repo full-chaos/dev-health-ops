@@ -28,12 +28,12 @@ import (
 type prDependencyIDParity struct {
 	Schema       string `json:"schema"`
 	Observations []struct {
-		Input     string `json:"input"`
-		Outcome   string `json:"outcome"`
-		Exception string `json:"exception"`
-		RepoSlug  string `json:"repo_slug"`
-		PRNumber  int    `json:"pr_number"`
-		Provider  string `json:"provider"`
+		Input     string      `json:"input"`
+		Outcome   string      `json:"outcome"`
+		Exception string      `json:"exception"`
+		RepoSlug  string      `json:"repo_slug"`
+		PRNumber  json.Number `json:"pr_number"`
+		Provider  string      `json:"provider"`
 	} `json:"observations"`
 }
 
@@ -73,11 +73,40 @@ func TestParsePRDependencySourceMatchesPython(t *testing.T) {
 				t.Errorf("%q: Python parsed it, this port errored: %v", observation.Input, err)
 				continue
 			}
-			if got.RepoSlug != observation.RepoSlug || got.PRNumber != observation.PRNumber ||
-				got.Provider != observation.Provider {
-				t.Errorf("%q: got {%s %d %s}, Python gave {%s %d %s}",
-					observation.Input, got.RepoSlug, got.PRNumber, got.Provider,
-					observation.RepoSlug, observation.PRNumber, observation.Provider)
+			if got.RepoSlug != observation.RepoSlug || got.Provider != observation.Provider {
+				t.Errorf("%q: got slug=%q provider=%q, Python gave slug=%q provider=%q",
+					observation.Input, got.RepoSlug, got.Provider,
+					observation.RepoSlug, observation.Provider)
+			}
+			// The corpus is decoded as json.Number because Python's ints are
+			// arbitrary-precision: the reference really does return a 40-digit
+			// PR number, and decoding that into an int would fail here rather
+			// than in the code under test.
+			reference, conversionErr := observation.PRNumber.Int64()
+			switch {
+			case conversionErr == nil:
+				if int64(got.PRNumber) != reference {
+					t.Errorf("%q: got PR %d, Python gave %d",
+						observation.Input, got.PRNumber, reference)
+				}
+				if got.NumberExceedsInt64 {
+					t.Errorf("%q: flagged as exceeding int64, but Python's value %d fits",
+						observation.Input, reference)
+				}
+			default:
+				// Python parsed a real positive integer this port cannot hold.
+				// The CLASSIFICATION must still be Python's: the row belongs to
+				// the issue<->PR pipeline, and must not be silently handed to
+				// the issue<->issue build because a number did not fit.
+				if !got.NumberExceedsInt64 {
+					t.Errorf("%q: Python parsed %s, which exceeds int64, but this port "+
+						"did not flag it", observation.Input, observation.PRNumber)
+				}
+				if !got.IsPR() {
+					t.Errorf("%q: a PR number too large to represent must still classify "+
+						"as a PR; this row would be built as an issue<->issue edge that "+
+						"the mapping pipeline also owns", observation.Input)
+				}
 			}
 		case "none":
 			sawNone++
@@ -86,10 +115,10 @@ func TestParsePRDependencySourceMatchesPython(t *testing.T) {
 					observation.Input, err)
 				continue
 			}
-			if got.PRNumber != 0 {
-				t.Errorf("%q: Python returned None but this port claimed it as PR %d — the row "+
+			if got.IsPR() {
+				t.Errorf("%q: Python returned None but this port claimed it as a PR — the row "+
 					"would be skipped from the issue<->issue build and owned by neither pipeline",
-					observation.Input, got.PRNumber)
+					observation.Input)
 			}
 		case "raises":
 			sawRaises++
@@ -134,9 +163,10 @@ func TestAtoiWouldDivergeInBothDirections(t *testing.T) {
 		if !isPythonDigitString(number) {
 			t.Fatalf("premise changed: python isdigit(%q) now rejects", number)
 		}
-		value, ok := pythonIntFromDigits(number)
-		if !ok || value != 5 {
-			t.Fatalf("int(%q) should be 5, got %d ok=%v", number, value, ok)
+		value, positive, exceeds, ok := pythonIntFromDigits(number)
+		if !ok || value != 5 || !positive || exceeds {
+			t.Fatalf("int(%q) should be 5, got %d positive=%v exceeds=%v ok=%v",
+				number, value, positive, exceeds, ok)
 		}
 	}
 }
@@ -150,7 +180,7 @@ func TestSuperscriptIsTheOnlyDeliberateDivergence(t *testing.T) {
 		if !isPythonDigitString(number) {
 			t.Fatalf("premise changed: isdigit(%q) now rejects, so it would not reach int()", number)
 		}
-		if _, ok := pythonIntFromDigits(number); ok {
+		if _, _, _, ok := pythonIntFromDigits(number); ok {
 			t.Fatalf("int(%q) should fail as it does in Python", number)
 		}
 		if _, err := ParsePRDependencySource("ghpr:o/r#" + number); !errors.Is(err, ErrMalformedPRID) {

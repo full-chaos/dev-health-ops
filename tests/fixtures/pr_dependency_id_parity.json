@@ -161,6 +161,61 @@
   {
    "input": "GHPR:o/r#5",
    "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#2147483647",
+   "outcome": "parsed",
+   "pr_number": 2147483647,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#2147483648",
+   "outcome": "parsed",
+   "pr_number": 2147483648,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#3000000000",
+   "outcome": "parsed",
+   "pr_number": 3000000000,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#9223372036854775807",
+   "outcome": "parsed",
+   "pr_number": 9223372036854775807,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#9223372036854775808",
+   "outcome": "parsed",
+   "pr_number": 9223372036854775808,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#9999999999999999999999999999999999999999",
+   "outcome": "parsed",
+   "pr_number": 9999999999999999999999999999999999999999,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#0000000000000000000000000000000000000000",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#0",
+   "outcome": "none"
+  },
+  {
+   "exception": "ValueError",
+   "input": "ghpr:o/r#9999999999999999999999999999999999999999²",
+   "outcome": "raises"
   }
  ],
  "producer": "work_graph/builder.py::_parse_pr_dependency_source",

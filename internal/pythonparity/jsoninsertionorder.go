@@ -216,7 +216,19 @@ func appendOrderedValue(dst []byte, value any, seen map[containerKey]bool) ([]by
 		if len(typed) > 1 {
 			keys := make(map[string]int, len(typed))
 			for index, member := range typed {
-				if first, duplicated := keys[member.Key]; duplicated {
+				// Keyed on the ENCODED key, not the Go string.
+				//
+				// AppendPythonJSONString normalises every invalid UTF-8 byte to
+				// U+FFFD, so `string([]byte{0xff})` and `string([]byte{0xfe})`
+				// are distinct Go strings that emit the SAME key. Scanning the
+				// raw strings let them through and produced
+				// `{"\ufffd": 1, "\ufffd": 2}` -- while CPython, where both
+				// decode to the same character, collapses the dict to
+				// `{"\ufffd": 2}`. Two keys that cannot be told apart in the
+				// output are duplicates in the output, whatever they were on
+				// the way in.
+				encoded := string(AppendPythonJSONString(nil, member.Key))
+				if first, duplicated := keys[encoded]; duplicated {
 					return nil, fmt.Errorf(
 						"pythonparity: duplicate key %q at positions %d and %d -- "+
 							"a Python dict cannot hold both, so no json.dumps call "+
@@ -225,7 +237,7 @@ func appendOrderedValue(dst []byte, value any, seen map[containerKey]bool) ([]by
 							"site if that is what you mean",
 						member.Key, first, index)
 				}
-				keys[member.Key] = index
+				keys[encoded] = index
 			}
 		}
 		dst = append(dst, '{')

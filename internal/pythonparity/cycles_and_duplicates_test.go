@@ -82,6 +82,36 @@ func TestSharedContainersAreNotCycles(t *testing.T) {
 			t.Errorf("the same OrderedObject twice is not a cycle; got %v", err)
 		}
 	})
+
+	// The PRODUCTION shape, and a different code path from the one above.
+	//
+	// An evidence list is a []OrderedObject, not a []any, so it takes the typed
+	// slice branch. A Go port that REUSES a row value rather than rebuilding it
+	// would produce exactly this, and an over-eager cycle check would reject a
+	// payload CPython accepts -- silently breaking the real evidence path while
+	// every data-shaped corpus stayed green.
+	//
+	// The distinction this pins is "no cycle" versus "no repetition". They are
+	// easy to conflate when touching the marker discipline, and only one of them
+	// is what json.dumps enforces. lane-3092 probed this against its own port;
+	// it is a permanent test rather than a throwaway because the next person to
+	// touch enterContainer needs it.
+	t.Run("shared rows in a typed evidence list", func(t *testing.T) {
+		row := OrderedObject{{Key: "a", Value: 1.0}}
+		encoded, err := MarshalPythonJSONInsertionOrder([]OrderedObject{row, row})
+		if err != nil {
+			t.Fatalf("a reused evidence row is repetition, not a cycle: %v", err)
+		}
+		if got, want := string(encoded), `[{"a": 1.0}, {"a": 1.0}]`; got != want {
+			t.Errorf("got %s, want %s", got, want)
+		}
+
+		nested := OrderedObject{{Key: "n", Value: 2.0}}
+		outer := []OrderedObject{{{Key: "wrap", Value: nested}}, {{Key: "wrap", Value: nested}}}
+		if _, err := MarshalPythonJSONInsertionOrder(outer); err != nil {
+			t.Errorf("a reused NESTED object is also repetition, not a cycle: %v", err)
+		}
+	})
 }
 
 // TestDuplicateKeysAreRefused pins the P2 fix.
@@ -110,6 +140,27 @@ func TestDuplicateKeysAreRefused(t *testing.T) {
 				"can find them; %q missing from %q", want, err)
 		}
 	}
+
+	// Keys that differ in Go but are INDISTINGUISHABLE once encoded.
+	//
+	// AppendPythonJSONString maps every invalid UTF-8 byte to U+FFFD, so these
+	// two distinct Go strings emit the same key. Scanning the raw strings let
+	// them through and produced `{"\ufffd": 1, "\ufffd": 2}`; CPython, where
+	// both decode to the same character, collapses to `{"\ufffd": 2}`.
+	//
+	// The general rule this pins: two keys that cannot be told apart in the
+	// OUTPUT are duplicates in the output, whatever they were on the way in.
+	t.Run("keys that collide only after encoding", func(t *testing.T) {
+		_, err := MarshalPythonJSONInsertionOrder(OrderedObject{
+			{Key: string([]byte{0xff}), Value: 1},
+			{Key: string([]byte{0xfe}), Value: 2},
+		})
+		if err == nil {
+			t.Error("two invalid-UTF-8 keys both encode as \\ufffd and must be " +
+				"refused as duplicates; emitting them produces bytes no Python " +
+				"dict can hold")
+		}
+	})
 
 	// The single-member and distinct-key cases must stay unaffected -- the
 	// duplicate scan is skipped for len <= 1, and that shortcut is easy to get

@@ -842,8 +842,11 @@ check_live_python_oracles() {
   # directions for different reasons -- a rune Python accepts and Go rejects is
   # a defect, while a rune Go accepts and Python does not is version skew with a
   # pinned count -- so it also rots when either side upgrades its tables.
+  # This marker carries DATA as well as the fact of execution: the two UCD
+  # versions the parity claim was established against. So it is a prefix test,
+  # not equality -- an undated parity claim is the thing being avoided.
   proof_file="${proof_dir}/workgraph-textrefs-charclass-allrunes"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+  if [ ! -f "${proof_file}" ] || ! grep -q '^executed ucd_python=.* ucd_go=' "${proof_file}"; then
     printf 'ERROR: the text-extractor character classes were not compared against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1

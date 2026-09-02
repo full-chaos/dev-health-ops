@@ -2,10 +2,12 @@ package textrefs
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"unicode"
 )
 
 // TestEveryRuneMatchesLivePythonCharacterClasses is the guard that makes the
@@ -21,15 +23,21 @@ import (
 //     dropped edge. There is no acceptable non-zero value here, so this fails
 //     hard rather than reporting a count.
 //
-//   - **go-only is PINNED to a measured number.** These are runes assigned in
-//     Go's Unicode tables and unassigned in CPython's UCD, so the count is a
-//     property of the version skew between the two, not of this code. A change
-//     means one side upgraded its tables; the test says which way and by how
-//     much rather than failing mysteriously.
+//   - **go-only must be a SUBSET OF THE UNASSIGNED SET.** These are runes
+//     assigned in Go's Unicode tables and not yet existing in CPython's UCD.
+//     Asserting the Cn property rather than a count is deliberate: a count
+//     fails on any table upgrade and gets "fixed" by editing the number, which
+//     would silently absorb a real semantic divergence arriving in the same
+//     release. The property stays true across upgrades and fails only on the
+//     thing that matters -- a rune Python KNOWS and still excludes, where Go
+//     matches and Python does not.
 //
-// The pinned counts were measured on CPython 3.14.7 / UCD 16.0.0 against Go
-// 1.24. When CPython adopts UCD 17 they go to zero without any change here,
-// and this test is what will say so.
+// Measured on CPython 3.14.7 / UCD 16.0.0 against Go 1.24, the residue is 0 for
+// \s, 4657 for \w and 10 for \d, all Cn. When CPython adopts UCD 17 it shrinks
+// toward zero on its own and this test keeps passing.
+//
+// The marker records BOTH UCD versions, so the parity claim in CI carries the
+// pair it was established against rather than being undated.
 //
 // Proof marker: workgraph-textrefs-charclass-allrunes
 func TestEveryRuneMatchesLivePythonCharacterClasses(t *testing.T) {
@@ -71,6 +79,11 @@ print(json.dumps({
     "space": ranges(lambda c: bool(re.match(r"\s", c))),
     "word":  ranges(lambda c: bool(re.match(r"\w", c))),
     "digit": ranges(lambda c: bool(re.match(r"\d", c))),
+    # The UNASSIGNED set. The go-only residue must be a SUBSET of this: a rune
+    # Go accepts and Python does not is tolerable ONLY when Python has no such
+    # code point yet. If Python knows the rune and still excludes it from the
+    # class, that is a semantic disagreement and a defect.
+    "unassigned": ranges(lambda c: unicodedata.category(c) == "Cn"),
     "unicode": unicodedata.unidata_version,
     "python": sys.version.split()[0],
 }))
@@ -81,11 +94,12 @@ print(json.dumps({
 	}
 
 	var derived struct {
-		Space   [][2]rune `json:"space"`
-		Word    [][2]rune `json:"word"`
-		Digit   [][2]rune `json:"digit"`
-		Unicode string    `json:"unicode"`
-		Python  string    `json:"python"`
+		Space      [][2]rune `json:"space"`
+		Word       [][2]rune `json:"word"`
+		Digit      [][2]rune `json:"digit"`
+		Unassigned [][2]rune `json:"unassigned"`
+		Unicode    string    `json:"unicode"`
+		Python     string    `json:"python"`
 	}
 	if err := json.Unmarshal(output, &derived); err != nil {
 		t.Fatalf("decode derived classes: %v", err)
@@ -108,17 +122,20 @@ print(json.dumps({
 		return set
 	}
 
+	unassigned := expand(derived.Unassigned)
+	if len(unassigned) == 0 {
+		t.Fatal("live python reported no unassigned code points; the Cn subset " +
+			"assertion below would be vacuous")
+	}
+
 	for _, class := range []struct {
 		name        string
 		pythonSet   map[rune]bool
 		goPredicate func(rune) bool
-		// Pinned go-only count. See the doc comment: this is version skew, not
-		// a defect, and it is pinned so a table bump is loud.
-		pinnedGoOnly int
 	}{
-		{"\\s", expand(derived.Space), pythonIsSpace, 0},
-		{"\\w", expand(derived.Word), pythonIsWord, 4657},
-		{"\\d", expand(derived.Digit), pythonIsDigit, 10},
+		{"\\s", expand(derived.Space), pythonIsSpace},
+		{"\\w", expand(derived.Word), pythonIsWord},
+		{"\\d", expand(derived.Digit), pythonIsDigit},
 	} {
 		var pythonOnly, goOnly []rune
 		for cp := rune(0); cp <= 0x10FFFF; cp++ {
@@ -144,24 +161,40 @@ print(json.dumps({
 				class.name, len(pythonOnly), sample)
 		}
 
-		// Direction 2: version skew. Pinned so a table upgrade is announced.
-		if len(goOnly) != class.pinnedGoOnly {
-			sample := goOnly
+		// Direction 2: version skew, asserted as a PROPERTY rather than a count.
+		//
+		// Every go-only rune must be unassigned (Cn) in the interpreter's UCD.
+		// That is the claim the package doc actually makes, and it is the one that
+		// stays true across table upgrades: when CPython adopts a newer UCD the
+		// residue shrinks toward zero on its own and this still passes, whereas a
+		// pinned count would fail and be "fixed" by editing the number -- which
+		// would also silently absorb a real semantic divergence arriving in the
+		// same release.
+		var assignedButExcluded []rune
+		for _, r := range goOnly {
+			if !unassigned[r] {
+				assignedButExcluded = append(assignedButExcluded, r)
+			}
+		}
+		if len(assignedButExcluded) != 0 {
+			sample := assignedButExcluded
 			if len(sample) > 12 {
 				sample = sample[:12]
 			}
-			t.Errorf("%s: go-only rune count is %d, pinned at %d. This is Unicode "+
-				"VERSION skew, not a defect: these runes are assigned in Go's "+
-				"tables and unassigned in CPython's UCD %s. A change means one "+
-				"side upgraded. If CPython adopted UCD 17 the count should now "+
-				"be 0 and the pin should be updated to 0. First: %U",
-				class.name, len(goOnly), class.pinnedGoOnly, derived.Unicode, sample)
+			t.Errorf("%s: %d rune(s) accepted by the Go substitution that live Python "+
+				"KNOWS (assigned in UCD %s) and still excludes from the class. This is "+
+				"a semantic disagreement, not version skew: Go would match where Python "+
+				"does not. First: %U",
+				class.name, len(assignedButExcluded), derived.Unicode, sample)
 		}
+		t.Logf("%s: go-only residue %d rune(s), all unassigned in UCD %s",
+			class.name, len(goOnly), derived.Unicode)
 	}
 
 	if err := os.WriteFile(
 		filepath.Join(proofDirectory, "workgraph-textrefs-charclass-allrunes"),
-		[]byte("executed"), 0o644,
+		[]byte(fmt.Sprintf("executed ucd_python=%s ucd_go=%s",
+			derived.Unicode, unicode.Version)), 0o644,
 	); err != nil {
 		t.Fatalf("write proof marker: %v", err)
 	}

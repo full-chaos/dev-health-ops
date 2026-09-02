@@ -2,18 +2,24 @@
 
 WHY THIS TEST EXISTS
 --------------------
-`go-quality` is a REQUIRED check on main. (CHAOS-4834 has since made
-`go-quality.yml` its single producer and deleted the no-op; the fixture
-coverage assertions below still apply, and the two mirror assertions that
-lived here were removed with the second list they compared.) `.github/workflows/go.yml` only runs
-when the change touches one of its `paths`; for everything else,
-`.github/workflows/go-quality-noop.yml` supplies a passing context so the
-required check is satisfied. Its step is named, accurately, "Vacuously satisfy
-the required go-quality check".
+`go-quality` is a REQUIRED check on main. It USED to be produced by two
+workflows: `.github/workflows/go.yml`, which ran only when the change touched
+one of its `paths`, and `.github/workflows/go-quality-noop.yml`, which supplied
+a passing context for everything else -- its step named, accurately, "Vacuously
+satisfy the required go-quality check". Both declared a job with the SAME id, so
+branch protection was satisfied by whichever ran, and a path missing from
+`go.yml`'s list did not produce a missing check -- it produced a GREEN one.
 
-Both workflows declare a job with the SAME id, `go-quality`. So branch
-protection is satisfied by whichever one ran, and a path that is missing from
-`go.yml`'s list does not produce a missing check -- it produces a GREEN one.
+CHAOS-4834 ended that: `go-quality.yml` is now the single producer, the no-op is
+deleted, and relevance is decided in-job by `ci/go_relevance.py` reading
+`go.yml`'s own list. The two assertions here that compared the two lists went
+with the second list they compared.
+
+**The fixture-coverage assertions below still apply, and are the reason this
+file survives.** They test `go.yml`'s `paths` -- which is still the list
+`go_relevance.py` reads, so a fixture missing from it still means a fixture-only
+change is judged irrelevant and the gate still skips. The producer changed; the
+list did not, and neither did the way it can fail.
 
 That bit the live-Python rot guards. Those guards exist to fire when a frozen
 fixture stops matching the interpreter, and the change that trips them is,

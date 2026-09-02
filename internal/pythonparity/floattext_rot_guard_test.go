@@ -225,9 +225,26 @@ func writeFloatTextProof(t *testing.T, proofDirectory string) {
 // environment, so a mismatch in one is never reported as a mismatch in the
 // other.
 //
-// Returns the data re-serialised canonically (sorted keys, stable spacing) so
-// the comparison is on content rather than on whatever key order a particular
-// json library happened to emit.
+// Returns the data re-serialised with TOP-LEVEL KEY ORDER normalised, and
+// nothing else. Be precise about the limit, because overclaiming it would
+// recreate the very misattribution this file exists to prevent.
+//
+// json.Marshal sorts map keys, so the order of "rounds"/"reprs"/"formats" is
+// canonical. It does NOT normalise anything inside them: the values are
+// json.RawMessage and their bytes are copied verbatim, so whitespace, indent
+// and key order WITHIN each entry are whatever the source document had.
+//
+// The consequence to know: if the committed JSON is ever reformatted -- a
+// linter, a different indent, a regeneration with different json.dumps
+// arguments -- the data comparison fails and this guard reports "SAME
+// INTERPRETER, DIFFERENT OUTPUT", blaming the generator when the cause was
+// spacing. That is not a hypothetical shape; measured, the same data at two
+// spacings is 2,765,074 vs 3,837,964 bytes.
+//
+// It is unreachable today because one generator with one fixed json.dumps call
+// produces both sides. That is an assumption about the PRODUCER, not a property
+// of this function, and it is the assumption to re-check if the generator's
+// serialisation ever changes.
 func splitFloatTextDocument(t *testing.T, document []byte, label string) (data []byte, environment string) {
 	t.Helper()
 	var parsed map[string]json.RawMessage

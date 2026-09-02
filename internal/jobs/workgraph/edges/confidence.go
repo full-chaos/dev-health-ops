@@ -150,3 +150,24 @@ func ValidateConfidence(confidence float32) error {
 
 // ErrUngroupableConfidence marks a confidence this writer refuses to emit.
 var ErrUngroupableConfidence = fmt.Errorf("ungroupable confidence")
+
+// ValidateConfidence's accept-set is Python's, not a stricter one we preferred.
+//
+// `WorkGraphEdge.__post_init__` (work_graph/models.py:125-128) raises unless
+// `0.0 <= confidence <= 1.0`. NaN fails that chain because every comparison
+// against NaN is false, so `not (False)` raises — meaning Python rejects NaN
+// through the same guard rather than needing a separate check.
+//
+// Measured against the deployed dataclass rather than reasoned about:
+//
+//	NaN   -> ValueError      +Inf  -> ValueError
+//	1.5   -> ValueError      -0.5  -> ValueError
+//	0.9   -> accepted        0.0   -> accepted
+//
+// Recorded because a validator is exactly the place where "obviously correct"
+// and "matches the reference" quietly part company: a stricter Go check would
+// reject rows Python writes, and a looser one would mint rows Python refuses.
+// Either is a divergence, and neither would fail a test that only asserted what
+// the author thought reasonable. (Sibling lane, CHAOS-4757 round 1: its own test
+// had asserted the wrong behaviour as desirable, so passing was not the same
+// claim as matching.)

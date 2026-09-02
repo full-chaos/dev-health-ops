@@ -1792,7 +1792,6 @@ def test_prepull_refuses_a_per_job_subset(tmp_path: Path) -> None:
 _CONTAINER_LEAF_PATTERN = re.compile(r"go test\b[^\n]*-tags=integration")
 _PREPULL_COMMAND = "ci/check_go.sh integration-prepull"
 _DOCKER_LOGIN_ACTION = "docker/login-action@"
-_HELP_VERBS = frozenset({"-h", "--help", "help"})
 
 # Verbs asserted NOT to start a container. Adding a verb to check_go.sh without
 # adding it here fails test_every_check_go_verb_is_classified, which is the

@@ -330,6 +330,606 @@
         }
       ],
       "label": "all_zero"
+    },
+    {
+      "confidence": 0.1,
+      "confidences": [
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        }
+      ],
+      "label": "twenty_tenths"
+    },
+    {
+      "confidence": 0.1,
+      "confidences": [
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        },
+        {
+          "kind": "float",
+          "value": 0.1
+        }
+      ],
+      "label": "hundred_tenths"
+    },
+    {
+      "confidence": 0.8333333333333334,
+      "confidences": [
+        {
+          "kind": "float",
+          "value": 1e+16
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "float",
+          "value": -1e+16
+        }
+      ],
+      "label": "wide_spread"
+    },
+    {
+      "confidence": 500000000000.0,
+      "confidences": [
+        {
+          "kind": "float",
+          "value": 1000000000000.0
+        },
+        {
+          "kind": "float",
+          "value": 1e-12
+        },
+        {
+          "kind": "float",
+          "value": 1000000000000.0
+        },
+        {
+          "kind": "float",
+          "value": 1e-12
+        },
+        {
+          "kind": "float",
+          "value": 1000000000000.0
+        },
+        {
+          "kind": "float",
+          "value": 1e-12
+        },
+        {
+          "kind": "float",
+          "value": 1000000000000.0
+        },
+        {
+          "kind": "float",
+          "value": 1e-12
+        },
+        {
+          "kind": "float",
+          "value": 1000000000000.0
+        },
+        {
+          "kind": "float",
+          "value": 1e-12
+        },
+        {
+          "kind": "float",
+          "value": 1000000000000.0
+        },
+        {
+          "kind": "float",
+          "value": 1e-12
+        }
+      ],
+      "label": "alternating_magnitudes"
     }
   ],
   "float_value_cases": [

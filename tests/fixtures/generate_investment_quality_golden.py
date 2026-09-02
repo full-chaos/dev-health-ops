@@ -272,6 +272,21 @@ def _edge_confidence_cases() -> list[dict[str, Any]]:
         ("inf_and_neg_inf", [{"confidence": INF}, {"confidence": -INF}]),
         ("unparseable_string", [{"confidence": "abc"}, {"confidence": 1.0}]),
         ("all_zero", [{"confidence": 0.0}, {"confidence": 0.0}]),
+        # The SUMMATION axis. Every case above has 0-2 edges, and below three
+        # summands Neumaier compensation is always zero -- so this corpus was
+        # structurally blind to a naive `total +=` port until these were added.
+        ("twenty_tenths", [{"confidence": 0.1} for _ in range(20)]),
+        ("hundred_tenths", [{"confidence": 0.1} for _ in range(100)]),
+        (
+            "wide_spread",
+            [{"confidence": 1e16}]
+            + [{"confidence": 1.0}] * 10
+            + [{"confidence": -1e16}],
+        ),
+        (
+            "alternating_magnitudes",
+            [{"confidence": 1e12 if n % 2 == 0 else 1e-12} for n in range(12)],
+        ),
     ]
     return [
         {

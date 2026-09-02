@@ -1,5 +1,7 @@
 package units
 
+import "github.com/full-chaos/dev-health-ops/internal/pythonparity"
+
 // This file ports the arithmetic plane of work_graph/investment/evidence.py
 // and the two helpers it borrows from utils/normalization.py.
 //
@@ -128,11 +130,21 @@ func MeanEdgeConfidence(confidences []any) float64 {
 	if len(confidences) == 0 {
 		return 0.0
 	}
-	total := 0.0
-	for _, value := range confidences {
-		total += ConfidenceFromValue(value)
+	// pythonparity.Sum, NOT a `total +=` loop -- Python is
+	// `sum(values) / float(len(values))`, and CPython's sum() has applied
+	// Neumaier compensated summation to floats since 3.12. The two differ on
+	// roughly two in five multi-value inputs.
+	//
+	// This was committed as a naive accumulation and the 2000-case quality
+	// corpus did not catch it, because every confidence list in that corpus had
+	// 0-2 entries -- and below three summands the compensation is always zero.
+	// Varying the VALUES exhaustively proved nothing about the summation; the
+	// discriminating axis is the NUMBER of summands.
+	values := make([]float64, len(confidences))
+	for index, value := range confidences {
+		values[index] = ConfidenceFromValue(value)
 	}
-	return total / float64(len(confidences))
+	return pythonparity.Sum(values) / float64(len(confidences))
 }
 
 // EvidenceQualityInput carries what compute_evidence_quality reads.

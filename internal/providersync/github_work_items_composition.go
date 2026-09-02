@@ -46,9 +46,15 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 //     family, and :247-249 additionally sets Plannable for the canonical
 //     dataset. The comment immediately above it states the matrix reports all
 //     five "as native and ready" deliberately.
-//   - the watermark is NOT unconditionally nil: github_work_items_route.go
-//     :437-466 returns one, suppressed only under the incompleteness policy
-//     (:110).
+//   - the watermark is NOT unconditionally nil, but it is not unconditionally
+//     set either: github_work_items_route.go:437-441 fills it only when BOTH
+//     `len(incomplete) == 0` AND `claim.BeforeAt != nil`. Incompleteness
+//     (:110) is one of two suppression causes, not the only one -- a COMPLETE
+//     but unwindowed claim also yields nil, and a claim with no BeforeAt is a
+//     supported derivation, mirroring Python's default `before = utc_today() +
+//     1 day` (see this file's own note at the `no BeforeAt` bullet). The
+//     original text's "still returns a nil watermark" was wrong as an absolute;
+//     so would be "returns one except when incomplete".
 //   - production, not a test, reaches this constructor -- via the
 //     provider_sync.go case above.
 //

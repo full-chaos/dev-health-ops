@@ -96,7 +96,9 @@ def evidence_bytes(value: float, digits: int) -> dict:
         rationale="R",
         success_criterion="S",
         evidence=(
-            EvidenceRef("t", "work_item_metrics_daily", WS, WE, "wip_count_end_of_day", rounded),
+            EvidenceRef(
+                "t", "work_item_metrics_daily", WS, WE, "wip_count_end_of_day", rounded
+            ),
         ),
     )
     return {

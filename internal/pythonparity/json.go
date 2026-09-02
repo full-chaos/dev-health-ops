@@ -26,6 +26,11 @@ import (
 //	astral U+10000+   surrogate pair           literal UTF-8
 //	invalid UTF-8     not representable        silently replaced, U+FFFD
 //
+// The last row is real but does NOT arise through the ClickHouse path: the
+// Python driver substitutes hex for undecodable values before they reach the
+// encoder, so the reader handles it (DecodeClickHouseString) and by this point
+// every such value is already valid ASCII.
+//
 // Three of those fire on any payload containing an accented name, an emoji, or
 // a CJK title -- and the separator difference fires on every payload without
 // exception. Only the escape table for C0 controls, the short escapes
@@ -191,18 +196,29 @@ func AppendPythonJSONString(dst []byte, value string) []byte {
 
 		codePoint, size := utf8.DecodeRuneInString(value[index:])
 		if codePoint == utf8.RuneError && size == 1 {
-			// Invalid UTF-8. A Go string is arbitrary bytes and a ClickHouse
-			// String column can carry a broken sequence, so this is reachable
-			// input rather than a hypothetical.
+			// Invalid UTF-8.
 			//
-			// U+FFFD is chosen to match a Python driver decoding with
-			// errors="replace", which yields the same replacement character
-			// and therefore the same escape. See the OPEN QUESTION in plan
-			// section 5d: this assumption is NOT yet verified against
-			// clickhouse-connect's actual decode policy, and if that policy
-			// turns out to be errors="strict" then Python RAISES where this
-			// silently substitutes -- a rejection-parity break rather than a
-			// hash break. Recorded as unverified rather than assumed safe.
+			// THIS PATH IS NOT REACHED THROUGH THE CLICKHOUSE ROUTE, and the
+			// reason is worth stating because an earlier revision of this
+			// comment got it wrong in both the layer and the policy.
+			//
+			// It claimed the driver decoded with errors="replace" and that
+			// U+FFFD here matched it. Measured against a real ClickHouse
+			// container, the policy is none of strict/replace/surrogateescape:
+			// clickhouse-connect substitutes the LOWERCASE HEX OF THE WHOLE
+			// VALUE (driver/buffer.py:135-138), so `a\xffb` arrives in Python
+			// as the ASCII string "61ff62". See DecodeClickHouseString.
+			//
+			// The correction moved the problem to a different layer entirely:
+			// the reader must apply that substitution at scan time, after
+			// which every value reaching this encoder is already valid UTF-8.
+			// Fixing it here would have been the wrong place even if the
+			// policy had been guessed correctly.
+			//
+			// The branch stays because this function is not ClickHouse-only:
+			// a caller passing a hand-built string can still reach it, and
+			// silently emitting invalid bytes would be worse than substituting.
+			// It is no longer load-bearing for parity.
 			dst = appendUnicodeEscape(dst, utf8.RuneError)
 			index++
 			continue

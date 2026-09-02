@@ -733,7 +733,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython)$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -759,6 +759,19 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-whitespace-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python whitespace predicate did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding the most fragile producer here: a THIRD-PARTY
+  # DEPENDENCY. clickhouse-connect decodes String columns as UTF-8 and, on
+  # failure, substitutes the lowercase hex of the whole value -- two lines
+  # inside its read loop, not part of its documented API. A lockfile bump moves
+  # it with no diff anywhere in this repository. chquery applies that policy to
+  # every String column, and those strings are hashed into input_hash and into
+  # work_unit_id.
+  proof_file="${proof_dir}/clickhouse-string-decode-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: clickhouse String decode policy did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

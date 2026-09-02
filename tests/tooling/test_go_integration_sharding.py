@@ -2897,67 +2897,119 @@ def test_every_compose_spelling_is_refused(command: str) -> None:
     )
 
 
-def test_no_orphaned_module_level_helpers() -> None:
-    """No helper in this file may be defined and never called.
+# Definitions in tests/tooling that are dead TODAY and not this ticket's to fix.
+# Asserted STILL ORPHANED, so the list cannot rot into a silent exemption.
+_KNOWN_ORPHANS: dict[str, frozenset[str]] = {
+    "test_aggregate_gate_results.py": frozenset(
+        {"_code_filter_patterns", "_job", "_steps"}
+    ),
+}
 
-    `_run_starts_containers` sat here defined-and-uncalled after the guards were
-    reduced for #2111 -- and survived a round of me asserting I had rewired it.
-    Dead code in a guard file is worse than absent code: it reads as protection,
-    and an audit counts it as coverage.
 
-    The control below guards the detector itself. An earlier hand-rolled version
-    of this check reported ten orphans because it miscounted single-call
-    functions; a detector with no control is a finding generator, not evidence.
+def _module_level_definitions_and_uses(tree: Any) -> tuple[set[str], set[str]]:
+    """(defined, used) for one parsed module.
+
+    `test_*` functions and pytest fixtures are excluded: pytest calls those, so
+    they are never referenced by name. Dunders are excluded.
     """
     import ast
 
-    source = Path(__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    defined = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("_")
-    }
-    # Module-level CONSTANTS too. The first version walked functions only, and
-    # `_DOCKER_PULLING_SUBCOMMANDS` went dead when the per-noun verb sets
-    # replaced it -- caught by CodeQL, not by this. A detector that watches one
-    # kind of definition reports "no orphans" while another kind rots, which is
-    # the reassuring-but-false answer this test exists to prevent.
+    defined: set[str] = set()
     for node in tree.body:
-        targets = []
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test_"):
+                continue
+            if any(
+                (isinstance(d, ast.Attribute) and d.attr == "fixture")
+                or (isinstance(d, ast.Name) and d.id == "fixture")
+                or (
+                    isinstance(d, ast.Call)
+                    and isinstance(d.func, ast.Attribute)
+                    and d.func.attr == "fixture"
+                )
+                for d in node.decorator_list
+            ):
+                continue
+            defined.add(node.name)
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else ([node.target] if isinstance(node, ast.AnnAssign) else [])
+        )
         defined |= {
-            t.id for t in targets if isinstance(t, ast.Name) and t.id.startswith("_")
+            t.id
+            for t in targets
+            if isinstance(t, ast.Name) and not t.id.startswith("__")
         }
+
     used = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        n.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
     }
-    used |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    used |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    used |= {
+        a.asname or a.name
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.Import, ast.ImportFrom))
+        for a in n.names
+    }
+    return defined, used
 
-    # CONTROL: a helper known to be called must be seen as called. If this fails
-    # the detector is broken and its orphan list means nothing.
-    assert "_ALLOWED_IMAGE_REGISTRIES" in used, (
-        "detector control failed: _ALLOWED_IMAGE_REGISTRIES is used by "
-        "_image_is_allowed but was not seen as used -- the constant half of "
-        "the orphan list cannot be trusted"
-    )
-    assert "_image_is_allowed" in used, (
-        "detector control failed: _image_is_allowed is called by "
-        "test_every_pulled_image_resolves_to_an_approved_registry but was not "
-        "seen as used -- the orphan list below cannot be trusted"
-    )
 
-    orphans = sorted(name for name in defined if name not in used)
-    assert not orphans, (
-        f"helper(s) defined and never called: {orphans}. Wire them in or delete "
-        "them -- an uncalled guard helper reads as protection while providing "
-        "none."
+def test_no_orphaned_module_level_definitions_in_tooling_tests() -> None:
+    """No definition in tests/tooling may be defined and never used.
+
+    HOISTED from one file to the directory. The per-file version watched only
+    the module it lived in, so a second guard file was entirely unwatched -- and
+    `SHARED_JOB_ID` went orphaned in that unwatched file within hours of the
+    detector shipping, when the test consuming it was removed. A detector that
+    watches one file reports "no orphans" for the whole directory.
+
+    The name filter widened with it: the first version required a leading
+    underscore, so `SHARED_JOB_ID` would have been invisible even in the file
+    already watched. Two blind spots, one symptom.
+    """
+    import ast
+
+    directory = Path(__file__).resolve().parent
+    offenders: list[str] = []
+    stale: list[str] = []
+    control_function = False
+    control_constant = False
+
+    for path in sorted(directory.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        defined, used = _module_level_definitions_and_uses(tree)
+
+        # CONTROLS, one per definition kind, on this module where both are known
+        # live. A control covering one kind certifies one kind while reading as
+        # certifying the detector -- which is how the constant half shipped blind.
+        if path.name == Path(__file__).name:
+            control_function = "_image_is_allowed" in used
+            control_constant = "_ALLOWED_IMAGE_REGISTRIES" in used
+
+        known = _KNOWN_ORPHANS.get(path.name, frozenset())
+        orphans = defined - used
+        offenders += [f"{path.name}: {n}" for n in sorted(orphans - known)]
+        stale += [f"{path.name}: {n}" for n in sorted(known - orphans)]
+
+    assert control_function, (
+        "detector control failed: a known-called function was not seen as used; "
+        "the function half of the orphan list cannot be trusted"
+    )
+    assert control_constant, (
+        "detector control failed: a known-used constant was not seen as used; "
+        "the constant half cannot be trusted"
+    )
+    assert not stale, (
+        "_KNOWN_ORPHANS is stale -- these are no longer orphaned; delete the "
+        f"entries rather than letting the list rot into a silent exemption:\n  {stale}"
+    )
+    assert not offenders, (
+        f"definition(s) defined and never used: {offenders}. Wire them in or "
+        "delete them -- an uncalled helper in a guard file reads as protection "
+        "while providing none."
     )
 
 
@@ -3036,4 +3088,106 @@ def test_compose_like_nouns_refuse_only_their_deploying_verb(
     assert refused is expected_refused, (
         f"{command!r}: refused={refused}, expected {expected_refused} "
         f"(images={images}, unknown={unknown})."
+    )
+
+
+def test_exactly_one_workflow_declares_the_required_go_quality_job() -> None:
+    """CHAOS-4834's acceptance criterion, and the whole point of the change.
+
+    `go-quality` is a REQUIRED check. It used to be declared by TWO workflows --
+    go.yml (path-filtered, does the work) and go-quality-noop.yml (paths-ignore,
+    reports a vacuous success). Both write to the same required context, and
+    GitHub's `paths` fires when ANY changed file matches while `paths-ignore`
+    fires when ANY changed file does not, so **any mixed change set triggers
+    both**. The no-op finishes in seconds and the real gate takes minutes, so the
+    meaningless green always lands first.
+
+    Observed live on 2026-09-02 at 15:21Z (lane-4441, PR #2103, SHA 5508d9b4e):
+
+        33647995023  completed/success  Go (non-Go changes)   <- no-op, ALREADY GREEN
+        33647996503  queued             Go                    <- real workflow, not started
+
+    Widening the path list fixes which changes are *seen*; it does not remove the
+    duplicate producer. Only one workflow declaring the job does that -- and with
+    one producer there is no tie for the ruleset to break, which is why we never
+    had to determine whether it resolves several same-named contexts by
+    all-must-pass, latest-wins, or first-wins.
+    """
+    declaring = []
+    for path in _workflow_files():  # both .yml and .yaml, unlike the
+        # branch this was written on, which globbed one extension
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if "go-quality" in (document.get("jobs") or {}):
+            declaring.append(path.name)
+
+    assert declaring == ["go-quality.yml"], (
+        f"exactly one workflow may declare the required `go-quality` job; found {declaring}. "
+        "Two producers means the required context can be satisfied by whichever "
+        "reports first, which is not necessarily the one that ran the gate."
+    )
+
+
+def test_the_go_quality_job_always_reports() -> None:
+    """One producer is only safe if that producer cannot be filtered out.
+
+    If the single declaring workflow carried a `paths` filter, a non-Go change
+    would produce NO `go-quality` context at all and the required check would
+    block forever -- which is the problem the no-op existed to solve. Relevance is
+    decided inside the job instead, so the context always appears and says
+    honestly whether the gate ran.
+    """
+    document = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "go-quality.yml").read_text(encoding="utf-8")
+    )
+    on_block = document.get(True, document.get("on"))
+    for event in ("pull_request", "push"):
+        trigger = on_block.get(event) or {}
+        assert "paths" not in trigger, (
+            f"go-quality.yml must not filter {event} by paths: a filtered required "
+            "check never reports on the changes it filters out."
+        )
+        assert "paths-ignore" not in trigger, (
+            f"go-quality.yml must not filter {event} by paths-ignore either."
+        )
+
+
+@pytest.mark.parametrize(
+    "changed,expected_relevant",
+    [
+        # `**/` matches ZERO OR MORE leading directories. Translating it as
+        # `.*/` demanded at least one, so every ROOT-LEVEL Go file was judged
+        # irrelevant and the gate skipped -- a false green produced by the
+        # mechanism that replaced the vacuous no-op, on the change class most
+        # likely to break the build.
+        ("root.go", True),
+        ("go.mod", True),
+        ("go.sum", True),
+        # ...and the nested forms it already handled must keep working.
+        ("internal/x/y.go", True),
+        ("cmd/dev-health-worker/main.go", True),
+        ("testdata/a.json", True),
+        ("internal/x/testdata/a.json", True),
+        # The negative control: without it this only shows a decider that
+        # returns true.
+        ("docs/README.md", False),
+    ],
+)
+def test_root_level_paths_match_the_double_star_prefix(
+    changed: str, expected_relevant: bool
+) -> None:
+    """`**/*.go` must match `root.go`, not only `dir/root.go`."""
+    import subprocess
+
+    result = subprocess.run(
+        ["python3", str(ROOT / "ci" / "go_relevance.py")],
+        input=changed + "\n",
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+    )
+    assert result.returncode == 0, f"go_relevance.py failed: {result.stderr[:300]}"
+    relevant = "relevant=true" in result.stdout
+    assert relevant is expected_relevant, (
+        f"{changed!r}: relevant={relevant}, expected {expected_relevant}. "
+        "A root-level Go change judged irrelevant skips the gate entirely."
     )

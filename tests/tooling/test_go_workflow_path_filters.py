@@ -2,15 +2,24 @@
 
 WHY THIS TEST EXISTS
 --------------------
-`go-quality` is a REQUIRED check on main. `.github/workflows/go.yml` only runs
-when the change touches one of its `paths`; for everything else,
-`.github/workflows/go-quality-noop.yml` supplies a passing context so the
-required check is satisfied. Its step is named, accurately, "Vacuously satisfy
-the required go-quality check".
+`go-quality` is a REQUIRED check on main. It USED to be produced by two
+workflows: `.github/workflows/go.yml`, which ran only when the change touched
+one of its `paths`, and `.github/workflows/go-quality-noop.yml`, which supplied
+a passing context for everything else -- its step named, accurately, "Vacuously
+satisfy the required go-quality check". Both declared a job with the SAME id, so
+branch protection was satisfied by whichever ran, and a path missing from
+`go.yml`'s list did not produce a missing check -- it produced a GREEN one.
 
-Both workflows declare a job with the SAME id, `go-quality`. So branch
-protection is satisfied by whichever one ran, and a path that is missing from
-`go.yml`'s list does not produce a missing check -- it produces a GREEN one.
+CHAOS-4834 ended that: `go-quality.yml` is now the single producer, the no-op is
+deleted, and relevance is decided in-job by `ci/go_relevance.py` reading
+`go.yml`'s own list. The two assertions here that compared the two lists went
+with the second list they compared.
+
+**The fixture-coverage assertions below still apply, and are the reason this
+file survives.** They test `go.yml`'s `paths` -- which is still the list
+`go_relevance.py` reads, so a fixture missing from it still means a fixture-only
+change is judged irrelevant and the gate still skips. The producer changed; the
+list did not, and neither did the way it can fail.
 
 That bit the live-Python rot guards. Those guards exist to fire when a frozen
 fixture stops matching the interpreter, and the change that trips them is,
@@ -59,12 +68,6 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GO_WORKFLOW = REPO_ROOT / ".github/workflows/go.yml"
-NOOP_WORKFLOW = REPO_ROOT / ".github/workflows/go-quality-noop.yml"
-
-# The job id both workflows declare. If these ever stop matching, the no-op no
-# longer satisfies the required check and this whole class evaporates -- which
-# would be a behaviour change worth noticing, hence the assertion below.
-SHARED_JOB_ID = "go-quality"
 
 
 def _load(path: Path) -> dict:
@@ -155,49 +158,6 @@ def _fixture_paths_named_in_go_tests() -> set[str]:
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
-def test_go_workflow_and_noop_path_lists_are_exact_mirrors(event: str) -> None:
-    """The no-op must ignore exactly what the real workflow includes.
-
-    A path in `go.yml` but not in the no-op's ignore list makes BOTH run: two
-    `go-quality` contexts, wasteful but safe. A path in the ignore list but not
-    in `go.yml` makes NEITHER run. Nothing was checking either direction, and
-    the first had already drifted by three entries.
-    """
-    go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
-    noop_ignored = (_on_block(_load(NOOP_WORKFLOW)).get(event) or {}).get(
-        "paths-ignore"
-    ) or []
-
-    assert go_paths, f"go.yml has no {event} paths filter"
-    only_go = sorted(set(go_paths) - set(noop_ignored))
-    only_noop = sorted(set(noop_ignored) - set(go_paths))
-
-    assert not only_go and not only_noop, (
-        f"the {event} path lists have diverged.\n"
-        f"  in go.yml but not ignored by the no-op: {only_go}\n"
-        f"    -> BOTH workflows run; two go-quality contexts for one change\n"
-        f"  ignored by the no-op but not in go.yml: {only_noop}\n"
-        f"    -> NEITHER runs; the required check has no producer\n"
-        "Keep the two lists identical; they are mirrors by construction."
-    )
-
-
-def test_both_workflows_declare_the_shared_job_id() -> None:
-    """The no-op only satisfies the required check while the ids match.
-
-    If this fails, the vacuous-green mechanism is gone -- which may be an
-    improvement, but it changes what every other assertion here is protecting
-    against, so it should be noticed rather than silently inherited.
-    """
-    for path in (GO_WORKFLOW, NOOP_WORKFLOW):
-        jobs = _load(path).get("jobs") or {}
-        assert SHARED_JOB_ID in jobs, (
-            f"{path.name} no longer declares a job called {SHARED_JOB_ID!r}; "
-            "the no-op's ability to satisfy the required check depends on it"
-        )
-
-
-@pytest.mark.parametrize("event", ["push", "pull_request"])
 def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
     """A change to any fixture must run the workflow that guards fixtures.
 
@@ -255,10 +215,13 @@ def test_the_fixture_filter_is_a_glob_not_an_enumeration() -> None:
     written and fail for the next fixture added, which is precisely the failure
     mode this file exists to end.
     """
-    for path in (GO_WORKFLOW, NOOP_WORKFLOW):
+    # go.yml only. CHAOS-4834 deleted go-quality-noop.yml, so there is no second
+    # list to keep in the same shape -- the drift this guarded against is retired
+    # by construction rather than by assertion.
+    for path in (GO_WORKFLOW,):
         block = _on_block(_load(path))
         for event in ("push", "pull_request"):
-            key = "paths" if path is GO_WORKFLOW else "paths-ignore"
+            key = "paths"
             patterns = (block.get(event) or {}).get(key) or []
             fixture_patterns = [p for p in patterns if p.startswith("tests/fixtures/")]
             assert fixture_patterns == ["tests/fixtures/**"], (

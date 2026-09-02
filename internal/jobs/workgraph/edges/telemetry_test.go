@@ -86,3 +86,29 @@ func TestANilObserverIsRefused(t *testing.T) {
 		t.Fatal("a nil observer was accepted: that is how a cutover ships unwired")
 	}
 }
+
+// TestTheTallyNamesEveryOutcomeEvenAtZero. A derivation in which nothing was
+// malformed and nothing was skipped for an empty id must SAY so, rather than
+// omitting the keys. Absent and zero are different facts — "this never
+// happened" versus "this is not being counted" — and only the second is a
+// defect, so they must not look alike to a reader or a dashboard.
+func TestTheTallyNamesEveryOutcomeEvenAtZero(t *testing.T) {
+	document := loadGolden(t)
+	buildClock, err := parseGoldenInstant(document.FrozenNow)
+	if err != nil {
+		t.Fatalf("frozen_now: %v", err)
+	}
+	result, err := DeriveIssueIssueEdges(goldenDependencyRows(t, document), buildClock)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	for _, outcome := range allOutcomes() {
+		if _, named := result.Counts[outcome]; !named {
+			t.Errorf("outcome %q is absent from the tally rather than present at zero", outcome)
+		}
+	}
+	if len(result.Counts) != len(allOutcomes()) {
+		t.Errorf("tally has %d keys for %d outcomes", len(result.Counts), len(allOutcomes()))
+	}
+	t.Logf("full tally: %v", result.Counts)
+}

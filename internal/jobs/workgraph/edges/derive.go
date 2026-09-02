@@ -27,6 +27,14 @@ const (
 // than re-listing the constants and drifting. A Go switch over a string type
 // has no compiler exhaustiveness check, so without this a sixth outcome would
 // compile everywhere and simply be missing from the places that matter.
+func zeroedCounts() map[Outcome]int {
+	counts := make(map[Outcome]int, len(allOutcomes()))
+	for _, outcome := range allOutcomes() {
+		counts[outcome] = 0
+	}
+	return counts
+}
+
 func allOutcomes() []Outcome {
 	return []Outcome{
 		OutcomeEmitted, OutcomeDeduped, OutcomeSkippedEmptyID,
@@ -54,7 +62,13 @@ type DeriveResult struct {
 func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveResult, error) {
 	result := DeriveResult{
 		Outcomes: make([]Outcome, len(rows)),
-		Counts:   map[Outcome]int{},
+		// Every outcome is pre-registered at zero rather than appearing only
+		// when it first occurs. An absent key and a zero key are different
+		// facts -- "this never happened" versus "this is not being counted" --
+		// and only the second is a defect, so they must not look alike. It also
+		// makes the tally a total function over the vocabulary, which is what
+		// lets the telemetry assert it partitions the rows read.
+		Counts: zeroedCounts(),
 	}
 
 	// Insertion-ordered, last-write-wins — Python's

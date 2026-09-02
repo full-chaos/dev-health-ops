@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // ErrOrganizationScopeRequired is returned when an entry point is asked to run
@@ -57,11 +58,11 @@ var ErrOrganizationScopeRequired = errors.New(
 // is a run Python would have executed unscoped, and there is no correct
 // unscoped answer to disagree about.
 func RequireOrganizationScope(organizationID string) error {
-	// TrimSpace mirrors Python's `not (config.org_id or "").strip()` — a
-	// whitespace-only org is not a scope, and accepting one would reach the
-	// fetchers with a value that matches no rows rather than every row, which
-	// is a different wrong answer, not a right one.
-	if strings.TrimSpace(organizationID) == "" {
+	// pythonStrip, not strings.TrimSpace — see its doc comment. A whitespace-only
+	// org is not a scope, and accepting one would reach the fetchers with a value
+	// that matches no rows rather than every row: a different wrong answer, not a
+	// right one.
+	if pythonStrip(organizationID) == "" {
 		return fmt.Errorf(
 			"%w: refusing to run unscoped, which would read every tenant's "+
 				"work_graph_edges and fuse them into shared components (CHAOS-4804)",
@@ -69,4 +70,44 @@ func RequireOrganizationScope(organizationID string) error {
 		)
 	}
 	return nil
+}
+
+// pythonStrip removes exactly what Python's `str.strip()` removes.
+//
+// `strings.TrimSpace` is NOT equivalent, and the difference is small enough to
+// look like pedantry until it is measured. Go's `unicode.IsSpace` is a strict
+// SUBSET of Python's `str.isspace()`, missing exactly four code points:
+//
+//	0x1c FILE SEPARATOR, 0x1d GROUP SEPARATOR,
+//	0x1e RECORD SEPARATOR, 0x1f UNIT SEPARATOR
+//
+// (Computed, not recalled: every code point in 0..0x10FFFF was compared between
+// the two predicates; the delta is those four, in one direction only.)
+//
+// So `RequireOrganizationScope("\x1c")` accepted a scope Python rejects, which
+// is a rejection-parity break: Python raises before any fetch, Go proceeds to a
+// silent zero-row run. Found by codex round 2 on CHAOS-4441 PR2.
+//
+// # WHY THE NUMERIC HELPERS DELIBERATELY DO NOT USE THIS
+//
+// `parsePythonInt` (constants.go, PR1) and `confidenceFromString` (chquery) also
+// mirror a Python whitespace rule, and they correctly use plain `TrimSpace` --
+// because `int()` and `float()` do NOT accept the separator characters that
+// `str.strip()` removes:
+//
+//	int("\x1c150")   -> ValueError        float("\x1c1.5") -> ValueError
+//	" 150".strip()   -> "150"            int(" 150")     -> 150
+//
+// Python uses TWO different whitespace definitions and Go's `TrimSpace` happens
+// to match the numeric one. Unifying these helpers "for consistency" would
+// therefore BREAK the parsers while fixing nothing -- pinned by
+// TestNumericParsersRejectSeparatorsLikePythonNumerics.
+func pythonStrip(value string) string {
+	return strings.TrimFunc(value, func(r rune) bool {
+		// The four ASCII separators Python treats as whitespace and Go does not.
+		if r >= 0x1c && r <= 0x1f {
+			return true
+		}
+		return unicode.IsSpace(r)
+	})
 }

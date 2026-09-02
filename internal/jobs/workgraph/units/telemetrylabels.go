@@ -32,6 +32,38 @@ import (
 // Unicode rules, which is what CPython does -- CPython does not apply the
 // locale-specific Lithuanian or Turkish tailorings, and neither does Und.
 //
+// # A MEASURED, BOUNDED DIVERGENCE THAT IS CONTAINED RATHER THAN IGNORED
+//
+// x/text is not a complete substitute either. Its Final_Sigma lookahead is
+// BOUNDED where CPython's is not, and the boundary is exactly 31 case-ignorable
+// runes. Found by a codex round; reproduced here before being accepted:
+//
+//	("A\u03a3" + "." * n + "B").lower()      n <= 30      n >= 31
+//	  CPython 3.14.7                          sigma        sigma      (medial)
+//	  x/text cases.Lower(Und)                 sigma        FINAL      <- differs
+//
+// Final_Sigma says a capital sigma is final only when it is NOT followed by a
+// cased letter, skipping case-ignorable characters in between. With 31 dots and
+// then "B" the sigma is not final, and CPython sees that at any distance;
+// x/text's scan gives up and concludes "no following cased letter".
+//
+// This is NOT accepted on the grounds that a 31-dot model name is implausible.
+// Implausibility is not a measurement, and this lane has been wrong that way
+// before. It is accepted because it is CONTAINED, provably:
+//
+//   - both sigma spellings are non-ASCII;
+//   - every entry in every allow-list here is ASCII;
+//   - every prefix ModelBucket tests is ASCII.
+//
+// So a string differing only in which sigma it carries takes the same branch and
+// lands in the same bucket, whichever form appears.
+//
+// TestSigmaFormCannotChangeABucket asserts exactly that, and is the reason this
+// stays acceptable. It fails the moment the containment does -- if pythonLower
+// is exported, if a non-ASCII entry joins an allow-list, or if a non-ASCII
+// prefix is added. At that point this comment stops being a justification and
+// the Final_Sigma rule has to be implemented directly.
+//
 // A caser is not safe for concurrent use, so one is constructed per call rather
 // than shared. These are called once per telemetry emission, not in a loop over
 // rows; if that changes, use a sync.Pool rather than a package-level caser.

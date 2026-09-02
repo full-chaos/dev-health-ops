@@ -154,7 +154,24 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 		}
 		to = parsed
 	}
+	// The DEFAULT lower bound is arithmetic, and the arithmetic can leave the
+	// reference's range even when both endpoints of the parse were inside it.
+	//
+	// `to_date: "0001-01-01"` parses cleanly on both planes -- year 1 is valid --
+	// and then `to - 30 days` underflows below year 1, where CPython raises
+	// OverflowError("date value out of range"). Go's time.Time has no such bound
+	// and rolls silently into year zero, so Go RAN a build the bridge rejects.
+	//
+	// Checking only the parse was a check that looked complete: the parse is
+	// where a value enters, but the DERIVED bound is a second value the
+	// reference also range-checks, and nothing had tested it because every date
+	// in the corpus was 2026.
 	from := to.AddDate(0, 0, -30)
+	if _, rangeErr := withPythonYearRange("derived from_date", from); rangeErr != nil {
+		return issueprlinks.Window{}, fmt.Errorf(
+			"build scope to_date %s: the default 30-day lower bound falls outside the "+
+				"reference's 1..9999 year range, where it raises OverflowError", to.Format(time.RFC3339))
+	}
 	if text, present, err := scopeString(scope["from_date"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", err)
 	} else if present {
@@ -293,7 +310,7 @@ func parseScopeInstant(value string) (time.Time, error) {
 	// silently computing a different window than the reference would.
 	for _, layout := range noOffsetLayouts {
 		if parsed, err := time.ParseInLocation(layout, trimmed, time.UTC); err == nil {
-			return parsed, nil
+			return withPythonYearRange(trimmed, parsed)
 		}
 	}
 	// OFFSETS ARE SPLIT OFF, not enumerated as layouts.
@@ -314,6 +331,28 @@ func parseScopeInstant(value string) (time.Time, error) {
 	if !hasOffset {
 		return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
 	}
+	// The BODY is validated before the offset's magnitude is judged, and the
+	// order is load-bearing for the error, not just for the verdict.
+	//
+	// A date's own trailing "-DD" is a well-formed +-HH offset, so "2026-02-30"
+	// splits into body "2026-02" and offset "-30". Judging the magnitude first
+	// reported that as "carries a non-zero UTC offset" -- a true-sounding reason
+	// for a value that has no offset at all. Same verdict, wrong story, and the
+	// next reader chases the offset rule instead of the invalid day.
+	//
+	// dateTimeLayouts, NOT noOffsetLayouts: a bare date with an offset is not a
+	// thing the reference accepts.
+	var parsed time.Time
+	var bodyParsed bool
+	for _, layout := range dateTimeLayouts {
+		if candidate, err := time.ParseInLocation(layout, body, time.UTC); err == nil {
+			parsed, bodyParsed = candidate, true
+			break
+		}
+	}
+	if !bodyParsed {
+		return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
+	}
 	if offsetSeconds != 0 {
 		// The one real divergence in this family, and it is deliberate. Python's
 		// strftime keeps the wall-clock fields and DISCARDS the offset, so a
@@ -326,15 +365,29 @@ func parseScopeInstant(value string) (time.Time, error) {
 	}
 	// A ZERO offset ("Z", "+00:00", "+0000", "+00", "+00:00:00") is unambiguous:
 	// every spelling names the same instant the naive reading would give.
-	//
-	// dateTimeLayouts, NOT noOffsetLayouts: a bare date with an offset is not a
-	// thing the reference accepts.
-	for _, layout := range dateTimeLayouts {
-		if parsed, err := time.ParseInLocation(layout, body, time.UTC); err == nil {
-			return parsed, nil
-		}
+	return withPythonYearRange(trimmed, parsed)
+}
+
+// withPythonYearRange applies `datetime`'s own year bound to a parsed value.
+//
+// CPython raises "year must be in 1..9999, not 0" and Go's time.Parse does not:
+// the "2006" layout element happily reads "0000", so Go ACCEPTED
+// "0000-01-01T00:00:00+00:00" where the reference raises. That is the dangerous
+// direction -- the pre-step would derive mappings for a scope the bridge then
+// rejects -- and it is worse than an ordinary refusal downstream, because a
+// year-zero lower bound is not merely wrong but MEANINGLESS to ClickHouse,
+// which reads the Go driver's `0000-01-01 00:00:00` as `2026-01-01 00:00:00`
+// and returns thousands of rows for a window nobody asked for.
+//
+// Applied at every successful parse rather than at one of them: the value can
+// arrive through the plain layout path or through the zero-offset path, and a
+// check on only one of those is a check that looks complete.
+func withPythonYearRange(original string, parsed time.Time) (time.Time, error) {
+	if year := parsed.Year(); year < 1 || year > 9999 {
+		return time.Time{}, fmt.Errorf(
+			"%q has year %d; the reference requires 1..9999", original, year)
 	}
-	return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
+	return parsed, nil
 }
 
 // splitTrailingOffset separates an ISO 8601 UTC offset from the end of a value.

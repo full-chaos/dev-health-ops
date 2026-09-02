@@ -187,6 +187,55 @@ _MALFORMED_OFFSETS = [
 ]
 _MALFORMED_BODIES = ["2026-08-15T06:07:08", "20260815T060708"]
 
+# FIELD VALUE RANGES, the axis the grid did not have EITHER.
+#
+# The third time this exact lesson has been paid for on this branch. The grid
+# varies the SHAPE of a date-time exhaustively and holds its VALUES constant:
+# every cell is 2026-08-15, so nothing tests what happens at the edges of what
+# a year, month or day may be.
+#
+# A review round constructed "0000-01-01T00:00:00+00:00". CPython raises
+# "year must be in 1..9999, not 0"; Go's "2006" layout element reads "0000"
+# happily, so Go ACCEPTED it. That is the dangerous direction, and worse than a
+# normal one: a year-zero lower bound is not just wrong, it is meaningless to
+# ClickHouse, which reads the Go driver's "0000-01-01 00:00:00" as
+# "2026-01-01 00:00:00" and returns thousands of rows for a window nobody asked
+# for.
+#
+# Shape and value are independent axes. Crossing one exhaustively says nothing
+# about the other -- a cross-product only varies the axes it is given, which is
+# now written here for the third time because it keeps being the answer.
+_RANGE_VALUES = [
+    # Year bounds. CPython's range is 1..9999 inclusive.
+    "0000-01-01",
+    "0000-01-01T00:00:00",
+    "0000-01-01T00:00:00+00:00",
+    "00000101",
+    "0001-01-01",
+    "0001-01-01T00:00:00Z",
+    "9999-12-31",
+    "9999-12-31T23:59:59",
+    "9999-12-31T23:59:59.999999",
+    # Month and day bounds, where Go's time.Parse validates and CPython does
+    # too -- recorded so that agreement is asserted rather than assumed.
+    "2026-00-01",
+    "2026-13-01",
+    "2026-01-00",
+    "2026-01-32",
+    "2026-02-30",
+    "2026-02-29",  # 2026 is not a leap year
+    "2024-02-29",  # 2024 is
+    "2026-04-31",
+    # Time-of-day bounds. "24:00" is the one the reference rolls to the next
+    # day rather than rejecting, measured earlier on this lane.
+    "2026-08-15T24:00",
+    "2026-08-15T24:00:00",
+    "2026-08-15T23:59:60",
+    "2026-08-15T25:00:00",
+    "2026-08-15T00:60:00",
+    "2026-08-15T00:00:60",
+]
+
 
 def _datetime_grid() -> list[str]:
     """Every date x separator x time x offset combination, deduplicated."""
@@ -228,6 +277,7 @@ VALUES += [
     for offset in _MALFORMED_OFFSETS
     if body + offset not in VALUES
 ]
+VALUES += [value for value in _RANGE_VALUES if value not in VALUES]
 
 
 def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:

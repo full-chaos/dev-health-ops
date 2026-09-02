@@ -3142,6 +3142,231 @@
    }
   },
   {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "0000-01-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "0000-01-01T00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "0000-01-01T00:00:00+00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "00000101"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "OverflowError",
+   "scope": {
+    "to_date": "0001-01-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "OverflowError",
+   "scope": {
+    "to_date": "0001-01-01T00:00:00Z"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "9999-12-31"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "9999-12-01T00:00:00",
+    "repo_id": null,
+    "to": "9999-12-31T00:00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "9999-12-31T23:59:59"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "9999-12-01T23:59:59",
+    "repo_id": null,
+    "to": "9999-12-31T23:59:59"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "9999-12-31T23:59:59.999999"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "9999-12-01T23:59:59.999999",
+    "repo_id": null,
+    "to": "9999-12-31T23:59:59.999999"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-00-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-13-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-01-00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-01-32"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-02-30"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-02-29"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2024-02-29"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2024-01-30T00:00:00",
+    "repo_id": null,
+    "to": "2024-02-29T00:00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-04-31"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-17T00:00:00",
+    "repo_id": null,
+    "to": "2026-08-16T00:00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "scope": {
+    "to_date": "2026-08-15T24:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-07-17T00:00:00",
+    "repo_id": null,
+    "to": "2026-08-16T00:00:00"
+   }
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T23:59:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T25:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T00:60:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:to_date",
+   "error": "ValueError",
+   "scope": {
+    "to_date": "2026-08-15T00:00:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
    "case": "field:from_date",
    "scope": {
     "from_date": null
@@ -6210,6 +6435,237 @@
    }
   },
   {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "0000-01-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "0000-01-01T00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "0000-01-01T00:00:00+00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "00000101"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "0001-01-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "0001-01-01T00:00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "0001-01-01T00:00:00Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "0001-01-01T00:00:00+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "9999-12-31"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "9999-12-31T00:00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "9999-12-31T23:59:59"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "9999-12-31T23:59:59",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "9999-12-31T23:59:59.999999"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "9999-12-31T23:59:59.999999",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-00-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-13-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-01-00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-01-32"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-02-30"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-02-29"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2024-02-29"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2024-02-29T00:00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-04-31"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-16T00:00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "scope": {
+    "from_date": "2026-08-15T24:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-16T00:00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T23:59:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T25:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T00:60:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:from_date",
+   "error": "ValueError",
+   "scope": {
+    "from_date": "2026-08-15T00:00:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
    "case": "field:repo_id",
    "scope": {
     "repo_id": null
@@ -8640,6 +9096,213 @@
    "error": "ValueError",
    "scope": {
     "repo_id": "20260815T060708+00:59:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "0000-01-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "0000-01-01T00:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "0000-01-01T00:00:00+00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "00000101"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "0001-01-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "0001-01-01T00:00:00Z"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "9999-12-31"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "9999-12-31T23:59:59"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "9999-12-31T23:59:59.999999"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-00-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-13-01"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-01-00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-01-32"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-02-30"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-02-29"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2024-02-29"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-04-31"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T24:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T24:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T23:59:60"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T25:00:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T00:60:00"
+   },
+   "stage": "window",
+   "verdict": "RAISES"
+  },
+  {
+   "case": "field:repo_id",
+   "error": "ValueError",
+   "scope": {
+    "repo_id": "2026-08-15T00:00:60"
    },
    "stage": "window",
    "verdict": "RAISES"
@@ -12124,6 +12787,282 @@
    }
   },
   {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "0000-01-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "0000-01-01T00:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "0000-01-01T00:00:00+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "00000101"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "0001-01-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "0001-01-01T00:00:00Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "9999-12-31"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "9999-12-31T23:59:59"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "9999-12-31T23:59:59.999999"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-00-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-13-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-01-00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-01-32"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-02-30"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-02-29"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2024-02-29"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-04-31"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T24:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T23:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T25:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T00:60:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_window",
+   "scope": {
+    "heuristic_window": "2026-08-15T00:00:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
    "case": "field:heuristic_confidence",
    "scope": {
     "heuristic_confidence": null
@@ -15321,6 +16260,282 @@
    "case": "field:heuristic_confidence",
    "scope": {
     "heuristic_confidence": "20260815T060708+00:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "0000-01-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "0000-01-01T00:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "0000-01-01T00:00:00+00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "00000101"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "0001-01-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "0001-01-01T00:00:00Z"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "9999-12-31"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "9999-12-31T23:59:59"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "9999-12-31T23:59:59.999999"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-00-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-13-01"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-01-00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-01-32"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-02-30"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-02-29"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2024-02-29"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-04-31"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T24:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T24:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T23:59:60"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T25:00:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T00:60:00"
+   },
+   "verdict": "RUNS",
+   "window": {
+    "from": "2026-08-02T12:30:45.500000+00:00",
+    "repo_id": null,
+    "to": "2026-09-01T12:30:45.500000+00:00"
+   }
+  },
+  {
+   "case": "field:heuristic_confidence",
+   "scope": {
+    "heuristic_confidence": "2026-08-15T00:00:60"
    },
    "verdict": "RUNS",
    "window": {

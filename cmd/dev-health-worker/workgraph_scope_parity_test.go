@@ -129,6 +129,17 @@ var divergenceClasses = []divergenceClass{
 		},
 	},
 	{
+		name: "hour-24 midnight rollover",
+		reason: "`fromisoformat` accepts an hour of 24 and ROLLS IT to 00:00 the next day: " +
+			"\"2026-08-15T24:00\" is 2026-08-16T00:00:00 there. Go's time.Parse rejects hour 24 " +
+			"outright. Fail-closed, and unreachable -- nothing writes a build scope with dates -- " +
+			"but note the reference's behaviour is a SILENT DAY SHIFT rather than an error, so " +
+			"matching it would mean reproducing a rollover no producer intends.",
+		matches: func(value string) bool {
+			return hour24.MatchString(value)
+		},
+	},
+	{
 		name: "bare date carrying an offset",
 		reason: "the reference does NOT read this as a date with an offset. It reads the sign as " +
 			"the date/time separator and the rest as a WALL-CLOCK TIME: " +
@@ -146,7 +157,11 @@ var (
 	trailingOffset = regexp.MustCompile(`(Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?)$`)
 	separatorRun   = regexp.MustCompile(`\d[t_]\d`)
 	bareDate       = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}$`)
-	dateTimeBody   = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}[Tt _]\d{2}:?\d{2}(:?\d{2}(\.\d+)?)?$`)
+	// Hour 24 only: "T24:00" and "T24:00:00", not an offset of +24:00 (which is
+	// a different class, already covered by non-zero offset) and not hour 4 of
+	// some longer number.
+	hour24       = regexp.MustCompile(`[Tt _]24:?[0-5]\d(:?[0-5]\d)?(\.\d+)?$`)
+	dateTimeBody = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}[Tt _]\d{2}:?\d{2}(:?\d{2}(\.\d+)?)?$`)
 )
 
 // trailingOffsetText returns the offset spelling at the end of a value, or "".

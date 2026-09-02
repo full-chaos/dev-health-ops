@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -355,6 +356,69 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 	}
 	if batch.Watermark != nil {
 		t.Fatalf("a genuine dev-status fetch failure must withhold the watermark: batch=%+v", batch)
+	}
+}
+
+// TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget is the
+// red-first regression oracle for codex round 4's P3 finding: the previous
+// multi-issue test covered only all-transient-503 exhaustion, so it would
+// still pass even if a future regression stopped debiting the shared budget
+// for the clean 400/404 no-op path specifically. Budget 2: issue A returns a
+// clean 404 no-op (1 wire call, must still debit), issue B then has only 1
+// of the budget left and gets a 503 -- if the no-op wrongly didn't debit,
+// issue B would instead see its full undebited share and this test's wire
+// counts would diverge from the asserted 1-and-1 split.
+func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.T) {
+	var devStatusIssueIDs []string
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Path == "/rest/api/3/search/jql":
+			body := `{"issues":[` +
+				`{"id":"20001","key":"OPS-401","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-401","fields":{"project":{"key":"OPS"},"summary":"First","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}},` +
+				`{"id":"20002","key":"OPS-402","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-402","fields":{"project":{"key":"OPS"},"summary":"Second","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}` +
+				`],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/") && strings.HasSuffix(request.URL.Path, "/changelog"):
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"values":[],"total":0,"isLast":true}`)), Request: request}, nil
+		case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
+			issueID := request.URL.Query().Get("issueId")
+			devStatusIssueIDs = append(devStatusIssueIDs, issueID)
+			if issueID == "20001" {
+				// The clean no-op: not retryable, exactly one wire call.
+				return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["not found"]}`)), Request: request}, nil
+			}
+			// Transient: retryable, but only 1 of the shared budget of 2
+			// should remain after OPS-401's single no-op call.
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	claim := nativeTestClaim("jira", "work-items")
+	claim.SourceExternalID = "OPS"
+	claim.DatasetOptions = map[string]any{
+		"fetch_dev_status": true, "dev_status_max_requests": 2,
+	}
+	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"20001", "20002"}
+	if !reflect.DeepEqual(devStatusIssueIDs, want) {
+		t.Fatalf("dev-status issue sequence=%v want=%v (the 404 no-op must debit the shared budget; "+
+			"if it didn't, OPS-402 would retry its full undebited share and this sequence would diverge)",
+			devStatusIssueIDs, want)
+	}
+	if got := batch.Result["dev_status_unavailable_count"]; got != 1 {
+		t.Fatalf("result=%v", batch.Result)
+	}
+	if got := batch.Result["dev_status_cap_skipped"]; got != 0 {
+		t.Fatalf("result=%v (both issues got exactly their share, neither was skipped outright)", batch.Result)
 	}
 }
 

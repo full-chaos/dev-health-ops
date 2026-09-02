@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -476,6 +477,21 @@ func writeFileMetricsDaily(
 		return 0, fmt.Errorf("prepare file_metrics_daily batch: %w", err)
 	}
 	for _, row := range rows {
+		// file_metrics_daily.churn is UInt32 in production (migration
+		// 001_metrics_v2.sql) -- unlike file_hotspot_daily.churn_loc_30d
+		// (UInt64, see writeFileHotspotDaily), there is no wider column to
+		// cast to here: the schema genuinely cannot hold a churn total
+		// >= 2^32 for one file. Python's own insert would raise a DataError
+		// encoding such a value (clickhouse_connect refuses to narrow it),
+		// so failing loudly here -- rather than letting a bare uint32(...)
+		// conversion silently wrap the value to something wrong -- is the
+		// FIDELITY-CORRECT behavior: Refused (falls back to the Python
+		// bridge, which fails the same way) beats silently persisting 0
+		// (codex round 6, P2).
+		if row.Metric.Churn < 0 || row.Metric.Churn > math.MaxUint32 {
+			return 0, fmt.Errorf("%w: file_metrics_daily.churn %d for repo %s path %q exceeds UInt32 range",
+				ErrInvalidState, row.Metric.Churn, row.RepoID, row.Metric.Path)
+		}
 		if err := batch.Append(
 			row.RepoID, row.Day, row.Metric.Path, uint32(row.Metric.Churn),
 			uint32(row.Metric.Contributors), uint32(row.Metric.CommitsCount),

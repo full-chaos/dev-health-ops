@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -60,5 +61,50 @@ func TestWriteFileHotspotDailyDoesNotWrapChurnLOC30d(t *testing.T) {
 		wrapped := uint32(uint64(overflowingChurn))
 		t.Fatalf("churn_loc_30d = %d, want %d (a uint32 cast would silently wrap this to %d)",
 			got, overflowingChurn, wrapped)
+	}
+}
+
+// TestWriteFileMetricsDailyRejectsChurnOverflowInsteadOfWrapping is codex
+// round 6's finding (P2): file_metrics_daily.churn IS UInt32 in production
+// (migration 001_metrics_v2.sql), unlike churn_loc_30d above -- there is no
+// wider column to cast to. Python's own insert would raise a DataError
+// encoding a churn total >= 2^32 (clickhouse_connect refuses to narrow it
+// silently); a bare uint32(...) conversion on the Go side would instead
+// silently persist a wrapped (wrong) value with no error at all. Failing
+// loudly here -- the family goes Refused and falls back to the Python
+// bridge, which fails the same way -- is the fidelity-correct behavior:
+// silent corruption is strictly worse than a visible, already-expected
+// failure mode.
+func TestWriteFileMetricsDailyRejectsChurnOverflowInsteadOfWrapping(t *testing.T) {
+	overflowingChurn := int(1<<32 + 12345) // exceeds MaxUint32 (4294967295)
+
+	batch := &recordingBatch{}
+	conn := &recordingBatchConn{batch: batch}
+	rows := []fileMetricsDailyRow{
+		{
+			RepoID: uuid.New(),
+			Day:    time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+			Metric: filehotspots.FileMetric{
+				Path:         "huge.py",
+				Churn:        overflowingChurn,
+				Contributors: 1,
+				CommitsCount: 1,
+			},
+			ComputedAt: time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	written, err := writeFileMetricsDaily(context.Background(), conn, "org-1", rows)
+	if err == nil {
+		t.Fatalf("expected an error for a churn total exceeding UInt32 range, got written=%d, appended=%v", written, batch.appended)
+	}
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("error = %v, want it to wrap ErrInvalidState", err)
+	}
+	if len(batch.appended) != 0 {
+		t.Fatalf("appended %d rows before failing, want 0 (no partial/corrupt write)", len(batch.appended))
+	}
+	if batch.sent {
+		t.Fatal("batch.Send must never be called after a rejected row")
 	}
 }

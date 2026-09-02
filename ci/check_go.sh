@@ -781,7 +781,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestEveryRuneMatchesLivePythonCharacterClasses)$' \
+        -run '^(TestEveryRuneMatchesLivePythonCharacterClasses|TestPythonDigitValueMatchesLivePythonForEveryDigit)$' \
         ./internal/jobs/workgraph/textrefs
   ); then
     rm -rf -- "${proof_dir}"

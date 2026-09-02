@@ -397,7 +397,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestTestopsRiskComputeMatchesLivePythonProduction$' \
+        -run '^(TestTestopsRiskComputeMatchesLivePythonProduction|TestPipelineStabilityFMAGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily
   ); then
     rm -rf -- "${proof_dir}"
@@ -406,6 +406,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/testops-risk-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: testops_risk live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY from testops-risk-golden above (same reasoning as the
+  # numerical package's sibling goldens): a single proof marker would be
+  # satisfied by whichever guard happened to run, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed.
+  proof_file="${proof_dir}/pipeline-stability-fma-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pipeline-stability FMA golden (CHAOS-4818 site 10) rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -445,7 +455,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestTeamWellbeingGoldenMatchesLivePython)$' \
+        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestTeamWellbeingGoldenMatchesLivePython|TestFMAGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/numerical
   ); then
     rm -rf -- "${proof_dir}"
@@ -474,6 +484,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/daily-wellbeing-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: team_wellbeing golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Same reasoning again: the CHAOS-4818 FMA golden (release_impact
+  # ._compute_confidence, compute._percentile, compute_capacity._percentile,
+  # hotspots.compute_file_hotspots) is a fourth distinct golden/producer in
+  # this same package and gets its own proof marker.
+  proof_file="${proof_dir}/fma-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: FMA golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

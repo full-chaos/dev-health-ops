@@ -272,11 +272,27 @@ func IntegerPercentiles(values []int, percentiles []float64) []int {
 		case percentile >= 100:
 			result = append(result, sorted[len(sorted)-1])
 		default:
-			rank := float64(len(sorted)-1) * percentile / 100
+			// Division before multiplication, matching compute_capacity._percentile's
+			// `(n - 1) * (p / 100.0)` exactly -- `A*B/100` (left-to-right: multiply
+			// first) is a DIFFERENT expression than Python's `A*(B/100.0)` and can
+			// diverge even with no FMA involved.
+			//
+			// float64(...) around `rank` and each product is load-bearing
+			// (CHAOS-4818). Two distinct exposures, not one: (1) the ordinary
+			// `x*y + z` shape below can fuse into one rounding on arm64 where
+			// CPython rounds the multiply and the add separately; (2) less
+			// obviously, `rank` itself can get FUSED WITH THE NEXT STATEMENT'S
+			// SUBTRACTION even though they are two source statements -- the Go
+			// spec permits fusion "across statements", and a nearby function
+			// call (here, the loop body's own `append`) can push the compiler to
+			// rematerialize `rank` instead of reusing the already-rounded value,
+			// fusing that recomputation with `rank - float64(low)` into one
+			// FNMSUBD (measured on deployPercentile, deploy.go, same package).
+			rank := float64(float64(len(sorted)-1) * (percentile / 100))
 			low := int(rank)
 			high := min(low+1, len(sorted)-1)
 			fraction := rank - float64(low)
-			value := float64(sorted[low])*(1-fraction) + float64(sorted[high])*fraction
+			value := float64(float64(sorted[low])*(1-fraction)) + float64(float64(sorted[high])*fraction)
 			result = append(result, int(value))
 		}
 	}
@@ -318,6 +334,15 @@ func ReleaseImpactConfidence(coverageRatio float64, totalSessions, concurrentDep
 		sampleScore = math.Min(float64(totalSessions)/float64(minimumSessions), 1)
 	}
 	confoundScore := 1 / (1 + float64(concurrentDeploys))
-	score := 0.35*coverageRatio + 0.35*sampleScore + 0.30*confoundScore
+	// float64(...) around each product is load-bearing (CHAOS-4818): the Go
+	// spec permits fusing `x*y + z` into a single fused-multiply-add, which
+	// rounds once where CPython's `_compute_confidence` rounds each `w*v`
+	// and each `+` separately. arm64 fuses this expression, amd64 typically
+	// does not -- so the unguarded form is correct in CI and wrong on the
+	// arm64 prod Go workers on 12.5% of swept inputs (measured, see
+	// parity_fma_golden_test.go). An explicit conversion, even to the
+	// already-float64 product's own type, forces that rounding and is
+	// documented by the Go spec as preventing fusion.
+	score := float64(0.35*coverageRatio) + float64(0.35*sampleScore) + float64(0.30*confoundScore)
 	return math.Max(0, math.Min(1, score))
 }

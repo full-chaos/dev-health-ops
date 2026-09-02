@@ -69,14 +69,22 @@ func percentile(values []float64, pct float64) float64 {
 	if len(sorted) == 1 {
 		return sorted[0]
 	}
-	rank := float64(len(sorted)-1) * (pct / 100.0)
+	// float64(...) on rank is load-bearing (CHAOS-4818): sort.Float64s above
+	// can push the compiler to rematerialize rank after the call instead of
+	// reusing the already-rounded value, fusing that recomputation with the
+	// next statement's subtraction (frac := rank - float64(lo)) into one
+	// FNMSUBD on arm64 -- fusion "across statements", not just within one.
+	rank := float64(float64(len(sorted)-1) * (pct / 100.0))
 	lo := int(rank)
 	hi := lo + 1
 	if hi > len(sorted)-1 {
 		hi = len(sorted) - 1
 	}
 	frac := rank - float64(lo)
-	return sorted[lo]*(1-frac) + sorted[hi]*frac
+	// float64(...) around each product prevents Go from fusing this into one
+	// FMA on arm64, which would round differently than CPython's
+	// compute_work_items._percentile (CHAOS-4818).
+	return float64(sorted[lo]*(1-frac)) + float64(sorted[hi]*frac)
 }
 
 func minFloat(values []float64) float64 {

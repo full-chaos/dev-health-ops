@@ -162,9 +162,14 @@ func ComputeFileHotspots(repoID uuid.UUID, windowStats []repouser.CommitStatRow)
 		churn := agg.churn
 		contributors := len(agg.authors)
 		commitsCount := len(agg.commits)
-		score := hotspotAlpha*math.Log1p(float64(churn)) +
-			hotspotBeta*float64(contributors) +
-			hotspotGamma*float64(commitsCount)
+		// float64(...) around each product is load-bearing (CHAOS-4818): Go
+		// may otherwise fuse a weighted-sum term's multiply into the
+		// following add on arm64, rounding once where CPython's
+		// hotspot_score = (alpha*log1p(churn)) + (beta*contributors) +
+		// (gamma*commits_count) rounds each term and each `+` separately.
+		score := float64(hotspotAlpha*math.Log1p(float64(churn))) +
+			float64(hotspotBeta*float64(contributors)) +
+			float64(hotspotGamma*float64(commitsCount))
 		records = append(records, FileMetric{
 			Path: path, Churn: churn, Contributors: contributors,
 			CommitsCount: commitsCount, HotspotScore: score,

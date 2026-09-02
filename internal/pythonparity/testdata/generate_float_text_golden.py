@@ -113,7 +113,37 @@ _NDIGITS = (
 # (measured). The huge accepted values are covered for NON-FINITE values only,
 # where the output is 3 characters -- format(1.0, ".2147483647f") would build a
 # two-gigabyte string, so a corpus cannot hold it and this file must not try.
-_PRECISIONS = list(range(0, 21)) + [30, 50, 100, -1, -2, -3, -10]
+_PRECISIONS = (
+    list(range(0, 21))
+    + [21, 25, 30, 40, 50, 75, 100, 101, 120]
+    + [
+        -1,
+        -2,
+        -3,
+        -10,
+    ]
+)
+
+#: The FINITE tail, bounded by measurement rather than by taste.
+#:
+#: Round 4 found a mutant clamping finite precision > 100 that passed, because
+#: the axis above was exhaustive to 20 and then hand-picked (30, 50, 100) --
+#: half a sweep. The tail was still a list of the values I thought mattered,
+#: which is the same defect the previous three rounds found in three other
+#: places.
+#:
+#: There is a real bound: the smallest subnormal is 2**-1074, whose exact
+#: decimal expansion ends at fractional place 1074, so for EVERY float64
+#: format(x, ".Nf") with N > 1074 only appends zeros (measured). 1074 is to
+#: format() what 323 is to round(): the last place where the answer can still
+#: carry information.
+#:
+#: These are applied to a value subset rather than the whole corpus purely for
+#: size -- a 1100-place string is ~1.1 kB per case. That costs nothing in
+#: coverage for this defect class: a clamp changes the STRING LENGTH, so any
+#: value detects it; the subset is about robustness against a clamp that is
+#: conditional on the value, not about whether a pure clamp is caught at all.
+_TAIL_PRECISIONS = [150, 250, 500, 1000, 1073, 1074, 1075, 1100]
 
 #: Precisions covered only for non-finite values (cheap output) plus the
 #: refusal boundary, which raises for every value including the specials --
@@ -178,8 +208,29 @@ def main() -> None:
 
     formats = []
     non_finite = [float("nan"), float("inf"), float("-inf")]
+    # Spans magnitude, sign, both subnormal extremes and the integral boundary,
+    # so a value-conditional clamp in the tail has somewhere to show up.
+    tail_values = [
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.1,
+        2.675,
+        5e-324,
+        1e-323,
+        2.2250738585072014e-308,
+        1.7976931348623157e308,
+        9007199254740992.0,
+        123456789.123456789,
+    ]
     for value in values:
         precisions = list(_PRECISIONS) + _REFUSED_PRECISIONS
+        if any(
+            math.isnan(value) if math.isnan(candidate) else value == candidate
+            for candidate in tail_values
+        ):
+            precisions += _TAIL_PRECISIONS
         # The huge ACCEPTED precisions are only tractable for the non-finite
         # values, whose output ignores the precision entirely.
         if any(

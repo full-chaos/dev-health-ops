@@ -45,12 +45,28 @@ const dependencyReadSQL = `
 
 // ReadDependencies loads every dependency row for an organization.
 //
-// The caller must have passed RequireOrganizationScope already; this does not
-// re-check, because a reader that refuses would diverge from Python's permissive
-// reader and the guard belongs at the entry point (see scope handling).
+// # WHAT AN UNSCOPED RUN DOES IN PYTHON
+//
+// `_build_issue_issue_edges` appends the org clause only when it is non-empty
+// (builder.py:847-849) and has NO guard of its own, so an unscoped Python run
+// issues `SELECT ... FROM work_item_dependencies` with no WHERE at all and
+// reads every tenant's dependency graph. The rows then flow through derivation
+// into `_edge_to_record`, which stamps `org_id=self.config.org_id`
+// unconditionally -- so a cross-tenant read becomes a write of every tenant's
+// edges under one empty org id, and those rows are untargetable by any later
+// scoped delete.
+//
+// This port refuses instead, at both database entry points, before any
+// statement is issued. That is a DELIBERATE divergence from Python and it makes
+// gates 14, 15, 21, 23, 29 and 32 of the audit unreachable rather than
+// replicated: every one of them is a distinct behaviour Python exhibits only
+// when org_id is empty.
 func ReadDependencies(
 	ctx context.Context, conn driver.Conn, organizationID string,
 ) ([]DependencyRow, error) {
+	if err := requireEdgeScope(organizationID); err != nil {
+		return nil, err
+	}
 	rows, err := conn.Query(ctx, dependencyReadSQL, clickhouse.Named("org_id", organizationID))
 	if err != nil {
 		return nil, fmt.Errorf("read work_item_dependencies: %w", err)
@@ -97,7 +113,16 @@ func ReadDependencies(
 // than left to its DEFAULT: an explicit INSERT names every column, so the
 // invariant `day = toDate(event_ts)` is ours to hold. PR1 asserts it across the
 // whole golden.
-func WriteEdges(ctx context.Context, conn driver.Conn, rows []Row) (int, error) {
+// The organization id is stamped here rather than carried on the row, because
+// the scope is a property of the RUN and the deriver is pure -- it has no
+// business knowing which tenant it is deriving for.
+func WriteEdges(ctx context.Context, conn driver.Conn, organizationID string, rows []Row) (int, error) {
+	// Before the length check, not after: a zero-row write under a bad scope is
+	// still a bad scope, and letting it return success would mean the guard's
+	// coverage depended on how many edges happened to be derived.
+	if err := requireEdgeScope(organizationID); err != nil {
+		return 0, err
+	}
 	if len(rows) == 0 {
 		// Python's `if not edges: return 0` (builder.py:222-223). A batch-level
 		// no-op, not a per-row outcome — the caller's outcome tally already says
@@ -121,7 +146,7 @@ func WriteEdges(ctx context.Context, conn driver.Conn, rows []Row) (int, error) 
 		if err := batch.Append(
 			row.EdgeID, row.SourceType, row.SourceID, row.TargetType, row.TargetID,
 			row.EdgeType, row.Provenance, row.Confidence, row.Evidence,
-			row.DiscoveredAt, row.LastSynced, row.EventTs, row.Day, row.OrgID,
+			row.DiscoveredAt, row.LastSynced, row.EventTs, row.Day, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append edge %s: %w", row.EdgeID, err)
 		}

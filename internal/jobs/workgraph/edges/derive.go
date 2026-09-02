@@ -136,7 +136,7 @@ func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveRe
 			LastSynced:   buildClock,
 			EventTs:      eventTs,
 			Day:          DayFor(eventTs),
-			OrgID:        "", // stamped by the writer, which knows the scope
+			OrgID:        "", // never used: WriteEdges stamps the run's scope. See scope.go.
 		}
 		if err := ValidateConfidence(edge.Confidence); err != nil {
 			return DeriveResult{}, fmt.Errorf("row %d: %w", index, err)

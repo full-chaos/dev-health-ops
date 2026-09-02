@@ -12,7 +12,10 @@ import tomllib
 import yaml
 
 ROOT = Path(__file__).parents[1]
-WORKFLOW = ROOT / ".github" / "workflows" / "go.yml"
+# CHAOS-4834 moved the `go-quality` job out of go.yml into its own always-run
+# workflow, so this reads go-quality.yml. The assertion is unchanged: the live
+# oracle install must still precede the quality gate in that job's steps.
+WORKFLOW = ROOT / ".github" / "workflows" / "go-quality.yml"
 REQUIREMENTS = ROOT / "ci" / "requirements-live-python-oracles.txt"
 LOCKFILE = ROOT / "uv.lock"
 

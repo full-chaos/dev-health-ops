@@ -682,7 +682,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestWorkgraphIssueEdgesGoldenMatchesLivePython$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -695,6 +695,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-issue-edges-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, per the capacity-forecast reasoning: this guard derives
+  # a Unicode property table from the live interpreter, a different producer from
+  # the edge golden above it, and it is the only thing standing between a Python
+  # upgrade and a silent parity break in which pipeline owns a dependency row.
+  proof_file="${proof_dir}/workgraph-numeric-digit-table"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the Numeric_Type=Digit table was not re-derived from live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

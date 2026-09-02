@@ -54,12 +54,23 @@ import (
 // short cooldown loses no real signal.
 const repoJoinDedupCollisionCooldown = 5 * time.Minute
 
-// repoJoinDedupCollisionLastChecked tracks, per org, the last time the
-// check query actually ran -- a plain mutex-guarded map rather than
+// repoJoinDedupCollisionErrorCooldown replaces a just-claimed FULL cooldown
+// when the check itself fails (query error, mid-stream failure, or a scan
+// error) -- codex round 4 (P3, CONFIRMED), mirroring the sibling CHAOS-4759
+// guard's identical fix (argMaxNullTransitionErrorCooldown): claiming the
+// full 5-minute cooldown BEFORE running the query means a transient
+// ClickHouse error (a blip, a deploy-time restart) would otherwise silence
+// this check for the full window with nothing but an invisible debug log to
+// show for it. A short error cooldown lets the NEXT request retry soon
+// while still bounding retry storms during a sustained outage.
+const repoJoinDedupCollisionErrorCooldown = 1 * time.Minute
+
+// repoJoinDedupCollisionLastChecked tracks, per org, the next time the
+// check query is allowed to run -- a plain mutex-guarded map rather than
 // sync.Map: the value is a fixed-size comparable (time.Time), there is no
 // high-cardinality churn (bounded by live org count), and a mutex keeps the
-// read-then-maybe-write racy-but-harmless (worst case: two requests in the
-// same instant both run the check once each -- never more).
+// claim-then-maybe-shorten sequence race-free (see
+// repoJoinDedupCollisionShorten's doc comment).
 var (
 	repoJoinDedupCollisionMu          sync.Mutex
 	repoJoinDedupCollisionLastChecked = map[string]time.Time{}
@@ -69,18 +80,30 @@ var (
 )
 
 // repoJoinDedupCollisionShouldCheck reports whether orgID is due for
-// another check, and if so marks it as checked NOW (single map access
+// another check, and if so claims the FULL cooldown NOW (single map access
 // under the lock, so two concurrent callers cannot both pass the gate for
-// the same org at the same instant).
+// the same org at the same instant). A failed check shortens this claim via
+// repoJoinDedupCollisionShorten below.
 func repoJoinDedupCollisionShouldCheck(orgID string) bool {
 	repoJoinDedupCollisionMu.Lock()
 	defer repoJoinDedupCollisionMu.Unlock()
 	now := repoJoinDedupCollisionNow()
-	if last, ok := repoJoinDedupCollisionLastChecked[orgID]; ok && now.Sub(last) < repoJoinDedupCollisionCooldown {
+	if next, ok := repoJoinDedupCollisionLastChecked[orgID]; ok && now.Before(next) {
 		return false
 	}
-	repoJoinDedupCollisionLastChecked[orgID] = now
+	repoJoinDedupCollisionLastChecked[orgID] = now.Add(repoJoinDedupCollisionCooldown)
 	return true
+}
+
+// repoJoinDedupCollisionShorten replaces a just-claimed FULL cooldown with
+// the SHORT error cooldown. Unconditional: this is only ever called
+// immediately after this same goroutine's own repoJoinDedupCollisionShouldCheck
+// succeeded for orgID, so there is no other claimant's window to
+// accidentally shorten.
+func repoJoinDedupCollisionShorten(orgID string) {
+	repoJoinDedupCollisionMu.Lock()
+	defer repoJoinDedupCollisionMu.Unlock()
+	repoJoinDedupCollisionLastChecked[orgID] = repoJoinDedupCollisionNow().Add(repoJoinDedupCollisionErrorCooldown)
 }
 
 // repoJoinDedupCollisionsCounter counts CHECK INVOCATIONS that found at
@@ -130,11 +153,35 @@ func defaultRecordInvestmentRepoJoinDedupCollisions(ctx context.Context, orgID s
 		"org_id", orgID, "excess_repo_ids", excessRepoIDs)
 }
 
+// repoJoinDedupCollisionFetchFailedCounter counts check failures -- codex
+// round 4 (P3, CONFIRMED), mirroring the sibling CHAOS-4759 guard's
+// identical fix (argMaxNullTransitionFetchFailedCounter): a debug-only log
+// line is invisible at this platform's default INFO level
+// (DEV_HEALTH_LOG_LEVEL), so a persistently broken check -- a permissions
+// change, a network partition -- could silently stop observing this org's
+// repos-duplicate state forever, with zero operator-visible signal AND (see
+// repoJoinDedupCollisionErrorCooldown) only a short, bounded retry window
+// rather than the full 5-minute cooldown silently swallowing the outage.
+var repoJoinDedupCollisionFetchFailedCounter = mustAnalyticsCounter(
+	"devhealth_query_api_investment_repo_join_dedup_collision_check_failed_total",
+	"repo-join dedup-collision checks that errored before a collision could even be checked -- a sustained non-zero rate means this org's repos-duplicate state is not being observed at all",
+)
+
+// recordRepoJoinDedupCollisionFetchFailure is a package var for the same
+// injectability reason as recordInvestmentRepoJoinDedupCollisions.
+var recordRepoJoinDedupCollisionFetchFailure = defaultRecordRepoJoinDedupCollisionFetchFailure
+
+func defaultRecordRepoJoinDedupCollisionFetchFailure(ctx context.Context, orgID string, err error) {
+	repoJoinDedupCollisionFetchFailedCounter.Add(ctx, 1)
+	slog.WarnContext(ctx, "investment repo join dedup-collision check failed; this org's repos-duplicate state is NOT being observed",
+		"org_id", orgID, "error", err)
+}
+
 // RecordInvestmentRepoJoinDedupCollisions runs the cheap check above and
-// reports only when it finds at least one colliding repo id. A check error
-// is swallowed to a debug log, matching every sibling telemetry hook in this
-// package (FetchInvestmentMembershipScopeState's caller,
-// RecordStaleInvestmentMembershipScope): an observability query must never
+// reports only when it finds at least one colliding repo id. Every failure
+// path shortens the org's cooldown (repoJoinDedupCollisionShorten) and
+// reports through recordRepoJoinDedupCollisionFetchFailure (counter + warn
+// log) -- it is never propagated, since an observability query must never
 // be able to break or slow the real resolver path it decorates.
 //
 // CALLED FROM resolveSankey, resolveOneTimeseries, resolveOneBreakdown and
@@ -154,7 +201,8 @@ func RecordInvestmentRepoJoinDedupCollisions(ctx context.Context, client QueryCl
 	}
 	rows, err := client.Query(ctx, investmentRepoDedupCollisionCheckSQL, bindingsForOrg(orgID))
 	if err != nil {
-		slog.DebugContext(ctx, "investment repo join dedup-collision check skipped", "error", err)
+		repoJoinDedupCollisionShorten(orgID)
+		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
 		return
 	}
 	defer rows.Close()
@@ -169,17 +217,20 @@ func RecordInvestmentRepoJoinDedupCollisions(ctx context.Context, client QueryCl
 		// input set) and would silently drop the failure this
 		// telemetry exists to never let happen silently.
 		if err := rows.Err(); err != nil {
-			slog.DebugContext(ctx, "investment repo join dedup-collision check skipped", "error", err)
+			repoJoinDedupCollisionShorten(orgID)
+			recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
 		}
 		return
 	}
 	var excess int64
 	if scanErr := rows.Scan(&excess); scanErr != nil {
-		slog.DebugContext(ctx, "investment repo join dedup-collision check skipped", "error", scanErr)
+		repoJoinDedupCollisionShorten(orgID)
+		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, scanErr)
 		return
 	}
 	if err := rows.Err(); err != nil {
-		slog.DebugContext(ctx, "investment repo join dedup-collision check skipped", "error", err)
+		repoJoinDedupCollisionShorten(orgID)
+		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
 		return
 	}
 	if excess <= 0 {

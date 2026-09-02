@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -305,5 +306,64 @@ func TestResolve_FlowMatrix_ThemeDimension_NeverFiresRepoJoinDedupCheck(t *testi
 	}
 	if len(*orgs) != 0 {
 		t.Fatalf("recorded orgs = %v, want none -- flow matrix's investment-dimension branch calls investmentContextFor with a one-element dimensions list that is never REPO", *orgs)
+	}
+}
+
+// TestRecordInvestmentRepoJoinDedupCollisions_ErrorShortensCooldown is
+// codex round 4's finding, closed: a query error used to claim the full
+// 5-minute cooldown up front and never release it early, so a transient
+// ClickHouse error silenced this check for the whole window. Fixed to
+// mirror the sibling CHAOS-4759 guard's identical repair
+// (argMaxNullTransitionErrorCooldown): a failed check shortens the claim to
+// repoJoinDedupCollisionErrorCooldown so the NEXT request retries soon.
+func TestRecordInvestmentRepoJoinDedupCollisions_ErrorShortensCooldown(t *testing.T) {
+	resetRepoJoinDedupCollisionCooldown(t)
+
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	repoJoinDedupCollisionNow = func() time.Time { return now }
+
+	failingClient := (&routingFakeClient{}).onErr("excess_repo_versions", errInjectedFetchFailure)
+	RecordInvestmentRepoJoinDedupCollisions(context.Background(), failingClient, "org-1")
+	if got := len(failingClient.calls); got != 1 {
+		t.Fatalf("failing call: expected exactly one query attempt, got %d", got)
+	}
+
+	// Barely past the SHORT error cooldown, still well inside the full
+	// success cooldown -- must be allowed to retry.
+	repoJoinDedupCollisionNow = func() time.Time { return now.Add(repoJoinDedupCollisionErrorCooldown + time.Second) }
+
+	client := (&routingFakeClient{}).on("excess_repo_versions", &fakeRowScanner{rows: [][]any{{int64(0)}}})
+	RecordInvestmentRepoJoinDedupCollisions(context.Background(), client, "org-1")
+	if got := len(client.calls); got != 1 {
+		t.Fatalf("retry after error cooldown: expected exactly one query, got %d -- a fetch error must not consume the full 5-minute cooldown", got)
+	}
+}
+
+// TestRecordInvestmentRepoJoinDedupCollisions_FetchFailureIsReported is
+// codex round 4's finding, closed: a check failure must be reported
+// through recordRepoJoinDedupCollisionFetchFailure (counter + warn log),
+// not merely logged at debug -- a level this platform's default config
+// drops, which would let a persistently broken check silently stop
+// observing this org forever.
+func TestRecordInvestmentRepoJoinDedupCollisions_FetchFailureIsReported(t *testing.T) {
+	resetRepoJoinDedupCollisionCooldown(t)
+
+	var capturedOrgID string
+	var capturedErr error
+	orig := recordRepoJoinDedupCollisionFetchFailure
+	recordRepoJoinDedupCollisionFetchFailure = func(_ context.Context, orgID string, err error) {
+		capturedOrgID = orgID
+		capturedErr = err
+	}
+	t.Cleanup(func() { recordRepoJoinDedupCollisionFetchFailure = orig })
+
+	client := (&routingFakeClient{}).onErr("excess_repo_versions", errInjectedFetchFailure)
+	RecordInvestmentRepoJoinDedupCollisions(context.Background(), client, "org-1")
+
+	if capturedOrgID != "org-1" {
+		t.Errorf("captured org_id = %q, want %q", capturedOrgID, "org-1")
+	}
+	if !errors.Is(capturedErr, errInjectedFetchFailure) {
+		t.Errorf("captured err = %v, want it to wrap %v", capturedErr, errInjectedFetchFailure)
 	}
 }

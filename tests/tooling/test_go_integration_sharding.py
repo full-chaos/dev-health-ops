@@ -2275,3 +2275,297 @@ def test_mirrored_image_matches_testcontainers_prefix_semantics() -> None:
     refused = run("docker.io/postgres:1", prefix)
     assert refused.returncode != 0, refused.stdout
     assert "names docker.io explicitly" in refused.stderr, refused.stderr
+
+
+def _mentions_mirror(value: Any) -> bool:
+    """True if any nested string references the ghcr mirror.
+
+    Uses the anchored `_MIRROR_HOST` matcher rather than a substring test. The
+    earlier substring form was satisfied by `evil-ghcr.io/` and
+    `ghcr.io.attacker.net/` -- CodeQL raised it as incomplete URL substring
+    sanitization and was right.
+    """
+    if isinstance(value, str):
+        return _MIRROR_HOST.search(_normalise_scheme(value)) is not None
+    if isinstance(value, dict):
+        return any(_mentions_mirror(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_mentions_mirror(v) for v in value)
+    return False
+
+
+def _mirror_image_declarations(job: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Job-level `container:`/`services:` images that come from the mirror.
+
+    These are NOT reachable by a login step: the runner pulls them BEFORE the
+    first step executes, which is why GitHub requires declaration-level
+    `credentials:` for a private image. A `docker/login-action` step cannot
+    rescue them, so they need their own assertion rather than folding into the
+    step-ordering one.
+    """
+    found: list[tuple[str, dict[str, Any]]] = []
+    container = job.get("container")
+    if isinstance(container, str):
+        container = {"image": container}
+    if isinstance(container, dict) and _mentions_mirror(container.get("image", "")):
+        found.append(("container", container))
+    services = job.get("services") or {}
+    if isinstance(services, dict):
+        for service_name, service in services.items():
+            if isinstance(service, str):
+                service = {"image": service}
+            if isinstance(service, dict) and _mentions_mirror(service.get("image", "")):
+                found.append((f"services.{service_name}", service))
+    return found
+
+
+_ALLOWED_IMAGE_REGISTRIES = ("ghcr.io/full-chaos/", "mirror.gcr.io/", "gcr.io/")
+
+# EMPTY, and that is the point: CHAOS-4851 mirrored the last ten Docker Hub
+# service images, so nothing is exempt. The mechanism stays because an empty
+# exemption list is worth keeping honest -- each entry is (workflow, job, where,
+# IMAGE), and the test asserts every entry is STILL PRESENT, so a debt slot
+# cannot be quietly reused for a different image and a paid-off entry fails
+# until it is deleted. Keying on the coordinate alone made it an exemption
+# rather than a ratchet.
+_UNMIRRORED_IMAGE_DEBT: set[tuple[str, str, str, str]] = set()
+
+# Actions that pull an image themselves. `docker/setup-buildx-action` pulls
+# `moby/buildkit:buildx-stable-1` from Docker Hub before any login runs -- the
+# reason it was removed from the mirror workflow, where it deadlocked against
+# the very quota that workflow exists to escape. These four are ticketed debt.
+_IMAGE_PULLING_ACTION_DEBT = {
+    ("docker-images.yml", "build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "merge", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+}
+_IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
+
+
+def _resolve_image_expressions(image: str) -> str:
+    """Resolve the one GitHub expression we can prove, and only that one.
+
+    `ghcr.io/${{ github.repository_owner }}/x` provably resolves to the allowed
+    prefix in this repository. Every OTHER expression is left in place so the
+    caller rejects it -- deliberately, because an unresolvable expression is an
+    unknown shape and unknown shapes must fail.
+    """
+    return image.replace("${{ github.repository_owner }}", "full-chaos").replace(
+        "${{github.repository_owner}}", "full-chaos"
+    )
+
+
+def _image_is_allowed(image: str) -> bool:
+    """Allowlist, not blocklist. Anything not provably allowed is refused.
+
+    THIS IS THE INVERSION. Eight fail-opens on this surface were all the same
+    mistake: enumerate the dangerous spellings and let everything else through.
+    An image can be named through run text, step env, job env, `container:`,
+    `services:`, a matrix, a composite action, a reusable workflow or an
+    expression like `format('{0}/{1}', 'ghcr.io', owner)` -- that set is
+    unbounded and every round found another member of it.
+
+    The approved registries are three and change roughly never, so the test
+    enumerates THOSE and refuses everything else, including shapes nobody has
+    thought of yet.
+    """
+    reference = _resolve_image_expressions(str(image)).strip()
+    if "${{" in reference or "${" in reference:
+        return False  # unresolvable => unknown => refused
+    # Registry HOSTS are case-insensitive DNS names, so `GHCR.IO/full-chaos/x`
+    # names our mirror and must not be refused. This compares prefixes rather
+    # than calling `.startswith` on a casefolded string, because `casefold()`
+    # can CHANGE LENGTH -- `'\u00df'.casefold() == 'ss'` -- and a match on the folded
+    # form paired with a slice of the original mis-slices. Nothing is sliced
+    # here, but the comparison is written the safe way so it stays correct if a
+    # caller ever does.
+    folded = reference.casefold()
+    return any(
+        folded[: len(allowed)] == allowed.casefold()
+        for allowed in _ALLOWED_IMAGE_REGISTRIES
+    )
+
+
+def _all_image_declarations() -> list[tuple[str, str, str, str]]:
+    """(workflow, job, where, image) for every image the RUNNER pulls.
+
+    Job-level `container:` and `services:` only: those are pulled before the
+    first step, which is what makes them un-rescuable by a login step. A step's
+    `with: image:` (an SBOM scan of a locally built tag, say) is an action input,
+    not a registry pull, and is out of scope by construction rather than by
+    being overlooked.
+    """
+    found: list[tuple[str, str, str, str]] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            container = job.get("container")
+            if isinstance(container, str):
+                container = {"image": container}
+            if isinstance(container, dict) and container.get("image"):
+                found.append(
+                    (path.name, job_name, "container", str(container["image"]))
+                )
+            for service_name, service in (job.get("services") or {}).items():
+                if isinstance(service, str):
+                    service = {"image": service}
+                if isinstance(service, dict) and service.get("image"):
+                    found.append(
+                        (
+                            path.name,
+                            job_name,
+                            f"services.{service_name}",
+                            str(service["image"]),
+                        )
+                    )
+    return found
+
+
+def test_every_pulled_image_resolves_to_an_approved_registry() -> None:
+    """Allowlist every image the runner pulls; refuse unknown shapes.
+
+    Replaces a guard that had been patched eight times, each time to recognise
+    one more way of naming an image. The eighth was
+    `${{ format('{0}/{1}/postgres:18-alpine', 'ghcr.io', github.repository_owner) }}`,
+    which contains no literal `ghcr.io/` and so passed a literal check while
+    pulling from the mirror without credentials.
+    """
+    offenders: list[str] = []
+    seen_debt: set[tuple[str, str, str, str]] = set()
+
+    for workflow, job_name, where, image in _all_image_declarations():
+        # The image is PART of the key. Keying on the coordinate alone made this
+        # an exemption rather than a ratchet: swapping any other Docker Hub
+        # image into a debt slot kept the coordinate present and passed.
+        key = (workflow, job_name, where, image)
+        if key in _UNMIRRORED_IMAGE_DEBT:
+            seen_debt.add(key)
+            continue
+        if not _image_is_allowed(image):
+            offenders.append(
+                f"{workflow}: {job_name}.{where} pulls {image!r}, which does not "
+                f"resolve to an approved registry {_ALLOWED_IMAGE_REGISTRIES}. "
+                "An unresolvable expression counts as unapproved."
+            )
+
+    stale = sorted(_UNMIRRORED_IMAGE_DEBT - seen_debt)
+    assert not stale, (
+        "ticketed image debt is stale -- these declarations no longer exist or "
+        "were mirrored; delete them from _UNMIRRORED_IMAGE_DEBT so the list "
+        f"cannot rot into a silent allowlist:\n  {stale}"
+    )
+    assert not offenders, "\n".join(offenders)
+
+
+def test_mirror_pulled_container_images_declare_credentials() -> None:
+    """A mirror image on `container:`/`services:` needs its own credentials.
+
+    The runner pulls these BEFORE the first step, so no `docker/login-action`
+    step can authenticate them; GitHub requires `credentials:` on the
+    declaration itself.
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for where, declaration in _mirror_image_declarations(job):
+                credentials = declaration.get("credentials") or {}
+                if not credentials.get("username") or not credentials.get("password"):
+                    offenders.append(
+                        f"{path.name}: {job_name}.{where} pulls "
+                        f"{declaration.get('image')!r} from the mirror without "
+                        "`credentials:`; the runner pulls it before any login step"
+                    )
+    assert not offenders, "\n".join(offenders)
+
+
+def test_no_unscanned_local_reusable_workflows_or_composite_actions() -> None:
+    """Fail closed on indirection this file cannot see through.
+
+    A `go.yml` job calling `./.github/workflows/hidden.yml`, whose callee runs
+    `docker/login-action` with the registry omitted, is invisible to every guard
+    here -- and an omitted registry IS Docker Hub. None exist today, so rather
+    than write a scanner for a case with no instances, this REFUSES the
+    indirection: adding one fails this test until the guards learn to follow it.
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            if str(job.get("uses", "")).startswith("./"):
+                offenders.append(
+                    f"{path.name}: job {job_name!r} calls local reusable workflow "
+                    f"{job.get('uses')!r}, which no guard in this file follows"
+                )
+            for step in job.get("steps") or []:
+                if str(step.get("uses", "")).startswith("./"):
+                    offenders.append(
+                        f"{path.name}: {job_name} uses local action "
+                        f"{step.get('uses')!r}, which no guard in this file follows"
+                    )
+    assert not offenders, (
+        "\n".join(offenders)
+        + "\n\nTeach the image/login guards to follow this indirection before adding it."
+    )
+
+
+def test_image_pulling_action_steps_are_allowlisted_or_ticketed() -> None:
+    """Actions pull images too, and the allowlist could not see them.
+
+    Two shapes reach a registry without any `container:`/`services:`
+    declaration:
+
+    * `uses: docker://<image>` -- a container action, pulled directly.
+    * an action that pulls internally. `docker/setup-buildx-action` fetches
+      `moby/buildkit:buildx-stable-1` from Docker Hub before any login step
+      runs. That is not theoretical here: it deadlocked the mirror workflow
+      against the very Docker Hub quota the mirror exists to escape, and was
+      removed for exactly this reason.
+
+    `docker://` refs must resolve to an approved registry. Internally-pulling
+    actions are ticketed debt, asserted STILL PRESENT so the list cannot rot.
+    """
+    offenders: list[str] = []
+    seen_debt: set[tuple[str, str, str]] = set()
+
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                uses = str(step.get("uses", ""))
+                if uses.startswith("docker://"):
+                    image = uses[len("docker://") :]
+                    if not _image_is_allowed(image):
+                        offenders.append(
+                            f"{path.name}: {job_name} runs container action "
+                            f"{uses!r}, which does not resolve to an approved "
+                            f"registry {_ALLOWED_IMAGE_REGISTRIES}"
+                        )
+                    continue
+                action = uses.split("@", 1)[0]
+                if action in _IMAGE_PULLING_ACTIONS:
+                    key = (path.name, job_name, action)
+                    if key in _IMAGE_PULLING_ACTION_DEBT:
+                        seen_debt.add(key)
+                    else:
+                        offenders.append(
+                            f"{path.name}: {job_name} uses {action!r}, which "
+                            "pulls its own image from Docker Hub; mirror it or "
+                            "add it to _IMAGE_PULLING_ACTION_DEBT with a ticket"
+                        )
+
+    stale = sorted(_IMAGE_PULLING_ACTION_DEBT - seen_debt)
+    assert not stale, (
+        "ticketed action debt is stale -- these steps no longer exist; delete "
+        f"them so the list cannot rot into a silent allowlist:\n  {stale}"
+    )
+    assert not offenders, "\n".join(offenders)

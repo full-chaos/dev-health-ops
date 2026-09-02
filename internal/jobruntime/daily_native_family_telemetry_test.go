@@ -1,6 +1,9 @@
 package jobruntime
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +95,75 @@ func TestDailyMetricsNativeFamilyIncludesFileHotspotsFamilies(t *testing.T) {
 		if !strings.Contains(exposition, want) {
 			t.Errorf("exposition is missing %q\nfull exposition:\n%s", want, exposition)
 		}
+	}
+}
+
+// TestDailyMetricsNativeFamiliesCoverEveryPortedFamily is the drift guard
+// for the whole CLASS, not just one instance: dailyMetricsNativeFamilies has
+// missed a newly-ported family SIX times now (team_wellbeing/repo_user_commit
+// landed together; then CHAOS-4277, CHAOS-4292 (cicd), CHAOS-4293, CHAOS-4294,
+// and CHAOS-4295 (incident) each either needed a human to remember to add
+// this line or, in incident's/cicd's case, initially forgot to -- a check
+// that depends on a human remembering is not a check). This reads
+// families.json directly (the same drift-gated source families_test.go
+// reads) and asserts every family already flipped to "port":"go" there is
+// ALSO present in dailyMetricsNativeFamilies -- so the next lane that flips
+// its family's port without touching this list gets a red test instead of a
+// silently-refused telemetry call in production.
+func TestDailyMetricsNativeFamiliesCoverEveryPortedFamily(t *testing.T) {
+	repoRoot := jobruntimeRepositoryRoot(t)
+	raw, err := os.ReadFile(filepath.Join(repoRoot, "internal", "jobs", "metrics", "daily", "families.json"))
+	if err != nil {
+		t.Fatalf("read families.json: %v", err)
+	}
+	var registry struct {
+		Families []struct {
+			Name string `json:"name"`
+			Port string `json:"port"`
+		} `json:"families"`
+	}
+	if err := json.Unmarshal(raw, &registry); err != nil {
+		t.Fatalf("decode families.json: %v", err)
+	}
+
+	registered := make(map[string]bool, len(dailyMetricsNativeFamilies))
+	for _, family := range dailyMetricsNativeFamilies {
+		registered[family] = true
+	}
+
+	var missing []string
+	for _, family := range registry.Families {
+		if family.Port == "go" && !registered[family.Name] {
+			missing = append(missing, family.Name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf(
+			"families.json marks %v as port=\"go\" but dailyMetricsNativeFamilies "+
+				"(telemetry.go) does not list them -- every ObserveDailyMetricsNativeFamily "+
+				"call for these families is silently refused with \"not registered\", losing "+
+				"all outcome/rows-written/duration telemetry for the family. Add each name to "+
+				"dailyMetricsNativeFamilies.",
+			missing,
+		)
+	}
+}
+
+func jobruntimeRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for directory := working; ; {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("could not find repository root (no go.mod found)")
+		}
+		directory = parent
 	}
 }
 

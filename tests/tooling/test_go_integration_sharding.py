@@ -2552,6 +2552,11 @@ def test_image_pulling_action_steps_are_allowlisted_or_ticketed() -> None:
 # harmless, because the point of this file is that "assumed harmless" is how
 # twelve fail-opens happened.
 _DOCKER_PULLING_SUBCOMMANDS = frozenset({"pull", "run", "create"})
+# `buildx` in this set is LOAD-BEARING, not an oversight. Two scanned workflows
+# depend on it: mirror-test-images.yml runs `docker buildx imagetools create`
+# against a Docker Hub SOURCE -- that is the mirror's entire job -- and
+# docker-images.yml uses imagetools create/inspect. Removing `buildx` while
+# tidying would fail the mirror and the image build on a required check.
 _DOCKER_NON_PULLING_SUBCOMMANDS = frozenset(
     {
         "build",
@@ -2625,10 +2630,18 @@ _NON_PULLING_NOUNS = frozenset(
         "system",
         "manifest",
         "swarm",
-        "stack",
     }
 )
-_DOCKER_MANAGEMENT_NOUNS = frozenset(_NOUN_PULLING_VERBS) - {""} | _NON_PULLING_NOUNS
+# Nouns whose verbs deploy from a FILE that names images. `docker stack deploy
+# -c compose.yml` is the swarm analogue of `docker compose up`: it reads a
+# compose file this scanner cannot see and pulls what the file names. Classing
+# it as resource-naming was wrong in the same way, and in the same file, as
+# `docker-compose` slipping past the refusal written for `docker compose`.
+_COMPOSE_LIKE_VERBS: dict[str, frozenset[str]] = {"stack": frozenset({"deploy"})}
+_COMPOSE_LIKE_NOUNS = frozenset(_COMPOSE_LIKE_VERBS)
+_DOCKER_MANAGEMENT_NOUNS = (
+    frozenset(_NOUN_PULLING_VERBS) - {""} | _NON_PULLING_NOUNS | _COMPOSE_LIKE_NOUNS
+)
 # Compose is refused rather than scanned; the legacy hyphenated binary is the
 # same thing under another name and must not slip past that refusal.
 _COMPOSE_BINARIES = frozenset({"docker-compose", "podman-compose", "nerdctl-compose"})
@@ -2679,6 +2692,18 @@ def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
                     unknown.append(f"`docker {sub}` with no verb: {line[:60]}")
                     continue
                 noun, sub = sub, words[1]
+                if sub in _COMPOSE_LIKE_VERBS.get(noun, frozenset()):
+                    unknown.append(
+                        f"`docker {noun} {sub}` deploys from a compose file whose "
+                        f"images this cannot see: {line[:60]}"
+                    )
+                    continue
+                if noun in _COMPOSE_LIKE_NOUNS:
+                    # Only the file-deploying verb is unknowable. `stack ls`,
+                    # `stack ps` and `stack rm` name a resource and pull nothing;
+                    # refusing them would be a false failure on a valid workflow,
+                    # which this file has now produced five times.
+                    continue
                 if noun in _NON_PULLING_NOUNS:
                     # Nothing under this noun takes an image; the next token is a
                     # resource name, not a ref.
@@ -2906,4 +2931,34 @@ def test_pulling_verbs_are_resolved_per_noun(
         f"{command!r}: refused={refused}, expected {expected_refused} "
         f"(images={images}, unknown={unknown}). A resource name must not be "
         "read as an image, and a real image must still be checked."
+    )
+
+
+@pytest.mark.parametrize(
+    "command,expected_refused",
+    [
+        # `docker stack deploy -c file` is the swarm analogue of `docker compose
+        # up`: it deploys from a compose file naming images this scanner cannot
+        # see. Classing `stack` as resource-naming was the same error, in the
+        # same file, as `docker-compose` slipping past the `docker compose`
+        # refusal -- same shape, opposite treatment.
+        ("docker stack deploy -c compose.yml mystack", True),
+        ("docker stack deploy --compose-file x.yml svc", True),
+        # ...but only the file-deploying verb. These name a resource and pull
+        # nothing; refusing them would be a false failure on a valid workflow.
+        ("docker stack ls", False),
+        ("docker stack ps mystack", False),
+        ("docker stack rm mystack", False),
+        ("docker stack services mystack", False),
+    ],
+)
+def test_compose_like_nouns_refuse_only_their_deploying_verb(
+    command: str, expected_refused: bool
+) -> None:
+    """A file-deploying verb is unknowable; its siblings are not."""
+    images, unknown = _run_pulled_images(command)
+    refused = bool(unknown) or any(not _image_is_allowed(image) for image in images)
+    assert refused is expected_refused, (
+        f"{command!r}: refused={refused}, expected {expected_refused} "
+        f"(images={images}, unknown={unknown})."
     )

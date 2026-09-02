@@ -208,65 +208,98 @@ func defaultRecordArgMaxNullTransition(ctx context.Context, orgID string, state 
 }
 
 // argMaxNullTransitionCheckCooldown bounds how often the guard's own
-// GROUP BY scan over work_unit_investments runs per org. That scan is the
-// same aggregate shape and cost as the one latestWorkUnitInvestmentsSource
-// already runs on every investment request for this org, so running it
-// AGAIN on every request would double this package's ClickHouse load for
-// a property that only needs bounded-latency detection -- the ticket asks
-// that a transition be OBSERVED, not that it be caught on the exact
-// request that produced it.
+// GROUP BY scan over work_unit_investments runs per org ON SUCCESS. That
+// scan is the same aggregate shape and cost as the one
+// latestWorkUnitInvestmentsSource already runs on every investment
+// request for this org, so running it AGAIN on every request would
+// double this package's ClickHouse load for a property that only needs
+// bounded-latency detection -- the ticket asks that a transition be
+// OBSERVED, not that it be caught on the exact request that produced it.
 const argMaxNullTransitionCheckCooldown = 15 * time.Minute
 
+// argMaxNullTransitionErrorCooldown is the SHORT cooldown a failed fetch
+// gets instead of the full one -- codex round-2 P2 fix. The gate claims
+// the cooldown optimistically, before the query runs, so concurrent
+// requests for the same org cannot both observe an elapsed cooldown and
+// fire the scan twice; but claiming the FULL 15-minute window on a fetch
+// that then FAILS would blind this org to a genuinely new, unobserved
+// divergence for the whole window on nothing but a transient ClickHouse
+// hiccup. Shortening to one minute on error bounds the retry rate for a
+// persistently-broken org (e.g. a permissions issue) while letting a
+// merely-transient failure self-heal quickly.
+const argMaxNullTransitionErrorCooldown = 1 * time.Minute
+
 // argMaxNullTransitionGateClock is a package var so a test can control
-// time deterministically instead of sleeping 15 minutes.
+// time deterministically instead of sleeping.
 var argMaxNullTransitionGateClock = time.Now
 
-// argMaxNullTransitionGate holds, per org, the last time the guard query
-// ran. Unbounded only in the number of DISTINCT orgs that ever call an
-// investment query on this process -- the same bound every other
+// argMaxNullTransitionGate holds, per org, the next time the guard query
+// may run. Unbounded only in the number of DISTINCT orgs that ever call
+// an investment query on this process -- the same bound every other
 // per-process in-memory org map in this package already accepts.
 var argMaxNullTransitionGate = struct {
 	mu          sync.Mutex
-	lastChecked map[string]time.Time
-}{lastChecked: make(map[string]time.Time)}
+	nextAllowed map[string]time.Time
+}{nextAllowed: make(map[string]time.Time)}
 
-// argMaxNullTransitionShouldCheck reports whether orgID's cooldown has
-// elapsed and, if so, claims the check immediately -- before the caller
-// runs the query -- so concurrent requests for the same org cannot both
-// observe an elapsed cooldown and fire the scan twice.
-func argMaxNullTransitionShouldCheck(orgID string) bool {
+// argMaxNullTransitionClaim reports whether orgID's cooldown has elapsed
+// and, if so, claims the FULL success cooldown immediately -- before the
+// caller runs the query -- so concurrent requests for the same org
+// cannot both observe an elapsed cooldown and fire the scan twice. A
+// caller whose fetch then fails must call
+// argMaxNullTransitionShortenAfterError to release most of that claim
+// back early; see that function's doc comment.
+func argMaxNullTransitionClaim(orgID string) bool {
 	now := argMaxNullTransitionGateClock()
 	argMaxNullTransitionGate.mu.Lock()
 	defer argMaxNullTransitionGate.mu.Unlock()
-	if last, ok := argMaxNullTransitionGate.lastChecked[orgID]; ok && now.Sub(last) < argMaxNullTransitionCheckCooldown {
+	if next, ok := argMaxNullTransitionGate.nextAllowed[orgID]; ok && now.Before(next) {
 		return false
 	}
-	argMaxNullTransitionGate.lastChecked[orgID] = now
+	argMaxNullTransitionGate.nextAllowed[orgID] = now.Add(argMaxNullTransitionCheckCooldown)
 	return true
+}
+
+// argMaxNullTransitionShortenAfterError replaces a just-claimed FULL
+// cooldown with the SHORT error cooldown -- see
+// argMaxNullTransitionErrorCooldown's doc comment. Unconditional: this is
+// only ever called immediately after this same goroutine's own
+// argMaxNullTransitionClaim succeeded for orgID, so there is no other
+// claimant's window to accidentally shorten.
+func argMaxNullTransitionShortenAfterError(orgID string) {
+	now := argMaxNullTransitionGateClock()
+	argMaxNullTransitionGate.mu.Lock()
+	defer argMaxNullTransitionGate.mu.Unlock()
+	argMaxNullTransitionGate.nextAllowed[orgID] = now.Add(argMaxNullTransitionErrorCooldown)
 }
 
 // RecordArgMaxNullTransitionGuard is CHAOS-4759's transition guard: it
 // runs FetchArgMaxNullTransitionState for orgID at most once per
-// argMaxNullTransitionCheckCooldown and, only when the state has
-// diverged on at least one column, reports through
-// recordArgMaxNullTransition. A fetch error is swallowed to a debug log
-// line -- like RecordStaleInvestmentMembershipScope, this telemetry must
-// never be able to break the real query it decorates.
+// argMaxNullTransitionCheckCooldown (argMaxNullTransitionErrorCooldown on
+// a failed attempt) and, only when the state has diverged on at least one
+// column, reports through recordArgMaxNullTransition. A fetch error is
+// swallowed to a debug log line -- like RecordStaleInvestmentMembershipScope,
+// this telemetry must never be able to break the real query it decorates.
 //
-// CALLED FROM the same four investment-path entry points that call
-// RecordStaleInvestmentMembershipScope (resolve.go's
+// CALLED FROM every investment-path entry point that can actually read
+// latestWorkUnitInvestmentsSource: the same four call sites
+// RecordStaleInvestmentMembershipScope uses (resolve.go's
 // resolveOneTimeseries/resolveOneBreakdown, investmentquality.go's
-// resolveEvidenceQualityStats, sankeycoverage.go's resolveSankeyCoverage)
-// -- every one of them already resolves useInvestment=true before
-// calling, which is the sole precondition for
-// latestWorkUnitInvestmentsSource to be live for this org's traffic at
-// all.
+// resolveEvidenceQualityStats, sankeycoverage.go's resolveSankeyCoverage),
+// PLUS resolve.go's resolveSankey (nodes/edges, gated on the AUTO-ROUTED
+// useInvestment, not the raw three-state flag resolveSankeyCoverage uses)
+// and resolveFlowMatrix (gated on flowMatrixUsesInvestmentSource) --
+// codex round-2 P1 fix: unlike RecordStaleInvestmentMembershipScope,
+// which mirrors Python's own call sites and is deliberately absent from
+// sankey/flowMatrix execution, this guard has no Python site to mirror
+// and must fire wherever the Go-only source it watches is actually read.
 func RecordArgMaxNullTransitionGuard(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) {
-	if orgID == "" || !argMaxNullTransitionShouldCheck(orgID) {
+	if orgID == "" || !argMaxNullTransitionClaim(orgID) {
 		return
 	}
 	state, err := FetchArgMaxNullTransitionState(ctx, client, orgID, timeoutSeconds)
 	if err != nil {
+		argMaxNullTransitionShortenAfterError(orgID)
 		slog.DebugContext(ctx, "argMax null transition guard skipped", "error", err)
 		return
 	}

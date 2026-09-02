@@ -228,6 +228,31 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 	return nodes, edges, nil
 }
 
+// flowMatrixUsesInvestmentSource reports whether CompileFlowMatrix would
+// route req through compileFlowMatrixInvestmentDimension (and therefore
+// through latestWorkUnitInvestmentsSource) -- CHAOS-4759 codex round-2 P1
+// fix: resolveFlowMatrix (resolve.go) never sees the useInvestment value
+// compileFlowMatrixInvestmentDimension resolves internally, so a caller
+// that needs to know whether THIS request will touch the investment
+// source (to gate RecordArgMaxNullTransitionGuard) has to make the same
+// decision CompileFlowMatrix's own switch below makes. Kept here,
+// deliberately duplicating the switch's case list rather than changing
+// CompileFlowMatrix's signature to return the decision, so the two stay
+// visually adjacent and a future dimension added to one switch is easy to
+// spot missing from the other. TEAM/REPO/WORK_TYPE NEVER read the
+// investment source regardless of UseInvestment (CompileFlowMatrix's
+// `case` branch above ignores the flag entirely for those three); every
+// other dimension resolves via resolveUseInvestment exactly as
+// compileFlowMatrixInvestmentDimension does below.
+func flowMatrixUsesInvestmentSource(req FlowMatrixRequest) bool {
+	switch req.Dimension {
+	case DimensionTeam, DimensionRepo, DimensionWorkType:
+		return false
+	default:
+		return resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment)
+	}
+}
+
 // compileFlowMatrixInvestmentDimension ports compile_flow_matrix's
 // AUTHOR/THEME/SUBCATEGORY "else" branch (compiler.py:519-533,
 // e9ea257ff) -- CHAOS-4538's flow-matrix scope item. Python reuses

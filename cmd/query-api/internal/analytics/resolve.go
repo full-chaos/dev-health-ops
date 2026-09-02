@@ -344,6 +344,20 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	if err != nil {
 		return nil, err
 	}
+	if useInvestment {
+		// CHAOS-4759 transition guard (codex round-2 P1 fix): unlike
+		// RecordStaleInvestmentMembershipScope below -- deliberately absent
+		// here to mirror Python's _execute_sankey_inner, which has no
+		// membership-scope call of its own -- this guard has no Python
+		// call site to mirror. It exists purely to observe a Go-only
+		// divergence latestWorkUnitInvestmentsSource() can produce, so it
+		// must fire whenever nodes/edges actually read that source,
+		// AUTO-ROUTED or explicit alike -- gated on `useInvestment` (the
+		// value CompileSankey just used), NOT `coverageUseInvestment`
+		// below, which is deliberately the raw three-state flag for a
+		// DIFFERENT, Python-faithful reason documented at that variable.
+		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
+	}
 	// DELIBERATELY NO RecordStaleInvestmentMembershipScope call here.
 	// Verified by reading analytics.py directly (not assumed from the
 	// "timeseries/coverage/sankey" wording in _execute_breakdown_query's
@@ -441,6 +455,16 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 	nodesQuery, edgesQuery, err := CompileFlowMatrix(req, orgID, queryTimeoutSecs, filters)
 	if err != nil {
 		return nil, err
+	}
+	if flowMatrixUsesInvestmentSource(req) {
+		// CHAOS-4759 transition guard (codex round-2 P1 fix): CompileFlowMatrix
+		// resolves useInvestment INTERNALLY (compileFlowMatrixInvestmentDimension,
+		// flowmatrix.go) and never returns the decision, so this mirrors
+		// that same routing via flowMatrixUsesInvestmentSource -- see its
+		// doc comment. Without this, a THEME/SUBCATEGORY flowMatrix that
+		// auto-routes to latestWorkUnitInvestmentsSource() with the flag
+		// omitted would read that source with no guard ever firing.
+		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 	}
 
 	nodes, edges, execErr := ExecuteFlowMatrix(ctx, client, nodesQuery, edgesQuery)

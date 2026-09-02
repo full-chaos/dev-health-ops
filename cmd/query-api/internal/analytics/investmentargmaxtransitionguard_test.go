@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,12 +14,12 @@ import (
 func resetArgMaxNullTransitionGate(t *testing.T) {
 	t.Helper()
 	argMaxNullTransitionGate.mu.Lock()
-	argMaxNullTransitionGate.lastChecked = make(map[string]time.Time)
+	argMaxNullTransitionGate.nextAllowed = make(map[string]time.Time)
 	argMaxNullTransitionGate.mu.Unlock()
 	origClock := argMaxNullTransitionGateClock
 	t.Cleanup(func() {
 		argMaxNullTransitionGate.mu.Lock()
-		argMaxNullTransitionGate.lastChecked = make(map[string]time.Time)
+		argMaxNullTransitionGate.nextAllowed = make(map[string]time.Time)
 		argMaxNullTransitionGate.mu.Unlock()
 		argMaxNullTransitionGateClock = origClock
 	})
@@ -280,3 +281,42 @@ func TestRecordArgMaxNullTransitionGuard_CooldownIsPerOrg(t *testing.T) {
 		t.Errorf("org-b: expected exactly one query (not suppressed by org-a's cooldown), got %d", got)
 	}
 }
+
+// TestRecordArgMaxNullTransitionGuard_ErrorShortensCooldown is codex
+// round-2's P2 finding, closed: a fetch error must not consume the FULL
+// 15-minute cooldown, because that would blind this org to a genuinely
+// NEW, never-observed divergence for the whole window on nothing but a
+// transient failure. Removing argMaxNullTransitionShortenAfterError's
+// call in RecordArgMaxNullTransitionGuard must turn this red (the second
+// call would then still be suppressed after only
+// argMaxNullTransitionErrorCooldown has elapsed).
+func TestRecordArgMaxNullTransitionGuard_ErrorShortensCooldown(t *testing.T) {
+	resetArgMaxNullTransitionGate(t)
+
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	argMaxNullTransitionGateClock = func() time.Time { return now }
+
+	failingClient := &routingFakeClient{}
+	failingClient.onErr("HAVING count() > 1", errInjectedFetchFailure)
+	RecordArgMaxNullTransitionGuard(context.Background(), failingClient, "org-1", 30)
+	if got := len(failingClient.calls); got != 1 {
+		t.Fatalf("failing call: expected exactly one query attempt, got %d", got)
+	}
+
+	// Barely past the SHORT error cooldown, still well inside the full
+	// success cooldown -- must be allowed to retry.
+	now = now.Add(argMaxNullTransitionErrorCooldown + time.Second)
+
+	client := &routingFakeClient{}
+	client.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{
+		{int64(0), int64(0), int64(0), int64(0), int64(10)},
+	}})
+	RecordArgMaxNullTransitionGuard(context.Background(), client, "org-1", 30)
+	if got := len(client.calls); got != 1 {
+		t.Fatalf("retry after error cooldown: expected exactly one query, got %d -- a fetch error must not consume the full 15-minute cooldown", got)
+	}
+}
+
+// errInjectedFetchFailure is a fixed sentinel for routingFakeClient.onErr
+// -- the exact message never matters, only that Query returns non-nil.
+var errInjectedFetchFailure = errors.New("investmentargmaxtransitionguard_test: injected fetch failure")

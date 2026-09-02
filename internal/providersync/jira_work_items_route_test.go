@@ -16,11 +16,18 @@ import (
 )
 
 type jiraWorkItemsDoer struct {
-	t        *testing.T
-	mu       sync.Mutex
-	paths    []string
-	search   int
-	comments int
+	t         *testing.T
+	mu        sync.Mutex
+	paths     []string
+	search    int
+	comments  int
+	devStatus int
+	// devStatusStatus/devStatusBody let a test control the dev-status
+	// response; zero-value (unset) means "this test does not expect a
+	// dev-status call" -- the default handler below fails loudly if hit
+	// unexpectedly, the same shape as the existing default `t.Fatalf`.
+	devStatusStatus int
+	devStatusBody   string
 }
 
 type jiraWorkItemsDoerFunc func(*http.Request) (*http.Response, error)
@@ -35,20 +42,27 @@ func (doer *jiraWorkItemsDoer) Do(request *http.Request) (*http.Response, error)
 	doer.paths = append(doer.paths, request.URL.String())
 	doer.mu.Unlock()
 	var body string
+	status := http.StatusOK
 	switch {
 	case request.URL.Path == "/rest/api/3/search/jql":
 		doer.search++
-		body = `{"issues":[{"key":"OPS-101","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-101","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Repair the delivery path","description":"Customer-visible repair","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Bug"},"labels":["bug"],"priority":{"name":"Highest"},"created":"2026-07-20T08:00:00Z","updated":"2026-07-21T09:30:00Z","resolutiondate":"2026-07-21T09:00:00Z","customfield_10020":[{"id":"9001","name":"July support"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-102"}}]},"changelog":{"histories":[{"created":"2026-07-20T09:00:00Z","author":{"accountId":"jira-account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]},{"created":"2026-07-21T10:00:00Z","author":{"accountId":"jira-account-1"},"items":[{"field":"status","fromString":"Done","toString":"To Do"}]}]}}],"isLast":true}`
+		body = `{"issues":[{"id":"10050","key":"OPS-101","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-101","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Repair the delivery path","description":"Customer-visible repair","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Bug"},"labels":["bug"],"priority":{"name":"Highest"},"created":"2026-07-20T08:00:00Z","updated":"2026-07-21T09:30:00Z","resolutiondate":"2026-07-21T09:00:00Z","customfield_10020":[{"id":"9001","name":"July support"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-102"}}]},"changelog":{"histories":[{"created":"2026-07-20T09:00:00Z","author":{"accountId":"jira-account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]},{"created":"2026-07-21T10:00:00Z","author":{"accountId":"jira-account-1"},"items":[{"field":"status","fromString":"Done","toString":"To Do"}]}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-101/comment"):
 		doer.comments++
 		body = `{"comments":[{"created":"2026-07-21T11:00:00Z","author":{"accountId":"jira-commenter"},"body":"verified"}],"isLast":true}`
 	case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 		body = `{"id":9001,"name":"July support","state":"closed","startDate":"2026-07-01T00:00:00Z","endDate":"2026-07-15T00:00:00Z","completeDate":"2026-07-16T00:00:00Z"}`
+	case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
+		doer.devStatus++
+		if doer.devStatusStatus == 0 {
+			doer.t.Fatalf("unexpected dev-status request %s (test did not configure devStatusStatus)", request.URL.String())
+		}
+		status, body = doer.devStatusStatus, doer.devStatusBody
 	default:
 		doer.t.Fatalf("unexpected Jira request %s", request.URL.String())
 	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
+		StatusCode: status,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)), Request: request,
 	}, nil
@@ -166,6 +180,103 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 	}
 	if sprint.SprintID != "9001" || sprint.State == nil || *sprint.State != "closed" {
 		t.Fatalf("sprint=%+v", sprint)
+	}
+}
+
+// TestJiraWorkItemsRouteDevStatusSyncsPrimaryDependencyRow is red on
+// origin/main -- the fetch_dev_status option, fetchJiraDevStatusPullRequests,
+// and extractJiraDevStatusDependencies do not exist there.
+func TestJiraWorkItemsRouteDevStatusSyncsPrimaryDependencyRow(t *testing.T) {
+	claim := nativeTestClaim("jira", "work-items")
+	claim.SourceExternalID = "OPS"
+	claim.DatasetOptions = map[string]any{"fetch_comments": true, "fetch_dev_status": true}
+	leaseChecks := 0
+	doer := &jiraWorkItemsDoer{
+		t: t, devStatusStatus: http.StatusOK,
+		devStatusBody: `{"detail":[{"pullRequests":[{"url":"https://github.com/acme/api/pull/968"}]}]}`,
+	}
+	client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error {
+		leaseChecks++
+		return nil
+	}))
+	batch, err := (JiraWorkItemsRouteHandler{
+		StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Watermark == nil {
+		t.Fatalf("expected the watermark to advance (dev-status success is not incompleteness): batch=%+v", batch)
+	}
+	if doer.devStatus != 1 {
+		t.Fatalf("dev-status requests=%d want=1", doer.devStatus)
+	}
+	if got := batch.Result["dev_status_pull_requests_synced"]; got != 1 {
+		t.Fatalf("result=%v", batch.Result)
+	}
+	if got := batch.Result["dev_status_unavailable_count"]; got != 0 {
+		t.Fatalf("result=%v", batch.Result)
+	}
+	var devStatusDependency jiraWorkItemDependencyRow
+	found := false
+	for _, effect := range batch.Effects {
+		if effect.Destination != "work_item_dependencies" {
+			continue
+		}
+		for _, raw := range effect.Rows {
+			var row jiraWorkItemDependencyRow
+			if err := json.Unmarshal(raw, &row); err != nil {
+				t.Fatal(err)
+			}
+			if row.RelationshipTypeRaw == "jira_dev_status" {
+				devStatusDependency, found = row, true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no jira_dev_status dependency row in effects: %+v", batch.Effects)
+	}
+	if devStatusDependency.SourceWorkItemID != "ghpr:acme/api#968" ||
+		devStatusDependency.TargetWorkItemID != "jira:OPS-101" ||
+		devStatusDependency.RelationshipType != "relates_to" {
+		t.Fatalf("dev-status dependency=%+v", devStatusDependency)
+	}
+}
+
+// TestJiraWorkItemsRouteDevStatusUnavailableIsCleanNoOp is the red-first test
+// for the ruling (chris via team-lead, 2026-09-01): an org with no
+// GitHub-for-Jira app configured (400/404) must never fail the sync or
+// suppress the watermark -- a typed, counted no-op only.
+func TestJiraWorkItemsRouteDevStatusUnavailableIsCleanNoOp(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			claim := nativeTestClaim("jira", "work-items")
+			claim.SourceExternalID = "OPS"
+			claim.DatasetOptions = map[string]any{"fetch_comments": true, "fetch_dev_status": true}
+			doer := &jiraWorkItemsDoer{
+				t: t, devStatusStatus: status, devStatusBody: `{"errorMessages":["no dev-status data"]}`,
+			}
+			client := jiraWorkItemsTestClient(t, doer, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			batch, err := (JiraWorkItemsRouteHandler{
+				StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
+			}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch.Watermark == nil {
+				t.Fatalf("a clean no-op must not suppress the watermark: batch=%+v", batch)
+			}
+			if incomplete, ok := batch.Result["incomplete"]; ok {
+				t.Fatalf("a clean no-op must not be recorded as incompleteness: incomplete=%v", incomplete)
+			}
+			if got := batch.Result["dev_status_unavailable_count"]; got != 1 {
+				t.Fatalf("result=%v", batch.Result)
+			}
+			if got := batch.Result["dev_status_pull_requests_synced"]; got != 0 {
+				t.Fatalf("result=%v", batch.Result)
+			}
+		})
 	}
 }
 

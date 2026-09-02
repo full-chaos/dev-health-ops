@@ -285,6 +285,9 @@ type Metrics struct {
 	// CHAOS-4586): it is a process-wide singleton, not a per-family field.
 	jiraSearchPages   map[string]uint64
 	chunkContinuation map[string]uint64
+	// jiraDevStatus counts CHAOS-4757's dev-status (GitHub-for-Jira panel)
+	// fetches, by outcome -- see RecordJiraDevStatus.
+	jiraDevStatus map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -312,6 +315,7 @@ func NewMetrics() *Metrics {
 		duplicateNaturalKey:            map[string]uint64{},
 		jiraSearchPages:                map[string]uint64{},
 		chunkContinuation:              map[string]uint64{},
+		jiraDevStatus:                  map[string]uint64{},
 	}
 }
 
@@ -1103,6 +1107,42 @@ func (m *Metrics) RecordJiraSearchPage(outcome string) {
 	m.jiraSearchPages[label]++
 }
 
+// metricJiraDevStatusOutcomeVocabulary is the closed set of outcomes for one
+// CHAOS-4757 dev-status (GitHub-for-Jira panel) fetch. "dev_status_unavailable"
+// is the RULED clean no-op (chris via team-lead, 2026-09-01: a 400/404,
+// meaning the org has no GitHub-for-Jira app configured for this issue) --
+// distinct from "failed" (a genuine fetch error) so a dashboard can tell
+// "nobody has this app installed" apart from "the endpoint is broken" at a
+// glance. Named to match jiraDevStatusUnavailableCause (providersync)
+// verbatim, per the ruling's exact wording.
+var metricJiraDevStatusOutcomeVocabulary = map[string]struct{}{
+	"synced": {}, "dev_status_unavailable": {}, "failed": {}, "cap_skipped": {},
+}
+
+// MetricJiraDevStatusOutcomeLabel bounds the outcome label by allowlist, the
+// same shape as MetricJiraSearchPageOutcomeLabel.
+func MetricJiraDevStatusOutcomeLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricJiraDevStatusOutcomeVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordJiraDevStatus counts one dev-status fetch attempt, by outcome:
+// "synced" (rows extracted), "dev_status_unavailable" (400/404 no-op),
+// "failed" (a genuine error), or "cap_skipped" (dev_status_max_requests
+// reached before this issue was attempted).
+func (m *Metrics) RecordJiraDevStatus(outcome string) {
+	if m == nil {
+		return
+	}
+	label := MetricJiraDevStatusOutcomeLabel(outcome)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.jiraDevStatus[label]++
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1503,6 +1543,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_jira_search_pages_total",
 		"Jira /rest/api/3/search/jql cursor-paging walks, by outcome (CHAOS-4585).",
 		"outcome", m.jiraSearchPages,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_jira_dev_status_total",
+		"Jira dev-status (GitHub-for-Jira panel) PRIMARY PR-issue link fetches, by outcome (CHAOS-4757). \"unavailable\" is the ruled clean no-op (no GitHub-for-Jira app configured for this issue), distinct from \"failed\" (a genuine fetch error).",
+		"outcome", m.jiraDevStatus,
 	); err != nil {
 		return err
 	}

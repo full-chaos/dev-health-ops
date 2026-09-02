@@ -519,20 +519,22 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.500")
 	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.000")
 
-	// !! KEY G IS BLIND ON THE CI IMAGE PIN. Measured, both engines:
+	// Key G is only meaningful because the harness image is 26.7. It was blind
+	// on the previous pin, and that is worth keeping rather than deleting:
 	//
-	//     26.6.1.1193 (ci/go pin)  '9999-12-31' stores as 2299-12-31, millis
-	//                              10,413,791,999,999  -> 2**45 margin x3.38
-	//     26.7.6.57   (prod line)  '9999-12-31' stores as written, millis
-	//                              253,402,300,799,000 -> 2**45 margin x0.14
+	//     26.6.1.1193 (the old pin)  '9999-12-31' SATURATES to 2299-12-31,
+	//                                millis 10,413,791,999,999 -> 2**45 margin x3.38
+	//     26.7.x      (current)      stored as written,
+	//                                millis 253,402,300,799,999 -> 2**45 margin x0.14
 	//
-	// DateTime64(3) SATURATES at 2299 on the pinned image and does not on the
-	// prod line. So the 2**45 defect is UNREACHABLE in CI and live in
-	// production, and the mutant proof for this key is only valid on 26.7:
-	//     26.6.1 + 2**45 mutant -> PASSES (clamped, cannot see it)
-	//     26.7   + 2**45 mutant -> FAILS, "surviving provenance heuristic, want native"
-	// Do not read a green here as certifying the multiplier. That is recorded
-	// in the PR body as a CI-vs-prod gap wider than this migration.
+	// DateTime64(3) saturates at 2299 on the older engine, so the 2**45 defect
+	// was UNREACHABLE in CI while live in production: with the multiplier
+	// reverted, this key PASSED on the pin and FAILED on 26.7. CHAOS-4854 /
+	// #2138 moved the harness to :26.7, so the mutant is now genuinely red on
+	// the default path -- verified after that merge, no DSN override:
+	//     2**45 mutant -> "surviving provenance heuristic, want native"
+	// If the harness image is ever moved BACK below 26.7, this key stops
+	// certifying the multiplier and silently passes.
 	//
 	// Keys G and H sit at DateTime64(3)'s REPRESENTABLE extremes, not at a
 	// plausible-looking one. Key C used year 2100 -- an imagined extreme -- and

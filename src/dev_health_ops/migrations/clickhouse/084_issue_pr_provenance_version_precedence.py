@@ -185,9 +185,11 @@ VERSION_MULTIPLIER = 2**50
 #     worst case 4*M + max = 4,757,001,928,170,495  (UInt64 max 1.8e19)
 #     min case   1*M + min(1900-01-01) = 1,123,690,918,042,624, still positive
 #
-# The corpus carries keys at BOTH representable extremes. NOTE that the CI image
-# pin cannot certify this: DateTime64(3) saturates at 2299 on 26.6.1.1193 and
-# does not on 26.7, so the mutant proof is valid only on the prod line.
+# The corpus carries keys at BOTH representable extremes. The harness image had
+# to move to :26.7 (CHAOS-4854 / #2138) for that to mean anything: DateTime64(3)
+# SATURATES at 2299 on 26.6.1.1193, so a year-9999 stamp clamped and the 2**45
+# defect was unreachable in CI while live in production. On :26.7 the mutant is
+# red on the default path.
 VERSION_EXPRESSION = (
     "(multiIf("
     "provenance = 'native', 3, "

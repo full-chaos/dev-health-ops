@@ -162,12 +162,14 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 			}
 			table := fmt.Sprintf("chaos4769_tie_%d", trial)
 			exec(ctx, t, conn, "DROP TABLE IF EXISTS "+table)
-			exec(ctx, t, conn, fmt.Sprintf(`CREATE TABLE %s (
-				repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32,
-				provenance String, evidence String, last_synced DateTime64(3,'UTC'),
-				org_id String DEFAULT 'default'
-			) ENGINE = ReplacingMergeTree(last_synced)
-			ORDER BY (org_id, repo_id, work_item_id, pr_number)`, table))
+			// `AS work_graph_issue_pr` copies the MIGRATED structure and engine,
+			// version column included, rather than restating them here. That is
+			// load-bearing: an earlier version of this subtest wrote its own DDL
+			// with ENGINE = ReplacingMergeTree(last_synced), so the trial tables
+			// kept the pre-084 behaviour and the subtest failed against a
+			// working migration. A hand-written fixture schema can drift from
+			// the thing it is meant to be testing; a copied one cannot.
+			exec(ctx, t, conn, fmt.Sprintf("CREATE TABLE %s AS work_graph_issue_pr", table))
 			for _, prov := range order {
 				// One INSERT is one PART, which is what distinct writer calls
 				// produce. The part boundary IS the mechanism here.

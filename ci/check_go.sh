@@ -841,7 +841,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -857,6 +857,20 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-json-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for a producer that is neither a computation nor a
+  # dependency but a set of DEFAULT ARGUMENTS. json.dumps(value) with no
+  # sort_keys is a DIFFERENT reference from json.dumps(value, sort_keys=True)
+  # guarded above, and the two emit different bytes for the same data --
+  # recommendations/loader.py:448 writes the evidence_json column with the
+  # bare form. This marker is separate because a shared one would be satisfied
+  # by the sort_keys guard while this one was filtered out of -run, which is
+  # exactly the substitution that makes the two look interchangeable.
+  proof_file="${proof_dir}/python-json-insertion-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps insertion-order golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

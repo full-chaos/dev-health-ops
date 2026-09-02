@@ -1240,5 +1240,597 @@
     }
   ],
   "membership_weight_threshold": 0.2,
-  "membership_weight_threshold_bits": "3fc999999999999a"
+  "membership_weight_threshold_bits": "3fc999999999999a",
+  "record_cases": [
+    {
+      "label": "no_nodes",
+      "nodes": [],
+      "records": [],
+      "subcategory_distribution": [
+        {
+          "bits": "3fe3333333333333",
+          "category": "feature_delivery.roadmap",
+          "kind": "float",
+          "repr": "0.6"
+        },
+        {
+          "bits": "3fd0000000000000",
+          "category": "maintenance.debt",
+          "kind": "float",
+          "repr": "0.25"
+        }
+      ],
+      "theme_distribution": [
+        {
+          "bits": "3fe6666666666666",
+          "category": "feature_delivery",
+          "kind": "float",
+          "repr": "0.7"
+        },
+        {
+          "bits": "3fd3333333333333",
+          "category": "maintenance",
+          "kind": "float",
+          "repr": "0.3"
+        }
+      ]
+    },
+    {
+      "label": "single_node",
+      "nodes": [
+        [
+          "issue",
+          "i1"
+        ]
+      ],
+      "records": [
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        }
+      ],
+      "subcategory_distribution": [
+        {
+          "bits": "3fe3333333333333",
+          "category": "feature_delivery.roadmap",
+          "kind": "float",
+          "repr": "0.6"
+        },
+        {
+          "bits": "3fd0000000000000",
+          "category": "maintenance.debt",
+          "kind": "float",
+          "repr": "0.25"
+        }
+      ],
+      "theme_distribution": [
+        {
+          "bits": "3fe6666666666666",
+          "category": "feature_delivery",
+          "kind": "float",
+          "repr": "0.7"
+        },
+        {
+          "bits": "3fd3333333333333",
+          "category": "maintenance",
+          "kind": "float",
+          "repr": "0.3"
+        }
+      ]
+    },
+    {
+      "label": "multiple_nodes_interleave_theme_then_subcategory",
+      "nodes": [
+        [
+          "issue",
+          "i1"
+        ],
+        [
+          "pr",
+          "p1"
+        ],
+        [
+          "commit",
+          "c1"
+        ]
+      ],
+      "records": [
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "p1",
+          "node_type": "pr",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "p1",
+          "node_type": "pr",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "p1",
+          "node_type": "pr",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "p1",
+          "node_type": "pr",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "c1",
+          "node_type": "commit",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "c1",
+          "node_type": "commit",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "c1",
+          "node_type": "commit",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "c1",
+          "node_type": "commit",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        }
+      ],
+      "subcategory_distribution": [
+        {
+          "bits": "3fe3333333333333",
+          "category": "feature_delivery.roadmap",
+          "kind": "float",
+          "repr": "0.6"
+        },
+        {
+          "bits": "3fd0000000000000",
+          "category": "maintenance.debt",
+          "kind": "float",
+          "repr": "0.25"
+        }
+      ],
+      "theme_distribution": [
+        {
+          "bits": "3fe6666666666666",
+          "category": "feature_delivery",
+          "kind": "float",
+          "repr": "0.7"
+        },
+        {
+          "bits": "3fd3333333333333",
+          "category": "maintenance",
+          "kind": "float",
+          "repr": "0.3"
+        }
+      ]
+    },
+    {
+      "label": "duplicate_node_is_not_deduplicated",
+      "nodes": [
+        [
+          "issue",
+          "i1"
+        ],
+        [
+          "issue",
+          "i1"
+        ]
+      ],
+      "records": [
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        }
+      ],
+      "subcategory_distribution": [
+        {
+          "bits": "3fe3333333333333",
+          "category": "feature_delivery.roadmap",
+          "kind": "float",
+          "repr": "0.6"
+        },
+        {
+          "bits": "3fd0000000000000",
+          "category": "maintenance.debt",
+          "kind": "float",
+          "repr": "0.25"
+        }
+      ],
+      "theme_distribution": [
+        {
+          "bits": "3fe6666666666666",
+          "category": "feature_delivery",
+          "kind": "float",
+          "repr": "0.7"
+        },
+        {
+          "bits": "3fd3333333333333",
+          "category": "maintenance",
+          "kind": "float",
+          "repr": "0.3"
+        }
+      ]
+    },
+    {
+      "label": "empty_theme_distribution",
+      "nodes": [
+        [
+          "issue",
+          "i1"
+        ]
+      ],
+      "records": [
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery.roadmap",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe3333333333333",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance.debt",
+          "category_kind": "subcategory",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd0000000000000",
+          "work_unit_id": "wu-1"
+        }
+      ],
+      "subcategory_distribution": [
+        {
+          "bits": "3fe3333333333333",
+          "category": "feature_delivery.roadmap",
+          "kind": "float",
+          "repr": "0.6"
+        },
+        {
+          "bits": "3fd0000000000000",
+          "category": "maintenance.debt",
+          "kind": "float",
+          "repr": "0.25"
+        }
+      ],
+      "theme_distribution": []
+    },
+    {
+      "label": "empty_subcategory_distribution",
+      "nodes": [
+        [
+          "issue",
+          "i1"
+        ]
+      ],
+      "records": [
+        {
+          "categorization_status": "llm",
+          "category": "feature_delivery",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 1,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fe6666666666666",
+          "work_unit_id": "wu-1"
+        },
+        {
+          "categorization_status": "llm",
+          "category": "maintenance",
+          "category_kind": "theme",
+          "computed_at": "2026-09-02T12:00:00+00:00",
+          "is_dominant": 0,
+          "node_id": "i1",
+          "node_type": "issue",
+          "org_id": "org-1",
+          "run_id": "run-1",
+          "weight_bits": "3fd3333333333333",
+          "work_unit_id": "wu-1"
+        }
+      ],
+      "subcategory_distribution": [],
+      "theme_distribution": [
+        {
+          "bits": "3fe6666666666666",
+          "category": "feature_delivery",
+          "kind": "float",
+          "repr": "0.7"
+        },
+        {
+          "bits": "3fd3333333333333",
+          "category": "maintenance",
+          "kind": "float",
+          "repr": "0.3"
+        }
+      ]
+    },
+    {
+      "label": "both_distributions_empty",
+      "nodes": [
+        [
+          "issue",
+          "i1"
+        ]
+      ],
+      "records": [],
+      "subcategory_distribution": [],
+      "theme_distribution": []
+    }
+  ]
 }

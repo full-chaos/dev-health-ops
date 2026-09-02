@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type membershipRawWeight struct {
@@ -220,4 +221,149 @@ func TestMembershipCorpusStillCoversItsAxes(t *testing.T) {
 			t.Errorf("corpus no longer contains %q -- an axis lost its only case", label)
 		}
 	}
+}
+
+type membershipGoldenRecord struct {
+	NodeType             string `json:"node_type"`
+	NodeID               string `json:"node_id"`
+	WorkUnitID           string `json:"work_unit_id"`
+	CategoryKind         string `json:"category_kind"`
+	Category             string `json:"category"`
+	WeightBits           string `json:"weight_bits"`
+	IsDominant           int    `json:"is_dominant"`
+	CategorizationStatus string `json:"categorization_status"`
+	ComputedAt           string `json:"computed_at"`
+	OrgID                string `json:"org_id"`
+	RunID                string `json:"run_id"`
+}
+
+type membershipRecordCase struct {
+	Label                   string                   `json:"label"`
+	Nodes                   [][]string               `json:"nodes"`
+	ThemeDistribution       []membershipRawWeight    `json:"theme_distribution"`
+	SubcategoryDistribution []membershipRawWeight    `json:"subcategory_distribution"`
+	Records                 []membershipGoldenRecord `json:"records"`
+}
+
+func loadMembershipRecordCases(t *testing.T) []membershipRecordCase {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "..",
+		"tests", "fixtures", "membership_python_golden.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read membership golden: %v", err)
+	}
+	var doc struct {
+		RecordCases []membershipRecordCase `json:"record_cases"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse membership golden: %v", err)
+	}
+	if len(doc.RecordCases) == 0 {
+		t.Fatal("no record cases in the corpus; this test would pass vacuously")
+	}
+	return doc.RecordCases
+}
+
+func buildDistribution(t *testing.T, entries []membershipRawWeight) *Distribution {
+	t.Helper()
+	pairs := make([]CategoryWeight, 0, len(entries))
+	for _, entry := range entries {
+		pairs = append(pairs, CategoryWeight{
+			Category: entry.Category,
+			Weight:   entry.value(t),
+		})
+	}
+	return NewDistribution(pairs...)
+}
+
+// TestBuildMembershipRecordsMatchesPython compares the record SEQUENCE.
+//
+// The nesting is the assertion. Python emits, per node, every theme row and then
+// every subcategory row -- not all themes for all nodes followed by all
+// subcategories. Both nestings produce the same multiset, so only an ordered
+// comparison distinguishes them, and only on a case with more than one node AND
+// both distributions non-empty. With a single node, or either distribution
+// empty, the two nestings coincide and the case proves nothing.
+func TestBuildMembershipRecordsMatchesPython(t *testing.T) {
+	for _, testCase := range loadMembershipRecordCases(t) {
+		t.Run(testCase.Label, func(t *testing.T) {
+			nodes := make([]NodeKey, 0, len(testCase.Nodes))
+			for _, node := range testCase.Nodes {
+				if len(node) != 2 {
+					t.Fatalf("malformed node %v", node)
+				}
+				nodes = append(nodes, NodeKey{Type: node[0], ID: node[1]})
+			}
+
+			computedAt, err := time.Parse(time.RFC3339Nano, testCase.Records0ComputedAt())
+			if err != nil && len(testCase.Records) > 0 {
+				t.Fatalf("parse computed_at: %v", err)
+			}
+
+			got := BuildMembershipRecords(
+				MembershipInput{
+					UnitNodes:            nodes,
+					WorkUnitID:           "wu-1",
+					CategorizationStatus: "llm",
+					ComputedAt:           computedAt,
+					OrgID:                "org-1",
+					RunID:                "run-1",
+				},
+				buildDistribution(t, testCase.ThemeDistribution),
+				buildDistribution(t, testCase.SubcategoryDistribution),
+			)
+
+			if len(got) != len(testCase.Records) {
+				t.Fatalf("record count = %d, python = %d", len(got), len(testCase.Records))
+			}
+			for i, want := range testCase.Records {
+				actual := got[i]
+				// Compared field by field with the INDEX in every message,
+				// because a nesting error produces the right rows in the wrong
+				// positions and "record 4 category_kind = theme, python =
+				// subcategory" is the message that names the actual bug.
+				if actual.NodeType != want.NodeType || actual.NodeID != want.NodeID {
+					t.Errorf("record %d node = (%s,%s), python = (%s,%s)",
+						i, actual.NodeType, actual.NodeID, want.NodeType, want.NodeID)
+				}
+				if actual.CategoryKind != want.CategoryKind {
+					t.Errorf("record %d category_kind = %q, python = %q (nesting order)",
+						i, actual.CategoryKind, want.CategoryKind)
+				}
+				if actual.Category != want.Category {
+					t.Errorf("record %d category = %q, python = %q", i, actual.Category, want.Category)
+				}
+				if bits := math.Float64bits(actual.Weight); bits != hexBits(t, want.WeightBits) {
+					t.Errorf("record %d weight bits = %016x, python = %s", i, bits, want.WeightBits)
+				}
+				if actual.IsDominant != want.IsDominant {
+					t.Errorf("record %d is_dominant = %d, python = %d", i, actual.IsDominant, want.IsDominant)
+				}
+				if actual.WorkUnitID != want.WorkUnitID || actual.OrgID != want.OrgID {
+					t.Errorf("record %d ids = (%s,%s), python = (%s,%s)",
+						i, actual.WorkUnitID, actual.OrgID, want.WorkUnitID, want.OrgID)
+				}
+				if actual.CategorizationStatus != want.CategorizationStatus {
+					t.Errorf("record %d status = %q, python = %q",
+						i, actual.CategorizationStatus, want.CategorizationStatus)
+				}
+				// run_id is stamped on EVERY row (CHAOS-2433). Readers scope to
+				// the latest complete run, so a row missing it is invisible.
+				if actual.RunID != want.RunID {
+					t.Errorf("record %d run_id = %q, python = %q", i, actual.RunID, want.RunID)
+				}
+			}
+		})
+	}
+}
+
+// Records0ComputedAt returns the computed_at the generator stamped, or a usable
+// zero for the empty cases. Kept as a helper so the empty-record cases do not
+// need a special branch at the call site.
+func (c membershipRecordCase) Records0ComputedAt() string {
+	if len(c.Records) == 0 {
+		return "2026-09-02T12:00:00+00:00"
+	}
+	return c.Records[0].ComputedAt
 }

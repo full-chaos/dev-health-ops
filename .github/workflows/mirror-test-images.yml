@@ -80,18 +80,6 @@ jobs:
           echo "--- images to mirror ---"
           cat images.tsv
 
-      - name: Report the Docker Hub rate limit before pulling
-        # Diagnostic, not a gate: makes the quota visible in the log so the next
-        # outage is one glance rather than an investigation. Reads only the
-        # anonymous token endpoint -- no credential is echoed.
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          token=$(curl -fsSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-          curl -fsSI -H "Authorization: Bearer ${token}" \
-            https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest \
-            | grep -i 'ratelimit' || echo "no ratelimit headers returned"
-
       - name: Mirror each image to ghcr.io, preserving its digest
         env:
           OWNER: ${{ github.repository_owner }}
@@ -144,3 +132,43 @@ jobs:
             esac
           done < images.tsv
           exit "${failed}"
+
+  # Measures the account's Docker Hub tier and remaining quota instead of asking
+  # for it. Docker Hub returns `ratelimit-limit`/`ratelimit-remaining` on
+  # metered plans and OMITS them entirely on unmetered ones, so the absence of
+  # the headers is itself the answer. Kept as a permanent diagnostic: the next
+  # time CI dies on `toomanyrequests`, this is one dispatch rather than an
+  # investigation.
+  #
+  # Only the two header values are printed. The credentials are passed to curl
+  # through the environment and never echoed; `set -x` is deliberately not used.
+  ratelimit-probe:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe the Docker Hub rate limit for this account
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          token=$(curl -fsSL -u "${HUB_USER}:${HUB_TOKEN}" \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          if [ -z "${token}" ]; then
+            echo "::error::could not obtain a Docker Hub token with the configured credentials"
+            exit 1
+          fi
+          headers=$(curl -fsSI -H "Authorization: Bearer ${token}" \
+            https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest)
+          limit=$(printf '%s\n' "${headers}" | grep -i '^ratelimit-limit:' || true)
+          remaining=$(printf '%s\n' "${headers}" | grep -i '^ratelimit-remaining:' || true)
+          echo "--- Docker Hub rate limit, authenticated as the configured account ---"
+          if [ -z "${limit}${remaining}" ]; then
+            echo "no ratelimit headers returned"
+            echo "=> unmetered plan (Pro/Team/Business): pull limits are not the cause"
+          else
+            printf '%s\n%s\n' "${limit}" "${remaining}"
+            echo "=> metered plan. 'w=21600' is the 6-hour window; remaining=0 means exhausted."
+          fi

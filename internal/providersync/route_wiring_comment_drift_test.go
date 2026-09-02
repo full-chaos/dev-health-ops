@@ -80,8 +80,10 @@ var staleRegistrationClaims = []string{
 // surface is eliminated rather than tiered: a retraction declares itself.
 //
 // CONTRACT: every line of a citation begins with this tag, including each line
-// of a multi-line quotation. Lines carrying it are excluded from the assertion
-// text; everything else is an assertion. Mechanical, exact, no grammar.
+// of a multi-line quotation. A tag exempts only what it FULLY CONTAINS -- a
+// claim severed by a tag boundary is treated as asserted, not cited, so the
+// exemption cannot be used to hide half a phrase (lane-4441's finding on
+// 22e5000a1). Mechanical, exact, no grammar.
 const supersededTag = "SUPERSEDED:"
 
 func wiringFilePath(t *testing.T) string {
@@ -307,20 +309,47 @@ func collapseWhitespace(text string) string {
 }
 
 func assertedStaleClaims(doc string) []string {
-	// Drop tagged citation lines, then collapse what remains. Whitespace is
-	// collapsed so a claim split across two comment lines cannot evade a
-	// literal (codex round 2 proved that with a passing mutation).
-	var assertionLines []string
+	// Three views of the comment. Whitespace is collapsed in each so a claim
+	// split across two lines cannot evade a literal (codex round 2 proved that
+	// with a passing mutation).
+	var assertionLines, citationLines, allLines []string
 	for _, line := range strings.Split(doc, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), supersededTag) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, supersededTag) {
+			body := strings.TrimPrefix(trimmed, supersededTag)
+			citationLines = append(citationLines, body)
+			// The tag TOKEN is stripped here too. Leaving it in would keep
+			// "SUPERSEDED:" sitting between the two halves of a severed claim,
+			// so the phrase still would not form and the severed case below
+			// could never fire -- the fixture for it caught exactly that.
+			allLines = append(allLines, body)
 			continue
 		}
 		assertionLines = append(assertionLines, line)
+		allLines = append(allLines, line)
 	}
 	assertions := collapseWhitespace(strings.Join(assertionLines, " "))
+	citations := collapseWhitespace(strings.Join(citationLines, " "))
+	everything := collapseWhitespace(strings.Join(allLines, " "))
+
 	var found []string
 	for _, claim := range staleRegistrationClaims {
-		if strings.Contains(assertions, claim) {
+		switch {
+		case strings.Contains(assertions, claim):
+			// Stated outside any citation: an assertion.
+			found = append(found, claim)
+		case strings.Contains(citations, claim):
+			// Wholly inside the citation: a legitimate retraction. This is the
+			// ONLY exemption, and it requires the tag to carry the WHOLE claim.
+		case strings.Contains(everything, claim):
+			// SEVERED: the claim exists in the comment but in neither view --
+			// a tag boundary cut through it, e.g.
+			//     this handler is intentionally
+			//     SUPERSEDED: unregistered
+			// Dropping the tagged line whole took "unregistered" with it, so
+			// the phrase never formed and nothing noticed. That is a false
+			// EXEMPTION, the dangerous direction, so this fails CLOSED: a tag
+			// only exempts what it fully contains (lane-4441, round on 22e5000a1).
 			found = append(found, claim)
 		}
 	}
@@ -405,6 +434,31 @@ func TestDriftGuardCatchesAPlantedStaleClaim(t *testing.T) {
 			`"intentionally unregistered" by the worker.`
 		if claims := assertedStaleClaims(f1); len(claims) != 1 {
 			t.Fatalf("an unrelated retraction marker shielded a real assertion: %v", claims)
+		}
+	})
+
+	t.Run("a tag must not exempt a claim it only partly contains", func(t *testing.T) {
+		// lane-4441's finding on 22e5000a1: line-granular exemption dropped the
+		// tagged line WHOLE, taking "unregistered" with it, so the phrase never
+		// formed and the guard reported clean -- a false EXEMPTION, the
+		// dangerous direction. A tag now exempts only what it fully contains.
+		severed := "this handler is intentionally\nSUPERSEDED: unregistered"
+		if claims := assertedStaleClaims(severed); len(claims) != 1 {
+			t.Fatalf("a claim severed across a tag boundary was exempted: %v", claims)
+		}
+	})
+
+	t.Run("a citation spanning several tagged lines still exempts", func(t *testing.T) {
+		// The control for the case above: severing must fail closed WITHOUT
+		// breaking a legitimate multi-line citation, which is the shape all
+		// seven converted comments use. If this ever reds, the fix above has
+		// over-corrected into rejecting correct comments.
+		spanning := "WIRING: WIRED.\n" +
+			"SUPERSEDED: \"It is intentionally\n" +
+			"SUPERSEDED: unregistered: wiring is a separate slice.\"\n" +
+			"That is now false."
+		if claims := assertedStaleClaims(spanning); len(claims) != 0 {
+			t.Fatalf("a legitimate citation spanning tagged lines was rejected: %v", claims)
 		}
 	})
 

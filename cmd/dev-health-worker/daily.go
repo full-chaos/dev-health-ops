@@ -193,155 +193,21 @@ func buildDailyWorker(
 				// SetNativeFamilies REPLACES its map on every call (it does
 				// not merge), so every native family must be accumulated
 				// into ONE map and registered in a single call.
-				nativeFamilies := map[string]daily.NativeFamilyExecutor{}
-				if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
-					nativeFamilies["team_wellbeing"] = teamWellbeingExecutor
-					// CHAOS-4329: per-team repo fan-out telemetry -- optional,
-					// same fail-open discipline as the native family observer
-					// registered below once every native family is accumulated.
-					if repoCountObserver, ok := observer.(jobruntime.TeamMetricsDailyRepoCountObserver); ok {
-						teamWellbeingExecutor.SetRepoCountObserver(repoCountObserver)
-					}
-				} else {
-					logger.Error(
-						"team_wellbeing native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", teamWellbeingErr,
-					)
-				}
-				if repoUserCommitExecutor, repoUserCommitErr := daily.NewRepoUserCommitExecutor(clickhouseConnection); repoUserCommitErr == nil {
-					nativeFamilies["repo_user_commit"] = repoUserCommitExecutor
-				} else {
-					logger.Error(
-						"repo_user_commit native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", repoUserCommitErr,
-					)
-				}
-				// CHAOS-4269/CHAOS-4295: incident carries a FIX, not just a
-				// port -- the Python compatibility bridge for this family is
-				// permanently zero-yield (active_incidents_query's
-				// valid_from predicate has no NULL-OK guard, and
-				// map_issue_incidents never sets valid_from). A refused
-				// executor here means the family STAYS BROKEN for every
-				// partition until the worker restarts with a healthy
-				// connection, not merely "computed a little slower" the way
-				// a refused team_wellbeing/repo_user_commit executor does --
-				// still fail-open by the same standing policy (one family
-				// degrading must never take another down), but worth this
-				// note for whoever reads this log line during an incident.
-				if incidentExecutor, incidentErr := daily.NewIncidentExecutor(clickhouseConnection); incidentErr == nil {
-					if guardObserver, ok := observer.(jobruntime.IncidentValidFromGuardObserver); ok {
-						incidentExecutor.SetValidFromGuardObserver(guardObserver)
-					}
-					nativeFamilies["incident"] = incidentExecutor
-				} else {
-					logger.Error(
-						"incident native executor refused; the family stays "+
-							"on the Python compatibility bridge, which is "+
-							"PERMANENTLY ZERO-YIELD for repository-derived "+
-							"incident mappings (CHAOS-4269) until this "+
-							"executor can be constructed. Every other "+
-							"daily-metrics family is unaffected.",
-						"error", incidentErr,
-					)
-				}
-				// CHAOS-4293: deploy is the daily bridge's fourth native
-				// family. Same fail-open construction policy as the others
-				// above -- a refusal here leaves ONLY `deploy` on the
-				// Python compatibility bridge.
-				if deployExecutor, deployErr := daily.NewDeployExecutor(clickhouseConnection); deployErr == nil {
-					nativeFamilies["deploy"] = deployExecutor
-				} else {
-					logger.Error(
-						"deploy native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", deployErr,
-					)
-				}
-				if cicdExecutor, cicdErr := daily.NewCICDExecutor(clickhouseConnection); cicdErr == nil {
-					nativeFamilies["cicd"] = cicdExecutor
-				} else {
-					logger.Error(
-						"cicd native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", cicdErr,
-					)
-				}
-				// CHAOS-4277: file_hotspots and file_risk_hotspots are
-				// the third pair of families to leave the Python
-				// compatibility bridge -- registered as TWO independent
-				// NativeFamilyExecutors (one per families.json entry,
-				// one per output table) so a construction or runtime
-				// failure in one never takes the other down with it,
-				// same discipline as every native family above.
-				if fileHotspotsExecutor, fileHotspotsErr := daily.NewFileHotspotsExecutor(clickhouseConnection); fileHotspotsErr == nil {
-					nativeFamilies["file_hotspots"] = fileHotspotsExecutor
-				} else {
-					logger.Error(
-						"file_hotspots native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", fileHotspotsErr,
-					)
-				}
-				if fileRiskHotspotsExecutor, fileRiskHotspotsErr := daily.NewFileRiskHotspotsExecutor(clickhouseConnection); fileRiskHotspotsErr == nil {
-					nativeFamilies["file_risk_hotspots"] = fileRiskHotspotsExecutor
-				} else {
-					logger.Error(
-						"file_risk_hotspots native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", fileRiskHotspotsErr,
-					)
-				}
-				// CHAOS-4278: work_item_state reads its team attribution
-				// from work_item_team_attributions.is_primary=1 rather than
-				// recomputing the 9-source cascade -- see
-				// WorkItemStateExecutor's and
-				// LoadWorkItemPrimaryTeamAttributions's doc comments. It is
-				// registered POST-BRIDGE, not in the nativeFamilies map
-				// above (SetPostBridgeNativeFamilies, not SetNativeFamilies)
-				// -- families.json declares "phase":"post_bridge" for the
-				// SAME reason: work_item_team_attributions is written by
-				// work_item_attribution, still Python-bridged (CHAOS-4283),
-				// in the SAME partition's compatibility call, so this
-				// executor must run AFTER that call returns, not before
-				// (codex round-1 P1 on this PR caught the pre_bridge
-				// placement reading stale data -- see
-				// computePostBridgeNativeFamilies's doc comment). TEMPORARY:
-				// move back into nativeFamilies above once CHAOS-4283 ports
-				// work_item_attribution to Go and families.json's phase_note
-				// says work_item_state can return to pre_bridge.
-				postBridgeFamilies := map[string]daily.NativeFamilyExecutor{}
-				if workItemStateExecutor, workItemStateErr := daily.NewWorkItemStateExecutor(clickhouseConnection); workItemStateErr == nil {
-					postBridgeFamilies["work_item_state"] = workItemStateExecutor
-					// CHAOS-4278: the team-attribution-READ guard counter --
-					// see WorkItemStateMissingAttributionObserver's doc
-					// comment. Same optional-observer discipline as
-					// team_wellbeing's repoCountObserver above.
-					if missingAttributionObserver, ok := observer.(jobruntime.WorkItemStateMissingAttributionObserver); ok {
-						workItemStateExecutor.SetMissingAttributionObserver(missingAttributionObserver)
-					}
-				} else {
-					logger.Error(
-						"work_item_state native executor refused; the family "+
-							"stays on the Python compatibility bridge for "+
-							"every partition. Every other daily-metrics "+
-							"family is unaffected.",
-						"error", workItemStateErr,
-					)
-				}
+				//
+				// CHAOS-4292 rebase-gate class fix: construction lives in
+				// dailyNativeFamilyRegistrations, a pure function, so its
+				// return values are what the two setter calls below
+				// receive DIRECTLY -- no local variable sits between
+				// construction and use for a stray delete()/reassignment to
+				// silently undo before SetNativeFamilies/
+				// SetPostBridgeNativeFamilies ever see it (codex found and
+				// executed exactly that construction against the prior
+				// shape: `delete(nativeFamilies, "incident")` inserted
+				// before the setter call left every drift test green). The
+				// test that matters now calls dailyNativeFamilyRegistrations
+				// directly and asserts on its actual return value, not on
+				// source text.
+				nativeFamilies, postBridgeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
@@ -589,6 +455,175 @@ func buildDailyWorker(
 		),
 		cleanups: cleanups,
 	}, nil
+}
+
+// dailyNativeFamilyRegistrations builds the native and post-bridge family
+// maps buildDailyWorker registers with the partition handler. Extracted as
+// a pure function (CHAOS-4292 rebase-gate class fix) precisely so its
+// return values -- the actual maps SetNativeFamilies/
+// SetPostBridgeNativeFamilies receive -- can be asserted on directly in a
+// test, rather than approximated by parsing source text for assignment
+// statements a later delete()/reassignment could silently undo before the
+// setter calls ever run. buildDailyWorker passes clickhouseConnection
+// (opened once, kept open for the worker's lifetime -- this function never
+// closes it), observer, and logger straight through; every family's
+// construction/fail-open/optional-observer-wiring logic is unchanged from
+// before this extraction, only relocated.
+func dailyNativeFamilyRegistrations(
+	clickhouseConnection driver.Conn,
+	observer jobruntime.Observer,
+	logger *slog.Logger,
+) (native map[string]daily.NativeFamilyExecutor, postBridge map[string]daily.NativeFamilyExecutor) {
+	native = map[string]daily.NativeFamilyExecutor{}
+	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
+		native["team_wellbeing"] = teamWellbeingExecutor
+		// CHAOS-4329: per-team repo fan-out telemetry -- optional,
+		// same fail-open discipline as the native family observer
+		// registered by the caller once every native family is accumulated.
+		if repoCountObserver, ok := observer.(jobruntime.TeamMetricsDailyRepoCountObserver); ok {
+			teamWellbeingExecutor.SetRepoCountObserver(repoCountObserver)
+		}
+	} else {
+		logger.Error(
+			"team_wellbeing native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", teamWellbeingErr,
+		)
+	}
+	if repoUserCommitExecutor, repoUserCommitErr := daily.NewRepoUserCommitExecutor(clickhouseConnection); repoUserCommitErr == nil {
+		native["repo_user_commit"] = repoUserCommitExecutor
+	} else {
+		logger.Error(
+			"repo_user_commit native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", repoUserCommitErr,
+		)
+	}
+	// CHAOS-4269/CHAOS-4295: incident carries a FIX, not just a
+	// port -- the Python compatibility bridge for this family is
+	// permanently zero-yield (active_incidents_query's
+	// valid_from predicate has no NULL-OK guard, and
+	// map_issue_incidents never sets valid_from). A refused
+	// executor here means the family STAYS BROKEN for every
+	// partition until the worker restarts with a healthy
+	// connection, not merely "computed a little slower" the way
+	// a refused team_wellbeing/repo_user_commit executor does --
+	// still fail-open by the same standing policy (one family
+	// degrading must never take another down), but worth this
+	// note for whoever reads this log line during an incident.
+	if incidentExecutor, incidentErr := daily.NewIncidentExecutor(clickhouseConnection); incidentErr == nil {
+		if guardObserver, ok := observer.(jobruntime.IncidentValidFromGuardObserver); ok {
+			incidentExecutor.SetValidFromGuardObserver(guardObserver)
+		}
+		native["incident"] = incidentExecutor
+	} else {
+		logger.Error(
+			"incident native executor refused; the family stays "+
+				"on the Python compatibility bridge, which is "+
+				"PERMANENTLY ZERO-YIELD for repository-derived "+
+				"incident mappings (CHAOS-4269) until this "+
+				"executor can be constructed. Every other "+
+				"daily-metrics family is unaffected.",
+			"error", incidentErr,
+		)
+	}
+	// CHAOS-4293: deploy is the daily bridge's fourth native
+	// family. Same fail-open construction policy as the others
+	// above -- a refusal here leaves ONLY `deploy` on the
+	// Python compatibility bridge.
+	if deployExecutor, deployErr := daily.NewDeployExecutor(clickhouseConnection); deployErr == nil {
+		native["deploy"] = deployExecutor
+	} else {
+		logger.Error(
+			"deploy native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", deployErr,
+		)
+	}
+	if cicdExecutor, cicdErr := daily.NewCICDExecutor(clickhouseConnection); cicdErr == nil {
+		native["cicd"] = cicdExecutor
+	} else {
+		logger.Error(
+			"cicd native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", cicdErr,
+		)
+	}
+	// CHAOS-4277: file_hotspots and file_risk_hotspots are
+	// the third pair of families to leave the Python
+	// compatibility bridge -- registered as TWO independent
+	// NativeFamilyExecutors (one per families.json entry,
+	// one per output table) so a construction or runtime
+	// failure in one never takes the other down with it,
+	// same discipline as every native family above.
+	if fileHotspotsExecutor, fileHotspotsErr := daily.NewFileHotspotsExecutor(clickhouseConnection); fileHotspotsErr == nil {
+		native["file_hotspots"] = fileHotspotsExecutor
+	} else {
+		logger.Error(
+			"file_hotspots native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", fileHotspotsErr,
+		)
+	}
+	if fileRiskHotspotsExecutor, fileRiskHotspotsErr := daily.NewFileRiskHotspotsExecutor(clickhouseConnection); fileRiskHotspotsErr == nil {
+		native["file_risk_hotspots"] = fileRiskHotspotsExecutor
+	} else {
+		logger.Error(
+			"file_risk_hotspots native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", fileRiskHotspotsErr,
+		)
+	}
+	// CHAOS-4278: work_item_state reads its team attribution
+	// from work_item_team_attributions.is_primary=1 rather than
+	// recomputing the 9-source cascade -- see
+	// WorkItemStateExecutor's and
+	// LoadWorkItemPrimaryTeamAttributions's doc comments. It is
+	// registered POST-BRIDGE, not in the native map
+	// above (SetPostBridgeNativeFamilies, not SetNativeFamilies)
+	// -- families.json declares "phase":"post_bridge" for the
+	// SAME reason: work_item_team_attributions is written by
+	// work_item_attribution, still Python-bridged (CHAOS-4283),
+	// in the SAME partition's compatibility call, so this
+	// executor must run AFTER that call returns, not before
+	// (codex round-1 P1 on this PR caught the pre_bridge
+	// placement reading stale data -- see
+	// computePostBridgeNativeFamilies's doc comment). TEMPORARY:
+	// move back into native above once CHAOS-4283 ports
+	// work_item_attribution to Go and families.json's phase_note
+	// says work_item_state can return to pre_bridge.
+	postBridge = map[string]daily.NativeFamilyExecutor{}
+	if workItemStateExecutor, workItemStateErr := daily.NewWorkItemStateExecutor(clickhouseConnection); workItemStateErr == nil {
+		postBridge["work_item_state"] = workItemStateExecutor
+		// CHAOS-4278: the team-attribution-READ guard counter --
+		// see WorkItemStateMissingAttributionObserver's doc
+		// comment. Same optional-observer discipline as
+		// team_wellbeing's repoCountObserver above.
+		if missingAttributionObserver, ok := observer.(jobruntime.WorkItemStateMissingAttributionObserver); ok {
+			workItemStateExecutor.SetMissingAttributionObserver(missingAttributionObserver)
+		}
+	} else {
+		logger.Error(
+			"work_item_state native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", workItemStateErr,
+		)
+	}
+	return native, postBridge
 }
 
 func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {

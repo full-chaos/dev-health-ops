@@ -2,42 +2,55 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 )
 
-// CHAOS-4292 rebase-gate finding (codex, 2026-09-01): the two drift checks
-// this metrics.daily cutover wave relied on -- families_test.go's
-// families.json validation and internal/jobruntime's
+// CHAOS-4292 rebase-gate finding (codex, 2026-09-01, two rounds): the
+// pre-existing drift checks this metrics.daily cutover wave relied on --
+// families_test.go's families.json validation and internal/jobruntime's
 // TestDailyMetricsNativeFamiliesCoverEveryPortedFamily -- both read a
-// SOURCE OF TRUTH (families.json, or telemetry.go's own allowlist), never
-// the ACTUAL dispatch registration in buildDailyWorker
-// (cmd/dev-health-worker/daily.go). Codex proved this by deleting each of
-// the four newest `nativeFamilies["X"] = ...` /
-// `postBridgeFamilies["X"] = ...` assignments in a disposable worktree:
-// both existing tests stayed green. For `incident` specifically this is
-// data-affecting, not cosmetic: with no native registration, the partition
-// falls through to the Python compatibility bridge, whose
-// `active_incidents_query` predicate has no NULL-OK guard and is
-// PERMANENTLY ZERO-YIELD (CHAOS-4269) -- silently, since construction
-// success means no refusal log and no native-family telemetry either.
+// declared source of truth, never buildDailyWorker's ACTUAL dispatch
+// registration. A first fix (parsing daily.go's source with go/ast) closed
+// the "assignment is missing entirely" case but codex then proved even
+// that insufficient: inserting `delete(nativeFamilies, "incident")`
+// immediately before SetNativeFamilies left the AST-based test green too,
+// since the assignment statement was still present in source -- the AST
+// walk could not see that a LATER statement undid it before the setter
+// call ever ran.
 //
-// This test closes that gap by reading the ACTUAL registration: it parses
-// buildDailyWorker's source with go/ast (same pattern
-// cmd/dev-health-reconciler/pool_composition_test.go already uses for an
-// analogous "the pin must match the wiring" check) and asserts SET
-// EQUALITY, in both directions, against families.json's own `"port":"go"`
-// set. A family registered here but not `"go"` in families.json is caught
-// exactly like a family that's `"go"` but never registered here -- neither
-// half of this pair can drift without the other noticing.
-func TestDailyWorkerNativeFamilyRegistrationMatchesFamiliesJSONPortGo(t *testing.T) {
-	registered := parseRegisteredDailyFamilies(t)
+// The real fix (team-lead ruling): dailyNativeFamilyRegistrations is now a
+// PURE FUNCTION returning the native/postBridge maps, and buildDailyWorker
+// passes its return values straight to the two setter calls with no
+// intermediate variable a stray statement could mutate in between (see
+// that function's own doc comment). This test calls it directly with a
+// connection stub that makes every executor constructor succeed (each one
+// only checks conn != nil at construction time; ClickHouse I/O happens
+// later, when the handler executes a partition) and asserts SET EQUALITY,
+// both directions, between the ACTUAL returned map keys and families.json's
+// own "port":"go" set. There is no longer any source text between
+// construction and assertion for an adversarial edit to hide in.
+func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	native, postBridge := dailyNativeFamilyRegistrations(githubWorkItemsBuildExecutorConn{}, nil, logger)
+
+	registered := make(map[string]bool, len(native)+len(postBridge))
+	for family := range native {
+		registered[family] = true
+	}
+	for family := range postBridge {
+		if registered[family] {
+			t.Fatalf("family %q is registered in BOTH native and postBridge maps -- "+
+				"SetNativeFamilies/SetPostBridgeNativeFamilies each replace their own "+
+				"map wholesale, so a family present in both is dispatched twice, not once", family)
+		}
+		registered[family] = true
+	}
+
 	goFamilies := readFamiliesJSONPortGoSet(t)
 
 	var missingFromRegistration []string
@@ -49,11 +62,11 @@ func TestDailyWorkerNativeFamilyRegistrationMatchesFamiliesJSONPortGo(t *testing
 	sort.Strings(missingFromRegistration)
 	if len(missingFromRegistration) > 0 {
 		t.Errorf(
-			"families.json marks %v as port=\"go\" but buildDailyWorker "+
-				"(cmd/dev-health-worker/daily.go) never assigns nativeFamilies[...] "+
-				"or postBridgeFamilies[...] for them -- every partition for this "+
-				"family silently falls through to the Python compatibility bridge "+
-				"with no refusal log and no native-family telemetry",
+			"families.json marks %v as port=\"go\" but dailyNativeFamilyRegistrations "+
+				"(cmd/dev-health-worker/daily.go) does not return them in its native or "+
+				"postBridge map -- every partition for this family silently falls "+
+				"through to the Python compatibility bridge with no refusal log and no "+
+				"native-family telemetry",
 			missingFromRegistration,
 		)
 	}
@@ -67,91 +80,14 @@ func TestDailyWorkerNativeFamilyRegistrationMatchesFamiliesJSONPortGo(t *testing
 	sort.Strings(registeredButNotGo)
 	if len(registeredButNotGo) > 0 {
 		t.Errorf(
-			"buildDailyWorker registers %v via nativeFamilies[...]/"+
-				"postBridgeFamilies[...] but families.json does not mark them "+
-				"port=\"go\" -- either families.json is stale (a family's cutover "+
-				"flag was reverted or never flipped) or the registration is dead "+
-				"code; both call sites must agree",
+			"dailyNativeFamilyRegistrations returns %v but families.json does not "+
+				"mark them port=\"go\" -- either families.json is stale (a family's "+
+				"cutover flag was reverted or never flipped) or the registration is "+
+				"dead code; both call sites must agree",
 			registeredButNotGo,
 		)
 	}
 }
-
-// parseRegisteredDailyFamilies returns the set of family names actually
-// assigned via `nativeFamilies["<name>"] = ...` or
-// `postBridgeFamilies["<name>"] = ...` inside buildDailyWorker's source, by
-// parsing daily.go with go/ast rather than importing/running it (the real
-// function dials live ClickHouse/Postgres and cannot run as a fast unit
-// test without production-only dependency injection this PR does not add).
-func parseRegisteredDailyFamilies(t *testing.T) map[string]bool {
-	t.Helper()
-	fileSet := token.NewFileSet()
-	parsed, err := parser.ParseFile(fileSet, filepath.Join(".", "daily.go"), nil, 0)
-	if err != nil {
-		t.Fatalf("parse daily.go: %v", err)
-	}
-
-	const targetFunc = "buildDailyWorker"
-	registrationMaps := map[string]bool{"nativeFamilies": true, "postBridgeFamilies": true}
-	registered := map[string]bool{}
-	found := false
-
-	for _, decl := range parsed.Decls {
-		function, isFunc := decl.(*ast.FuncDecl)
-		if !isFunc || function.Name.Name != targetFunc {
-			continue
-		}
-		found = true
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			assign, isAssign := node.(*ast.AssignStmt)
-			if !isAssign {
-				return true
-			}
-			for _, lhs := range assign.Lhs {
-				index, isIndex := lhs.(*ast.IndexExpr)
-				if !isIndex {
-					continue
-				}
-				mapIdent, isIdent := index.X.(*ast.Ident)
-				if !isIdent || !registrationMaps[mapIdent.Name] {
-					continue
-				}
-				keyLit, isLit := index.Index.(*ast.BasicLit)
-				if !isLit || keyLit.Kind != token.STRING {
-					continue
-				}
-				familyName, unquoteErr := unquoteGoStringLiteral(keyLit.Value)
-				if unquoteErr != nil {
-					t.Fatalf("daily.go: unparseable string literal key %s: %v", keyLit.Value, unquoteErr)
-				}
-				registered[familyName] = true
-			}
-			return true
-		})
-	}
-	if !found {
-		t.Fatalf("%s not found in daily.go", targetFunc)
-	}
-	if len(registered) == 0 {
-		t.Fatalf("%s: parsed zero nativeFamilies/postBridgeFamilies assignments -- "+
-			"the AST walk itself is broken, not just missing an entry", targetFunc)
-	}
-	return registered
-}
-
-// unquoteGoStringLiteral strips the surrounding double quotes go/ast leaves
-// on a *ast.BasicLit's Value for a plain (non-raw) Go string literal. Every
-// key in nativeFamilies/postBridgeFamilies is a simple identifier-shaped
-// family name (no escapes), so this is deliberately minimal rather than a
-// full strconv.Unquote.
-func unquoteGoStringLiteral(literal string) (string, error) {
-	if len(literal) < 2 || literal[0] != '"' || literal[len(literal)-1] != '"' {
-		return "", errNotAPlainStringLiteral
-	}
-	return literal[1 : len(literal)-1], nil
-}
-
-var errNotAPlainStringLiteral = errors.New("not a plain double-quoted string literal")
 
 // readFamiliesJSONPortGoSet reads the drift-gated families.json (the same
 // file families_test.go validates) and returns the set of family names

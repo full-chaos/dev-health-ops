@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // -----------------------------------------------------------------------
@@ -815,32 +816,45 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 	if n == 0 {
 		return nil
 	}
+	// CHAOS-4824: every reduction below mirrors a Python `sum()` over floats,
+	// which is Neumaier-compensated since CPython 3.12 -- NOT the naive
+	// left-to-right `total += x` a Go loop would otherwise do (they disagree
+	// on 16% of random 2-8 element inputs, architecture-independent, per
+	// pythonparity.Sum's own doc comment). Every term is collected into a
+	// slice first so pythonparity.Sum can reproduce CPython's algorithm
+	// exactly, rather than accumulating in the loop.
 	weights := make([]float64, n)
-	totalWeight := 0.0
 	for i := range dayEntries {
 		weights[i] = 1.0 + float64(i)*0.5
-		totalWeight += weights[i]
 	}
-	successRate7d := 0.0
+	totalWeight := pythonparity.Sum(weights) // sum(weights)
+
+	weightedSuccessRates := make([]float64, n)
 	for i, m := range dayEntries {
-		successRate7d += m.SuccessRate * weights[i]
+		weightedSuccessRates[i] = m.SuccessRate * weights[i]
 	}
-	successRate7d /= totalWeight
+	// sum(m.success_rate * w for m, w in zip(days_data, weights)) / total_weight
+	successRate7d := pythonparity.Sum(weightedSuccessRates) / totalWeight
 
 	successRateTrend := 0.0
 	if n >= 2 {
 		xMean := float64(n-1) / 2.0
-		ySum := 0.0
-		for _, m := range dayEntries {
-			ySum += m.SuccessRate
-		}
-		yMean := ySum / float64(n)
-		num := 0.0
-		den := 0.0
+		successRates := make([]float64, n)
 		for i, m := range dayEntries {
-			num += (float64(i) - xMean) * (m.SuccessRate - yMean)
-			den += (float64(i) - xMean) * (float64(i) - xMean)
+			successRates[i] = m.SuccessRate
 		}
+		// sum(m.success_rate for m in days_data) / n
+		yMean := pythonparity.Sum(successRates) / float64(n)
+		numTerms := make([]float64, n)
+		denTerms := make([]float64, n)
+		for i, m := range dayEntries {
+			numTerms[i] = (float64(i) - xMean) * (m.SuccessRate - yMean)
+			denTerms[i] = (float64(i) - xMean) * (float64(i) - xMean)
+		}
+		// sum((i - x_mean) * (m.success_rate - y_mean) for i, m in enumerate(days_data))
+		num := pythonparity.Sum(numTerms)
+		// sum((i - x_mean) ** 2 for i in range(n))
+		den := pythonparity.Sum(denTerms)
 		if den > 0 {
 			successRateTrend = num / den
 		}

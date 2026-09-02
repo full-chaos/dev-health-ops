@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ReworkChurnRatio mirrors compute_rework_churn_ratio (quality.py:16): the
@@ -161,11 +163,18 @@ func CodeOwnershipGini(repoID uuid.UUID, windowStats []CommitStatRow) float64 {
 	sort.Float64s(churns)
 	n := len(churns)
 
-	var numerator, denominatorSum float64
+	// CHAOS-4824: both reductions mirror a Python `sum()` over floats, which
+	// is Neumaier-compensated since CPython 3.12 -- a naive Go `+=` loop is
+	// not equivalent (16% disagreement on random 2-8 element inputs, per
+	// pythonparity.Sum's doc comment).
+	//   numerator = sum((i + 1) * val for i, val in enumerate(churns))
+	//   denominator = n * sum(churns)
+	numeratorTerms := make([]float64, n)
 	for index, value := range churns {
-		numerator += float64(index+1) * value
-		denominatorSum += value
+		numeratorTerms[index] = float64(index+1) * value
 	}
+	numerator := pythonparity.Sum(numeratorTerms)
+	denominatorSum := pythonparity.Sum(churns)
 	denominator := float64(n) * denominatorSum
 	if denominator == 0 {
 		return 0.0

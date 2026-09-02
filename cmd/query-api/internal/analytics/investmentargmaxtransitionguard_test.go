@@ -320,3 +320,78 @@ func TestRecordArgMaxNullTransitionGuard_ErrorShortensCooldown(t *testing.T) {
 // errInjectedFetchFailure is a fixed sentinel for routingFakeClient.onErr
 // -- the exact message never matters, only that Query returns non-nil.
 var errInjectedFetchFailure = errors.New("investmentargmaxtransitionguard_test: injected fetch failure")
+
+// TestRecordArgMaxNullTransitionGuard_FetchFailureIsReported is codex
+// round-3's finding, closed: a fetch error must be reported through
+// recordArgMaxNullTransitionFetchFailure, not merely logged at a level
+// this platform's default config drops. Removing that call in
+// RecordArgMaxNullTransitionGuard must turn this red.
+func TestRecordArgMaxNullTransitionGuard_FetchFailureIsReported(t *testing.T) {
+	resetArgMaxNullTransitionGate(t)
+
+	var capturedOrgID string
+	var capturedErr error
+	origRecord := recordArgMaxNullTransitionFetchFailure
+	recordArgMaxNullTransitionFetchFailure = func(_ context.Context, orgID string, err error) {
+		capturedOrgID = orgID
+		capturedErr = err
+	}
+	t.Cleanup(func() { recordArgMaxNullTransitionFetchFailure = origRecord })
+
+	client := &routingFakeClient{}
+	client.onErr("HAVING count() > 1", errInjectedFetchFailure)
+	RecordArgMaxNullTransitionGuard(context.Background(), client, "org-1", 30)
+
+	if capturedOrgID != "org-1" {
+		t.Errorf("captured org_id = %q, want %q", capturedOrgID, "org-1")
+	}
+	if !errors.Is(capturedErr, errInjectedFetchFailure) {
+		t.Errorf("captured err = %v, want it to wrap %v", capturedErr, errInjectedFetchFailure)
+	}
+}
+
+// TestDefaultRecordArgMaxNullTransitionFetchFailure_RecordsToRealMeter is
+// this file's level for the injection seam behind
+// recordArgMaxNullTransitionFetchFailure -- same shape as
+// TestDefaultRecordArgMaxNullTransition_RecordsToRealMeter, reading from
+// the package's ONE shared real reader (main_test.go's TestMain).
+func TestDefaultRecordArgMaxNullTransitionFetchFailure_RecordsToRealMeter(t *testing.T) {
+	ctx := context.Background()
+
+	readCounter := func() int64 {
+		var rm metricdata.ResourceMetrics
+		if err := realMeterReader.Collect(ctx, &rm); err != nil {
+			t.Fatalf("reader.Collect error = %v", err)
+		}
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name != "devhealth_query_api_investment_argmax_null_transition_fetch_failed_total" {
+					continue
+				}
+				data, ok := m.Data.(metricdata.Sum[int64])
+				if !ok || len(data.DataPoints) != 1 {
+					t.Fatalf("counter data shape = %+v, want one int64 sum data point", m.Data)
+				}
+				return data.DataPoints[0].Value
+			}
+		}
+		return 0
+	}
+
+	// Measure the DELTA, not an absolute value: this counter is a REAL,
+	// process-shared instrument (main_test.go's TestMain), and other
+	// tests in this package that exercise RecordArgMaxNullTransitionGuard
+	// through a fake client with no "HAVING count() > 1" rule registered
+	// now legitimately increment it too (a genuine fetch failure is a
+	// genuine fetch failure, whether the test meant to construct one or
+	// not) -- an exact absolute assertion would be order-dependent and
+	// flaky, the same class of bug main_test.go's own doc comment
+	// documents for the meter-provider delegation itself.
+	before := readCounter()
+	defaultRecordArgMaxNullTransitionFetchFailure(ctx, "org-1", errInjectedFetchFailure)
+	after := readCounter()
+
+	if after != before+1 {
+		t.Errorf("counter delta = %d, want exactly +1 (before=%d after=%d)", after-before, before, after)
+	}
+}

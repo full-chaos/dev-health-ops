@@ -273,13 +273,46 @@ func argMaxNullTransitionShortenAfterError(orgID string) {
 	argMaxNullTransitionGate.nextAllowed[orgID] = now.Add(argMaxNullTransitionErrorCooldown)
 }
 
+// argMaxNullTransitionFetchFailedCounter counts guard fetch failures --
+// codex round-3 finding: a debug-only log line (this package's existing
+// convention for a decorator-telemetry fetch failure, e.g.
+// RecordStaleInvestmentMembershipScope's own swallow) is invisible at
+// this platform's default INFO level (DEV_HEALTH_LOG_LEVEL), so a
+// persistently broken fetch -- a permissions change, a network partition
+// -- could silently stop observing this org's divergence state forever,
+// with zero operator-visible signal. That silence is worse here than for
+// membership-scope's freshness observation: this guard's ENTIRE reason to
+// exist, per CHAOS-4759's ruling, is "the day it happens is OBSERVED, not
+// silent" -- a guard whose own failure mode is silent defeats that
+// purpose. Deliberately diverges from the sibling convention for this
+// reason; no attributes (org_id is logged, never a metric label, same
+// cardinality discipline as argMaxNullTransitionCounter).
+var argMaxNullTransitionFetchFailedCounter = mustAnalyticsCounter(
+	"devhealth_query_api_investment_argmax_null_transition_fetch_failed_total",
+	"argMax null transition guard fetches that errored before a divergence could even be checked -- a sustained non-zero rate means this org's divergence state is not being observed at all",
+)
+
+// recordArgMaxNullTransitionFetchFailure is a package var, not a plain
+// func, for the same reason as recordArgMaxNullTransition: "the failure
+// was reported" is the only observable a test can assert on.
+var recordArgMaxNullTransitionFetchFailure = defaultRecordArgMaxNullTransitionFetchFailure
+
+func defaultRecordArgMaxNullTransitionFetchFailure(ctx context.Context, orgID string, err error) {
+	argMaxNullTransitionFetchFailedCounter.Add(ctx, 1)
+	slog.WarnContext(ctx, "argMax null transition guard fetch failed; this org's divergence state is NOT being observed",
+		"org_id", orgID,
+		"error", err,
+	)
+}
+
 // RecordArgMaxNullTransitionGuard is CHAOS-4759's transition guard: it
 // runs FetchArgMaxNullTransitionState for orgID at most once per
 // argMaxNullTransitionCheckCooldown (argMaxNullTransitionErrorCooldown on
 // a failed attempt) and, only when the state has diverged on at least one
 // column, reports through recordArgMaxNullTransition. A fetch error is
-// swallowed to a debug log line -- like RecordStaleInvestmentMembershipScope,
-// this telemetry must never be able to break the real query it decorates.
+// reported through recordArgMaxNullTransitionFetchFailure (counter +
+// warn log, see its doc comment) but never propagated -- this telemetry
+// must never be able to break the real query it decorates.
 //
 // CALLED FROM every investment-path entry point that can actually read
 // latestWorkUnitInvestmentsSource: the same four call sites
@@ -300,7 +333,7 @@ func RecordArgMaxNullTransitionGuard(ctx context.Context, client QueryClient, or
 	state, err := FetchArgMaxNullTransitionState(ctx, client, orgID, timeoutSeconds)
 	if err != nil {
 		argMaxNullTransitionShortenAfterError(orgID)
-		slog.DebugContext(ctx, "argMax null transition guard skipped", "error", err)
+		recordArgMaxNullTransitionFetchFailure(ctx, orgID, err)
 		return
 	}
 	if !state.Diverged() {

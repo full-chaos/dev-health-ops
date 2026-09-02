@@ -1958,17 +1958,10 @@ def test_container_derivation_still_sees_the_known_verbs() -> None:
 # — but the tag VALUE may be a shell variable, so the value is not inspected.
 _GO_TEST_WITH_TAGS = re.compile(r"go test\b[^\n]*-tags[= ]")
 _CHECK_GO_INVOCATION = re.compile(r"ci/check_go\.sh\s+(\S+)")
-# Any shell word ending in .sh, however it is spelled. `ext=.sh` in an assembled
-# command path matches, which is the point.
-_SCRIPT_TOKEN = re.compile(r"\S*\.sh\b")
 # A container runtime named anywhere in the step, and a build tag arriving
 # through the environment rather than the command line.
 _CONTAINER_TOOL = re.compile(r"\b(docker|podman|compose|nerdctl)\b")
 _TAGS_VIA_ENV = re.compile(r"\b(GOFLAGS|GOEXPERIMENT)\b")
-
-# Scripts asserted not to start containers. `ci/check_go.sh` is absent on purpose:
-# it is judged by its verb, not by its name.
-_SAFE_SCRIPTS = frozenset({"ci/check_river_compat_static.sh"})
 
 
 # `_run_starts_containers` lived here. It was defined and never called --
@@ -2551,7 +2544,6 @@ def test_image_pulling_action_steps_are_allowlisted_or_ticketed() -> None:
 # an allowlist too: an unrecognised subcommand is refused rather than assumed
 # harmless, because the point of this file is that "assumed harmless" is how
 # twelve fail-opens happened.
-_DOCKER_PULLING_SUBCOMMANDS = frozenset({"pull", "run", "create"})
 # `buildx` in this set is LOAD-BEARING, not an oversight. Two scanned workflows
 # depend on it: mirror-test-images.yml runs `docker buildx imagetools create`
 # against a Docker Hub SOURCE -- that is the mirror's entire job -- and
@@ -2885,6 +2877,20 @@ def test_no_orphaned_module_level_helpers() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name.startswith("_")
     }
+    # Module-level CONSTANTS too. The first version walked functions only, and
+    # `_DOCKER_PULLING_SUBCOMMANDS` went dead when the per-noun verb sets
+    # replaced it -- caught by CodeQL, not by this. A detector that watches one
+    # kind of definition reports "no orphans" while another kind rots, which is
+    # the reassuring-but-false answer this test exists to prevent.
+    for node in tree.body:
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        defined |= {
+            t.id for t in targets if isinstance(t, ast.Name) and t.id.startswith("_")
+        }
     used = {
         node.id
         for node in ast.walk(tree)
@@ -2894,6 +2900,11 @@ def test_no_orphaned_module_level_helpers() -> None:
 
     # CONTROL: a helper known to be called must be seen as called. If this fails
     # the detector is broken and its orphan list means nothing.
+    assert "_ALLOWED_IMAGE_REGISTRIES" in used, (
+        "detector control failed: _ALLOWED_IMAGE_REGISTRIES is used by "
+        "_image_is_allowed but was not seen as used -- the constant half of "
+        "the orphan list cannot be trusted"
+    )
     assert "_image_is_allowed" in used, (
         "detector control failed: _image_is_allowed is called by "
         "test_every_pulled_image_resolves_to_an_approved_registry but was not "

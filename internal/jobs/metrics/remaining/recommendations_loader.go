@@ -139,8 +139,8 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 	}
 	defer rows.Close()
 
-	wip := []float64{}
-	throughput := []float64{}
+	wipRaw := []*float64{}
+	throughputRaw := []*float64{}
 	for rows.Next() {
 		var day time.Time
 		var wipTotal, throughputTotal *float64
@@ -151,10 +151,14 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 		// cycle_time_by_day below, which DROPS null rows and so returns a
 		// shorter list. The asymmetry is the reference's and it is observable:
 		// list length decides the `len(x) < 2` guards in three rules.
-		wip = append(wip, nullableToZero(wipTotal))
-		throughput = append(throughput, nullableToZero(throughputTotal))
+		wipRaw = append(wipRaw, wipTotal)
+		throughputRaw = append(throughputRaw, throughputTotal)
 	}
-	return wip, throughput, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	wip, throughput := wipThroughputFrom(wipRaw, throughputRaw)
+	return wip, throughput, nil
 }
 
 // loadReviewSignals ports _load_review_signals.
@@ -351,7 +355,7 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 	}
 	defer cycleRows.Close()
 
-	cycleTimes = []float64{}
+	cycleRaw := []*float64{}
 	for cycleRows.Next() {
 		var day time.Time
 		var average *float64
@@ -363,11 +367,12 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 		// list, and length decides the `len(cycle_times) < 2` guard in
 		// sustainability-risk, so substituting zero here would make the rule
 		// fire on windows where the reference declines.
-		if average != nil {
-			cycleTimes = append(cycleTimes, *average)
-		}
+		cycleRaw = append(cycleRaw, average)
 	}
-	return afterHours, afterHoursKnown, cycleTimes, cycleRows.Err()
+	if err := cycleRows.Err(); err != nil {
+		return 0, false, nil, err
+	}
+	return afterHours, afterHoursKnown, cycleTimesFrom(cycleRaw), nil
 }
 
 // loadCompoundingSignals ports _load_compounding_signals, the legacy hotspot
@@ -413,20 +418,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 			complexityRows.Close()
 			return 0, false, 0, false, fmt.Errorf("scan complexity halves: %w", scanErr)
 		}
-		first, firstKnown := safeFloat(firstHalf)
-		second, secondKnown := safeFloat(secondHalf)
-		if firstKnown && secondKnown {
-			// max(first, 1.0) is a DENOMINATOR FLOOR, not a clamp on the
-			// result: it keeps a near-zero first half from turning a small
-			// absolute rise into an enormous normalised delta. It also means a
-			// NEGATIVE first half divides by 1.0 rather than by itself.
-			denominator := first
-			if denominator < 1.0 {
-				denominator = 1.0
-			}
-			complexityDelta = (second - first) / denominator
-			complexityKnown = true
-		}
+		complexityDelta, complexityKnown = complexityDeltaFrom(firstHalf, secondHalf)
 	}
 	if closeErr := complexityRows.Close(); closeErr != nil {
 		return 0, false, 0, false, closeErr
@@ -461,15 +453,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 	// not interchangeable: absent makes compounding-risk's legacy path decline
 	// outright, while 0.0 fails the threshold comparison instead. Same outcome
 	// today, different reasons, and only one survives a threshold change.
-	if totalHotspots > 0 {
-		churnKnown = true
-		if complexityKnown && complexityDelta > 0 {
-			churnOverlap = complexityDelta
-			if churnOverlap > 1.0 {
-				churnOverlap = 1.0
-			}
-		}
-	}
+	churnOverlap, churnKnown = churnOverlapFrom(complexityDelta, complexityKnown, totalHotspots)
 	return complexityDelta, complexityKnown, churnOverlap, churnKnown, nil
 }
 
@@ -584,4 +568,96 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 		CompoundingRiskScoreKnown:   scoreKnown,
 		CompoundingRiskSeverity:     severity,
 	}, nil
+}
+
+// The pure post-processing, lifted out of the query methods so the parity
+// harness exercises THE REAL CODE PATH rather than a second copy of the
+// arithmetic written to agree with it.
+//
+// Everything with parity risk lives here: the null-handling asymmetry, the
+// denominator floor, and the absent-versus-zero churn decision. The query
+// methods above are then only SQL, scanning and error wrapping.
+
+// complexityDeltaFrom ports the normalised second-half-minus-first-half delta.
+//
+// max(first, 1.0) is a DENOMINATOR FLOOR, not a clamp on the result: it stops a
+// near-zero first half from turning a small absolute rise into an enormous
+// normalised delta. It also means a NEGATIVE first half divides by 1.0 rather
+// than by itself, so the sign of the delta follows (second - first) alone and
+// never flips from dividing by a negative number.
+//
+// Absent when EITHER half is absent -- and _safe_float treats NaN as absent
+// while passing infinities through, so an infinite half yields an infinite or
+// NaN delta rather than an absent one.
+func complexityDeltaFrom(firstHalf, secondHalf *float64) (float64, bool) {
+	first, firstKnown := safeFloat(firstHalf)
+	second, secondKnown := safeFloat(secondHalf)
+	if !firstKnown || !secondKnown {
+		return 0, false
+	}
+	denominator := first
+	if denominator < 1.0 {
+		denominator = 1.0
+	}
+	return (second - first) / denominator, true
+}
+
+// churnOverlapFrom ports the legacy hotspot proxy's overlap decision.
+//
+// Three outcomes, and the first two are NOT interchangeable:
+//
+//	no hotspots                      -> ABSENT. compounding-risk's legacy path
+//	                                    returns None outright without ever
+//	                                    reaching a threshold comparison.
+//	hotspots, delta absent or <= 0   -> 0.0. Present, and FAILS the threshold.
+//	hotspots, delta > 0              -> min(1.0, delta).
+//
+// Absent and 0.0 reach the same outcome under today's constant (0.4 > 0.0) and
+// would diverge the moment that threshold moved to or below zero. Collapsing
+// them would be invisible now and wrong later.
+//
+// NaN is worth tracing: `delta > 0` is false for NaN, so a NaN delta with
+// hotspots present yields 0.0, not NaN. That matches Python's `if
+// complexity_delta is not None and complexity_delta > 0`.
+func churnOverlapFrom(complexityDelta float64, complexityKnown bool, totalHotspots uint64) (float64, bool) {
+	if totalHotspots == 0 {
+		return 0, false
+	}
+	if complexityKnown && complexityDelta > 0 {
+		if complexityDelta > 1.0 {
+			return 1.0, true
+		}
+		return complexityDelta, true
+	}
+	return 0.0, true
+}
+
+// cycleTimesFrom ports the cycle-time list build, which DROPS null rows.
+//
+// The opposite of wipThroughputFrom below, in the same loader. A dropped row
+// SHORTENS the list, and length decides sustainability-risk's
+// `len(cycle_times) < 2` guard, so substituting 0.0 here would make the rule
+// fire on windows where the reference declines.
+func cycleTimesFrom(values []*float64) []float64 {
+	cycleTimes := []float64{}
+	for _, value := range values {
+		if value != nil {
+			cycleTimes = append(cycleTimes, *value)
+		}
+	}
+	return cycleTimes
+}
+
+// wipThroughputFrom ports the wip/throughput list build, which KEEPS null rows
+// as 0.0 -- see cycleTimesFrom for why the asymmetry is deliberate.
+func wipThroughputFrom(wipValues, throughputValues []*float64) ([]float64, []float64) {
+	wip := make([]float64, 0, len(wipValues))
+	for _, value := range wipValues {
+		wip = append(wip, nullableToZero(value))
+	}
+	throughput := make([]float64, 0, len(throughputValues))
+	for _, value := range throughputValues {
+		throughput = append(throughput, nullableToZero(value))
+	}
+	return wip, throughput
 }

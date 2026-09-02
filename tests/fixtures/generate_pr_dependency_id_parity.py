@@ -109,6 +109,18 @@ CORPUS += [
     "ghpr:o/r#" + "9" * 4300,  # exactly at the limit: converts
     "ghpr:o/r#" + "9" * 4301,  # one past: RAISES
     "ghpr:o/r#" + "0" * 4301,  # leading zeros still count toward it
+    # THE CROSS PRODUCT. Every case above varies character class at SHORT
+    # lengths and magnitude in ASCII, and never both — so bytes and runes are
+    # equal in all of them, and the corpus cannot tell a rune count from a byte
+    # count. Codex round 3 found exactly that defect and the corpus stayed
+    # green through the fix; a regression to len() would still go green today.
+    #
+    # 2151 full-width digits: 2151 CHARACTERS (Python accepts, under its 4300
+    # limit) but 6453 BYTES (a byte count wrongly refuses it).
+    "ghpr:o/r#" + "\uff15" * 2151,
+    # Character class AND magnitude at full length together, both directions.
+    "ghpr:o/r#" + "\u00b2" * 4301,
+    "ghpr:o/r#" + "\uff15" * 4301,
 ]
 
 # ENDPOINT_CORPUS varies the third axis: WHICH FIELD carries the value.

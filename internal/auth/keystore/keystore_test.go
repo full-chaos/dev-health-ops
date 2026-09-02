@@ -177,6 +177,47 @@ func TestDescribeRejects(t *testing.T) {
 			wantReason: ReasonWrongAlgorithm,
 		},
 		{
+			name: "the PEM block is labelled something other than PRIVATE KEY",
+			build: func(t *testing.T, dir string) FileSource {
+				_, private, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatalf("generate key: %v", err)
+				}
+				der, err := x509.MarshalPKCS8PrivateKey(private)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				path := filepath.Join(dir, "mislabelled.pem")
+				armoured := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+				if err := os.WriteFile(path, armoured, 0o600); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+				return FileSource{Path: path, KeyID: "k"}
+			},
+			wantReason: ReasonNotPEM,
+		},
+		{
+			name: "the file carries a second PEM block",
+			build: func(t *testing.T, dir string) FileSource {
+				first, _ := writeKeyFile(t, dir, "first.pem")
+				firstBytes, err := os.ReadFile(first)
+				if err != nil {
+					t.Fatalf("read: %v", err)
+				}
+				second, _ := writeKeyFile(t, dir, "second.pem")
+				secondBytes, err := os.ReadFile(second)
+				if err != nil {
+					t.Fatalf("read: %v", err)
+				}
+				path := filepath.Join(dir, "two-keys.pem")
+				if err := os.WriteFile(path, append(firstBytes, secondBytes...), 0o600); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+				return FileSource{Path: path, KeyID: "k"}
+			},
+			wantReason: ReasonAmbiguousPEM,
+		},
+		{
 			name: "no path is configured",
 			build: func(t *testing.T, dir string) FileSource {
 				return FileSource{KeyID: "k"}

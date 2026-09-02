@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
@@ -177,6 +178,20 @@ func configure(
 		return nil, err
 	}
 
+	// Every failure path below must close the pool it already opened.
+	// configure's caller exits the process, so a leaked pool would not
+	// out-live this call for long -- but a resource opened and abandoned on an
+	// error path is the shape that survives into the first caller that DOESN'T
+	// exit (a test, or the future unified binary that hosts this as a
+	// subcommand), and it is cheaper to get right now than to find later.
+	closeStore := func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if closeErr := store.Shutdown(closeCtx); closeErr != nil {
+			logger.ErrorContext(ctx, "close auth store after a failed startup", "error", closeErr)
+		}
+	}
+
 	var signingKey keystore.Source = keystore.FileSource{
 		Path:  cfg.SigningKeyPath,
 		KeyID: cfg.SigningKeyID,
@@ -202,6 +217,7 @@ func configure(
 		}
 		return nil
 	}); err != nil {
+		closeStore()
 		return nil, err
 	}
 	if err := registry.RegisterRequired(CheckSigningKey, func(ctx context.Context) error {
@@ -214,6 +230,7 @@ func configure(
 		}
 		return nil
 	}); err != nil {
+		closeStore()
 		return nil, err
 	}
 
@@ -224,6 +241,7 @@ func configure(
 		Version:  version.Current(cfg.Service).Version,
 	})
 	if err != nil {
+		closeStore()
 		return nil, err
 	}
 
@@ -237,6 +255,7 @@ func configure(
 		RateLimitBurst: cfg.RateLimit.Burst,
 	})
 	if err != nil {
+		closeStore()
 		return nil, err
 	}
 

@@ -142,6 +142,56 @@ func TestMethodMismatchOnAKnownPathIs405WithAllow(t *testing.T) {
 	}
 }
 
+// TestHeadReachesAGetRoute pins net/http's own documented behaviour as an
+// ASSERTED property rather than a surprise: since Go 1.22 a "GET" pattern also
+// matches HEAD, so a HEAD request reaches the GET handler and does NOT fall to
+// the 405 fallback. The Allow header on that fallback therefore lists the
+// registered methods only, and reads as narrower than what is actually
+// accepted -- which is worth knowing before someone treats Allow as the
+// authoritative method set.
+func TestHeadReachesAGetRoute(t *testing.T) {
+	var reached bool
+	handler := handlerFor(t, testOptions(Route{
+		Method:  http.MethodGet,
+		Pattern: "/v1/head",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached = true
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/v1/head", nil))
+
+	if !reached || response.Code != http.StatusNoContent {
+		t.Fatalf("HEAD on a GET route = %d (handler reached: %t), want 204", response.Code, reached)
+	}
+}
+
+// TestTrailingSlashIsADifferentPath: "/v1/keys" and "/v1/keys/" are distinct
+// patterns to http.ServeMux, so the second falls to the catch-all 404 rather
+// than reaching the route. Asserted so a later wave registering a route knows
+// it must register both spellings if it wants both.
+func TestTrailingSlashIsADifferentPath(t *testing.T) {
+	handler := handlerFor(t, testOptions(Route{
+		Method:  http.MethodGet,
+		Pattern: "/v1/keys",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("a trailing-slash path reached the route handler")
+		}),
+	}))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/keys/", nil))
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("GET /v1/keys/ = %d, want 404", response.Code)
+	}
+	if envelope := decodeEnvelope(t, response); envelope.Error.Code != CodeNotFound {
+		t.Fatalf("code = %q, want %q", envelope.Error.Code, CodeNotFound)
+	}
+}
+
 func TestRequestIDIsEchoedAndBoundToTheContext(t *testing.T) {
 	var seen string
 	handler := handlerFor(t, testOptions(Route{

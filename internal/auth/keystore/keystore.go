@@ -28,6 +28,7 @@
 package keystore
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/x509"
@@ -60,6 +61,7 @@ const (
 	ReasonPermissiveMode    Reason = "key_file_mode_too_permissive"
 	ReasonTooLarge          Reason = "key_file_too_large"
 	ReasonNotPEM            Reason = "key_file_not_pem"
+	ReasonAmbiguousPEM      Reason = "key_file_ambiguous_pem"
 	ReasonUnparseable       Reason = "key_file_unparseable"
 	ReasonWrongAlgorithm    Reason = "key_file_wrong_algorithm"
 	ReasonKeyIDUnconfigured Reason = "key_id_unconfigured"
@@ -211,10 +213,26 @@ func readCustodiedFile(path string) ([]byte, error) {
 // The private key is intentionally not returned and not stored anywhere. See
 // the package doc: Wave 1 is dormant and nothing signs, so nothing keeps
 // minting material resident.
+//
+// Two refusals here are about AMBIGUITY rather than malformation, and both are
+// deliberate. A file whose first block is not labelled "PRIVATE KEY" is
+// refused even if its bytes happen to parse as PKCS#8, and a file carrying
+// anything beyond the first block is refused rather than silently using the
+// first. A key file with two blocks has no single answer to "which key is in
+// effect", and an operator who appended a rotated key expecting it to take
+// over would get the old one with no signal. Under ACP-ADR-02 §5 rotation is
+// represented by a second kid and a second JWKS entry, never by a second block
+// in one file.
 func parseEd25519Public(pemBytes []byte) (ed25519.PublicKey, error) {
-	block, _ := pem.Decode(pemBytes)
+	block, rest := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, failure(ReasonNotPEM, nil)
+	}
+	if block.Type != "PRIVATE KEY" {
+		return nil, failure(ReasonNotPEM, fmt.Errorf("PEM block is %q, want PRIVATE KEY", block.Type))
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, failure(ReasonAmbiguousPEM, nil)
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {

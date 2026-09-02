@@ -86,13 +86,27 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	ctx := context.Background()
 	conn := connect(ctx, t)
 
+	// STOP MERGES while seeding, and this is load-bearing rather than tidiness.
+	//
+	// Step 3 asserts every seeded row is still visible without FINAL. That is
+	// only true until a BACKGROUND merge fires, and nothing schedules those
+	// predictably -- so the assertion was passing on timing. It passed twice,
+	// then adding Key C's two extra inserts changed the part count and it began
+	// reporting "1 rows without FINAL, want 3": the merge had already collapsed
+	// them. The test was measuring merge scheduling, not the engine's ranking.
+	//
+	// Merges are restarted before step 4, which needs a real merge to run.
+	exec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+
 	const (
 		org   = "00000000-4769-0000-0000-000000000001"
 		repo  = "00000000-4769-0000-0000-000000000002"
 		keyA  = "00000000-4769-0000-0000-000000000003"
 		keyB  = "00000000-4769-0000-0000-000000000004"
+		keyC  = "00000000-4769-0000-0000-000000000006"
 		prA   = 4769
 		prB   = 4770
+		prC   = 4772
 		tieID = "00000000-4769-0000-0000-000000000005"
 	)
 
@@ -110,7 +124,28 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	seed(ctx, t, conn, org, repo, keyA, prA, "heuristic", 0.50, "2026-01-03 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyB, prB, "explicit_text", 0.90, "2026-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyB, prB, "heuristic", 0.99, "2026-01-02 00:00:00.000")
-	for _, pr := range []int{prA, prB} {
+	// Key C exists to test THE MULTIPLIER, which Keys A and B cannot.
+	//
+	// A and B span 2026-01-01..2026-01-03 -- 172,800,000 ms. Any multiplier
+	// larger than that orders them correctly, so they pass under 2**45, under
+	// 2**40, and under 2**28 alike: they are structurally blind to the constant
+	// whose correctness the whole design rests on. Found by lane-4752-go while
+	// reviewing their own container run, which had reported "the design works"
+	// on exactly this blind fixture.
+	//
+	// A far-future sentinel makes the constant load-bearing. Under 2**40 the
+	// recency term crosses a rank step and the FALLBACK wins -- the fix
+	// inverting into the defect it removes:
+	//     heuristic@2100 = 1*2**40 + 4,102,444,800,000 = 5,201,956,427,776
+	//     native@2026    = 3*2**40 + 1,788,307,200,000 = 5,086,842,083,328  LOSES
+	// Under 2**45 native wins by 2*2**45, which no plausible stamp can cross.
+	//
+	// A Key D (epoch-0 stamp on the NATIVE row) was considered and left out: it
+	// passes under both 2**40 and 2**45, so it would not discriminate and would
+	// be a test that cannot fail on the thing it appears to check.
+	seed(ctx, t, conn, org, repo, keyC, prC, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyC, prC, "heuristic", 0.50, "2100-01-01 00:00:00.000")
+	for _, pr := range []int{prA, prB, prC} {
 		exec(ctx, t, conn, fmt.Sprintf(
 			`INSERT INTO git_pull_requests (repo_id, number, org_id, created_at, last_synced)
 			 VALUES ('%s', %d, '%s', '2025-12-01 00:00:00.000', '2025-12-01 00:00:00.000')`,
@@ -130,6 +165,8 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	// STEP 2. FLIP: after the fix these become "native" and "explicit_text".
 	assertSurvivor(t, visible, prA, "native")
 	assertSurvivor(t, visible, prB, "explicit_text")
+	// The multiplier's own assertion: rank must beat a 74-year recency gap.
+	assertSurvivor(t, visible, prC, "native")
 
 	// STEP 3. Without FINAL every seeded row is still visible. This is also the
 	// precondition for the Go port's approach (drop FINAL, dedup with
@@ -137,14 +174,19 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	// BEFORE any ranking can see the alternatives.
 	assertRowCount(ctx, t, conn, keyA, 3)
 	assertRowCount(ctx, t, conn, keyB, 2)
+	assertRowCount(ctx, t, conn, keyC, 2)
 
-	// STEP 4. The measurement that decided the fix.
+	// STEP 4. The measurement that decided the fix. Merges must be running
+	// again for OPTIMIZE ... FINAL to do anything.
+	exec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
 	exec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
 	assertRowCount(ctx, t, conn, keyA, 1)
 	assertRowCount(ctx, t, conn, keyB, 1)
 	// FLIP: after the fix, native (A) and explicit_text (B) must be what remain.
 	assertOnlyProvenance(ctx, t, conn, keyA, "native")
 	assertOnlyProvenance(ctx, t, conn, keyB, "explicit_text")
+	assertRowCount(ctx, t, conn, keyC, 1)
+	assertOnlyProvenance(ctx, t, conn, keyC, "native")
 
 	// STEP 5. Regime (b): an EXACT version tie, resolved by part recency.
 	// A fresh table per trial -- not merely a fresh key -- because an earlier

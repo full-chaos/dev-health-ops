@@ -78,9 +78,11 @@ true instead of accidentally true:
 ``INSERT INTO <shadow> SELECT ... FROM <table>`` WITHOUT ``FINAL``, deliberately.
 Selecting with ``FINAL`` would carry over only today's winners -- the fallback
 rows -- and permanently destroy the native rows this migration exists to
-promote. The copy must carry every unmerged version; the shadow is already
-``ReplacingMergeTree(version_rank)``, so any merge inside the shadow ranks
-them correctly as they land.
+promote. The copy must read every unmerged version. What happens on the WRITE side is
+better than "await a merge", and measured rather than assumed (lane-4752-go):
+a single ``INSERT ... SELECT`` is one block, and ReplacingMergeTree collapses
+same-key rows AT PART CREATION under the new ranking -- 2 rows in, 1 out. The
+shadow therefore lands already-correct instead of depending on a later merge.
 
 An EXPLICIT column list is used rather than ``SELECT *``, so the copy is immune
 to whether ``version_rank`` ends up MATERIALIZED (excluded from ``SELECT *``)

@@ -1,6 +1,8 @@
 package units
 
 import (
+	"errors"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,21 +76,62 @@ func ConfidenceFromValue(value any) float64 {
 	case int64:
 		return float64(typed)
 	case string:
-		// Python's float() strips surrounding whitespace before parsing;
-		// ParseFloat does not, so " 1 " would be 1.0 there and 0.0 here --
-		// a confidence silently collapsing to zero re-partitions the split.
-		// Measured against this checkout's interpreter: with the trim, the two
-		// parsers agree on every form tested including "1_0", "+3", "1e3",
-		// "inf", "Infinity", "NaN", and the rejections "1__0", "_1", "1_".
-		// See TestConfidenceFromValueMatchesPythonCoercion.
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
-		if err != nil {
-			return 0.0
-		}
-		return parsed
+		return confidenceFromString(typed)
 	default:
 		return 0.0
 	}
+}
+
+// confidenceFromString ports Python's `float(value)` for the string branch of
+// _edge_confidence (components.py:75-82), which returns 0.0 on ValueError.
+//
+// Go's strconv.ParseFloat is NOT a drop-in for Python's float(): it is broader in
+// one direction and narrower in the other, and both directions change which
+// edges the split protects.
+//
+//   - BROADER: Go accepts C99 hexadecimal float literals ("0x1p2" -> 4). Python
+//     rejects every hex form. Accepting one invents a confidence out of a string
+//     Python scores 0, which can protect an edge Python drops and mint a
+//     work_unit_id that exists on only one plane.
+//   - NARROWER: Go reports ErrRange for magnitudes outside float64 and Python
+//     does not. float("1e309") is +Inf in Python; treating the error as a parse
+//     failure would score 0 instead, dropping an edge Python treats as the
+//     maximum-confidence one. On ErrRange, ParseFloat already returns the right
+//     saturated value (+/-Inf on overflow, 0 or a denormal on underflow), so the
+//     value is kept and only ErrSyntax maps to 0.
+//
+// Agreement is not asserted from reasoning: TestConfidenceFromStringMatchesPythonCorpus
+// runs a checked-in corpus of 68 forms whose expectations were produced by the
+// interpreter itself, and a rot guard re-runs the generator against live Python.
+// A hand-written matrix is what let the hex and range cases through in the first
+// place -- an enumerated corpus is the instrument, not a longer list of guesses.
+func confidenceFromString(value string) float64 {
+	trimmed := strings.TrimSpace(value)
+
+	unsigned := trimmed
+	if len(unsigned) > 0 && (unsigned[0] == '+' || unsigned[0] == '-') {
+		unsigned = unsigned[1:]
+	}
+	if len(unsigned) > 1 && unsigned[0] == '0' && (unsigned[1] == 'x' || unsigned[1] == 'X') {
+		return 0.0
+	}
+	// Python accepts a SIGNED NaN word ("-nan", "+nan", "-NaN" are all nan);
+	// ParseFloat accepts only the unsigned spellings and rejects the rest, which
+	// would score 0.0 instead. Found by the generated corpus, not by hand -- it
+	// is the sort of form nobody writes down from memory.
+	if strings.EqualFold(unsigned, "nan") {
+		return math.NaN()
+	}
+
+	parsed, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		var numError *strconv.NumError
+		if errors.As(err, &numError) && errors.Is(numError.Err, strconv.ErrRange) {
+			return parsed
+		}
+		return 0.0
+	}
+	return parsed
 }
 
 // nodeIndex is an insertion-ordered set of nodes.
@@ -133,16 +176,38 @@ func (index *nodeIndex) has(node NodeKey) bool {
 // Grouping is content-based, so the node SET of each component is independent
 // of input iteration order -- the property work_unit_id relies on.
 //
-// DELIBERATE, UNOBSERVABLE ORDER DIVERGENCE: Python builds its groups by
-// iterating a set of tuples, so both the order of the returned fragments and
-// the order of nodes within a fragment follow string-hash order, which
-// PYTHONHASHSEED randomizes between runs. This implementation iterates the
-// insertion-ordered node slice instead, which is deterministic. That is safe
-// because every consumer normalizes: splitOversizedComponent sorts its result
-// by each fragment's sorted node list (components.py:301-303), removeHubs feeds
-// that same sort, degrees/max/min are order-independent, and WorkUnitID sorts
-// its tokens. Python could not have relied on the order it produces, because it
-// does not have a stable one.
+// NODE ORDER IS DELIBERATELY NOT MATCHED TO PYTHON, AND CANNOT BE.
+//
+// Python builds its groups by iterating a set of tuples, so both the order of
+// the returned fragments and the order of nodes within a fragment follow
+// string-hash order. That order is randomized by PYTHONHASHSEED and is NOT
+// reproducible: measured on this checkout over one fixed 4-node input, the same
+// fragment comes back as [a c b], [c a b] or [b c a] depending on the seed.
+// There is therefore no stable Python value here to port to.
+//
+// CORRECTION (codex round 3, CHAOS-4441 PR1): an earlier version of this comment
+// claimed the divergence was UNOBSERVABLE. That was wrong, and the reviewer was
+// right to construct it. The order does survive into Component.Nodes and is
+// consumed downstream -- the Python materializer derives ordered issue/pr/commit
+// id lists from it (materialize.py:1315-1330) and then sums churn in that order
+// (_effort_from_work_unit, materialize.py:998-1010). Floating-point addition is
+// not associative, so the summation order changes effort_value.
+//
+// What that means is NOT that this port has a bug to fix. It means PYTHON's
+// effort_value for a split component is itself PYTHONHASHSEED-dependent:
+// measured here with ordinary churn values (0.1, 0.2, 0.3), the deployed Python
+// returns 0.6 under some seeds and 0.6000000000000001 under others, for
+// byte-identical input. Filed separately; this port is deterministic where
+// Python is not, which is strictly better but means effort_value can differ in
+// the last ULP from any particular Python run.
+//
+// So node ORDER is explicitly outside the parity contract, and the golden
+// comparator sorts nodes before comparing for exactly that reason -- not to hide
+// a divergence, but because the reference implementation has no stable answer to
+// compare against. What IS in the contract and IS asserted: the node SET, the
+// work_unit_id, the edge bundle, the fragment count, the split stats, and the
+// order of the COMPONENT LIST (which is driven by the ordered nodeIndex above,
+// not by any set iteration, and is therefore deterministic on both planes).
 func connectedComponents(nodes *nodeIndex, edges []Edge) [][]NodeKey {
 	parent := make([]int, len(nodes.order))
 	for slot := range parent {

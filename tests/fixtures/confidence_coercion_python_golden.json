@@ -1,0 +1,277 @@
+{
+ "cases": [
+  {
+   "expected": "0.0",
+   "input": "0"
+  },
+  {
+   "expected": "1.0",
+   "input": "1"
+  },
+  {
+   "expected": "2.0",
+   "input": "2"
+  },
+  {
+   "expected": "0.5",
+   "input": "0.5"
+  },
+  {
+   "expected": "1.0",
+   "input": "1.0"
+  },
+  {
+   "expected": "0.9",
+   "input": "0.9"
+  },
+  {
+   "expected": "12.5",
+   "input": "12.5"
+  },
+  {
+   "expected": "3.0",
+   "input": "+3"
+  },
+  {
+   "expected": "-1.0",
+   "input": "-1"
+  },
+  {
+   "expected": "0.5",
+   "input": ".5"
+  },
+  {
+   "expected": "5.0",
+   "input": "5."
+  },
+  {
+   "expected": "0.5",
+   "input": "+.5"
+  },
+  {
+   "expected": "-0.5",
+   "input": "-.5"
+  },
+  {
+   "expected": "1.0",
+   "input": "1."
+  },
+  {
+   "expected": "17.0",
+   "input": "017"
+  },
+  {
+   "expected": "1000.0",
+   "input": "1e3"
+  },
+  {
+   "expected": "1000.0",
+   "input": "1E3"
+  },
+  {
+   "expected": "0.001",
+   "input": "1e-3"
+  },
+  {
+   "expected": "inf",
+   "input": "1e309"
+  },
+  {
+   "expected": "-inf",
+   "input": "-1e309"
+  },
+  {
+   "expected": "0.0",
+   "input": "1e-400"
+  },
+  {
+   "expected": "inf",
+   "input": "inf"
+  },
+  {
+   "expected": "inf",
+   "input": "Inf"
+  },
+  {
+   "expected": "inf",
+   "input": "INF"
+  },
+  {
+   "expected": "inf",
+   "input": "infinity"
+  },
+  {
+   "expected": "inf",
+   "input": "Infinity"
+  },
+  {
+   "expected": "-inf",
+   "input": "-inf"
+  },
+  {
+   "expected": "inf",
+   "input": "+inf"
+  },
+  {
+   "expected": "nan",
+   "input": "nan"
+  },
+  {
+   "expected": "nan",
+   "input": "NaN"
+  },
+  {
+   "expected": "nan",
+   "input": "NAN"
+  },
+  {
+   "expected": "nan",
+   "input": "-nan"
+  },
+  {
+   "expected": "0.0",
+   "input": "0x1p2"
+  },
+  {
+   "expected": "0.0",
+   "input": "0X1P2"
+  },
+  {
+   "expected": "0.0",
+   "input": "0x1.8p1"
+  },
+  {
+   "expected": "0.0",
+   "input": "-0x1p2"
+  },
+  {
+   "expected": "0.0",
+   "input": "0b101"
+  },
+  {
+   "expected": "0.0",
+   "input": "0o17"
+  },
+  {
+   "expected": "10.0",
+   "input": "1_0"
+  },
+  {
+   "expected": "1000.0",
+   "input": "1_000"
+  },
+  {
+   "expected": "0.0",
+   "input": "1__0"
+  },
+  {
+   "expected": "0.0",
+   "input": "_1"
+  },
+  {
+   "expected": "0.0",
+   "input": "1_"
+  },
+  {
+   "expected": "0.0",
+   "input": ""
+  },
+  {
+   "expected": "0.0",
+   "input": " "
+  },
+  {
+   "expected": "0.0",
+   "input": "  "
+  },
+  {
+   "expected": "0.0",
+   "input": "\t"
+  },
+  {
+   "expected": "0.0",
+   "input": "\n"
+  },
+  {
+   "expected": "1.0",
+   "input": " 1 "
+  },
+  {
+   "expected": "2.5",
+   "input": "\t2.5\n"
+  },
+  {
+   "expected": "1.0",
+   "input": "1 "
+  },
+  {
+   "expected": "1.0",
+   "input": " 1"
+  },
+  {
+   "expected": "0.0",
+   "input": "1e"
+  },
+  {
+   "expected": "0.0",
+   "input": "e3"
+  },
+  {
+   "expected": "0.0",
+   "input": "--1"
+  },
+  {
+   "expected": "0.0",
+   "input": "++1"
+  },
+  {
+   "expected": "0.0",
+   "input": "1 2"
+  },
+  {
+   "expected": "0.0",
+   "input": "1,5"
+  },
+  {
+   "expected": "0.0",
+   "input": "1%"
+  },
+  {
+   "expected": "0.0",
+   "input": "%1"
+  },
+  {
+   "expected": "0.0",
+   "input": "1.0.0"
+  },
+  {
+   "expected": "0.0",
+   "input": "1e1e1"
+  },
+  {
+   "expected": "0.0",
+   "input": "abc"
+  },
+  {
+   "expected": "0.0",
+   "input": "true"
+  },
+  {
+   "expected": "0.0",
+   "input": "True"
+  },
+  {
+   "expected": "0.0",
+   "input": "None"
+  },
+  {
+   "expected": "0.0",
+   "input": "null"
+  },
+  {
+   "expected": "12.0",
+   "input": "\u0661\u0662"
+  }
+ ],
+ "note": "Expectations are the return value of components.py's _edge_confidence string branch (float(value), ValueError -> 0.0), produced by the interpreter itself. Rendered as strings because inf and nan have no JSON representation and are precisely the values under test."
+}

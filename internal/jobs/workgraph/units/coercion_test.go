@@ -1,7 +1,6 @@
 package units
 
 import (
-	"math"
 	"testing"
 )
 
@@ -15,58 +14,37 @@ import (
 // The frozen golden cannot reach either class -- its confidences are all JSON
 // numbers, and it pins one explicit integer cap.
 
-// TestConfidenceFromValueMatchesPythonCoercion pins ConfidenceFromValue against
-// Python's `_edge_confidence` (components.py:72-83), whose string branch is a
-// bare `float(value)`.
-func TestConfidenceFromValueMatchesPythonCoercion(t *testing.T) {
+// TestConfidenceFromValueNonStringBranches covers the NON-string arms of
+// ConfidenceFromValue. The string arm is covered exhaustively by
+// TestConfidenceFromStringMatchesPythonCorpus against a generated corpus --
+// a hand-written string matrix failed twice on this function and has been
+// replaced rather than extended.
+func TestConfidenceFromValueNonStringBranches(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		input    any
 		expected float64
-		isNaN    bool
 	}{
-		// The divergence codex found: Python's float() strips whitespace,
-		// strconv.ParseFloat does not.
-		{name: "space padded", input: " 1 ", expected: 1},
-		{name: "tab and newline padded", input: "\t2.5\n", expected: 2.5},
-
-		// Forms both parsers already agreed on -- pinned so the whitespace fix
-		// cannot regress them.
-		{name: "plain", input: "1", expected: 1},
-		{name: "decimal", input: "0.5", expected: 0.5},
-		{name: "underscore separated", input: "1_0", expected: 10},
-		{name: "explicit plus", input: "+3", expected: 3},
-		{name: "negative", input: "-1", expected: -1},
-		{name: "exponent", input: "1e3", expected: 1000},
-		{name: "infinity word", input: "Infinity", expected: math.Inf(1)},
-		{name: "nan word", input: "NaN", isNaN: true},
-
-		// Rejections, all of which Python also rejects -> 0.0 on both planes.
-		{name: "empty", input: "", expected: 0},
-		{name: "whitespace only", input: "  ", expected: 0},
-		{name: "not a number", input: "abc", expected: 0},
-		{name: "doubled underscore", input: "1__0", expected: 0},
-		{name: "leading underscore", input: "_1", expected: 0},
-		{name: "trailing underscore", input: "1_", expected: 0},
-
-		// Non-string branches. bool is checked BEFORE the numeric branch in
-		// Python because bool subclasses int there, so True is 0.0, not 1.0.
+		// Python checks isinstance(value, bool) BEFORE the numeric branch,
+		// because bool subclasses int there. True is therefore 0.0, not 1.0 --
+		// the one case where the "obvious" Go port silently inverts a meaning.
 		{name: "bool true is zero not one", input: true, expected: 0},
 		{name: "bool false", input: false, expected: 0},
+
 		{name: "float64", input: 0.75, expected: 0.75},
+		// The documented decode path: read the Float32 column, widen. 0.9 as a
+		// float32 widened is NOT the double 0.9, and the split compares
+		// confidences for equality against the component maximum.
 		{name: "float32 widened", input: float32(0.9), expected: float64(float32(0.9))},
 		{name: "int", input: 3, expected: 3},
+		{name: "int32", input: int32(2), expected: 2},
+		{name: "int64", input: int64(7), expected: 7},
+
 		{name: "nil", input: nil, expected: 0},
+		{name: "unexpected type", input: []string{"1"}, expected: 0},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := ConfidenceFromValue(testCase.input)
-			if testCase.isNaN {
-				if !math.IsNaN(got) {
-					t.Errorf("ConfidenceFromValue(%v) = %v, python = nan", testCase.input, got)
-				}
-				return
-			}
-			if got != testCase.expected {
+			if got := ConfidenceFromValue(testCase.input); got != testCase.expected {
 				t.Errorf("ConfidenceFromValue(%v) = %v, python = %v", testCase.input, got, testCase.expected)
 			}
 		})

@@ -114,3 +114,62 @@ func workgraphComponentsLivePython(t *testing.T, repoRoot string) string {
 	}
 	return resolved
 }
+
+// TestConfidenceCoercionGoldenMatchesLivePython is the rot guard for
+// tests/fixtures/confidence_coercion_python_golden.json.
+//
+// Its own guard, separate from the component golden above, because it has a
+// different producer: Python's float() as invoked by _edge_confidence's string
+// branch. That branch is where three separate parity divergences were found
+// (whitespace stripping, C99 hex literals plus ErrRange saturation, and signed
+// NaN words), so it is the last place to rely on a shared marker.
+func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+
+	repoRoot := repositoryRootPath(t)
+	python := workgraphComponentsLivePython(t, repoRoot)
+	generator := filepath.Join(
+		repoRoot, "tests", "fixtures", "generate_confidence_coercion_python_golden.py",
+	)
+	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("coercion golden generator is missing at %s: %v", generator, err)
+	}
+
+	command := exec.Command(python, generator, "--stdout")
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
+	rendered, err := command.Output()
+	if err != nil {
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("run the coercion golden generator against live Python: %v: %s", err, stderr)
+	}
+
+	frozen, err := os.ReadFile(filepath.Join(repoRoot, "tests", "fixtures", coercionGoldenFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(frozen) == string(rendered) {
+		if writeErr := os.WriteFile(
+			filepath.Join(proofDirectory, "confidence-coercion-golden"), []byte("executed"), 0o644,
+		); writeErr != nil {
+			t.Fatalf("write live-python-oracle proof: %v", writeErr)
+		}
+		return
+	}
+	t.Error(
+		"live Python no longer coerces the corpus the way the frozen golden records.\n" +
+			"Regenerate with\n" +
+			"    python tests/fixtures/generate_confidence_coercion_python_golden.py\n" +
+			"and treat the diff as a real behaviour change: the coerced confidence decides which\n" +
+			"edges the oversized-component split protects, which decides work_unit_id.",
+	)
+}

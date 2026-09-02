@@ -476,7 +476,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestWorkgraphComponentsGoldenMatchesLivePython$' \
+        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -491,6 +491,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-components-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: work-unit component golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again: the coercion corpus has a DIFFERENT producer
+  # (float()'s string branch) from the component golden above, and it is the
+  # guard that caught three separate parser divergences. A shared marker could
+  # be satisfied by the component guard while this one was filtered out of -run.
+  proof_file="${proof_dir}/confidence-coercion-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: confidence coercion corpus did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

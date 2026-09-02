@@ -63,6 +63,7 @@ the connection instead.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -151,7 +152,20 @@ class RecordingSink:
         # method would execute it against the shared stack. Gate the statement.
         _refuse_non_read(query)
         rows = self._read(query, params)
-        self.reads.append(rows)
+        # SNAPSHOT at capture, then hand the ORIGINALS to the producer.
+        #
+        # Recording the same objects the producer holds does not freeze anything:
+        # the golden is serialised after the producer returns, so a producer that
+        # mutates a row in place -- `row["relationship_type_raw"] = ...` -- rewrites
+        # the captured "input" too. Both halves then agree, and an oracle that
+        # derives its expectation from that input derives it FROM the corruption
+        # and accepts it. Adversarial review round 5 constructed exactly that and
+        # got `accepted=3548/3548`.
+        #
+        # The copy is the recording; the producer keeps the originals so its
+        # behaviour is unchanged and anything it does to them is visible as a
+        # divergence rather than absorbed as the new reference answer.
+        self.reads.append(copy.deepcopy(rows))
         self.queries.append(_normalize_query(query, params))
         return rows
 

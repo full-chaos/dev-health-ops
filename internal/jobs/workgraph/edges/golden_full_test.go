@@ -13,6 +13,44 @@ import (
 	"time"
 )
 
+// dependencyEdgeType is the ONE mapping from a dependency row's relationship_type
+// to the edge kind the producer emits, shared by every test that needs it.
+//
+// It exists as a single function because adversarial review round 5 found a
+// second, simplified copy in the falsification test that handled only the blocker
+// family and `duplicates`: it bucketed `is_related_to` under `relates`, so it
+// would have counted a VALID edge as rejected. Today's fixture has no such rows,
+// so it passed while not validating the mapping it claimed to. A duplicated
+// mapping that drifts from the real one is precisely what would mislead PR2.
+//
+// Mirrors DEPENDENCY_TYPE_MAP plus the blocker forcing in _canonical_dependency
+// (src/dev_health_ops/work_graph/builder.py): the whole blocker family collapses
+// to BLOCKS, every other known type maps directly, and anything unrecognised
+// falls back to RELATES exactly as DEPENDENCY_TYPE_MAP.get(relationship, RELATES)
+// does. Only the TYPE is derived here, never the direction, so the endpoint swap
+// _canonical_dependency performs for blocker rows cannot affect a caller keying
+// on an unordered pair.
+func dependencyEdgeType(relationship string) string {
+	switch strings.ToLower(relationship) {
+	case "blocks", "blocked_by", "is_blocked_by":
+		return EdgeTypeBlocks
+	case "relates", "relates_to":
+		return EdgeTypeRelates
+	case "is_related_to":
+		return EdgeTypeIsRelatedTo
+	case "duplicates":
+		return EdgeTypeDuplicates
+	case "is_duplicate_of":
+		return EdgeTypeIsDuplicateOf
+	case "parent", "is_parent_of":
+		return EdgeTypeParentOf
+	case "child", "is_child_of":
+		return EdgeTypeChildOf
+	default:
+		return EdgeTypeRelates
+	}
+}
+
 const goldenFixture = "workgraph_issue_edges_python_golden.json"
 
 func repositoryRootPath(t *testing.T) string {
@@ -147,26 +185,6 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 		low, high string
 		edgeType  string
 	}
-	edgeTypeFor := func(relationship string) string {
-		switch strings.ToLower(relationship) {
-		// The blocker family is all forced to BLOCKS by _canonical_dependency.
-		case "blocks", "blocked_by", "is_blocked_by":
-			return EdgeTypeBlocks
-		case "is_related_to":
-			return EdgeTypeIsRelatedTo
-		case "duplicates":
-			return EdgeTypeDuplicates
-		case "is_duplicate_of":
-			return EdgeTypeIsDuplicateOf
-		case "parent", "is_parent_of":
-			return EdgeTypeParentOf
-		case "child", "is_child_of":
-			return EdgeTypeChildOf
-		default:
-			// DEPENDENCY_TYPE_MAP's fallback, which is what "relates_to" hits.
-			return EdgeTypeRelates
-		}
-	}
 	key := func(a, b, edgeType string) binding {
 		if a > b {
 			a, b = b, a
@@ -191,7 +209,7 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dependency %d last_synced: %v", index, err)
 		}
-		bindingKey := key(source, target, edgeTypeFor(relationship))
+		bindingKey := key(source, target, dependencyEdgeType(relationship))
 		if permitted[bindingKey] == nil {
 			permitted[bindingKey] = map[int64]struct{}{}
 		}
@@ -664,26 +682,6 @@ func TestProvenanceAndEvidenceAreDerivedFromTheFrozenInputs(t *testing.T) {
 		}
 		return binding{a, b, edgeType}
 	}
-	// Same mapping as the event_ts binding; only the TYPE is needed, not the
-	// direction, so _canonical_dependency's endpoint swap cannot affect the key.
-	edgeTypeFor := func(relationship string) string {
-		switch strings.ToLower(relationship) {
-		case "blocks", "blocked_by", "is_blocked_by":
-			return EdgeTypeBlocks
-		case "is_related_to":
-			return EdgeTypeIsRelatedTo
-		case "duplicates":
-			return EdgeTypeDuplicates
-		case "is_duplicate_of":
-			return EdgeTypeIsDuplicateOf
-		case "parent", "is_parent_of":
-			return EdgeTypeParentOf
-		case "child", "is_child_of":
-			return EdgeTypeChildOf
-		default:
-			return EdgeTypeRelates
-		}
-	}
 
 	expectedEvidence := map[binding]map[string]struct{}{}
 	for index, dependency := range document.Dependencies {
@@ -711,7 +709,7 @@ func TestProvenanceAndEvidenceAreDerivedFromTheFrozenInputs(t *testing.T) {
 		if evidence == "" {
 			evidence = "dependency"
 		}
-		bindingKey := key(source, target, edgeTypeFor(relationship))
+		bindingKey := key(source, target, dependencyEdgeType(relationship))
 		if expectedEvidence[bindingKey] == nil {
 			expectedEvidence[bindingKey] = map[string]struct{}{}
 		}

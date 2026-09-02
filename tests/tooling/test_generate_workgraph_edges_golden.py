@@ -238,6 +238,61 @@ class TestTheReadBarrierIsServerSide:
             sink.ensure_schema()
 
 
+class TestCapturedInputsAreSnapshots:
+    """The frozen inputs must be frozen AT CAPTURE, not at serialisation time.
+
+    Adversarial review round 5, P1: the sink recorded the same dict objects it
+    handed the producer, and the golden is serialised only after the producer
+    returns. So a producer that mutated a row in place rewrote the captured
+    "input" as well as the output, both halves agreed, and the Go oracle -- which
+    derives `evidence` FROM that input -- derived it from the corruption and
+    accepted all 3,548 edges.
+
+    This is the load-bearing property of the whole frozen-inputs pattern, not a
+    detail of this generator: an oracle is only as trustworthy as the immutability
+    of what it derives from. CHAOS-4803 carries the general form.
+    """
+
+    def test_a_producer_mutation_does_not_reach_the_recorded_input(self, generator):
+        row = {
+            "source_work_item_id": "linear:A",
+            "target_work_item_id": "linear:B",
+            "relationship_type": "relates_to",
+            "relationship_type_raw": "linear_relation:related",
+            "relationship_semantics_version": "canonical-blocks.v2",
+        }
+        sink = generator.RecordingSink(lambda statement, params: [row])
+        handed_over = sink.query_dicts(SCOPED_READ, {})
+
+        # The producer keeps the originals, so its behaviour is unchanged...
+        assert handed_over[0] is row
+        # ...but the recording is a snapshot it cannot reach.
+        assert sink.reads[0][0] is not row
+
+        handed_over[0]["relationship_type_raw"] = "regression:oracle-blind"
+        assert sink.reads[0][0]["relationship_type_raw"] == "linear_relation:related", (
+            "a producer mutation reached the recorded input; the oracle would derive "
+            "its expectation from the corruption and accept it"
+        )
+
+    def test_nested_values_are_snapshotted_too(self, generator):
+        # A shallow copy would pass the test above and still alias anything nested.
+        row = {"source_work_item_id": "linear:A", "labels": ["one"]}
+        sink = generator.RecordingSink(lambda statement, params: [row])
+        handed_over = sink.query_dicts(SCOPED_READ, {})
+        handed_over[0]["labels"].append("two")
+        assert sink.reads[0][0]["labels"] == ["one"], (
+            "nested values are aliased; the snapshot is shallow"
+        )
+
+    def test_the_snapshot_survives_replacing_the_row_list(self, generator):
+        rows = [{"source_work_item_id": "linear:A"}]
+        sink = generator.RecordingSink(lambda statement, params: rows)
+        sink.query_dicts(SCOPED_READ, {})
+        rows.clear()
+        assert len(sink.reads[0]) == 1
+
+
 class TestRecordedMutationsAreNotExecuted:
     """The cleanup mutations belong in the golden, never in the database."""
 

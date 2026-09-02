@@ -3,7 +3,6 @@ package edges
 import (
 	"encoding/json"
 	"math"
-	"strings"
 	"testing"
 )
 
@@ -262,16 +261,6 @@ func TestProvenanceAndEvidenceOracleRejectsACorruptedRegeneration(t *testing.T) 
 		}
 		return binding{a, b, edgeType}
 	}
-	edgeTypeFor := func(relationship string) string {
-		switch strings.ToLower(relationship) {
-		case "blocks", "blocked_by", "is_blocked_by":
-			return EdgeTypeBlocks
-		case "duplicates":
-			return EdgeTypeDuplicates
-		default:
-			return EdgeTypeRelates
-		}
-	}
 	derived := map[binding]map[string]struct{}{}
 	for index, dependency := range document.Dependencies {
 		source, err := document.String(dependency[0])
@@ -297,7 +286,7 @@ func TestProvenanceAndEvidenceOracleRejectsACorruptedRegeneration(t *testing.T) 
 		if evidence == "" {
 			evidence = "dependency"
 		}
-		bindingKey := key(source, target, edgeTypeFor(relationship))
+		bindingKey := key(source, target, dependencyEdgeType(relationship))
 		if derived[bindingKey] == nil {
 			derived[bindingKey] = map[string]struct{}{}
 		}

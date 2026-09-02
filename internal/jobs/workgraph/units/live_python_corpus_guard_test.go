@@ -70,6 +70,14 @@ var outputPathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`OUTPUT_PATH\s*=\s*Path\(__file__\)\.parent\s*/\s*'([^']+)'`),
 	regexp.MustCompile(`OUTPUT\w*\s*=\s*Path\(__file__\)\.with_name\(\s*"([^"]+)"\s*\)`),
 	regexp.MustCompile(`OUTPUT\w*\s*=\s*Path\(__file__\)\.with_name\(\s*'([^']+)'\s*\)`),
+	// argparse `--out` with a REPO-RELATIVE default is also a declaration, just
+	// in another syntax. Two generators arrived this way within a day, and
+	// naming each in explicitCorpusPaths would be curating instances of a shape
+	// the parser can simply read. Only tests/fixtures/ defaults count: a default
+	// of /tmp/... names a scratch path, not the committed corpus, and treating
+	// it as one would point the comparison at a file that is not in the tree.
+	regexp.MustCompile(`add_argument\(\s*"--out"\s*,\s*default\s*=\s*"tests/fixtures/([^"]+)"`),
+	regexp.MustCompile(`add_argument\(\s*'--out'\s*,\s*default\s*=\s*'tests/fixtures/([^']+)'`),
 }
 
 // explicitCorpusPaths names generators whose corpus path cannot be INFERRED

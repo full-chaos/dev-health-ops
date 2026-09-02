@@ -186,6 +186,13 @@ func CodeOwnershipGini(repoID uuid.UUID, windowStats []CommitStatRow) float64 {
 	sort.Slice(churns, func(i, j int) bool { return churns[i].Cmp(churns[j]) < 0 })
 	n := len(churns)
 
+	// CHAOS-4818 note: this used to be a float64 compound assignment
+	// (`numerator += float64(index+1)*value`), an unguarded FMA-fusion
+	// site the lint (fma_lint_test.go) now catches. CHAOS-4824's rewrite
+	// below eliminated float64 arithmetic from this loop entirely --
+	// everything is exact math/big.Int until the one final division, so
+	// the FMA-fusion class is structurally impossible here, not merely
+	// guarded. Confirmed: the lint reports this file clean.
 	numerator := new(big.Int)
 	denominatorSum := new(big.Int)
 	term := new(big.Int)

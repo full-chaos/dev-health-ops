@@ -329,6 +329,13 @@ func sampleZScores(values []float64) []float64 {
 	squaredDiffs := make([]float64, n)
 	for i, v := range values {
 		diff := v - mean
+		// CHAOS-4818 note: this used to be a compound assignment
+		// (`sumSquares += diff*diff`), an unguarded FMA-fusion site the
+		// lint (fma_lint_test.go) now catches. CHAOS-4824's rewrite
+		// (pythonparity.Sum below) eliminated the compound assignment
+		// entirely -- a bare per-element multiply-and-store has no
+		// adjacent +/- to fuse with, so no float64() guard is needed here
+		// anymore. Confirmed: the lint reports this file clean.
 		squaredDiffs[i] = diff * diff
 	}
 	// variance = sum((x - mean) ** 2 for x in values) / (n - 1)

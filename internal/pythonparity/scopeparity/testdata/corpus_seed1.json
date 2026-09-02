@@ -121,7 +121,7 @@
   },
   {
    "scope": {
-    "heuristic_window": -2147483649
+    "heuristic_window": 1
    },
    "verdict": "RUNS",
    "window": {
@@ -917,13 +917,14 @@
    "error": "ValueError",
    "scope": {
     "from_date": "2026-W33-6#06:07:08.1234567-08:00",
-    "to_date": "2026-243#24:00:00+05"
+    "to_date": "not-a-date"
    },
    "stage": "window",
    "verdict": "RAISES"
   },
   {
    "scope": {
+    "heuristic_confidence": "\udfff",
     "to_date": "2026-W33-6#06:07:08+00:00"
    },
    "verdict": "RUNS",
@@ -1142,7 +1143,7 @@
    "error": "ValueError",
    "scope": {
     "from_date": "20260815 06:07+05",
-    "heuristic_window": "15/08/2026",
+    "heuristic_window": "00000000000000000000000000000001",
     "repo_id": "2026-08-15X060708+05:00"
    },
    "stage": "window",
@@ -1489,7 +1490,7 @@
   {
    "error": "AttributeError",
    "scope": {
-    "repo_id": 9223372036854775808
+    "repo_id": -2147483648
    },
    "stage": "window",
    "verdict": "RAISES"
@@ -1555,7 +1556,7 @@
    "error": "ValueError",
    "scope": {
     "from_date": "2026-08-15 24:00:00-08:00",
-    "to_date": "9999999999999999999999999999999999999999"
+    "to_date": "10000000000000000000000000000000000000000"
    },
    "stage": "window",
    "verdict": "RAISES"
@@ -3656,7 +3657,7 @@
   },
   {
    "scope": {
-    "heuristic_window": "2147483648"
+    "heuristic_window": "0"
    },
    "verdict": "RUNS",
    "window": {
@@ -4290,7 +4291,7 @@
   {
    "error": "ValueError",
    "scope": {
-    "repo_id": 1e+308,
+    "repo_id": 18446744073709551616,
     "run_id": "2026-243t06:07:08",
     "to_date": "2026-243t060708+00:00:00"
    },
@@ -4788,15 +4789,12 @@
    "verdict": "RAISES"
   },
   {
+   "error": "TypeError",
    "scope": {
-    "to_date": -0.0
+    "to_date": 18446744073709551615
    },
-   "verdict": "RUNS",
-   "window": {
-    "from": "2026-08-02T12:30:45.500000+00:00",
-    "repo_id": null,
-    "to": "2026-09-01T12:30:45.500000+00:00"
-   }
+   "stage": "window",
+   "verdict": "RAISES"
   },
   {
    "scope": {

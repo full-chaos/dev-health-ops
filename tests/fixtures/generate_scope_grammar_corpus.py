@@ -119,6 +119,28 @@ OFFSETS = [
 # field diverges on every non-string member.
 FALSY: list[Any] = [None, "", False, 0, 0.0, -0.0, [], {}]
 WHITESPACE: list[Any] = [" ", "\t", "\n", "  \t "]
+
+# Invalid / boundary Unicode. These are NOT decoration: the two planes decode
+# them differently and NEITHER reports an error.
+#
+#   json.loads('"\\ud800"')  Python -> a 1-char string holding the lone
+#                             surrogate; Go -> U+FFFD, with err == nil.
+#   '"a\\ud800b"'            Python -> 'a\\ud800b' (3 chars); Go -> "a\ufffdb".
+#   a valid surrogate PAIR    both -> the same astral character. They agree
+#                             only when the pair is well formed.
+#
+# So a scope carrying a lone surrogate is a different VALUE on each plane
+# before either parser is reached, silently. This is the JSON-layer twin of
+# the ClickHouse String decode divergence lane-4441 measured (invalid UTF-8
+# comes back to Python as hex of the whole value, and to Go as raw bytes):
+# same shape, different reader.
+INVALID_UNICODE: list[Any] = [
+    "\ud800",  # lone high surrogate
+    "\udfff",  # lone low surrogate
+    "a\ud800b",  # embedded, so the divergence is mid-string
+    "2026-08-15T\ud800",  # attached to an otherwise-parseable date
+    "\ufffd",  # the replacement char ITSELF, which both planes keep
+]
 NON_STRINGS: list[Any] = [True, 1, 123, 1.5, ["2026-08-15"], {"a": 1}]
 
 # The MAGNITUDE axis (contributed by lane-4752-go: its corpus had no positive id
@@ -219,6 +241,7 @@ def value_alphabet() -> list[Any]:
     values.extend(NON_STRINGS)
     values.extend(datetime_values())
     values.extend(uuid_values())
+    values.extend(INVALID_UNICODE)
     values.extend(MAGNITUDES)
     values.extend(MAGNITUDE_STRINGS)
     values.extend(["not-a-date", "15/08/2026", "2026-13-45"])

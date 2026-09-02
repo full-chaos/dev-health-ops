@@ -168,10 +168,15 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
-      - name: Set up Python 3.14.7 for live provider oracles
+      # Minor-only, matching docker/Dockerfile's floating `python:3.14-slim`
+      # and the thirteen sibling workflows. An exact patch here would re-create
+      # the very drift this change removes: the shipped image advances to the
+      # next 3.14.x while CI stays behind, and the live-Python oracles are once
+      # again proved against an interpreter the product does not run.
+      - name: Set up Python 3.14 for live provider oracles
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.14.7'
+          python-version: '3.14'
 
       - name: Install locked live provider oracle dependencies
         run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt
@@ -274,10 +279,10 @@ jobs:
       # with ModuleNotFoundError. The closure is pinned and installed with
       # --no-deps for the same reason go-quality's is: an undeclared dependency
       # must fail loudly rather than drift to latest.
-      - name: Set up Python 3.14.7 for the ClickHouse migration chain
+      - name: Set up Python 3.14 for the ClickHouse migration chain
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.14.7'
+          python-version: '3.14'
 
       - name: Install locked ClickHouse migration dependencies
         run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt

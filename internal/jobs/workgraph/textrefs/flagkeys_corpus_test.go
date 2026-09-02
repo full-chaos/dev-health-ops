@@ -8,10 +8,11 @@ import (
 )
 
 type flagKeyCase struct {
-	ID     string   `json:"id"`
-	Text   string   `json:"text"`
-	Keys   []string `json:"keys"`
-	Expect []struct {
+	ID        string   `json:"id"`
+	Text      string   `json:"text"`
+	Keys      []string `json:"keys"`
+	MinLength int      `json:"min_length"`
+	Expect    []struct {
 		FlagKey  string `json:"flag_key"`
 		RawMatch string `json:"raw_match"`
 	} `json:"extract_flag_key_refs"`
@@ -52,7 +53,10 @@ func TestFlagKeyRefsMatchFrozenPython(t *testing.T) {
 
 	pass, fail := 0, 0
 	for _, c := range doc.Cases {
-		got := ExtractFlagKeyRefs(c.Text, c.Keys, FlagKeyMinLength)
+		// The corpus carries the min_length each case was generated with. Passing
+		// FlagKeyMinLength unconditionally is what hid the sentinel defect: every
+		// row used the default, so no row could see an override.
+		got := ExtractFlagKeyRefs(c.Text, c.Keys, c.MinLength)
 		type pair struct{ FlagKey, RawMatch string }
 		gotPairs := []pair{}
 		for _, r := range got {

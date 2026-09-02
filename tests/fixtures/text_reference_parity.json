@@ -26486,6 +26486,7 @@
       "keys": [
         "checkout"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -26527,6 +26528,7 @@
       "keys": [
         "checkout"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+006E",
         "U+006F",
@@ -26550,6 +26552,7 @@
       "keys": [
         "search"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -26582,6 +26585,7 @@
         "checkout-v2",
         "checkout"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0073",
         "U+0068",
@@ -26623,6 +26627,7 @@
       "keys": [
         "checkout"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0073",
         "U+0068",
@@ -26659,6 +26664,7 @@
       "keys": [
         "a.b"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0066",
         "U+006C",
@@ -26685,6 +26691,7 @@
       "keys": [
         "ns"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0066",
         "U+006C",
@@ -26712,6 +26719,7 @@
       "keys": [
         "key"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0066",
         "U+006C",
@@ -26740,6 +26748,7 @@
         "alpha",
         "beta"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0062",
         "U+0065",
@@ -26775,6 +26784,7 @@
       "keys": [
         "dupe"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0064",
         "U+0075",
@@ -26810,6 +26820,7 @@
       "keys": [
         "checkout"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0063",
         "U+0068",
@@ -26844,6 +26855,7 @@
       "keys": [
         "ab ab"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0058",
         "U+0061",
@@ -26869,6 +26881,7 @@
       "keys": [
         "ab ab"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0061",
         "U+0062",
@@ -26893,6 +26906,7 @@
       "keys": [
         "a+b a+b"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0058",
         "U+0061",
@@ -26912,6 +26926,7 @@
       "keys": [
         "abc"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -26943,6 +26958,7 @@
       "keys": [
         "abcd"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -26980,6 +26996,7 @@
       "keys": [
         "ab\ud83d\ude00"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27011,6 +27028,7 @@
       "keys": [
         "ni3hao"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27050,6 +27068,7 @@
       "keys": [
         "ab\u65e5"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27081,6 +27100,7 @@
       "keys": [
         "1234"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27113,6 +27133,7 @@
       "keys": [
         "\u00b2\u00b2\u00b2\u00b2"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27145,6 +27166,7 @@
       "keys": [
         "\u1369\u1369\u1369\u1369"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27177,6 +27199,7 @@
       "keys": [
         "12a4"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27214,6 +27237,7 @@
       "keys": [
         "a.b+c"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0066",
         "U+006C",
@@ -27245,6 +27269,7 @@
       "keys": [
         "a*bc"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0066",
         "U+006C",
@@ -27275,6 +27300,7 @@
       "keys": [
         "  abcd  "
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27312,6 +27338,7 @@
       "keys": [
         ""
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27345,6 +27372,7 @@
         "abcd",
         "abcd"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0077",
         "U+0065",
@@ -27382,6 +27410,7 @@
       "keys": [
         "abcd"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0073",
         "U+0068",
@@ -27412,6 +27441,7 @@
       "keys": [
         "abcd"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0061",
         "U+0062",
@@ -27440,6 +27470,7 @@
       "keys": [
         "abcd"
       ],
+      "min_length": 4,
       "codepoints": [
         "U+0073",
         "U+0068",
@@ -27458,6 +27489,191 @@
         {
           "flag_key": "abcd",
           "raw_match": "abcd"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/min_length_zero",
+      "axis": "flag_keys",
+      "text": "a bc def",
+      "keys": [
+        "a",
+        "bc",
+        "def"
+      ],
+      "min_length": 0,
+      "codepoints": [
+        "U+0061",
+        "U+0020",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0064",
+        "U+0065",
+        "U+0066"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "a",
+          "raw_match": "a"
+        },
+        {
+          "flag_key": "bc",
+          "raw_match": "bc"
+        },
+        {
+          "flag_key": "def",
+          "raw_match": "def"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/min_length_one",
+      "axis": "flag_keys",
+      "text": "a bc def",
+      "keys": [
+        "a",
+        "bc",
+        "def"
+      ],
+      "min_length": 1,
+      "codepoints": [
+        "U+0061",
+        "U+0020",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0064",
+        "U+0065",
+        "U+0066"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "a",
+          "raw_match": "a"
+        },
+        {
+          "flag_key": "bc",
+          "raw_match": "bc"
+        },
+        {
+          "flag_key": "def",
+          "raw_match": "def"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/min_length_two",
+      "axis": "flag_keys",
+      "text": "a bc def",
+      "keys": [
+        "a",
+        "bc",
+        "def"
+      ],
+      "min_length": 2,
+      "codepoints": [
+        "U+0061",
+        "U+0020",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0064",
+        "U+0065",
+        "U+0066"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "bc",
+          "raw_match": "bc"
+        },
+        {
+          "flag_key": "def",
+          "raw_match": "def"
+        }
+      ]
+    },
+    {
+      "id": "flagkey/min_length_default",
+      "axis": "flag_keys",
+      "text": "a bc def",
+      "keys": [
+        "a",
+        "bc",
+        "def"
+      ],
+      "min_length": 4,
+      "codepoints": [
+        "U+0061",
+        "U+0020",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0064",
+        "U+0065",
+        "U+0066"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/min_length_high",
+      "axis": "flag_keys",
+      "text": "we shipped abcd",
+      "keys": [
+        "abcd"
+      ],
+      "min_length": 99,
+      "codepoints": [
+        "U+0077",
+        "U+0065",
+        "U+0020",
+        "U+0073",
+        "U+0068",
+        "U+0069",
+        "U+0070",
+        "U+0070",
+        "U+0065",
+        "U+0064",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063",
+        "U+0064"
+      ],
+      "extract_flag_key_refs": []
+    },
+    {
+      "id": "flagkey/min_length_negative",
+      "axis": "flag_keys",
+      "text": "a bc def",
+      "keys": [
+        "a",
+        "bc",
+        "def"
+      ],
+      "min_length": -1,
+      "codepoints": [
+        "U+0061",
+        "U+0020",
+        "U+0062",
+        "U+0063",
+        "U+0020",
+        "U+0064",
+        "U+0065",
+        "U+0066"
+      ],
+      "extract_flag_key_refs": [
+        {
+          "flag_key": "a",
+          "raw_match": "a"
+        },
+        {
+          "flag_key": "bc",
+          "raw_match": "bc"
+        },
+        {
+          "flag_key": "def",
+          "raw_match": "def"
         }
       ]
     }

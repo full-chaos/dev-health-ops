@@ -425,13 +425,30 @@ FLAG_KEY_CASES = [
 ]
 
 
-def _flag_key_case(case_id, text, keys):
-    refs = tp.extract_flag_key_refs(text, keys)
+# min_length is the CALLER'S, and Python honours 0 and 1 as written. An earlier
+# Go version treated a non-positive value as "unset" and substituted the default,
+# inventing a sentinel Python does not have. Every case in FLAG_KEY_CASES passes
+# the default, so the axis could not see it -- codex round 3 found it with a
+# probe rather than a corpus row, which is the corpus failing, not the round
+# succeeding. Kept as its own list so the 28 cases above keep their shape.
+FLAG_KEY_MIN_LENGTH_CASES = [
+    ("min_length_zero", "a bc def", ["a", "bc", "def"], 0),
+    ("min_length_one", "a bc def", ["a", "bc", "def"], 1),
+    ("min_length_two", "a bc def", ["a", "bc", "def"], 2),
+    ("min_length_default", "a bc def", ["a", "bc", "def"], tp.FLAG_KEY_MIN_LENGTH),
+    ("min_length_high", "we shipped abcd", ["abcd"], 99),
+    ("min_length_negative", "a bc def", ["a", "bc", "def"], -1),
+]
+
+
+def _flag_key_case(case_id, text, keys, min_length=tp.FLAG_KEY_MIN_LENGTH):
+    refs = tp.extract_flag_key_refs(text, keys, min_length=min_length)
     return {
         "id": case_id,
         "axis": "flag_keys",
         "text": text,
         "keys": keys,
+        "min_length": min_length,
         "codepoints": [f"U+{ord(ch):04X}" for ch in text],
         "extract_flag_key_refs": [
             {"flag_key": r.flag_key, "raw_match": r.raw_match} for r in refs
@@ -598,6 +615,10 @@ def build_corpus() -> dict:
         "flag_key_cases": [
             _flag_key_case(f"flagkey/{label}", text, keys)
             for label, text, keys in FLAG_KEY_CASES
+        ]
+        + [
+            _flag_key_case(f"flagkey/{label}", text, keys, min_length)
+            for label, text, keys, min_length in FLAG_KEY_MIN_LENGTH_CASES
         ],
     }
 

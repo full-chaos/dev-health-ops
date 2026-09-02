@@ -74,9 +74,6 @@ func ExtractFlagKeyRefs(text string, knownFlagKeys []string, minLength int) []Pa
 	if text == "" {
 		return nil
 	}
-	if minLength <= 0 {
-		minLength = FlagKeyMinLength
-	}
 	var out []ParsedFlagRef
 	seen := map[string]bool{}
 	for _, rawKey := range knownFlagKeys {

@@ -1964,31 +1964,80 @@ def test_container_running_verbs_are_derived_not_assumed() -> None:
     assert {"ci", "all", "integration", "integration-shard"} <= verbs
     # Planning and static verbs must NOT be swept in, or the contract test would
     # demand a pre-pull from jobs that never start a container.
-    assert verbs.isdisjoint({"fmt", "vet", "build", "integration-shard-plan"})
+    assert verbs.isdisjoint(
+        {"fmt", "vet", "build", "integration-shard-plan", "integration-prepull"}
+    )
 
 
-def test_every_workflow_job_starting_containers_pre_pulls_first() -> None:
+_DOCKER_LOGIN_ACTION = "docker/login-action@"
+
+
+def _step_kind(step: dict[str, Any], container_verbs: set[str]) -> str | None:
+    """Classify a workflow step as login / prepull / container-running."""
+    uses = str(step.get("uses", ""))
+    if uses.startswith(_DOCKER_LOGIN_ACTION):
+        registry = str((step.get("with") or {}).get("registry", ""))
+        return "login" if registry == "docker.io" else None
+    command = str(step.get("run", ""))
+    if not command:
+        return None
+    if _PREPULL_COMMAND in command:
+        return "prepull"
+    match = re.search(r"ci/check_go\.sh\s+([a-z0-9-]+)", command)
+    if match is not None and match.group(1) in container_verbs:
+        return "container"
+    return None
+
+
+def test_every_workflow_job_starting_containers_authenticates_and_pre_pulls() -> None:
+    """The class, not the two jobs that happened to be caught failing.
+
+    A job that starts Testcontainers must log in to Docker Hub and warm its
+    images, in that order, before it runs anything that starts a container.
+    Anonymous cold pulls are what took run 33572737859 down before the test
+    executed a line of its own logic.
+    """
     container_verbs = _container_running_verbs()
     offenders: list[str] = []
 
     for job_name, job in _workflow()["jobs"].items():
-        commands = [str(step.get("run", "")) for step in job.get("steps", [])]
-        prepull_at = next(
-            (i for i, cmd in enumerate(commands) if _PREPULL_COMMAND in cmd),
-            None,
-        )
-        for index, command in enumerate(commands):
-            match = re.search(r"ci/check_go\.sh\s+([a-z0-9-]+)", command)
-            if match is None or match.group(1) not in container_verbs:
-                continue
-            if prepull_at is None:
-                offenders.append(
-                    f"{job_name}: runs `{match.group(1)}` (starts containers) "
-                    f"with no `{_PREPULL_COMMAND}` step"
-                )
-            elif prepull_at > index:
-                offenders.append(
-                    f"{job_name}: pre-pulls AFTER running `{match.group(1)}`"
-                )
+        kinds = [_step_kind(step, container_verbs) for step in job.get("steps", [])]
+        if "container" not in kinds:
+            continue
+        first_container = kinds.index("container")
+        login = next((i for i, k in enumerate(kinds) if k == "login"), None)
+        prepull = next((i for i, k in enumerate(kinds) if k == "prepull"), None)
+
+        if login is None:
+            offenders.append(
+                f"{job_name}: starts containers with no docker.io login step"
+            )
+        if prepull is None:
+            offenders.append(
+                f"{job_name}: starts containers with no `{_PREPULL_COMMAND}` step"
+            )
+        if prepull is not None and prepull > first_container:
+            offenders.append(f"{job_name}: pre-pulls AFTER starting containers")
+        if login is not None and prepull is not None and login > prepull:
+            offenders.append(f"{job_name}: logs in AFTER pre-pulling")
 
     assert not offenders, "\n".join(offenders)
+
+
+def test_docker_hub_login_is_skipped_on_forks() -> None:
+    """`secrets.*` are empty on fork pull requests.
+
+    Without the condition the login step fails there and takes the whole job
+    with it; with it, forks fall back to anonymous pulls plus the bounded retry.
+    """
+    for job_name, job in _workflow()["jobs"].items():
+        for step in job.get("steps", []):
+            if not str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION):
+                continue
+            condition = str(step.get("if", ""))
+            assert "head.repo.full_name == github.repository" in condition, (
+                f"{job_name}: Docker Hub login has no fork guard"
+            )
+            assert "github.event_name != 'pull_request'" in condition, (
+                f"{job_name}: Docker Hub login would be skipped on push/merge_group"
+            )

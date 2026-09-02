@@ -186,6 +186,24 @@ jobs:
           git archive "${BASE_SHA}" contracts/jobs/v1 | tar -x -C "${base_dir}"
           echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
 
+      # Authenticated Docker Hub pulls. Anonymous pulls are rate limited per IP,
+      # and a hosted runner shares that IP with everyone else on it -- which is
+      # how run 33572737859 got `unauthorized: authentication required` while
+      # creating a container (CHAOS-4778). The pre-pull step below turns a
+      # transient rejection into three visible attempts; this step is what stops
+      # the rejection happening in the first place.
+      #
+      # Skipped on fork pull requests, where `secrets.*` are empty by design:
+      # those runs fall back to anonymous pulls plus the bounded retry rather
+      # than failing at login.
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # `ci` ends in check_multi_replica_workers, which starts a Testcontainers
       # PostgreSQL -- and testcontainers-go starts its own reaper first. Both
       # were pulled cold and anonymously from Docker Hub until CHAOS-4778: run
@@ -258,7 +276,25 @@ jobs:
       - name: Install locked ClickHouse migration dependencies
         run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
 
-      - name: Pre-pull pinned ClickHouse image with bounded retry
+      # Authenticated Docker Hub pulls. Anonymous pulls are rate limited per IP,
+      # and a hosted runner shares that IP with everyone else on it -- which is
+      # how run 33572737859 got `unauthorized: authentication required` while
+      # creating a container (CHAOS-4778). The pre-pull step below turns a
+      # transient rejection into three visible attempts; this step is what stops
+      # the rejection happening in the first place.
+      #
+      # Skipped on fork pull requests, where `secrets.*` are empty by design:
+      # those runs fall back to anonymous pulls plus the bounded retry rather
+      # than failing at login.
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
         run: bash ci/check_go.sh integration-prepull
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}

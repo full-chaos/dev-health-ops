@@ -38,19 +38,22 @@ across the three targets, and that is what decides the routing:
 | Where | ClickHouse | PostgreSQL | How this was established |
 | --- | --- | --- | --- |
 | Host Testcontainers (this repo) | **26.6.1.1193** | 18-alpine | The image is digest-pinned with no version in the source; resolved from the registry config blob label `com.clickhouse.build.version` (built 2026-06-26). Independently corroborated in-repo: `internal/providersync/linear_stale_project_ownership_cleanup.go:75-82` records the same resolution, reached by running against the digest directly. |
-| GitHub Actions CI services | **25.1** | 18-alpine | `.github/workflows/test.yml:165,335`; `.github/workflows/live-e2e.yml:82,176`. |
+| GitHub Actions CI services | **26.7** | 18-alpine | `.github/workflows/test.yml:171,353`; `.github/workflows/live-e2e.yml:88,200`. Moved 25.1 -> 26.7 by CHAOS-4851 when the service images were mirrored to ghcr; kept a tag, not a digest, so minor upgrades apply. |
 | kiac in-cluster (`acr-local`) | **26.7.3.19** | **18.6** | Live readback, `SELECT version()` / `SHOW server_version`, 2026-08-31. |
 | acr's own Testcontainers | 26.7.5.10 | 18-alpine | Pinned deliberately by CHAOS-4549; floor `26.7` in `acr/internal/chfixture`. |
 | Production | 26.7.x (floating) | — | CHAOS-4519: prod's exact patch drifts, so the floor is `major.minor`. |
 
 Three consequences follow, and they are the whole decision procedure:
 
-1. **CI cannot prove ClickHouse engine behaviour.** It runs 25.1 against a
-   production line of 26.7. CHAOS-4549 is the precedent for why the gap
-   matters rather than being cosmetic: a multi-arm `JOIN ... ON (... OR ...)`
-   is accepted on 26.7 and rejected on 24.8 with
+1. **CI's service containers now match production's line.** They ran 25.1
+   against a production line of 26.7 until CHAOS-4851 moved them to 26.7 as a
+   side effect of mirroring them to ghcr. CHAOS-4549 is the precedent for why
+   that gap mattered rather than being cosmetic: a multi-arm
+   `JOIN ... ON (... OR ...)` is accepted on 26.7 and rejected on 24.8 with
    `Code: 403 Unsupported JOIN ON conditions`, under every analyzer setting.
-   A version gap changes *what SQL is accepted at all*.
+   A version gap changes *what SQL is accepted at all* — so closing it is a
+   correctness change, not housekeeping, and it is worth knowing that no
+   suite has yet been run specifically to exercise the difference.
 2. **The ops host Testcontainers cannot prove it either.** They run
    26.6.1, one minor **below** the 26.7 floor acr ruled for exactly this
    reason — so an ops host container would fail acr's own
@@ -98,7 +101,7 @@ flowchart TD
     V -- yes --> V1[Valkey has no CREATE DATABASE<br/>to isolate parallel callers]
 
     Q --> C{Does it touch ClickHouse?}
-    C -- yes --> C1[CI runs 25.1 against a 26.7<br/>production line, so it cannot<br/>prove engine behaviour]
+    C -- yes --> C1[CI services run 26.7,<br/>production's line, since CHAOS-4851]
 
     O1 --> T[Read that store's cell<br/>in the table below]
     R1 --> T
@@ -141,8 +144,10 @@ and still unsafe beside a second lane doing the same.
 
 PostgreSQL-only packages get **yes**: CI's PostgreSQL is the same 18 line as
 kiac (18.6) and production, so nothing about the engine differs. ClickHouse-
-touching packages get **no** unless every construct they exercise is engine-
-neutral — CI is 25.1 against a 26.7 production line.
+touching packages are no longer blocked on the CI engine version: since
+CHAOS-4851 the CI services run 26.7, production's line. The host
+Testcontainers gap in point 2 above still stands, so "I ran it locally"
+remains the weaker claim.
 
 Engine-sensitivity below is per-package and evidenced. The recurring sensitive
 constructs in this codebase are `FINAL` on `ReplacingMergeTree`, `argMax`
@@ -360,9 +365,10 @@ the repository, used by four call sites in that one package.
 
 That package is therefore **host-only until its names are namespaced** — which
 leaves it in an uncomfortable spot worth stating plainly: it is
-engine-sensitive *and* host-only, so today it can be proven neither by CI (25.1)
-nor by kiac (destructive), and its host containers run 26.6.1 rather than
-production's 26.7 line.
+engine-sensitive *and* host-only, so it cannot be proven by kiac
+(destructive), and its host containers run 26.6.1 rather than production's
+26.7 line. CI's own services moved to 26.7 in CHAOS-4851, so the CI half of
+this constraint has lifted; the host-only half has not.
 
 ### Orphans
 

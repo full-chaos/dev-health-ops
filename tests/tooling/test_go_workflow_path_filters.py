@@ -17,8 +17,11 @@ fixture stops matching the interpreter, and the change that trips them is,
 characteristically, a change to a fixture and nothing else. The lists named
 individual fixture FILES, so a fixture-only PR was classified non-Go, the no-op
 ran, `go-quality` went green, and the guard never executed -- on exactly the
-change it was built for. 23 fixtures were unlisted at the time this was found,
-including several already merged.
+change it was built for. On `main` at the time this was written, 21 fixtures
+read by Go tests were unmatched -- several already merged. (A count of 23
+appears in the originating report; that included two fixtures still on an
+unmerged branch. The number this test computes is whatever the tree holds, which
+is the point.)
 
 Only `issue_pr_links_python_golden.*` had been listed, added when an earlier
 lane hit the same hole and fixed it by adding two more entries. That is the tell

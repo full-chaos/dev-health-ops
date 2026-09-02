@@ -48,7 +48,7 @@ func loadPRIDParity(t *testing.T) prDependencyIDParity {
 	if err := json.Unmarshal(raw, &corpus); err != nil {
 		t.Fatalf("decode pr-id parity corpus: %v", err)
 	}
-	if corpus.Schema != "pr_dependency_id_parity.v1" {
+	if corpus.Schema != "pr_dependency_id_parity.v2" {
 		t.Fatalf("unexpected corpus schema %q", corpus.Schema)
 	}
 	// A silently-empty corpus would make every assertion below vacuous.

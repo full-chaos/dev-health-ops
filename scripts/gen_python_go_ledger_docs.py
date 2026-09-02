@@ -538,6 +538,11 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported worker_operational.py:15-18 (health_check, phone_home_heartbeat, send_billing_notification)",
         "ticket": "n/a",
     },
+    "system_ops_metrics.py": {
+        "category": "c",
+        "evidence": "CHAOS-3952: sole importer is system_ops.py (BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL counter for the durable completion-fence outcomes on the live send_billing_notification path) — dual Prometheus/OTel instrument builder module, same shape as work_graph/investment/llm_telemetry_metrics.py",
+        "ticket": "n/a",
+    },
     "system_tasks.py": {
         "category": "c",
         "evidence": "corrected 2026-08-28 per codex review: NOT a dead shim — `api/webhooks/router.py:34` and `api/billing/router.py:45` import `process_webhook_event`/`send_billing_notification` from this module and call `.delay(...)`/`.apply_async(...)` on them, gated behind `if route_requires_celery(route):`. Since `operational.webhook_delivery`/`billing_notification` are `route=river` in migration-state.json, that gate evaluates false in production today, so the call is live-but-inert (same 'live call site, dead effect' shape as report_task.py above) — the module itself cannot be deleted without removing these two router imports first",

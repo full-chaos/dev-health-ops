@@ -543,7 +543,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestRepoUserCommitGoldenMatchesLivePython$' \
+        -run '^(TestRepoUserCommitGoldenMatchesLivePython|TestPysumGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily/repouser
   ); then
     rm -rf -- "${proof_dir}"
@@ -552,6 +552,14 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/repo-user-commit-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: repo_user_commit golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY (same reasoning throughout this function): a single
+  # proof marker would be satisfied by whichever guard happened to run.
+  proof_file="${proof_dir}/pysum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pysum golden (CHAOS-4824) rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -639,6 +647,35 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/confidence-coercion-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: confidence coercion corpus did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/pythonparity (CPython sum() semantics vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestSumGoldenMatchesLivePython$' \
+        ./internal/pythonparity
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
+  # used Neumaier compensated summation for floats since 3.12 (gh-100425) and
+  # was a naive accumulation before it. The fixture therefore depends on the
+  # interpreter version with no diff in this repository, and the dependency runs
+  # in BOTH directions -- a downgrade below 3.12 would make naive summation
+  # correct and pythonparity.Sum's compensation WRONG, not merely unnecessary.
+  proof_file="${proof_dir}/python-sum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -820,6 +857,28 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/build-scope-parity-table"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the build-scope parity table was not re-measured against the live bridge\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/pythonparity (float round/repr/format mirrors vs the live interpreter)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestFloatTextGoldenMatchesLivePython$' \
+        ./internal/pythonparity/...
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/pythonparity-float-text"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the CPython float round/repr/format golden was not re-derived from the live interpreter\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

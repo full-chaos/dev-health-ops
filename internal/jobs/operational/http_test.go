@@ -2,6 +2,7 @@ package operational
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -52,6 +53,52 @@ func TestHTTPDispatcherClassifiesBridgeResultContract(t *testing.T) {
 				t.Fatalf("error=%v permanent=%v", err, errors.Is(err, ErrDispatchPermanent))
 			}
 		})
+	}
+}
+
+// CHAOS-3952: the whole fix is worthless if the key never leaves the
+// process — assert the wire body Go actually sends, not just that
+// DispatchBilling returns nil.
+func TestDispatchBillingSendsIdempotencyKeyAcrossTheBridge(t *testing.T) {
+	var captured map[string]string
+	client := &http.Client{
+		Timeout: time.Second,
+		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(body, &captured); err != nil {
+				t.Fatal(err)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status":"sent"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+	dispatcher, err := NewHTTPDispatcher(client, HTTPDispatcherConfig{
+		WebhookEndpoint:   "https://api.internal.example/webhook",
+		BillingEndpoint:   "https://api.internal.example/billing",
+		HeartbeatEndpoint: "https://api.internal.example/heartbeat",
+		BearerToken:       "test-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notification := BillingNotification{
+		ID: billingID, OrganizationID: "00000000-0000-4000-8000-000000000010",
+		NotificationType: "invoice_receipt", IdempotencyKey: "billing:wire-key",
+	}
+	if err := dispatcher.DispatchBilling(context.Background(), notification); err != nil {
+		t.Fatal(err)
+	}
+	if captured["idempotency_key"] != "billing:wire-key" {
+		t.Fatalf("idempotency_key did not cross the bridge: body=%#v", captured)
+	}
+	if captured["notification_id"] != billingID {
+		t.Fatalf("notification_id missing from wire body: %#v", captured)
 	}
 }
 

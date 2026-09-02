@@ -38,10 +38,16 @@ func (step *issuePRLinksPreStep) Name() string { return "issue_pr_links" }
 // `api/internal/worker_workgraph.py:74-80`: from_date, to_date, repo_id,
 // heuristic_window, heuristic_confidence. The two heuristic keys belong to the
 // heuristic edge builder, which this step does not implement.
+//
+// The fields are RAW, not *string, because Python's gate is TRUTHINESS on
+// whatever JSON decoded to -- `if to_date:` -- and the bridge's scope filter
+// checks field NAMES, not types (worker_workgraph.py:71). So `false`, `0` and
+// `[]` all reach Python as falsy and select the default window, while a typed
+// *string unmarshal would fail the request instead. See scopeString.
 type buildScope struct {
-	FromDate *string `json:"from_date"`
-	ToDate   *string `json:"to_date"`
-	RepoID   *string `json:"repo_id"`
+	FromDate json.RawMessage `json:"from_date"`
+	ToDate   json.RawMessage `json:"to_date"`
+	RepoID   json.RawMessage `json:"repo_id"`
 }
 
 func (step *issuePRLinksPreStep) Run(ctx context.Context, claim workgraph.Claim) (map[string]any, error) {
@@ -119,27 +125,33 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 	// ordinary "no value" serialisation into a build failure (codex round 1,
 	// F2 -- and the first version of this adapter did exactly that).
 	to := step.now().UTC()
-	if present(scope.ToDate) {
-		parsed, err := parseScopeInstant(*scope.ToDate)
-		if err != nil {
-			return issueprlinks.Window{}, fmt.Errorf("build scope to_date: %w", err)
+	if text, present, err := scopeString(scope.ToDate); err != nil {
+		return issueprlinks.Window{}, fmt.Errorf("build scope to_date: %w", err)
+	} else if present {
+		parsed, parseErr := parseScopeInstant(text)
+		if parseErr != nil {
+			return issueprlinks.Window{}, fmt.Errorf("build scope to_date: %w", parseErr)
 		}
 		to = parsed
 	}
 	from := to.AddDate(0, 0, -30)
-	if present(scope.FromDate) {
-		parsed, err := parseScopeInstant(*scope.FromDate)
-		if err != nil {
-			return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", err)
+	if text, present, err := scopeString(scope.FromDate); err != nil {
+		return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", err)
+	} else if present {
+		parsed, parseErr := parseScopeInstant(text)
+		if parseErr != nil {
+			return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", parseErr)
 		}
 		from = parsed
 	}
 
 	window := issueprlinks.Window{From: &from, To: &to}
-	if present(scope.RepoID) {
-		repoID, err := uuid.Parse(strings.TrimSpace(*scope.RepoID))
-		if err != nil {
-			return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", err)
+	if text, present, err := scopeString(scope.RepoID); err != nil {
+		return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", err)
+	} else if present {
+		repoID, parseErr := uuid.Parse(text)
+		if parseErr != nil {
+			return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", parseErr)
 		}
 		window.RepoID = &repoID
 	}
@@ -163,15 +175,53 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 // instant-preserving reading. Those are different queries, nothing produces
 // such a scope today, and guessing between them is exactly what a measurement
 // that cannot honour its contract must not do.
-// present reports whether a scope string carries a value, matching Python's
-// truthiness gate. A nil pointer, an empty string and a whitespace-only string
-// are all "absent".
-func present(value *string) bool {
-	return value != nil && strings.TrimSpace(*value) != ""
+// scopeString applies Python's truthiness gate to one raw scope value and
+// returns the string Python would then parse.
+//
+// present=false means Python takes the DEFAULT window. present=true with a
+// non-nil error means Python reaches its parser and RAISES, so this step must
+// fail too rather than quietly defaulting.
+//
+// Measured against the deployed interpreter rather than assumed, because an
+// earlier version of this adapter guessed and was wrong TWICE:
+//
+//	''        FALSY  -> default window
+//	'\t'      TRUTHY -> ValueError: Invalid isoformat string
+//	'   '     TRUTHY -> ValueError: Invalid isoformat string
+//	false     FALSY  -> default window
+//	0         FALSY  -> default window
+//	123       TRUTHY -> TypeError: argument must be str
+//
+// The whitespace rows are the ones that matter: a whitespace-only string is
+// NON-EMPTY and therefore TRUTHY, so Python parses and fails. Trimming before
+// the emptiness test -- which the previous version did -- turns a request
+// Python REJECTS into a default 30-day window here, and this step writes
+// mapping rows before the bridge ever gets to reject it.
+func scopeString(raw json.RawMessage) (string, bool, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	switch trimmed {
+	case "", "null", "false", "0", "[]", "{}", `""`:
+		// Falsy in Python: absent, and the default applies.
+		return "", false, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		// Truthy but not a string: Python raises TypeError from fromisoformat.
+		return "", true, fmt.Errorf("%s is not a string; the reference raises on it", trimmed)
+	}
+	if text == "" {
+		return "", false, nil
+	}
+	// NOT trimmed: a whitespace-only string is truthy in Python and reaches its
+	// parser, which rejects it.
+	return text, true, nil
 }
 
 func parseScopeInstant(value string) (time.Time, error) {
-	trimmed := strings.TrimSpace(value)
+	// NOT trimmed: the caller has already applied Python's truthiness, and a
+	// whitespace-only value must reach the parser and be REJECTED here, exactly
+	// as it is by fromisoformat.
+	trimmed := value
 	if trimmed == "" {
 		return time.Time{}, fmt.Errorf("empty value")
 	}
@@ -192,7 +242,13 @@ func parseScopeInstant(value string) (time.Time, error) {
 			return parsed, nil
 		}
 	}
-	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+	// Zero-offset forms, including the colon-less "+0000" that RFC3339 rejects
+	// but fromisoformat accepts.
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05-0700", "2006-01-02T15:04-0700"} {
+		parsed, err := time.Parse(layout, trimmed)
+		if err != nil {
+			continue
+		}
 		// A ZERO offset ("Z" or "+00:00") is unambiguous: Python's
 		// fromisoformat yields an aware UTC datetime and strftime renders the
 		// same wall clock either reading would give. Accepting it here matches

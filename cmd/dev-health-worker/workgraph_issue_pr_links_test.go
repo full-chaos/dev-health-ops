@@ -238,11 +238,18 @@ func TestBuildWindowTreatsAnEmptyScopeValueAsAbsent(t *testing.T) {
 	step := frozenPreStep()
 	wantTo := time.Date(2026, 9, 1, 12, 30, 45, 500_000_000, time.UTC)
 
+	// Only FALSY values. A whitespace-only string is NON-EMPTY and therefore
+	// TRUTHY in Python — it reaches fromisoformat and raises — so it does NOT
+	// belong here. The first version of this test listed it, which made the
+	// test a false oracle: it asserted that Go should default where Python
+	// rejects. See TestBuildWindowRejectsWhitespaceLikePython.
 	for _, scope := range []string{
 		`{"from_date":""}`,
 		`{"to_date":""}`,
-		`{"from_date":"   ","to_date":"\t"}`,
 		`{"repo_id":""}`,
+		`{"to_date":null}`,
+		`{"to_date":false}`,
+		`{"to_date":0}`,
 	} {
 		window, err := step.windowFor([]byte(scope))
 		if err != nil {
@@ -279,5 +286,72 @@ func TestBuildWindowAcceptsTheOtherISOFormsPythonAccepts(t *testing.T) {
 		if !window.To.Equal(testCase.want) {
 			t.Errorf("windowFor(%s) to = %s, want %s", testCase.scope, window.To, testCase.want)
 		}
+	}
+}
+
+// TestBuildWindowRejectsWhitespaceLikePython is codex round-2, and it is the
+// SECOND time this one gate caught me guessing.
+//
+// Round 1 found that Python treats "" as absent (falsy) while I failed the
+// build. I fixed that — and then EXTENDED it to whitespace by assumption,
+// trimming before the emptiness test, and wrote a test asserting the extension
+// as correct. Measured against the deployed interpreter:
+//
+//	''    -> FALSY, default window
+//	'\t'  -> TRUTHY -> ValueError: Invalid isoformat string
+//	'   ' -> TRUTHY -> ValueError: Invalid isoformat string
+//
+// A whitespace-only string is non-empty, so Python parses it and RAISES. My
+// trimming turned a request Python REJECTS into a default 30-day window — and
+// this step writes mapping rows before the bridge ever gets to reject it.
+//
+// The lesson is not "handle whitespace". It is that the fix for a measured
+// divergence must itself be measured: I had the interpreter open when I fixed
+// the empty-string case and did not spend one more line on the neighbouring
+// input.
+func TestBuildWindowRejectsWhitespaceLikePython(t *testing.T) {
+	step := frozenPreStep()
+	for _, scope := range []string{
+		`{"to_date":"\t"}`,
+		`{"from_date":"   "}`,
+		`{"repo_id":" "}`,
+	} {
+		if _, err := step.windowFor([]byte(scope)); err == nil {
+			t.Errorf(
+				"windowFor(%s) defaulted; a whitespace-only value is TRUTHY in Python and "+
+					"raises in fromisoformat, so this must fail too", scope,
+			)
+		}
+	}
+}
+
+// TestBuildWindowRejectsATruthyNonString: Python's scope filter checks field
+// NAMES, not types, so a truthy non-string reaches fromisoformat and raises
+// TypeError. Go must fail rather than defaulting or silently unmarshalling.
+func TestBuildWindowRejectsATruthyNonString(t *testing.T) {
+	step := frozenPreStep()
+	for _, scope := range []string{
+		`{"to_date":123}`,
+		`{"to_date":true}`,
+		`{"from_date":["2026-08-15"]}`,
+	} {
+		if _, err := step.windowFor([]byte(scope)); err == nil {
+			t.Errorf("windowFor(%s) accepted a truthy non-string; the reference raises TypeError", scope)
+		}
+	}
+}
+
+// TestBuildWindowAcceptsAColonLessZeroOffset closes a gap my own rule had:
+// I said zero offsets are accepted, but only RFC3339 forms were tried, so
+// "+0000" — which fromisoformat accepts — was rejected. Being inconsistent
+// with my own stated rule is its own defect.
+func TestBuildWindowAcceptsAColonLessZeroOffset(t *testing.T) {
+	step := frozenPreStep()
+	window, err := step.windowFor([]byte(`{"to_date":"2026-08-15T06:07:08+0000"}`))
+	if err != nil {
+		t.Fatalf("windowFor rejected a colon-less zero offset: %v", err)
+	}
+	if want := time.Date(2026, 8, 15, 6, 7, 8, 0, time.UTC); !window.To.Equal(want) {
+		t.Errorf("to = %s, want %s", window.To, want)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // workItemsDeduped mirrors Python's WORK_ITEMS_DEDUPED
@@ -140,6 +141,19 @@ func (reader *Reader) FetchWorkItems(ctx context.Context, workItemIDs []string, 
 		if description != nil {
 			item.Description = *description
 		}
+		// Every String column, matching the Python driver, which applies its
+		// hex substitution to all of them rather than to a chosen subset. The
+		// ids are included deliberately: work_item_id feeds work_unit_id, so a
+		// value the two planes spell differently re-addresses the row.
+		item.WorkItemID = pythonparity.DecodeClickHouseStringValue(item.WorkItemID)
+		item.Provider = pythonparity.DecodeClickHouseStringValue(item.Provider)
+		item.RepoID = pythonparity.DecodeClickHouseStringValue(item.RepoID)
+		item.Title = pythonparity.DecodeClickHouseStringValue(item.Title)
+		item.Description = pythonparity.DecodeClickHouseStringValue(item.Description)
+		item.Type = pythonparity.DecodeClickHouseStringValue(item.Type)
+		item.ParentID = pythonparity.DecodeClickHouseStringValue(item.ParentID)
+		item.EpicID = pythonparity.DecodeClickHouseStringValue(item.EpicID)
+		item.Labels = decodeClickHouseStrings(item.Labels)
 		item.CreatedAt = normalizeTimestamp(item.CreatedAt)
 		item.UpdatedAt = normalizeTimestamp(item.UpdatedAt)
 		item.CompletedAt = normalizeOptionalTimestamp(completedAt)
@@ -186,6 +200,11 @@ func (reader *Reader) FetchParentTitles(ctx context.Context, workItemIDs []strin
 		if err := rows.Scan(&workItemID, &title); err != nil {
 			return nil, fmt.Errorf("scan work_items title row: %w", err)
 		}
+		workItemID = pythonparity.DecodeClickHouseStringValue(workItemID)
+		title = pythonparity.DecodeClickHouseStringValue(title)
+		// The emptiness gate runs AFTER the substitution, as it does in Python:
+		// an undecodable value becomes a non-empty hex string and is therefore
+		// KEPT, not dropped.
 		if workItemID == "" || title == "" {
 			continue
 		}
@@ -252,7 +271,7 @@ func (reader *Reader) FetchWorkItemActiveHours(ctx context.Context, workItemIDs 
 		if err := rows.Scan(&workItemID, &active); err != nil {
 			return nil, fmt.Errorf("scan work_item_cycle_times row: %w", err)
 		}
-		hours[workItemID] = active
+		hours[pythonparity.DecodeClickHouseStringValue(workItemID)] = active
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate work_item_cycle_times rows: %w", err)
@@ -354,6 +373,9 @@ func (reader *Reader) FetchPullRequests(ctx context.Context, repoNumbers map[str
 			if deletions != nil {
 				pullRequest.Deletions = float64(*deletions)
 			}
+			pullRequest.RepoID = pythonparity.DecodeClickHouseStringValue(pullRequest.RepoID)
+			pullRequest.Title = pythonparity.DecodeClickHouseStringValue(pullRequest.Title)
+			pullRequest.Body = pythonparity.DecodeClickHouseStringValue(pullRequest.Body)
 			pullRequest.CreatedAt = normalizeTimestamp(pullRequest.CreatedAt)
 			pullRequest.MergedAt = normalizeOptionalTimestamp(mergedAt)
 			pullRequest.ClosedAt = normalizeOptionalTimestamp(closedAt)
@@ -431,6 +453,9 @@ func (reader *Reader) FetchCommits(ctx context.Context, repoCommits map[string][
 			if message != nil {
 				commit.Message = *message
 			}
+			commit.RepoID = pythonparity.DecodeClickHouseStringValue(commit.RepoID)
+			commit.Hash = pythonparity.DecodeClickHouseStringValue(commit.Hash)
+			commit.Message = pythonparity.DecodeClickHouseStringValue(commit.Message)
 			commit.AuthorWhen = normalizeTimestamp(commit.AuthorWhen)
 			commit.CommitterWhen = normalizeTimestamp(commit.CommitterWhen)
 			commits = append(commits, commit)
@@ -497,7 +522,7 @@ func (reader *Reader) FetchCommitChurn(ctx context.Context, repoCommits map[stri
 				_ = rows.Close()
 				return nil, fmt.Errorf("scan git_commit_stats row: %w", err)
 			}
-			churn[repoID+"@"+commitHash] = float64(churnLOC)
+			churn[repoID+"@"+pythonparity.DecodeClickHouseStringValue(commitHash)] = float64(churnLOC)
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -549,6 +574,7 @@ func (reader *Reader) ResolveRepoIDsForTeams(ctx context.Context, teamIDs []stri
 		if err := rows.Scan(&repoID); err != nil {
 			return nil, fmt.Errorf("scan user_metrics_daily row: %w", err)
 		}
+		repoID = pythonparity.DecodeClickHouseStringValue(repoID)
 		if repoID == "" {
 			continue
 		}
@@ -558,4 +584,17 @@ func (reader *Reader) ResolveRepoIDsForTeams(ctx context.Context, teamIDs []stri
 		return nil, fmt.Errorf("iterate user_metrics_daily rows: %w", err)
 	}
 	return repoIDs, nil
+}
+
+// decodeClickHouseStrings applies the driver's decode policy to every element
+// of an Array(String).
+//
+// clickhouse-connect decodes array elements one at a time, so the substitution
+// is per ELEMENT: one undecodable label is hexed while its neighbours are left
+// alone. Hexing the whole array, or skipping arrays entirely, both diverge.
+func decodeClickHouseStrings(values []string) []string {
+	for index, value := range values {
+		values[index] = pythonparity.DecodeClickHouseStringValue(value)
+	}
+	return values
 }

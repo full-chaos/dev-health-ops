@@ -17,16 +17,24 @@ fixture stops matching the interpreter, and the change that trips them is,
 characteristically, a change to a fixture and nothing else. The lists named
 individual fixture FILES, so a fixture-only PR was classified non-Go, the no-op
 ran, `go-quality` went green, and the guard never executed -- on exactly the
-change it was built for. On `main` at the time this was written, 21 fixtures
-read by Go tests were unmatched -- several already merged. (A count of 23
-appears in the originating report; that included two fixtures still on an
-unmerged branch. The number this test computes is whatever the tree holds, which
-is the point.)
+change it was built for.
 
-Only `issue_pr_links_python_golden.*` had been listed, added when an earlier
-lane hit the same hole and fixed it by adding two more entries. That is the tell
-this test is aimed at: a filter maintained by enumeration fails silently, and
-the previous fix being *more entries* is what guarantees the next recurrence.
+Measured on `main` at the time this was written: of the 48 files under
+`tests/fixtures/`, **46 matched no path filter**. The 2 that did were
+`issue_pr_links_python_golden.{json,py}` -- the pair an earlier lane added by
+hand when it hit this same hole.
+
+That is the tell this test is aimed at. A filter maintained by enumeration fails
+silently, and the previous fix being *two more entries* is what guaranteed the
+recurrence: it repaired the instance and left the mechanism, so coverage decayed
+from 2/2 to 2/48 as fixtures accumulated.
+
+The count moved during review, and how it moved is the point. The first version
+of this test discovered fixtures by regex over `*_test.go` and reported 23 found
+/ 21 unmatched. A codex round showed the regex missed every path built with
+`filepath.Join` -- two real reads, and no way to know there were only two. The
+oracle is now the directory listing, which cannot miss anything, and the honest
+number is 46. A coverage test whose oracle is a pattern measures the pattern.
 
 WHAT THIS TEST ASSERTS
 ----------------------
@@ -100,12 +108,42 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
     return any(_github_glob_to_regex(p).match(path) for p in patterns)
 
 
-def _fixtures_read_by_go_tests() -> set[str]:
-    """Every `tests/fixtures/...` path referenced from a Go test file.
+def _fixture_files_on_disk() -> set[str]:
+    """Every file under `tests/fixtures/`, as repo-relative POSIX paths.
 
-    Derived from the tree rather than listed here, so a new guard is covered the
-    day it lands. A hand-kept list would reproduce the very failure this file
-    exists to prevent.
+    THIS is the coverage oracle, and it is complete by construction: it asks the
+    filesystem what exists rather than asking source code what it mentions. A
+    fixture cannot hide from it.
+
+    The first version of this file used a regex over `*_test.go` to find fixture
+    references instead. That was wrong in the specific way this whole file is
+    about. The regex only matches paths written as one contiguous literal, so it
+    silently missed every read assembled with `filepath.Join`:
+
+        filepath.Join(repoRoot(t), "tests", "fixtures", "cpython_random_golden.json")
+        filepath.Join(filepath.Dir(filename), "..", "..", "tests", "fixtures", ...)
+
+    It found 23 paths where a static inventory found 25. Both misses happened to
+    sit inside the new glob, so nothing was actually uncovered -- but a coverage
+    test whose oracle is a pattern only checks what the pattern's author thought
+    to match. That is the enumeration failure this PR replaced in the workflow,
+    reintroduced one layer up in the test meant to prevent it. Walking the
+    directory removes the oracle entirely.
+    """
+    root = REPO_ROOT / "tests" / "fixtures"
+    return {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+
+
+def _fixture_paths_named_in_go_tests() -> set[str]:
+    """Contiguous `tests/fixtures/...` literals appearing in Go test files.
+
+    Deliberately INCOMPLETE, and used only to catch typos -- a literal naming a
+    fixture that does not exist. It must never be used as a coverage oracle; see
+    `_fixture_files_on_disk` for why.
     """
     reference = re.compile(r"tests/fixtures/[A-Za-z0-9_./-]+\.(?:json|py|tsv|txt)")
     found: set[str] = set()
@@ -160,28 +198,51 @@ def test_both_workflows_declare_the_shared_job_id() -> None:
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
-def test_every_fixture_a_go_test_reads_triggers_the_go_workflow(event: str) -> None:
-    """A change to a guarded fixture must run the guard.
+def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
+    """A change to any fixture must run the workflow that guards fixtures.
 
     This is the assertion that would have caught the original defect. It tests
     the WIRING, not the presence of any particular entry: a fixture added
     tomorrow is covered by the glob automatically, and a future narrowing of the
     filter fails here instead of silently going green.
+
+    The oracle is the directory, not a scan of source. Anything under
+    `tests/fixtures/` must trigger the workflow, whether a Go test reads it, a
+    Python test reads it, or nothing reads it yet -- because deciding which is
+    which requires the very source analysis that proved unreliable.
     """
     go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
-    fixtures = _fixtures_read_by_go_tests()
+    fixtures = _fixture_files_on_disk()
 
     assert fixtures, (
-        "no tests/fixtures path was found in any *_test.go -- the discovery "
-        "regex has stopped matching, so this test would pass vacuously"
+        "tests/fixtures/ is empty or missing -- this test would pass vacuously, "
+        "which is precisely the failure mode it exists to prevent"
     )
 
     unmatched = sorted(f for f in fixtures if not _matches_any(f, go_paths))
     assert not unmatched, (
-        f"{len(unmatched)} fixture(s) read by a Go test do not match any {event} "
-        f"path filter in go.yml, so a PR changing only one of them is classified "
-        f"non-Go and go-quality is satisfied VACUOUSLY by the no-op workflow -- "
-        f"the guard never runs:\n  " + "\n  ".join(unmatched)
+        f"{len(unmatched)} of {len(fixtures)} fixture(s) do not match any "
+        f"{event} path filter in go.yml, so a PR changing only one of them is "
+        f"classified non-Go and go-quality is satisfied VACUOUSLY by the no-op "
+        f"workflow -- the guard never runs:\n  " + "\n  ".join(unmatched)
+    )
+
+
+def test_every_fixture_named_in_a_go_test_exists() -> None:
+    """A fixture literal in a Go test must name a file that is really there.
+
+    Separate concern from coverage, and a separate oracle: this one catches a
+    renamed or deleted fixture whose reference was left behind. It uses the
+    deliberately-incomplete literal scan, which is fine here -- a typo it misses
+    is a typo, not a silent gap in a guard.
+    """
+    on_disk = _fixture_files_on_disk()
+    named = _fixture_paths_named_in_go_tests()
+
+    missing = sorted(named - on_disk)
+    assert not missing, (
+        "Go test(s) reference fixture paths that do not exist on disk:\n  "
+        + "\n  ".join(missing)
     )
 
 

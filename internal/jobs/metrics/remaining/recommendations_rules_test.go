@@ -30,6 +30,7 @@ type goldenEvidence struct {
 	Field       string `json:"field"`
 	ValueHex    string `json:"value_hex"`
 	ValueBits   string `json:"value_bits"`
+	ValueType   string `json:"value_type"`
 }
 
 type goldenResult struct {
@@ -73,10 +74,11 @@ type goldenCase struct {
 }
 
 type goldenDocument struct {
-	Environment     goldenEnvironment `json:"environment"`
-	RuleOrder       []string          `json:"rule_order"`
-	SuccessCriteria map[string]string `json:"success_criteria"`
-	Cases           []goldenCase      `json:"cases"`
+	EvidenceValuesTypeChecked int               `json:"evidence_values_type_checked"`
+	Environment               goldenEnvironment `json:"environment"`
+	RuleOrder                 []string          `json:"rule_order"`
+	SuccessCriteria           map[string]string `json:"success_criteria"`
+	Cases                     []goldenCase      `json:"cases"`
 }
 
 func loadRulesGolden(t *testing.T) goldenDocument {
@@ -437,4 +439,64 @@ func TestCompoundingRiskPathsAreBothExercised(t *testing.T) {
 			`rule that can, so the "high" -> critical mapping is otherwise unchecked`)
 	}
 	t.Logf("compounding-risk firings: composite %d, proxy %d, critical %d", composite, proxy, critical)
+}
+
+// TestEveryEvidenceValueIsAPythonFloat is the frozen half of a guard whose live
+// half runs in the generator.
+//
+// The other end of this argument is in internal/pythonparity/jsoninsertionorder.go
+// under "INTS ARE ENCODED, NOT REFUSED, AND THAT IS A SHARP EDGE TOO". That
+// encoder writes 100 for a Python int and 100.0 for a float, correctly, because
+// it reproduces json.dumps and json.dumps(100) is 100. It therefore cannot
+// catch an evidence value that arrives as an int, and must not try.
+//
+// Go cannot catch it either: EvidenceRef.Value is typed float64, so the port is
+// structurally unable to produce an int and a Go test asserting "this float64
+// is a float" would be asserting the compiler, not the reference.
+//
+// The exposure is Python-side. All eleven `value=` sites pass an explicit
+// ndigits to round(), and round(float, ndigits) returns a float -- but round(x)
+// WITHOUT ndigits returns an int. Drop one argument and the stored column goes
+// from 100.0 to 100 silently.
+//
+// The generator refuses to WRITE such a corpus. This test refuses to ACCEPT
+// one, which is a different failure: a corpus regenerated against a changed
+// reference, hand-edited, or restored from an older revision would carry the
+// int and no live check would be running at that moment.
+func TestEveryEvidenceValueIsAPythonFloat(t *testing.T) {
+	document := loadRulesGolden(t)
+
+	var checked int
+	for _, testCase := range document.Cases {
+		for ruleID, result := range testCase.Results {
+			if result == nil {
+				continue
+			}
+			for _, ref := range result.Evidence {
+				checked++
+				if ref.ValueType != "float" {
+					t.Errorf("case %q rule %q field %q: Python type %q, want \"float\" -- "+
+						"a `value=round(x, N)` site has probably lost its ndigits, which "+
+						"makes round() return an int and silently changes the stored "+
+						"evidence_json from e.g. 100.0 to 100 (see jsoninsertionorder.go, "+
+						"\"INTS ARE ENCODED, NOT REFUSED\")",
+						testCase.Name, ruleID, ref.Field, ref.ValueType)
+				}
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Fatal("no evidence values carried a recorded type; either the corpus fired " +
+			"no rules or value_type is missing, and this guard proved nothing")
+	}
+	// Cross-check against the count the generator recorded, so a corpus that
+	// silently lost most of its evidence rows fails here rather than passing on
+	// the handful that remain.
+	if document.EvidenceValuesTypeChecked != checked {
+		t.Errorf("generator type-checked %d evidence values, this test found %d; "+
+			"the corpus and its own provenance disagree",
+			document.EvidenceValuesTypeChecked, checked)
+	}
+	t.Logf("evidence values with a recorded Python type of float: %d", checked)
 }

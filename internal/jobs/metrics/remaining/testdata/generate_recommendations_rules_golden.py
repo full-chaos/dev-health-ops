@@ -350,10 +350,62 @@ def encode_result(result) -> dict | None:
                 "field": ref["field"],
                 "value_hex": float(ref["value"]).hex(),
                 "value_bits": encode_bits(ref["value"]),
+                # The PYTHON type, recorded because the bit pattern erases it.
+                # See assert_every_evidence_value_is_a_float below.
+                "value_type": type(ref["value"]).__name__,
             }
             for ref in payload["evidence"]
         ],
     }
+
+
+def assert_every_evidence_value_is_a_float(entries: list[dict]) -> int:
+    """Refuse to write a corpus in which any evidence value is not a float.
+
+    This is the Python half of an argument whose other half lives in Go, in
+    internal/pythonparity/jsoninsertionorder.go under the heading
+    "INTS ARE ENCODED, NOT REFUSED, AND THAT IS A SHARP EDGE TOO".
+
+    That encoder writes `100` for a Python int and `100.0` for a float, and it
+    is right to: it reproduces json.dumps, and json.dumps(100) is 100. So it
+    CANNOT catch a value that arrives as an int, and must not try.
+
+    Nothing else catches it either. On the Go side EvidenceRef.Value is typed
+    float64, so the port is structurally incapable of producing an int and a Go
+    test asserting "it is a float" would be asserting the compiler. The risk is
+    entirely on the Python side: all eleven `value=` sites pass an explicit
+    ndigits to round(), and round(float, ndigits) returns a float -- but
+    round(x) WITHOUT ndigits returns an INT. Drop one second argument and the
+    stored column silently changes from 100.0 to 100, with no error anywhere on
+    either side and no test failing.
+
+    So the guard has to run against the live reference, at generation time,
+    which is here. bool is excluded explicitly: it is a subclass of int, so
+    `isinstance(True, int)` is True and a bool would otherwise slip past a
+    naive int check.
+    """
+    checked = 0
+    for entry in entries:
+        for rule_id, result in entry["results"].items():
+            if result is None:
+                continue
+            for ref in result["evidence"]:
+                checked += 1
+                if ref["value_type"] != "float":
+                    raise SystemExit(
+                        f"evidence value in case {entry['name']!r} rule {rule_id!r} "
+                        f"field {ref['field']!r} has Python type {ref['value_type']!r}, "
+                        "not float. If a `value=round(x, N)` site lost its ndigits, "
+                        "round() now returns an int and the stored evidence_json "
+                        "changes from e.g. 100.0 to 100 with nothing else catching it "
+                        "-- see jsoninsertionorder.go, 'INTS ARE ENCODED, NOT REFUSED'."
+                    )
+    if checked == 0:
+        raise SystemExit(
+            "no evidence values were type-checked; the corpus fired no rules, so "
+            "this guard would pass vacuously"
+        )
+    return checked
 
 
 def build_document() -> dict:
@@ -388,7 +440,10 @@ def build_document() -> dict:
         "compounding-risk": compounding_risk.SUCCESS_CRITERION,
     }
 
+    typed = assert_every_evidence_value_is_a_float(entries)
+
     return {
+        "evidence_values_type_checked": typed,
         "environment": {
             "python_version": sys.version,
             "version_info": list(sys.version_info[:3]),

@@ -1782,6 +1782,66 @@ def test_source_commit_unverifiable_is_reported_not_passed_silently(tmp_path):
     assert note is not None and "SOURCE COMMIT UNVERIFIED" in note, note
 
 
+def test_shallow_ancestry_is_unverifiable_even_when_the_object_is_present(tmp_path):
+    """The hole the object-absence guard left open.
+
+    Guarding only "the object is missing" covers a fresh `--depth=1` CLONE. It
+    does not cover a `--depth=1` FETCH into an existing clone, which truncates
+    ancestry while leaving older objects in place. `--is-ancestor` then answers
+    "no" where the truthful answer is "cannot tell", and the stale-commit error
+    fires on a provenance line that is correct -- telling a lane to re-derive
+    and re-stamp something that needs neither.
+
+    Observed on the shared ops clone 2026-09-02: commit 4a8af2146 was present,
+    `--is-ancestor` returned non-zero, and the forge reported behind=0 -- it WAS
+    an ancestor.
+    """
+    origin = _tiny_repo(tmp_path)
+    first = _git(origin, "rev-list", "--max-parents=0", "HEAD")
+    for text in ("b", "c"):
+        (origin / "f").write_text(f"{text}\n")
+        _git(origin, "commit", "-qam", text)
+    tip = _git(origin, "rev-parse", "HEAD")
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", f"file://{origin}", str(clone)],
+        check=True,
+        capture_output=True,
+    )
+    # A full clone answers ancestry correctly -- so this test is not just
+    # "everything is unverifiable".
+    assert checker.check_source_commit(clone, {"source_commit": first}) == ([], None)
+
+    subprocess.run(
+        ["git", "-C", str(clone), "fetch", "-q", "--depth=1", "origin", tip],
+        check=True,
+        capture_output=True,
+    )
+
+    # The precise state under test: shallow, object PRESENT, ancestry cut.
+    assert _git(clone, "rev-parse", "--is-shallow-repository") == "true"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(clone), "cat-file", "-e", f"{first}^{{commit}}"],
+            capture_output=True,
+        ).returncode
+        == 0
+    ), "fixture no longer reproduces: the object must be PRESENT"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(clone), "merge-base", "--is-ancestor", first, "HEAD"],
+            capture_output=True,
+        ).returncode
+        != 0
+    ), "fixture no longer reproduces: ancestry must be unanswerable"
+
+    errors, note = checker.check_source_commit(clone, {"source_commit": first})
+    assert errors == [], errors
+    assert note is not None and "SOURCE COMMIT UNVERIFIED" in note, note
+    assert "truncated" in note, note
+
+
 def test_the_committed_inventory_source_commit_is_an_ancestor_of_head():
     inventory = checker.load_json(_INVENTORY_PATH)
     errors, _note = checker.check_source_commit(_REPO_ROOT, inventory)

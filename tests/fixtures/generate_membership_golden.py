@@ -304,7 +304,9 @@ def main() -> None:
     # distribution empty, the two nestings coincide and the case proves nothing.
     theme_dist = {"feature_delivery": 0.7, "maintenance": 0.3}
     subcat_dist = {"feature_delivery.roadmap": 0.6, "maintenance.debt": 0.25}
-    record_scenarios: list[tuple[str, list[NodeKeyT], dict[str, Any], dict[str, Any]]] = [
+    record_scenarios: list[
+        tuple[str, list[NodeKeyT], dict[str, Any], dict[str, Any]]
+    ] = [
         ("no_nodes", [], theme_dist, subcat_dist),
         ("single_node", [("issue", "i1")], theme_dist, subcat_dist),
         (
@@ -341,9 +343,7 @@ def main() -> None:
             {
                 "label": label,
                 "nodes": [list(node) for node in nodes],
-                "theme_distribution": [
-                    _encode_raw(c, w) for c, w in themes.items()
-                ],
+                "theme_distribution": [_encode_raw(c, w) for c, w in themes.items()],
                 "subcategory_distribution": [
                     _encode_raw(c, w) for c, w in subcats.items()
                 ],

@@ -2029,7 +2029,12 @@ def _run_uses_go_test_harness(command: str) -> bool:
 # match, which is why scheme separators are normalised first -- otherwise
 # `docker://ghcr.io/x` and the path case are indistinguishable. An optional port
 # keeps the valid `ghcr.io:443/...` form matching.
-_MIRROR_HOST = re.compile(r"(?<![A-Za-z0-9.:/-])ghcr\.io(?::\d+)?/")
+# IGNORECASE because registry HOSTS are case-insensitive: `GHCR.IO/full-chaos/x`
+# is the same registry and was classified as not-the-mirror, so a job spelling
+# it that way escaped the login requirement. The lookbehind uses `\w` (unicode)
+# rather than an ASCII class so `éghcr.io/x` -- a different host entirely -- is
+# not read as ours.
+_MIRROR_HOST = re.compile(r"(?<![\w.:/-])ghcr\.io(?::\d+)?/", re.IGNORECASE)
 
 
 def _workflow_files() -> list[Path]:
@@ -2046,10 +2051,20 @@ def _normalise_scheme(text: str) -> str:
     return text.replace("://", " ")
 
 
+def _is_docker_login_action(step: dict[str, Any]) -> bool:
+    """Case-insensitive, because GitHub resolves action refs case-insensitively.
+
+    `uses: Docker/Login-Action@v4` is the SAME action as `docker/login-action@v4`
+    (verified: `gh api repos/Docker/Login-Action` returns `docker/login-action`),
+    so a case-sensitive compare let a login with no `registry` -- i.e. defaulting
+    to Docker Hub -- pass the guard that exists to forbid exactly that.
+    """
+    return str(step.get("uses", "")).casefold().startswith(_DOCKER_LOGIN_ACTION)
+
+
 def _step_kind(step: dict[str, Any]) -> str | None:
     """Classify a workflow step as login / prepull / container-running."""
-    uses = str(step.get("uses", ""))
-    if uses.startswith(_DOCKER_LOGIN_ACTION):
+    if _is_docker_login_action(step):
         registry = str((step.get("with") or {}).get("registry", ""))
         return "login" if registry == "ghcr.io" else None
     command = str(step.get("run", ""))
@@ -2148,7 +2163,7 @@ def test_ci_holds_no_docker_hub_credentials() -> None:
             if not isinstance(job, dict):
                 continue
             for step in job.get("steps") or []:
-                if not str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION):
+                if not _is_docker_login_action(step):
                     continue
                 registry = str((step.get("with") or {}).get("registry", "")).strip()
                 if registry != "ghcr.io":
@@ -2172,8 +2187,7 @@ def test_ghcr_login_is_present_and_not_fork_guarded() -> None:
     guarded: list[str] = []
     for job_name, job in workflow["jobs"].items():
         for step in job.get("steps", []):
-            uses = str(step.get("uses", ""))
-            if not uses.startswith(_DOCKER_LOGIN_ACTION):
+            if not _is_docker_login_action(step):
                 continue
             if str((step.get("with") or {}).get("registry", "")) != "ghcr.io":
                 continue
@@ -2194,7 +2208,7 @@ def test_ghcr_login_is_present_and_not_fork_guarded() -> None:
         registries = [
             str((step.get("with") or {}).get("registry", ""))
             for step in job.get("steps", [])
-            if str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION)
+            if _is_docker_login_action(step)
         ]
         assert any(registry == "ghcr.io" for registry in registries), (
             f"{job_name}: pulls the mirror with no ghcr.io login"

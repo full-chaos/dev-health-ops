@@ -157,21 +157,37 @@ VERSION_MULTIPLIER = 2**50
 #     provenance='unknown', last_synced='1900-01-01' -> 18446741864720751616
 # Ranks 1..4 give even the unknown bucket a full multiplier of headroom.
 #
-# WHY 2**50: the multiplier must exceed the LARGEST representable stamp, or a
-# far-future value crosses a rank step and a fallback outranks native. 2**45 did
-# not, and the acceptance corpus could not see it because its far-future key was
-# year 2100 -- a plausible extreme, not the representable one:
-#     max DateTime64(3) (9999-12-31) = 253,402,300,799,000
-#     2**45                          =  35,184,372,088,832   margin x0.14
-#     native@2026    = 142,504,713,955,328
-#     heuristic@9999 = 323,771,044,976,664   FALLBACK WINS
-# 2**48 clears it at x1.11, which is the same thin margin that produced the
-# defect, so:
-#     2**50 = 1,125,899,906,842,624   margin x4.44 over the representable max
-#     worst case 4*M + max  = 4,757,001,928,169,496  (UInt64 max 1.8e19)
+# WHY 2**50 -- THE PRINCIPLE FIRST, BECAUSE THE NUMBER IS DOWNSTREAM OF IT:
+#
+#   The multiplier must exceed the maximum the TYPE CAN REPRESENT, never the
+#   maximum date anyone considers plausible.
+#
+# One rank step must be wider than any value the column can hold; only then is
+# it impossible for a timestamp to cross a rank boundary, for any input. Every
+# constant chosen against a plausible extreme has been wrong here:
+#
+#     max DateTime64(3) millis (9999-12-31 23:59:59.999) = 253,402,300,799,999
+#
+#     power    value                    exceeds max?  margin   orders the tested pair?
+#     2**40       1,099,511,627,776     no            x0.004   no   (round 2 P1)
+#     2**45      35,184,372,088,832     no            x0.14    no   (round 4 P1)
+#     2**47     140,737,488,355,328     no            x0.56    YES  <- ACCIDENT
+#     2**48     281,474,976,710,656     YES           x1.11    yes  <- first correct
+#     2**50   1,125,899,906,842,624     YES           x4.44    yes  <- chosen
+#
+# 2**47 is the instructive one: it orders a year-9999 heuristic against a 2026
+# native correctly while NOT exceeding the span, so it is the same KIND of
+# number as 2**40 and 2**45 -- right for the cases someone thought to check.
+# 2**48 is the first correct by construction; 2**50 is chosen because x1.11 is
+# the shape of margin that produced this finding in the first place.
+# Arithmetic by lane-4752-go, checked independently here.
+#
+#     worst case 4*M + max = 4,757,001,928,170,495  (UInt64 max 1.8e19)
 #     min case   1*M + min(1900-01-01) = 1,123,690,918,042,624, still positive
-# The corpus now carries keys at BOTH representable extremes so the constant is
-# certified against the type's range rather than against an imagined one.
+#
+# The corpus carries keys at BOTH representable extremes. NOTE that the CI image
+# pin cannot certify this: DateTime64(3) saturates at 2299 on 26.6.1.1193 and
+# does not on 26.7, so the mutant proof is valid only on the prod line.
 VERSION_EXPRESSION = (
     "(multiIf("
     "provenance = 'native', 3, "

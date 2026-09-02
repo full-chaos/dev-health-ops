@@ -36,11 +36,13 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib.util
 import json
 import pathlib
 import platform
 import sys
 import textwrap
+import types
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -480,9 +482,56 @@ def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_bridge_module() -> Any:
+    """Load `worker_workgraph` WITHOUT executing `api.internal.__init__`.
+
+    The plain `from dev_health_ops.api.internal import worker_workgraph` runs
+    that package's `__init__`, which does `from .acr import router`, which
+    imports `limits`. That is installed in a lane venv and NOT in go-quality's
+    Python environment, so CI failed with:
+
+        ModuleNotFoundError: No module named 'limits'
+
+    A fixture generator must not depend on the API's HTTP dependencies to read
+    one pure function. Rather than widen CI's dependency set to satisfy a
+    generator, the module is loaded directly from its file with a synthetic
+    parent package -- real `__path__`, so the module's own relative imports
+    still resolve, but the real `__init__` never runs.
+
+    Note the first CI failure line was `No module named 'opentelemetry'`, which
+    is a HANDLED warning ("tracing disabled") printed before the real traceback.
+    Diagnosing from the first line of stderr rather than from the traceback cost
+    one wrong fix; the killer was `limits`, further down.
+    """
+    package = "dev_health_ops.api.internal"
+    if package not in sys.modules:
+        import dev_health_ops
+
+        directory = (
+            pathlib.Path(dev_health_ops.__file__).resolve().parent / "api" / "internal"
+        )
+        synthetic = types.ModuleType(package)
+        synthetic.__path__ = [str(directory)]
+        sys.modules[package] = synthetic
+
+    name = package + ".worker_workgraph"
+    if name in sys.modules:
+        return sys.modules[name]
+    directory = pathlib.Path(sys.modules[package].__path__[0])
+    spec = importlib.util.spec_from_file_location(
+        name, directory / "worker_workgraph.py"
+    )
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load {name} from {directory}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _admit(scope: Any) -> dict[str, Any]:
     """Run the reference's admission for one scope, recording RAISES or RUNS."""
-    from dev_health_ops.api.internal import worker_workgraph
+    worker_workgraph = _load_bridge_module()
 
     row = {
         "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",

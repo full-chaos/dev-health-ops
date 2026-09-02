@@ -72,6 +72,12 @@ from dev_health_ops.work_graph.extractors import text_parser as tp  # noqa: E402
 
 SCHEMA = "text_reference_parity.v1"
 
+# Declared in the form the live-python corpus guard recognises, so this corpus
+# is GUARDED rather than merely committed. The guard's ratchet counts
+# generators whose output it cannot find; an undeclared path would have made
+# this one of them, and the count may only go down.
+OUTPUT_PATH = Path(__file__).with_name("text_reference_parity.json")
+
 # --------------------------------------------------------------------------
 # The character-class alphabet. Every input below is built from these, so the
 # axes are explicit rather than implied by whatever examples came to mind.
@@ -499,7 +505,7 @@ def main() -> int:
     parser.add_argument("--stdout", action="store_true")
     parser.add_argument(
         "--out",
-        default=str(Path(__file__).with_name("text_reference_parity.json")),
+        default=str(OUTPUT_PATH),
     )
     args = parser.parse_args()
 

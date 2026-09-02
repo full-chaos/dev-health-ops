@@ -7,15 +7,49 @@ its meaning stays exact -- it is precisely the set the port must subtract.
 """
 
 import json
+import os
 import re as _re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from pathlib import Path
 
-go_out = subprocess.run(
-    ["go", "run", "."], cwd="/tmp/l4752/pinprobe", capture_output=True, text=True
+# The Go side of the intersection is a throwaway program written at run time
+# rather than a checked-in module: it exists only to enumerate what Go's tables
+# consider a letter, number, space or underscore, and a committed copy would be
+# one more thing to keep in step with the predicates it is measuring.
+_PROBE = """package main
+
+import (
+	"encoding/json"
+	"os"
+	"unicode"
 )
+
+func main() {
+	var out []int
+	for r := rune(0); r <= 0x10FFFF; r++ {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsSpace(r) || r == '_' ||
+			(r >= 0x1C && r <= 0x1F) {
+			out = append(out, int(r))
+		}
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(out)
+}
+"""
+
+with tempfile.TemporaryDirectory() as probe_dir:
+    Path(probe_dir, "go.mod").write_text("module ucdpinprobe\n\ngo 1.24\n")
+    Path(probe_dir, "main.go").write_text(_PROBE)
+    go_out = subprocess.run(
+        ["go", "run", "."],
+        cwd=probe_dir,
+        capture_output=True,
+        text=True,
+        # The same bounds every other Go invocation in this repo carries.
+        env={**os.environ, "GOMAXPROCS": "4", "GOFLAGS": "-p=2"},
+    )
 if go_out.returncode != 0:
     print(go_out.stderr[:2000], file=sys.stderr)
     raise SystemExit("go probe failed")

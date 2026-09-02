@@ -242,7 +242,7 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenRenewalKeepsFailing(t *testi
 	createIdempotencyTable(t, ctx, verifyPool)
 
 	const lease = 1500 * time.Millisecond
-	retirements := &recordingRetirements{}
+	retirements := newRecordingRetirements()
 	store, err := NewPostgresIdempotency(renewPool, retirements)
 	if err != nil {
 		t.Fatal(err)
@@ -276,17 +276,31 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenRenewalKeepsFailing(t *testi
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler context was not canceled after the lease was lost")
 	}
+	// Wait for the retirement to be REPORTED, not merely for the lease to be
+	// lost. markLost closes the lost channel before it calls the observer, so
+	// the two waits above say nothing about the recorder; reading it here
+	// unconditionally is what failed on loaded CI runners with
+	// `retirement reason = "0 retirements"`. A retirement that is never
+	// reported is itself the defect this test exists to catch, so the timeout
+	// arm is a real assertion rather than a tolerance.
+	select {
+	case <-retirements.Recorded():
+	case <-time.After(10 * time.Second):
+		t.Fatal("renewal retired without reporting the retirement an alert would bind to")
+	}
 	if got := retirements.reason(); got != IdempotencyRenewalTransientExhausted {
 		t.Fatalf("retirement reason = %q, want %q", got, IdempotencyRenewalTransientExhausted)
 	}
 
 	// The renewal goroutine really is gone, not merely quiet.
-	if internal, ok := claim.(*postgresClaim); ok {
-		select {
-		case <-internal.renewalDone:
-		case <-time.After(10 * time.Second):
-			t.Fatal("renewal goroutine still running after signaling loss")
-		}
+	internal, ok := claim.(*postgresClaim)
+	if !ok {
+		t.Fatalf("claim is %T, not *postgresClaim: renewal shutdown is unobservable", claim)
+	}
+	select {
+	case <-internal.renewalDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("renewal goroutine still running after signaling loss")
 	}
 
 	// Durable truth agrees the lease lapsed. This is the honest outcome, not a
@@ -322,8 +336,14 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenRenewalKeepsFailing(t *testi
 // reported, so the test asserts the exported signal an alert would bind to and
 // not merely that renewal stopped.
 type recordingRetirements struct {
-	mu      sync.Mutex
-	reasons []IdempotencyRenewalRetiredReason
+	mu         sync.Mutex
+	reasons    []IdempotencyRenewalRetiredReason
+	recorded   chan struct{}
+	recordOnce sync.Once
+}
+
+func newRecordingRetirements() *recordingRetirements {
+	return &recordingRetirements{recorded: make(chan struct{})}
 }
 
 func (recorder *recordingRetirements) ObserveIdempotencyRenewalRetired(
@@ -332,7 +352,25 @@ func (recorder *recordingRetirements) ObserveIdempotencyRenewalRetired(
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	recorder.reasons = append(recorder.reasons, reason)
+	recorder.recordOnce.Do(func() { close(recorder.recorded) })
 	return nil
+}
+
+// Recorded closes once a retirement has been reported. Waiting on it is how a
+// test observes the retirement without assuming anything about WHEN the store
+// reports it relative to its other signals.
+//
+// That independence is the point. markLost deliberately closes the lost channel
+// BEFORE calling this observer, so Lost() firing proves nothing about the
+// recorder -- reading it there is what made these tests flake under CI load
+// ("retirement reason = \"0 retirements\""). Synchronising on the store's
+// renewalDone instead would work today only because renew's deferred close
+// happens to run after markLost returns; that is a premise about code the test
+// does not own, and a refactor moving the close would silently restore the
+// flake with every assertion still passing. Waiting for the event the assertion
+// is actually about has no such premise.
+func (recorder *recordingRetirements) Recorded() <-chan struct{} {
+	return recorder.recorded
 }
 
 func (recorder *recordingRetirements) all() []IdempotencyRenewalRetiredReason {
@@ -377,7 +415,7 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenFencedOut(t *testing.T) {
 	createIdempotencyTable(t, ctx, pool)
 
 	const lease = 1500 * time.Millisecond
-	retirements := &recordingRetirements{}
+	retirements := newRecordingRetirements()
 	store, err := NewPostgresIdempotency(pool, retirements)
 	if err != nil {
 		t.Fatal(err)
@@ -413,8 +451,26 @@ func TestPostgresIdempotencyRetiresRenewalLoudlyWhenFencedOut(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler context was not canceled after the claim was fenced out")
 	}
+	// Same reason the transient-exhaustion test waits here: the retirement is
+	// reported after the lost channel closes, so Lost() firing is not evidence
+	// the observer has run.
+	select {
+	case <-retirements.Recorded():
+	case <-time.After(10 * time.Second):
+		t.Fatal("fenced claim retired without reporting the retirement an alert would bind to")
+	}
 	if got := retirements.reason(); got != IdempotencyRenewalFenced {
 		t.Fatalf("retirement reason = %q, want %q", got, IdempotencyRenewalFenced)
+	}
+
+	internal, ok := claim.(*postgresClaim)
+	if !ok {
+		t.Fatalf("claim is %T, not *postgresClaim: renewal shutdown is unobservable", claim)
+	}
+	select {
+	case <-internal.renewalDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("renewal goroutine still running after the claim was fenced out")
 	}
 }
 
@@ -444,7 +500,7 @@ func TestPostgresIdempotencyOrdinaryCompletionIsSilent(t *testing.T) {
 	createIdempotencyTable(t, ctx, pool)
 
 	const lease = 1500 * time.Millisecond
-	retirements := &recordingRetirements{}
+	retirements := newRecordingRetirements()
 	store, err := NewPostgresIdempotency(pool, retirements)
 	if err != nil {
 		t.Fatal(err)

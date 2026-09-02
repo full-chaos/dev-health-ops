@@ -27,16 +27,23 @@ type ParsedIssueRef struct {
 // own `\s`, `\w` and `\d` are ASCII-only. See charclass.go for the measurements
 // these encode; these strings and the predicates there must agree, which
 // TestRE2ClassesAgreeWithPredicates checks rather than assumes.
-const (
+var (
 	// Python's `\s`: 29 runes, exactly str.isspace(). The 001C-001F span is the
 	// part unicode.IsSpace omits and the part no reviewer thinks to test.
 	wsClass = `[\x{0009}-\x{000D}\x{001C}-\x{0020}\x{0085}\x{00A0}\x{1680}` +
 		`\x{2000}-\x{200A}\x{2028}-\x{2029}\x{202F}\x{205F}\x{3000}]`
 	// Python's `\d`: category Nd.
-	digitClass = `\p{Nd}`
+	// PINNED to the interpreter's UCD: explicit ranges, not `\p{Nd}`. RE2 has
+	// no class subtraction, so a property class would consume a rune Go's
+	// tables know and the interpreter does not -- and the regex half of the
+	// port would then disagree with the predicate half, which is worse than
+	// either being wrong alone.
+	digitClass = "[" + pythonDigitClassRanges + "]"
 	// Python's `\w`: alphanumeric-or-underscore, where alphanumeric spans the
 	// whole N category and not just Nd.
-	wordClass = `\p{L}\p{N}_`
+	// PINNED the same way. Used INSIDE a larger class, so this is the range
+	// body without brackets.
+	wordClass = pythonWordClassRanges
 )
 
 var (

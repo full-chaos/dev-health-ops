@@ -261,6 +261,61 @@ GITLAB_MR = [
     ("digits_then_text", "see merge request group/proj!42abc"),
 ]
 
+# The UCD-RESIDUE axis, added after codex round 1 found the class was
+# OBSERVABLE rather than theoretical.
+#
+# U+11DE0 is Nd in Go's Unicode 17 tables and Cn -- unassigned -- in CPython's
+# UCD 16. The package doc classified this residue as RARE-but-reachable and the
+# all-runes guard asserted it was Cn-only. Both were true and neither was
+# enough: no case in the corpus CONTAINED such a rune, because the neighbour and
+# digit alphabets were built from scripts a human would think of.
+#
+# The direction inverts through the boundary logic, which is the part the
+# rune-set framing hid. `python-only == 0` says Go's CLASS never misses a rune
+# Python's class has. But a GO-ONLY rune widens Go's word class, so a boundary
+# that holds for Python FAILS for Go -- and Go misses the whole match:
+#
+#     'see merge request<U+11DE0>!45'   Python [45]        Go nil
+#     '#1<U+11DE0>'                     Python key '1'     Go key '1<U+11DE0>'
+#
+# So a residue rune can make Go emit LESS than Python (a dropped edge) or emit a
+# DIFFERENT key. Neither is visible in a rune-set diff.
+UCD_RESIDUE = [
+    ("mr_boundary", "see merge request" + chr(0x11DE0) + "!45"),
+    ("plain_ref_suffix", "#1" + chr(0x11DE0)),
+    ("plain_ref_prefix", chr(0x11DE0) + "#1"),
+    ("jira_suffix", "PROJ-1" + chr(0x11DE0)),
+    ("jira_prefix", chr(0x11DE0) + "PROJ-1"),
+    ("closing_ref", "closes #1" + chr(0x11DE0)),
+    ("digit_body", "merge pull request #" + chr(0x11DE0)),
+    ("digit_mixed", "merge pull request #1" + chr(0x11DE0) + "2"),
+    ("gitlab_path", "grp" + chr(0x11DE0) + "/proj#7"),
+    ("squash_suffix", "fix the thing (#42)" + chr(0x11DE0)),
+]
+
+# The MAGNITUDE axis. Python's int() is arbitrary precision; Go's int is 64-bit.
+# The corpus's digit bodies were all two characters, so no case could reach the
+# boundary at all.
+#
+# Three regimes, and they need different answers rather than one:
+#   - fits int64 comfortably: must round-trip
+#   - fits int64 but near the top: must round-trip (a too-conservative guard
+#     refuses these, which is what round 1 found)
+#   - exceeds int64: CANNOT round-trip, and is a declared divergence rather
+#     than a bug -- Go has no value to return
+MAGNITUDE = [
+    ("small", "merge pull request #42"),
+    ("seven_digits", "merge pull request #1234567"),
+    ("eighteen_digits", "merge pull request #123456789012345678"),
+    ("near_int64_max", "merge pull request #9223372036854775806"),
+    ("int64_max", "merge pull request #9223372036854775807"),
+    ("int64_max_plus_one", "merge pull request #9223372036854775808"),
+    ("five_e18", "merge pull request #5000000000000000000"),
+    ("twenty_three_digits", "merge pull request #99999999999999999999999"),
+    ("leading_zeros", "merge pull request #0000000000000000000000042"),
+    ("zero", "merge pull request #0"),
+]
+
 # Cardinality and overlap: a corpus of single-match strings cannot see an
 # extractor that returns matches in the wrong order, drops duplicates it should
 # keep, or keeps ones it should drop.
@@ -400,6 +455,10 @@ def build_corpus() -> dict:
         cases.append(_case(f"gitlabmr/{label}", "gitlab_mr", text))
     for label, text in SUBJECT_TRUNCATION:
         cases.append(_case(f"subject/{label}", "subject_truncation", text))
+    for label, text in UCD_RESIDUE:
+        cases.append(_case(f"residue/{label}", "ucd_residue", text))
+    for label, text in MAGNITUDE:
+        cases.append(_case(f"magnitude/{label}", "magnitude", text))
 
     # Axis 4: the reference at the very end of the string, and followed by each
     # neighbour class. `\b` and `(?<!\w)` are asymmetric -- a corpus that only

@@ -1,6 +1,9 @@
 package textrefs
 
-import "unicode"
+import (
+	"math"
+	"unicode"
+)
 
 // pythonAtoi converts a run of `\d` characters the way Python's int() does.
 //
@@ -41,22 +44,32 @@ func pythonAtoi(s string) (int, bool) {
 	if s == "" {
 		return 0, false
 	}
-	value := 0
+	var value int64
 	for _, r := range s {
 		digit, ok := pythonDigitValue(r)
 		if !ok {
 			return 0, false
 		}
-		// The Python side has no width limit here, but a PR number that
-		// overflows an int is not a PR number. Refusing is correct and is what
-		// the caller's "not a reference" branch already handles; silently
-		// wrapping would invent an edge pointing at an unrelated PR.
-		if value > (1<<62)/10 {
+		// Overflow refusal at the EXACT int64 boundary, not a conservative
+		// approximation of it.
+		//
+		// The first version guarded with `value > (1<<62)/10`, which refuses
+		// everything above about 4.6e18 -- but int64 holds up to 9.22e18, so it
+		// rejected values Python returns and Go can represent. Codex round 1
+		// found it with 'Merge pull request #5000000000000000000': Python
+		// [5000000000000000000], Go nothing. A too-conservative guard is not
+		// "safe"; it is a silent dropped edge in the direction that loses data.
+		//
+		// Python's int() is arbitrary precision, so values above int64 CANNOT
+		// round-trip and are a declared divergence rather than a bug -- Go has
+		// no value to return. That case is enumerated in the package doc with
+		// its reachability; a real PR number is seven digits.
+		if value > (math.MaxInt64-int64(digit))/10 {
 			return 0, false
 		}
-		value = value*10 + digit
+		value = value*10 + int64(digit)
 	}
-	return value, true
+	return int(value), true
 }
 
 // pythonDigitValue returns the decimal value of a single `\d` rune.

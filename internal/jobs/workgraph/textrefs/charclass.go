@@ -28,24 +28,45 @@
 //	\w            IsLetter || IsNumber || '_'                0     4657
 //	\d            IsDigit                                    0       10
 //
-// **`python-only` is zero for all three.** That is the column that would
-// represent a real defect: a rune Python treats as a member and Go does not
-// would make the Go side MISS a match Python finds, silently dropping an edge.
-// There is no such rune for any of the three classes.
+// Both columns are now ZERO, because the classes are PINNED to the interpreter's
+// UCD -- see ucdpin.go. They did not start that way, and the history is the
+// point:
 //
-// The `go-only` residue is one-directional and fully characterised: every one of
-// those runes is category `Cn` -- UNASSIGNED -- in CPython's UCD 16.0.0, and
-// assigned in Go's Unicode 17 tables. They are not a semantic disagreement about
-// what a word character is; they are code points that do not exist yet on the
-// Python plane. `\d`'s ten are the contiguous block U+11DE0..U+11DE9.
+// Go's tables are newer than CPython's, so Go alone treated 4657 code points as
+// letters or numbers and 10 as digits. That residue looked one-directional and
+// harmless, and the guard asserted it was exactly the unassigned (`Cn`) set,
+// which was true. **The inference from it was wrong.** `python-only == 0` says
+// Go's CLASS never misses a rune Python's class has; it does NOT say the
+// EXTRACTORS agree, because the direction inverts through the boundary logic. A
+// rune only Go considers a word character widens Go's word class, so a boundary
+// that holds for Python FAILS for Go and the entire match is lost:
 //
-// Reachability: RARE, not absent. A rune from that residue in a PR body or
-// commit message makes Go treat it as a word/digit character while Python treats
-// it as neither, which moves a `\b` boundary or extends a `[\w\-\.]+` span. No
-// such rune appears in the frozen corpus. This is the same class as the 28-rune
-// lowercase skew recorded in CHAOS-4869, arriving through a different table, and
-// it resolves the same way: when CPython adopts UCD 17 the residue goes to zero
-// without any change here.
+//	see merge request<U+11DE0>!45   Python [45]      Go nil    (dropped edge)
+//	#1<U+11DE0>                     Python key '1'   Go key '1<U+11DE0>'
+//
+// Codex round 1 found this; the corpus could not, because no case CONTAINED
+// such a rune -- the neighbour and digit alphabets were built from scripts a
+// human would think of. Pinning to the interpreter's UCD couples the port to a
+// CPython version, and the all-runes guard makes that coupling loud rather than
+// implicit: it records both UCD versions in its proof marker and fails when
+// either side moves.
+//
+// # THE ONE DIVERGENCE THAT REMAINS, AND WHY IT CANNOT BE FIXED
+//
+// Python's int() is arbitrary precision; Go's int is 64 bits. A PR number above
+// the int64 ceiling cannot round-trip because Go has no value to return:
+//
+//	'Merge pull request #9223372036854775808'   Python [9223372036854775808]
+//	                                            Go     [] (refused)
+//
+// This is a property of the type, not a defect. Two corpus rows are marked
+// expected-divergent BY NAME -- never by pattern, so the next magnitude case
+// cannot be absorbed silently -- and the corpus guard asserts the set is exactly
+// those two, so a divergence that disappears is as loud as one that appears.
+//
+// Reachability: provider PR/MR identifiers sit well inside int64; the largest in
+// the frozen corpus is seven digits. Reaching this needs a commit message
+// carrying a 19-digit number after a merge keyword.
 //
 // # THE SUBSTITUTIONS THAT ARE EASY TO GET WRONG
 //
@@ -85,6 +106,9 @@ import (
 // SEPARATOR -- are the entire difference, and they are the only ones that
 // distinguish this function from unicode.IsSpace on any input.
 func pythonIsSpace(r rune) bool {
+	if isPythonUnassigned(r) {
+		return false
+	}
 	return unicode.IsSpace(r) || (r >= 0x1C && r <= 0x1F)
 }
 
@@ -97,6 +121,9 @@ func pythonIsSpace(r rune) bool {
 // unicode.IsNumber, not unicode.IsDigit: Python's word character is
 // `isalnum() or '_'`, and isalnum() spans the whole N category (Nd, Nl, No).
 func pythonIsWord(r rune) bool {
+	if isPythonUnassigned(r) {
+		return false
+	}
 	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'
 }
 
@@ -110,6 +137,9 @@ func pythonIsWord(r rune) bool {
 // superscripts among them. The two are conflated easily and this port needs the
 // former, because the Python side reaches these characters through `re`.
 func pythonIsDigit(r rune) bool {
+	if isPythonUnassigned(r) {
+		return false
+	}
 	return unicode.IsDigit(r)
 }
 

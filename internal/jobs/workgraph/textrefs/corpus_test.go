@@ -49,9 +49,31 @@ func loadCorpus(t *testing.T) corpusDocument {
 func TestExtractorsMatchFrozenPython(t *testing.T) {
 	doc := loadCorpus(t)
 
+	// EXPECTED DIVERGENCES, by NAME and never by pattern.
+	//
+	// Python's int() is arbitrary precision; Go's int is 64 bits. A PR number
+	// above the int64 ceiling cannot round-trip, because Go has no value to
+	// return -- this is a property of the type, not a defect in the port.
+	//
+	// Named individually rather than matched by prefix on purpose. A pattern
+	// like "magnitude/*" would silently absorb the next magnitude case someone
+	// adds, including one that fails for a real reason. The guard below asserts
+	// the set is EXACTLY these two, so adding a third divergence requires
+	// saying so here.
+	//
+	// Reachability: provider PR/MR identifiers are integers well inside int64 --
+	// the largest in the frozen corpus is seven digits. Reaching this needs a
+	// commit message containing a 19-digit number after a merge keyword.
+	expectedDivergent := map[string]string{
+		"magnitude/int64_max_plus_one":  "2^63, one past the int64 ceiling",
+		"magnitude/twenty_three_digits": "23 digits, far past the int64 ceiling",
+	}
+	sawDivergent := map[string]bool{}
+
 	type result struct{ pass, fail int }
 	tally := map[string]*result{}
 	firstFailure := map[string]string{}
+	allFailures := map[string][]string{}
 
 	record := func(name, id string, got, want any) {
 		if tally[name] == nil {
@@ -63,7 +85,12 @@ func TestExtractorsMatchFrozenPython(t *testing.T) {
 			tally[name].pass++
 			return
 		}
+		if _, expected := expectedDivergent[id]; expected {
+			sawDivergent[id] = true
+			return
+		}
 		tally[name].fail++
+		allFailures[name] = append(allFailures[name], id)
 		if _, seen := firstFailure[name]; !seen {
 			firstFailure[name] = id + "\n      got:  " + string(gotJSON) + "\n      want: " + string(wantJSON)
 		}
@@ -110,6 +137,17 @@ func TestExtractorsMatchFrozenPython(t *testing.T) {
 		}
 	}
 
+	// The set must be exactly what is declared: a case that stops diverging is
+	// as important as one that starts. If int64 ever holds the value, or the
+	// corpus row is renamed, this says so rather than passing quietly.
+	for id, reason := range expectedDivergent {
+		if !sawDivergent[id] {
+			t.Errorf("expected-divergent case %q (%s) did NOT diverge. Either the "+
+				"port changed, the corpus row was renamed or removed, or the "+
+				"divergence is gone and this entry should be deleted.", id, reason)
+		}
+	}
+
 	for _, name := range []string{
 		"extract_pr_refs", "extract_squash_pr_refs",
 		"extract_jira_keys", "extract_github_issue_refs", "extract_gitlab_issue_refs",
@@ -123,8 +161,8 @@ func TestExtractorsMatchFrozenPython(t *testing.T) {
 			t.Logf("%-26s %d/%d PASS", name, r.pass, r.pass+r.fail)
 			continue
 		}
-		t.Errorf("%-26s %d/%d pass, %d FAIL\n    first: %s",
-			name, r.pass, r.pass+r.fail, r.fail, firstFailure[name])
+		t.Errorf("%-26s %d/%d pass, %d FAIL\n    ids: %v",
+			name, r.pass, r.pass+r.fail, r.fail, allFailures[name])
 	}
 }
 

@@ -22,6 +22,13 @@
 # local run of both its Testcontainers-backed tests together (21.575s,
 # breakdown_seeded_integration_test.go + investmentquality_seeded_integration_test.go,
 # each starting its own container).
+# internal/jobs/investment/chquery (CHAOS-4441): weight 122s, ceil() of a local
+# run of all seven of its Testcontainers-backed tests together (121.469s). Same
+# shape as internal/streamhandlers above -- almost all of that is ClickHouse
+# container startup plus the real migration chain, applied to a clean database
+# per test rather than to whatever an earlier test left behind, so the weight
+# scales with the TEST COUNT in that file, not with the assertions in them.
+# Re-time it if that file grows.
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
@@ -38,6 +45,7 @@ internal/joboutbox	12
 internal/jobrescue	5
 internal/jobroute	6
 internal/jobruntime	5
+internal/jobs/investment/chquery	122
 internal/jobs/metrics/daily	6
 internal/jobs/metrics/remaining	6
 internal/jobs/pagerduty	9

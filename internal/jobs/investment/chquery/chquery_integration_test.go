@@ -366,3 +366,62 @@ func seedEdge(
 		provenance, confidence, lastSynced, lastSynced, lastSynced, orgID,
 	)
 }
+
+// TestActiveHoursUnscopedCollapsesTenants is the SECOND deliberate pin of
+// behaviour that is wrong (CHAOS-4804).
+//
+// fetch_work_item_active_hours groups by work_item_id ALONE while filtering on
+// org conditionally, so an empty scope drops the filter and collapses every
+// tenant's row for a shared work-item id into one group. argMax then returns
+// whichever tenant wrote last. work_item_id is provider-scoped, not
+// tenant-scoped, so ids really are shared across orgs.
+//
+// Asserted as-is on purpose: the port's contract is to match Python, and the
+// fix belongs on BOTH planes at once. When CHAOS-4804 lands, this test and
+// TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant are what should fail, and
+// they should be flipped deliberately in the same change set that moves
+// queries.py -- never one plane alone.
+func TestActiveHoursUnscopedCollapsesTenants(t *testing.T) {
+	reader, conn, ctx := newTestReader(t)
+
+	// The SAME work-item id in two tenants -- the realistic case, since
+	// "linear:CHAOS-4441" is provider-scoped.
+	const sharedID = "linear:CHAOS-4441"
+	mustExec(t, ctx, conn, `
+        INSERT INTO work_item_cycle_times
+            (org_id, work_item_id, provider, type, active_time_hours, created_at, computed_at)
+        VALUES (?, ?, 'linear', 'task', ?, ?, ?)
+    `, orgAlpha, sharedID, 10.0, "2026-03-01 00:00:00", "2026-03-01 00:00:00")
+	mustExec(t, ctx, conn, `
+        INSERT INTO work_item_cycle_times
+            (org_id, work_item_id, provider, type, active_time_hours, created_at, computed_at)
+        VALUES (?, ?, 'linear', 'task', ?, ?, ?)
+    `, orgBeta, sharedID, 99.0, "2026-03-01 00:00:00", "2026-06-01 00:00:00")
+
+	// Scoped: correct. Org alpha sees its own 10 hours, never beta's 99.
+	scoped, err := reader.FetchWorkItemActiveHours(ctx, []string{sharedID}, orgAlpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoped[sharedID] != 10.0 {
+		t.Fatalf("scoped read must return org alpha's own value, got %v", scoped[sharedID])
+	}
+
+	// Unscoped: CHAOS-4804. The filter disappears, the GROUP BY collapses both
+	// tenants, and argMax returns beta's later-written 99.
+	unscoped, err := reader.FetchWorkItemActiveHours(ctx, []string{sharedID}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unscoped[sharedID] != 99.0 {
+		t.Fatalf(
+			"unscoped read returned %v, want 99 (the OTHER tenant's value). "+
+				"If this now returns 10 or nothing, CHAOS-4804 has been fixed -- verify "+
+				"queries.py moved in the SAME change set, then flip this test and "+
+				"TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant together. Fixing one "+
+				"plane alone makes the two group differently, which is the failure this "+
+				"port exists to prevent",
+			unscoped[sharedID],
+		)
+	}
+}

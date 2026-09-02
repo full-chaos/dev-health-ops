@@ -42,6 +42,22 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	assertRiskMetricsMatch(t, golden.RiskHotspotsRepoB, ComputeFileRiskHotspots(repoB, windowStats, nil, nil))
 }
 
+// TestComputeFileRiskHotspotsReturnsEmptyNotNilSlice is codex round 8's
+// finding: a repo with neither churn nor a complexity snapshot must return
+// an empty, non-nil slice -- matching Python's `return []` (hotspots.py:174)
+// literally, not merely behaviorally (no current caller distinguishes nil
+// from empty, but this removes any doubt).
+func TestComputeFileRiskHotspotsReturnsEmptyNotNilSlice(t *testing.T) {
+	repoWithNoData := uuid.MustParse("00000000-0000-4000-8000-00000000dead")
+	result := ComputeFileRiskHotspots(repoWithNoData, nil, nil, nil)
+	if result == nil {
+		t.Fatal("ComputeFileRiskHotspots returned nil for an empty input, want a non-nil empty slice")
+	}
+	if len(result) != 0 {
+		t.Fatalf("ComputeFileRiskHotspots returned %d rows for an empty input, want 0", len(result))
+	}
+}
+
 // goldenWindowStats mirrors generate_file_hotspots_python_golden.py's
 // _window_stats() exactly -- same repo ids, hashes, authors, days, and byte
 // counts -- so this test and the frozen fixture describe the same input.

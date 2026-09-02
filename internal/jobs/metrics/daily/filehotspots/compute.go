@@ -232,7 +232,13 @@ func ComputeFileRiskHotspots(
 		allPaths[path] = struct{}{}
 	}
 	if len(allPaths) == 0 {
-		return nil
+		// Matches Python's `return []` (hotspots.py:174) exactly -- an empty,
+		// non-nil slice, not nil. No production caller distinguishes the two
+		// today (every consumer only ranges/lens this result, both of which
+		// treat nil and empty identically in Go), but returning the literal
+		// Python-equivalent value removes any doubt rather than relying on
+		// that being true forever (codex round 8).
+		return []RiskMetric{}
 	}
 
 	type input struct {

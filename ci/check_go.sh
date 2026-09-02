@@ -833,6 +833,28 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/pythonparity (float round/repr/format mirrors vs the live interpreter)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestFloatTextGoldenMatchesLivePython$' \
+        ./internal/pythonparity/...
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/pythonparity-float-text"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the CPython float round/repr/format golden was not re-derived from the live interpreter\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   rm -rf -- "${proof_dir}"
 }
 

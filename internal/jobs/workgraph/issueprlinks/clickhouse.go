@@ -1,0 +1,267 @@
+package issueprlinks
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+)
+
+// ErrUnavailable reports a missing ClickHouse dependency.
+var ErrUnavailable = errors.New("issueprlinks: clickhouse connection is required")
+
+// conn is the narrow ClickHouse capability this package needs -- query plus
+// batch insert. driver.Conn satisfies it directly; the interface exists so
+// tests can drive Loader/Writer without a container.
+type conn interface {
+	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
+	PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error)
+}
+
+// Window is the build's PR scope: the from/to/repo filters BuildConfig carries
+// (work_graph/builder.py:124-133). A nil bound means unbounded, matching
+// Python's `if self.config.from_date:` guards (:679-684).
+//
+// Both bounds are INCLUSIVE. That is Python's shape verbatim
+// (`created_at >= from` AND `created_at <= to`, :680/:682) and not a typo for a
+// half-open interval: a PR created exactly at `to` is inside the window on both
+// planes.
+type Window struct {
+	From   *time.Time
+	To     *time.Time
+	RepoID *uuid.UUID
+}
+
+// Loader reads the four inputs Derive needs, scoped to one org.
+type Loader struct {
+	conn conn
+}
+
+// NewLoader builds a Loader over an established ClickHouse connection.
+func NewLoader(connection conn) (*Loader, error) {
+	if connection == nil {
+		return nil, ErrUnavailable
+	}
+	return &Loader{conn: connection}, nil
+}
+
+// dependencyQuery ports builder.py:648-663.
+//
+// The ORDER BY is the ONE deliberate addition. Python iterates the rows in
+// whatever order ClickHouse returned and takes first-wins on a duplicate
+// identity (:764-767); an unordered read makes which duplicate wins a property
+// of the storage layout rather than of the data. Ordering on the full identity
+// key -- plus last_synced and the raw kind, so the tuple is total -- makes the
+// choice reproducible on both planes and lets the golden assert an exact row
+// order. Where no duplicate exists, the order cannot change the output at all,
+// which is the case for every row in the proof org.
+const dependencyQuery = `
+SELECT
+  org_id,
+  source_work_item_id,
+  target_work_item_id,
+  relationship_type_raw,
+  last_synced
+FROM work_item_dependencies FINAL
+WHERE org_id = {org_id:String}
+ORDER BY target_work_item_id, source_work_item_id, relationship_type_raw, last_synced`
+
+const repoQuery = `
+SELECT org_id, id, repo
+FROM repos FINAL
+WHERE org_id = {org_id:String}`
+
+const workItemQuery = `
+SELECT org_id, work_item_id
+FROM work_items FINAL
+WHERE org_id = {org_id:String}`
+
+// Load reads all four inputs for one org and window.
+func (loader *Loader) Load(ctx context.Context, orgID string, window Window) (Inputs, error) {
+	if loader == nil || loader.conn == nil {
+		return Inputs{}, ErrUnavailable
+	}
+	if orgID == "" {
+		return Inputs{}, fmt.Errorf("issueprlinks: org id is required")
+	}
+	inputs := Inputs{OrgID: orgID}
+
+	dependencies, err := loader.loadDependencies(ctx, orgID)
+	if err != nil {
+		return Inputs{}, fmt.Errorf("load work_item_dependencies: %w", err)
+	}
+	// Python returns early on an empty dependency read (builder.py:706-707) and
+	// never issues the other three queries. Same short-circuit, so an org with
+	// no dependencies costs one read on both planes.
+	if len(dependencies) == 0 {
+		return inputs, nil
+	}
+	inputs.Dependencies = dependencies
+
+	if inputs.Repos, err = loader.loadRepos(ctx, orgID); err != nil {
+		return Inputs{}, fmt.Errorf("load repos: %w", err)
+	}
+	if inputs.PullRequests, err = loader.loadPullRequests(ctx, orgID, window); err != nil {
+		return Inputs{}, fmt.Errorf("load git_pull_requests: %w", err)
+	}
+	if inputs.WorkItems, err = loader.loadWorkItems(ctx, orgID); err != nil {
+		return Inputs{}, fmt.Errorf("load work_items: %w", err)
+	}
+	return inputs, nil
+}
+
+func (loader *Loader) loadDependencies(ctx context.Context, orgID string) ([]DependencyRow, error) {
+	rows, err := loader.conn.Query(ctx, dependencyQuery, clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []DependencyRow
+	for rows.Next() {
+		var row DependencyRow
+		if err := rows.Scan(
+			&row.OrgID, &row.SourceWorkItemID, &row.TargetWorkItemID,
+			&row.RelationshipTypeRaw, &row.LastSynced,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (loader *Loader) loadRepos(ctx context.Context, orgID string) ([]RepoRow, error) {
+	rows, err := loader.conn.Query(ctx, repoQuery, clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []RepoRow
+	for rows.Next() {
+		var row RepoRow
+		if err := rows.Scan(&row.OrgID, &row.ID, &row.Repo); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// loadPullRequests ports builder.py:665-684 including the window and repo
+// filters. Only (org_id, repo_id, number) is read -- the derivation uses the
+// row's EXISTENCE, never its columns, so created_at stays in the WHERE clause
+// and never crosses into Go where a timezone could distort it.
+func (loader *Loader) loadPullRequests(ctx context.Context, orgID string, window Window) ([]PullRequestRow, error) {
+	query := `
+SELECT org_id, repo_id, number
+FROM git_pull_requests FINAL
+WHERE org_id = {org_id:String}`
+	args := []any{clickhouse.Named("org_id", orgID)}
+	if window.From != nil {
+		query += ` AND created_at >= {from_ts:DateTime64(3)}`
+		args = append(args, clickhouse.Named("from_ts", window.From.UTC()))
+	}
+	if window.To != nil {
+		query += ` AND created_at <= {to_ts:DateTime64(3)}`
+		args = append(args, clickhouse.Named("to_ts", window.To.UTC()))
+	}
+	if window.RepoID != nil {
+		query += ` AND repo_id = {repo_id:UUID}`
+		args = append(args, clickhouse.Named("repo_id", *window.RepoID))
+	}
+
+	rows, err := loader.conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PullRequestRow
+	for rows.Next() {
+		var row PullRequestRow
+		if err := rows.Scan(&row.OrgID, &row.RepoID, &row.Number); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (loader *Loader) loadWorkItems(ctx context.Context, orgID string) ([]WorkItemRow, error) {
+	rows, err := loader.conn.Query(ctx, workItemQuery, clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []WorkItemRow
+	for rows.Next() {
+		var row WorkItemRow
+		if err := rows.Scan(&row.OrgID, &row.WorkItemID); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// insertStatement names every column explicitly and in the live table's own
+// order (system.columns, db `default`, 2026-09-01). Positional inserts against
+// a ReplacingMergeTree are how a future ALTER ... ADD COLUMN silently shifts
+// values into the wrong columns.
+const insertStatement = `INSERT INTO work_graph_issue_pr
+ (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`
+
+// Writer inserts mapping rows.
+type Writer struct {
+	conn conn
+}
+
+// NewWriter builds a Writer over an established ClickHouse connection.
+func NewWriter(connection conn) (*Writer, error) {
+	if connection == nil {
+		return nil, ErrUnavailable
+	}
+	return &Writer{conn: connection}, nil
+}
+
+// Write inserts the derived rows. An empty slice writes nothing and is not an
+// error -- Python's _write_issue_pr_links returns early on an empty list
+// (builder.py:228-233), and an org with no provider-attached links is a normal
+// state, not a failure.
+func (writer *Writer) Write(ctx context.Context, links []Link) error {
+	if writer == nil || writer.conn == nil {
+		return ErrUnavailable
+	}
+	if len(links) == 0 {
+		return nil
+	}
+	batch, err := writer.conn.PrepareBatch(ctx, insertStatement)
+	if err != nil {
+		return fmt.Errorf("prepare work_graph_issue_pr batch: %w", err)
+	}
+	for _, link := range links {
+		if err := batch.Append(
+			link.RepoID,
+			link.WorkItemID,
+			link.PRNumber,
+			link.Confidence,
+			link.Provenance,
+			link.Evidence,
+			link.LastSynced,
+			link.OrgID,
+		); err != nil {
+			return fmt.Errorf("append work_graph_issue_pr row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("send work_graph_issue_pr batch: %w", err)
+	}
+	return nil
+}

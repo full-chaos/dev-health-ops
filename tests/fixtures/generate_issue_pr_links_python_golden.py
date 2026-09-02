@@ -33,6 +33,7 @@ fires, and the recording sink refuses every write except the one it captures.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -65,11 +66,27 @@ class RecordingSink:
 
     def query_dicts(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         rows = self._inner.query_dicts(query, params)
-        self.reads.append(rows)
+        # SNAPSHOT, not a reference (CHAOS-4803). The producer is handed the
+        # real rows -- handing it a copy would make the generator exercise a
+        # different object graph than production does -- but what is CAPTURED
+        # must be what it was handed, frozen at that moment. Recording the same
+        # objects lets an in-place mutation corrupt the captured "input" and the
+        # derived output CONSISTENTLY, so a regenerated golden would encode the
+        # mutated state as if it had been the input all along, and the oracle
+        # would accept the very regression it exists to catch.
+        #
+        # deepcopy, not list(rows) or dict(row): the rows are dict[str, Any]
+        # whose values can themselves be mutable, so a shallow copy still shares
+        # the row dicts (or their nested values) and reproduces the hole one
+        # level down. Cost is irrelevant -- generation is a rare offline run.
+        self.reads.append(copy.deepcopy(rows))
         return rows
 
     def write_work_graph_issue_pr(self, records: Any) -> None:
-        self.written.extend(records)
+        # Snapshotted for the same reason. These records are minted fresh by
+        # _issue_pr_to_record and not touched again today, so this is defence
+        # against a future change rather than a live defect.
+        self.written.extend(copy.deepcopy(list(records)))
 
     def __getattr__(self, name: str) -> Any:
         # Anything the derivation might reach that is NOT one of the two methods
@@ -304,7 +321,8 @@ class ReplaySink:
         return self._reads.pop(0)
 
     def write_work_graph_issue_pr(self, records: Any) -> None:
-        self.written.extend(records)
+        # Snapshotted for the same reason as RecordingSink (CHAOS-4803).
+        self.written.extend(copy.deepcopy(list(records)))
 
     def __getattr__(self, name: str) -> Any:
         # AttributeError for the same protocol reason as RecordingSink above.

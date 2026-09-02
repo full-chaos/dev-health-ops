@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,7 +10,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
 )
 
@@ -66,9 +69,15 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	dependencies := jobruntime.Dependencies{Logger: logger, Observer: observer, TenantScope: operationalTenantScope{}, Budget: newOperationalBudget(postgresDatabase.pools.Domain, observer), Idempotency: idempotency}
+
+	buildPreSteps, preStepErr := workgraphBuildPreSteps(cfg, specs, observer, logger)
+	if preStepErr != nil {
+		return workerFamily{}, preStepErr
+	}
+
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
-		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies); err != nil {
+		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies, buildPreSteps); err != nil {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		registered = append(registered, spec)
@@ -90,10 +99,93 @@ func workgraphCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client
 	return contractDeadlineHTTPClient(connectTimeout)
 }
 
-func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies) error {
+// workgraphBuildPreSteps constructs the native Go producers that run inside a
+// build execution before the Python bridge. Returns nil when no build kind is
+// selected for this worker, so a workgraph process running only the investment
+// kinds takes no ClickHouse dependency it does not need.
+//
+// A ClickHouse failure REFUSES the family rather than registering the build
+// handler without its pre-step. Once the mapping is produced natively, a build
+// that skipped it would still succeed and still write edges -- just an edge set
+// missing every provider-attached issue-PR link. A wrong answer that looks
+// healthy is worse than a family that will not start, and `newHandler` refuses
+// a nil step for the same reason.
+func workgraphBuildPreSteps(
+	cfg config.Config, specs []jobruntime.HandlerSpec, observer jobruntime.Observer, logger *slog.Logger,
+) ([]workgraph.NativePreStep, error) {
+	declared := buildPreStepOrder()
+	buildSelected := false
+	for _, spec := range specs {
+		if spec.Kind == jobcontract.KindWorkGraphBuild {
+			buildSelected = true
+			break
+		}
+	}
+	if !buildSelected {
+		return nil, nil
+	}
+
+	connection, connectionErr := clickhousestore.Open(
+		context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+	)
+	if connectionErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	loader, loaderErr := issueprlinks.NewLoader(connection)
+	if loaderErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	writer, writerErr := issueprlinks.NewWriter(connection)
+	if writerErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	service, serviceErr := issueprlinks.NewService(loader, writer, logger)
+	if serviceErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	if candidate, ok := observer.(issueprlinks.Observer); ok {
+		service.SetObserver(candidate)
+	}
+	step, stepErr := newIssuePRLinksPreStep(service)
+	if stepErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	steps := []workgraph.NativePreStep{step}
+
+	// The constructed steps must match the DECLARED order exactly. Without
+	// this, the declaration would be a comment: a step could be added to the
+	// construction, run in whatever position it happened to be appended, and
+	// the ordering invariant in NativePreStep would be violated silently.
+	if len(steps) != len(declared) {
+		return nil, errWorkerDependencyUnavailable
+	}
+	for index, name := range declared {
+		if steps[index].Name() != name {
+			return nil, errWorkerDependencyUnavailable
+		}
+	}
+	return steps, nil
+}
+
+// buildPreStepOrder is the DECLARED order of the native pre-steps that run
+// inside a work-graph build, and the single place that order is decided.
+//
+// It is a pure function so a test can assert the order without a ClickHouse
+// connection -- the same "declared source of truth, asserted separately from
+// the actual dispatch" split daily_native_family_registration_test.go uses.
+//
+// Appending here is a real decision, not a formality: see the ordering
+// invariant on workgraph.NativePreStep. lane-4752-go's edge producer straddles
+// this step in Python's build() and therefore needs at least two entries, one
+// before and one after "issue_pr_links".
+func buildPreStepOrder() []string {
+	return []string{"issue_pr_links"}
+}
+
+func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
-		h, err := workgraph.NewBuildHandler(store, executor)
+		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps...)
 		if err != nil {
 			return err
 		}

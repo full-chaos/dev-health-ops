@@ -589,7 +589,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython)$' \
+        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -614,6 +614,20 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/confidence-coercion-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: confidence coercion corpus did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again: this fixture spans FOUR producers across TWO modules
+  # (utils/normalization's clamp and evidence_quality_band, plus evidence's
+  # _graph_density, _float_value and compute_evidence_quality), and it records
+  # whether evidence._float_value still agrees with components._edge_confidence
+  # -- two Python copies of one coercion that the Go port collapses into a
+  # single function. clamp() in particular lives outside work_graph/investment
+  # entirely, so nothing else would tell a reviewer editing it that this port
+  # depends on its NaN behaviour.
+  proof_file="${proof_dir}/investment-quality-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: investment evidence-quality golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

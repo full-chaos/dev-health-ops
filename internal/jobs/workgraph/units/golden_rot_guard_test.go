@@ -173,3 +173,86 @@ func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 			"edges the oversized-component split protects, which decides work_unit_id.",
 	)
 }
+
+// TestInvestmentQualityGoldenMatchesLivePython is the rot guard for
+// tests/fixtures/investment_quality_python_golden.json.
+//
+// Its own marker again, and for a reason the other two do not share: this
+// fixture spans FOUR producers in TWO modules -- utils/normalization.clamp and
+// evidence_quality_band, plus evidence._graph_density, _float_value and
+// compute_evidence_quality -- and it additionally records whether
+// evidence._float_value still agrees with components._edge_confidence.
+//
+// That last one is the load-bearing part. The Go port reuses a SINGLE function
+// (ConfidenceFromValue) for what Python keeps as two separate copies of the
+// same coercion in two files. Nothing in Python enforces that they stay
+// identical. If one is edited without the other, the recorded agreement breaks,
+// this guard fails, and the Go side must be split into two functions rather
+// than silently absorbing the divergence into whichever call site happens to be
+// tested.
+//
+// A failure here is also the only signal that would catch a change to clamp(),
+// which is shared with the rest of the codebase and lives outside
+// work_graph/investment entirely -- so a reviewer editing normalization.py has
+// no local cue that the investment port depends on its NaN behaviour.
+func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+
+	repoRoot := repositoryRootPath(t)
+	python := workgraphComponentsLivePython(t, repoRoot)
+	generator := filepath.Join(
+		repoRoot, "tests", "fixtures", "generate_investment_quality_golden.py",
+	)
+	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("quality generator is missing at %s: %v", generator, err)
+	}
+
+	command := exec.Command(python, generator, "--stdout")
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
+	rendered, err := command.Output()
+	if err != nil {
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("run the quality generator against live Python: %v: %s", err, stderr)
+	}
+
+	frozen, err := os.ReadFile(filepath.Join(
+		repoRoot, "tests", "fixtures", "investment_quality_python_golden.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(frozen) == string(rendered) {
+		if writeErr := os.WriteFile(
+			filepath.Join(proofDirectory, "investment-quality-golden"), []byte("executed"), 0o644,
+		); writeErr != nil {
+			t.Fatalf("write live-python-oracle proof: %v", writeErr)
+		}
+		return
+	}
+	t.Error(
+		"live Python no longer reproduces the frozen evidence-quality golden.\n" +
+			"Regenerate with\n" +
+			"    PYTHONPATH=src python tests/fixtures/generate_investment_quality_golden.py\n" +
+			"and read the diff before accepting it. Three things it could mean, with\n" +
+			"different responses:\n" +
+			"  1. clamp() changed in utils/normalization.py -- that function is shared\n" +
+			"     far beyond this port, and units.Clamp reproduces its NaN behaviour\n" +
+			"     (NaN lands on the HIGH bound because of the max(low, min(high, v))\n" +
+			"     nesting). Port the change; do not just re-freeze.\n" +
+			"  2. a weight or threshold moved in compute_evidence_quality or\n" +
+			"     evidence_quality_band -- evidence_quality is a stored column and the\n" +
+			"     bands are stored categories, so this is a data change.\n" +
+			"  3. evidence._float_value and components._edge_confidence have DIVERGED.\n" +
+			"     The Go port shares one function for both; it must be split.",
+	)
+}

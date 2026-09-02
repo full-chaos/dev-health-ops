@@ -232,6 +232,46 @@ jobs:
       - name: Validate River compatibility harness
         run: bash ci/check_river_compat_static.sh
 
+  # CHAOS-4818: Go permits fusing an unguarded float64 `x*y +/- z` into one
+  # fused-multiply-add (a single rounding) on arm64, where CPython always
+  # rounds the multiply and the add/subtract separately -- and prod Go
+  # workers run arm64 (images are multi-arch, see docker-images.yml's
+  # linux/arm64 build target). amd64 CI (go-quality above) cannot see a
+  # regression in this class: the fusion typically does not happen there, so
+  # the bit-pattern goldens pass regardless of whether the arm64-only bug is
+  # present. This job runs those goldens, plus the static lint that catches
+  # the ordinary unguarded shape on sight, on a REAL arm64 runner -- not
+  # QEMU, which does not reproduce host FMA instruction selection.
+  go-arm64-numeric-parity:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Confirm this runner is actually arm64
+        # A mislabeled or reassigned runner would make this job's absence of
+        # findings mean nothing -- fail loud rather than silently validate
+        # the wrong architecture (same principle as ci/check_go.sh's stage
+        # manifest: a skipped check must never read as a passed one).
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on ubuntu-26.04-arm, got '${arch}' -- CHAOS-4818's FMA class does not reproduce on any other architecture, so this job proves nothing if it is not actually running on arm64" >&2
+            exit 1
+          fi
+
+      - name: Run FMA bit-pattern goldens and the unguarded-FMA lint on real arm64
+        run: |
+          go test -mod=readonly -count=1 ./internal/jobs/... \
+            -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython|NoUnguardedFloatFMAInJobsPackages|FMALintDetectsTheKnownShape)$'
+
   go-storage-integration-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5

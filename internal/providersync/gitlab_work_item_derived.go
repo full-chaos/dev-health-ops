@@ -90,8 +90,23 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 	}
 }
 
-// GitLabWorkItemDeriver owns only the compute boundary. It is intentionally
-// unregistered: the provider route/cutover wiring remains a separate slice.
+// GitLabWorkItemDeriver owns the compute boundary for GitLab work items.
+//
+// WIRING: LIVE. cmd/dev-health-worker/provider_sync.go's
+// `provider == "gitlab" && dataset == "work-items"` case (:351) constructs
+// this deriver through NewGitLabWorkItemDeriver (:362) and passes it as
+// GitLabWorkItemsRouteHandler{Derived: ...}; the effect sink and readback come
+// from NewGitLabWorkItemFamilyClickHouseEffects. execution_registry.go:296-301
+// (`case provider == "gitlab" && workItemAlias`) sets RouteReady and, for the
+// canonical dataset, Plannable. Cite the case predicates and constructor names
+// above rather than the line numbers alone -- the names are what survive an
+// edit that shifts these anchors.
+//
+// This comment previously read "It is intentionally unregistered: the provider
+// route/cutover wiring remains a separate slice." That was accurate while the
+// compute boundary landed ahead of its route, and is now false. Left as a
+// correction rather than a silent deletion because the stale form made a live
+// writer read as dead code (CHAOS-4731 lost time to exactly that).
 type GitLabWorkItemDeriver struct {
 	Source               githubWorkItemDerivationContextSource
 	statusMapping        *StatusMapping

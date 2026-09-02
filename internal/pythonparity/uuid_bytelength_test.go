@@ -5,27 +5,33 @@ import (
 	"unicode/utf8"
 )
 
-// ParseUUID's final gate is `len(hex) != 32`, which in Go counts BYTES while
-// CPython's equivalent counts CHARACTERS. That is the byte-index/character
-// class (lane-4752-go round 3), and the two measurements genuinely differ:
-// `len("é"*32)` is 32 in Python and 64 in Go.
+// ParseUUID's gate counts CHARACTERS, matching CPython's `len()`. This file
+// pins the inputs where that differs from counting bytes.
 //
-// The outcome is nevertheless identical, for a reason worth asserting rather
-// than trusting: ACCEPTANCE requires 32 hexadecimal digits, every hex digit is
-// ASCII, and for ASCII the two counts coincide. So the byte/character
-// distinction can only affect values that are REJECTED either way — it changes
-// which check rejects them, never whether.
+// # A correction, kept visible on purpose
 //
-// These tests pin that. If someone later relaxes the hex requirement, or
-// pre-normalises non-ASCII into the candidate, the reasoning stops holding and
-// these fail rather than the divergence appearing in a window somewhere.
-func TestParseUUIDLengthGateIsByteSafe(t *testing.T) {
+// This file used to argue the opposite: that counting bytes was SAFE here,
+// because "acceptance requires 32 hexadecimal digits, every hex digit is
+// ASCII, and for ASCII the two counts coincide". The premise was false. The
+// step behind the gate is `int(hex, 16)`, not a hex decode, and int() folds
+// Unicode decimal digits to ASCII — so acceptance does NOT require ASCII, and
+// `uuid.UUID("１" * 32)` is a valid UUID with 32 characters and 96 bytes.
+//
+// A byte-counting gate refused it. The argument was wrong at its first step,
+// and it read as rigorous, which is why it survived four review rounds and one
+// planted-defect pass before a codex round constructed the counterexample.
+//
+// The lesson generalises past this file: an argument that a divergence "cannot
+// affect the outcome" is a claim about the WHOLE pipeline behind the check, not
+// about the check. It is only as good as one's model of the step downstream —
+// and that is exactly the step nobody re-measures.
+func TestParseUUIDLengthGateCountsCharacters(t *testing.T) {
 	const valid = "7b9583ee-4d24-2be7-4d09-34f815bebdd7"
 
 	t.Run("32 multi-byte characters are rejected by both planes", func(t *testing.T) {
-		// Python: len() == 32, so it passes the LENGTH gate and dies at int(hex, 16).
-		// Go: len() == 64 bytes, so it dies at the length gate. Different check,
-		// same verdict.
+		// Both planes pass the LENGTH gate (32 characters) and die at
+		// int(hex, 16): "é" is not Nd, so it does not fold to a digit. A
+		// byte-counting gate would reject this earlier, for the wrong reason.
 		var candidate string
 		for range 32 {
 			candidate += "é"
@@ -43,7 +49,8 @@ func TestParseUUIDLengthGateIsByteSafe(t *testing.T) {
 
 	t.Run("32 bytes that are fewer than 32 characters are rejected", func(t *testing.T) {
 		// 30 ASCII hex digits + one 2-byte character = 32 bytes, 31 characters.
-		// Python rejects on length; Go passes the length gate and rejects on hex.
+		// Both planes now reject on LENGTH. A byte-counting gate would let this
+		// through to the grammar instead — the mirror of the case above.
 		candidate := "7b9583ee4d242be74d0934f815bebdé"
 		for len(candidate) < 32 {
 			candidate += "a"
@@ -59,14 +66,10 @@ func TestParseUUIDLengthGateIsByteSafe(t *testing.T) {
 		}
 	})
 
-	t.Run("the accepted form is pure ASCII, where both counts agree", func(t *testing.T) {
+	t.Run("a canonical value still parses", func(t *testing.T) {
 		parsed, err := ParseUUID(valid)
 		if err != nil {
 			t.Fatalf("ParseUUID refused a canonical uuid: %v", err)
-		}
-		normalised := "7b9583ee4d242be74d0934f815bebdd7"
-		if len(normalised) != utf8.RuneCountInString(normalised) {
-			t.Fatal("the normalised form is not ASCII; the byte/character argument no longer holds")
 		}
 		if parsed.String() != valid {
 			t.Fatalf("ParseUUID(%q) = %s", valid, parsed)

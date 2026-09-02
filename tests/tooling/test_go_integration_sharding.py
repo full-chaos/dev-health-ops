@@ -1970,39 +1970,13 @@ _TAGS_VIA_ENV = re.compile(r"\b(GOFLAGS|GOEXPERIMENT)\b")
 _SAFE_SCRIPTS = frozenset({"ci/check_river_compat_static.sh"})
 
 
-def _run_starts_containers(command: str) -> bool:
-    """Fail closed at the STEP level, not just the verb level.
-
-    Recognising one literal `ci/check_go.sh <verb>` shape and skipping everything
-    else meant any other spelling was silently treated as safe. A codex round
-    showed two: a job running `go test -tags=integration ... ./cmd/dev-health-worker`
-    directly, and `bash ci/check_go.sh "${requested}"` through a variable. Both
-    start containers; both were accepted.
-
-    A step is now container-starting unless it can be SHOWN otherwise: a check_go
-    verb must be a literal on the safe list, and a `go test` must carry no tags.
-    """
-    if _GO_TEST_WITH_TAGS.search(command) or _CONTAINER_TOOL.search(command):
-        return True
-    if _TAGS_VIA_ENV.search(command):
-        # check_go.sh scrubs both now, so this is defence in depth: a step that
-        # sets them is doing something the safe-list cannot vouch for.
-        return True
-    for match in _CHECK_GO_INVOCATION.finditer(command):
-        verb = match.group(1)
-        if re.fullmatch(r"[a-z0-9-]+", verb) is None:
-            return True  # indirection: cannot be shown safe, so it is not
-        if verb not in _NON_CONTAINER_VERBS:
-            return True
-    for match in _SCRIPT_TOKEN.finditer(command):
-        script = match.group(0).strip("\"'").lstrip("./")
-        if script.endswith("check_go.sh"):
-            continue  # judged by its verb above
-        if script not in _SAFE_SCRIPTS:
-            return True
-    return False
-
-
+# `_run_starts_containers` lived here. It was defined and never called --
+# orphaned when the guards were reduced for #2111, and still orphaned after I
+# claimed to have rewired it: what I made load-bearing was its `_CONTAINER_TOOL`
+# regex, not the function. Everything it checked (`go test -tags`, tags via
+# GOFLAGS, an unsafe check_go verb) is checked by `_run_uses_go_test_harness`,
+# which IS called. Dead code in a guard file reads as protection while providing
+# none, so it is removed rather than left as a comfort.
 def _run_uses_go_test_harness(command: str) -> bool:
     """Does this step start containers via internal/testsupport/containers?
 
@@ -2599,9 +2573,38 @@ _DOCKER_NON_PULLING_SUBCOMMANDS = frozenset(
         "exec",
         "cp",
         "system",
-        "image",
     }
 )
+# Management NOUNS, not verbs. `docker image pull` is the modern spelling of
+# `docker pull`, so exempting the noun exempted every verb beneath it --
+# including the pulling ones. The verb is the token after the noun.
+_DOCKER_MANAGEMENT_NOUNS = frozenset(
+    {
+        "image",
+        "container",
+        "volume",
+        "network",
+        "system",
+        "builder",
+        "context",
+        "manifest",
+        "trust",
+        "plugin",
+        "secret",
+        "config",
+        "node",
+        "service",
+        "stack",
+        "swarm",
+    }
+)
+# Compose is refused rather than scanned; the legacy hyphenated binary is the
+# same thing under another name and must not slip past that refusal.
+_COMPOSE_BINARIES = frozenset({"docker-compose", "podman-compose", "nerdctl-compose"})
+# The container tools this scans. A DECISION, not a completeness claim: `ctr`,
+# `buildah` and `apptainer` are not scanned and have no instances here. The
+# invariant is registry-scoped, so widening belongs with evidence of use.
+_CONTAINER_BINARIES = frozenset({"docker", "podman", "nerdctl"})
 
 
 def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
@@ -2624,19 +2627,26 @@ def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
         except ValueError:
             unknown.append(f"unparseable shell: {line[:60]}")
             continue
-        tools = [
-            i
-            for i, t in enumerate(tokens)
-            if Path(t).name in {"docker", "podman", "nerdctl"}
-        ]
+        if any(Path(t).name in _COMPOSE_BINARIES for t in tokens):
+            unknown.append(f"`docker-compose` invocation: {line[:60]}")
+            continue
+        tools = [i for i, t in enumerate(tokens) if Path(t).name in _CONTAINER_BINARIES]
         if not tools:
             continue
         for start in tools:
             rest = tokens[start + 1 :]
-            sub = next((t for t in rest if not t.startswith("-")), None)
+            words = [t for t in rest if not t.startswith("-")]
+            sub = words[0] if words else None
             if sub is None:
                 unknown.append(f"container tool with no subcommand: {line[:60]}")
                 continue
+            if sub in _DOCKER_MANAGEMENT_NOUNS:
+                # `docker image pull x` -> the verb is `pull`. A noun with no
+                # verb after it is unknown, not harmless.
+                if len(words) < 2:
+                    unknown.append(f"`docker {sub}` with no verb: {line[:60]}")
+                    continue
+                sub = words[1]
             if sub == "compose":
                 # Images live in the compose file, not here. Refused rather than
                 # scanned: no workflow runs compose today, so a scanner would be

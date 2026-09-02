@@ -12,13 +12,23 @@ import (
 type handler struct {
 	store         Store
 	compatibility CompatibilityExecutor
+	// preSteps run before the bridge, in order, inside the same lease
+	// renewal. Only KindBuild carries any today; see NativePreStep.
+	preSteps []NativePreStep
 }
 
-func newHandler(store Store, compatibility CompatibilityExecutor) (*handler, error) {
+func newHandler(store Store, compatibility CompatibilityExecutor, preSteps ...NativePreStep) (*handler, error) {
 	if store == nil || compatibility == nil {
 		return nil, ErrUnavailable
 	}
-	return &handler{store: store, compatibility: compatibility}, nil
+	for _, step := range preSteps {
+		// A nil step would be a wiring bug that silently skips ported compute,
+		// which is exactly the failure this seam exists to prevent.
+		if step == nil {
+			return nil, ErrUnavailable
+		}
+	}
+	return &handler{store: store, compatibility: compatibility, preSteps: preSteps}, nil
 }
 
 func (handler *handler) work(ctx context.Context, requestID string, kind Kind, organizationID *string, domain jobcontract.DomainLink) error {
@@ -47,9 +57,22 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		_ = releaseAmbiguous(handler.store, ctx, *claim, "claimed request no longer matches River envelope")
 		return jobruntime.Permanent(ErrInvalidState)
 	}
+	// The pre-steps and the bridge share ONE lease renewal: the lease has to
+	// cover the whole execution, and a step that ran under an expired lease
+	// would be writing outside its fence.
 	evidence, err := runWithLeaseRenewal(ctx, claim.LeaseDuration,
 		func(renewCtx context.Context) error { return handler.store.Renew(renewCtx, *claim) },
-		func(workCtx context.Context) ([]byte, error) { return handler.compatibility.Execute(workCtx, *claim) },
+		func(workCtx context.Context) ([]byte, error) {
+			fragments, preStepErr := runPreSteps(workCtx, handler.preSteps, *claim)
+			if preStepErr != nil {
+				return nil, preStepErr
+			}
+			executed, executeErr := handler.compatibility.Execute(workCtx, *claim)
+			if executeErr != nil {
+				return nil, executeErr
+			}
+			return mergePreStepEvidence(executed, fragments), nil
+		},
 	)
 	if err != nil {
 		if errors.Is(err, ErrLeaseLost) {
@@ -116,8 +139,11 @@ type DispatchHandler struct{ *handler }
 type ChunkHandler struct{ *handler }
 type FinalizeHandler struct{ *handler }
 
-func NewBuildHandler(store Store, executor CompatibilityExecutor) (*BuildHandler, error) {
-	h, err := newHandler(store, executor)
+// NewBuildHandler builds the workgraph.build handler. preSteps are native Go
+// producers that run before the Python bridge, in the order given; see
+// NativePreStep for why they live inside this execution rather than beside it.
+func NewBuildHandler(store Store, executor CompatibilityExecutor, preSteps ...NativePreStep) (*BuildHandler, error) {
+	h, err := newHandler(store, executor, preSteps...)
 	return &BuildHandler{h}, err
 }
 func NewMaterializeHandler(store Store, executor CompatibilityExecutor) (*MaterializeHandler, error) {

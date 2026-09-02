@@ -130,6 +130,9 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 	// full reasoning (this file's caller reaches here only when
 	// useInvestment is true, same precondition).
 	RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
+	// CHAOS-4759 transition guard: bounded-cooldown check, see
+	// RecordArgMaxNullTransitionGuard's doc comment.
+	RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 
 	q := compileInvestmentQualityStats(orgID, startDate, endDate, scopeFilter, scopeBindings, themes, teamScopeIDs)
 	row, found, err := executeInvestmentQualityStats(ctx, client, q)

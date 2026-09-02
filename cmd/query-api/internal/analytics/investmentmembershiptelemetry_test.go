@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"go.opentelemetry.io/otel"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -26,31 +24,23 @@ import (
 // TestDefaultRecordDegradation_RecordsDriverCause's shape but for a
 // metric instrument rather than a span.
 //
-// Uses a REAL go.opentelemetry.io/otel/sdk/metric.ManualReader, not a
-// spy -- per root AGENTS.md's verification rules ("sink-level tests
-// assert on the production sink's real output bytes") and the brief's
-// own instruction ("verify something CONSUMES it -- never merely that
-// the value exists and is populated"). otel.SetMeterProvider redirects
-// the package-level membershipScopeStaleCounter/membershipScopeLagGauge
-// instruments (created once at package-init time via the GLOBAL
-// delegating otel.Meter(...) proxy) to this test's real SDK provider --
-// that delegation is exactly what makes a package-level var safe to use
-// as an OTel instrument at all; if this test fails to observe anything,
-// that assumption itself is the first thing to re-check, not a red
-// herring.
+// Uses the package's ONE real go.opentelemetry.io/otel/sdk/metric.ManualReader
+// (main_test.go's TestMain, shared with every other "RecordsToRealMeter"
+// test in this package -- see that file's doc comment for why a second,
+// independent SetMeterProvider+ManualReader pair here would silently
+// lose the process-wide one-time delegation), not a spy -- per root
+// AGENTS.md's verification rules ("sink-level tests assert on the
+// production sink's real output bytes") and the brief's own instruction
+// ("verify something CONSUMES it -- never merely that the value exists
+// and is populated"). If this test fails to observe anything, that
+// delegation is the first thing to re-check, not a red herring.
 func TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	prior := otel.GetMeterProvider()
-	otel.SetMeterProvider(provider)
-	t.Cleanup(func() { otel.SetMeterProvider(prior) })
-
 	ctx := context.Background()
 	state := InvestmentMembershipScopeState{ScopeMode: "unscoped_fallback", LagSeconds: 4321}
 	defaultRecordStaleInvestmentMembershipScope(ctx, state)
 
 	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(ctx, &rm); err != nil {
+	if err := realMeterReader.Collect(ctx, &rm); err != nil {
 		t.Fatalf("reader.Collect error = %v", err)
 	}
 

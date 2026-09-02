@@ -681,6 +681,116 @@ func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.
 	}
 }
 
+// TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges is CHAOS-4759
+// codex round-2 P1's regression lock for resolveSankey: a TEAM->THEME
+// sankey with useInvestment omitted at both levels auto-routes its
+// nodes/edges to latestWorkUnitInvestmentsSource (the test above proves
+// this), and RecordArgMaxNullTransitionGuard must fire for it even though
+// resolveSankeyCoverage's OWN useInvestment (the raw three-state flag,
+// deliberately not auto-routed -- see resolveSankey's doc comment) stays
+// false for the very same request. Removing the guard call gated on the
+// auto-routed `useInvestment` in resolveSankey must turn this red.
+func TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges(t *testing.T) {
+	resetArgMaxNullTransitionGate(t)
+
+	client := &routingFakeClient{}
+	client.on("AS source_dimension,", &fakeRowScanner{rows: [][]any{
+		{"TEAM", "THEME", "team-a", "value-a", 2.0},
+	}})
+	client.on("AS dimension,", &fakeRowScanner{rows: [][]any{
+		{"TEAM", "team-a", 5.0},
+	}})
+	// Coverage query: useInvestment=false here (the raw flag), so this is
+	// the NON-investment coverage shape (investment_metrics_daily).
+	client.on("FROM investment_metrics_daily", &fakeRowScanner{})
+	// The guard's own query -- empty result is fine, this test only
+	// proves the query was ISSUED, not that it detected a divergence.
+	client.on("HAVING count() > 1", &fakeRowScanner{})
+
+	batch := model.AnalyticsRequestInput{
+		Sankey: &model.SankeyRequestInput{
+			Path:      []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+			Measure:   model.MeasureInputCount,
+			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:  100,
+			MaxEdges:  500,
+		},
+	}
+	if _, err := Resolve(context.Background(), client, "org-1", batch); err != nil {
+		t.Fatalf("Resolve error = %v", err)
+	}
+
+	fired := false
+	for _, c := range client.calls {
+		if c == "HAVING count() > 1" {
+			fired = true
+		}
+	}
+	if !fired {
+		t.Fatalf("RecordArgMaxNullTransitionGuard's query was never issued for an auto-routed sankey -- client.calls=%v", client.calls)
+	}
+}
+
+// TestResolveFlowMatrix_ArgMaxGuard is CHAOS-4759 codex round-2 P1's
+// regression lock for resolveFlowMatrix: THEME (auto-routes to the
+// investment source when useInvestment is unset) must fire the guard;
+// TEAM (never routes to the investment source regardless of the flag,
+// per CompileFlowMatrix's own switch) must NOT -- a blanket "always fire"
+// fix would be just as wrong as never firing, so both directions are
+// pinned in one test.
+func TestResolveFlowMatrix_ArgMaxGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		dimension model.DimensionInput
+		wantFired bool
+	}{
+		{"theme_auto_routes_fires", model.DimensionInputTheme, true},
+		{"team_never_routes_does_not_fire", model.DimensionInputTeam, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetArgMaxNullTransitionGate(t)
+
+			client := &routingFakeClient{}
+			// The guard's own query is registered FIRST -- routingFakeClient
+			// matches in REGISTRATION order, and "SELECT" below would
+			// otherwise shadow it (every statement this package generates
+			// starts with SELECT).
+			client.on("HAVING count() > 1", &fakeRowScanner{})
+			// Both flowMatrixTeamNodesTemplate/EdgesTemplate (non-investment)
+			// and compileFlowMatrixInvestmentDimension's own generated SQL
+			// (investment) share enough structure that a single broad
+			// fallback rule keeps this table-driven test from having to
+			// hand-tune per-dimension match strings -- what matters here is
+			// ONLY whether the guard's OWN query fires, tracked separately
+			// below.
+			client.on("SELECT", &fakeRowScanner{})
+
+			batch := model.AnalyticsRequestInput{
+				FlowMatrix: &model.FlowMatrixRequestInput{
+					Dimension: tc.dimension,
+					Measure:   model.MeasureInputCount,
+					DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+					MaxNodes:  50,
+					MaxEdges:  200,
+				},
+			}
+			if _, err := Resolve(context.Background(), client, "org-1", batch); err != nil {
+				t.Fatalf("Resolve error = %v", err)
+			}
+
+			fired := false
+			for _, c := range client.calls {
+				if c == "HAVING count() > 1" {
+					fired = true
+				}
+			}
+			if fired != tc.wantFired {
+				t.Fatalf("guard fired = %v, want %v -- client.calls=%v", fired, tc.wantFired, client.calls)
+			}
+		})
+	}
+}
+
 // TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue
 // is CHAOS-4723's RED-FIRST proof: on the parent commit, resolve.go
 // hardcoded EvidenceQualityDistribution/EvidenceQualityStats to nil

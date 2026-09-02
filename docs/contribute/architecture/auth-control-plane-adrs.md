@@ -146,6 +146,97 @@ in-wave.
 
 ---
 
+## ACP-ADR-01 Addendum — OAuth/OIDC client, SAML, and password-hashing library selection
+
+**Status:** Proposed · **Decides:** ACP-ADR-01's deferred item 6 (TRD §26.1) · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+
+### Context
+
+ACP-ADR-01 pinned four of six Wave 1 dependencies and explicitly deferred the
+other three — OAuth 2.0/OIDC client, SAML, and password hashing — because no
+candidate for any of them was evaluated in Wave 0. This addendum makes that
+selection. Docs only: the versions below are the recorded decision, not yet a
+`go.mod` change — pinning happens with the `internal/identity` implementation
+work (Wave 2), per TRD §26's own sequencing.
+
+Two dependencies are already present in the platform's Go module graph, which
+lowers the marginal supply-chain cost of promoting them to direct, reviewed
+dependencies rather than introducing something wholly new:
+
+* `golang.org/x/crypto` is already a **direct** dependency of `ops/go.mod`
+  (`v0.55.0`, `go.mod:25`) — it houses both the `bcrypt` and `argon2` packages
+  evaluated below.
+* `golang.org/x/oauth2` is already an **indirect** dependency of `acr/go.mod`
+  (`v0.35.0`, `go.mod:117`) — the same package that anchors the OAuth client
+  decision below.
+
+The current Python password-hashing implementation is `bcrypt` (the PyPI
+`bcrypt` package, not `passlib`), anchored at
+`src/dev_health_ops/api/services/users.py:30-36` (`_hash_password`/
+`_verify_password`, `bcrypt.hashpw`/`bcrypt.checkpw`),
+`api/auth/routers/login.py:42-43` (a fixed bcrypt hash used specifically for
+missing-user timing mitigation — TRD §13's timing-safe unknown-user handling,
+already implemented and worth replicating exactly rather than reinventing),
+`api/services/password_reset.py:116-118`, and
+`api/auth/routers/register.py:101`. No SAML or OIDC-client Go library exists
+anywhere in the platform today; this half of the addendum is a greenfield
+pick, same as ADR-01 itself found for the router.
+
+### Decision
+
+1. **OAuth 2.0/OIDC client: `golang.org/x/oauth2`** (core client/token
+   exchange, plus its `endpoints` subpackage for Google/GitHub/GitLab —
+   already the PRD's named local/social providers) **layered with
+   `github.com/coreos/go-oidc/v3`** for OIDC discovery
+   (`.well-known/openid-configuration`) and ID-token verification (issuer,
+   audience, signature, nonce) wherever a provider speaks OIDC rather than
+   plain OAuth. `go-oidc` is the de facto standard Go OIDC relying-party
+   library (used by `kubectl`'s own OIDC auth plugin and by Dex), Apache-2.0,
+   and it delegates token handling rather than reimplementing JOSE parsing by
+   hand.
+2. **SAML: `github.com/crewjam/saml`**, Apache-2.0. It validates signature,
+   issuer, audience, recipient/destination, subject, temporal conditions,
+   replay, and binding as first-class checks — matching TRD §13's SAML
+   requirement list point for point — rather than requiring the integrator to
+   hand-assemble that checklist against a lower-level XML-DSig library. The
+   current Python reference (`api/sso.py:796-812`, `signxml`) is confirmed
+   fail-closed and is the behavioural target for parity, not a library
+   constraint.
+3. **Password hashing: `golang.org/x/crypto/bcrypt`**, cost factor pinned
+   explicitly in code (never left at the library default), chosen specifically
+   to match the existing `$2b$...` hash format byte-for-byte — a Go verifier
+   using this package reads today's stored hashes with zero migration or
+   dual-format complexity, and the missing-user timing-mitigation pattern at
+   `login.py:42-43` is replicated exactly rather than redesigned.
+
+**Considered and rejected as primary:** `golang.org/x/crypto/argon2`
+(Argon2id) via a thin encoding wrapper such as `github.com/alexedwards/argon2id`.
+Argon2id is the current OWASP-recommended default and is memory-hard where
+bcrypt is not — a real advantage. It is rejected as the Wave 1 pick, not
+because it is worse, but because adopting it now means carrying two live hash
+formats (legacy bcrypt plus new Argon2id) and a rehash-on-login migration path
+for a property no Wave 1 acceptance criterion needs; bcrypt with an explicit,
+generous cost factor is adequate for this migration wave. **This is not a
+silent deferral:** Argon2id is named here as the recommended target for a
+follow-up hashing-scheme ADR once password-hash algorithm versioning (the same
+`kid`-style versioning ADR-02 gives signing keys) exists to support a clean
+two-format transition.
+
+### Supersedes
+
+Nothing new. Resolves ACP-ADR-01's item 6 deferral; ACP-ADR-01's other five
+decisions are unchanged.
+
+### Leaves open
+
+Whether the OIDC/SAML client code lives in `dev-health-go` (versioned,
+divergent pins across ops/acr) or an ops-local package — the same tension
+ACP-ADR-01 left open for the JWT verifier, and the same answer should govern
+both. Also open: timing of the follow-up Argon2id ADR, a Wave 2+ candidate,
+not committed here.
+
+---
+
 ## ACP-ADR-02 — Signing-key custody and the production KMS adapter
 
 **Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62

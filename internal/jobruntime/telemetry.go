@@ -444,6 +444,60 @@ const (
 	DailyMetricsNativeFamilyOutcomeRefused  DailyMetricsNativeFamilyOutcome = "refused"
 )
 
+// WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
+// work_item_dependencies row read by the native issue<->issue edge builder
+// (CHAOS-4766). Every input row lands in exactly one of these, so the five
+// counters sum to rows read -- a conservation property the derivation test
+// pins, and the reason this is a per-row vocabulary rather than a single
+// "edges written" gauge.
+//
+// WHAT IS INVISIBLE WITHOUT IT. On the reference org, 2828 of 6531 rows
+// (43%) are PR-shaped and correctly skipped by this builder because the
+// issue<->PR pipeline owns them. If that detection drifted in either
+// direction the edge table would simply have a different number of rows in
+// it, which is indistinguishable from an org whose dependency graph changed
+// -- and the two failures point opposite ways: over-skipping silently drops
+// real dependency edges, under-skipping double-writes rows the other
+// pipeline also owns.
+//
+// The dedupe count is merge-state dependent, not input dependent
+// (CHAOS-4788): the same source table read twice can yield different
+// numbers of duplicate identities depending on what ClickHouse has merged.
+// A counter makes that drift observable instead of mysterious.
+//
+// MalformedPRID is the one place this port deliberately diverges from
+// Python and therefore the one counter that must never be silently zero.
+// Python's `isdigit()` guard accepts characters `int()` rejects, and the
+// conversion is unguarded, so such a row raises ValueError and aborts the
+// entire organisation's build (CHAOS-4811). This port rejects the single row
+// and carries on. Every increment here is a row that used to take a whole
+// build down, so the counter is the only way to learn that the Python path
+// would now be failing -- a silent success is exactly what it should NOT
+// look like.
+type WorkGraphIssueEdgeOutcome string
+
+const (
+	// WorkGraphIssueEdgeEmitted is a row that produced an edge.
+	WorkGraphIssueEdgeEmitted WorkGraphIssueEdgeOutcome = "emitted"
+	// WorkGraphIssueEdgeDeduped is a row whose edge identity was already
+	// emitted by an earlier row; last write wins, matching Python's dict.
+	WorkGraphIssueEdgeDeduped WorkGraphIssueEdgeOutcome = "deduped"
+	// WorkGraphIssueEdgeSkippedEmptyID is a row with an empty endpoint id.
+	WorkGraphIssueEdgeSkippedEmptyID WorkGraphIssueEdgeOutcome = "skipped_empty_id"
+	// WorkGraphIssueEdgeSkippedPRShaped is a row the issue<->PR pipeline owns.
+	WorkGraphIssueEdgeSkippedPRShaped WorkGraphIssueEdgeOutcome = "skipped_pr_shaped"
+	// WorkGraphIssueEdgeMalformedPRID is a PR-shaped id whose number passed
+	// Python's isdigit() but is not convertible; Python raises here.
+	WorkGraphIssueEdgeMalformedPRID WorkGraphIssueEdgeOutcome = "malformed_pr_id"
+)
+
+func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
+	return []WorkGraphIssueEdgeOutcome{
+		WorkGraphIssueEdgeEmitted, WorkGraphIssueEdgeDeduped, WorkGraphIssueEdgeSkippedEmptyID,
+		WorkGraphIssueEdgeSkippedPRShaped, WorkGraphIssueEdgeMalformedPRID,
+	}
+}
+
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
 		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
@@ -903,6 +957,14 @@ type MetricsCollector struct {
 	dailyMetricsNativeFamilyOutcome     map[dailyMetricsNativeFamilyOutcomeLabels]uint64
 	dailyMetricsNativeFamilyRowsWritten map[string]uint64
 	dailyMetricsNativeFamilyDuration    map[string]*histogram
+	// Native issue<->issue edge builder (CHAOS-4766). Rows are counted by
+	// bounded per-row disposition; runs and duration are separate because a
+	// build that reads zero rows is a legitimate quiet org, not a failure,
+	// and only the run counter separates that from a step that stopped
+	// running at all.
+	workGraphIssueEdgeRows     map[WorkGraphIssueEdgeOutcome]uint64
+	workGraphIssueEdgeRuns     uint64
+	workGraphIssueEdgeDuration *histogram
 	// Ambiguous-refused terminal persistence (CHAOS-4319). See
 	// DailyMetricsCompatRetryDecision's doc comment for why Go only ever
 	// records the "persisted_failed" half of this decision axis.
@@ -1091,6 +1153,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsCompatRetry:              make(map[DailyMetricsCompatRetryDecision]uint64, len(dailyMetricsCompatRetryDecisions())),
 		dailyMetricsNativeFamilyOutcome:      make(map[dailyMetricsNativeFamilyOutcomeLabels]uint64, len(dailyMetricsNativeFamilies)*len(dailyMetricsNativeFamilyOutcomes())),
 		dailyMetricsNativeFamilyRowsWritten:  make(map[string]uint64, len(dailyMetricsNativeFamilies)),
+		workGraphIssueEdgeRows:               make(map[WorkGraphIssueEdgeOutcome]uint64, len(workGraphIssueEdgeOutcomes())),
 		dailyMetricsNativeFamilyDuration:     make(map[string]*histogram, len(dailyMetricsNativeFamilies)),
 		teamMetricsDailyRepoCount:            newHistogramWithBounds(repoCountBuckets),
 		jobsAvailable:                        make(map[JobLabels]int64, len(dimensions.Jobs)),
@@ -1234,6 +1297,14 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		for _, outcome := range dailyMetricsNativeFamilyOutcomes() {
 			collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}] = 0
 		}
+	}
+	// Pre-registered at zero so an outcome that has never occurred renders as
+	// 0 rather than vanishing. That distinction is the whole point for
+	// malformed_pr_id: an absent series and a zero series look identical on a
+	// dashboard, but only one of them proves the guard is being evaluated.
+	collector.workGraphIssueEdgeDuration = newHistogram()
+	for _, outcome := range workGraphIssueEdgeOutcomes() {
+		collector.workGraphIssueEdgeRows[outcome] = 0
 	}
 	for _, labels := range dimensions.Streams {
 		if !metricIdentifier(labels.Stream, 96) || !metricIdentifier(labels.ConsumerGroup, 96) {
@@ -1664,6 +1735,49 @@ func (collector *MetricsCollector) ObserveDailyMetricsPartitionRecompute(family,
 // the caller happened to measure before giving up (mirrors
 // ObserveDORAPartition's rowsWritten/skippedRows discipline: a caller must
 // not report work that did not durably happen).
+// ObserveWorkGraphIssueEdges records one native issue<->issue edge build:
+// the per-row outcome tally, one run, and how long it took (CHAOS-4766).
+//
+// The whole tally is taken in one call rather than one call per row, because
+// the counters are only meaningful together -- they are a partition of the
+// rows read, and a caller that could report some outcomes and not others
+// would be able to publish a tally that does not sum to its own input.
+//
+// An unregistered outcome is refused rather than dropped: a new disposition
+// added to the deriver without a counter here would otherwise be silently
+// unobservable, which is the exact failure this metric exists to prevent.
+func (collector *MetricsCollector) ObserveWorkGraphIssueEdges(
+	rowsByOutcome map[WorkGraphIssueEdgeOutcome]int, rowsRead int, duration time.Duration,
+) error {
+	if rowsRead < 0 || duration < 0 {
+		return errors.New("work graph issue edge counts cannot be negative")
+	}
+	total := 0
+	for outcome, count := range rowsByOutcome {
+		if !slices.Contains(workGraphIssueEdgeOutcomes(), outcome) {
+			return fmt.Errorf("work graph issue edge outcome %q is not registered", outcome)
+		}
+		if count < 0 {
+			return errors.New("work graph issue edge counts cannot be negative")
+		}
+		total += count
+	}
+	// Every row read must land in exactly one outcome. A tally that does not
+	// sum to its input is not a partition, and publishing it would let a
+	// dropped row hide behind counters that still look individually sane.
+	if total != rowsRead {
+		return fmt.Errorf("work graph issue edge outcomes sum to %d, want %d rows read", total, rowsRead)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	for outcome, count := range rowsByOutcome {
+		collector.workGraphIssueEdgeRows[outcome] += uint64(count)
+	}
+	collector.workGraphIssueEdgeRuns++
+	collector.workGraphIssueEdgeDuration.observe(duration.Seconds())
+	return nil
+}
+
 func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	family string, outcome DailyMetricsNativeFamilyOutcome, rowsWritten int, duration time.Duration,
 ) error {
@@ -2498,6 +2612,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFinalizeRedrive(&output)
 	collector.writeDailyMetricsPartitionRecompute(&output)
 	collector.writeDailyMetricsNativeFamily(&output)
+	collector.writeWorkGraphIssueEdges(&output)
 	collector.writeDailyMetricsCompatRetry(&output)
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writeWorkItemStateMissingAttribution(&output)
@@ -2906,6 +3021,23 @@ func (collector *MetricsCollector) writeDailyMetricsPartitionRecompute(output *s
 // per River kind) and with a per-family duration histogram, since native
 // families are cut over independently and one family's compute cost tells
 // nothing about another's.
+func (collector *MetricsCollector) writeWorkGraphIssueEdges(output *strings.Builder) {
+	writeMetadata(output, "worker_work_graph_issue_edge_rows_total",
+		"work_item_dependencies rows read by the native issue<->issue edge builder, by bounded per-row disposition. The outcomes partition the rows read (CHAOS-4766).", "counter")
+	for _, outcome := range workGraphIssueEdgeOutcomes() {
+		writeUintSample(output, "worker_work_graph_issue_edge_rows_total",
+			[]metricLabel{{"outcome", string(outcome)}}, collector.workGraphIssueEdgeRows[outcome])
+	}
+
+	writeMetadata(output, "worker_work_graph_issue_edge_runs_total",
+		"Native issue<->issue edge builds completed. Separates a quiet org (runs rise, rows stay flat) from a step that stopped running (runs stay flat).", "counter")
+	writeUintSample(output, "worker_work_graph_issue_edge_runs_total", nil, collector.workGraphIssueEdgeRuns)
+
+	writeMetadata(output, "worker_work_graph_issue_edge_duration_seconds",
+		"Native issue<->issue edge build duration.", "histogram")
+	writeHistogram(output, "worker_work_graph_issue_edge_duration_seconds", nil, collector.workGraphIssueEdgeDuration)
+}
+
 func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings.Builder) {
 	families := append([]string(nil), dailyMetricsNativeFamilies...)
 	sort.Strings(families)
@@ -3459,3 +3591,5 @@ func sortedStrings(values map[string]struct{}) []string {
 	sort.Strings(result)
 	return result
 }
+
+var _ WorkGraphIssueEdgesObserver = (*MetricsCollector)(nil)

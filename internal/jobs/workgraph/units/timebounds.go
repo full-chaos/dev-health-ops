@@ -33,6 +33,23 @@ type TimeBounds struct {
 // declared Nullable -- completed_at, merged_at, closed_at -- and the value
 // fields are exactly the NOT NULL ones, so the shape is not a convention but a
 // restatement of the schema.
+//
+// # THE TYPES ARE THE GUARD, NOT JUST THE MODEL
+//
+// The reasoning above says a string branch "is never taken on this path". That
+// is prose, and prose stops being true silently. What actually prevents an ISO
+// parse from being reintroduced is that these fields are time.Time: changing any
+// of them to a string breaks every .Before, .After and .UTC() call site at
+// COMPILE time, so the reintroduction cannot pass review by accident.
+//
+// Recorded because the pin was arrived at for an unrelated reason -- typed
+// fields were chosen to avoid modelling an ISO grammar neither plane can
+// produce -- and a future reader refactoring for a third reason would find
+// nothing telling them the type is load-bearing. Safe-by-accident degrades to
+// unsafe the moment someone has a reason to change it.
+//
+// The shape is lane-4752-go's on CHAOS-4819: a containment argument closes a
+// question, and then nothing can observe the question reopening.
 type NodeTimes struct {
 	// Issue: created_at (NOT NULL), completed_at, updated_at (NOT NULL).
 	// PR: created_at (NOT NULL), merged_at, closed_at.

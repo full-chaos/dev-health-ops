@@ -145,7 +145,11 @@ def main() -> None:
     formats = []
     for value in values:
         for precision in _PRECISIONS:
-            entry: dict[str, object] = {
+            # Named distinctly from the rounds loop's `entry`: that one is
+            # typed `dict[str, object] | None` (a skipped case is None), and
+            # reusing the name here rebinds it to that union, so the indexed
+            # assignments below stop type-checking.
+            format_entry: dict[str, object] = {
                 "value_hex": float.hex(value) if not math.isnan(value) else "nan",
                 "is_nan": math.isnan(value),
                 "precision": precision,
@@ -154,10 +158,10 @@ def main() -> None:
             # it is a malformed spec. Recording the raise is the only way the
             # corpus can hold the Go mirror to refusing it too.
             try:
-                entry["text"] = format(value, f".{precision}f")
+                format_entry["text"] = format(value, f".{precision}f")
             except (ValueError, OverflowError) as exc:
-                entry["raises"] = type(exc).__name__
-            formats.append(entry)
+                format_entry["raises"] = type(exc).__name__
+            formats.append(format_entry)
 
     document = {
         "_marker": "recommendations-float-text-golden",

@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -106,5 +107,47 @@ func TestWriteFileMetricsDailyRejectsChurnOverflowInsteadOfWrapping(t *testing.T
 	}
 	if batch.sent {
 		t.Fatal("batch.Send must never be called after a rejected row")
+	}
+}
+
+// TestUint32ColumnValueRejectsOutOfRangeAndNegative directly proves the
+// shared choke point every UInt32 destination column in this port's writers
+// goes through (team-lead's ruling, 2026-09-01: a fix closes the CLASS, not
+// one column at a time -- codex rounds 3 and 6 found the identical bug on
+// churn_loc_30d and churn separately). Covers the boundary (MaxUint32 itself
+// must still succeed), one past it, and negative (which a bare uint32(...)
+// cast would also wrap, not just overflow).
+func TestUint32ColumnValueRejectsOutOfRangeAndNegative(t *testing.T) {
+	repoID := uuid.New()
+	cases := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{"zero", 0, false},
+		{"ordinary", 42, false},
+		{"exact boundary", math.MaxUint32, false},
+		{"one past boundary", math.MaxUint32 + 1, true},
+		{"negative", -1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := uint32ColumnValue(tc.value, "some_table", "some_column", repoID, "some/path.py")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("value=%d: expected an error, got %d", tc.value, got)
+				}
+				if !errors.Is(err, ErrInvalidState) {
+					t.Fatalf("value=%d: error = %v, want it to wrap ErrInvalidState", tc.value, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("value=%d: unexpected error: %v", tc.value, err)
+			}
+			if got != uint32(tc.value) {
+				t.Fatalf("value=%d: got %d, want %d", tc.value, got, uint32(tc.value))
+			}
+		})
 	}
 }

@@ -454,6 +454,28 @@ type fileMetricsBatchConn interface {
 	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
 }
 
+// uint32ColumnValue converts a Go int to a uint32 for a UInt32 ClickHouse
+// destination column, REFUSING (rather than silently wrapping) any value
+// outside [0, MaxUint32]. This is the single choke point for the bug class
+// codex rounds 3 and 6 both found on this port -- a Go-computed int
+// (churn_loc_30d, then churn) silently wrapping into a fixed-width column
+// via a bare uint32(...)/uint64(...) conversion -- on two different columns.
+// Team-lead's ruling (2026-09-01): a fix closes the CLASS, not one column at
+// a time. Every UInt32 destination this port writes goes through this
+// function (or is documented as provably safe without it -- see
+// writeFileHotspotDaily's cyclomaticTotal comment). Matches Python's own
+// fail-loud behavior: clickhouse_connect's encoder raises a DataError
+// narrowing an out-of-range Python int into a UInt32 column, so an error
+// here (Refused, falls back to the Python bridge, which fails identically)
+// is fidelity-correct, not merely defensive.
+func uint32ColumnValue(value int, table, column string, repoID uuid.UUID, key string) (uint32, error) {
+	if value < 0 || value > math.MaxUint32 {
+		return 0, fmt.Errorf("%w: %s.%s %d for repo %s %q exceeds UInt32 range",
+			ErrInvalidState, table, column, value, repoID, key)
+	}
+	return uint32(value), nil
+}
+
 // writeFileMetricsDaily ports the write side of write_file_metrics
 // (sinks/clickhouse/work_graph.py:139) -- same table, same column order.
 // file_metrics_daily is APPEND-ONLY MergeTree (migration
@@ -477,24 +499,28 @@ func writeFileMetricsDaily(
 		return 0, fmt.Errorf("prepare file_metrics_daily batch: %w", err)
 	}
 	for _, row := range rows {
-		// file_metrics_daily.churn is UInt32 in production (migration
-		// 001_metrics_v2.sql) -- unlike file_hotspot_daily.churn_loc_30d
-		// (UInt64, see writeFileHotspotDaily), there is no wider column to
-		// cast to here: the schema genuinely cannot hold a churn total
-		// >= 2^32 for one file. Python's own insert would raise a DataError
-		// encoding such a value (clickhouse_connect refuses to narrow it),
-		// so failing loudly here -- rather than letting a bare uint32(...)
-		// conversion silently wrap the value to something wrong -- is the
-		// FIDELITY-CORRECT behavior: Refused (falls back to the Python
-		// bridge, which fails the same way) beats silently persisting 0
-		// (codex round 6, P2).
-		if row.Metric.Churn < 0 || row.Metric.Churn > math.MaxUint32 {
-			return 0, fmt.Errorf("%w: file_metrics_daily.churn %d for repo %s path %q exceeds UInt32 range",
-				ErrInvalidState, row.Metric.Churn, row.RepoID, row.Metric.Path)
+		// Every UInt32 destination column is bounds-checked via
+		// uint32ColumnValue rather than cast with a bare uint32(...) --
+		// codex rounds 3 and 6 found the SAME class of bug (a Go-computed
+		// int silently wrapping into a fixed-width ClickHouse column) on two
+		// different columns; team-lead's ruling (2026-09-01) is that the fix
+		// is only done when the CLASS stops reproducing, not the two
+		// instances. See uint32ColumnValue's doc comment and this PR's
+		// RISK-NOTES cast-safety table for the full sweep.
+		churn, err := uint32ColumnValue(row.Metric.Churn, "file_metrics_daily", "churn", row.RepoID, row.Metric.Path)
+		if err != nil {
+			return 0, err
+		}
+		contributors, err := uint32ColumnValue(row.Metric.Contributors, "file_metrics_daily", "contributors", row.RepoID, row.Metric.Path)
+		if err != nil {
+			return 0, err
+		}
+		commitsCount, err := uint32ColumnValue(row.Metric.CommitsCount, "file_metrics_daily", "commits_count", row.RepoID, row.Metric.Path)
+		if err != nil {
+			return 0, err
 		}
 		if err := batch.Append(
-			row.RepoID, row.Day, row.Metric.Path, uint32(row.Metric.Churn),
-			uint32(row.Metric.Contributors), uint32(row.Metric.CommitsCount),
+			row.RepoID, row.Day, row.Metric.Path, churn, contributors, commitsCount,
 			row.Metric.HotspotScore, row.ComputedAt.UTC(), organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append file_metrics_daily row: %w", err)
@@ -529,14 +555,33 @@ func writeFileHotspotDaily(
 		return 0, fmt.Errorf("prepare file_hotspot_daily batch: %w", err)
 	}
 	for _, row := range rows {
+		// churn_loc_30d is UInt64 in production (migration
+		// 007_complexity_investment_issues.sql:43) -- NOT UInt32 like its
+		// sibling columns here (codex round 3, P2). Safe by construction: it
+		// is a non-negative accumulation of nonNegative()-clamped additions/
+		// deletions (see filehotspots.ComputeFileRiskHotspots), so it is
+		// always >= 0 and Go's `int` is 64-bit, meaning uint64(int) can only
+		// wrap if the value were negative -- which it structurally cannot be.
+		if row.Metric.ChurnLOC30d < 0 {
+			return 0, fmt.Errorf("%w: file_hotspot_daily.churn_loc_30d %d for repo %s path %q is negative",
+				ErrInvalidState, row.Metric.ChurnLOC30d, row.RepoID, row.Metric.FilePath)
+		}
+		churnCommits30d, err := uint32ColumnValue(row.Metric.ChurnCommits30d, "file_hotspot_daily", "churn_commits_30d", row.RepoID, row.Metric.FilePath)
+		if err != nil {
+			return 0, err
+		}
+		// cyclomatic_total is also UInt32, but is provably safe without a
+		// runtime check: loadComplexityMap (this file) reads it via a Go
+		// `uint32` scan straight off the UInt32 file_complexity_snapshots
+		// column, converts to `int` (always safe, UInt32 always fits in a
+		// 64-bit Go int), and that value flows through the kernel unchanged
+		// (filehotspots.ComputeFileRiskHotspots never arithmetically combines
+		// it with anything). The round trip UInt32 -> int -> UInt32 cannot
+		// exceed UInt32 range because the value never left it.
+		cyclomaticTotal := uint32(row.Metric.CyclomaticTotal)
 		if err := batch.Append(
-			// churn_loc_30d is UInt64 in production (migration
-			// 007_complexity_investment_issues.sql:43) -- NOT UInt32 like
-			// its sibling columns here. A uint32 cast silently wraps a
-			// churn total >= 2^32 to a smaller (or zero) value before the
-			// row ever reaches ClickHouse (codex round 3, P2).
 			row.RepoID, row.Day, row.Metric.FilePath, uint64(row.Metric.ChurnLOC30d),
-			uint32(row.Metric.ChurnCommits30d), uint32(row.Metric.CyclomaticTotal),
+			churnCommits30d, cyclomaticTotal,
 			row.Metric.CyclomaticAvg, row.Metric.BlameConcentration,
 			row.Metric.RiskScore, row.ComputedAt.UTC(), organizationID,
 		); err != nil {

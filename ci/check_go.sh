@@ -96,6 +96,11 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
+  integration-images
+         Print "<key>\t<image>" for every image declared by the Go test
+         container harness. The single source of truth for the dependency set:
+         the pre-pull and the ghcr.io mirror workflow both read it, so neither
+         re-parses harness.go on its own. No Docker required.
   integration-prepull
          Pre-pull every image declared by the Go test container harness --
          postgres, clickhouse, valkey, and the testcontainers-go reaper,
@@ -1436,6 +1441,17 @@ prepull_one_image() {
   done
 }
 
+# print_test_dependency_images emits "<key><TAB><image>" for every declared
+# dependency, so anything that needs the set -- the pre-pull below, and the
+# mirror workflow that copies them to ghcr.io -- reads it from ONE parser
+# instead of each re-deriving it from harness.go and drifting.
+print_test_dependency_images() {
+  local key
+  for key in "${INTEGRATION_IMAGE_KEYS[@]}"; do
+    printf '%s\t%s\n' "${key}" "$(discover_test_dependency_image "${key}")"
+  done
+}
+
 # check_integration_prepull warms EVERY declared dependency image.
 #
 # It deliberately takes no arguments. An earlier revision let a job name the
@@ -1685,6 +1701,10 @@ case "${1:-all}" in
   integration-shard-plan)
     [ "$#" -eq 1 ] || die "integration-shard-plan accepts no arguments"
     check_integration_shard_plan
+    ;;
+  integration-images)
+    [ "$#" -eq 1 ] || die "integration-images accepts no arguments"
+    print_test_dependency_images
     ;;
   integration-prepull)
     [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"

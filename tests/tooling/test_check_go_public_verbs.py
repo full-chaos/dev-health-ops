@@ -20,6 +20,7 @@ PUBLIC_VERBS = (
     "integration-vet",
     "integration-coverage",
     "integration-shard-plan",
+    "integration-images",
     "integration-prepull",
     "integration-shard",
     "integration",

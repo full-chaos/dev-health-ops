@@ -1,5 +1,7 @@
 package units
 
+import "time"
+
 // MembershipWeightThreshold is declared in constants.go, alongside the other
 // ported constants, so the two ported jobs cannot drift on it. Note 0.2 has no
 // exact binary representation (bits 3fc999999999999a); the corpus pins the bits
@@ -277,4 +279,101 @@ func MembershipCategories(distribution *Distribution) []MembershipRow {
 		})
 	}
 	return rows
+}
+
+// MembershipRecord ports metrics.schemas.WorkUnitMembershipRecord: one row per
+// (node, category) in work_unit_membership.
+//
+// RunID carries no default here. Python declares `run_id: str = ""`, but
+// build_membership_records takes it as a required keyword and the reference's
+// own docstring says it "must be stamped on every row" -- the dataclass default
+// exists for other construction sites, not this one. A Go zero value would
+// silently reproduce the default rather than the requirement, so the builder
+// takes it explicitly.
+type MembershipRecord struct {
+	OrgID                string
+	NodeType             string
+	NodeID               string
+	WorkUnitID           string
+	CategoryKind         string
+	Category             string
+	Weight               float64
+	IsDominant           int
+	CategorizationStatus string
+	ComputedAt           time.Time
+	RunID                string
+}
+
+// MembershipInput carries the non-distribution arguments of
+// build_membership_records. Grouped into a struct because Python takes them as
+// keyword-only arguments (the `*` in the signature), so no caller can supply
+// them positionally and no caller can transpose two same-typed fields by
+// accident. Five of these are strings; positional Go parameters would give up
+// that protection silently.
+type MembershipInput struct {
+	UnitNodes            []NodeKey
+	WorkUnitID           string
+	CategorizationStatus string
+	ComputedAt           time.Time
+	OrgID                string
+	RunID                string
+}
+
+// BuildMembershipRecords ports membership.build_membership_records.
+//
+// # THE ORDER IS THE OUTPUT
+//
+// Python emits, for each node in unit_nodes: every THEME row, then every
+// SUBCATEGORY row. Within each kind the rows are in the distribution's insertion
+// order, via MembershipCategories. So the sequence is
+//
+//	node[0] themes..., node[0] subcategories...,
+//	node[1] themes..., node[1] subcategories..., ...
+//
+// and NOT all themes for all nodes followed by all subcategories. Swapping the
+// loop nesting produces the same multiset of rows in a different sequence, which
+// a set-comparison test cannot see.
+//
+// Both category lists are computed ONCE, before the node loop, exactly as the
+// reference does. Recomputing them per node would be a pure waste in Go and
+// would also give NaN-driven argmax instability a second chance to differ
+// between iterations if the distribution were ever mutated mid-loop.
+//
+// A node contributes rows even when it appears twice in unit_nodes: the
+// reference does not deduplicate, so neither does this.
+func BuildMembershipRecords(
+	input MembershipInput,
+	themeDistribution *Distribution,
+	subcategoryDistribution *Distribution,
+) []MembershipRecord {
+	themeRows := MembershipCategories(themeDistribution)
+	subcategoryRows := MembershipCategories(subcategoryDistribution)
+
+	records := make([]MembershipRecord, 0,
+		len(input.UnitNodes)*(len(themeRows)+len(subcategoryRows)))
+
+	appendRows := func(node NodeKey, kind string, rows []MembershipRow) {
+		for _, row := range rows {
+			records = append(records, MembershipRecord{
+				OrgID:                input.OrgID,
+				NodeType:             node.Type,
+				NodeID:               node.ID,
+				WorkUnitID:           input.WorkUnitID,
+				CategoryKind:         kind,
+				Category:             row.Category,
+				Weight:               row.Weight,
+				IsDominant:           row.IsDominant,
+				CategorizationStatus: input.CategorizationStatus,
+				ComputedAt:           input.ComputedAt,
+				RunID:                input.RunID,
+			})
+		}
+	}
+
+	for _, node := range input.UnitNodes {
+		// "theme" before "subcategory", per node. Not a stylistic choice.
+		appendRows(node, "theme", themeRows)
+		appendRows(node, "subcategory", subcategoryRows)
+	}
+	return records
 }

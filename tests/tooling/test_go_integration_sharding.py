@@ -48,6 +48,7 @@ EXPECTED_PACKAGES = {
     "internal/jobs/report",
     "internal/jobs/system",
     "internal/jobs/workgraph",
+    "internal/jobs/workgraph/edges",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -288,8 +289,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # of the engine, so a fake connection cannot fail them. Weight 122s,
     # ceil() of a local run of all seven tests together (each starting its own
     # container).
-    assert "36 package(s) discovered, 0 denylisted, 36 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 36 package(s)" in result.stdout
+    # CHAOS-4766 added internal/jobs/workgraph/edges (36 -> 37 discovered,
+    # 36 -> 37 will run): the native issue<->issue edge derivation got its
+    # first -tags integration file. writeorder_integration_test.go proves the
+    # work_graph_edges ReplacingMergeTree collapse -- Python's confidence=1.0
+    # and this port's variant-C 0.9 are the SAME row, because the sorting key
+    # excludes confidence -- against the real migration chain in a real
+    # container, asserting BOTH write orders so a pre-step regression cannot
+    # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
+    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 37 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -318,7 +327,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4441: 36, not 35 -- internal/jobs/investment/chquery added. This
     # is the FLATTENED set across all shards, so unlike the selected-package
     # count above it INCLUDES the providersync shard-1 package.
-    assert len(flattened) == len(set(flattened)) == 36
+    # CHAOS-4766: 37, not 36 -- internal/jobs/workgraph/edges added.
+    assert len(flattened) == len(set(flattened)) == 37
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1586,7 +1596,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4441: 35, not 34 -- internal/jobs/investment/chquery added
     # (36 discovered - 1 for the providersync shard-1 package = 35 across
     # shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 35
+    # CHAOS-4766: 36, not 35 -- internal/jobs/workgraph/edges added
+    # (37 discovered - 1 for the providersync shard-1 package = 36 across
+    # shards 2/3).
+    assert len(selected_packages) == len(set(selected_packages)) == 36
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

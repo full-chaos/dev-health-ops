@@ -491,9 +491,26 @@ def _unresolvable_in_source(
         for literal in re.findall(r'"([^"\n]+)"', line):
             if not literal.endswith(_GO_DATA_SUFFIXES):
                 continue
-            if not _looks_like_a_path(literal) or literal.startswith("/"):
-                # Prose, or a deployment path such as /app/config/x.yaml,
-                # whose repo-side original is covered on its own path.
+            if not _looks_like_a_path(literal):
+                # Prose only. There is deliberately no absolute-path branch.
+                #
+                # There used to be, excusing `/app/config/x.yaml` as a
+                # deployment location. It was the last SHAPE-based exception in
+                # a guard whose whole principle is that there are none, and it
+                # was inert: all ten absolute literals in this repo either name
+                # no file at all (8) or have every candidate covered (2), so
+                # deleting it changed no outcome -- a mutation that SURVIVED.
+                #
+                # Inert is not harmless. It was silent on exactly the risk this
+                # guard exists to catch: `/app/config/secrets.yaml` and
+                # `config/secrets.yaml` carry identical ambiguity and identical
+                # uncovered candidates, and it reported only the second. A
+                # leading slash decided it.
+                #
+                # The two cases it excused are already handled by properties
+                # that were here anyway: a literal naming no file falls out at
+                # `not candidates`, and one whose candidates are all covered
+                # falls out at the caller's coverage check.
                 continue
             if literal in FABRICATED_PATH_LITERALS:
                 continue
@@ -914,6 +931,45 @@ def test_a_sixth_unknown_shape_fails_loud_instead_of_vanishing(tmp_path: Path) -
     assert set(reported[0][2]) == {"a/data.json", "b/data.json"}, (
         "the report must name every candidate, so the reader can decide whether "
         "the ambiguity can hide a gap"
+    )
+
+
+def test_an_absolute_literal_is_judged_like_any_other(tmp_path: Path) -> None:
+    """A leading slash must not buy an exemption.
+
+    Constructed by lane-ci-flakes during its executed read: two literals with
+    identical ambiguity and identical uncovered candidates, differing only in a
+    leading `/`. The old absolute-path branch reported the relative one and
+    stayed silent on the absolute one.
+
+    That branch was inert -- deleting it changed no current outcome, a mutation
+    that survived -- which is exactly why it was worth deleting. A dead branch
+    that reads as a judgement is a judgement nobody has had to defend, and this
+    one would have woken up the first time a Go test read a deployment path
+    whose repo-side original was ambiguous and uncovered.
+    """
+    package = tmp_path / "cmd" / "svc"
+    package.mkdir(parents=True)
+    index: dict[str, tuple[str, ...]] = {
+        "secrets.yaml": ("a/secrets.yaml", "b/secrets.yaml")
+    }
+
+    absolute = _unresolvable_in_source(
+        'readConfig("/app/config/secrets.yaml")', package, tmp_path, index
+    )
+    relative = _unresolvable_in_source(
+        'readConfig("config/secrets.yaml")', package, tmp_path, index
+    )
+
+    assert absolute, (
+        "an absolute literal naming an ambiguous, real file was not reported. "
+        "It carries the same risk as the relative spelling, and a leading slash "
+        "is not a reason to treat it differently."
+    )
+    assert [literal for _, literal, _ in absolute] == ["/app/config/secrets.yaml"]
+    assert absolute[0][2] == relative[0][2], (
+        "both spellings name the same candidates, so both must report the same "
+        "candidates"
     )
 
 

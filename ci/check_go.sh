@@ -1434,6 +1434,17 @@ mirrored_image() {
     return 0
   fi
   first="${image%%/*}"
+  # An explicitly written `docker.io/...` ref is REFUSED rather than guessed at.
+  # testcontainers-go cannot handle it coherently: ExtractRegistry normalises
+  # "docker.io" to the empty fallback, so its own `registry == "docker.io"`
+  # exclusion can never fire, and prependHubRegistry then builds
+  # `<prefix>/docker.io/<image>` -- a ref that does not resolve. Matching that
+  # would mean pre-warming a nonsense ref; diverging from it would mean this
+  # script warms one image while the test pulls another. Both are worse than
+  # refusing, and no pin here needs the prefix form.
+  if [ "${first}" != "${image}" ] && [ "$(printf '%s' "${first}" | tr '[:upper:]' '[:lower:]')" = "docker.io" ]; then
+    die "test dependency image '${image}' names docker.io explicitly. Write it without the registry (e.g. 'postgres:18-alpine@sha256:...') so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX can redirect it; testcontainers-go mishandles the explicit form."
+  fi
   if [ "${first}" != "${image}" ] && case "${first}" in *.*|*:*) true ;; *) false ;; esac; then
     printf '%s\n' "${image}"
     return 0

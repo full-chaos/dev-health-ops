@@ -27,11 +27,21 @@ on:
     paths:
       - internal/testsupport/containers/harness.go
       - ci/check_go.sh
+      # The river compose is an INPUT to this workflow (its images are mirrored
+      # too), so a pin bump there must re-run the mirror. Without this, bumping
+      # only the pgbouncer digest runs river CI against a ghcr ref that was
+      # never copied.
+      - tests/compatibility/river/compose.compatibility.yml
       - .github/workflows/mirror-test-images.yml
   pull_request:
     paths:
       - internal/testsupport/containers/harness.go
       - ci/check_go.sh
+      # The river compose is an INPUT to this workflow (its images are mirrored
+      # too), so a pin bump there must re-run the mirror. Without this, bumping
+      # only the pgbouncer digest runs river CI against a ghcr ref that was
+      # never copied.
+      - tests/compatibility/river/compose.compatibility.yml
       - .github/workflows/mirror-test-images.yml
 
 permissions:
@@ -52,15 +62,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # NO Docker Hub login, deliberately. Reading a handful of manifests per run
+      # fits comfortably inside the anonymous per-runner-IP allowance (100/hour),
+      # and it means CI holds no Docker Hub account at all. Verified locally: the
+      # same copies succeed anonymously.
       - name: Set up Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -169,27 +176,23 @@ jobs:
           done < images.txt
           exit "${failed}"
 
-  # Measures the account's Docker Hub tier and remaining quota instead of asking
-  # for it. Hub returns `ratelimit-limit`/`ratelimit-remaining` on metered plans
-  # and OMITS them on unmetered ones, so their absence is itself the answer.
-  # Measured 2026-09-02: `200;w=3600` with 65 remaining -- a metered account at
-  # 200 pulls per HOUR, shared fleet-wide. One Go run is ~8 container jobs x 4
-  # images, so a few concurrent lanes exhaust it inside the window; that is the
-  # outage this workflow exists to end.
+  # Reports the ANONYMOUS per-runner-IP Docker Hub allowance -- the only one this
+  # workflow now depends on, since it holds no Docker Hub account.
+  #
+  # History, because the numbers explain the design: while CI authenticated as a
+  # personal account, this probe measured `200;w=3600` with 65 remaining -- 200
+  # pulls per HOUR shared fleet-wide, against ~8 container jobs x 4 images per Go
+  # run. It hit zero the same afternoon and took every Testcontainers job down on
+  # every branch. That is why CI no longer uses that account at all.
   #
   # Kept as a permanent diagnostic: the next `toomanyrequests` is one dispatch
-  # rather than an investigation. Only the two header values are printed --
-  # credentials reach curl through the environment, are never echoed, and `set -x`
-  # is deliberately not used.
+  # rather than an investigation.
   ratelimit-probe:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Probe the Docker Hub rate limit for this account
-        env:
-          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
           # NO `-f` on either call, deliberately. `curl -f` turns a 429 into exit
@@ -197,7 +200,7 @@ jobs:
           # the situation it exists to diagnose (observed 2026-09-02 14:17: the
           # probe failed with `curl: (22) ... error: 429` and reported nothing).
           # A probe that only works when nothing is wrong is not a probe.
-          token_body=$(curl -sSL -w '\n%{http_code}' -u "${HUB_USER}:${HUB_TOKEN}" \
+          token_body=$(curl -sSL -w '\n%{http_code}' \
             "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull")
           token_status="${token_body##*$'\n'}"
           token=$(printf '%s' "${token_body}" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')

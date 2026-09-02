@@ -91,11 +91,16 @@ on:
   # CHAOS-3948 turned `push` off (see the concurrency block below for why)
   # and added this scheduled run against main's HEAD (`schedule` always
   # targets the default branch) as a fixed-cost, one-fan-out-a-day backstop
-  # so main still got some Go CI between merges. Push is enabled again above
-  # (owner-ratified), scoped to all branches like `pull_request`, so a
-  # branch with no open PR also gets gate coverage; this schedule stays as a
-  # cheap safety net regardless. `workflow_dispatch` above also gives a
-  # one-click way to run the full matrix against main on demand.
+  # so main still got some Go CI between merges.
+  #
+  # Push was later re-enabled across all branches, which is what produced the
+  # cancelled-twin race CHAOS-4814 traced; it is now scoped to `main` only.
+  # So a branch with no open PR gets NO Go run -- branch protection gates on
+  # the PR, so nothing merges unproven, but there is no pre-PR coverage and
+  # this schedule is not a substitute for it: `schedule` targets main's HEAD,
+  # never a feature branch. It backstops MAIN between merges, which is what
+  # CHAOS-3948 built it for. `workflow_dispatch` above gives a one-click way
+  # to run the full matrix against main on demand.
   schedule:
     - cron: '17 8 * * *'
 

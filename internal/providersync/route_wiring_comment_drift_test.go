@@ -26,6 +26,9 @@ import (
 // Doc comments are read on TYPE, FUNC (including METHODS, attributed to the
 // receiver type), VAR and CONST declarations -- the closed set of Go decl
 // kinds, so this is a bounded decision rather than another reachability hop.
+// For VAR and CONST that means BOTH the block doc and a per-spec doc inside
+// `var (…)` / `const (…)`, and every name in a multi-name spec, not just the
+// first.
 //
 // MEASURED, not assumed: an earlier version of this sentence claimed "type and
 // function doc comments" while discovery filtered `Recv == nil`, so methods
@@ -218,16 +221,30 @@ func declsFromFile(fset *token.FileSet, entry string, decl ast.Decl) []packageTy
 				doc: doc.Text(), file: entry, line: fset.Position(typeSpec.Pos()).Line})
 		}
 	case token.VAR, token.CONST:
-		if genDecl.Doc == nil {
-			return nil
-		}
 		for _, spec := range genDecl.Specs {
 			valueSpec, ok := spec.(*ast.ValueSpec)
 			if !ok || len(valueSpec.Names) == 0 {
 				continue
 			}
-			out = append(out, packageTypeDecl{name: valueSpec.Names[0].Name,
-				doc: genDecl.Doc.Text(), file: entry, line: fset.Position(valueSpec.Pos()).Line})
+			// Per-spec doc wins over the block doc, mirroring the TYPE branch
+			// above. The previous form returned early when the BLOCK had no
+			// doc, so a doc on an individual spec inside `var (…)` / `const (…)`
+			// was never consulted -- asymmetric with TYPE, and line 26 claimed
+			// otherwise (lane-4441, round on e0b4774ff).
+			doc := genDecl.Doc
+			if valueSpec.Doc != nil {
+				doc = valueSpec.Doc
+			}
+			if doc == nil {
+				continue
+			}
+			// EVERY name, not just Names[0]: `var A, B = 1, 2` left B
+			// unchecked, so a stale claim attached to that spec was read for A
+			// and silently skipped for B.
+			for _, name := range valueSpec.Names {
+				out = append(out, packageTypeDecl{name: name.Name,
+					doc: doc.Text(), file: entry, line: fset.Position(valueSpec.Pos()).Line})
+			}
 		}
 	}
 	return out
@@ -504,6 +521,19 @@ var SomeVar = 1
 // SomeConst is intentionally unregistered.
 const SomeConst = 2
 
+var (
+	// GroupedVar is intentionally unregistered.
+	GroupedVar = 3
+)
+
+const (
+	// GroupedConst is intentionally unregistered.
+	GroupedConst = 4
+)
+
+// MultiA and MultiB are intentionally unregistered.
+var MultiA, MultiB = 5, 6
+
 // Detached is intentionally unregistered.
 
 type Detached struct{}
@@ -524,7 +554,14 @@ type Detached struct{}
 
 	// A method must be attributed to its RECEIVER: that is the symbol the
 	// wiring file names, so that is the name the guard must match against.
-	for _, want := range []string{"WiredThing", "PlainFunc", "SomeVar", "SomeConst"} {
+	// GroupedVar/GroupedConst carry a PER-SPEC doc inside a block with no block
+	// doc; MultiB is the second name of a multi-name spec. All three were
+	// unread before lane-4441's round on e0b4774ff, while line 26 claimed
+	// VAR/CONST were covered.
+	for _, want := range []string{
+		"WiredThing", "PlainFunc", "SomeVar", "SomeConst",
+		"GroupedVar", "GroupedConst", "MultiA", "MultiB",
+	} {
 		if len(found[want]) == 0 {
 			t.Errorf("decl kind for %s is NOT read -- a stale claim there would never be checked", want)
 		}

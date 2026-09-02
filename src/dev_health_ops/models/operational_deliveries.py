@@ -64,6 +64,14 @@ class BillingNotification(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
+    # CHAOS-3952: durable completion fence. Set once, atomically, the moment
+    # the email dispatch call returns successfully — never before. A retry
+    # (e.g. the River job replaying because the HTTP response back to Go was
+    # lost after Python already sent) sees this set and skips re-sending
+    # instead of dispatching the email a second time.
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_billing_notification_key"),

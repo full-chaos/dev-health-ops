@@ -50,6 +50,11 @@ class BillingReference(_StrictModel):
     notification_id: uuid.UUID
     organization_id: uuid.UUID
     notification_type: str
+    # CHAOS-3952: Go's own copy of the durable row's idempotency key. Cross-
+    # checked against the row itself so the two sides' identity can never
+    # silently drift; the actual duplicate-send guard is the row's own
+    # completion fence (system_ops._mark_billing_notification_completed).
+    idempotency_key: str = Field(min_length=1, max_length=256)
 
 
 class HeartbeatReference(_StrictModel):
@@ -110,6 +115,7 @@ async def process_billing_reference(
     result = await run_in_threadpool(
         send_billing_notification.run,
         durable_notification_id=str(reference.notification_id),
+        idempotency_key=reference.idempotency_key,
     )
     return _bridge_result(result, success=frozenset({"sent"}))
 

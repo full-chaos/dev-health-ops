@@ -136,3 +136,41 @@ func TestResolveMaxComponentNodesNonASCIIDigitsDivergeFromPython(t *testing.T) {
 		)
 	}
 }
+
+// TestNumericParsersRejectSeparatorsLikePythonNumerics pins the reason the
+// numeric helpers must NOT adopt pythonStrip.
+//
+// Python uses TWO different whitespace definitions, and this is the whole
+// subtlety of the fix above: str.strip() REMOVES 0x1c-0x1f, but int() and
+// float() REJECT them outright. The scope guard that DOES need the wider rule
+// lives at internal/jobs/investment.RequireOrganizationScope; this test exists
+// here, beside the parser, so the two cannot be 'unified' without one of them
+// failing.
+//
+//	" 150".strip() -> "150"        int(" 150")     -> 150
+//	"\x1c150".strip() -> "150"     int("\x1c150")  -> ValueError
+//
+// Go's plain strings.TrimSpace happens to match the NUMERIC rule exactly, so
+// parsePythonInt and confidenceFromString are correct as written. Applying
+// pythonStrip to them "for consistency" would make Go accept a value Python
+// raises on -- breaking the parsers while fixing nothing.
+func TestNumericParsersRejectSeparatorsLikePythonNumerics(t *testing.T) {
+	for _, separator := range []string{"\x1c", "\x1d", "\x1e", "\x1f"} {
+		t.Setenv(MaxComponentNodesEnvVar, separator+"150")
+		if got := ResolveMaxComponentNodes(nil); got != DefaultMaxComponentNodes {
+			t.Errorf(
+				"env %q resolved to %d, want the default: Python's int() raises "+
+					"ValueError on a leading separator, so both planes must fall back. "+
+					"If this changed because pythonStrip was applied to the numeric "+
+					"parser, revert it -- see pythonStrip's doc comment",
+				separator+"150", got,
+			)
+		}
+	}
+
+	// Ordinary whitespace IS accepted by int(), and must stay accepted.
+	t.Setenv(MaxComponentNodesEnvVar, " 150 ")
+	if got := ResolveMaxComponentNodes(nil); got != 150 {
+		t.Errorf("ordinary whitespace must still be stripped for the numeric parser, got %d", got)
+	}
+}

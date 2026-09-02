@@ -180,6 +180,33 @@ class _FakeLoader:
         return [], []
 
 
+class _FakeLoaderWithTestopsPipeline(_FakeLoader):
+    """Like _FakeLoader, but returns ONE ci_pipeline_runs row so
+    compute_release_confidence/compute_quality_drag/compute_pipeline_stability
+    produce non-empty output -- needed to distinguish "write skipped because
+    skip_families named testops_risk" from "write skipped because there was
+    nothing to write" (test_repo_user_commit_in_skip_families_writes_nothing_
+    but_still_computes doesn't hit this ambiguity because compute_daily_metrics
+    already gets a real commit row from the base _FakeLoader)."""
+
+    async def load_testops_pipeline_data(self, *a: Any, **k: Any) -> tuple[list, list]:
+        pipeline_row = {
+            "repo_id": REPO_ID,
+            "run_id": "run-1",
+            "status": "success",
+            "queued_at": None,
+            "started_at": datetime(2025, 12, 18, 12, 0, tzinfo=timezone.utc),
+            "finished_at": datetime(2025, 12, 18, 12, 10, tzinfo=timezone.utc),
+            "duration_seconds": None,
+            "queue_seconds": None,
+            "retry_count": 0,
+            "team_id": None,
+            "service_id": None,
+            "org_id": ORG_ID,
+        }
+        return [pipeline_row], []
+
+
 class _NullResolver:
     def resolve(self, *a: Any, **k: Any) -> tuple[None, None]:
         return (None, None)
@@ -316,7 +343,8 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
 ) -> None:
     """A family with no native executor is unaffected by being named in
     skip_families -- only team_wellbeing, repo_user_commit, incident, deploy,
-    and cicd check this set today. "file_hotspots" has no Go executor yet."""
+    cicd, and testops_risk check this set today. "file_hotspots" has no Go
+    executor yet."""
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
@@ -704,3 +732,91 @@ async def test_file_risk_hotspots_skip_families_none_writes_it(
     )
 
     assert "write_file_hotspot_daily" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_testops_risk_in_skip_families_writes_nothing_but_still_computes(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4294: like repo_user_commit, compute_release_confidence must
+    still run when testops_risk is skipped (nothing downstream reads its
+    result, but the compute is cheap/ClickHouse-free and matching
+    repo_user_commit's precedent keeps _note_family_zero_rows's degrade
+    signal live regardless of which side computed the rows -- team-lead
+    ruling 2026-09-01). Only the three writes are gated."""
+    compute_calls: list[Any] = []
+    original = job_daily.compute_release_confidence
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(job_daily, "compute_release_confidence", _spy)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(
+        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
+    )
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"testops_risk"},
+    )
+
+    assert len(compute_calls) == 1
+    assert "write_release_confidence" not in sink.write_calls
+    assert "write_quality_drag" not in sink.write_calls
+    assert "write_pipeline_stability" not in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_testops_risk_skip_does_not_affect_other_families(
+    monkeypatch: Any,
+) -> None:
+    """Naming testops_risk in skip_families must not perturb team_metrics or
+    any other family's write path."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(
+        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
+    )
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"testops_risk"},
+    )
+
+    assert "team_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_testops_risk_not_skipped_writes_rows(monkeypatch: Any) -> None:
+    """Baseline for the two tests above: WITHOUT testops_risk in
+    skip_families, the same fixture actually writes release_confidence --
+    proves the "writes nothing" assertion above is because of the skip, not
+    because the fixture never produces rows in the first place."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(
+        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
+    )
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert "write_release_confidence" in sink.write_calls

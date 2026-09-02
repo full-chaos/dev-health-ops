@@ -1135,8 +1135,8 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277); naming any other family here has no
-    effect.
+    ``file_risk_hotspots`` CHAOS-4277, and ``testops_risk`` CHAOS-4294);
+    naming any other family here has no effect.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -1979,7 +1979,20 @@ async def run_daily_metrics_job(
         # observing inside that loop would double-count).
         record_team_metrics_daily_repo_rows(team_metrics)
 
-        # TestOps risk metrics (release confidence, quality drag, pipeline stability)
+        # CHAOS-4294: testops_risk has a native Go executor
+        # (TestopsRiskExecutor). Mirrors repo_user_commit's WRITE-ONLY skip
+        # (job_daily.py's skip_repo_user_commit_write above), not
+        # team_wellbeing's compute+write skip: compute always runs here
+        # (cheap, ClickHouse-free -- it only consumes testops_pipeline_metrics/
+        # testops_test_metrics/testops_coverage_metrics, which are computed
+        # unconditionally a few lines above regardless of this family's own
+        # skip state) and _note_family_zero_rows always fires, so this
+        # family's zero-row degrade signal keeps working the same way
+        # whether Go or Python actually wrote the rows. Only the three
+        # s.write_* calls are gated -- skipping them is what actually
+        # prevents the double-write a family flipped to families.json
+        # port="go" would otherwise produce (Go's executor already wrote
+        # these rows for this scope; Python must not write them again).
         release_conf = compute_release_confidence(
             day=d,
             pipeline_metrics=testops_pipeline_metrics,
@@ -2004,13 +2017,15 @@ async def run_daily_metrics_job(
             pipeline_metrics_7d=pipeline_metrics_buffer,
             computed_at=computed_at,
         )
+        skip_testops_risk_write = "testops_risk" in skip_families
         for s in sinks:
-            if release_conf:
-                s.write_release_confidence(release_conf)
-            if quality_drag:
-                s.write_quality_drag(quality_drag)
-            if pipeline_stab:
-                s.write_pipeline_stability(pipeline_stab)
+            if not skip_testops_risk_write:
+                if release_conf:
+                    s.write_release_confidence(release_conf)
+                if quality_drag:
+                    s.write_quality_drag(quality_drag)
+                if pipeline_stab:
+                    s.write_pipeline_stability(pipeline_stab)
         _note_family_zero_rows("testops_risk.release_confidence", release_conf, day=d)
         _note_family_zero_rows("testops_risk.quality_drag", quality_drag, day=d)
         _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)

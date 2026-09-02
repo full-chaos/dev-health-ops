@@ -187,15 +187,24 @@ func configure(
 	// The context carries no deadline, deliberately, and this comment says so
 	// rather than implying a bound that does not exist. Postgres.Shutdown ends
 	// in pgxpool.Close, which takes no context: it returns once every acquired
-	// connection is released, and cannot be cut short by one. On this path
-	// nothing has acquired a connection -- the failure happens during
-	// construction, before any component starts -- so Close returns
-	// immediately and there is nothing to bound. An earlier revision wrapped
-	// this in a five-second timeout, which read as a guarantee while enforcing
-	// nothing (team-lead ruling, 2026-09-02, after lane-auth-cp's executed
-	// check: correct the comment, do not build a bound for a call that cannot
-	// hang). WithoutCancel is kept so an already-cancelled parent cannot skip
-	// the close if a future adapter does start honouring the context.
+	// connection is released, and cannot be cut short by one.
+	//
+	// It cannot block here, and the REASON is worth naming, because it is a
+	// property of this function rather than of the pool:
+	// health.Registry.RegisterRequired only STORES its callback -- it never
+	// invokes it -- so store.Probe, and therefore pool.Ping, has not run by the
+	// time any of the four closeStore calls below can fire. The pool has
+	// acquired no connection and has no dial in flight, so Close returns
+	// immediately. A future change that eagerly probes a dependency inside
+	// configure would break that property, and this paragraph is the thing it
+	// should trip over.
+	//
+	// An earlier revision wrapped this in a five-second timeout, which read as
+	// a guarantee while enforcing nothing (team-lead ruling, 2026-09-02, after
+	// lane-auth-cp's executed check: correct the comment, do not build a bound
+	// for a call that cannot hang). WithoutCancel is kept so an
+	// already-cancelled parent cannot skip the close if a future adapter does
+	// start honouring the context.
 	closeStore := func() {
 		if closeErr := store.Shutdown(context.WithoutCancel(ctx)); closeErr != nil {
 			logger.ErrorContext(ctx, "close auth store after a failed startup", "error", closeErr)

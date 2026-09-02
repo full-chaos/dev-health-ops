@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -360,6 +361,200 @@ func TestUndeclaredBodyLengthUnderTheLimitStillReachesTheHandler(t *testing.T) {
 	}
 	if seen != payload {
 		t.Fatalf("handler read %q, want %q", seen, payload)
+	}
+}
+
+// TestBodyBoundIsExactAtTheLimit pins the off-by-one on BOTH sides, for both
+// the declared and the undeclared path.
+//
+// Nothing else in this suite exercises a body of exactly `limit` bytes: the
+// other cases are 64-against-16 (clearly over) and 15-against-64 (clearly
+// under), so `len(buffered) > limit` could become `>=` -- rejecting every
+// request that exactly fills the budget -- and every other test would still
+// pass. Codex round 2 and the peer delta review both came back CLEAN without
+// covering this boundary either, which is precisely why it is worth a test
+// rather than an argument: three passes agreeing tells you nothing about a
+// case none of them ran.
+//
+// The limit is the largest ACCEPTABLE size, so `limit` is in and `limit+1` is
+// out. Reading `limit+1` bytes in the middleware is what makes those two
+// distinguishable without reading an unbounded body.
+func TestBodyBoundIsExactAtTheLimit(t *testing.T) {
+	const limit = 32
+
+	cases := []struct {
+		name          string
+		size          int
+		declareLength bool
+		wantStatus    int
+		wantHandler   bool
+	}{
+		{name: "declared, exactly at the limit", size: limit, declareLength: true, wantStatus: http.StatusNoContent, wantHandler: true},
+		{name: "declared, one byte over", size: limit + 1, declareLength: true, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "undeclared, exactly at the limit", size: limit, wantStatus: http.StatusNoContent, wantHandler: true},
+		{name: "undeclared, one byte over", size: limit + 1, wantStatus: http.StatusRequestEntityTooLarge},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var handlerRan bool
+			var read int
+			options := testOptions(Route{
+				Method:  http.MethodPost,
+				Pattern: "/v1/boundary",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					handlerRan = true
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Errorf("read body: %v", err)
+					}
+					read = len(body)
+					w.WriteHeader(http.StatusNoContent)
+				}),
+			})
+			options.MaxBodyBytes = limit
+			handler := handlerFor(t, options)
+
+			payload := strings.Repeat("x", testCase.size)
+			request := httptest.NewRequest(http.MethodPost, "/v1/boundary", strings.NewReader(payload))
+			if !testCase.declareLength {
+				request.ContentLength = -1
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, testCase.wantStatus)
+			}
+			if handlerRan != testCase.wantHandler {
+				t.Fatalf("handler ran = %t, want %t", handlerRan, testCase.wantHandler)
+			}
+			// An accepted body must arrive WHOLE. A fix that let the request
+			// through but truncated it at the bound would satisfy the status
+			// assertion above and silently corrupt every request that exactly
+			// fills the budget.
+			if testCase.wantHandler && read != testCase.size {
+				t.Fatalf("handler read %d bytes, want the whole %d-byte body", read, testCase.size)
+			}
+		})
+	}
+}
+
+// countingReader is an endless source that records how much was taken from
+// it. It exists so a test can prove the middleware STOPPED reading, which a
+// finite fixture cannot: a fixture that runs out looks identical to a bound
+// that worked.
+type countingReader struct{ read int }
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	for index := range p {
+		p[index] = 'x'
+	}
+	c.read += len(p)
+	return len(p), nil
+}
+
+// TestUndeclaredBodyReadsAtMostOneByteBeyondTheLimit proves the memory claim
+// in MaxBody's doc comment against an unbounded source.
+//
+// Every other body test uses a fixture a few dozen bytes long, so all of them
+// would pass even if the middleware drained the entire stream — the fixture
+// simply ends first. This is the case that distinguishes "bounded" from
+// "happened not to be very long".
+//
+// Construction credited to lane-auth-cp, who built it as a throwaway during
+// the executed delta review of c82519bd0..5aaa29e1d; promoted here so it keeps
+// holding after the review that found it is over.
+func TestUndeclaredBodyReadsAtMostOneByteBeyondTheLimit(t *testing.T) {
+	const limit = 16
+	source := &countingReader{}
+
+	options := testOptions(Route{
+		Method:  http.MethodPost,
+		Pattern: "/v1/endless",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("an endless oversized body reached the route handler")
+		}),
+	})
+	options.MaxBodyBytes = limit
+	handler := handlerFor(t, options)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/endless", source)
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", response.Code)
+	}
+	// limit+1 is the exact budget: one byte past the limit is what makes "at
+	// the limit" and "over it" distinguishable. Reading more would mean the
+	// bound is not what the doc comment claims.
+	if source.read > limit+1 {
+		t.Fatalf("middleware read %d bytes from an endless source, want at most %d", source.read, limit+1)
+	}
+	if source.read == 0 {
+		t.Fatal("middleware read nothing, so this test cannot distinguish a bound from a no-op")
+	}
+}
+
+// failingReader yields some bytes and then fails, standing in for a client
+// that disappears part-way through a body.
+type failingReader struct {
+	remaining int
+	err       error
+}
+
+func (f *failingReader) Read(p []byte) (int, error) {
+	if f.remaining <= 0 {
+		return 0, f.err
+	}
+	take := min(len(p), f.remaining)
+	for index := range take {
+		p[index] = 'x'
+	}
+	f.remaining -= take
+	return take, nil
+}
+
+// TestUndeclaredBodyReadFailureIsNotReportedAsTooLarge separates the two ways
+// reading a body can end badly.
+//
+// A transport failure eight bytes into a sixty-four-byte budget is nowhere
+// near the limit, so answering 413 would tell the caller it sent too much when
+// it actually sent too little — a misdiagnosis that would send someone
+// shrinking a payload that was never the problem. Buffering made these two
+// outcomes share a code path, so the distinction needs a test rather than a
+// reading of the code.
+//
+// Construction credited to lane-auth-cp (executed delta review, c82519bd0..5aaa29e1d).
+func TestUndeclaredBodyReadFailureIsNotReportedAsTooLarge(t *testing.T) {
+	options := testOptions(Route{
+		Method:  http.MethodPost,
+		Pattern: "/v1/truncated",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("a request whose body failed mid-read reached the route handler")
+		}),
+	})
+	options.MaxBodyBytes = 64
+	handler := handlerFor(t, options)
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/v1/truncated",
+		&failingReader{remaining: 8, err: errors.New("connection reset")},
+	)
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code == http.StatusRequestEntityTooLarge {
+		t.Fatal("a short body that failed mid-read was reported as too large")
+	}
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+	if envelope := decodeEnvelope(t, response); envelope.Error.Code != CodeInvalidRequest {
+		t.Fatalf("code = %q, want %q", envelope.Error.Code, CodeInvalidRequest)
 	}
 }
 

@@ -953,6 +953,18 @@ func weightedSuccessRate7d(successRates []float64) float64 {
 // UNROUNDED value and why every sum below uses pythonparity.Sum.
 func successRateTrendFromRates(successRates []float64) float64 {
 	n := len(successRates)
+	// FMA note (lane-4441 review, CHAOS-4818): the compiler strength-reduces
+	// this division into `0.5 * float64(n-1)` and fuses that multiply into
+	// the `float64(i) - xMean` subtraction below (FMSUBD, confirmed via
+	// `go tool objdump` on arm64) -- NOT into numTerms[i]/denTerms[i]'s own
+	// multiplies, which stay unfused. This is harmless today ONLY because
+	// multiplying by the power-of-two constant 0.5 is exact for every
+	// integer (verified 0..100000 plus the 2**52/2**53 boundaries, 0
+	// inexact) -- round(i - 0.5*k) and round(i - round(0.5*k)) are then the
+	// same value regardless of fusion. That equivalence breaks if this
+	// divisor ever stops being a power of two (e.g. /3.0 is inexact for
+	// ~67% of integers in the same range) -- if xMean's formula changes,
+	// re-verify this fusion is still exact rather than assuming it.
 	xMean := float64(n-1) / 2.0
 	// sum(m.success_rate for m in days_data) / n
 	yMean := pythonparity.Sum(successRates) / float64(n)

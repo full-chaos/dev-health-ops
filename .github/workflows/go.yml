@@ -109,7 +109,22 @@ concurrency:
   # pull_request/pull_request_target) and empty for push, so it falls
   # through to `github.ref_name` (the pushed branch name) there — the same
   # branch produces the same group key from either trigger.
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # Keyed on the PR NUMBER for pull_request events and the ref otherwise, so a
+  # push run and a pull_request run for the same commit land in DIFFERENT
+  # groups. Keyed on the branch alone they shared one: `github.head_ref` is the
+  # branch on a pull_request and empty on a push, so `head_ref || ref_name`
+  # collapsed both events to the same value, and `cancel-in-progress` then let
+  # the twins race to cancel each other.
+  #
+  # Observed on #2110 (CHAOS-4814): both runs created in the SAME second, the
+  # pull_request twin cancelled, 15 cancelled check-runs left on the head
+  # commit carrying required context names, merge BLOCKED with nothing actually
+  # failing. It is a race, not a certainty -- #2115's twins were created in the
+  # same second and both survived -- which is why it presents as intermittent.
+  #
+  # This is the form the other eleven workflows already use; go.yml was the lone
+  # outlier.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   # Live-proof commit for the push-then-PR-open/reopen ordering (round 6,
   # CHAOS-4676): pushed while PR #2050 was closed, then the PR was reopened
   # at this exact SHA with no further push, to prove the shared group

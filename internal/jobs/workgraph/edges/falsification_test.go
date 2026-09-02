@@ -348,3 +348,47 @@ func TestProvenanceAndEvidenceOracleRejectsACorruptedRegeneration(t *testing.T) 
 		t.Fatal("the provenance constants collapsed; the assertion cannot distinguish them")
 	}
 }
+
+// TestConfidenceAcceptSetIsPythonsNotOurs pins the validator against the
+// measured behaviour of `WorkGraphEdge.__post_init__`, not against what a
+// reasonable validator would do.
+//
+// The distinction is the point. A stricter Go check rejects rows Python writes;
+// a looser one mints rows Python refuses. Both are divergences, and neither
+// fails a test that asserts only the author's intuition.
+func TestConfidenceAcceptSetIsPythonsNotOurs(t *testing.T) {
+	// Measured 2026-09-02 against the deployed dataclass, see confidence.go.
+	pythonRejects := map[string]float32{
+		"NaN":  float32(math.NaN()),
+		"+Inf": float32(math.Inf(1)),
+		"1.5":  1.5,
+		"-0.5": -0.5,
+	}
+	pythonAccepts := map[string]float32{
+		"0.9": 0.9,
+		"0.0": 0.0,
+		// The two tiers this port actually writes must both be inside the
+		// reference's accept-set, or the policy mints rows Python would refuse.
+		"delivery tier":    DeliveryConfidence,
+		"associative tier": AssociativeConfidence,
+	}
+	for name, value := range pythonRejects {
+		if err := ValidateConfidence(value); err == nil {
+			t.Errorf("Python rejects %s but this port accepts it — it would mint a row "+
+				"the reference refuses", name)
+		}
+	}
+	for name, value := range pythonAccepts {
+		if err := ValidateConfidence(value); err != nil {
+			t.Errorf("Python accepts %s but this port rejects it (%v) — it would drop a row "+
+				"the reference writes", name, err)
+		}
+	}
+	// The boundaries are inclusive in Python (`0.0 <= c <= 1.0`), so the exact
+	// endpoints must pass; an exclusive Go comparison would silently drop them.
+	for name, value := range map[string]float32{"exactly 0": 0, "exactly 1": 1} {
+		if err := ValidateConfidence(value); err != nil {
+			t.Errorf("%s must be accepted — Python's bounds are inclusive: %v", name, err)
+		}
+	}
+}

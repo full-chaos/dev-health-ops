@@ -94,6 +94,28 @@ type OrderedObject []Member
 // faithfully writes `100` where `100.0` stood, and the column changes with no
 // error anywhere on either side.
 //
+// That silence holds ONLY FOR FINITE VALUES, and the qualifier is worth having
+// because the unqualified version overstates the risk in one direction while
+// understating how the failure would actually present. Measured:
+//
+//	round(2.4)   = 2     int
+//	round(+inf)  raises OverflowError: cannot convert float infinity to integer
+//	round(-inf)  raises OverflowError
+//	round(nan)   raises ValueError: cannot convert float NaN to integer
+//
+// So on the three LIST-DERIVED fields -- wip_count_end_of_day,
+// items_completed_delta, cycle_time_p50_hours_slope, the ones where NaN and the
+// infinities are live because `_safe_float` guards only the scalar loaders -- a
+// dropped ndigits does not change the column quietly. It crashes the job, which
+// is the loudest failure available. The silent-int case needs the value to be
+// finite at that moment.
+//
+// Both are worth guarding, since finite data is overwhelmingly the common case
+// and a crash is only loud if it actually happens. lane-3092 found this by
+// PLANTING the defect rather than reading the code: its first plant on a
+// non-finite field raised instead of returning an int, contradicting the
+// wording we had both already written down.
+//
 // This encoder cannot catch that, and must not: refusing ints would make it
 // disagree with json.dumps. The invariant belongs to the Python caller, and
 // lane-3092 owns a float-type assertion in the loader port for exactly this.

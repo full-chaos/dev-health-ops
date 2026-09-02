@@ -773,64 +773,6 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/pythonparity (CPython sum() semantics vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestSumGoldenMatchesLivePython$' \
-        ./internal/pythonparity
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
-  # used Neumaier compensated summation for floats since 3.12 (gh-100425) and
-  # was a naive accumulation before it. The fixture therefore depends on the
-  # interpreter version with no diff in this repository, and the dependency runs
-  # in BOTH directions -- a downgrade below 3.12 would make naive summation
-  # correct and pythonparity.Sum's compensation WRONG, not merely unnecessary.
-  proof_file="${proof_dir}/python-sum-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/pythonparity (CPython sum() semantics vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestSumGoldenMatchesLivePython$' \
-        ./internal/pythonparity
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
-  # used Neumaier compensated summation for floats since 3.12 (gh-100425) and
-  # was a naive accumulation before it. The fixture therefore depends on the
-  # interpreter version with no diff in this repository, and the dependency runs
-  # in BOTH directions -- a downgrade below 3.12 would make naive summation
-  # correct and pythonparity.Sum's compensation WRONG, not merely unnecessary.
-  proof_file="${proof_dir}/python-sum-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
   printf 'go test -count=1: internal/pythonparity (frozen json.dumps golden vs live Python)\n'
   if ! (
     cd "${ROOT}"

@@ -61,6 +61,7 @@ WHAT THIS TEST ASSERTS
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -84,61 +85,459 @@ def _on_block(document: dict) -> dict:
     return document.get(True) or document.get("on") or {}
 
 
-def _github_glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """Translate a GitHub path filter to a regex.
-
-    `**` spans separators; `*` does not; everything else is literal. This is a
-    deliberately small translation covering the forms these two files actually
-    use -- if a filter ever needs `?`, `[...]` or `!` negation, this must grow
-    rather than silently mis-match.
-    """
-    out: list[str] = []
-    index = 0
-    while index < len(pattern):
-        if pattern.startswith("**", index):
-            out.append(".*")
-            index += 2
-        elif pattern[index] == "*":
-            out.append("[^/]*")
-            index += 1
-        else:
-            out.append(re.escape(pattern[index]))
-            index += 1
-    return re.compile("^" + "".join(out) + "$")
+# ONE implementation of `**/` semantics, not two kept in sync.
+#
+# This file used to carry its own translator. It diverged from `ci/go_relevance.py`'s
+# within a day: mine special-cased only a LEADING `**/`, so `docs/**/x.md` did not
+# match `docs/x.md`, while theirs treats `**/` as a token at any position. Two
+# copies of a rule is two answers to the same question, and the guard and the
+# relevance decider disagreeing about which paths are covered is exactly the drift
+# both exist to prevent.
+#
+# IMPORT COUPLING, stated because it is a real cost: this makes a test depend on a
+# CI script at import time. `tests/tooling/conftest.py` puts the repo root on
+# sys.path and `ci/` resolves as an implicit namespace package. If go_relevance.py
+# ever grows a heavy import or a module-scope side effect, this file inherits it.
+# That is worth accepting -- a shared rule with one owner beats two that agree today.
+from ci.go_relevance import github_glob_to_regex  # noqa: E402
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
-    return any(_github_glob_to_regex(p).match(path) for p in patterns)
+    return any(github_glob_to_regex(p).match(path) for p in patterns)
 
 
-def _fixture_files_on_disk() -> set[str]:
-    """Every file under `tests/fixtures/`, as repo-relative POSIX paths.
+# Directories whose fixture-shaped files are deliberately NOT required to match
+# the Go path filters, each with the reason and the condition that would remove
+# the exclusion.
+#
+# This map is the successor to a worse design. The first version of this test
+# walked `tests/fixtures/` and called itself "complete by construction" -- for
+# that directory. The DIRECTORY was the enumeration, and the docstring above it
+# said, in as many words, that a coverage oracle keyed on a pattern only checks
+# what its author thought to match. lane-3092 found the gap: their corpus under
+# `internal/pythonparity/testdata/` matched nothing, because `go.yml` has no
+# `internal/**` pattern -- only `**/*.go` (which does not cover a .json) and two
+# hand-listed testdata directories. Measured residue at that point: 63 unmatched
+# files across a dozen directories, belonging to five lanes that did not know.
+#
+# So the oracle now walks the whole tree, and a directory leaves coverage only by
+# being named here WITH a reason.
+UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
+    "src/dev_health_ops/fixtures": (
+        "the Python source tree, not Go testdata -- no Go test reads these, so "
+        "requiring them to trigger the Go workflow would make every Python-only "
+        "fixture change run the Go suite for nothing"
+    ),
+    "tests/testops/fixtures": (
+        "read by the Python testops suite, not by Go tests; covered by the "
+        "Python workflow's own filters"
+    ),
+    "tests/api/dev/fixtures": (
+        "read by the Python API test suite (tests/api/), not by Go tests; "
+        "covered by the Python workflow's own filters"
+    ),
+    "tests/docs/fixtures": (
+        "documentation-lint fixtures consumed by the docs workflow; markdown "
+        "and mkdocs config, with no Go reader"
+    ),
+    "internal/providersync/JIRA_PROVIDER_GAP_MATRIX.md": (
+        'surfaced by the os.ReadDir(".") reader shape, which enumerates a whole '
+        "package directory. The three tests doing that all filter to `jira_*.go` "
+        "or `*.go`, which `**/*.go` already covers -- so a markdown file in that "
+        "directory cannot change what any of them assert. Excused rather than "
+        "given a path filter, because adding a pattern for it would claim a "
+        "dependency that does not exist"
+    ),
+    "tests/acceptance/corpus": (
+        "acceptance-suite corpus consumed by the acceptance workflow, which has "
+        "its own path filters and does not run under go-quality"
+    ),
+}
 
-    THIS is the coverage oracle, and it is complete by construction: it asks the
-    filesystem what exists rather than asking source code what it mentions. A
-    fixture cannot hide from it.
 
-    The first version of this file used a regex over `*_test.go` to find fixture
-    references instead. That was wrong in the specific way this whole file is
-    about. The regex only matches paths written as one contiguous literal, so it
-    silently missed every read assembled with `filepath.Join`:
+# Directories no walk in this file descends: VCS internals, virtualenvs, caches.
+# Shared so the two oracles below cannot drift apart on what they skip.
+_SKIP_DIRECTORIES = frozenset(
+    {".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache"}
+)
 
-        filepath.Join(repoRoot(t), "tests", "fixtures", "cpython_random_golden.json")
-        filepath.Join(filepath.Dir(filename), "..", "..", "tests", "fixtures", ...)
 
-    It found 23 paths where a static inventory found 25. Both misses happened to
-    sit inside the new glob, so nothing was actually uncovered -- but a coverage
-    test whose oracle is a pattern only checks what the pattern's author thought
-    to match. That is the enumeration failure this PR replaced in the workflow,
-    reintroduced one layer up in the test meant to prevent it. Walking the
-    directory removes the oracle entirely.
+def _fixture_like_files_on_disk() -> set[str]:
+    """Every non-`.go` file under any `testdata/` or `fixtures/` directory.
+
+    THIS is the coverage oracle, and the scope is the whole tree rather than one
+    chosen directory.
+
+    The previous version walked `tests/fixtures/` only. It was complete for that
+    directory and blind to everywhere else fixtures live, which is at least a
+    dozen directories across five lanes. Replacing a regex with a directory walk
+    removed the pattern and kept the assumption -- the same enumeration failure,
+    one level up, inside the fix for that failure.
+
+    `.go` files are excluded because `**/*.go` already covers them; what is at
+    risk is data -- `.json`, `.py`, `.tsv`, `.txt` -- which no Go-source pattern
+    matches.
     """
-    root = REPO_ROOT / "tests" / "fixtures"
-    return {
-        path.relative_to(REPO_ROOT).as_posix()
-        for path in root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
+    root = REPO_ROOT
+    found: set[str] = set()
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        parts = path.relative_to(root).parts
+        if _SKIP_DIRECTORIES.intersection(parts):
+            continue
+        if path.suffix == ".go":
+            continue
+        if not any(segment in ("testdata", "fixtures") for segment in parts):
+            continue
+        found.add(path.relative_to(root).as_posix())
+    return found
+
+
+_GO_DATA_SUFFIXES = (
+    ".json",
+    # `.py` is here because Go tests read PYTHON as an input: a parity test
+    # scrapes the real sink module, a migration file, a model. Excluding it made
+    # the scanner blind to exactly the files whose drift the Go test exists to
+    # catch -- a PR touching only one of them was classified irrelevant, the Go
+    # contract test never ran, and this oracle passed anyway.
+    ".py",
+    ".sql",
+    ".csv",
+    ".tsv",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".golden",
+)
+
+
+def _files_named_by_go_tests() -> set[str]:
+    """Every repo file Go code NAMES, resolved from the naming file's directory.
+
+    THIS is the coverage oracle for Go inputs, keyed on the property that decides
+    the question: a file is a Go input because GO CODE NAMES IT, not because of
+    what its parent directory is called.
+
+    Three earlier versions keyed on directories -- a regex over one, a walk of
+    `tests/fixtures/`, then a walk over the two names `testdata` and `fixtures`.
+    Each replaced an enumeration with a slightly larger enumeration. Four
+    contract files read by Go tests were invisible to all three:
+
+        contracts/metrics/v1/remaining-scopes.json          scopes_test.go:56
+        contracts/cache-invalidation/v1/org_cache_epoch_key.json
+        contracts/provider-matrix/v1/matrix.json            capability_matrix_test.go
+        internal/jobs/metrics/daily/families.json           families_test.go:11
+
+    # THE READER SHAPES THIS COVERS
+
+    All four are mechanically enumerable from source, and each has a fixture in
+    `test_every_covered_reader_shape_is_found`:
+
+      1. a data-suffixed string literal in any `.go` file -- test OR production,
+         because a test's input is just as real when the production file it calls
+         is what names the path (`families.go` embeds `families.json`);
+      2. `//go:embed` directives, including multi-pattern lines and globs;
+      3. `filepath.Join("a", "b.json")` -- covered by (1), since the segments are
+         literals and the join is resolved against the file's directory;
+      4. `os.ReadDir("literal")` -- the directory's own non-`.go` files.
+
+    # WHAT IT CANNOT SEE, STATED BOTH WAYS
+
+    It cannot see a path BUILT AT RUNTIME: assembled from variables, a function
+    return, an env var, or a `fmt.Sprintf`. Those readers are THE RESIDUAL RISK
+    of this guard -- a corpus reached only that way can still rot silently, and
+    no amount of widening the literal scan finds it.
+
+    That limit is red-tested rather than narrated:
+    `test_the_runtime_built_path_limit_is_real` asserts a variable-built path is
+    NOT found, so the day someone teaches this to resolve them, the test fails
+    and the docstring gets corrected instead of quietly going stale.
+    """
+    found: set[str] = set()
+    for source_file in REPO_ROOT.rglob("*.go"):
+        parts = source_file.relative_to(REPO_ROOT).parts
+        if _SKIP_DIRECTORIES.intersection(parts):
+            continue
+        try:
+            source = source_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        found |= _resolve_named_files(source, source_file.parent, REPO_ROOT)
+    return found
+
+
+@lru_cache(maxsize=8)
+def _files_by_basename(anchor: Path) -> dict[str, tuple[str, ...]]:
+    """Every real file under *anchor*, indexed by basename.
+
+    Cached because it is consulted once per Go source file and rebuilding it
+    each time is quadratic over the tree.
+    """
+    index: dict[str, list[str]] = {}
+    for path in anchor.rglob("*"):
+        relative = path.relative_to(anchor)
+        if _SKIP_DIRECTORIES.intersection(relative.parts) or not path.is_file():
+            continue
+        index.setdefault(path.name, []).append(relative.as_posix())
+    return {name: tuple(paths) for name, paths in index.items()}
+
+
+def _looks_like_a_path(literal: str) -> bool:
+    """Reject prose that happens to end in a data suffix.
+
+    Three Go error messages in this repo end in a real path -- "httpx2 is added
+    to ci/requirements-live-python-oracles.txt" is a sentence, not a literal
+    naming an input. Whitespace or a format verb is the tell.
+    """
+    return not (
+        " " in literal
+        or "\t" in literal
+        or "%" in literal
+        or literal.startswith(("http://", "https://"))
+    )
+
+
+def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> set[str]:
+    """Resolve every file the Go source names, relative to its own directory.
+
+    `root` is injectable so the reader-shape fixtures can exercise this against a
+    tmp_path tree. A resolver that only works against the real repository cannot
+    be fixture-tested, and an untestable resolver is how the last three versions
+    of this oracle each shipped a coverage claim nobody had checked.
+    """
+    anchor = root if root is not None else REPO_ROOT
+    found: set[str] = set()
+
+    def add(candidate: Path) -> None:
+        try:
+            relative = candidate.resolve().relative_to(anchor)
+        except ValueError:
+            return  # escapes the repo; not ours to cover
+        if candidate.is_file() and candidate.suffix != ".go":
+            found.add(relative.as_posix())
+
+    # (1) and (3): data-suffixed string literals, including filepath.Join parts.
+    #
+    # Resolved against BOTH the naming file's directory and the repository root,
+    # because Go names inputs in both spellings and only one of them was tried.
+    # A sibling fixture is written `"testdata/x.json"`; a cross-tree input is
+    # written whole -- `"src/dev_health_ops/.../work_graph.py"` -- and handed to
+    # a helper that joins it onto the repo root itself. Resolving that second
+    # spelling against `internal/providersync/` yields a path that does not
+    # exist, so `add` dropped it and the file was invisible to the oracle while
+    # LOOKING covered: the literal is right there in the test.
+    #
+    # `add` already requires the candidate to be a real file, so trying both
+    # anchors cannot invent coverage -- at most one of them can exist.
+    for literal in re.findall(r'"([^"\n]+)"', source):
+        if literal.endswith(_GO_DATA_SUFFIXES):
+            before = len(found)
+            add(base / literal)
+            add(anchor / literal)
+            # Neither anchor worked, so the literal is relative to a directory
+            # only known at runtime -- `filepath.Join(contractsDir, "x.json")`,
+            # or a helper that joins the repo root itself. If exactly ONE file in
+            # the tree carries that basename, the reference is unambiguous and
+            # resolving it is strictly more coverage. Ambiguity is NOT resolved
+            # here: it is reported by _unresolvable_named_paths instead, because
+            # guessing between candidates is how an oracle starts asserting
+            # coverage it does not have.
+            if len(found) == before and _looks_like_a_path(literal):
+                candidates = _files_by_basename(anchor).get(Path(literal).name, ())
+                if len(candidates) == 1:
+                    add(anchor / candidates[0])
+
+    # (3) filepath.Join("a", "b.json") -- the segments are separate literals, so
+    # the literal scan above sees "b.json" and resolves it against the wrong
+    # directory. Joining them is what makes a multi-segment call resolvable; a
+    # fixture caught this docstring claiming (1) covered it when it did not.
+    for arguments in re.findall(r"filepath\.Join\(([^)]*)\)", source):
+        segments = re.findall(r'"([^"\n]*)"', arguments)
+        if segments and segments[-1].endswith(_GO_DATA_SUFFIXES):
+            # BOTH anchors again, and for the same reason as the plain literal
+            # above -- this is the shape that fix missed.
+            #
+            # The dominant spelling in this repo is
+            # `filepath.Join(repoRoot, "src", ..., "x.json")`: the FIRST segment
+            # is a VARIABLE, so the literal segments are repo-root-relative.
+            # Joining them onto the naming file's directory produced
+            # `cmd/query-api/src/dev_health_ops/...`, which does not exist, and
+            # the file was dropped -- invisible, while the literals sit in plain
+            # sight in the Go source.
+            #
+            # `len(segments) > 1` was also wrong: `filepath.Join(root, "x.json")`
+            # yields ONE literal and is exactly the variable-rooted shape that
+            # matters most. A single literal is now resolved against both
+            # anchors, which is what the plain-literal branch already does.
+            add(base.joinpath(*segments))
+            add(anchor.joinpath(*segments))
+
+        # (2) //go:embed — space-separated patterns, globs allowed.
+    for directive in re.findall(r"//go:embed\s+(.+)", source):
+        for pattern in directive.split():
+            # Go's `all:` prefix changes DIRECTORY WALKING to include names
+            # starting with `.` or `_` (go doc embed). It is not part of the
+            # path, so it must be stripped before globbing -- otherwise the glob
+            # looks for a directory literally named `all:uncovered` and silently
+            # finds nothing. A file reachable only through an `all:` embed was
+            # invisible to this oracle and to the workflow filters.
+            include_dot_prefixed = pattern.startswith("all:")
+            if include_dot_prefixed:
+                pattern = pattern[len("all:") :]
+            for match in base.glob(pattern):
+                # A directory pattern embeds the whole TREE beneath it. `add`
+                # requires a file, so globbing a directory added nothing at all
+                # -- `//go:embed uncovered` covered none of its contents.
+                if match.is_dir():
+                    for entry in match.rglob("*"):
+                        if not entry.is_file():
+                            continue
+                        # Without `all:`, Go excludes any path element starting
+                        # with `.` or `_`, so this oracle must exclude them too:
+                        # claiming coverage Go does not give is the same defect
+                        # as missing coverage it does.
+                        parts = entry.relative_to(match).parts
+                        if not include_dot_prefixed and any(
+                            part.startswith((".", "_")) for part in parts
+                        ):
+                            continue
+                        add(entry)
+                    continue
+                add(match)
+
+    # (4) os.ReadDir on a literal directory: its own non-.go files.
+    for directory in re.findall(r'os\.ReadDir\("([^"\n]*)"\)', source):
+        target = base / directory
+        if target.is_dir():
+            for entry in target.iterdir():
+                add(entry)
+
+    return found
+
+
+# The one class that cannot be decided by property.
+#
+# A provider file-listing fixture fabricates a repository layout and names
+# `__init__.py` in it. Over a hundred real `__init__.py` files exist, so the
+# literal matches many candidates while referring to NONE of them -- it is not a
+# reference to this repository at all.
+#
+# Every other case is decided by a property and needs no entry here: prose is
+# filtered by _looks_like_a_path, absolute paths are deployment locations,
+# a basename matching no file has nothing to cover, and an ambiguous literal
+# passes when every candidate is already covered. This is the residue, and it is
+# deliberately two lines rather than a growing list.
+FABRICATED_PATH_LITERALS: dict[str, str] = {
+    "__init__.py": "synthetic name in a fabricated provider file listing",
+    "src/__init__.py": "same fixture, same fabricated layout",
+}
+
+
+def _unresolvable_named_paths() -> list[tuple[str, str, tuple[str, ...]]]:
+    """Every data-suffixed literal naming a real file we could not resolve.
+
+    THIS is the guard keyed on the PROPERTY rather than on a list of shapes.
+    Four instances of one root cause reached review as separate findings --
+    a missing suffix, a plain literal, a filepath.Join, a go:embed prefix --
+    because each was a new WAY of naming a path, and the resolver's answer to
+    every one of them was the same: resolve to nothing, and say nothing.
+
+    A fifth way will exist. This does not try to enumerate it; it fails on the
+    property all five share -- a literal that names a real file, which this
+    resolver could not locate. The shape does not matter.
+
+    Ambiguity is reported rather than guessed, and there is deliberately NO
+    exception list: the caller decides whether an ambiguous literal is safe by
+    the only question that matters -- whether EVERY candidate it could mean is
+    already covered. If they all are, the ambiguity cannot hide a gap. If even
+    one is not, it can.
+    """
+    root = REPO_ROOT
+    index = _files_by_basename(root)
+    unresolvable: list[tuple[str, str, tuple[str, ...]]] = []
+
+    for source_file in root.rglob("*.go"):
+        relative = source_file.relative_to(root)
+        if _SKIP_DIRECTORIES.intersection(relative.parts):
+            continue
+        try:
+            source = source_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        unresolvable.extend(
+            (f"{relative.as_posix()}:{number}", literal, candidates)
+            for number, literal, candidates in _unresolvable_in_source(
+                source, source_file.parent, root, index
+            )
+        )
+    return unresolvable
+
+
+def _unresolvable_in_source(
+    source: str,
+    base: Path,
+    root: Path,
+    index: dict[str, tuple[str, ...]],
+) -> list[tuple[int, str, tuple[str, ...]]]:
+    """The guard's core, split out so it can be exercised against a fixture tree.
+
+    A guard that only runs against the real repository cannot be tested with a
+    CONSTRUCTED input, and an untestable guard is how the last three versions of
+    this oracle each shipped a coverage claim nobody had checked.
+    """
+    out: list[tuple[int, str, tuple[str, ...]]] = []
+    for number, line in enumerate(source.splitlines(), 1):
+        for literal in re.findall(r'"([^"\n]+)"', line):
+            if not literal.endswith(_GO_DATA_SUFFIXES):
+                continue
+            if not _looks_like_a_path(literal):
+                # Prose only. There is deliberately no absolute-path branch.
+                #
+                # There used to be, excusing `/app/config/x.yaml` as a
+                # deployment location. It was the last SHAPE-based exception in
+                # a guard whose whole principle is that there are none, and it
+                # was inert: all ten absolute literals in this repo either name
+                # no file at all (8) or have every candidate covered (2), so
+                # deleting it changed no outcome -- a mutation that SURVIVED.
+                #
+                # Inert is not harmless. It was silent on exactly the risk this
+                # guard exists to catch: `/app/config/secrets.yaml` and
+                # `config/secrets.yaml` carry identical ambiguity and identical
+                # uncovered candidates, and it reported only the second. A
+                # leading slash decided it.
+                #
+                # The two cases it excused are already handled by properties
+                # that were here anyway: a literal naming no file falls out at
+                # `not candidates`, and one whose candidates are all covered
+                # falls out at the caller's coverage check.
+                continue
+            if literal in FABRICATED_PATH_LITERALS:
+                continue
+            candidates = index.get(Path(literal).name, ())
+            if not candidates:
+                # Names no file in the tree, so there is nothing to cover.
+                continue
+            # Ask the same questions the resolver asks, rather than
+            # string-matching its OUTPUT against the literal. The output is
+            # normalised (`internal/x/../../tests/f.json` becomes
+            # `tests/f.json`) while the literal is not, so a substring
+            # comparison reported seven `../..` paths as unresolvable when
+            # the resolver had resolved every one of them.
+            if (base / literal).is_file() or (root / literal).is_file():
+                continue
+            if len(candidates) == 1:
+                continue  # the unique-basename fallback resolves it
+            out.append((number, literal, candidates))
+    return out
+
+
+def _is_excused(path: str) -> str | None:
+    """Return the reason this path is excused from coverage, or None."""
+    for directory, reason in UNCOVERED_FIXTURE_DIRECTORIES.items():
+        if path == directory or path.startswith(directory + "/"):
+            return reason
+    return None
 
 
 def _fixture_paths_named_in_go_tests() -> set[str]:
@@ -159,33 +558,82 @@ def _fixture_paths_named_in_go_tests() -> set[str]:
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
 def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
-    """A change to any fixture must run the workflow that guards fixtures.
+    """A change to any Go-relevant fixture must run the workflow that guards it.
 
-    This is the assertion that would have caught the original defect. It tests
-    the WIRING, not the presence of any particular entry: a fixture added
-    tomorrow is covered by the glob automatically, and a future narrowing of the
-    filter fails here instead of silently going green.
-
-    The oracle is the directory, not a scan of source. Anything under
-    `tests/fixtures/` must trigger the workflow, whether a Go test reads it, a
-    Python test reads it, or nothing reads it yet -- because deciding which is
-    which requires the very source analysis that proved unreliable.
+    The oracle is the whole tree, not one directory. Anything under a `testdata/`
+    or `fixtures/` directory must either match the filter or be named in
+    UNCOVERED_FIXTURE_DIRECTORIES with a reason.
     """
     go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
-    fixtures = _fixture_files_on_disk()
+    fixtures = _fixture_like_files_on_disk() | _files_named_by_go_tests()
 
     assert fixtures, (
-        "tests/fixtures/ is empty or missing -- this test would pass vacuously, "
-        "which is precisely the failure mode it exists to prevent"
+        "no fixture-like files found anywhere in the tree -- the walk has broken, "
+        "and this test would pass vacuously, which is the failure mode it exists "
+        "to prevent"
     )
 
-    unmatched = sorted(f for f in fixtures if not _matches_any(f, go_paths))
-    assert not unmatched, (
-        f"{len(unmatched)} of {len(fixtures)} fixture(s) do not match any "
-        f"{event} path filter in go.yml, so a PR changing only one of them is "
-        f"classified non-Go and go-quality is satisfied VACUOUSLY by the no-op "
-        f"workflow -- the guard never runs:\n  " + "\n  ".join(unmatched)
+    unmatched = sorted(
+        path
+        for path in fixtures
+        if not _matches_any(path, go_paths) and _is_excused(path) is None
     )
+    assert not unmatched, (
+        f"{len(unmatched)} of {len(fixtures)} fixture-like file(s) match no "
+        f"{event} path filter in go.yml and are not excused, so a PR changing "
+        f"only one of them is classified non-Go and go-quality is satisfied "
+        f"VACUOUSLY by the no-op workflow -- the guard never runs:\n  "
+        + "\n  ".join(unmatched)
+        + "\n\nEither add a pattern covering them to BOTH path lists in go.yml "
+        "(push and pull_request), or add the "
+        "directory to UNCOVERED_FIXTURE_DIRECTORIES with a reason. Do not add "
+        "individual files: that is the enumeration this test exists to end."
+    )
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+def test_no_excused_directory_is_actually_covered(event: str) -> None:
+    """An exclusion that stops being necessary must fail, not linger.
+
+    Same discipline as a documented-divergence entry: it asserts the exclusion
+    rather than describing it. If a directory here becomes matched by the
+    filters, the entry is stale and should be deleted -- otherwise the map grows
+    into a list of things nobody rechecks, which is the enumeration failure
+    wearing a different hat.
+    """
+    go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
+    fixtures = _fixture_like_files_on_disk()
+
+    for directory, reason in UNCOVERED_FIXTURE_DIRECTORIES.items():
+        covered = sorted(
+            path
+            for path in fixtures
+            if (path == directory or path.startswith(directory + "/"))
+            and _matches_any(path, go_paths)
+        )
+        assert not covered, (
+            f"{directory!r} is excused because {reason!r}, but {len(covered)} of "
+            f"its files now MATCH the {event} filters. The exclusion is stale: "
+            f"delete the entry rather than leaving it to describe something that "
+            f"is no longer true.\n  " + "\n  ".join(covered[:5])
+        )
+
+
+def test_every_excused_directory_actually_exists() -> None:
+    """An exclusion naming a directory that is gone is dead weight.
+
+    A stale path here silently excuses nothing while looking like it excuses
+    something, so the map's length stops meaning what a reader assumes.
+    """
+    for directory in UNCOVERED_FIXTURE_DIRECTORIES:
+        # A file is a legitimate exclusion key: the os.ReadDir reader shape
+        # surfaces individual files a directory-wide entry would over-excuse.
+        target = REPO_ROOT / directory
+        assert target.is_dir() or target.is_file(), (
+            f"{directory!r} is excused from fixture coverage but does not exist. "
+            "Delete the entry; an exclusion for a missing directory reads as "
+            "coverage policy and is noise."
+        )
 
 
 def test_every_fixture_named_in_a_go_test_exists() -> None:
@@ -196,7 +644,7 @@ def test_every_fixture_named_in_a_go_test_exists() -> None:
     deliberately-incomplete literal scan, which is fine here -- a typo it misses
     is a typo, not a silent gap in a guard.
     """
-    on_disk = _fixture_files_on_disk()
+    on_disk = _fixture_like_files_on_disk()
     named = _fixture_paths_named_in_go_tests()
 
     missing = sorted(named - on_disk)
@@ -229,3 +677,382 @@ def test_the_fixture_filter_is_a_glob_not_an_enumeration() -> None:
                 f"glob 'tests/fixtures/**', not by enumeration; found "
                 f"{fixture_patterns}"
             )
+
+
+def test_every_covered_reader_shape_is_found(tmp_path: Path) -> None:
+    """One fixture per reader shape the oracle claims to cover.
+
+    A docstring listing four shapes is a claim. These are the claim's evidence,
+    and each fails on its own if that shape regresses -- so the list cannot go
+    stale while still reading as covered.
+    """
+    (tmp_path / "corpus.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "embedded.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "listed").mkdir()
+    (tmp_path / "listed" / "scanned.sql").write_text("SELECT 1", encoding="utf-8")
+
+    shapes = {
+        "string literal": 'raw, _ := os.ReadFile("corpus.json")',
+        "filepath.Join literal segments": 'os.ReadFile(filepath.Join("nested", "embedded.json"))',
+        "go:embed directive": "//go:embed nested/embedded.json",
+        "go:embed glob": "//go:embed nested/*.json",
+        "os.ReadDir literal directory": 'entries, _ := os.ReadDir("listed")',
+    }
+    for name, source in shapes.items():
+        found = _resolve_named_files(source, tmp_path, tmp_path)
+        assert found, (
+            f"reader shape {name!r} found nothing. The oracle's docstring claims "
+            f"this shape is covered; either the shape regressed or the claim is "
+            f"wrong -- and an overstated coverage claim is worse than an admitted "
+            f"gap, because a reader stops checking."
+        )
+
+
+def test_a_repo_root_relative_literal_is_found(tmp_path: Path) -> None:
+    """A whole-path literal resolves against the ROOT, not just its own directory.
+
+    Go names inputs in two spellings. A sibling fixture is written relative to
+    the test -- `"testdata/x.json"` -- but a cross-tree input is written whole,
+    `"src/dev_health_ops/.../work_graph.py"`, and handed to a helper that joins
+    it onto the repository root.
+
+    Only the first spelling used to resolve. The second produced
+    `internal/providersync/src/dev_health_ops/...`, which does not exist, so it
+    was dropped -- and the file looked covered, because the literal is right
+    there in the test. Nine real Go inputs were invisible this way, including
+    two YAML configs and a SQL migration that no `.py` fix would have reached.
+    """
+    # Deliberately a `.json`, not a `.py`: this test isolates the ANCHOR fix.
+    # A `.py` fixture here would also fail when the suffix-set fix is reverted,
+    # so one test would report two different defects and neither would be named.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "contract.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / "internal" / "providersync"
+    package.mkdir(parents=True)
+
+    found = _resolve_named_files(
+        'readSource(t, "src/contract.json")', package, tmp_path
+    )
+
+    assert "src/contract.json" in found, (
+        "a repo-root-relative literal was not resolved. It is named verbatim in "
+        "Go source, so it reads as covered; if only the naming file's directory "
+        "is tried, the path silently resolves to nothing and the input drops out "
+        f"of the oracle entirely. found={sorted(found)}"
+    )
+
+
+def test_python_named_by_go_is_an_input(tmp_path: Path) -> None:
+    """`.py` is a Go INPUT suffix, because Go tests read Python as data.
+
+    A parity test scrapes the real sink module; another reads a migration. The
+    suffix set excluded `.py`, so those reads were invisible: a PR touching only
+    the Python file was classified non-Go, the contract test never ran, and the
+    coverage oracle passed anyway -- the exact vacuous green it exists to stop.
+    """
+    (tmp_path / "sink.py").write_text("x = 1", encoding="utf-8")
+
+    found = _resolve_named_files('readSource(t, "sink.py")', tmp_path, tmp_path)
+
+    assert "sink.py" in found, (
+        "a Python file named by Go source was not treated as an input; the Go "
+        f"test that reads it would skip on a PR that changed it. found={sorted(found)}"
+    )
+
+
+def test_a_variable_rooted_filepath_join_is_found(tmp_path: Path) -> None:
+    """`filepath.Join(repoRoot, "a", "b.json")` resolves against the ROOT.
+
+    This is the DOMINANT spelling in this repo and it was the third instance of
+    one root cause. The single-literal fix tried both anchors; the Join branch
+    still joined only onto the naming file's directory, so a variable-rooted
+    call produced `cmd/query-api/src/dev_health_ops/...` -- a path that does not
+    exist -- and the file vanished from the oracle while its segments sat in
+    plain sight in the Go source.
+
+    `src/dev_health_ops/api/graphql/go_api_operations.json` was reached exactly
+    this way from `cmd/query-api/query_route_mounted_log_test.go:188`, matched
+    no path filter, and was invisible to two rounds of review.
+
+    The single-segment case is covered deliberately: `filepath.Join(root,
+    "x.json")` yields ONE literal, and the old `len(segments) > 1` guard
+    skipped precisely the variable-rooted shape that matters most.
+    """
+    (tmp_path / "src" / "graphql").mkdir(parents=True)
+    (tmp_path / "src" / "graphql" / "ops.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "one.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / "cmd" / "api"
+    package.mkdir(parents=True)
+
+    multi = _resolve_named_files(
+        'p := filepath.Join(repoRoot, "src", "graphql", "ops.json")', package, tmp_path
+    )
+    assert "src/graphql/ops.json" in multi, (
+        "a variable-rooted multi-segment filepath.Join was not resolved against "
+        f"the repository root. found={sorted(multi)}"
+    )
+
+    single = _resolve_named_files(
+        'p := filepath.Join(root, "one.json")', package, tmp_path
+    )
+    assert "one.json" in single, (
+        "a variable-rooted SINGLE-segment filepath.Join was not resolved; the "
+        f"old len(segments) > 1 guard skipped exactly this shape. found={sorted(single)}"
+    )
+
+
+def test_go_embed_prefix_and_directory_forms_are_found(tmp_path: Path) -> None:
+    """`all:` is a walking MODE, not part of the path, and a directory embeds a tree.
+
+    Two ways this silently found nothing. `//go:embed all:dir/x.json` was passed
+    to `Path.glob` verbatim, so it looked for a directory literally named
+    `all:dir` -- no match, no error. And a bare directory pattern globbed to the
+    directory itself, which `add` rejects because it is not a file, so
+    `//go:embed dir` covered none of its contents.
+
+    The exclusion rule is asserted too, not just the inclusion. Without `all:`,
+    Go skips any path element starting with `.` or `_` (go doc embed). An oracle
+    that claimed those files were covered would be overstating coverage, which
+    is the same defect as missing it -- it just fails in the other direction.
+    """
+    package = tmp_path / "cmd" / "pkg"
+    (package / "data" / "sub").mkdir(parents=True)
+    for name in (
+        "data/.hidden.json",
+        "data/_under.json",
+        "data/plain.json",
+        "data/sub/deep.json",
+    ):
+        (package / name).write_text("{}", encoding="utf-8")
+
+    def resolve(pattern: str) -> set[str]:
+        found = _resolve_named_files(f"//go:embed {pattern}", package, tmp_path)
+        return {path.split("pkg/", 1)[1] for path in found}
+
+    assert resolve("all:data/.hidden.json") == {"data/.hidden.json"}, (
+        "an `all:`-prefixed file pattern found nothing; the prefix is a walking "
+        "mode and must be stripped before globbing"
+    )
+    assert resolve("all:data") == {
+        "data/.hidden.json",
+        "data/_under.json",
+        "data/plain.json",
+        "data/sub/deep.json",
+    }, "`all:` on a directory must embed the whole tree INCLUDING dot/underscore names"
+    assert resolve("data") == {"data/plain.json", "data/sub/deep.json"}, (
+        "a bare directory embeds its tree but EXCLUDES dot/underscore names; "
+        "including them would claim coverage Go does not actually give"
+    )
+
+
+def test_no_named_path_resolves_to_nothing() -> None:
+    """A literal naming a real file must never be dropped in silence.
+
+    THE POINT OF THIS TEST, which is different from every other test here.
+
+    Four instances of one root cause reached review as four separate findings:
+    a missing `.py` suffix, a plain repo-root-relative literal, a variable-rooted
+    `filepath.Join`, and a `go:embed all:` prefix. Each was a new WAY of naming a
+    path, each was found by a different round, and the resolver's response to all
+    four was identical -- resolve to nothing, report nothing, stay green.
+
+    Enumerating shapes cannot end that, because the next shape is by definition
+    the one nobody listed. This keys on the PROPERTY the four share instead: a
+    literal that names a file which really exists, that this resolver could not
+    locate. When the fifth shape arrives it fails here, named, with its
+    file:line -- rather than silently subtracting from coverage.
+
+    Ambiguous literals are not guessed at. They pass only when EVERY candidate
+    is already covered, which is the question that actually decides whether the
+    ambiguity can hide a gap.
+    """
+    go_paths = (_on_block(_load(GO_WORKFLOW)).get("pull_request") or {}).get(
+        "paths"
+    ) or []
+
+    dangerous = []
+    for location, literal, candidates in _unresolvable_named_paths():
+        uncovered = [c for c in candidates if not _matches_any(c, go_paths)]
+        if uncovered:
+            dangerous.append((location, literal, uncovered))
+
+    assert not dangerous, (
+        "these literals name a real file the resolver could not locate, and at "
+        "least one candidate matches no path filter -- so a PR changing it is "
+        "classified non-Go and the Go test that reads it never runs:\n  "
+        + "\n  ".join(
+            f"{location}: {literal!r} could mean {uncovered}"
+            for location, literal, uncovered in dangerous
+        )
+        + "\n\nEither teach _resolve_named_files the shape that names it, or add "
+        "a pattern covering every candidate. Do NOT add the literal to an "
+        "exception list: the whole point of this check is that it keys on the "
+        "property rather than on a list of known shapes."
+    )
+
+
+def test_a_sixth_unknown_shape_fails_loud_instead_of_vanishing(tmp_path: Path) -> None:
+    """The guard must fire on a naming shape the resolver has never heard of.
+
+    Four instances of one root cause arrived as four separate findings, each a
+    new WAY of naming a path. A fifth and a sixth will exist. This constructs
+    one the resolver genuinely does not implement -- `os.DirFS` plus a relative
+    `Open` -- and asserts it is REPORTED rather than silently dropped.
+
+    The file is deliberately ambiguous (two `data.json` in the tree) so the
+    unique-basename fallback cannot rescue it. That is the honest test: the
+    resolver still cannot locate it, and the requirement is that it says so.
+    """
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "data.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "b" / "data.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / "cmd" / "svc"
+    package.mkdir(parents=True)
+
+    source = 'fsys := os.DirFS(repoRoot)\n f, _ := fsys.Open("data.json")'
+
+    assert not _resolve_named_files(source, package, tmp_path), (
+        "the resolver is not expected to understand os.DirFS; if it now does, "
+        "this test's premise is stale and should be rewritten around a shape "
+        "that is genuinely unknown"
+    )
+
+    index: dict[str, tuple[str, ...]] = {"data.json": ("a/data.json", "b/data.json")}
+    reported = _unresolvable_in_source(source, package, tmp_path, index)
+
+    assert reported, (
+        "a literal naming a real file was neither resolved NOR reported -- it "
+        "vanished. That is the exact failure mode four review rounds found in "
+        "four different shapes, and the guard exists to end it."
+    )
+    assert reported[0][1] == "data.json"
+    assert set(reported[0][2]) == {"a/data.json", "b/data.json"}, (
+        "the report must name every candidate, so the reader can decide whether "
+        "the ambiguity can hide a gap"
+    )
+
+
+def test_an_absolute_literal_is_judged_like_any_other(tmp_path: Path) -> None:
+    """A leading slash must not buy an exemption.
+
+    Constructed by lane-ci-flakes during its executed read: two literals with
+    identical ambiguity and identical uncovered candidates, differing only in a
+    leading `/`. The old absolute-path branch reported the relative one and
+    stayed silent on the absolute one.
+
+    That branch was inert -- deleting it changed no current outcome, a mutation
+    that survived -- which is exactly why it was worth deleting. A dead branch
+    that reads as a judgement is a judgement nobody has had to defend, and this
+    one would have woken up the first time a Go test read a deployment path
+    whose repo-side original was ambiguous and uncovered.
+    """
+    package = tmp_path / "cmd" / "svc"
+    package.mkdir(parents=True)
+    index: dict[str, tuple[str, ...]] = {
+        "secrets.yaml": ("a/secrets.yaml", "b/secrets.yaml")
+    }
+
+    absolute = _unresolvable_in_source(
+        'readConfig("/app/config/secrets.yaml")', package, tmp_path, index
+    )
+    relative = _unresolvable_in_source(
+        'readConfig("config/secrets.yaml")', package, tmp_path, index
+    )
+
+    assert absolute, (
+        "an absolute literal naming an ambiguous, real file was not reported. "
+        "It carries the same risk as the relative spelling, and a leading slash "
+        "is not a reason to treat it differently."
+    )
+    assert [literal for _, literal, _ in absolute] == ["/app/config/secrets.yaml"]
+    assert absolute[0][2] == relative[0][2], (
+        "both spellings name the same candidates, so both must report the same "
+        "candidates"
+    )
+
+
+def test_the_runtime_built_path_limit_is_real(tmp_path: Path) -> None:
+    """The CONTROL for the uncovered shape, so the stated limit is red-tested.
+
+    The oracle cannot resolve a path assembled at runtime, and says so. If that
+    ever becomes false -- someone teaches it to evaluate variables -- this test
+    fails and the docstring gets corrected, instead of the limit quietly
+    outliving its truth. A narrated limitation rots; a tested one cannot.
+    """
+    (tmp_path / "runtime.json").write_text("{}", encoding="utf-8")
+    built_at_runtime = (
+        'name := "runtime"\nraw, _ := os.ReadFile(fmt.Sprintf("%s.json", name))\n'
+    )
+    found = _resolve_named_files(built_at_runtime, tmp_path, tmp_path)
+    assert "runtime.json" not in {Path(p).name for p in found}, (
+        "the oracle resolved a runtime-built path. That is an improvement, but "
+        "the docstring still calls those readers the residual risk -- correct "
+        "the docstring in the same change that made this pass."
+    )
+
+    # CONTROL for the control: the same file IS found when named literally, so a
+    # pass above means "runtime paths are unresolved", not "nothing resolves".
+    literal = 'raw, _ := os.ReadFile("runtime.json")'
+    assert {
+        Path(p).name for p in _resolve_named_files(literal, tmp_path, tmp_path)
+    } == {"runtime.json"}, (
+        "the literal form is not found either, so the test above proves nothing"
+    )
+
+
+@pytest.mark.parametrize(
+    "pattern,path,expected",
+    [
+        # The case this file's own translator got WRONG before consolidation: a
+        # LEADING `**/` means zero or more directories, so a top-level file
+        # matches. Kept from that translator's fixtures, per the consolidation.
+        ("**/testdata/**", "testdata/a.json", True),
+        ("**/testdata/**", "internal/x/testdata/a.json", True),
+        ("**/testdata/**", "notestdata/a.json", False),
+        # The case the SHARED translator handles and the deleted one did not:
+        # `**/` is a token at any position, not only at the start.
+        ("docs/**/x.md", "docs/x.md", True),
+        ("docs/**/x.md", "docs/a/b/x.md", True),
+        # Root-level under `**/`, the CHAOS-4834 false-green.
+        ("**/*.go", "root.go", True),
+        ("**/go.mod", "go.mod", True),
+        ("**/go.mod", "mygo.mod", False),
+        # `*` must not span a separator; `**` must.
+        ("docs/*.md", "docs/a/b.md", False),
+        ("docs/**", "docs/a/b.md", True),
+    ],
+)
+def test_the_shared_translator_matches_github_semantics(
+    pattern: str, path: str, expected: bool
+) -> None:
+    """Semantics of the ONE translator this file now shares with the relevance gate.
+
+    These moved here when this file's own copy was deleted. They are not
+    duplicated coverage: nothing else in `tests/` exercises
+    `github_glob_to_regex` directly -- the sharding suite only invokes
+    `go_relevance.py` as a subprocess, which cannot pin a per-pattern answer.
+
+    Both directions matter. A false *match* over-triggers the Go workflow, which
+    costs minutes. A false *non-match* marks a real change irrelevant and skips
+    a required gate, which is the defect CHAOS-4834 exists to prevent.
+    """
+    assert bool(github_glob_to_regex(pattern).match(path)) is expected
+
+
+def test_the_shared_translator_refuses_what_it_cannot_express() -> None:
+    """The hard error, which was pinned NOWHERE before this.
+
+    `?`, `[`, `]` and `!` are not implemented. Silently escaping them into
+    literal text yields a filter matching nothing, which reports full coverage
+    and skips the gate -- a false green in the direction that hides work.
+
+    It raises SystemExit rather than AssertionError: `go_relevance.py` is a CLI
+    first and a library second. Asserting the type here is deliberate, so a
+    future refactor to a normal exception fails this test instead of silently
+    changing how callers must guard.
+    """
+    for unsupported in ("a?b", "a[bc]d", "!negated"):
+        with pytest.raises(SystemExit):
+            github_glob_to_regex(unsupported)

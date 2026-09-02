@@ -177,6 +177,14 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
         "documentation-lint fixtures consumed by the docs workflow; markdown "
         "and mkdocs config, with no Go reader"
     ),
+    "internal/providersync/JIRA_PROVIDER_GAP_MATRIX.md": (
+        'surfaced by the os.ReadDir(".") reader shape, which enumerates a whole '
+        "package directory. The three tests doing that all filter to `jira_*.go` "
+        "or `*.go`, which `**/*.go` already covers -- so a markdown file in that "
+        "directory cannot change what any of them assert. Excused rather than "
+        "given a path filter, because adding a pattern for it would claim a "
+        "dependency that does not exist"
+    ),
     "tests/acceptance/corpus": (
         "acceptance-suite corpus consumed by the acceptance workflow, which has "
         "its own path filters and does not run under go-quality"
@@ -236,57 +244,106 @@ _GO_DATA_SUFFIXES = (
 
 
 def _files_named_by_go_tests() -> set[str]:
-    """Every repo file a Go test NAMES, resolved from that test's own directory.
+    """Every repo file Go code NAMES, resolved from the naming file's directory.
 
-    THIS is the coverage oracle for Go test inputs, and it is keyed on the
-    property that actually matters: a file is a Go test's input because a Go test
-    READS it, not because of what its parent directory is called.
+    THIS is the coverage oracle for Go inputs, keyed on the property that decides
+    the question: a file is a Go input because GO CODE NAMES IT, not because of
+    what its parent directory is called.
 
-    The previous version walked for a `testdata/` or `fixtures/` path segment.
-    That was the third instance of one error in this file. It began as a regex
-    over one directory; then a walk of `tests/fixtures/`; then a walk keyed on
-    two directory NAMES -- each fix replacing an enumeration with a slightly
-    larger enumeration and calling it complete. Four contract files read by Go
-    tests were invisible to all three, because none of them lives under either
-    name:
+    Three earlier versions keyed on directories -- a regex over one, a walk of
+    `tests/fixtures/`, then a walk over the two names `testdata` and `fixtures`.
+    Each replaced an enumeration with a slightly larger enumeration. Four
+    contract files read by Go tests were invisible to all three:
 
         contracts/metrics/v1/remaining-scopes.json          scopes_test.go:56
         contracts/cache-invalidation/v1/org_cache_epoch_key.json
         contracts/provider-matrix/v1/matrix.json            capability_matrix_test.go
         internal/jobs/metrics/daily/families.json           families_test.go:11
 
-    A PR changing only one of those ran the no-op `go-quality` while this guard
-    reported no uncovered fixture.
+    # THE READER SHAPES THIS COVERS
 
-    Reference forms all reduce to the same rule -- resolve the literal against
-    the test file's directory:
+    All four are mechanically enumerable from source, and each has a fixture in
+    `test_every_covered_reader_shape_is_found`:
 
-        os.ReadFile("../../../../contracts/metrics/v1/remaining-scopes.json")
-        const p = "../../contracts/..."; os.ReadFile(filepath.Clean(p))
-        os.ReadFile(filepath.Join("families.json"))
+      1. a data-suffixed string literal in any `.go` file -- test OR production,
+         because a test's input is just as real when the production file it calls
+         is what names the path (`families.go` embeds `families.json`);
+      2. `//go:embed` directives, including multi-pattern lines and globs;
+      3. `filepath.Join("a", "b.json")` -- covered by (1), since the segments are
+         literals and the join is resolved against the file's directory;
+      4. `os.ReadDir("literal")` -- the directory's own non-`.go` files.
 
-    Only literals ending in a data suffix are considered; `.go` needs no cover
-    because `**/*.go` already matches it.
+    # WHAT IT CANNOT SEE, STATED BOTH WAYS
+
+    It cannot see a path BUILT AT RUNTIME: assembled from variables, a function
+    return, an env var, or a `fmt.Sprintf`. Those readers are THE RESIDUAL RISK
+    of this guard -- a corpus reached only that way can still rot silently, and
+    no amount of widening the literal scan finds it.
+
+    That limit is red-tested rather than narrated:
+    `test_the_runtime_built_path_limit_is_real` asserts a variable-built path is
+    NOT found, so the day someone teaches this to resolve them, the test fails
+    and the docstring gets corrected instead of quietly going stale.
     """
     found: set[str] = set()
-    for test in REPO_ROOT.rglob("*_test.go"):
-        parts = test.relative_to(REPO_ROOT).parts
+    for source_file in REPO_ROOT.rglob("*.go"):
+        parts = source_file.relative_to(REPO_ROOT).parts
         if _SKIP_DIRECTORIES.intersection(parts):
             continue
         try:
-            source = test.read_text(encoding="utf-8")
+            source = source_file.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for literal in re.findall(r'"([^"\n]+)"', source):
-            if not literal.endswith(_GO_DATA_SUFFIXES):
-                continue
-            candidate = (test.parent / literal).resolve()
-            try:
-                relative = candidate.relative_to(REPO_ROOT)
-            except ValueError:
-                continue  # escapes the repo; not ours to cover
-            if candidate.is_file():
-                found.add(relative.as_posix())
+        found |= _resolve_named_files(source, source_file.parent, REPO_ROOT)
+    return found
+
+
+def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> set[str]:
+    """Resolve every file the Go source names, relative to its own directory.
+
+    `root` is injectable so the reader-shape fixtures can exercise this against a
+    tmp_path tree. A resolver that only works against the real repository cannot
+    be fixture-tested, and an untestable resolver is how the last three versions
+    of this oracle each shipped a coverage claim nobody had checked.
+    """
+    anchor = root if root is not None else REPO_ROOT
+    found: set[str] = set()
+
+    def add(candidate: Path) -> None:
+        try:
+            relative = candidate.resolve().relative_to(anchor)
+        except ValueError:
+            return  # escapes the repo; not ours to cover
+        if candidate.is_file() and candidate.suffix != ".go":
+            found.add(relative.as_posix())
+
+    # (1) and (3): data-suffixed string literals, including filepath.Join parts.
+    for literal in re.findall(r'"([^"\n]+)"', source):
+        if literal.endswith(_GO_DATA_SUFFIXES):
+            add(base / literal)
+
+    # (3) filepath.Join("a", "b.json") -- the segments are separate literals, so
+    # the literal scan above sees "b.json" and resolves it against the wrong
+    # directory. Joining them is what makes a multi-segment call resolvable; a
+    # fixture caught this docstring claiming (1) covered it when it did not.
+    for arguments in re.findall(r"filepath\.Join\(([^)]*)\)", source):
+        segments = re.findall(r'"([^"\n]*)"', arguments)
+        if len(segments) > 1 and segments[-1].endswith(_GO_DATA_SUFFIXES):
+            add(base.joinpath(*segments))
+
+        # (2) //go:embed — space-separated patterns, globs allowed.
+    for directive in re.findall(r"//go:embed\s+(.+)", source):
+        for pattern in directive.split():
+            for match in base.glob(pattern):
+                add(match)
+
+    # (4) os.ReadDir on a literal directory: its own non-.go files.
+    for directory in re.findall(r'os\.ReadDir\("([^"\n]*)"\)', source):
+        target = base / directory
+        if target.is_dir():
+            for entry in target.iterdir():
+                add(entry)
+
     return found
 
 
@@ -426,7 +483,10 @@ def test_every_excused_directory_actually_exists() -> None:
     something, so the map's length stops meaning what a reader assumes.
     """
     for directory in UNCOVERED_FIXTURE_DIRECTORIES:
-        assert (REPO_ROOT / directory).is_dir(), (
+        # A file is a legitimate exclusion key: the os.ReadDir reader shape
+        # surfaces individual files a directory-wide entry would over-excuse.
+        target = REPO_ROOT / directory
+        assert target.is_dir() or target.is_file(), (
             f"{directory!r} is excused from fixture coverage but does not exist. "
             "Delete the entry; an exclusion for a missing directory reads as "
             "coverage policy and is noise."
@@ -471,3 +531,62 @@ def test_the_fixture_filter_is_a_glob_not_an_enumeration() -> None:
                 f"glob 'tests/fixtures/**', not by enumeration; found "
                 f"{fixture_patterns}"
             )
+
+
+def test_every_covered_reader_shape_is_found(tmp_path: Path) -> None:
+    """One fixture per reader shape the oracle claims to cover.
+
+    A docstring listing four shapes is a claim. These are the claim's evidence,
+    and each fails on its own if that shape regresses -- so the list cannot go
+    stale while still reading as covered.
+    """
+    (tmp_path / "corpus.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "embedded.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "listed").mkdir()
+    (tmp_path / "listed" / "scanned.sql").write_text("SELECT 1", encoding="utf-8")
+
+    shapes = {
+        "string literal": 'raw, _ := os.ReadFile("corpus.json")',
+        "filepath.Join literal segments": 'os.ReadFile(filepath.Join("nested", "embedded.json"))',
+        "go:embed directive": "//go:embed nested/embedded.json",
+        "go:embed glob": "//go:embed nested/*.json",
+        "os.ReadDir literal directory": 'entries, _ := os.ReadDir("listed")',
+    }
+    for name, source in shapes.items():
+        found = _resolve_named_files(source, tmp_path, tmp_path)
+        assert found, (
+            f"reader shape {name!r} found nothing. The oracle's docstring claims "
+            f"this shape is covered; either the shape regressed or the claim is "
+            f"wrong -- and an overstated coverage claim is worse than an admitted "
+            f"gap, because a reader stops checking."
+        )
+
+
+def test_the_runtime_built_path_limit_is_real(tmp_path: Path) -> None:
+    """The CONTROL for the uncovered shape, so the stated limit is red-tested.
+
+    The oracle cannot resolve a path assembled at runtime, and says so. If that
+    ever becomes false -- someone teaches it to evaluate variables -- this test
+    fails and the docstring gets corrected, instead of the limit quietly
+    outliving its truth. A narrated limitation rots; a tested one cannot.
+    """
+    (tmp_path / "runtime.json").write_text("{}", encoding="utf-8")
+    built_at_runtime = (
+        'name := "runtime"\nraw, _ := os.ReadFile(fmt.Sprintf("%s.json", name))\n'
+    )
+    found = _resolve_named_files(built_at_runtime, tmp_path, tmp_path)
+    assert "runtime.json" not in {Path(p).name for p in found}, (
+        "the oracle resolved a runtime-built path. That is an improvement, but "
+        "the docstring still calls those readers the residual risk -- correct "
+        "the docstring in the same change that made this pass."
+    )
+
+    # CONTROL for the control: the same file IS found when named literally, so a
+    # pass above means "runtime paths are unresolved", not "nothing resolves".
+    literal = 'raw, _ := os.ReadFile("runtime.json")'
+    assert {
+        Path(p).name for p in _resolve_named_files(literal, tmp_path, tmp_path)
+    } == {"runtime.json"}, (
+        "the literal form is not found either, so the test above proves nothing"
+    )

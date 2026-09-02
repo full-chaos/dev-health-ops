@@ -339,7 +339,8 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			// continue-and-record treatment as the issue path.
 			bundle, normalizeErr := normalizeGitHubPullRequestBundle(
 				claim, restResult.RepoFullName, restResult.RepoID, pull.Payload,
-				adapted.Events, adapted.Comments, handler.ResolveIdentity, normalizedAt,
+				adapted.Events, adapted.Comments, adapted.ClosingIssueRefs,
+				handler.ResolveIdentity, normalizedAt,
 			)
 			if normalizeErr != nil {
 				incomplete = append(incomplete, GitHubWorkItemsIncomplete{
@@ -349,6 +350,18 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 				break
 			}
 			appendGitHubWorkItemRows(&rows, bundle)
+			// codex round 2b (P2, CHAOS-4757): closingIssuesReferences is
+			// evidence-bearing (team-attribution edges), not cosmetic like
+			// Comments/Events, so a PR at the fetch cap must never look complete
+			// when it is not — record it as optional-data incompleteness (D17)
+			// rather than a silent truncation. Non-fatal: does not `break`, the
+			// rows already captured for this and every other PR still land.
+			if adapted.ClosingIssueRefsTruncated {
+				incomplete = append(incomplete, GitHubWorkItemsIncomplete{
+					Component: "pull_request_processing", SubjectID: subject,
+					Cause: "closing_references_truncated",
+				})
+			}
 		}
 	}
 
@@ -426,13 +439,24 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		value := claim.BeforeAt.UTC()
 		watermark = &value
 	}
+	// CHAOS-4757 telemetry: count the PRIMARY provider-attached dependency rows
+	// (closingIssuesReferences) separately from the total, so a run's provider
+	// usage is observable by tier without a ClickHouse query against
+	// relationship_type_raw.
+	closingReferenceDependenciesSynced := 0
+	for _, dependency := range rows.Dependencies {
+		if dependency.RelationshipTypeRaw == "github_closing_reference" {
+			closingReferenceDependenciesSynced++
+		}
+	}
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: attachGitHubWorkItemTeamAttributionObservation(
 			attachWorkItemTeamInheritanceObservation(map[string]any{
-				"work_items_synced":                len(rows.WorkItems),
-				"projects_v2":                      projectState,
-				githubWorkItemsIncompleteResultKey: incomplete,
+				"work_items_synced":                     len(rows.WorkItems),
+				"projects_v2":                           projectState,
+				"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
+				githubWorkItemsIncompleteResultKey:      incomplete,
 				"observations": map[string]any{
 					"provider_usage": usage.snapshot(),
 				},

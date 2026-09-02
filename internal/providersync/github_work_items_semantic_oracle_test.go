@@ -281,7 +281,7 @@ func buildGitHubPullRequestSemanticOracleRows(t *testing.T, input map[string]any
 		marshalSemanticOracleValue(t, input["raw_pr"]),
 		marshalSemanticOracleValues(t, input["raw_events"]),
 		marshalSemanticOracleValues(t, input["raw_comments"]),
-		nil, githubWorkItemOracleNormalizedAt,
+		nil, nil, githubWorkItemOracleNormalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

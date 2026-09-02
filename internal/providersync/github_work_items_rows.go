@@ -442,6 +442,7 @@ func normalizeGitHubPullRequestBundle(
 	raw json.RawMessage,
 	events []json.RawMessage,
 	comments []json.RawMessage,
+	closingIssueRefs []json.RawMessage,
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
 ) (githubWorkItemRows, error) {
@@ -556,6 +557,13 @@ func normalizeGitHubPullRequestBundle(
 	if err != nil {
 		return githubWorkItemRows{}, err
 	}
+	closingRefDependencies, err := extractGitHubClosingIssueReferences(
+		claim, item.WorkItemID, closingIssueRefs, normalizedAt,
+	)
+	if err != nil {
+		return githubWorkItemRows{}, err
+	}
+	dependencies = append(dependencies, closingRefDependencies...)
 	attributions, err := detectGitHubPullRequestAttributions(
 		claim, repoID, pull, normalizedAt,
 	)
@@ -737,6 +745,63 @@ var (
 		`(?i)linear\.app/[^/\s]+/issue/([A-Za-z][A-Za-z0-9]+-[0-9]+)`,
 	)
 )
+
+// githubClosingIssueReferenceNode is the raw closingIssuesReferences GraphQL
+// node shape: {"number": N, "repository": {"nameWithOwner": "owner/repo"}}.
+type githubClosingIssueReferenceNode struct {
+	Number     int `json:"number"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
+}
+
+// extractGitHubClosingIssueReferences emits the PRIMARY provider-attached
+// PR-issue link mechanism for GitHub (CHAOS-4757): GitHub's own
+// closingIssuesReferences on the PR node (populated by closing keywords in
+// the PR body/title AND by the manual "Development" panel link) — the
+// provider-attached data the standing PRIMARY/FALLBACK design calls for
+// (team-attribution.md), as opposed to extractGitHubWorkItemDependencies'
+// FALLBACK text-parse of body/branch/comments above. There is no Python
+// producer for this field (Go-only, per the standing sync-ownership rule: no
+// Python sync changes for anything Go workers run).
+func extractGitHubClosingIssueReferences(
+	claim Claim,
+	workItemID string,
+	rawRefs []json.RawMessage,
+	normalizedAt time.Time,
+) ([]githubWorkItemDependencyRow, error) {
+	rows := make([]githubWorkItemDependencyRow, 0, len(rawRefs))
+	seen := make(map[string]struct{}, len(rawRefs))
+	for _, raw := range rawRefs {
+		var node githubClosingIssueReferenceNode
+		if json.Unmarshal(raw, &node) != nil {
+			return nil, providerfoundation.ErrNormalizationInvalid
+		}
+		repoFullName := strings.TrimSpace(node.Repository.NameWithOwner)
+		if node.Number < 1 || repoFullName == "" {
+			continue
+		}
+		target := "gh:" + repoFullName + "#" + strconv.Itoa(node.Number)
+		if target == workItemID {
+			continue
+		}
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		row := githubWorkItemDependencyRow{
+			SourceWorkItemID: workItemID, TargetWorkItemID: target,
+			RelationshipType: "relates_to", RelationshipTypeRaw: "github_closing_reference",
+			RelationshipSemanticsVersion: "canonical-blocks.v2",
+			LastSynced:                   normalizedAt.UTC(), OrgID: claim.OrgID,
+		}
+		if err := row.validate(claim); err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
 
 func extractGitHubWorkItemDependencies(
 	claim Claim,

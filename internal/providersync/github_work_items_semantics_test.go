@@ -111,7 +111,7 @@ func TestNormalizeGitHubPullRequestBundlePreservesPythonPRSemantics(t *testing.T
 	}
 
 	rows, err := normalizeGitHubPullRequestBundle(
-		claim, "acme/api", repoID, pr, events, comments, nil, normalizedAt,
+		claim, "acme/api", repoID, pr, events, comments, nil, nil, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestNormalizeGitHubPullRequestBundlePreservesPythonPRSemantics(t *testing.T
 		t.Fatalf("sources=%v want=%v", gotSources, wantSources)
 	}
 	second, err := normalizeGitHubPullRequestBundle(
-		claim, "acme/api", repoID, pr, events, comments, nil, normalizedAt,
+		claim, "acme/api", repoID, pr, events, comments, nil, nil, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestNormalizeGitHubPullRequestStatusPartitionsMatchPython(t *testing.T) {
 			t.Parallel()
 			raw := json.RawMessage(`{"number":17,"title":"Partition","created_at":"2026-08-01T08:00:00Z",` + test.extra + `}`)
 			rows, err := normalizeGitHubPullRequestBundle(
-				claim, "acme/api", repoID, raw, nil, nil, nil, normalizedAt,
+				claim, "acme/api", repoID, raw, nil, nil, nil, nil, normalizedAt,
 			)
 			if err != nil {
 				t.Fatal(err)

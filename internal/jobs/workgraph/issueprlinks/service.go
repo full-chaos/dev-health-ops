@@ -31,7 +31,11 @@ type Outcome struct {
 	AdmittedByRawKind map[string]int
 	Written           int
 	Rejected          map[RejectionReason]int
-	Duration          time.Duration
+	// ReservedSeenByRawKind counts rows whose raw kind is recognised but held
+	// in ReservedAdmissions -- the signal that activating one would now do
+	// something. See ReservedAdmissions for the sequencing this protects.
+	ReservedSeenByRawKind map[string]int
+	Duration              time.Duration
 	// Balanced is false when the read count does not equal written plus
 	// rejected -- an accounting bug in this package, not a data condition.
 	Balanced bool
@@ -115,13 +119,14 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 	}
 
 	outcome := Outcome{
-		OrganizationID:    orgID,
-		DependenciesRead:  result.DependenciesRead,
-		AdmittedByRawKind: result.AdmittedByRawKind,
-		Written:           result.Written(),
-		Rejected:          result.Rejected,
-		Duration:          service.now().Sub(started),
-		Balanced:          result.Balanced(),
+		OrganizationID:        orgID,
+		DependenciesRead:      result.DependenciesRead,
+		AdmittedByRawKind:     result.AdmittedByRawKind,
+		Written:               result.Written(),
+		Rejected:              result.Rejected,
+		ReservedSeenByRawKind: result.ReservedSeenByRawKind,
+		Duration:              service.now().Sub(started),
+		Balanced:              result.Balanced(),
 	}
 	service.observe(outcome)
 	return outcome, nil
@@ -144,6 +149,12 @@ func (service *Service) observe(outcome Outcome) {
 		attributes = append(attributes, slog.Int(
 			"admitted_"+admission.RelationshipTypeRaw,
 			outcome.AdmittedByRawKind[admission.RelationshipTypeRaw],
+		))
+	}
+	for _, reserved := range ReservedAdmissions {
+		attributes = append(attributes, slog.Int(
+			"reserved_seen_"+reserved.RelationshipTypeRaw,
+			outcome.ReservedSeenByRawKind[reserved.RelationshipTypeRaw],
 		))
 	}
 

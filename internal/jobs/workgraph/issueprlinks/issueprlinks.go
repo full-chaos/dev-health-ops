@@ -148,18 +148,42 @@ type Admission struct {
 	TargetPrefix string
 }
 
-// DefaultAdmissions is the admission table.
+// DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer
+// will turn into mapping rows today.
 //
-// Only the Linear row is reachable today. The GitHub and Jira rows are
-// CHAOS-4757 slices A and B: NEITHER PLANE writes those raw kinds yet
-// (`rg closingIssuesReferences` over the whole tree returns zero hits, and both
-// planes' Jira normalizers cover `issuelinks` only), so they admit nothing
-// until lane-4757's ingestion lands. They are declared here, frozen with
-// team-lead, so that landing is a providersync change with no edit to this
-// package -- and so a reader can see the whole rule in one place instead of
-// inferring it from a Linear literal.
+// It holds Linear alone, deliberately. That makes the Go active set IDENTICAL
+// to the live Python gate (_is_linear_pr_attachment_dependency, a Linear
+// literal), which is what lets the parity oracle be a plain statement rather
+// than one with an asterisk for the whole window in which both planes are
+// write-capable. See ReservedAdmissions for why the other two are not here yet.
 var DefaultAdmissions = []Admission{
 	{RelationshipTypeRaw: "linear_attachment", TargetPrefix: "linear:"},
+}
+
+// ReservedAdmissions are the raw kinds whose shape is FROZEN and implemented
+// but which this producer must not admit yet. Promoting one is a one-line move
+// into DefaultAdmissions -- no other code changes.
+//
+//   - `github_closing_reference` (CHAOS-4757 slice A). lane-4757's Go PR will
+//     start writing these rows. Admitting them BEFORE CHAOS-4769 is fixed makes
+//     that defect reachable: Python's fallback text-parse writer
+//     (`_build_issue_pr_edges`, builder.py:1352) can mint the SAME
+//     (org_id, repo_id, work_item_id, pr_number) from a "closes #N" PR body,
+//     stamped with build time, while this producer stamps the dependency row's
+//     earlier `last_synced`. `work_graph_issue_pr` is a
+//     ReplacingMergeTree(last_synced), so the text-parsed row would WIN and the
+//     provider's own closing reference would be discarded -- inverting the
+//     standing rule that provider-attached is PRIMARY and text parsing is
+//     FALLBACK. Ruling (team-lead, 2026-09-01): fix CHAOS-4769 on the Go readers
+//     first, activate this second, in its own PR with before/after evidence.
+//   - `jira_dev_status` (CHAOS-4757 slice B). No writer exists on either plane;
+//     both planes' Jira normalizers cover issue-to-issue `issuelinks` only.
+//     Reserved until a Jira ingestion writer exists.
+//
+// Declaring them here rather than leaving them undeclared is the point: the
+// shape is agreed and tested, so activation is a decision, not an
+// implementation.
+var ReservedAdmissions = []Admission{
 	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:"},
 	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
 }
@@ -277,6 +301,12 @@ type Result struct {
 	AdmittedByRawKind map[string]int
 	// Rejected counts every non-written row by reason.
 	Rejected map[RejectionReason]int
+	// ReservedSeenByRawKind counts rows matching a RESERVED admission -- the
+	// shape is recognised but activation is deliberately withheld. Without it,
+	// a provider starting to write a reserved kind would be invisible, buried
+	// in `not_admissible` alongside every unrelated relation row, and the
+	// decision to activate would have no evidence behind it.
+	ReservedSeenByRawKind map[string]int
 }
 
 // Written is the number of rows Derive produced.
@@ -335,9 +365,10 @@ func Derive(inputs Inputs) Result {
 	}
 
 	result := Result{
-		DependenciesRead:  len(inputs.Dependencies),
-		AdmittedByRawKind: make(map[string]int),
-		Rejected:          make(map[RejectionReason]int),
+		DependenciesRead:      len(inputs.Dependencies),
+		AdmittedByRawKind:     make(map[string]int),
+		Rejected:              make(map[RejectionReason]int),
+		ReservedSeenByRawKind: make(map[string]int),
 	}
 	if len(inputs.Dependencies) == 0 {
 		return result
@@ -376,15 +407,24 @@ func Derive(inputs Inputs) Result {
 	for _, dependency := range inputs.Dependencies {
 		admission, admissible := admit(admissions, dependency)
 		if !admissible {
+			if reserved, ok := admit(ReservedAdmissions, dependency); ok {
+				result.ReservedSeenByRawKind[reserved.RelationshipTypeRaw]++
+			}
 			result.Rejected[ReasonNotAdmissible]++
 			continue
 		}
+		// Counted BEFORE the parse: this counter answers "is this provider
+		// writing rows yet", so a provider whose rows all fail to parse must
+		// look different from a provider that is not writing at all. Those two
+		// states are operationally opposite and only one of them gets
+		// investigated (codex round 1, F2).
+		result.AdmittedByRawKind[admission.RelationshipTypeRaw]++
+
 		source, parsed := ParsePRSource(dependency.SourceWorkItemID)
 		if !parsed {
 			result.Rejected[ReasonUnparseableSource]++
 			continue
 		}
-		result.AdmittedByRawKind[admission.RelationshipTypeRaw]++
 
 		if dependency.TargetWorkItemID == "" {
 			result.Rejected[ReasonEmptyTarget]++

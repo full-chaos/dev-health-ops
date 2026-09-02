@@ -36,6 +36,31 @@ type Window struct {
 	RepoID *uuid.UUID
 }
 
+// truncateBoundToSecond drops sub-second precision from a window bound, because
+// Python does and this is a parity port.
+//
+// Python builds the clause by STRING FORMATTING the bound through
+// `_format_datetime_for_clickhouse` (builder.py:57-60) --
+// `strftime("%Y-%m-%d %H:%M:%S")` -- which silently discards everything below
+// a second. The bounds reaching it routinely carry microseconds:
+// `run_work_graph_build` defaults them to `datetime.now(timezone.utc)`
+// (runner.py:61-69).
+//
+// `git_pull_requests.created_at` is `DateTime64(3, 'UTC')` in the live schema,
+// so this is not cosmetic. Binding the untruncated instant moves the boundary
+// by up to a second in BOTH directions: with `to = 00:00:00.750Z`, a PR created
+// at `00:00:00.500Z` is outside Python's window (`<= '...00:00:00'`) and inside
+// an untruncated Go one, so Go would write a native mapping row Python does not;
+// at the `from` bound the asymmetry drops rows instead.
+//
+// Truncate() floors toward the zero time, which for a UTC instant is the same
+// operation strftime performs. The frozen golden cannot catch this class at all
+// -- its generator constructs `BuildConfig` with only a DSN and an org, so no
+// window is ever exercised (codex round 1, F1).
+func truncateBoundToSecond(bound time.Time) time.Time {
+	return bound.UTC().Truncate(time.Second)
+}
+
 // Loader reads the four inputs Derive needs, scoped to one org.
 type Loader struct {
 	conn conn
@@ -165,11 +190,11 @@ WHERE org_id = {org_id:String}`
 	args := []any{clickhouse.Named("org_id", orgID)}
 	if window.From != nil {
 		query += ` AND created_at >= {from_ts:DateTime64(3)}`
-		args = append(args, clickhouse.Named("from_ts", window.From.UTC()))
+		args = append(args, clickhouse.Named("from_ts", truncateBoundToSecond(*window.From)))
 	}
 	if window.To != nil {
 		query += ` AND created_at <= {to_ts:DateTime64(3)}`
-		args = append(args, clickhouse.Named("to_ts", window.To.UTC()))
+		args = append(args, clickhouse.Named("to_ts", truncateBoundToSecond(*window.To)))
 	}
 	if window.RepoID != nil {
 		query += ` AND repo_id = {repo_id:UUID}`

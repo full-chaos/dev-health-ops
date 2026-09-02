@@ -284,20 +284,78 @@ func TestDeriveAccountsForEveryDependencyRow(t *testing.T) {
 			result.DependenciesRead, golden.Counts["dependencies"],
 		)
 	}
-	// The admission table's Linear row is the only one reachable on today's
-	// data; the GitHub and Jira rows admit nothing until lane-4757's ingestion
-	// lands. Asserting that keeps the golden honest about which slice is live.
+	// Linear is the only ACTIVE admission, and it must stay reachable.
 	if result.AdmittedByRawKind["linear_attachment"] == 0 {
 		t.Fatal("no linear_attachment rows admitted -- the proof org's primary mechanism vanished")
 	}
-	for _, unreachable := range []string{"github_closing_reference", "jira_dev_status"} {
-		if count := result.AdmittedByRawKind[unreachable]; count != 0 {
+	// Nothing reserved may be admitted, and nothing reserved has appeared in
+	// the data yet. The second assertion is the interesting one: when
+	// lane-4757's GitHub ingestion starts writing, this fails and tells us the
+	// activation decision now has evidence behind it (CHAOS-4769 sequencing).
+	for _, reserved := range ReservedAdmissions {
+		if count := result.AdmittedByRawKind[reserved.RelationshipTypeRaw]; count != 0 {
+			t.Errorf("admitted %d %s rows, but that kind is RESERVED", count, reserved.RelationshipTypeRaw)
+		}
+		if count := result.ReservedSeenByRawKind[reserved.RelationshipTypeRaw]; count != 0 {
 			t.Errorf(
-				"admitted %d %s rows: that raw kind is not written by either plane yet, so the "+
-					"golden's expectations need regenerating alongside lane-4757's ingestion",
-				count, unreachable,
+				"the frozen data now contains %d %s rows. The golden is not wrong -- regenerate it, "+
+					"and note that activating this kind is now a live decision (CHAOS-4769 must land first)",
+				count, reserved.RelationshipTypeRaw,
 			)
 		}
+	}
+}
+
+// TestReservedKindsAreNotActive is the guard on the CHAOS-4769 sequencing: a
+// reserved raw kind must never appear in the active table, because activating
+// one before the Go readers rank by provenance lets a text-parsed row displace
+// a provider-attached one on an RMT collision.
+func TestReservedKindsAreNotActive(t *testing.T) {
+	active := make(map[string]struct{}, len(DefaultAdmissions))
+	for _, admission := range DefaultAdmissions {
+		active[admission.RelationshipTypeRaw] = struct{}{}
+	}
+	for _, reserved := range ReservedAdmissions {
+		if _, clash := active[reserved.RelationshipTypeRaw]; clash {
+			t.Errorf(
+				"%s is in BOTH DefaultAdmissions and ReservedAdmissions -- activating it is a "+
+					"deliberate PR with before/after evidence, gated on CHAOS-4769",
+				reserved.RelationshipTypeRaw,
+			)
+		}
+	}
+	// The active set must equal the live Python gate's set exactly, for as long
+	// as both planes can write. That equality IS the parity oracle's premise.
+	if len(DefaultAdmissions) != 1 || DefaultAdmissions[0].RelationshipTypeRaw != "linear_attachment" {
+		t.Errorf(
+			"active admissions are %+v; Python's live gate (_is_linear_pr_attachment_dependency) "+
+				"admits linear_attachment alone, and the two must match while both planes write",
+			DefaultAdmissions,
+		)
+	}
+}
+
+// TestReservedKindIsSeenButNotAdmitted proves the reserved kinds are wired end
+// to end -- recognised, counted, and refused -- so activation is one line and
+// its effect is already measurable.
+func TestReservedKindIsSeenButNotAdmitted(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+	inputs.Dependencies[0].TargetWorkItemID = "gh:owner/repo#5"
+	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "gh:owner/repo#5"}}
+
+	result := Derive(inputs)
+	if result.Written() != 0 {
+		t.Fatalf("wrote %d links for a RESERVED kind", result.Written())
+	}
+	if got := result.Rejected[ReasonNotAdmissible]; got != 1 {
+		t.Errorf("rejected[not_admissible] = %d, want 1", got)
+	}
+	if got := result.ReservedSeenByRawKind["github_closing_reference"]; got != 1 {
+		t.Errorf("reserved_seen[github_closing_reference] = %d, want 1", got)
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
 	}
 }
 

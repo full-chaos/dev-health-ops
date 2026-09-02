@@ -283,3 +283,32 @@ func TestGoldenRejectionBreakdown(t *testing.T) {
 		t.Errorf("admitted-to-written gap %d is not explained by the post-admission gates (%d)", gap, want)
 	}
 }
+
+// TestAdmittedCounterCountsRowsThatPassedAdmission is codex round-1 finding F2.
+//
+// `AdmittedByRawKind` is documented as counting rows that passed the ADMISSION
+// TABLE, and it is the signal that lane-4757's GitHub/Jira slices have started
+// producing rows at all. Incrementing it only after ParsePRSource succeeds
+// makes a provider whose rows are ALL malformed look like a provider that is
+// not writing yet -- the two states are operationally opposite, and the second
+// one is the one nobody investigates.
+func TestAdmittedCounterCountsRowsThatPassedAdmission(t *testing.T) {
+	inputs := baseInputs()
+	// Passes the admission table (raw kind + target prefix) but its source is a
+	// tracker id, not a PR reference.
+	inputs.Dependencies[0].SourceWorkItemID = "gh:owner/repo#not-a-pr"
+
+	result := Derive(inputs)
+	if got := result.Rejected[ReasonUnparseableSource]; got != 1 {
+		t.Fatalf("rejected[unparseable_source] = %d, want 1", got)
+	}
+	if got := result.AdmittedByRawKind["linear_attachment"]; got != 1 {
+		t.Errorf(
+			"admitted[linear_attachment] = %d, want 1: the row passed admission and was "+
+				"rejected later, so it must still be counted as admitted", got,
+		)
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}

@@ -20,17 +20,19 @@ import (
 type stubConn struct {
 	responses [][][]any
 	queries   []string
+	queryArgs [][]any
 	inserted  [][]any
 	prepared  string
 	queryErr  error
 	batchErr  error
 }
 
-func (stub *stubConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+func (stub *stubConn) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
 	if stub.queryErr != nil {
 		return nil, stub.queryErr
 	}
 	stub.queries = append(stub.queries, query)
+	stub.queryArgs = append(stub.queryArgs, args)
 	if len(stub.responses) == 0 {
 		return &stubRows{}, nil
 	}
@@ -331,5 +333,62 @@ func TestConstructorsRejectNilDependencies(t *testing.T) {
 	}
 	if _, err := NewService(nil, nil, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("NewService(nil, nil, nil) = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestWindowBoundsAreTruncatedToWholeSeconds is codex round-1 finding F1.
+//
+// Python builds the window clause by STRING FORMATTING the bound through
+// `_format_datetime_for_clickhouse` (builder.py:57-60), which is
+// `strftime("%Y-%m-%d %H:%M:%S")` -- it silently DROPS sub-second precision.
+// The bounds reaching it routinely carry microseconds: `run_work_graph_build`
+// defaults them to `datetime.now(timezone.utc)` (runner.py:61-69).
+//
+// `git_pull_requests.created_at` is `DateTime64(3, 'UTC')` (live schema), so
+// the truncation is not cosmetic -- it moves the comparison boundary by up to
+// a second. Binding the untruncated instant means a PR created at
+// `00:00:00.500Z` is OUTSIDE Python's window (`created_at <= '...00:00:00'`)
+// and INSIDE Go's (`<= ...00:00:00.750`), so Go writes a native mapping row
+// Python does not. The inverse happens at the `from` bound.
+//
+// The golden cannot catch this: its generator builds `BuildConfig` with only a
+// DSN and org, so no window is frozen at all.
+func TestWindowBoundsAreTruncatedToWholeSeconds(t *testing.T) {
+	from := time.Date(2026, 8, 1, 10, 30, 15, 250_000_000, time.UTC)
+	to := time.Date(2026, 9, 1, 0, 0, 0, 750_000_000, time.UTC)
+
+	conn := &stubConn{responses: stubResponsesForOneLink()}
+	service, _ := newTestService(t, conn)
+	if _, err := service.Produce(context.Background(), testOrg, Window{From: &from, To: &to}); err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	if len(conn.queryArgs) != 4 {
+		t.Fatalf("issued %d queries, want 4", len(conn.queryArgs))
+	}
+
+	bound := func(name string) time.Time {
+		t.Helper()
+		for _, arg := range conn.queryArgs[2] {
+			named, ok := arg.(driver.NamedValue)
+			if !ok || named.Name != name {
+				continue
+			}
+			moment, ok := named.Value.(time.Time)
+			if !ok {
+				t.Fatalf("bound %q is %T, want time.Time", name, named.Value)
+			}
+			return moment
+		}
+		t.Fatalf("bound %q not found in %+v", name, conn.queryArgs[2])
+		return time.Time{}
+	}
+
+	wantFrom := time.Date(2026, 8, 1, 10, 30, 15, 0, time.UTC)
+	wantTo := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	if got := bound("from_ts"); !got.Equal(wantFrom) {
+		t.Errorf("from_ts = %s, want %s (Python truncates to whole seconds)", got.Format(time.RFC3339Nano), wantFrom.Format(time.RFC3339Nano))
+	}
+	if got := bound("to_ts"); !got.Equal(wantTo) {
+		t.Errorf("to_ts = %s, want %s (Python truncates to whole seconds)", got.Format(time.RFC3339Nano), wantTo.Format(time.RFC3339Nano))
 	}
 }

@@ -148,7 +148,7 @@ in-wave.
 
 ## ACP-ADR-01 Addendum — OAuth/OIDC client, SAML, and password-hashing library selection
 
-**Status:** Proposed · **Decides:** ACP-ADR-01's deferred item 6 (TRD §26.1) · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+**Status:** Accepted, 2026-09-02 (ratified: chris, 14:26 PT, "accept") · **Decides:** ACP-ADR-01's deferred item 6 (TRD §26.1) · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
 
 ### Context
 

@@ -28,10 +28,7 @@ import (
 // consecutive runs would almost certainly disagree.
 func TestTheDerivationIsByteIdenticalAcrossRuns(t *testing.T) {
 	document := loadGolden(t)
-	buildClock, err := parseGoldenInstant(document.FrozenNow)
-	if err != nil {
-		t.Fatalf("frozen_now: %v", err)
-	}
+	buildClock := parseFrozenInstant(t, document.FrozenNow)
 	rows := goldenDependencyRows(t, document)
 
 	digest := func(label string) string {
@@ -96,10 +93,7 @@ func mustDerive(t *testing.T, rows []DependencyRow, buildClock time.Time) Derive
 // while it had stopped testing anything.
 func TestTheDeterminismPinDetectsMapOrdering(t *testing.T) {
 	document := loadGolden(t)
-	buildClock, err := parseGoldenInstant(document.FrozenNow)
-	if err != nil {
-		t.Fatalf("frozen_now: %v", err)
-	}
+	buildClock := parseFrozenInstant(t, document.FrozenNow)
 	edges := mustDerive(t, goldenDependencyRows(t, document), buildClock).Edges
 
 	byID := make(map[string]Row, len(edges))

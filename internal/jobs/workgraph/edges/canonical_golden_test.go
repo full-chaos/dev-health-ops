@@ -2,6 +2,7 @@ package edges
 
 import (
 	"testing"
+	"time"
 )
 
 // TestDerivationReproducesTheFrozenGolden is what PR1 was built for: the Go
@@ -20,24 +21,7 @@ func TestDerivationReproducesTheFrozenGolden(t *testing.T) {
 
 	// Rebuild the producer's input in the order it saw it — order is load-bearing
 	// because the dedup below is last-write-wins.
-	rows := make([]DependencyRow, 0, len(document.Dependencies))
-	for index, frozen := range document.Dependencies {
-		resolve := func(at int) string {
-			value, err := document.String(frozen[at])
-			if err != nil {
-				t.Fatalf("dependency %d field %d: %v", index, at, err)
-			}
-			return value
-		}
-		rows = append(rows, DependencyRow{
-			SourceWorkItemID: resolve(0),
-			TargetWorkItemID: resolve(1),
-			RelationshipType: resolve(2),
-			RelationshipRaw:  resolve(3),
-			SemanticsVersion: resolve(4),
-			LastSynced:       resolve(5),
-		})
-	}
+	rows := goldenDependencyRows(t, document)
 
 	derived, outcomes := deriveForTest(t, rows)
 
@@ -136,10 +120,7 @@ func TestDerivationReproducesTheFrozenGolden(t *testing.T) {
 func deriveForTest(t *testing.T, rows []DependencyRow) (map[string]Row, map[string]string) {
 	t.Helper()
 	document := loadGolden(t)
-	buildClock, err := parseGoldenInstant(document.FrozenNow)
-	if err != nil {
-		t.Fatalf("frozen_now: %v", err)
-	}
+	buildClock := parseFrozenInstant(t, document.FrozenNow)
 	result, err := DeriveIssueIssueEdges(rows, buildClock)
 	if err != nil {
 		t.Fatalf("derive: %v", err)
@@ -163,10 +144,7 @@ func deriveForTest(t *testing.T, rows []DependencyRow) (map[string]Row, map[stri
 // attributed to a named row with a named reason.
 func TestEveryInputRowGetsExactlyOneOutcome(t *testing.T) {
 	document := loadGolden(t)
-	buildClock, err := parseGoldenInstant(document.FrozenNow)
-	if err != nil {
-		t.Fatalf("frozen_now: %v", err)
-	}
+	buildClock := parseFrozenInstant(t, document.FrozenNow)
 	rows := goldenDependencyRows(t, document)
 
 	result, err := DeriveIssueIssueEdges(rows, buildClock)
@@ -211,8 +189,34 @@ func goldenDependencyRows(t *testing.T, document *GoldenDocument) []DependencyRo
 		rows = append(rows, DependencyRow{
 			SourceWorkItemID: resolve(0), TargetWorkItemID: resolve(1),
 			RelationshipType: resolve(2), RelationshipRaw: resolve(3),
-			SemanticsVersion: resolve(4), LastSynced: resolve(5),
+			SemanticsVersion: resolve(4), LastSynced: parseFrozenInstant(t, resolve(5)),
 		})
 	}
 	return rows
+}
+
+// parseFrozenInstant reads a timestamp out of the frozen golden.
+//
+// It accepts RFC3339Nano and NOTHING else, and that narrowness is the point.
+// The golden is Go's own artefact -- its generator writes this format -- so
+// there is no reference accept-set to match here. The production path does not
+// parse timestamps at all any more: ReadDependencies hands the scanned
+// time.Time straight to the derivation.
+//
+// This replaced a parser that modelled `datetime.fromisoformat`, which three
+// codex rounds kept finding new shapes for. Keeping the string handling in the
+// TEST, where the input is known, is what makes that class unreachable rather
+// than merely enumerated.
+func parseFrozenInstant(t *testing.T, value string) time.Time {
+	t.Helper()
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		t.Fatalf("frozen instant %q is not RFC3339Nano — the golden generator writes that "+
+			"format, so this is generator drift, not an input this port must tolerate: %v",
+			value, err)
+	}
+	return parsed.UTC()
 }

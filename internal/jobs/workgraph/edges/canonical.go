@@ -1,6 +1,9 @@
 package edges
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // DependencyRow is one `work_item_dependencies` row as the producer reads it.
 //
@@ -13,7 +16,19 @@ type DependencyRow struct {
 	RelationshipType string
 	RelationshipRaw  string
 	SemanticsVersion string
-	LastSynced       string // RFC3339; empty means the producer's parse fell back
+	// LastSynced is the instant ClickHouse returned, NOT a string.
+	//
+	// It used to be an RFC3339 string, and that was the root of a defect class
+	// three codex rounds could not close: ReadDependencies scanned a time.Time,
+	// formatted it, and handed the text to a parser that then had to model all
+	// of `datetime.fromisoformat` -- offset seconds, arbitrary separators, basic
+	// format, week dates. Every round found another shape it did not model, and
+	// each miss substituted the build clock SILENTLY.
+	//
+	// Carrying the instant deletes the class rather than enumerating it: there
+	// is no accept set to match because there is no parse. A zero value means
+	// the row had no timestamp, which is the only case left to handle.
+	LastSynced time.Time
 }
 
 // blockerTypes is Python's `_BLOCKER_TYPES` (builder.py:83).

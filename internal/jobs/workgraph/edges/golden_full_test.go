@@ -171,8 +171,15 @@ func TestFrozenConfidencesSurviveTheFloat32RoundTrip(t *testing.T) {
 	document := loadGolden(t)
 	for index, edge := range document.Edges {
 		if !math.IsInf(edge.Confidence, 0) && !math.IsNaN(edge.Confidence) {
-			narrowed := Quantize(edge.Confidence)
-			if float64(narrowed) != float64(Quantize(float64(narrowed))) {
+			narrowed, err := Quantize(edge.Confidence)
+			if err != nil {
+				t.Fatalf("frozen confidence %v is rejected: %v", edge.Confidence, err)
+			}
+			renarrowed, err := Quantize(float64(narrowed))
+			if err != nil {
+				t.Fatalf("re-quantizing %v failed: %v", narrowed, err)
+			}
+			if float64(narrowed) != float64(renarrowed) {
 				t.Fatalf("edge %d: narrowing %v is not idempotent", index, edge.Confidence)
 			}
 			continue
@@ -182,7 +189,11 @@ func TestFrozenConfidencesSurviveTheFloat32RoundTrip(t *testing.T) {
 	// The value the variant-C policy writes must be a Float32 fixed point, or the
 	// split's (confidence, edge_id) sort puts a freshly written edge in a
 	// different tier from the identical edge read back.
-	if got := Quantize(float64(AssociativeConfidence)); got != AssociativeConfidence {
+	got, err := Quantize(float64(AssociativeConfidence))
+	if err != nil {
+		t.Fatalf("AssociativeConfidence is rejected by its own validator: %v", err)
+	}
+	if got != AssociativeConfidence {
 		t.Fatalf("AssociativeConfidence %v is not a Float32 fixed point (got %v)", AssociativeConfidence, got)
 	}
 	if float64(AssociativeConfidence) == 0.9 {

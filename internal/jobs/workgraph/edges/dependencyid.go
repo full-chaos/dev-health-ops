@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // PRReference is a dependency id that names a pull/merge request rather than an
@@ -184,7 +185,7 @@ func isPythonDigitString(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if !unicode.Is(unicode.Nd, r) && !unicode.Is(numericTypeDigitNotDecimal, r) {
+		if decimalValue(r) < 0 && !unicode.Is(numericTypeDigitNotDecimal, r) {
 			return false
 		}
 	}
@@ -232,7 +233,13 @@ func pythonIntFromDigits(value string) (number int, positive bool, exceedsInt64 
 	//
 	// The digit count is of the STRING, so leading zeros count: `int("0"*4301)`
 	// raises exactly as `int("9"*4301)` does (measured, both directions).
-	if len(value) > pythonIntMaxStrDigits {
+	// CHARACTERS, not bytes. `len()` counts bytes, and Python applies the limit
+	// to `len(str)` -- characters. 2151 full-width digits are 2151 characters to
+	// the reference and 6453 bytes here, so a byte count rejected a PR number
+	// Python parses (codex round 3). Same root cause as the byte-indexed
+	// separator that round found in the timestamp normaliser: byte arithmetic on
+	// a string the reference treats as characters.
+	if utf8.RuneCountInString(value) > pythonIntMaxStrDigits {
 		return 0, false, false, false
 	}
 	for _, r := range value {
@@ -263,18 +270,58 @@ func pythonIntFromDigits(value string) (number int, positive bool, exceedsInt64 
 // zero within Nd.
 func decimalValue(r rune) int {
 	if r >= '0' && r <= '9' {
-		return int(r - '0')
+		return int(r - '0') // the overwhelmingly common case, and the cheapest
 	}
-	if !unicode.Is(unicode.Nd, r) {
-		return -1
-	}
-	for zero := r; zero >= r-9; zero-- {
-		if !unicode.Is(unicode.Nd, zero) {
-			break
-		}
-		if !unicode.Is(unicode.Nd, zero-1) {
-			return int(r - zero)
+	// Binary search the DERIVED blocks. Go's unicode.Nd is deliberately not
+	// consulted: see pythonDecimalBlocks.
+	low, high := 0, len(pythonDecimalBlocks)-1
+	for low <= high {
+		middle := (low + high) / 2
+		start := pythonDecimalBlocks[middle]
+		switch {
+		case r < start:
+			high = middle - 1
+		case r > start+9:
+			low = middle + 1
+		default:
+			return int(r - start)
 		}
 	}
 	return -1
+}
+
+// pythonDecimalBlocks is every rune Python's `int()` accepts as a decimal digit,
+// stored as the 76 blocks of ten it forms, each entry the rune for that script's
+// zero. A rune's value is its offset from its block start.
+//
+// # WHY THIS EXISTS RATHER THAN unicode.Nd
+//
+// Go's `unicode` package is not allowed to be the oracle for a Python-facing
+// predicate, because the two planes track DIFFERENT Unicode versions. Measured:
+// Go 1.27 is Unicode 17.0.0, the deployed interpreter is 16.0.0, and `U+11DE5`
+// is `Nd` to Go while being `Cn` -- unassigned -- to Python. Reading it through
+// `unicode.Nd` parsed a PR number Python does not recognise at all, so the row
+// went to the wrong pipeline (codex round 3).
+//
+// The earlier `numericTypeDigitNotDecimal` table closed the isdigit()/IsDigit()
+// difference but left this one open, because it derived only the set Python
+// accepts and Go rejects -- never the reverse. Both directions are derived now,
+// which is what makes the guard total rather than one-sided.
+//
+// Derived by scanning all 0x110000 code points through the interpreter, and
+// re-derived by TestPythonDecimalBlocksMatchLivePython so it cannot rot.
+var pythonDecimalBlocks = [76]rune{
+	0x0030, 0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6,
+	0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6,
+	0x0D66, 0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040,
+	0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80,
+	0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620,
+	0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
+	0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0,
+	0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
+	0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950,
+	0x11BF0, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16130,
+	0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE,
+	0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0,
+	0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
 }

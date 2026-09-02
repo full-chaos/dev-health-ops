@@ -11,6 +11,10 @@ ClickHouse for the seeded org, with `computed_at` at or after the run start,
 and every `repo_id` those rows carry is a repo ClickHouse actually knows about
 for that org.
 
+CHAOS-4775: `family_readback`'s row query is bound to `org_id = {org}` (not
+interpolated), not just the org's repo_id set -- a repo_id set alone lets a
+foreign/blank-org row for the target org's own repo satisfy the readback.
+
 Exit codes: 0 = every requested family produced valid rows; 1 = at least one
 family is zero-rows-with-source-data or produced a repo_id ClickHouse repos
 does not have (the exact CHAOS-4263 defect shape: dead/mismatched repo ids).
@@ -108,19 +112,37 @@ def live_repo_ids(client, org_id: str) -> set[str]:
 
 
 def family_readback(
-    client, table: str, repo_ids: set[str], run_start: datetime
+    client, table: str, org_id: str, repo_ids: set[str], run_start: datetime
 ) -> dict[str, FamilyRowCount]:
+    """Rows this table holds for THIS org's repos (CHAOS-4775: org-scoped).
+
+    Before CHAOS-4775 this query filtered only by `repo_id IN {repo_ids}` --
+    `repo_ids` itself already came from `live_repo_ids(client, org_id)`, so a
+    row with the TARGET org's real repo_id but a foreign/blank org_id (e.g. a
+    regression that drops org_id on write, or a cross-tenant repo_id
+    collision) satisfied the readback even though the target org's own
+    GraphQL reader -- which filters by org_id directly -- would see zero
+    rows. Codex proved this by executed repro against a simulated fresh row
+    with org_id=ORG-B, repo_id=<ORG-A's real repo>: exit_code 0. Binding
+    org_id here closes it; the predicate only narrows what already-correct,
+    already-org-scoped data satisfies.
+    """
     if not repo_ids:
         return {}
     result = client.query(
         f"""
         SELECT repo_id, count() AS n, max(computed_at) AS latest
         FROM {table}
-        WHERE repo_id IN {{repo_ids:Array(UUID)}}
+        WHERE org_id = {{org_id:String}}
+          AND repo_id IN {{repo_ids:Array(UUID)}}
           AND computed_at >= {{run_start:DateTime64(6)}}
         GROUP BY repo_id
         """,
-        parameters={"repo_ids": sorted(repo_ids), "run_start": run_start},
+        parameters={
+            "org_id": org_id,
+            "repo_ids": sorted(repo_ids),
+            "run_start": run_start,
+        },
     )
     return {
         str(row[0]): {"rows": int(row[1]), "latest_computed_at": str(row[2])}
@@ -244,6 +266,7 @@ def main() -> int:
                 total_rows = sum(int(v["rows"]) for v in team_rows.values())
                 summary[family] = {
                     "table": table,
+                    "org_id": args.org_id,
                     "rows_written": total_rows,
                     "teams_with_rows": sorted(team_rows),
                 }
@@ -256,11 +279,12 @@ def main() -> int:
                 continue
 
             table = REPO_DAY_FAMILIES[family]
-            readback = family_readback(client, table, repo_ids, run_start)
+            readback = family_readback(client, table, args.org_id, repo_ids, run_start)
             total_rows = sum(int(v["rows"]) for v in readback.values())
             stray = unscoped_repo_ids(client, table, run_start) - repo_ids
             summary[family] = {
                 "table": table,
+                "org_id": args.org_id,
                 "rows_written": total_rows,
                 "repos_with_rows": sorted(readback),
                 "repo_ids_outside_org": sorted(stray),

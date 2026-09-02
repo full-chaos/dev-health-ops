@@ -24,12 +24,42 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // NewGitHubWorkItemClickHouseEffects wires every landed destination adapter
 // onto the composite sink.
 //
-// It REGISTERS AND ACTIVATES NOTHING. cmd/dev-health-worker/provider_sync.go
-// gains no case for the work-item family here, the provider matrix still marks
-// all five aliases route_ready: false, and the route still returns a nil
-// watermark -- so the only thing that can reach this constructor today is a
-// test. Activation is a separate change that must first satisfy the unmet D17
-// obligation recorded on GitHubWorkItemsIncomplete.
+// WIRING: LIVE, and this paragraph used to say the opposite. It read:
+//
+//	"It REGISTERS AND ACTIVATES NOTHING. cmd/dev-health-worker/provider_sync.go
+//	gains no case for the work-item family here, the provider matrix still
+//	marks all five aliases route_ready: false, and the route still returns a
+//	nil watermark -- so the only thing that can reach this constructor today is
+//	a test. Activation is a separate change that must first satisfy the unmet
+//	D17 obligation recorded on GitHubWorkItemsIncomplete."
+//
+// All four of those claims are now false. Corrected, each against what
+// actually implements it:
+//
+//   - provider_sync.go DOES have the case:
+//     `provider == "github" && dataset == "work-items"` (:324) calls this
+//     constructor (:329), builds the deriver via NewGitHubWorkItemDeriver
+//     (:335), and installs GitHubWorkItemsRouteHandler with both as
+//     sink and readback (:350).
+//   - route_ready is TRUE for all five aliases: execution_registry.go:246
+//     sets descriptor.RouteReady unconditionally for the github work-item
+//     family, and :247-249 additionally sets Plannable for the canonical
+//     dataset. The comment immediately above it states the matrix reports all
+//     five "as native and ready" deliberately.
+//   - the watermark is NOT unconditionally nil: github_work_items_route.go
+//     :437-466 returns one, suppressed only under the incompleteness policy
+//     (:110).
+//   - production, not a test, reaches this constructor -- via the
+//     provider_sync.go case above.
+//
+// Still true and NOT retracted: GitHubWorkItemsIncomplete and its policy are
+// live (applyGitHubWorkItemsIncompletePolicy, called from complete_route.go
+// :317 and :429, chunked_executor.go:99, chunked_stream_executor.go:160). What
+// is stale is only the claim that the unmet D17 obligation still gates
+// activation -- activation happened.
+//
+// Cite the case predicate and constructor names above rather than the line
+// numbers alone; the names are what survive an edit that shifts these anchors.
 //
 // The returned sink is USABLE ONLY when the error is nil. On an incomplete
 // build the sink is returned alongside the error rather than zeroed, because

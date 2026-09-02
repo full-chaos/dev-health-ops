@@ -1801,50 +1801,72 @@ class TestInvalidOrgIdGuards:
 
 
 class TestBillingNotificationCompletionFence:
-    def test_duplicate_durable_dispatch_sends_exactly_one_email(self):
-        from dev_health_ops.workers.system_ops import send_billing_notification
-
-        notification_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        key = "billing:fence-key"
-        task = cast(_CallableCeleryTask, send_billing_notification)
-
-        # A tiny in-memory stand-in for the durable row: real code marks
-        # completed_at via `_mark_billing_notification_completed`, which this
-        # fake honours, so the second `_load_billing_notification` call sees
-        # exactly what the first call's fence write left behind.
-        row: dict[str, Any] = {
+    @staticmethod
+    def _row(idempotency_key: str) -> dict[str, Any]:
+        return {
             "email_type": "invoice_receipt",
-            "org_id": org_id,
+            "org_id": str(uuid.uuid4()),
             "attributes": {
                 "amount_cents": 500,
                 "currency": "usd",
                 "invoice_url": "https://x",
             },
-            "idempotency_key": key,
+            "idempotency_key": idempotency_key,
+            "claimed_at": None,
             "completed_at": None,
         }
 
+    @staticmethod
+    def _fake_load(row: dict[str, Any]):
         def fake_load(_id: str):
             return (
                 row["email_type"],
                 row["org_id"],
                 row["attributes"],
                 row["idempotency_key"],
-                row["completed_at"],
             )
 
-        def fake_mark(_id: str) -> None:
+        return fake_load
+
+    @staticmethod
+    def _fake_claim(row: dict[str, Any]):
+        from dev_health_ops.workers.system_ops import _ClaimResult
+
+        def fake_claim(_id: str) -> _ClaimResult:
+            if row["claimed_at"] is not None:
+                return _ClaimResult(
+                    claimed=False,
+                    claimed_at=row["claimed_at"],
+                    completed_at=row["completed_at"],
+                )
+            row["claimed_at"] = datetime.now(timezone.utc)
+            return _ClaimResult(claimed=True)
+
+        return fake_claim
+
+    def test_duplicate_durable_dispatch_sends_exactly_one_email(self):
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        notification_id = str(uuid.uuid4())
+        key = "billing:fence-key"
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        row = self._row(key)
+
+        def fake_mark_completed(_id: str) -> None:
             row["completed_at"] = datetime.now(timezone.utc)
 
         with (
             patch(
                 "dev_health_ops.workers.system_ops._load_billing_notification",
-                side_effect=fake_load,
+                side_effect=self._fake_load(row),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion",
+                side_effect=self._fake_claim(row),
             ),
             patch(
                 "dev_health_ops.workers.system_ops._mark_billing_notification_completed",
-                side_effect=fake_mark,
+                side_effect=fake_mark_completed,
             ),
             patch(
                 "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
@@ -1872,6 +1894,7 @@ class TestBillingNotificationCompletionFence:
         assert first.get("already_sent") is not True
         assert second["status"] == "sent"
         assert second.get("already_sent") is True
+        assert row["completed_at"] is not None
         # The defect (CHAOS-3952): a lost-response retry replays the durable
         # row unchanged, so nothing distinguished the second dispatch from
         # the first and the email went out twice.
@@ -1899,9 +1922,11 @@ class TestBillingNotificationCompletionFence:
                         "invoice_url": "https://x",
                     },
                     "billing:actual-key",
-                    None,
                 ),
             ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion"
+            ) as claim,
             patch(
                 "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
                 new_callable=AsyncMock,
@@ -1922,3 +1947,234 @@ class TestBillingNotificationCompletionFence:
             "reason": "idempotency_key_mismatch",
         }
         send_invoice_receipt.assert_not_called()
+        # A mismatched key is a data-integrity failure, not a dedup
+        # question -- must never even attempt a claim.
+        claim.assert_not_called()
+
+    def test_stale_claim_is_reported_not_silently_treated_as_sent(self):
+        """(c) A claim that is old and never completed must be its own
+        visible outcome, not masquerade as `already_sent`."""
+        from datetime import timedelta
+
+        from dev_health_ops.workers.system_ops import (
+            _STALE_CLAIM_THRESHOLD_SECONDS,
+            _ClaimResult,
+            send_billing_notification,
+        )
+
+        notification_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        stale_claimed_at = datetime.now(timezone.utc) - timedelta(
+            seconds=_STALE_CLAIM_THRESHOLD_SECONDS + 60
+        )
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                return_value=(
+                    "invoice_receipt",
+                    org_id,
+                    {
+                        "amount_cents": 500,
+                        "currency": "usd",
+                        "invoice_url": "https://x",
+                    },
+                    "billing:stale-key",
+                ),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion",
+                return_value=_ClaimResult(
+                    claimed=False, claimed_at=stale_claimed_at, completed_at=None
+                ),
+            ),
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as send_invoice_receipt,
+            patch(
+                "dev_health_ops.workers.system_ops.BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL"
+            ) as fence_counter,
+        ):
+            task.push_request(id="billing-stale-claim", retries=0)
+            try:
+                result = task(
+                    durable_notification_id=notification_id,
+                    idempotency_key="billing:stale-key",
+                )
+            finally:
+                task.pop_request()
+
+        assert result["status"] != "sent", (
+            f"a stale, unresolved claim must not be reported as sent: {result}"
+        )
+        assert result.get("already_sent") is not True
+        assert result["reason"] == "stale_claim"
+        send_invoice_receipt.assert_not_called()
+        fence_counter.labels.assert_called_once_with(outcome="stale_claim_detected")
+
+    def test_recent_unresolved_claim_is_still_suppressed_as_a_duplicate(self):
+        """The mirror of the stale-claim test: a claim only seconds old
+        (still within the normal retry/backoff window) is NOT yet reported
+        as stale — it is the ordinary duplicate-suppression path."""
+        from dev_health_ops.workers.system_ops import (
+            _ClaimResult,
+            send_billing_notification,
+        )
+
+        notification_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        task = cast(_CallableCeleryTask, send_billing_notification)
+        recent_claimed_at = datetime.now(timezone.utc)
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                return_value=(
+                    "invoice_receipt",
+                    org_id,
+                    {
+                        "amount_cents": 500,
+                        "currency": "usd",
+                        "invoice_url": "https://x",
+                    },
+                    "billing:recent-key",
+                ),
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion",
+                return_value=_ClaimResult(
+                    claimed=False, claimed_at=recent_claimed_at, completed_at=None
+                ),
+            ),
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as send_invoice_receipt,
+        ):
+            task.push_request(id="billing-recent-claim", retries=0)
+            try:
+                result = task(
+                    durable_notification_id=notification_id,
+                    idempotency_key="billing:recent-key",
+                )
+            finally:
+                task.pop_request()
+
+        assert result["status"] == "sent"
+        assert result.get("already_sent") is True
+        send_invoice_receipt.assert_not_called()
+
+    def test_send_failure_releases_the_claim_so_a_retry_can_still_send(self):
+        """Codex round 1, P1 (executed): claim-then-send means an ordinary
+        transient send failure must release the claim, or the email is
+        silently never sent on any later retry. Model: first attempt's send
+        raises (a real transient failure, not a crash) -> the claim it took
+        must be released -> a second attempt claims again and sends."""
+        from dev_health_ops.workers.system_ops import (
+            _ClaimResult,
+            send_billing_notification,
+        )
+
+        notification_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        task = cast(_CallableCeleryTask, send_billing_notification)
+
+        row: dict[str, Any] = {
+            "email_type": "invoice_receipt",
+            "org_id": org_id,
+            "attributes": {
+                "amount_cents": 500,
+                "currency": "usd",
+                "invoice_url": "https://x",
+            },
+            "idempotency_key": "billing:retry-key",
+            "claimed_at": None,
+            "completed_at": None,
+        }
+
+        def fake_load(_id: str):
+            return (
+                row["email_type"],
+                row["org_id"],
+                row["attributes"],
+                row["idempotency_key"],
+            )
+
+        def fake_claim(_id: str) -> _ClaimResult:
+            if row["claimed_at"] is not None:
+                return _ClaimResult(
+                    claimed=False,
+                    claimed_at=row["claimed_at"],
+                    completed_at=row["completed_at"],
+                )
+            row["claimed_at"] = datetime.now(timezone.utc)
+            return _ClaimResult(claimed=True)
+
+        def fake_release(_id: str) -> None:
+            row["claimed_at"] = None
+
+        send_calls = {"n": 0}
+
+        async def flaky_send(*args, **kwargs):
+            send_calls["n"] += 1
+            if send_calls["n"] == 1:
+                raise RuntimeError("transient email provider error")
+            return None
+
+        def fake_mark_completed(_id: str) -> None:
+            row["completed_at"] = datetime.now(timezone.utc)
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                side_effect=fake_load,
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._claim_billing_notification_completion",
+                side_effect=fake_claim,
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._release_billing_notification_completion_claim",
+                side_effect=fake_release,
+            ) as release_claim,
+            patch(
+                "dev_health_ops.workers.system_ops._mark_billing_notification_completed",
+                side_effect=fake_mark_completed,
+            ),
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                side_effect=flaky_send,
+            ) as send_invoice_receipt,
+        ):
+            task.push_request(id="billing-retry-1", retries=0)
+            try:
+                with pytest.raises(Exception):
+                    task(
+                        durable_notification_id=notification_id,
+                        idempotency_key="billing:retry-key",
+                    )
+            finally:
+                task.pop_request()
+
+            release_claim.assert_called_once_with(notification_id)
+            assert row["claimed_at"] is None, (
+                "the failed attempt's claim must be released, or this "
+                "notification can never be sent again"
+            )
+
+            task.push_request(id="billing-retry-2", retries=1)
+            try:
+                second = task(
+                    durable_notification_id=notification_id,
+                    idempotency_key="billing:retry-key",
+                )
+            finally:
+                task.pop_request()
+
+        assert second["status"] == "sent"
+        assert second.get("already_sent") is not True
+        assert send_invoice_receipt.call_count == 2

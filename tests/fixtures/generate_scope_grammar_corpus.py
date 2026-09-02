@@ -74,8 +74,32 @@ UNSUPPORTED_FIELDS = ["not_a_field", "org_id", "run_id"]
 # of these that nobody thought to combine.
 
 DATE_BODIES = ["2026-08-15", "20260815", "2026-W33-6", "2026-243"]
-TIME_BODIES = ["", "06", "06:07", "06:07:08", "06:07:08.123", "0607", "060708"]
-SEPARATORS = ["T", " ", "t", "_"]
+# "24:00" ROLLS INTO THE NEXT DAY (2026-08-15T24:00 -> 2026-08-16 00:00), which
+# is a semantic rather than a parse quirk: a port that rejects hour 24, or that
+# accepts it without rolling, derives a window a day out. "23:59:60" is refused
+# (no leap seconds). Sub-microsecond fractions TRUNCATE to microseconds in
+# Python while Go keeps nanoseconds, so .123456789 is two different instants
+# across the planes.
+TIME_BODIES = [
+    "",
+    "06",
+    "06:07",
+    "06:07:08",
+    "06:07:08.123",
+    "06:07:08.123456",
+    "06:07:08.1234567",
+    "06:07:08.123456789",
+    "24:00",
+    "24:00:00",
+    "23:59:60",
+    "0607",
+    "060708",
+]
+# `fromisoformat` accepts ANY single character as the date/time separator, not
+# just T and space -- measured: "T t _ X # 9 \\ é" all parse. The multi-byte one
+# is deliberate: a port that indexes by BYTE to find the separator splits a
+# rune in half on it.
+SEPARATORS = ["T", " ", "t", "_", "X", "#", "9", "é"]
 OFFSETS = [
     "",
     "Z",
@@ -140,6 +164,13 @@ MAGNITUDE_STRINGS: list[Any] = [str(value) for value in MAGNITUDES] + [
     "0" * 40,  # collapses to zero in both planes
     "9" * 40,
     "00000000000000000000000000000001",
+    # CPython refuses int() above sys.get_int_max_str_digits() (4300). Measured:
+    # 4300 digits parse, 4301 raise, and LEADING ZEROS COUNT -- "0"*4301 raises
+    # too, so a port that strips them before measuring length accepts an input
+    # the reference rejects.
+    "9" * 4300,
+    "9" * 4301,
+    "0" * 4301,
 ]
 
 _UUID = "7b9583ee-4d24-2be7-4d09-34f815bebdd7"

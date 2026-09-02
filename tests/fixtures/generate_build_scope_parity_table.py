@@ -1,18 +1,32 @@
-"""Measure the reference's verdict for every build-scope value shape.
+"""Measure the BRIDGE'S OWN ADMISSION for every build-scope shape.
 
-`run_work_graph_build` gates each scope value on Python TRUTHINESS and then
-hands the truthy ones to `datetime.fromisoformat`
-(`workers/work_graph_tasks.py:121-135`). The Go adapter in
-`cmd/dev-health-worker/workgraph_issue_pr_links.go` reproduces that gate.
+The Go pre-step in `cmd/dev-health-worker/workgraph_issue_pr_links.go` runs
+before the Python bridge and writes to `work_graph_issue_pr`. So the property
+that matters is not "does Go parse this string the same way" but:
 
-That gate has been got wrong TWICE by reasoning about it -- once treating an
-empty string as a parse error, once treating a whitespace-only string as
-absent -- and on both occasions a hand-written Go test asserted the wrong
-behaviour and passed. So the accept/reject set is MEASURED here and frozen,
-and the Go test diffs against this table with an explicitly enumerated
-divergence list. A shape neither matched nor enumerated is a failure.
+    THE REFERENCE RAISES  =>  Go must REFUSE before writing anything.
+    THE REFERENCE RUNS    =>  Go's window must equal the reference's.
 
-Regenerate:
+Getting that backwards persists mapping rows for a build the bridge is about to
+reject. Three separate defects in three review rounds were that exact shape.
+
+So this table records the reference's admission, not a parser's opinion:
+
+1. `worker_workgraph._scope_arguments` — the REAL function, imported and
+   called. It raises on a non-object scope and on any unsupported field.
+2. `run_work_graph_build`'s window derivation
+   (`workers/work_graph_tasks.py:121-135`), reproduced verbatim below against a
+   FROZEN `now` because the surrounding function opens a database. The six
+   lines it reproduces are quoted in `_derive_window` so a reader can diff them.
+
+The corpus is two-dimensional — the DOCUMENT's shape crossed with its VALUES —
+because the value axis alone missed two real divergences (a top-level `null`
+scope and the numeric-falsy family), and the shape axis is where the dangerous
+direction lives.
+
+Regenerate (prefer the container; the local interpreter is a faithful stand-in
+only while it matches the shipped 3.14 line, and the header records which ran):
+
     docker cp tests/fixtures/generate_build_scope_parity_table.py dev-health-api-1:/tmp/
     docker exec -i dev-health-api-1 python /tmp/generate_build_scope_parity_table.py --stdout
 """
@@ -21,21 +35,51 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-# Every shape a build scope value could plausibly carry: the falsy set, the
-# whitespace family (the one that caused the second defect), the ISO forms
-# fromisoformat accepts including the exotic ones, offset variants, and
-# non-string types (the bridge filters scope by field NAME, not type).
-CASES: list[Any] = [
+sys.path.insert(0, "/app/src")
+
+# A fixed instant so "now" defaults are reproducible. The Go differential uses
+# the same value for its own clock.
+FROZEN_NOW = datetime(2026, 9, 1, 12, 30, 45, 500000, tzinfo=timezone.utc)
+
+# Document shapes. The scope reaches the bridge as decoded JSON, so these are
+# the shapes `_scope_arguments` can actually receive.
+DOCUMENTS: list[tuple[str, Any]] = [
+    ("object_empty", {}),
+    ("null", None),
+    ("array", []),
+    ("array_nonempty", ["2026-08-15"]),
+    ("string", "2026-08-15"),
+    ("number", 123),
+    ("bool", True),
+    ("object_unsupported_field", {"not_a_field": 1}),
+    ("object_unsupported_plus_valid", {"to_date": "2026-08-15", "nope": 1}),
+]
+
+# Value shapes, each placed under `to_date` in an otherwise valid object.
+VALUES: list[Any] = [
     None,
     "",
     " ",
     "\t",
     "\n",
     "  \t ",
+    False,
+    True,
+    0,
+    0.0,
+    -0.0,
+    0e100,
+    1e-400,
+    1,
+    123,
+    [],
+    {},
+    ["2026-08-15"],
     "2026-08-15",
     "20260815",
     "2026-W33-6",
@@ -47,6 +91,8 @@ CASES: list[Any] = [
     "2026-08-15T06:07:08Z",
     "2026-08-15T06:07:08+00:00",
     "2026-08-15T06:07:08+0000",
+    "2026-08-15T06:07:08+00",
+    "2026-08-15T06:07:08+00:00:00",
     "2026-08-15T06:07:08+05:00",
     "2026-08-15T06:07:08-08:00",
     "2026-08-15t06:07:08",
@@ -54,36 +100,75 @@ CASES: list[Any] = [
     "15/08/2026",
     "not-a-date",
     "2026-13-45",
-    False,
-    True,
-    0,
-    1,
-    123,
-    [],
-    {},
-    ["2026-08-15"],
 ]
+
+
+def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Reproduce `run_work_graph_build`'s window derivation, verbatim.
+
+    From `src/dev_health_ops/workers/work_graph_tasks.py:121-135`:
+
+        now = datetime.now(timezone.utc)
+        if to_date:   parsed_to = datetime.fromisoformat(to_date)
+        else:         parsed_to = now
+        if from_date: parsed_from = datetime.fromisoformat(from_date)
+        else:         parsed_from = parsed_to - timedelta(days=30)
+        parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
+
+    Reproduced rather than called because the surrounding task opens a
+    database. `now` is frozen so the defaults are reproducible.
+    """
+    import uuid
+
+    to_date = arguments.get("to_date")
+    from_date = arguments.get("from_date")
+    repo_id = arguments.get("repo_id")
+
+    parsed_to = datetime.fromisoformat(to_date) if to_date else FROZEN_NOW
+    parsed_from = (
+        datetime.fromisoformat(from_date)
+        if from_date
+        else parsed_to - timedelta(days=30)
+    )
+    parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
+    return {
+        "from": parsed_from.isoformat(),
+        "to": parsed_to.isoformat(),
+        "repo_id": str(parsed_repo_id) if parsed_repo_id else None,
+    }
+
+
+def _admit(scope: Any) -> dict[str, Any]:
+    """Run the reference's admission for one scope, recording RAISES or RUNS."""
+    from dev_health_ops.api.internal import worker_workgraph
+
+    row = {
+        "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+        "model_ref": None,
+        "llm_concurrency": 1,
+    }
+    try:
+        arguments = worker_workgraph._scope_arguments("workgraph.build", scope, row)
+    except Exception as error:  # noqa: BLE001 - the verdict IS the exception
+        return {
+            "verdict": "RAISES",
+            "stage": "scope_arguments",
+            "error": type(error).__name__,
+        }
+    try:
+        return {"verdict": "RUNS", "window": _derive_window(arguments)}
+    except Exception as error:  # noqa: BLE001
+        return {"verdict": "RAISES", "stage": "window", "error": type(error).__name__}
 
 
 def measure() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for value in CASES:
-        # The reference's gate, verbatim: `if to_date:` then fromisoformat.
-        if not value:
-            rows.append({"value": value, "verdict": "DEFAULT"})
-            continue
-        try:
-            rows.append(
-                {
-                    "value": value,
-                    "verdict": "PARSED",
-                    "iso": datetime.fromisoformat(value).isoformat(),
-                }
-            )
-        except Exception as error:  # noqa: BLE001 - the verdict IS the exception type
-            rows.append(
-                {"value": value, "verdict": "RAISES", "error": type(error).__name__}
-            )
+    for name, document in DOCUMENTS:
+        rows.append({"case": f"document:{name}", "scope": document, **_admit(document)})
+    for value in VALUES:
+        rows.append(
+            {"case": "value", "scope": {"to_date": value}, **_admit({"to_date": value})}
+        )
     return rows
 
 
@@ -95,7 +180,12 @@ def main() -> int:
 
     payload = (
         json.dumps(
-            {"schema": "build_scope_parity_table.v1", "cases": measure()},
+            {
+                "schema": "build_scope_parity_table.v2",
+                "frozen_now": FROZEN_NOW.isoformat(),
+                "measured_on": platform.python_version(),
+                "cases": measure(),
+            },
             indent=1,
             sort_keys=True,
         )

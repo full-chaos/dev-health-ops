@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,16 +39,16 @@ func (step *issuePRLinksPreStep) Name() string { return "issue_pr_links" }
 // `api/internal/worker_workgraph.py:74-80`: from_date, to_date, repo_id,
 // heuristic_window, heuristic_confidence. The two heuristic keys belong to the
 // heuristic edge builder, which this step does not implement.
-//
-// The fields are RAW, not *string, because Python's gate is TRUTHINESS on
-// whatever JSON decoded to -- `if to_date:` -- and the bridge's scope filter
-// checks field NAMES, not types (worker_workgraph.py:71). So `false`, `0` and
-// `[]` all reach Python as falsy and select the default window, while a typed
-// *string unmarshal would fail the request instead. See scopeString.
-type buildScope struct {
-	FromDate json.RawMessage `json:"from_date"`
-	ToDate   json.RawMessage `json:"to_date"`
-	RepoID   json.RawMessage `json:"repo_id"`
+// buildScopeAllowedFields mirrors the bridge's allowlist for this kind
+// (`worker_workgraph.py:74-80`). `_scope_arguments` raises
+// `request scope contains unsupported fields` on ANY key outside it, so a scope
+// this step accepts but the bridge rejects would leave mapping rows behind for
+// a build that never ran.
+var buildScopeAllowedFields = map[string]struct{}{
+	"from_date": {}, "to_date": {}, "repo_id": {},
+	// Belong to the heuristic edge builder, which this step does not implement,
+	// but they are ADMISSIBLE to the bridge and so must not be refused here.
+	"heuristic_window": {}, "heuristic_confidence": {},
 }
 
 func (step *issuePRLinksPreStep) Run(ctx context.Context, claim workgraph.Claim) (map[string]any, error) {
@@ -112,10 +113,28 @@ func (step *issuePRLinksPreStep) Run(ctx context.Context, claim workgraph.Claim)
 // derives. It cannot happen: the step runs strictly before the bridge dispatch
 // that leads to Python's own derivation.
 func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window, error) {
-	scope := buildScope{}
+	// The bridge admits an OBJECT and nothing else: `_scope_arguments` raises
+	// `request scope must be an object` for null, arrays, strings, numbers and
+	// booleans (worker_workgraph.py:72-73). Decoding into a struct would accept
+	// `null` as an empty object and take the default window -- writing mapping
+	// rows for a request the bridge is about to reject.
+	scope := map[string]json.RawMessage{}
 	if len(rawScope) > 0 {
+		// `json.Unmarshal` decodes a literal `null` into a map WITHOUT error,
+		// leaving it nil -- which would read as "an empty scope" and take the
+		// default window. The bridge raises on it. Check the shape explicitly.
+		if strings.TrimSpace(string(rawScope)) == "null" {
+			return issueprlinks.Window{}, fmt.Errorf("build scope must be an object, got null")
+		}
 		if err := json.Unmarshal(rawScope, &scope); err != nil {
-			return issueprlinks.Window{}, fmt.Errorf("decode build scope: %w", err)
+			return issueprlinks.Window{}, fmt.Errorf("build scope must be an object: %w", err)
+		}
+	}
+	for field := range scope {
+		if _, allowed := buildScopeAllowedFields[field]; !allowed {
+			return issueprlinks.Window{}, fmt.Errorf(
+				"build scope contains unsupported field %q; the bridge rejects it", field,
+			)
 		}
 	}
 
@@ -125,7 +144,7 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 	// ordinary "no value" serialisation into a build failure (codex round 1,
 	// F2 -- and the first version of this adapter did exactly that).
 	to := step.now().UTC()
-	if text, present, err := scopeString(scope.ToDate); err != nil {
+	if text, present, err := scopeString(scope["to_date"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope to_date: %w", err)
 	} else if present {
 		parsed, parseErr := parseScopeInstant(text)
@@ -135,7 +154,7 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 		to = parsed
 	}
 	from := to.AddDate(0, 0, -30)
-	if text, present, err := scopeString(scope.FromDate); err != nil {
+	if text, present, err := scopeString(scope["from_date"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", err)
 	} else if present {
 		parsed, parseErr := parseScopeInstant(text)
@@ -146,7 +165,7 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 	}
 
 	window := issueprlinks.Window{From: &from, To: &to}
-	if text, present, err := scopeString(scope.RepoID); err != nil {
+	if text, present, err := scopeString(scope["repo_id"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", err)
 	} else if present {
 		repoID, parseErr := uuid.Parse(text)
@@ -200,9 +219,19 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 func scopeString(raw json.RawMessage) (string, bool, error) {
 	trimmed := strings.TrimSpace(string(raw))
 	switch trimmed {
-	case "", "null", "false", "0", "[]", "{}", `""`:
+	case "", "null", "false", "[]", "{}", `""`:
 		// Falsy in Python: absent, and the default applies.
 		return "", false, nil
+	}
+	// Any JSON number equal to zero is falsy in Python, not just the literal
+	// `0`: `0.0`, `-0.0`, `0e100` and `1e-400` all decode to 0.0 and are falsy.
+	// Matching only the literal treated them as truthy non-strings and failed
+	// the build where the reference takes the default window.
+	if number, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		if number == 0 {
+			return "", false, nil
+		}
+		return "", true, fmt.Errorf("%s is a number; the reference raises TypeError on it", trimmed)
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {
@@ -244,7 +273,13 @@ func parseScopeInstant(value string) (time.Time, error) {
 	}
 	// Zero-offset forms, including the colon-less "+0000" that RFC3339 rejects
 	// but fromisoformat accepts.
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05-0700", "2006-01-02T15:04-0700"} {
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05-0700", "2006-01-02T15:04-0700",
+		// fromisoformat also accepts hour-only and second-precision offsets.
+		"2006-01-02T15:04:05-07", "2006-01-02T15:04-07",
+		"2006-01-02T15:04:05-07:00:00",
+	} {
 		parsed, err := time.Parse(layout, trimmed)
 		if err != nil {
 			continue

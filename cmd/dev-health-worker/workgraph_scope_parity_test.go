@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,15 +27,23 @@ import (
 // consequence of being wrong twice in the same place.
 
 type scopeParityTable struct {
-	Schema string            `json:"schema"`
-	Cases  []scopeParityCase `json:"cases"`
+	Schema    string            `json:"schema"`
+	FrozenNow string            `json:"frozen_now"`
+	Measured  string            `json:"measured_on"`
+	Cases     []scopeParityCase `json:"cases"`
 }
 
 type scopeParityCase struct {
-	Value   json.RawMessage `json:"value"`
-	Verdict string          `json:"verdict"` // DEFAULT | PARSED | RAISES
-	ISO     string          `json:"iso"`
+	Case    string          `json:"case"`
+	Scope   json.RawMessage `json:"scope"`
+	Verdict string          `json:"verdict"` // RAISES | RUNS
+	Stage   string          `json:"stage"`
 	Error   string          `json:"error"`
+	Window  *struct {
+		From   string  `json:"from"`
+		To     string  `json:"to"`
+		RepoID *string `json:"repo_id"`
+	} `json:"window"`
 }
 
 // divergence records a shape where Go deliberately differs from the reference,
@@ -44,34 +53,35 @@ type divergence struct {
 	reason string
 }
 
-// enumeratedDivergences is keyed by the case's raw JSON value.
+// enumeratedDivergences is keyed by the COMPACTED scope document, so an entry
+// names the exact input rather than a value shared across positions.
 //
 // Every entry REFUSES something the reference accepts. None accepts something
 // the reference refuses — that direction would let this step write mapping rows
 // for a request the build is about to reject, which is the defect class that
 // produced the second failure of this gate.
 var enumeratedDivergences = map[string]divergence{
-	`"2026-08-15T06:07:08+05:00"`: {
+	`{"to_date":"2026-08-15T06:07:08+05:00"}`: {
 		want: "RAISES",
 		reason: "non-zero UTC offset: the reference's strftime keeps the wall-clock fields and " +
 			"DISCARDS the offset, so rendering it would silently pick one of two possible instants. " +
 			"Refused rather than guessed; nothing produces such a scope today.",
 	},
-	`"2026-08-15T06:07:08-08:00"`: {
+	`{"to_date":"2026-08-15T06:07:08-08:00"}`: {
 		want:   "RAISES",
 		reason: "same as the +05:00 case.",
 	},
-	`"2026-W33-6"`: {
+	`{"to_date":"2026-W33-6"}`: {
 		want: "RAISES",
 		reason: "ISO week date. Accepted by fromisoformat, refused here: nothing in the tree writes " +
 			"a build scope with dates at all (the fixed producer persists `{}`), so it is unreachable, " +
 			"and a loud refusal beats silently computing a different window.",
 	},
-	`"2026-08-15t06:07:08"`: {
+	`{"to_date":"2026-08-15t06:07:08"}`: {
 		want:   "RAISES",
 		reason: "lowercase separator; same unreachability reasoning as the ISO week date.",
 	},
-	`"2026-08-15_06:07:08"`: {
+	`{"to_date":"2026-08-15_06:07:08"}`: {
 		want:   "RAISES",
 		reason: "arbitrary single-character separator; same reasoning.",
 	},
@@ -86,6 +96,17 @@ var enumeratedDivergences = map[string]divergence{
 	// reviewer.
 }
 
+// canonicalScope compacts a scope document so the divergence list can be keyed
+// on it regardless of how the generator indented the fixture.
+func canonicalScope(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	if err := json.Compact(&buffer, raw); err != nil {
+		t.Fatalf("compact scope %s: %v", raw, err)
+	}
+	return buffer.String()
+}
+
 func loadScopeParityTable(t *testing.T) scopeParityTable {
 	t.Helper()
 	path := filepath.Join(repositoryRoot(t), "tests", "fixtures", "build_scope_parity_table.json")
@@ -97,7 +118,7 @@ func loadScopeParityTable(t *testing.T) scopeParityTable {
 	if err := json.Unmarshal(raw, &table); err != nil {
 		t.Fatalf("decode the measured scope table: %v", err)
 	}
-	if table.Schema != "build_scope_parity_table.v1" {
+	if table.Schema != "build_scope_parity_table.v2" {
 		t.Fatalf("unexpected table schema %q", table.Schema)
 	}
 	if len(table.Cases) == 0 {
@@ -124,67 +145,73 @@ func repositoryRoot(t *testing.T) string {
 	}
 }
 
-// TestBuildScopeMatchesTheMeasuredReference is the differential.
-func TestBuildScopeMatchesTheMeasuredReference(t *testing.T) {
+// TestBuildScopeMatchesTheBridgeAdmission is the differential, and it asserts
+// the property that actually matters rather than parser agreement:
+//
+//	the reference RAISES => Go must REFUSE, before writing anything
+//	the reference RUNS   => Go's window must EQUAL the reference's
+//
+// The first direction is the one that bites. This step runs before the bridge
+// and writes to work_graph_issue_pr, so Go accepting a scope the bridge will
+// reject persists mapping rows for a build that never legitimately ran. Three
+// separate defects across three review rounds were exactly that shape.
+func TestBuildScopeMatchesTheBridgeAdmission(t *testing.T) {
 	table := loadScopeParityTable(t)
 	step := frozenPreStep()
-	defaultTo := time.Date(2026, 9, 1, 12, 30, 45, 500_000_000, time.UTC)
 
-	for _, testCase := range table.Cases {
-		raw := string(testCase.Value)
-		t.Run(raw, func(t *testing.T) {
-			scope := []byte(fmt.Sprintf(`{"to_date":%s}`, raw))
-			window, err := step.windowFor(scope)
+	for index, testCase := range table.Cases {
+		name := fmt.Sprintf("%d_%s_%s", index, testCase.Case, string(testCase.Scope))
+		t.Run(name, func(t *testing.T) {
+			window, err := step.windowFor(testCase.Scope)
 
-			got := "PARSED"
-			switch {
-			case err != nil:
-				got = "RAISES"
-			case window.To.Equal(defaultTo):
-				got = "DEFAULT"
-			}
+			key := canonicalScope(t, testCase.Scope)
+			diverge, enumerated := enumeratedDivergences[key]
 
-			want := testCase.Verdict
-			if diverge, enumerated := enumeratedDivergences[raw]; enumerated {
-				if got == want {
+			if testCase.Verdict == "RAISES" {
+				if err == nil {
 					t.Fatalf(
-						"%s is listed as a divergence (%s) but Go now AGREES with the reference "+
-							"(%s). Remove the entry — a stale divergence hides a real one.",
-						raw, diverge.reason, got,
+						"scope %s: the reference RAISES (%s at %s) but Go accepted it and would "+
+							"WRITE mapping rows for a build the bridge rejects. This direction is "+
+							"never an acceptable divergence.",
+						testCase.Scope, testCase.Error, testCase.Stage,
 					)
 				}
-				want = diverge.want
+				return
 			}
 
-			if got != want {
+			// The reference RUNS.
+			if enumerated {
+				if err == nil {
+					t.Fatalf(
+						"scope %s is listed as a divergence (%s) but Go now agrees with the "+
+							"reference. Remove the entry — a stale divergence hides a real one.",
+						testCase.Scope, diverge.reason,
+					)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf(
-					"scope value %s: Go says %s, the reference says %s.\n"+
+					"scope %s: the reference RUNS with window %s..%s but Go refused: %v.\n"+
 						"Either fix the adapter, or add an entry to enumeratedDivergences with a "+
-						"REASON. Do not widen a parsing rule to make this pass — that is how this "+
-						"gate was got wrong twice.",
-					raw, got, testCase.Verdict,
+						"REASON. Do not widen a parsing rule to make this pass.",
+					testCase.Scope, testCase.Window.From, testCase.Window.To, err,
 				)
 			}
 
-			// Where both parse, the INSTANT must agree too, not just the verdict.
-			//
-			// Compared at full precision on purpose. An earlier version of this
-			// assertion sliced the reference's ISO string to 19 characters and
-			// so compared a truncated expectation against an untruncated value,
-			// which reported a divergence that did not exist: both planes carry
-			// the fractional second at THIS layer, and the truncation to whole
-			// seconds happens further down (issueprlinks.truncateBoundToSecond
-			// on one side, strftime on the other). An assertion that quietly
-			// drops precision is the same class of defect as a parser that
-			// quietly widens.
-			if got == "PARSED" && testCase.ISO != "" {
-				wantInstant, parseErr := parseReferenceISO(testCase.ISO)
-				if parseErr != nil {
-					t.Fatalf("could not parse the reference's own output %q: %v", testCase.ISO, parseErr)
-				}
-				if !window.To.Equal(wantInstant) {
-					t.Errorf("scope %s: Go parsed %s, the reference parsed %s", raw, window.To, testCase.ISO)
-				}
+			wantFrom, parseErr := parseReferenceISO(testCase.Window.From)
+			if parseErr != nil {
+				t.Fatalf("cannot parse the reference's own from bound %q: %v", testCase.Window.From, parseErr)
+			}
+			wantTo, parseErr := parseReferenceISO(testCase.Window.To)
+			if parseErr != nil {
+				t.Fatalf("cannot parse the reference's own to bound %q: %v", testCase.Window.To, parseErr)
+			}
+			if !window.From.Equal(wantFrom) {
+				t.Errorf("scope %s: from = %s, the reference derived %s", testCase.Scope, window.From, wantFrom)
+			}
+			if !window.To.Equal(wantTo) {
+				t.Errorf("scope %s: to = %s, the reference derived %s", testCase.Scope, window.To, wantTo)
 			}
 		})
 	}
@@ -212,7 +239,7 @@ func TestEveryEnumeratedDivergenceIsInTheTable(t *testing.T) {
 	table := loadScopeParityTable(t)
 	measured := make(map[string]struct{}, len(table.Cases))
 	for _, testCase := range table.Cases {
-		measured[string(testCase.Value)] = struct{}{}
+		measured[canonicalScope(t, testCase.Scope)] = struct{}{}
 	}
 	for raw, diverge := range enumeratedDivergences {
 		if _, present := measured[raw]; !present {

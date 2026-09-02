@@ -235,6 +235,76 @@ jobs:
       - name: Validate River compatibility harness
         run: bash ci/check_river_compat_static.sh
 
+  # CHAOS-4818: Go permits fusing an unguarded float64 `x*y +/- z` into one
+  # fused-multiply-add (a single rounding) on arm64, where CPython always
+  # rounds the multiply and the add/subtract separately -- and prod Go
+  # workers run arm64 (images are multi-arch, see docker-images.yml's
+  # linux/arm64 build target). amd64 CI (go-quality above) cannot see a
+  # regression in this class: the fusion typically does not happen there, so
+  # the bit-pattern goldens pass regardless of whether the arm64-only bug is
+  # present. This job runs those bit-pattern goldens on a REAL arm64
+  # runner -- not QEMU, which does not reproduce host FMA instruction
+  # selection. (An earlier draft of this job also ran a companion static
+  # lint for the same unguarded shape; codex found real blind spots in it
+  # during #2106's review, so it was dropped from that PR and now ships
+  # separately as its own follow-up. This job does not depend on it.)
+  #
+  # Based on main post-#2106 (the FMA fix this job proves ran on real
+  # arm64, already merged) -- the tests named in the -run pattern below
+  # exist on main. The "0 tests matched" guard still protects against the
+  # pattern going stale later, e.g. a future rename.
+  go-arm64-numeric-parity:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Confirm this runner is actually arm64
+        # A mislabeled or reassigned runner would make this job's absence of
+        # findings mean nothing -- fail loud rather than silently validate
+        # the wrong architecture (same principle as ci/check_go.sh's stage
+        # manifest: a skipped check must never read as a passed one).
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on ubuntu-26.04-arm, got '${arch}' -- CHAOS-4818's FMA class does not reproduce on any other architecture, so this job proves nothing if it is not actually running on arm64" >&2
+            exit 1
+          fi
+
+      - name: Run FMA bit-pattern goldens on real arm64
+        # team-lead ruling (CHAOS-4818): `go test -run <pattern>` exits 0
+        # when the pattern matches ZERO tests -- correct Go semantics, but
+        # if a future rename ever empties this job's -run pattern (a test
+        # renamed, a package moved, a typo in the regex), this job would
+        # stay green forever having proved nothing, which IS a false
+        # green from this job's own perspective (its entire purpose is
+        # proving these specific tests ran on real arm64). `-json` output
+        # lets us count actual RUN events for named Test* functions and
+        # fail loud if none ran, rather than trusting the bare exit code.
+        #
+        # This pattern intentionally matches only the bit-pattern golden
+        # tests -- it does not name any test from the companion static
+        # lint mentioned above, since that lint (and its tests) do not
+        # exist on main.
+        run: |
+          set -euo pipefail
+          go test -mod=readonly -count=1 -json ./internal/jobs/... \
+            -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
+            | tee go-test-output.json
+          ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
+          echo "tests actually run: ${ran}"
+          if [ "${ran}" -eq 0 ]; then
+            echo "0 tests matched the -run pattern -- this job would prove NOTHING and stay green even if every named test were renamed or deleted. Failing loud rather than reporting a silent pass." >&2
+            exit 1
+          fi
+
   go-storage-integration-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5

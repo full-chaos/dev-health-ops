@@ -257,6 +257,13 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 		// CHAOS-4759 transition guard: bounded-cooldown check, see
 		// RecordArgMaxNullTransitionGuard's doc comment.
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
+		// CHAOS-4773 (codex round-1 finding): this path compiles the
+		// same repos join investmentContextFor's REPO branch does --
+		// wire the same telemetry resolveSankey/resolveSankeyCoverage
+		// carry, not just the Sankey/coverage surfaces.
+		if req.Dimension == DimensionRepo {
+			RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
+		}
 	}
 	return ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
@@ -274,6 +281,9 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 		// See resolveOneTimeseries's identical call for the reasoning.
 		RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
+		if req.Dimension == DimensionRepo {
+			RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
+		}
 	}
 	return ExecuteBreakdown(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
@@ -357,6 +367,13 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		// below, which is deliberately the raw three-state flag for a
 		// DIFFERENT, Python-faithful reason documented at that variable.
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
+		// CHAOS-4773 telemetry: only the investment path with REPO in the
+		// dimension list compiles the repos join investmentContextFor's doc
+		// comment (investment.go) roots this ticket's fan-out class on. See
+		// investmentrepojointelemetry.go for what this reports and why.
+		if dimensionListHas(req.Path, DimensionRepo) {
+			RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
+		}
 	}
 	// DELIBERATELY NO RecordStaleInvestmentMembershipScope call here.
 	// Verified by reading analytics.py directly (not assumed from the
@@ -466,7 +483,27 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 		// omitted would read that source with no guard ever firing.
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 	}
-
+	// CHAOS-4773: NO RecordInvestmentRepoJoinDedupCollisions call here,
+	// deliberately, corrected after codex round 2 (P2, EXECUTED) caught
+	// round 1's own mistake -- CompileFlowMatrix routes TEAM/REPO/WORK_TYPE
+	// to fixed, hand-written templates BEFORE reaching
+	// compileFlowMatrixInvestmentDimension (flowmatrix.go:176-190), which
+	// never call investmentContextFor at all; and
+	// compileFlowMatrixInvestmentDimension's own call (flowmatrix.go:268)
+	// passes investmentContextFor a ONE-element dimensions list containing
+	// only req.Dimension, which in that branch is always
+	// AUTHOR/THEME/SUBCATEGORY, never REPO -- so
+	// dimensionListHas(dimensions, DimensionRepo) is always false there
+	// too. The repos join investmentContextFor's REPO branch adds is
+	// therefore structurally UNREACHABLE from any flow-matrix request, for
+	// any dimension, by any path -- unlike RecordArgMaxNullTransitionGuard
+	// above, which DOES apply here (it observes
+	// latestWorkUnitInvestmentsSource() generally, not this specific join).
+	// Round 1's guard (`resolveUseInvestment(...) && req.Dimension ==
+	// DimensionRepo`) could still evaluate true (e.g. an explicit
+	// flowMatrix.useInvestment=true with dimension=REPO), firing an
+	// irrelevant scan and burning the org's telemetry cooldown for a query
+	// that never touches repos at all.
 	nodes, edges, execErr := ExecuteFlowMatrix(ctx, client, nodesQuery, edgesQuery)
 	if execErr != nil {
 		// Swallow: analytics.py:959-961 logs and degrades to empty.

@@ -85,6 +85,8 @@ VALUES: list[Any] = [
     "2026-W33-6",
     "2026-243",
     "2026-08-15T06:07",
+    "20260815T060708",
+    "20260815T0607",
     "2026-08-15T06:07:08",
     "2026-08-15 06:07:08",
     "2026-08-15T06:07:08.123",
@@ -161,14 +163,47 @@ def _admit(scope: Any) -> dict[str, Any]:
         return {"verdict": "RAISES", "stage": "window", "error": type(error).__name__}
 
 
+# UUID spellings. Python's uuid.UUID strips a LOWERCASE `urn:`/`uuid:` prefix
+# and surrounding braces before checking 32 hex digits, so its accepted set is
+# not the one a general-purpose UUID parser implements -- google/uuid.Parse is
+# case-insensitive about the URN prefix and therefore accepts input the
+# reference rejects. That divergence was invisible until this corpus gained a
+# FIELD axis, because every value used to be placed under `to_date` only.
+_UUID = "11111111-1111-4111-8111-111111111111"
+UUID_VALUES: list[Any] = [
+    _UUID,
+    _UUID.upper(),
+    _UUID.replace("-", ""),
+    _UUID.replace("-", "").upper(),
+    "{" + _UUID + "}",
+    "{" + _UUID.replace("-", "") + "}",
+    "urn:uuid:" + _UUID,
+    "URN:UUID:" + _UUID,
+    "Urn:Uuid:" + _UUID,
+    "urn:uuid:" + _UUID.replace("-", ""),
+    "urn:uuid:{" + _UUID + "}",
+    "  " + _UUID + "  ",
+    _UUID + "x",
+    _UUID[:-1],
+    "not-a-uuid",
+]
+
+# The FIELD axis. Every scope field the bridge admits, crossed with every value
+# shape -- the axis whose absence hid a repo_id-specific divergence through four
+# review rounds. `heuristic_*` are admissible to the bridge and unused by this
+# step; they are included to prove their presence never breaks it.
+FIELDS = ["to_date", "from_date", "repo_id", "heuristic_window", "heuristic_confidence"]
+
+
 def measure() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for name, document in DOCUMENTS:
         rows.append({"case": f"document:{name}", "scope": document, **_admit(document)})
-    for value in VALUES:
-        rows.append(
-            {"case": "value", "scope": {"to_date": value}, **_admit({"to_date": value})}
-        )
+    for field in FIELDS:
+        values = VALUES + (UUID_VALUES if field == "repo_id" else [])
+        for value in values:
+            scope = {field: value}
+            rows.append({"case": f"field:{field}", "scope": scope, **_admit(scope)})
     return rows
 
 

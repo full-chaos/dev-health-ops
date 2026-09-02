@@ -168,13 +168,46 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 	if text, present, err := scopeString(scope["repo_id"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", err)
 	} else if present {
-		repoID, parseErr := uuid.Parse(text)
+		repoID, parseErr := parsePythonUUID(text)
 		if parseErr != nil {
 			return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", parseErr)
 		}
 		window.RepoID = &repoID
 	}
 	return window, nil
+}
+
+// parsePythonUUID mirrors `uuid.UUID(hex=...)`'s own normalisation rather than
+// using a general-purpose parser, because the two accept DIFFERENT SETS.
+//
+// CPython does, in order: strip a `urn:` prefix, strip a `uuid:` prefix, strip
+// surrounding braces, remove hyphens, then require exactly 32 hex digits. Every
+// step is CASE-SENSITIVE, which is the whole point: `urn:uuid:X` is accepted and
+// `URN:UUID:X` is NOT, because the uppercase prefix is never stripped and the
+// leftover colons fail the length check.
+//
+// google/uuid.Parse is case-INSENSITIVE about that prefix, so it accepted
+// `URN:UUID:X` — a value the reference rejects. This step runs before the
+// bridge and writes rows, so that direction persists mapping rows for a build
+// the bridge is about to fail. It also REJECTED three spellings the reference
+// accepts (`{unhyphenated}`, `urn:uuid:unhyphenated`, `urn:uuid:{...}`).
+//
+// Measured, not inferred: the accepted set is a row of the parity corpus under
+// the repo_id field, so a change to either plane fails the differential.
+func parsePythonUUID(value string) (uuid.UUID, error) {
+	hex := strings.Replace(value, "urn:", "", 1)
+	hex = strings.Replace(hex, "uuid:", "", 1)
+	hex = strings.TrimPrefix(hex, "{")
+	hex = strings.TrimSuffix(hex, "}")
+	hex = strings.ReplaceAll(hex, "-", "")
+	if len(hex) != 32 {
+		return uuid.Nil, fmt.Errorf("%q is not a UUID the reference accepts", value)
+	}
+	parsed, err := uuid.Parse(hex)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("%q is not a UUID the reference accepts", value)
+	}
+	return parsed, nil
 }
 
 // parseScopeInstant accepts the forms Python's `datetime.fromisoformat` accepts
@@ -266,6 +299,8 @@ func parseScopeInstant(value string) (time.Time, error) {
 		"2006-01-02", "20060102",
 		"2006-01-02T15:04:05", "2006-01-02 15:04:05",
 		"2006-01-02T15:04", "2006-01-02 15:04",
+		// Basic (hyphen-less) date-times, which fromisoformat also accepts.
+		"20060102T150405", "20060102T1504",
 	} {
 		if parsed, err := time.ParseInLocation(layout, trimmed, time.UTC); err == nil {
 			return parsed, nil

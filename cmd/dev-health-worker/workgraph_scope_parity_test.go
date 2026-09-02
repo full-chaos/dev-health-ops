@@ -53,35 +53,37 @@ type divergence struct {
 	reason string
 }
 
-// enumeratedDivergences is keyed by the COMPACTED scope document, so an entry
-// names the exact input rather than a value shared across positions.
+// enumeratedDivergences is keyed by the VALUE, because these divergences are
+// properties of the value's FORM, not of which field carries it. Keying on the
+// whole document made the same form diverge silently under from_date while
+// being enumerated under to_date -- which the field axis exposed immediately.
 //
 // Every entry REFUSES something the reference accepts. None accepts something
 // the reference refuses — that direction would let this step write mapping rows
 // for a request the build is about to reject, which is the defect class that
 // produced the second failure of this gate.
 var enumeratedDivergences = map[string]divergence{
-	`{"to_date":"2026-08-15T06:07:08+05:00"}`: {
+	`"2026-08-15T06:07:08+05:00"`: {
 		want: "RAISES",
 		reason: "non-zero UTC offset: the reference's strftime keeps the wall-clock fields and " +
 			"DISCARDS the offset, so rendering it would silently pick one of two possible instants. " +
 			"Refused rather than guessed; nothing produces such a scope today.",
 	},
-	`{"to_date":"2026-08-15T06:07:08-08:00"}`: {
+	`"2026-08-15T06:07:08-08:00"`: {
 		want:   "RAISES",
 		reason: "same as the +05:00 case.",
 	},
-	`{"to_date":"2026-W33-6"}`: {
+	`"2026-W33-6"`: {
 		want: "RAISES",
 		reason: "ISO week date. Accepted by fromisoformat, refused here: nothing in the tree writes " +
 			"a build scope with dates at all (the fixed producer persists `{}`), so it is unreachable, " +
 			"and a loud refusal beats silently computing a different window.",
 	},
-	`{"to_date":"2026-08-15t06:07:08"}`: {
+	`"2026-08-15t06:07:08"`: {
 		want:   "RAISES",
 		reason: "lowercase separator; same unreachability reasoning as the ISO week date.",
 	},
-	`{"to_date":"2026-08-15_06:07:08"}`: {
+	`"2026-08-15_06:07:08"`: {
 		want:   "RAISES",
 		reason: "arbitrary single-character separator; same reasoning.",
 	},
@@ -105,6 +107,37 @@ func canonicalScope(t *testing.T, raw json.RawMessage) string {
 		t.Fatalf("compact scope %s: %v", raw, err)
 	}
 	return buffer.String()
+}
+
+// parsedScopeFields are the fields this step actually reads. `heuristic_window`
+// and `heuristic_confidence` are ADMISSIBLE to the bridge but belong to the
+// heuristic edge builder, so their values never reach this step's parser.
+var parsedScopeFields = map[string]struct{}{
+	"to_date": {}, "from_date": {}, "repo_id": {},
+}
+
+// scopeValueKey returns the divergence key for a one-field scope: the VALUE,
+// but ONLY when the field is one this step parses.
+//
+// A divergence here is a property of the value's FORM crossed with WHETHER THIS
+// STEP PARSES THAT FIELD — not of the form alone. The same ISO week date is a
+// deliberate refusal under `to_date` (this step parses it) and simply passes
+// through under `heuristic_window` (it does not), so Go correctly agrees with
+// the reference in the second case. Keying on the form alone marked those rows
+// as stale divergences; the field axis is what made that visible.
+func scopeValueKey(t *testing.T, raw json.RawMessage) (string, bool) {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || len(fields) != 1 {
+		return "", false
+	}
+	for field, value := range fields {
+		if _, parsed := parsedScopeFields[field]; !parsed {
+			return "", false
+		}
+		return canonicalScope(t, value), true
+	}
+	return "", false
 }
 
 func loadScopeParityTable(t *testing.T) scopeParityTable {
@@ -164,8 +197,11 @@ func TestBuildScopeMatchesTheBridgeAdmission(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			window, err := step.windowFor(testCase.Scope)
 
-			key := canonicalScope(t, testCase.Scope)
-			diverge, enumerated := enumeratedDivergences[key]
+			var diverge divergence
+			enumerated := false
+			if key, parsed := scopeValueKey(t, testCase.Scope); parsed {
+				diverge, enumerated = enumeratedDivergences[key]
+			}
 
 			if testCase.Verdict == "RAISES" {
 				if err == nil {
@@ -239,7 +275,9 @@ func TestEveryEnumeratedDivergenceIsInTheTable(t *testing.T) {
 	table := loadScopeParityTable(t)
 	measured := make(map[string]struct{}, len(table.Cases))
 	for _, testCase := range table.Cases {
-		measured[canonicalScope(t, testCase.Scope)] = struct{}{}
+		if key, parsed := scopeValueKey(t, testCase.Scope); parsed {
+			measured[key] = struct{}{}
+		}
 	}
 	for raw, diverge := range enumeratedDivergences {
 		if _, present := measured[raw]; !present {

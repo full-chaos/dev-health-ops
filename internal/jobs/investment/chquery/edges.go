@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ErrUnavailable is returned when the reader is constructed without a
@@ -173,20 +174,28 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 			providerValue = *provider
 		}
 
+		// Every String column goes through the Python driver's decode policy
+		// (see pythonparity.DecodeClickHouseString). The four node-key columns
+		// are the ones that matter most: source_type, source_id, target_type
+		// and target_id are hashed into work_unit_id, which addresses rows in
+		// BOTH work_unit_investments and work_unit_membership -- written by two
+		// different jobs. A byte sequence the two planes spell differently
+		// would mint a different work_unit_id in each, which is the silent
+		// cross-table divergence this whole port exists to prevent.
 		edges = append(edges, EdgeRow{
 			Edge: units.Edge{
-				EdgeID:     edgeID,
-				SourceType: sourceType,
-				SourceID:   sourceID,
-				TargetType: targetType,
-				TargetID:   targetID,
+				EdgeID:     pythonparity.DecodeClickHouseStringValue(edgeID),
+				SourceType: pythonparity.DecodeClickHouseStringValue(sourceType),
+				SourceID:   pythonparity.DecodeClickHouseStringValue(sourceID),
+				TargetType: pythonparity.DecodeClickHouseStringValue(targetType),
+				TargetID:   pythonparity.DecodeClickHouseStringValue(targetID),
 				Confidence: float64(confidence),
 			},
-			EdgeType:   edgeType,
-			RepoID:     repoID,
-			Provider:   providerValue,
-			Provenance: provenance,
-			Evidence:   evidence,
+			EdgeType:   pythonparity.DecodeClickHouseStringValue(edgeType),
+			RepoID:     pythonparity.DecodeClickHouseStringValue(repoID),
+			Provider:   pythonparity.DecodeClickHouseStringValue(providerValue),
+			Provenance: pythonparity.DecodeClickHouseStringValue(provenance),
+			Evidence:   pythonparity.DecodeClickHouseStringValue(evidence),
 		})
 	}
 	if err := rows.Err(); err != nil {

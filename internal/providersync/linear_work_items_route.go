@@ -377,9 +377,23 @@ type linearWorkItemRows struct {
 	Projects           []projectmembership.CatalogRow
 }
 
-// LinearWorkItemsRouteHandler is the provider-only canonical work-items
-// vertical slice. It is intentionally not registered or activated here; the
-// family planner and route gate remain separate work.
+// LinearWorkItemsRouteHandler is the canonical work-items vertical slice, and
+// it is LIVE -- reached as a FIELD, not by direct assignment, which is why a
+// grep for `routeHandler = .*LinearWorkItemsRouteHandler` finds nothing and
+// appears to confirm the superseded comment below.
+//
+// WIRING: cmd/dev-health-worker/provider_sync.go's
+// `provider == "linear" && dataset == "work-items"` case constructs
+// LinearWorkItemFamilyRouteHandler and passes this type as its `Direct` field
+// (linear_work_items_composition.go:28-31 declares
+// `Direct LinearWorkItemsRouteHandler`). That field is not inert: the family
+// handler's own Collect reads Direct.FetchComments / FetchHistory / FetchCycles
+// and refuses the claim when any is unset, so this type is on the production
+// collect path.
+//
+// The superseded text read "It is intentionally not registered or activated
+// here; the family planner and route gate remain separate work." Kept visible
+// as a correction rather than deleted (CHAOS-4848).
 type LinearWorkItemsRouteHandler struct {
 	PerPage       int
 	MaxPages      int

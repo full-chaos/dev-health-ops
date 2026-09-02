@@ -63,8 +63,21 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 }
 
 // GitHubWorkItemsRESTCollector builds the REST half of GitHub's composite
-// work-item producer. It remains intentionally unregistered until the PR
-// GraphQL social layer and every direct/derived effect are composed atomically.
+// work-item producer, and that composition has HAPPENED.
+//
+// WIRING: LIVE, as a FIELD rather than by direct assignment --
+// github_work_items_route.go:182-183 declares
+// `REST GitHubWorkItemsRESTCollector` on GitHubWorkItemsRouteHandler, which
+// cmd/dev-health-worker/provider_sync.go's
+// `provider == "github" && dataset == "work-items"` case constructs and assigns
+// to routeHandler alongside NewGitHubWorkItemClickHouseEffects and
+// NewGitHubWorkItemDeriver.
+//
+// The superseded text read "It remains intentionally unregistered until the PR
+// GraphQL social layer and every direct/derived effect are composed
+// atomically." Both preconditions are met: the Social fetcher is a sibling
+// field on the same handler and the derived effects are wired. Kept visible as
+// a correction rather than deleted (CHAOS-4848).
 type GitHubWorkItemsRESTCollector struct {
 	MaxPages int
 }

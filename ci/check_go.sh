@@ -589,7 +589,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython)$' \
+        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython|TestTimeBoundsGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -653,6 +653,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-decimal-digits"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python decimal-digit set did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: compute_time_bounds and _node_time_bounds, whose per-type
+  # fallback chains decide the stored TimeBounds on every work unit. Does not
+  # touch input_hash, so a drift here re-dates units rather than re-billing
+  # categorisation.
+  proof_file="${proof_dir}/time-bounds-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: time-bounds golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

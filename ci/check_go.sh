@@ -41,7 +41,13 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # call in this script, not only the one confirmed offender: none of these gate
 # stages need either var, and CI never sets them, so scrubbing everywhere keeps
 # this script's signal CI-equivalent by construction instead of by memory.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV)
+#
+# GOFLAGS and GOEXPERIMENT are scrubbed for a sharper reason (CHAOS-4778): GOFLAGS
+# is inherited by every `go` invocation, so an ambient `GOFLAGS=-tags=integration`
+# turned `check_go.sh test` -- a verb CI declares container-free -- into a full
+# integration run that starts Testcontainers. A caller's environment must not be
+# able to change which suite a verb runs.
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT)
 
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
@@ -92,9 +98,9 @@ usage() {
          output when GITHUB_OUTPUT is set. No Docker required.
   integration-prepull
          Pre-pull every image declared by the Go test container harness --
-         postgres, clickhouse, valkey, and testcontainers-go's reaper, which it
-         starts before the first container of any test binary whether or not a
-         test asks for it. Retries transient registry failures at most three
+         postgres, clickhouse, valkey, and the testcontainers-go reaper,
+         which starts before the first container of any test binary whether or
+         not a test asks for it. Retries registry failures at most three
          times per image before failing loudly. Takes no arguments on purpose:
          a per-job subset is a list nothing can check against what the job
          actually starts. CI runs this before every job that starts a container.

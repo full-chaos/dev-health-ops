@@ -1895,6 +1895,17 @@ def test_container_derivation_still_sees_the_known_verbs() -> None:
 # — but the tag VALUE may be a shell variable, so the value is not inspected.
 _GO_TEST_WITH_TAGS = re.compile(r"go test\b[^\n]*-tags[= ]")
 _CHECK_GO_INVOCATION = re.compile(r"ci/check_go\.sh\s+(\S+)")
+# Any shell word ending in .sh, however it is spelled. `ext=.sh` in an assembled
+# command path matches, which is the point.
+_SCRIPT_TOKEN = re.compile(r"\S*\.sh\b")
+# A container runtime named anywhere in the step, and a build tag arriving
+# through the environment rather than the command line.
+_CONTAINER_TOOL = re.compile(r"\b(docker|podman|compose|nerdctl)\b")
+_TAGS_VIA_ENV = re.compile(r"\b(GOFLAGS|GOEXPERIMENT)\b")
+
+# Scripts asserted not to start containers. `ci/check_go.sh` is absent on purpose:
+# it is judged by its verb, not by its name.
+_SAFE_SCRIPTS = frozenset({"ci/check_river_compat_static.sh"})
 
 
 def _run_starts_containers(command: str) -> bool:
@@ -1909,12 +1920,41 @@ def _run_starts_containers(command: str) -> bool:
     A step is now container-starting unless it can be SHOWN otherwise: a check_go
     verb must be a literal on the safe list, and a `go test` must carry no tags.
     """
-    if _GO_TEST_WITH_TAGS.search(command):
+    if _GO_TEST_WITH_TAGS.search(command) or _CONTAINER_TOOL.search(command):
+        return True
+    if _TAGS_VIA_ENV.search(command):
+        # check_go.sh scrubs both now, so this is defence in depth: a step that
+        # sets them is doing something the safe-list cannot vouch for.
         return True
     for match in _CHECK_GO_INVOCATION.finditer(command):
         verb = match.group(1)
         if re.fullmatch(r"[a-z0-9-]+", verb) is None:
             return True  # indirection: cannot be shown safe, so it is not
+        if verb not in _NON_CONTAINER_VERBS:
+            return True
+    for match in _SCRIPT_TOKEN.finditer(command):
+        script = match.group(0).strip("\"'").lstrip("./")
+        if script.endswith("check_go.sh"):
+            continue  # judged by its verb above
+        if script not in _SAFE_SCRIPTS:
+            return True
+    return False
+
+
+def _run_uses_go_test_harness(command: str) -> bool:
+    """Does this step start containers via internal/testsupport/containers?
+
+    Only those are warmed by `integration-prepull`. A step that builds from a
+    Python base image or brings up a compose stack needs the Docker Hub login but
+    would gain nothing from warming the Go harness images, so the two obligations
+    are tracked separately rather than demanding a pre-pull that cannot help.
+    """
+    if _GO_TEST_WITH_TAGS.search(command) or _TAGS_VIA_ENV.search(command):
+        return True
+    for match in _CHECK_GO_INVOCATION.finditer(command):
+        verb = match.group(1)
+        if re.fullmatch(r"[a-z0-9-]+", verb) is None:
+            return True
         if verb not in _NON_CONTAINER_VERBS:
             return True
     return False
@@ -1929,13 +1969,17 @@ def _step_kind(step: dict[str, Any]) -> str | None:
     command = str(step.get("run", ""))
     if not command:
         return None
-    # Match the bare verb only. `integration-prepull clickhouse` is refused at
-    # runtime now, but a step that still carried a subset would otherwise read as
-    # a valid pre-pull here and the job would fail late instead of in review.
-    if re.search(rf"{re.escape(_PREPULL_COMMAND)}\s*$", command.strip()):
+    # The step must BE the pre-pull, not merely contain the text. A substring
+    # match accepted `: bash ci/check_go.sh integration-prepull` -- `:` is a
+    # successful shell no-op, so nothing was warmed and the next step pulled cold.
+    # It also rejects a leftover subset argument, which is refused at runtime now
+    # but would otherwise fail in CI rather than in review.
+    if re.fullmatch(rf"(?:bash\s+)?{re.escape(_PREPULL_COMMAND)}", command.strip()):
         return "prepull"
+    if _run_uses_go_test_harness(command):
+        return "harness"
     if _run_starts_containers(command):
-        return "container"
+        return "pulls"
     return None
 
 
@@ -1945,24 +1989,32 @@ def test_every_workflow_job_starting_containers_authenticates_and_pre_pulls() ->
 
     for job_name, job in _workflow()["jobs"].items():
         kinds = [_step_kind(step) for step in job.get("steps", [])]
-        if "container" not in kinds:
+        pulling = [i for i, k in enumerate(kinds) if k in {"harness", "pulls"}]
+        if not pulling:
             continue
-        first_container = kinds.index("container")
+        first_pull = pulling[0]
+        harness = next((i for i, k in enumerate(kinds) if k == "harness"), None)
         login = next((i for i, k in enumerate(kinds) if k == "login"), None)
         prepull = next((i for i, k in enumerate(kinds) if k == "prepull"), None)
 
+        # Every job that pulls an image at all needs the authenticated pull.
         if login is None:
-            offenders.append(
-                f"{job_name}: starts containers with no docker.io login step"
-            )
-        if prepull is None:
-            offenders.append(
-                f"{job_name}: starts containers with no `{_PREPULL_COMMAND}` step"
-            )
-        if prepull is not None and prepull > first_container:
-            offenders.append(f"{job_name}: pre-pulls AFTER starting containers")
-        if login is not None and prepull is not None and login > prepull:
-            offenders.append(f"{job_name}: logs in AFTER pre-pulling")
+            offenders.append(f"{job_name}: pulls images with no docker.io login step")
+        elif login > first_pull:
+            offenders.append(f"{job_name}: logs in AFTER pulling images")
+
+        # Only jobs using the Go test harness benefit from warming ITS images; a
+        # step that builds from a python base or brings up compose does not.
+        if harness is not None:
+            if prepull is None:
+                offenders.append(
+                    f"{job_name}: starts Testcontainers with no "
+                    f"`{_PREPULL_COMMAND}` step"
+                )
+            elif prepull > harness:
+                offenders.append(f"{job_name}: pre-pulls AFTER starting Testcontainers")
+            elif login is not None and login > prepull:
+                offenders.append(f"{job_name}: logs in AFTER pre-pulling")
 
     assert not offenders, "\n".join(offenders)
 
@@ -2008,6 +2060,19 @@ def test_step_classifier_fails_closed_on_known_evasions() -> None:
         "bash ci/check_go.sh ci",
         "bash ci/check_go.sh fast",
         'bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"',
+        # The command PATH assembled from fragments, so no literal script name
+        # appears at the call site.
+        'script=ci/check_go; ext=.sh; verb=ci; "$script$ext" "$verb"',
+        # A container started with no Go involvement at all.
+        "docker run --rm postgres:18-alpine",
+        "docker compose -f compose.yml up -d postgres",
+        # A build tag arriving through the environment rather than the command
+        # line, turning a verb declared safe into an integration run. check_go.sh
+        # scrubs GOFLAGS now, so this is belt and braces.
+        "GOFLAGS=-tags=integration bash ci/check_go.sh test",
+        # Any other script: not analysable from here, so not assumed safe.
+        "bash ci/check_go_containers.sh smoke",
+        "tests/compatibility/river/run.sh",
     ]
     for command in must_be_container:
         assert _run_starts_containers(command), f"classified as safe: {command!r}"
@@ -2033,6 +2098,31 @@ def test_prepull_subset_does_not_read_as_a_valid_pre_pull() -> None:
     still accepted it as a pre-pull step the job would reach CI before saying so.
     """
     assert _step_kind({"run": "bash ci/check_go.sh integration-prepull"}) == "prepull"
-    assert _step_kind(
-        {"run": "bash ci/check_go.sh integration-prepull clickhouse"}
-    ) != ("prepull")
+    assert _step_kind({"run": "ci/check_go.sh integration-prepull"}) == "prepull"
+
+    not_a_prepull = [
+        # A leftover subset argument: refused at runtime, and must fail review too.
+        "bash ci/check_go.sh integration-prepull clickhouse",
+        # `:` is a successful shell no-op. The text is present, nothing is warmed,
+        # and the next step pulls cold -- which a substring match accepted.
+        ": bash ci/check_go.sh integration-prepull",
+        "echo bash ci/check_go.sh integration-prepull",
+    ]
+    for command in not_a_prepull:
+        assert _step_kind({"run": command}) != "prepull", f"accepted: {command!r}"
+
+
+def test_pulling_and_harness_obligations_are_distinguished() -> None:
+    """A job that pulls needs the login; only harness jobs need the pre-pull.
+
+    Demanding `integration-prepull` from a job that builds off a Python base image
+    would be a guard asking for something that cannot help, which is how guards
+    get worked around rather than satisfied.
+    """
+    assert _step_kind({"run": "bash ci/check_go.sh ci"}) == "harness"
+    assert (
+        _step_kind({"run": "go test -tags=integration ./cmd/dev-health-worker"})
+        == "harness"
+    )
+    assert _step_kind({"run": "docker run --rm postgres:18-alpine"}) == "pulls"
+    assert _step_kind({"run": "bash ci/check_go_containers.sh smoke"}) == "pulls"

@@ -497,12 +497,12 @@
       "notes": "registry kind metrics.remaining.membership_backfill"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:15",
+      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:49",
       "surface": "health_check",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 15
+        "line": 49
       },
       "queue_or_cadence": "default (implicit)",
       "dispatches": "n/a",
@@ -521,12 +521,12 @@
       "notes": "no dispatch call site found anywhere (not .delay/apply_async/getattr/Beat) - likely celery inspect only, confirm intent | Verified during CUT-01: repo-wide search for .delay/apply_async/send_task/getattr-indirection/Beat/CLI finds zero dispatch sites for health_check (only the task decorator and two `__all__`/import re-exports exist). Celery `inspect`/`ping` commands are the only conceivable callers and are being replaced by Go health/readiness/metrics endpoints (CUT-04)."
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:24",
+      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:58",
       "surface": "send_billing_notification",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 24
+        "line": 58
       },
       "queue_or_cadence": "webhooks",
       "dispatches": "self",
@@ -545,12 +545,12 @@
       "notes": "registry kind operational.billing_notification; task name has no .tasks. prefix (dev_health_ops.workers.system_ops.send_billing_notification)"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:169",
+      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:522",
       "surface": "phone_home_heartbeat",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 169
+        "line": 522
       },
       "queue_or_cadence": "default",
       "dispatches": "invoked by api/internal/worker_operational.py::process_heartbeat_reference via phone_home_heartbeat.run() (HTTP bridge, not Beat)",

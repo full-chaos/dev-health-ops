@@ -1,4 +1,16 @@
-"""Authenticated internal bridge for dormant Go operational handlers."""
+"""Authenticated internal bridge invoked by LIVE Go operational handlers.
+
+CHAOS-4440: this module's own docstring previously said "dormant" — backwards.
+`operational.billing_notification`, `operational.webhook_delivery`, and
+`system.heartbeat` are registered and running in production today
+(`cmd/dev-health-worker/operational.go:120-167`); each route below is called
+from the Go handler that owns the durable row, the River attempt, and retry
+classification, while this bridge performs the compatibility side effect
+(email dispatch, webhook processing, telemetry POST) during coexistence. The
+`/pagerduty` route is a different shape: it reconciles one Go-owned Valkey
+stream delivery per call rather than a durable Postgres row — see
+`PagerDutyDelivery` below.
+"""
 
 from __future__ import annotations
 
@@ -50,6 +62,21 @@ class BillingReference(_StrictModel):
     notification_id: uuid.UUID
     organization_id: uuid.UUID
     notification_type: str
+    # CHAOS-3952: Go's own copy of the durable row's idempotency key. Cross-
+    # checked against the row itself so the two sides' identity can never
+    # silently drift; the actual duplicate-send guard is the row's own
+    # completion fence (system_ops._claim_billing_notification_completion).
+    # Optional, not required: a REQUIRED field on a strict (extra="forbid")
+    # bridge model is a rolling-deploy hazard — an old Go binary that omits
+    # it hits a 422 that http.go classifies as permanent (codex round 2,
+    # P1, EXECUTED), terminalizing the River job with no email ever sent.
+    # `send_billing_notification` itself already treats a missing key as
+    # "skip the cross-check" (see system_ops.py), so the wire contract
+    # matches. This does not cover new-Go-against-old-Python during a
+    # rollout (an old strict model rejects the unknown field outright) —
+    # that direction needs deploy ORDER (bridge before worker), not a code
+    # change here; see the PR's RISK-NOTES.
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class HeartbeatReference(_StrictModel):
@@ -110,6 +137,7 @@ async def process_billing_reference(
     result = await run_in_threadpool(
         send_billing_notification.run,
         durable_notification_id=str(reference.notification_id),
+        idempotency_key=reference.idempotency_key,
     )
     return _bridge_result(result, success=frozenset({"sent"}))
 

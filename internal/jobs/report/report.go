@@ -1,6 +1,11 @@
-// Package report contains the dormant, dependency-injected report execution
-// kernel. It intentionally has no process wiring while report jobs remain
-// Celery-routed. ReportRun, not River state, remains authoritative.
+// Package report contains the dependency-injected report execution kernel.
+//
+// CHAOS-4440: this package's own docstring previously called it "dormant"
+// and "Celery-routed" — backwards. `cmd/dev-health-worker/reports.go:17-96`
+// (CUT-03) wires real ClickHouse/renderer/artifact/notification adapters
+// into the binary via NewProductionRuntimeAdapters, and both
+// `report.execute_on_demand` and `report.execute_scheduled` are fully
+// Go-native in production. ReportRun, not River state, remains authoritative.
 package report
 
 import (

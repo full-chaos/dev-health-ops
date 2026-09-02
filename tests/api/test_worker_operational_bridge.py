@@ -54,11 +54,13 @@ def test_internal_bridge_passes_only_durable_billing_reference(monkeypatch) -> N
                 "notification_id": "00000000-0000-4000-8000-000000000011",
                 "organization_id": "00000000-0000-4000-8000-000000000010",
                 "notification_type": "invoice_receipt",
+                "idempotency_key": "billing:key",
             },
         )
     assert response.status_code == 200
     run.assert_called_once_with(
-        durable_notification_id="00000000-0000-4000-8000-000000000011"
+        durable_notification_id="00000000-0000-4000-8000-000000000011",
+        idempotency_key="billing:key",
     )
 
 
@@ -75,10 +77,42 @@ def test_internal_bridge_classifies_dropped_billing_as_permanent(monkeypatch) ->
                 "notification_id": "00000000-0000-4000-8000-000000000011",
                 "organization_id": "00000000-0000-4000-8000-000000000010",
                 "notification_type": "invoice_receipt",
+                "idempotency_key": "billing:key",
             },
         )
     assert response.status_code == 422
     assert response.json() == {"detail": "Operational delivery rejected"}
+
+
+def test_internal_bridge_accepts_billing_reference_missing_idempotency_key(
+    monkeypatch,
+) -> None:
+    """codex round 2, P1 (executed): a REQUIRED idempotency_key on this
+    strict bridge model is a rolling-deploy hazard — an old Go binary that
+    predates CHAOS-3952 omits the field, hits a 422, and http.go
+    permanently terminalizes the River job with no email ever sent. The
+    field must stay optional (send_billing_notification's own parameter
+    already is) so an old-Go/new-Python deploy window degrades to "no
+    cross-check", not "billing email delivery stops"."""
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    with patch(
+        "dev_health_ops.api.internal.worker_operational.send_billing_notification.run",
+        return_value={"status": "sent"},
+    ) as run:
+        response = TestClient(app).post(
+            "/api/internal/worker-operational/billing",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "notification_id": "00000000-0000-4000-8000-000000000011",
+                "organization_id": "00000000-0000-4000-8000-000000000010",
+                "notification_type": "invoice_receipt",
+            },
+        )
+    assert response.status_code == 200
+    run.assert_called_once_with(
+        durable_notification_id="00000000-0000-4000-8000-000000000011",
+        idempotency_key=None,
+    )
 
 
 def test_internal_bridge_classifies_unknown_result_shape_as_retryable(

@@ -1,4 +1,6 @@
 **/data/**
+# Tracked on purpose: a source data file, not a data artifact.
+!src/dev_health_ops/data/common_passwords.txt
 .env
 .env.local
 .env.*.local
@@ -19,6 +21,8 @@ demo-data**
 # **/.terraform*
 **/.trunk/**
 **/.beads/**
+# Tracked on purpose: the issue ledger, not local beads state.
+!.beads/issues.jsonl
 **/site**
 *.egg-info/
 build/
@@ -30,7 +34,11 @@ dist/
 .sisyphus/
 
 # Local GitLab Runner state (do not commit)
-.gitlab/gitlab-runner/
+.gitlab/gitlab-runner/**
+# Tracked on purpose: setup docs and compose file, not runner state.
+# NOTE the ** — a trailing-slash directory rule cannot be negated into.
+!.gitlab/gitlab-runner/README.md
+!.gitlab/gitlab-runner/docker-compose.yml
 
 # Mypy report artifact
 index.txt
@@ -73,4 +81,6 @@ tests/acceptance/artifacts/wave4/junit-corpus.xml
 # `uv sync` runs in different worktrees don't serialize on ~/.cache/uv/.lock.
 .uv-cache/
 worktrees/
-dev-health-workerctl
+# Anchored: a bare name also matches the directory cmd/dev-health-workerctl/,
+# which hid its three tracked Go sources from every gitignore-aware tool.
+/dev-health-workerctl

@@ -66,6 +66,7 @@ tests/acceptance/artifacts/wave4/junit-corpus.xml
 # lint/typecheck stages likewise leave .mypy_cache/ and .ruff_cache/ untracked —
 # same class of local-run byproduct, same accidental-commit risk under `git add -A`.
 .venv/
+.venv
 .mypy_cache/
 .ruff_cache/
 # Per-worktree uv cache (CHAOS-4411) — UV_CACHE_DIR points here so concurrent

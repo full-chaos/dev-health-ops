@@ -560,6 +560,33 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/workgraph/edges (frozen issue<->issue edge golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestWorkgraphIssueEdgesGoldenMatchesLivePython$' \
+        ./internal/jobs/workgraph/edges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the reason spelled out at capacity-forecast-golden: the
+  # edge golden has a different producer from every guard above it, so sharing a
+  # proof file would let this one be renamed or filtered out of the -run pattern
+  # while another guard's success stood in for it.
+  proof_file="${proof_dir}/workgraph-issue-edges-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/numerical/cpyrandom (recorded CPython RNG vectors vs the live interpreter)\n'
   if ! (
     cd "${ROOT}"

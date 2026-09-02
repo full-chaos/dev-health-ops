@@ -65,6 +65,7 @@ real ones"). Treat PARITY? rows as "check this first", not "this is broken".
 
 | file:line | classification | why |
 | --- | --- | --- |
+| `cmd/dev-health-workerctl/main.go:1944` | INFRA | CLI argument parsing (`positiveID`), no Python reference -- landed after this inventory's original sweep, added on a later pass |
 | `internal/externalrecompute/valkey.go:307` | INFRA | internal cache-key/ticket parsing |
 | `internal/streamrunner/valkey.go:365` | INFRA | internal cache-key parsing |
 | `internal/streamrunner/valkey.go:368` | INFRA | internal cache-key parsing |
@@ -85,18 +86,19 @@ real ones"). Treat PARITY? rows as "check this first", not "this is broken".
 
 ## Atoi (`strconv.Atoi` is `ParseInt(s, 10, 0)`; same class)
 
-All ~40 non-test call sites are pagination cursors (GitHub/GitLab/Jira/PagerDuty
-API page numbers), HTTP headers, cron-expression fields
-(`internal/scheduler/sync/cron.go`), CLI/env config
+45 non-test call sites total. **43 are INFRA**: pagination cursors
+(GitHub/GitLab/Jira/PagerDuty API page numbers), HTTP headers,
+cron-expression fields (`internal/scheduler/sync/cron.go`), CLI/env config
 (`internal/platform/config/config.go`), job-contract registry version keys
 (`internal/jobcontract/registry.go`), or budget/backfill counters
-(`internal/syncdispatchruntime/*`, `internal/scheduler/sync/*`) -- **all
-INFRA** by inspection, no Python `int()` counterpart to port against. Not
-tabled individually; re-run the `Atoi` grep in this file's header if a
-specific site needs re-checking after new code lands.
+(`internal/syncdispatchruntime/*`, `internal/scheduler/sync/*`) -- by
+inspection, no Python `int()` counterpart to port against. Not tabled
+individually; re-run the `Atoi` grep in this file's header if a specific
+site needs re-checking after new code lands.
 
-Two exceptions worth a second look, same reasoning as the ParseFloat/ParseInt
-`status_mapping_pyyaml.go` rows:
+**The remaining 2 are PARITY?** (same reasoning as the ParseFloat/ParseInt
+`status_mapping_pyyaml.go` rows), tabled below rather than folded into the
+"43 INFRA" count above:
 
 | file:line | classification | why |
 | --- | --- | --- |

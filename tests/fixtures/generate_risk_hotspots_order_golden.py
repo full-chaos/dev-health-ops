@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import subprocess
 import sys
@@ -94,6 +95,20 @@ json.dump(out, sys.stdout)
 
 
 def _run_once(payload: dict[str, Any]) -> dict[str, str]:
+    # codex round 1 (P1, EXECUTED): subprocess.run without env= inherits the
+    # PARENT's environment wholesale, including PYTHONHASHSEED if the caller
+    # (a developer's shell, CI) happens to have it pinned -- every worker
+    # would then share that SAME seed, silently defeating the fresh-seed
+    # verification this generator's whole design depends on. Explicitly
+    # deletes PYTHONHASHSEED from the child's environment so CPython picks a
+    # fresh random seed itself (its own default behaviour when the variable
+    # is absent) -- verified this is not a no-op: a child inheriting a
+    # pinned seed reports that exact value via os.environ, confirmed with
+    # `PYTHONHASHSEED=424242 python3 -c 'import subprocess ...'` printing
+    # "424242" before this fix.
+    child_env = {
+        key: value for key, value in os.environ.items() if key != "PYTHONHASHSEED"
+    }
     proc = subprocess.run(
         [sys.executable, "-c", _WORKER],
         input=json.dumps(payload),
@@ -101,13 +116,21 @@ def _run_once(payload: dict[str, Any]) -> dict[str, str]:
         text=True,
         check=True,
         cwd=Path(__file__).resolve().parents[2],
+        env=child_env,
     )
     return json.loads(proc.stdout)
 
 
-def _case_payload(case_id: str, churns: dict[str, int], row_order: list[str]) -> dict[str, Any]:
+def _case_payload(
+    case_id: str, churns: dict[str, int], row_order: list[str]
+) -> dict[str, Any]:
     window_stats = [
-        {"commit_hash": f"c{i}", "author_email": f"a{i}@example.com", "file_path": path, "additions": churns[path]}
+        {
+            "commit_hash": f"c{i}",
+            "author_email": f"a{i}@example.com",
+            "file_path": path,
+            "additions": churns[path],
+        }
         for i, path in enumerate(row_order)
     ]
     complexity_map = {path: {"total": 5, "avg": 1.0} for path in churns}
@@ -120,7 +143,9 @@ def _case_payload(case_id: str, churns: dict[str, int], row_order: list[str]) ->
     }
 
 
-def _verified_case(case_id: str, churns: dict[str, int], rng: random.Random) -> dict[str, Any]:
+def _verified_case(
+    case_id: str, churns: dict[str, int], rng: random.Random
+) -> dict[str, Any]:
     """Runs CROSS_PROCESS_CONFIRMATIONS separate python3 invocations, each
     with a DIFFERENT permutation of window_stats row order, and asserts
     every one agrees bit-exactly before returning a golden entry. Raises
@@ -170,7 +195,12 @@ def _cases() -> list[dict[str, Any]]:
     for n in (8, 20, 45):
         churns = {
             f"src/g{i}.go": rng.choice(
-                [rng.randint(1, 9), rng.randint(1, 10**9), rng.randint(1, 50), rng.randint(10**6, 10**7)]
+                [
+                    rng.randint(1, 9),
+                    rng.randint(1, 10**9),
+                    rng.randint(1, 50),
+                    rng.randint(10**6, 10**7),
+                ]
             )
             for i in range(n)
         }
@@ -178,17 +208,28 @@ def _cases() -> list[dict[str, Any]]:
 
     # Near-duplicate paths (byte-order sort must still separate them
     # correctly) and a case with a path prefix collision.
-    specs.append(("path_prefixes", {
-        "src/a.go": 5, "src/aa.go": 13, "src/ab.go": 41, "src/b.go": 7,
-        "src/z.go": 999983, "src/Z.go": 3,  # uppercase sorts before lowercase in byte order
-    }))
+    specs.append(
+        (
+            "path_prefixes",
+            {
+                "src/a.go": 5,
+                "src/aa.go": 13,
+                "src/ab.go": 41,
+                "src/b.go": 7,
+                "src/z.go": 999983,
+                "src/Z.go": 3,  # uppercase sorts before lowercase in byte order
+            },
+        )
+    )
 
     return [_verified_case(case_id, churns, rng) for case_id, churns in specs]
 
 
 def render() -> str:
     value = {"schema_version": 1, "cases": _cases()}
-    return json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n"
+    return (
+        json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n"
+    )
 
 
 def main() -> int:

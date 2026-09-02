@@ -288,11 +288,7 @@ func ComputeFileRiskHotspots(
 	// most CHAOS-4818/4824 sites, this one has no red-on-baseline case in
 	// the corpus tried. If a future corpus finds one, that is real new
 	// evidence, not a retry-until-green target.
-	sortedPaths := make([]string, 0, len(allPaths))
-	for path := range allPaths {
-		sortedPaths = append(sortedPaths, path)
-	}
-	sort.Strings(sortedPaths)
+	sortedPaths := sortedFilePathUnion(allPaths)
 
 	type input struct {
 		path       string
@@ -356,6 +352,26 @@ func ComputeFileRiskHotspots(
 		return results[i].FilePath < results[j].FilePath
 	})
 	return results
+}
+
+// sortedFilePathUnion returns paths' keys in Go's byte-lexicographic string
+// order (sort.Strings, i.e. plain []byte comparison -- NOT Unicode
+// collation and NOT case-insensitive: "Z" (0x5A) sorts before "z" (0x7A)).
+// Extracted as its own function (CHAOS-4863, codex round 1 P2, EXECUTED) so
+// the ordering claim is directly testable on its own: TestSortedFilePathUnionIsByteLexicographic
+// asserts the exact returned slice for a fixture containing both cases of
+// the same letter, rather than only inferring the order indirectly through
+// risk_score bit patterns -- which codex correctly pointed out could pass
+// under a DIFFERENT (wrong) deterministic sort too, since compensated
+// summation is order-invariant for many realistic inputs regardless of
+// which well-defined order produced them.
+func sortedFilePathUnion(paths map[string]struct{}) []string {
+	sorted := make([]string, 0, len(paths))
+	for path := range paths {
+		sorted = append(sorted, path)
+	}
+	sort.Strings(sorted)
+	return sorted
 }
 
 // sampleZScores ports hotspots.py's get_z_scores: population size < 2 or a

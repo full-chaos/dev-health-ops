@@ -129,6 +129,38 @@ func TestComputeFileRiskHotspotsOrderInvariantMatchesLivePythonBitExact(t *testi
 	}
 }
 
+// TestSortedFilePathUnionIsByteLexicographic directly verifies
+// sortedFilePathUnion's ordering claim (CHAOS-4863, codex round 1 P2,
+// EXECUTED): the bit-pattern test above only shows risk_score VALUES
+// match regardless of Go-side reordering, which -- because compensated
+// summation is order-invariant for many realistic inputs -- could pass
+// even under a DIFFERENT, wrong deterministic order (e.g. case-insensitive
+// or Unicode-collated) that happened to sum to the same bits. This test
+// asserts the exact returned slice directly, independent of risk_score,
+// for a fixture that would order differently under byte-lexicographic vs.
+// case-insensitive comparison: "Z" (0x5A) must sort before "z" (0x7A) in
+// byte order, but a case-insensitive/collated sort could place them
+// adjacently or in the opposite relative order depending on locale rules.
+func TestSortedFilePathUnionIsByteLexicographic(t *testing.T) {
+	paths := map[string]struct{}{
+		"src/b.go":  {},
+		"src/a.go":  {},
+		"src/z.go":  {},
+		"src/Z.go":  {},
+		"src/aa.go": {},
+	}
+	got := sortedFilePathUnion(paths)
+	want := []string{"src/Z.go", "src/a.go", "src/aa.go", "src/b.go", "src/z.go"}
+	if len(got) != len(want) {
+		t.Fatalf("sortedFilePathUnion() = %v, want %v (length mismatch)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sortedFilePathUnion() = %v, want %v (byte-lexicographic order)", got, want)
+		}
+	}
+}
+
 // hashString is a tiny deterministic (non-cryptographic) string hash, used
 // only to seed this test's per-case PRNG so different cases don't all
 // shuffle identically -- not a production algorithm, no relation to

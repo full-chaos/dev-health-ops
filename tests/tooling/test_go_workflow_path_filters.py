@@ -84,11 +84,38 @@ def _on_block(document: dict) -> dict:
 def _github_glob_to_regex(pattern: str) -> re.Pattern[str]:
     """Translate a GitHub path filter to a regex.
 
-    `**` spans separators; `*` does not; everything else is literal. This is a
-    deliberately small translation covering the forms these two files actually
-    use -- if a filter ever needs `?`, `[...]` or `!` negation, this must grow
-    rather than silently mis-match.
+    `**` spans separators; `*` does not; everything else is literal.
+
+    UNSUPPORTED METACHARACTERS ARE A HARD ERROR, not an escape. An earlier
+    revision escaped `?`, `[`, `]` and `!` into literal text, so a negation like
+    `!tests/fixtures/**` would have been translated into a pattern matching a
+    path that literally begins with "!" -- i.e. matching nothing, silently. This
+    test would then report "0 unmatched fixtures" and pass, which is precisely
+    the failure mode the whole file exists to prevent.
+
+    Raised by lane-ci-flakes, who took the same change in `ci/go_relevance.py`
+    where it is worse: there the translator DECIDES RELEVANCE on a live PR, so a
+    silently-empty pattern marks real changes irrelevant and skips the gate.
+    Same bug, one line of severity apart -- here it weakens an assertion, there
+    it skips a required check.
+
+    On `**` matching ZERO characters: the evidence is deliberately external to
+    this function, because lane-ci-flakes' implementation descends from this one
+    and two agreeing reimplementations are one implementation counted twice.
+    GitHub documents `docs/**` matching `docs/README.md`; this repo's `docs/**`
+    filter ran for PR #1472, which changed `docs/index.md` directly; and
+    `docs-guards.yml` run 30947483495 did the same. Observed behaviour of the
+    real matcher, not a second opinion from a sibling translator.
     """
+    unsupported = sorted({character for character in "?[]!" if character in pattern})
+    if unsupported:
+        raise AssertionError(
+            f"path filter {pattern!r} uses {unsupported}, which this translator "
+            "does not implement. Extend _github_glob_to_regex rather than letting "
+            "the pattern be escaped into literal text -- a filter that matches "
+            "nothing silently reports full coverage."
+        )
+
     out: list[str] = []
     index = 0
     while index < len(pattern):

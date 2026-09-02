@@ -97,8 +97,20 @@ func loadGolden(t *testing.T) *GoldenDocument {
 	if document.Schema != "workgraph_issue_edges_python_golden.v1" {
 		t.Fatalf("unexpected golden schema %q", document.Schema)
 	}
+	// "No error" is not evidence that anything decoded: json.Unmarshal of `null`
+	// into a slice succeeds and yields nil. Every collection the oracles derive
+	// from is checked for presence explicitly.
 	if len(document.Edges) == 0 {
 		t.Fatal("golden carries no edges")
+	}
+	if len(document.Dependencies) == 0 {
+		t.Fatal("golden carries no dependencies — every derived expectation would be vacuous")
+	}
+	if len(document.Strings) == 0 {
+		t.Fatal("golden carries no intern table")
+	}
+	if len(document.Mutations) == 0 {
+		t.Fatal("golden carries no mutations")
 	}
 	return document
 }

@@ -19,7 +19,7 @@ type GoldenDocument struct {
 	Strings   []string `json:"strings"`
 
 	// [source*, target*, relationship_type*, relationship_type_raw*, semantics*, last_synced*]
-	Dependencies [][6]int `json:"dependencies"`
+	Dependencies []GoldenDependency `json:"dependencies"`
 	// One list per cursor page, in page order. Page BOUNDARIES are part of the
 	// contract: the cleanup step pages work_graph_edges on an `edge_id > cursor`
 	// cursor, and an unpaged port works on this org and truncates on a larger one.
@@ -212,4 +212,53 @@ type GoldenConfig struct {
 type Query struct {
 	Statement  string         `json:"statement"`
 	Parameters map[string]any `json:"parameters"`
+}
+
+// GoldenDependency is one frozen dependency row: six intern indexes.
+//
+// # WHY THIS HAS A CUSTOM DECODER
+//
+// `json.Unmarshal` of `null` into a `[6]int` SUCCEEDS and yields `[0 0 0 0 0 0]`
+// — no error. Every field then resolves to intern index 0, which is a real
+// string, so a null row silently becomes a FABRICATED row built from whatever
+// happens to be first in the table, and the oracle derives its expectations from
+// it. Verified by probe before writing this.
+//
+// That is the shape a sibling lane found the hard way: "no error" is not
+// evidence that anything was decoded. So absence and wrong shape are rejected
+// explicitly rather than defaulted.
+type GoldenDependency [6]int
+
+func (dependency *GoldenDependency) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return fmt.Errorf("dependency row is null; a null row decodes to all-zero " +
+			"intern indexes and would fabricate a row from the first interned string")
+	}
+	var raw []int
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode dependency row: %w", err)
+	}
+	if len(raw) != 6 {
+		return fmt.Errorf("dependency row has %d fields, want 6", len(raw))
+	}
+	copy(dependency[:], raw)
+	return nil
+}
+
+// GoldenProjectionRun is one frozen projection row, with the same null guard.
+type GoldenProjectionRun [7]int
+
+func (run *GoldenProjectionRun) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return fmt.Errorf("projection row is null")
+	}
+	var raw []int
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode projection row: %w", err)
+	}
+	if len(raw) != 7 {
+		return fmt.Errorf("projection row has %d fields, want 7", len(raw))
+	}
+	copy(run[:], raw)
+	return nil
 }

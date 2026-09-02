@@ -1,0 +1,105 @@
+{
+ "generated_by": "tests/fixtures/generate_pr_dependency_id_parity.py",
+ "note": "Expectations are the reference's OWN output, not transcribed. `raises` is a real recorded outcome: Python's isdigit() accepts characters int() rejects, and the conversion is unguarded (CHAOS-4811).",
+ "observations": [
+  {
+   "input": "ghpr:owner/repo#5",
+   "outcome": "parsed",
+   "pr_number": 5,
+   "provider": "github",
+   "repo_slug": "owner/repo"
+  },
+  {
+   "input": "gitlab:group/proj!42",
+   "outcome": "parsed",
+   "pr_number": 42,
+   "provider": "gitlab",
+   "repo_slug": "group/proj"
+  },
+  {
+   "input": "ghpr:o/r#-5",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#+5",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#٥",
+   "outcome": "parsed",
+   "pr_number": 5,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "input": "ghpr:o/r#５",
+   "outcome": "parsed",
+   "pr_number": 5,
+   "provider": "github",
+   "repo_slug": "o/r"
+  },
+  {
+   "exception": "ValueError",
+   "input": "ghpr:o/r#²",
+   "outcome": "raises"
+  },
+  {
+   "exception": "ValueError",
+   "input": "ghpr:o/r#5²",
+   "outcome": "raises"
+  },
+  {
+   "input": "linear:CHAOS-4766",
+   "outcome": "none"
+  },
+  {
+   "input": "",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:owner/repo",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:#5",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#0",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r# 5",
+   "outcome": "none"
+  },
+  {
+   "input": "ghpr:o/r#x#7",
+   "outcome": "parsed",
+   "pr_number": 7,
+   "provider": "github",
+   "repo_slug": "o/r#x"
+  },
+  {
+   "input": "ghpr:o/r!5",
+   "outcome": "none"
+  },
+  {
+   "input": "gitlab:g/p#5",
+   "outcome": "none"
+  },
+  {
+   "input": "GHPR:o/r#5",
+   "outcome": "none"
+  }
+ ],
+ "producer": "work_graph/builder.py::_parse_pr_dependency_source",
+ "schema": "pr_dependency_id_parity.v1"
+}

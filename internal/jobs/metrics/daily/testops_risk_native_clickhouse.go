@@ -827,7 +827,16 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 	}
 	successRate7d := 0.0
 	for i, m := range dayEntries {
-		successRate7d += m.SuccessRate * weights[i]
+		// float64(...) is load-bearing (CHAOS-4818, codex round 3 on
+		// PR #2106): compound assignment desugars to
+		// `successRate7d = successRate7d + m.SuccessRate*weights[i]`, and Go
+		// may fuse the product into that addition on arm64 -- a DIFFERENT
+		// defect from the CHAOS-4824 compensated-sum() issue on this same
+		// accumulator (tracked separately, PR #2107): this is a per-step FMA
+		// fusion present regardless of whether the accumulation strategy is
+		// naive or compensated. Measured: `go tool objdump` showed FMADDD at
+		// this line before the wrap.
+		successRate7d += float64(m.SuccessRate * weights[i])
 	}
 	successRate7d /= totalWeight
 
@@ -842,8 +851,13 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 		num := 0.0
 		den := 0.0
 		for i, m := range dayEntries {
-			num += (float64(i) - xMean) * (m.SuccessRate - yMean)
-			den += (float64(i) - xMean) * (float64(i) - xMean)
+			// float64(...) is load-bearing (CHAOS-4818, codex round 3 on
+			// PR #2106): found by disassembly while verifying the :830 fix
+			// -- these two compound assignments have the SAME live FMADDD/
+			// FMSUBD exposure as successRate7d above, for the same reason
+			// (compound assignment desugars to a fusable add/subtract).
+			num += float64((float64(i) - xMean) * (m.SuccessRate - yMean))
+			den += float64((float64(i) - xMean) * (float64(i) - xMean))
 		}
 		if den > 0 {
 			successRateTrend = num / den

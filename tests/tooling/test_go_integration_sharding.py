@@ -2044,6 +2044,12 @@ def _step_kind(step: dict[str, Any]) -> str | None:
     # the Go harness images.
     if "compose.compatibility.yml" in command or "tests/compatibility/river" in command:
         return "mirror"
+    # Any direct reference to the mirror registry counts too. Recognising only the
+    # two shapes that exist today was fail-open: a future job running
+    # `docker pull ghcr.io/<owner>/...` with no login classified as None and was
+    # skipped by BOTH assertions, leaving the suite green while the job failed.
+    if "ghcr.io/" in command:
+        return "mirror"
     return None
 
 

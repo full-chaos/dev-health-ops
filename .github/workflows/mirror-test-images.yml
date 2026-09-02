@@ -62,13 +62,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # NO Docker Hub login, deliberately. Reading a handful of manifests per run
-      # fits comfortably inside the anonymous per-runner-IP allowance (100/hour),
-      # and it means CI holds no Docker Hub account at all. Verified locally: the
-      # same copies succeed anonymously.
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
+      # NO `setup-buildx-action`, and NO Docker Hub login -- both deliberate.
+      #
+      # That action defaults to the `docker-container` driver, which bootstraps by
+      # pulling `moby/buildkit:buildx-stable-1` FROM DOCKER HUB, unconditionally,
+      # before anything here has logged in anywhere. On a rate-limited runner the
+      # mirror would fail to start for want of the very registry it exists to stop
+      # depending on -- and that image is not in the mirror set either.
+      #
+      # `docker buildx imagetools` needs no builder: it is a registry-to-registry
+      # manifest operation on the CLI's built-in `docker` driver. Verified by
+      # populating all eight images this way, with no buildx action and no Docker
+      # Hub credentials.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

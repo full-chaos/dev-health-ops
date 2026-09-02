@@ -68,10 +68,18 @@ var (
 		`(?i)(?:see` + wsClass + `+)?merge` + wsClass + `+request`)
 	gitlabMRNumber = regexp.MustCompile(`^[^!\n]*!(` + digitClass + `+)`)
 
-	// `\(#(\d+)\)\s*$`. Go's `$` without (?m) is end-of-text where Python's is
-	// end-of-text-or-before-a-final-newline, but the preceding `\s*` is greedy
-	// and newlines are in wsClass, so it absorbs the difference. Verified by the
-	// corpus rather than left to that argument.
+	// `\(#(\d+)\)\s*$`.
+	//
+	// I first justified this by arguing that Go's `$` (end of text) differs from
+	// Python's (end of text OR before a final newline), and that the greedy
+	// `\s*` absorbs the difference. That argument is TRUE and IRRELEVANT: both
+	// planes truncate to the subject line before matching, so `$` never sees a
+	// trailing newline and the difference is unreachable here.
+	//
+	// Chasing that wrong explanation is what found the real divergence, which is
+	// in the truncation rather than the anchor -- see ExtractSquashPRRefs. Left
+	// recorded because the plausible-but-wrong mechanism is what a reviewer will
+	// reconstruct otherwise.
 	githubSquashPRPattern = regexp.MustCompile(`\(#(` + digitClass + `+)\)` + wsClass + `*$`)
 
 	// `^\s*revert[\s"']` with IGNORECASE.
@@ -135,11 +143,21 @@ func ExtractSquashPRRefs(text string) []int {
 	if isRevertMessage(text) {
 		return nil
 	}
-	// Python anchors to the end of the SUBJECT -- the first line -- not the end
-	// of the message.
-	subject := text
-	if i := strings.IndexByte(text, '\n'); i >= 0 {
-		subject = text[:i]
+	// Python is `text.lstrip().split("\n", 1)[0]` and THE ORDER MATTERS.
+	//
+	// Stripping happens FIRST, over the whole message, and only then is the
+	// first line taken. A message beginning with a newline therefore has its
+	// newline stripped away and matches on what follows; splitting first would
+	// see an empty first line and find nothing. Measured: Python returns [42]
+	// for "\n  fix the thing (#42)" and a split-first port returns nothing.
+	//
+	// TrimLeftFunc with pythonIsSpace rather than strings.TrimLeft or
+	// unicode.IsSpace: Python's str.lstrip() uses the same 29-rune set as `\s`,
+	// which includes U+001C..U+001F. A port trimming only ASCII space, or only
+	// unicode.IsSpace, diverges on a message that starts with one of those.
+	subject := strings.TrimLeftFunc(text, pythonIsSpace)
+	if i := strings.IndexByte(subject, '\n'); i >= 0 {
+		subject = subject[:i]
 	}
 	m := githubSquashPRPattern.FindStringSubmatch(subject)
 	if m == nil {

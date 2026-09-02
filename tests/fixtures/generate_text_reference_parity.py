@@ -178,6 +178,89 @@ WHITESPACE_SHAPES = [
     ("revert_body", "{}this reverts commit abc"),
 ]
 
+# The `$` axis, built to ATTACK a specific equivalence rather than to sample.
+#
+# GITHUB_SQUASH_PR_PATTERN ends `\)\s*$`. Python's `$` (no MULTILINE) matches at
+# end of string OR just before a final newline; Go RE2's `$` (no `(?m)`) matches
+# only at end of text. The Go port relies on the greedy Unicode `\s*` absorbing
+# the difference, since newlines are in the class -- an argument, not a proof.
+#
+# These rows are the proof or the refutation. If the argument is right every row
+# agrees across planes; if it is wrong, a trailing-newline row diverges and says
+# so. The `\r\n` and lone-`\r` rows are here because `\r` is `\s` on both planes
+# but is NOT what Python's `$` special-cases -- only `\n` is -- so they separate
+# "absorbed by \s*" from "special-cased by $".
+DOLLAR_ANCHOR = [
+    ("bare", "fix the thing (#42)"),
+    ("trailing_lf", "fix the thing (#42)\n"),
+    ("trailing_lf_lf", "fix the thing (#42)\n\n"),
+    ("trailing_space_lf", "fix the thing (#42) \n"),
+    ("trailing_lf_space", "fix the thing (#42)\n "),
+    ("trailing_crlf", "fix the thing (#42)\r\n"),
+    ("trailing_cr", "fix the thing (#42)\r"),
+    ("trailing_tab", "fix the thing (#42)\t"),
+    ("trailing_nbsp", "fix the thing (#42)\u00a0"),
+    ("trailing_fs", "fix the thing (#42)\u001c"),
+    ("body_after_lf", "fix the thing (#42)\nbody text here"),
+    ("second_line_paren", "subject\nfix the thing (#42)"),
+    ("paren_not_at_end", "fix the thing (#42) and more"),
+]
+
+# The SUBJECT-TRUNCATION axis.
+#
+# extract_squash_pr_refs does `text.lstrip().split("\n", 1)[0]` -- it strips
+# leading whitespace from the WHOLE text FIRST, then takes the first line. The
+# order matters: a message that begins with a newline has an empty first line,
+# so a port that splits before stripping sees an empty subject and finds
+# nothing, while Python strips the newline away and matches on what follows.
+#
+# `lstrip()` uses Python's str whitespace set, which is the same 29 runes as
+# `\s`, so the leading-NBSP and leading-U+001C rows are here to catch a port
+# that strips only ASCII space.
+#
+# This axis exists because the `$`-semantics axis above PASSED for the wrong
+# reason: both planes truncate to the subject, so `$` never sees a trailing
+# newline and the Python-vs-RE2 `$` difference is unreachable in this extractor.
+# Discovering that the stated mechanism was wrong is what surfaced the real
+# divergence, which is in the truncation itself rather than in the anchor.
+SUBJECT_TRUNCATION = [
+    ("leading_newline", chr(10) + "  fix the thing (#42)"),
+    ("leading_two_newlines", chr(10) * 2 + "fix the thing (#42)"),
+    ("leading_spaces", "   fix the thing (#42)"),
+    ("leading_tab", chr(9) + "fix the thing (#42)"),
+    ("leading_nbsp", chr(0xA0) + "fix the thing (#42)"),
+    ("leading_fs", chr(0x1C) + "fix the thing (#42)"),
+    ("leading_ideographic", chr(0x3000) + "fix the thing (#42)"),
+    ("leading_newline_then_body", chr(10) + "fix (#42)" + chr(10) + "body"),
+    ("leading_ws_then_newline", "  " + chr(10) + "fix the thing (#42)"),
+    ("only_newlines", chr(10) * 3),
+    ("leading_zwsp_not_ws", chr(0x200B) + "fix the thing (#42)"),
+]
+
+# The GitLab MR axis, built to attack the OTHER flagged equivalence.
+#
+# Python has one pattern: `(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)`.
+# The Go port splits it into a keyword match plus a separate `[^!\n]*!(\d+)` scan
+# from the boundary. These shapes are the ones where a split could diverge from a
+# single regex: an intervening `!` that the `[^!\n]*` must stop at, a newline
+# that must also stop it, more than one MR in the text, and a keyword with no `!`
+# at all after it.
+GITLAB_MR = [
+    ("plain", "see merge request group/proj!42"),
+    ("no_see", "merge request group/proj!42"),
+    ("intervening_bang", "see merge request wow! group/proj!42"),
+    ("bang_immediately", "see merge request!42"),
+    ("newline_before_bang", "see merge request group/proj\n!42"),
+    ("two_mrs", "see merge request a!1 and merge request b!2"),
+    ("keyword_no_bang", "see merge request group/proj"),
+    ("keyword_twice_one_bang", "merge request merge request x!7"),
+    ("uppercase", "SEE MERGE REQUEST group/proj!42"),
+    ("nbsp_between", "see\u00a0merge\u00a0request group/proj!42"),
+    ("fs_between", "see\u001cmerge\u001crequest group/proj!42"),
+    ("bang_no_digits", "see merge request group/proj!"),
+    ("digits_then_text", "see merge request group/proj!42abc"),
+]
+
 # Cardinality and overlap: a corpus of single-match strings cannot see an
 # extractor that returns matches in the wrong order, drops duplicates it should
 # keep, or keeps ones it should drop.
@@ -309,6 +392,14 @@ def build_corpus() -> dict:
                     template.format(*([ws_char] * slots)),
                 )
             )
+
+    # Axis 3c: the `$` equivalence, and 3d: the GitLab MR split.
+    for label, text in DOLLAR_ANCHOR:
+        cases.append(_case(f"dollar/{label}", "dollar_anchor", text))
+    for label, text in GITLAB_MR:
+        cases.append(_case(f"gitlabmr/{label}", "gitlab_mr", text))
+    for label, text in SUBJECT_TRUNCATION:
+        cases.append(_case(f"subject/{label}", "subject_truncation", text))
 
     # Axis 4: the reference at the very end of the string, and followed by each
     # neighbour class. `\b` and `(?<!\w)` are asymmetric -- a corpus that only

@@ -90,14 +90,14 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
-  integration-prepull [KEY...]
-         Pre-pull the exact images declared by the Go test container harness,
-         retrying transient registry failures at most three times each before
-         failing loudly. With no KEY every declared dependency is warmed
-         (postgres, clickhouse, valkey, reaper); with KEYs only those, plus the
-         reaper, which testcontainers-go starts before the first container of
-         any test binary whether or not a test asks for it. CI runs this before
-         every job that starts a container.
+  integration-prepull
+         Pre-pull every image declared by the Go test container harness --
+         postgres, clickhouse, valkey, and testcontainers-go's reaper, which it
+         starts before the first container of any test binary whether or not a
+         test asks for it. Retries transient registry failures at most three
+         times per image before failing loudly. Takes no arguments on purpose:
+         a per-job subset is a list nothing can check against what the job
+         actually starts. CI runs this before every job that starts a container.
   integration-shard TARGET SHARD [--dry-run]
          Run exactly one validated integration shard. TARGET is `packages` for
          a package-level shard or `providersync` for a top-level test shard of
@@ -1261,30 +1261,21 @@ prepull_one_image() {
   done
 }
 
-# check_integration_prepull warms the images a job is about to need. With no
-# arguments it warms every declared dependency; a job that starts only some of
-# them names those, so go-quality does not drag the ClickHouse image into a job
-# that never starts one. The reaper is implicit in every subset because every
-# container-backed test binary starts it, whether or not the test asks for it.
+# check_integration_prepull warms EVERY declared dependency image.
+#
+# It deliberately takes no arguments. An earlier revision let a job name the
+# subset it needed, which was cheaper -- go-quality starts no ClickHouse -- but
+# it made the correctness of every job depend on a list a human kept in the
+# workflow, and nothing checked that list against what the job actually starts.
+# A codex round demonstrated the hole: `integration-prepull clickhouse` followed
+# by `ci` passed every guard while leaving PostgreSQL cold, which is the exact
+# defect this verb exists to prevent. Warming all four costs one extra image pull
+# on go-quality and removes the entire class.
 check_integration_prepull() {
   local key
-  local -a keys=()
 
   command -v docker >/dev/null 2>&1 || die "docker is required for integration-prepull"
-  if [ "$#" -eq 0 ]; then
-    keys=("${INTEGRATION_IMAGE_KEYS[@]}")
-  else
-    for key in "$@"; do
-      integration_image_declaration "${key}" >/dev/null
-      keys+=("${key}")
-    done
-    case " ${keys[*]} " in
-      *" reaper "*) ;;
-      *) keys+=(reaper) ;;
-    esac
-  fi
-
-  for key in "${keys[@]}"; do
+  for key in "${INTEGRATION_IMAGE_KEYS[@]}"; do
     prepull_one_image "${key}" || return 1
   done
 }
@@ -1521,8 +1512,8 @@ case "${1:-all}" in
     check_integration_shard_plan
     ;;
   integration-prepull)
-    shift
-    check_integration_prepull "$@"
+    [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"
+    check_integration_prepull
     ;;
   integration-shard)
     if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then

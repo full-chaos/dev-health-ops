@@ -212,7 +212,7 @@ jobs:
       # test executed a line of its own logic. ClickHouse is deliberately not in
       # this subset; no test in this job starts one.
       - name: Pre-pull pinned test dependency images with bounded retry
-        run: bash ci/check_go.sh integration-prepull postgres
+        run: bash ci/check_go.sh integration-prepull
 
       - name: Run Go quality gate
         # `ci`, not `all`: CHAOS-3948 made `all` genuinely execute the full

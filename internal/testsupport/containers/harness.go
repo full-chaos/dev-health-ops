@@ -15,8 +15,20 @@ import (
 )
 
 const (
-	PostgresImage   = "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
-	ClickHouseImage = "clickhouse/clickhouse-server@sha256:1d1f6508eba2dccce2cee9913907c5f7766327debc57a6b1991f2c9e3176c163"
+	PostgresImage = "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
+
+	// ClickHouseImage tracks the 26.7 MINOR, not a digest. Ruled by chris
+	// (2026-09-02): "26.7 will pull all tags, 'matching' != matching exact. It's
+	// major version MATCHING." Patch drift inside 26.7 is allowed by design, the
+	// same policy CHAOS-4851 applied to the CI service containers.
+	//
+	// CHAOS-4854 moved it off sha256:1d1f6508 (26.6.1.1193), a minor BELOW the
+	// 26.7 floor -- that gap was the defect, not the patch level.
+	//
+	// Read the version with `com.clickhouse.build.version`. The obvious label,
+	// `org.opencontainers.image.version`, reports the Ubuntu BASE (22.04) on
+	// every ClickHouse image and will tell you nothing about ClickHouse.
+	ClickHouseImage = "clickhouse/clickhouse-server:26.7"
 	ValkeyImage     = "valkey/valkey@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02"
 
 	// ReaperImage is testcontainers-go's own garbage collector (Ryuk). Nothing

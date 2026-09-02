@@ -21,6 +21,35 @@ const DefaultMaxComponentNodes = 150
 // MaxComponentNodesEnvVar is the environment override, matching Python's.
 const MaxComponentNodesEnvVar = "INVESTMENT_MAX_COMPONENT_NODES"
 
+// DefaultIntMaxStrDigits mirrors CPython's sys.get_int_max_str_digits().
+//
+// Since 3.11, int() REFUSES to parse a decimal string with more than this many
+// DIGITS, raising ValueError -- a denial-of-service mitigation, since decimal
+// conversion is quadratic. So a 4301-digit value is not a huge number to
+// Python: it is a parse FAILURE, and resolve_max_component_nodes falls back to
+// the default.
+//
+// That makes the boundary a three-way split, not two, which is what the
+// saturation fix alone got wrong:
+//
+//	<= MaxInt digits ... parse exactly
+//	> MaxInt, <= 4300 digits ... Python parses; Go saturates (behaviourally exact)
+//	> 4300 digits ... Python RAISES; Go must REFUSE, not saturate
+//
+// The counting rule, measured rather than assumed:
+//   - DIGITS only. A sign does not count, surrounding whitespace does not
+//     count, and PEP 515 underscores do not count -- 4300 digits separated by
+//     underscores is 8599 characters and parses fine.
+//   - Leading zeros DO count. 4301 zeros raises, even though the value is 0.
+//   - float() has NO such limit: float("1"*4301) succeeds. One more place
+//     where Python's int and float string rules differ, alongside the
+//     whitespace divergence documented on pythonparity.IsSpace.
+//
+// It is a RUNTIME setting (sys.set_int_max_str_digits), so the value is carried
+// in the golden and read from the deployed interpreter by the rot guard rather
+// than hard-coded as a fact about all Pythons.
+const DefaultIntMaxStrDigits = 4300
+
 // MembershipWeightThreshold is the port of constants.py:52
 // MEMBERSHIP_WEIGHT_THRESHOLD (CHAOS-2430): the minimum category weight for a
 // node to be recorded as a member of that theme/subcategory in
@@ -135,6 +164,18 @@ func parsePythonInt(raw string) (int, bool) {
 		default:
 			return 0, false
 		}
+	}
+
+	// CPython refuses more than sys.get_int_max_str_digits() DIGITS. builder
+	// holds exactly the digits -- underscores were dropped and the sign was
+	// stripped above -- so its length is the quantity Python counts.
+	//
+	// This must be REFUSED, not saturated: Python raises here, so the caller
+	// falls back to its default. Saturating would hand back MaxInt for a value
+	// Python never accepted, which is the mirror image of the ErrRange defect
+	// below and just as divergent.
+	if builder.Len() > DefaultIntMaxStrDigits {
+		return 0, false
 	}
 
 	parsed, err := strconv.Atoi(sign + builder.String())

@@ -589,7 +589,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython)$' \
+        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -628,6 +628,19 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/investment-quality-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: investment evidence-quality golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding a value that appears in NO source file on either
+  # side: sys.get_int_max_str_digits(). It is an interpreter runtime setting,
+  # so it can move with no diff in this repository and no change of CPython
+  # version. Every value between the old and new limits would then be parsed by
+  # one plane and refused by the other -- which, for
+  # INVESTMENT_MAX_COMPONENT_NODES, means one plane splits oversized components
+  # and the other does not.
+  proof_file="${proof_dir}/max-component-nodes-magnitude"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: max_component_nodes magnitude golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

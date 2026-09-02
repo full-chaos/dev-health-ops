@@ -70,8 +70,8 @@ const blockerProjectionRuleVersion = "canonical-blocks.v2"
 func CanonicalDependency(row DependencyRow) (string, string, string) {
 	source := row.SourceWorkItemID
 	target := row.TargetWorkItemID
-	relationship := strings.ToLower(row.RelationshipType)
-	raw := strings.ToLower(row.RelationshipRaw)
+	relationship := pythonLower(row.RelationshipType)
+	raw := pythonLower(row.RelationshipRaw)
 
 	// `str(row.get(...) or "legacy.v1")`: empty and missing both become the
 	// default, and they are indistinguishable afterwards (CHAOS-4812 context).
@@ -137,4 +137,36 @@ func EvidenceFor(row DependencyRow) string {
 		return row.RelationshipType
 	}
 	return "dependency"
+}
+
+// pythonLower is `str.lower()`, which is NOT `strings.ToLower`.
+//
+// Go applies SIMPLE case mapping: one rune in, one rune out. Python applies FULL
+// case mapping, where a few runes lowercase to MORE than one rune. The two
+// therefore disagree in both directions, and neither `strings.ToLower` nor an
+// ASCII-only fold is correct on its own — measured against the live interpreter:
+//
+//	input           python .lower()   strings.ToLower   ASCII-only fold
+//	"BLOCKS"        "blocks"          "blocks"          "blocks"
+//	"İS_BLOCKED_BY" "i̇s_blocked_by"   "is_blocked_by"   "İs_blocked_by"
+//	"BLOCKS" (U+212A KELVIN as the K)
+//	                "blocks"          "blocks"          "blocKs"
+//
+// So `ToLower` wrongly folds `İS_BLOCKED_BY` INTO the blocker set that Python
+// leaves out, and an ASCII fold wrongly leaves a Kelvin-sign `BLOCKS` OUT of the
+// set Python puts it in. Either way a row lands in the wrong branch of
+// CanonicalDependency, changing its edge type and its direction.
+//
+// The whole difference is the runes whose full lowering is longer than their
+// simple lowering. In lowercase mapping that is U+0130 alone, which Python turns
+// into "i" + U+0307 COMBINING DOT ABOVE. Expanding it first and then applying
+// simple mapping reproduces Python for both cases above.
+//
+// TestPythonLowerMatchesLivePython re-derives the expansion set from the
+// interpreter, so a Unicode revision that adds another cannot pass unnoticed.
+func pythonLower(value string) string {
+	if strings.ContainsRune(value, '\u0130') {
+		value = strings.ReplaceAll(value, "\u0130", "i\u0307")
+	}
+	return strings.ToLower(value)
 }

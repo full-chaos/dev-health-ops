@@ -1,12 +1,11 @@
 package repouser
 
 import (
+	"math/big"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ReworkChurnRatio mirrors compute_rework_churn_ratio (quality.py:16): the
@@ -143,43 +142,66 @@ func CodeOwnershipGini(repoID uuid.UUID, windowStats []CommitStatRow) float64 {
 	if len(windowStats) == 0 {
 		return 0.0
 	}
-	authorChurn := map[string]int{}
+	authorChurn := map[string]int64{}
 	for _, row := range windowStats {
 		if row.RepoID != repoID {
 			continue
 		}
 		identity := rawIdentity(row.AuthorEmail, row.AuthorName)
-		authorChurn[identity] += row.Additions + row.Deletions
+		authorChurn[identity] += int64(row.Additions) + int64(row.Deletions)
 	}
-	churns := make([]float64, 0, len(authorChurn))
+	churns := make([]int64, 0, len(authorChurn))
 	for _, churn := range authorChurn {
 		if churn > 0 {
-			churns = append(churns, float64(churn))
+			churns = append(churns, churn)
 		}
 	}
 	if len(churns) == 0 {
 		return 0.0
 	}
-	sort.Float64s(churns)
+	sort.Slice(churns, func(i, j int) bool { return churns[i] < churns[j] })
 	n := len(churns)
 
-	// CHAOS-4824: both reductions mirror a Python `sum()` over floats, which
-	// is Neumaier-compensated since CPython 3.12 -- a naive Go `+=` loop is
-	// not equivalent (16% disagreement on random 2-8 element inputs, per
-	// pythonparity.Sum's doc comment).
-	//   numerator = sum((i + 1) * val for i, val in enumerate(churns))
-	//   denominator = n * sum(churns)
-	numeratorTerms := make([]float64, n)
-	for index, value := range churns {
-		numeratorTerms[index] = float64(index+1) * value
+	// CHAOS-4824 (round 3, codex): Python's Gini formula is EXACT integer
+	// arithmetic -- `churns` holds arbitrary-precision Python ints -- until
+	// ONE true division at the very end, `2*numerator/denominator`, which
+	// CPython computes as the correctly-rounded float64 nearest the exact
+	// rational. Converting churn totals to float64 at any EARLIER point
+	// loses precision Python never loses, and each earlier attempt here
+	// (pythonparity.Sum over float64 terms) closed one construction while
+	// leaving a strictly more extreme one reachable: an accumulated
+	// numerator crossing 2**53 across many representable per-author totals,
+	// then a SINGLE author's own total exceeding 2**53 before summation
+	// even began. Mirroring Python's conversion POINT instead of patching
+	// each construction: accumulate numerator/denominator as math/big.Int
+	// (churn totals are integers; (index+1)*churn can exceed int64 for
+	// large n or large churn), then do the ONE division with
+	// big.Rat.Float64(), documented to return the nearest float64 to the
+	// exact rational -- the same guarantee CPython's int/int division
+	// makes. No float appears before that single step, so both prior
+	// constructions and any further "more extreme" one collapse to this
+	// one mechanism.
+	numerator := new(big.Int)
+	denominatorSum := new(big.Int)
+	term := new(big.Int)
+	for index, churn := range churns {
+		term.Mul(big.NewInt(int64(index+1)), big.NewInt(churn))
+		numerator.Add(numerator, term)
+		denominatorSum.Add(denominatorSum, big.NewInt(churn))
 	}
-	numerator := pythonparity.Sum(numeratorTerms)
-	denominatorSum := pythonparity.Sum(churns)
-	denominator := float64(n) * denominatorSum
-	if denominator == 0 {
+	denominator := new(big.Int).Mul(big.NewInt(int64(n)), denominatorSum)
+	if denominator.Sign() == 0 {
 		return 0.0
 	}
-	gini := (2*numerator)/denominator - float64(n+1)/float64(n)
+	numeratorTimes2 := new(big.Int).Mul(big.NewInt(2), numerator)
+	// 2*numerator/denominator, correctly rounded to the nearest float64 --
+	// matches CPython's int/int true division exactly, regardless of
+	// magnitude.
+	quotient, _ := new(big.Rat).SetFrac(numeratorTimes2, denominator).Float64()
+	// (n+1)/n: n is len(churns), always a small int far below 2**53, so a
+	// plain float64 division is already correctly rounded and identical to
+	// Python's -- no big.Rat needed for this term.
+	gini := quotient - float64(n+1)/float64(n)
 	if gini < 0 {
 		return 0.0
 	}

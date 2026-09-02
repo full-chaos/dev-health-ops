@@ -97,6 +97,42 @@ def _gini_corpus() -> list[list[float]]:
     #   naive numerator   bits 0x43412bfeffdda81c
     #   sum() numerator    bits 0x43412bfeffdda802   (measured, this session)
     corpus.append([2_147_483_647] * 3000)
+    # codex round 2 on #2107 (P2, EXECUTED): a DIFFERENT mechanism -- a
+    # single author's own aggregated total exceeding 2**53 loses precision
+    # at the int-to-float64 CONVERSION, before any summation runs at all.
+    # Their repro (reduced here to 3 authors, matching their construction):
+    corpus.append(
+        [12_489_292_407_867_864, 12_713_596_315_088_591, 12_834_794_751_636_030]
+    )
+    # team-lead ruling (CHAOS-4824, round 2): the proper fix mirrors
+    # Python's conversion POINT (exact int arithmetic until one final
+    # division) rather than patching each construction, which is why every
+    # case above is expected to pass now regardless of author count or
+    # magnitude. Corpus below varies BOTH axes explicitly, up to and past
+    # 2**53 (9,007,199,254,740,992) and 2**63 (9,223,372,036,854,775,808,
+    # one past int64 max -- exercises the big.Int-based numerator/
+    # denominator arithmetic at the edge of what a single int64 churn field
+    # can hold; reaching this magnitude through real per-row accumulation
+    # would need far more rows than is realistic, a disclosed, separate
+    # bound from the numerator/denominator arithmetic this corpus targets).
+    magnitudes = [
+        1,
+        2**31 - 1,  # int32 max: the largest a single row's additions/deletions can be
+        2**53 - 1,  # largest exactly-representable float64 integer
+        2**53,  # first integer float64 cannot represent exactly
+        2**53 + 1,
+        2**62,
+        2**63 - 1,  # int64 max: the largest a single author's accumulated total can be
+    ]
+    author_counts = [3, 5, 10, 50, 500]
+    for magnitude in magnitudes:
+        for count in author_counts:
+            # Vary per-author values around `magnitude` so churns are not
+            # all identical (an all-equal corpus is Gini=0 by construction
+            # in exact arithmetic and can mask a divergence that only shows
+            # up when authors differ -- see the round-1 "expected value
+            # equals the fallback" lesson).
+            corpus.append([max(1, magnitude - i) for i in range(count)])
     return corpus
 
 

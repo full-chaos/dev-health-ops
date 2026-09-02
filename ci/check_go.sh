@@ -518,7 +518,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestRepoUserCommitGoldenMatchesLivePython$' \
+        -run '^(TestRepoUserCommitGoldenMatchesLivePython|TestPysumGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily/repouser
   ); then
     rm -rf -- "${proof_dir}"
@@ -527,6 +527,14 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/repo-user-commit-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: repo_user_commit golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY (same reasoning throughout this function): a single
+  # proof marker would be satisfied by whichever guard happened to run.
+  proof_file="${proof_dir}/pysum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pysum golden (CHAOS-4824) rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

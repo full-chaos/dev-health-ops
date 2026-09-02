@@ -96,3 +96,72 @@ def test_the_gate_still_names_a_plausible_number_of_tests() -> None:
         "patterns; the uniqueness check above would pass vacuously on a set "
         "this small"
     )
+
+
+# Live-oracle invocations that carry NO `-run`, so they execute EVERY test in
+# their package. Derived by reading ci/check_go.sh, and re-derived by the test
+# below rather than trusted from this list.
+_UNFILTERED_ORACLE_PACKAGES = (
+    "internal/providersync",
+    "internal/scheduler/sync",
+    "internal/synccoverage",
+    "internal/syncdispatchruntime",
+)
+
+
+def test_no_named_test_also_runs_inside_an_unfiltered_package() -> None:
+    """Close the blind spot rather than only documenting it.
+
+    The check above reads `-run` patterns, so it can only see tests invoked BY
+    NAME. Four live-oracle blocks carry no `-run` at all and execute every test
+    in their package:
+
+        go test -mod=readonly -count=1 ./internal/providersync/...
+
+    A test living in one of those packages AND named in some other `-run`
+    pattern would therefore run twice, and the name-based check could not see
+    it -- the exact failure shape this file exists to prevent, one level down.
+
+    Today the overlap is empty: 1319 + 211 + 23 + 255 tests across those four
+    packages, none of them among the 42 named in a `-run`. That makes the
+    property assertable now, which is the moment to assert it -- a limitation
+    documented in prose is one nobody re-checks.
+    """
+    named: set[str] = set()
+    for names in _test_names_per_run_pattern():
+        named |= names
+
+    declared = re.compile(r"^func (Test[A-Za-z0-9_]+)", re.M)
+    overlaps: dict[str, list[str]] = {}
+    for package in _UNFILTERED_ORACLE_PACKAGES:
+        directory = REPO_ROOT / package
+        if not directory.is_dir():
+            continue
+        in_package: set[str] = set()
+        for source in directory.rglob("*_test.go"):
+            in_package.update(
+                declared.findall(source.read_text(encoding="utf-8", errors="ignore"))
+            )
+        # A package with no tests found means the scan broke, not that the
+        # package is empty -- these are large packages and a silent zero here
+        # would make the assertion below vacuous.
+        assert in_package, (
+            f"found no Test functions in {package}; the scan has broken rather "
+            "than the package having emptied, and a zero here would make this "
+            "check pass without looking"
+        )
+        shared = sorted(named & in_package)
+        if shared:
+            overlaps[package] = shared
+
+    assert not overlaps, (
+        "these tests are named in a `-run` pattern AND live in a package the "
+        "gate runs unfiltered, so each executes twice:\n  "
+        + "\n  ".join(
+            f"{package}: {', '.join(tests)}"
+            for package, tests in sorted(overlaps.items())
+        )
+        + "\n\nThe name-based check in this file cannot see this, because one of "
+        "the two invocations names no tests at all. Either drop the `-run` entry "
+        "or scope the unfiltered run."
+    )

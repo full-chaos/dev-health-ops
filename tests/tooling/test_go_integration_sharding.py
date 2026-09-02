@@ -2021,6 +2021,53 @@ def _run_uses_go_test_harness(command: str) -> bool:
     return False
 
 
+def _mentions_mirror(value: Any) -> bool:
+    """True if any nested string references the ghcr mirror."""
+    if isinstance(value, str):
+        return "ghcr.io/" in value
+    if isinstance(value, dict):
+        return any(_mentions_mirror(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_mentions_mirror(v) for v in value)
+    return False
+
+
+def _job_declares_mirror_env(job: dict[str, Any]) -> bool:
+    """True if the JOB's env carries a mirror ref usable by any step.
+
+    A ref held in env and pulled as `docker pull "$IMAGE"` never appears in the
+    `run:` text, so the literal scan classified the step as None and BOTH
+    assertions skipped the job -- green suite, failing job. Same fail-open shape
+    as the three before it: recognise one spelling, miss the rest.
+    """
+    return _mentions_mirror(job.get("env") or {})
+
+
+def _mirror_image_declarations(job: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Job-level `container:`/`services:` images that come from the mirror.
+
+    These are NOT reachable by a login step: the runner pulls them BEFORE the
+    first step executes, which is why GitHub requires declaration-level
+    `credentials:` for a private image. A `docker/login-action` step cannot
+    rescue them, so they need their own assertion rather than folding into the
+    step-ordering one.
+    """
+    found: list[tuple[str, dict[str, Any]]] = []
+    container = job.get("container")
+    if isinstance(container, str):
+        container = {"image": container}
+    if isinstance(container, dict) and _mentions_mirror(container.get("image", "")):
+        found.append(("container", container))
+    services = job.get("services") or {}
+    if isinstance(services, dict):
+        for service_name, service in services.items():
+            if isinstance(service, str):
+                service = {"image": service}
+            if isinstance(service, dict) and _mentions_mirror(service.get("image", "")):
+                found.append((f"services.{service_name}", service))
+    return found
+
+
 def _step_kind(step: dict[str, Any]) -> str | None:
     """Classify a workflow step as login / prepull / container-running."""
     uses = str(step.get("uses", ""))
@@ -2050,6 +2097,10 @@ def _step_kind(step: dict[str, Any]) -> str | None:
     # skipped by BOTH assertions, leaving the suite green while the job failed.
     if "ghcr.io/" in command:
         return "mirror"
+    # A ref held in the step's env and pulled as `docker pull "$IMAGE"` is a
+    # mirror pull too, and it leaves no trace in the run text.
+    if _mentions_mirror(step.get("env") or {}):
+        return "mirror"
     return None
 
 
@@ -2060,6 +2111,16 @@ def test_every_workflow_job_starting_containers_authenticates_and_pre_pulls() ->
     for job_name, job in _workflow()["jobs"].items():
         kinds = [_step_kind(step) for step in job.get("steps", [])]
         mirror_users = [i for i, k in enumerate(kinds) if k in {"harness", "mirror"}]
+        # A job-level env ref is usable by EVERY step, so the job pulls from the
+        # mirror even when no single run line says so. Ordering cannot be pinned
+        # to one step here, so this only demands the login exists.
+        if _job_declares_mirror_env(job) and not mirror_users:
+            if not any(k == "login" for k in kinds):
+                offenders.append(
+                    f"{job_name}: job env holds a ghcr.io ref but the job has no "
+                    "ghcr.io login step"
+                )
+            continue
         if not mirror_users:
             continue
         first_pull = mirror_users[0]
@@ -2111,8 +2172,24 @@ def test_ci_holds_no_docker_hub_credentials() -> None:
         text = path.read_text(encoding="utf-8")
         if "DOCKERHUB_" in text:
             offenders.append(f"{path.name}: references a DOCKERHUB_* secret")
-        if "registry: docker.io" in text:
-            offenders.append(f"{path.name}: logs in to docker.io")
+        # Structural, not textual. `registry: docker.io` was the only spelling
+        # checked, so a `docker/login-action` with renamed secrets and the
+        # registry key OMITTED slipped through -- and an omitted registry is
+        # precisely the Docker Hub default. The absence being asserted is "CI
+        # authenticates to no registry except ghcr.io", so read the parsed
+        # declaration rather than hoping for a literal.
+        document = yaml.safe_load(text) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            for step in (job or {}).get("steps") or []:
+                if not str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION):
+                    continue
+                registry = str((step.get("with") or {}).get("registry", "")).strip()
+                if registry != "ghcr.io":
+                    offenders.append(
+                        f"{path.name}: job {job_name!r} runs docker/login-action "
+                        f"with registry={registry or '<unset>'}; an unset registry "
+                        "DEFAULTS to Docker Hub, which CI must never authenticate to"
+                    )
     assert not offenders, "\n".join(offenders)
 
 
@@ -2217,3 +2294,34 @@ def test_mirrored_image_matches_testcontainers_prefix_semantics() -> None:
     refused = run("docker.io/postgres:1", prefix)
     assert refused.returncode != 0, refused.stdout
     assert "names docker.io explicitly" in refused.stderr, refused.stderr
+
+
+def test_mirror_sourced_container_and_service_images_declare_credentials() -> None:
+    """A `container:`/`services:` image from the mirror needs its own credentials.
+
+    The runner pulls these BEFORE the first step, so no `docker/login-action`
+    step can authenticate them -- GitHub requires `credentials:` on the
+    declaration itself. Nothing checked this, and the very next change on the
+    roadmap moves `test.yml`/`live-e2e.yml` service images onto the mirror,
+    which is exactly the shape that would have failed at pull time with the
+    suite green.
+
+    Not vacuous by accident: it fails the moment such a declaration appears
+    without credentials, which is the only moment it needs to fire.
+    """
+    offenders: list[str] = []
+    workflow_dir = ROOT / ".github" / "workflows"
+    for path in sorted(workflow_dir.glob("*.yml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for where, declaration in _mirror_image_declarations(job):
+                credentials = declaration.get("credentials") or {}
+                if not credentials.get("username") or not credentials.get("password"):
+                    offenders.append(
+                        f"{path.name}: {job_name}.{where} pulls "
+                        f"{declaration.get('image')!r} from the mirror without "
+                        "`credentials:`; the runner pulls it before any login step"
+                    )
+    assert not offenders, "\n".join(offenders)

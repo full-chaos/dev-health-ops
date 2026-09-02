@@ -289,9 +289,16 @@ VALUES += [
 VALUES += [value for value in _RANGE_VALUES if value not in VALUES]
 
 
-# The production source this file COPIES, anchored by text rather than by line
-# number so the check survives unrelated edits above it.
-_PRODUCTION_SOURCE = "src/dev_health_ops/workers/work_graph_tasks.py"
+# The production source this file COPIES is
+# `src/dev_health_ops/workers/work_graph_tasks.py`, anchored by TEXT rather than
+# by line number so the check survives unrelated edits above it.
+#
+# That path is deliberately prose and not a constant. The digest resolves the
+# file through `dev_health_ops.__file__` (see below) so it reads whichever copy
+# the bridge itself would import; a repo-relative constant would be a SECOND,
+# silently divergent answer to "which file is being digested" -- green while
+# pointing at a different tree. CodeQL flagged it unused, which it was: nothing
+# read it, so it documented an anchor the code did not use.
 _ENCLOSING = "def run_work_graph_build("
 _REGION_START = "now = datetime.now(timezone.utc)"
 _REGION_END = "parsed_repo_id = uuid.UUID(repo_id) if repo_id else None"

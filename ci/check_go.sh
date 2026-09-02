@@ -612,7 +612,14 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/workgraph/units (frozen work-unit component golden vs live Python)\n'
+  # NOTE: this -run list is itself an enumeration, and it is the SECOND place a
+  # rot guard has to be remembered -- once when the test is written, again here
+  # before it can ever execute. A guard missing from this list does not fail; it
+  # silently never runs. TestEveryDiscoverableCorpusStillMatchesLivePython is
+  # listed first because it DISCOVERS its subjects from tests/fixtures/ and so
+  # covers every conforming corpus without anyone editing this line again. See
+  # CHAOS-4849.
+  printf 'go test -count=1: internal/jobs/workgraph/units (frozen goldens vs live Python; the first test discovers its own subjects)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -622,7 +629,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython|TestTimeBoundsGoldenMatchesLivePython)$' \
+        -run '^(TestEveryDiscoverableCorpusStillMatchesLivePython|TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython|TestTimeBoundsGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"

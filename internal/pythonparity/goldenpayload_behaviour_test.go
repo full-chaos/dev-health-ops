@@ -2,6 +2,7 @@ package pythonparity
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,4 +119,65 @@ func TestShippedFixturesExposeThePayloadFieldsTheGuardsCompare(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPayloadMismatchIsAttributed covers the half that excluding provenance does
+// not give you: USING it when something fails.
+//
+// The original incident is the argument. The guard reported "has ROTTED" and
+// sent the reader to recommendations/loader.py, while the actual difference was
+// a macOS build string against a Linux one -- and the guard had both
+// interpreters in hand and printed neither. Excluding provenance stops the false
+// alarm; attributing it is what makes a REAL alarm diagnosable.
+//
+// Adopted from floattext_rot_guard_test.go, which had the pattern first.
+func TestPayloadMismatchIsAttributed(t *testing.T) {
+	const base = `{
+  "environment": {"python_version": "%s", "float_repr_style": "short"},
+  "cases": [{"name": "a", "value": %s}]
+}`
+	frozen := fmt.Sprintf(base, "3.14.7", "1.5")
+
+	t.Run("same interpreter says the DATA moved", func(t *testing.T) {
+		rendered := fmt.Sprintf(base, "3.14.7", "1.6")
+		err := comparePayload([]byte(frozen), []byte(rendered), "cases")
+		if err == nil {
+			t.Fatal("a changed case must fail")
+		}
+		if !strings.Contains(err.Error(), "real data change") {
+			t.Errorf("with an identical interpreter the failure should say the data "+
+				"moved; got %v", err)
+		}
+		if !strings.Contains(err.Error(), "CPython 3.14.7") {
+			t.Errorf("the failure must name the interpreter it was produced by; got %v", err)
+		}
+	})
+
+	t.Run("different interpreter says to check that first", func(t *testing.T) {
+		rendered := fmt.Sprintf(base, "3.14.8", "1.6")
+		err := comparePayload([]byte(frozen), []byte(rendered), "cases")
+		if err == nil {
+			t.Fatal("a changed case must fail")
+		}
+		if !strings.Contains(err.Error(), "interpreter ALSO differs") {
+			t.Errorf("when both moved the reader must be told to check the "+
+				"interpreter before porting; got %v", err)
+		}
+		for _, want := range []string{"3.14.7", "3.14.8"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the failure must name BOTH interpreters; %q missing from %v", want, err)
+			}
+		}
+	})
+
+	t.Run("a document with no interpreter is FATAL, not tolerated", func(t *testing.T) {
+		// This is what stops the provenance being deleted again -- which is
+		// exactly what I did one commit earlier.
+		stripped := `{"cases": [{"name": "a", "value": 9.9}]}`
+		err := comparePayload([]byte(frozen), []byte(stripped), "cases")
+		if err == nil || !strings.Contains(err.Error(), "records no interpreter") {
+			t.Errorf("a document without provenance cannot be attributed and must "+
+				"fail saying so; got %v", err)
+		}
+	})
 }

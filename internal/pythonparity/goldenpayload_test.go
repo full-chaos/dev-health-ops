@@ -41,6 +41,43 @@ import (
 // BYTE-parity package, where those are exactly the differences that matter.
 // json.RawMessage keeps the original bytes of each field, so the comparison
 // stays as strict as the old whole-file one everywhere it still applies.
+
+// interpreterOf renders the recorded interpreter for ATTRIBUTION.
+//
+// Adopted from floattext_rot_guard_test.go, which had this pattern before I
+// wrote mine and which lane-ci-flakes pointed me at. Excluding provenance from
+// the comparison is only half of it; the other half is USING it, so a failure
+// can say which side moved.
+//
+// That half is exactly what the original incident lacked. The guard reported
+// "has ROTTED" and sent the reader to recommendations/loader.py while the real
+// difference was a macOS build string against a Linux one. It had the
+// interpreter in hand and did not print it.
+//
+// An ABSENT interpreter block is fatal, not tolerated. A fixture that does not
+// record what produced it cannot be attributed -- and making the field
+// mandatory is what stops someone deleting it again, which is what I did in the
+// commit before this one.
+func interpreterOf(document []byte, label string) (string, error) {
+	var parsed struct {
+		Environment struct {
+			PythonVersion  string `json:"python_version"`
+			FloatReprStyle string `json:"float_repr_style"`
+		} `json:"environment"`
+	}
+	if err := json.Unmarshal(document, &parsed); err != nil {
+		return "", fmt.Errorf("decode %s document: %w", label, err)
+	}
+	if parsed.Environment.PythonVersion == "" {
+		return "", fmt.Errorf(
+			"%s document records no interpreter; a fixture that does not record "+
+				"what produced it cannot be attributed, and the provenance must "+
+				"not be deleted merely because it is not compared", label)
+	}
+	return fmt.Sprintf("CPython %s (float_repr_style %s)",
+		parsed.Environment.PythonVersion, parsed.Environment.FloatReprStyle), nil
+}
+
 func comparePayload(frozen, rendered []byte, fields ...string) error {
 	var frozenDoc, renderedDoc map[string]json.RawMessage
 	if err := json.Unmarshal(frozen, &frozenDoc); err != nil {
@@ -66,7 +103,28 @@ func comparePayload(frozen, rendered []byte, fields ...string) error {
 				field, frozenPresent, renderedPresent)
 		}
 		if !bytes.Equal(frozenValue, renderedValue) {
-			return fmt.Errorf("payload field %q differs between frozen and live", field)
+			// ATTRIBUTE the difference. The two interpreters are reported
+			// alongside the field so the reader can tell "the data moved" from
+			// "the interpreter moved" without going and looking -- which is the
+			// step the original incident skipped.
+			frozenInterpreter, frozenErr := interpreterOf(frozen, "frozen")
+			renderedInterpreter, renderedErr := interpreterOf(rendered, "live")
+			if frozenErr != nil {
+				return frozenErr
+			}
+			if renderedErr != nil {
+				return renderedErr
+			}
+			attribution := "the interpreter is IDENTICAL on both sides, so this " +
+				"is a real data change"
+			if frozenInterpreter != renderedInterpreter {
+				attribution = "the interpreter ALSO differs, so check whether the " +
+					"data change follows from it before porting anything"
+			}
+			return fmt.Errorf(
+				"payload field %q differs between frozen and live\n"+
+					"  frozen produced by: %s\n  live produced by:   %s\n  %s",
+				field, frozenInterpreter, renderedInterpreter, attribution)
 		}
 	}
 	return nil

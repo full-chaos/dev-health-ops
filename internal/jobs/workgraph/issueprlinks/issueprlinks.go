@@ -376,11 +376,31 @@ func Derive(inputs Inputs) Result {
 	}
 
 	result := Result{
-		DependenciesRead:      len(inputs.Dependencies),
 		AdmittedByRawKind:     make(map[string]int),
 		Rejected:              make(map[RejectionReason]int),
 		ReservedSeenByRawKind: make(map[string]int),
 	}
+
+	// Python's FIRST statement is `if not self.config.org_id: return 0`
+	// (builder.py:645-646): an org-less build reads nothing and writes nothing.
+	// Without this, Derive maps rows and stamps OrgID:"" on every link, and a
+	// row written with an empty org_id lands in the wrong partition of
+	// work_graph_issue_pr's (org_id, repo_id, work_item_id, pr_number) merge
+	// key.
+	//
+	// Load already refuses an empty org, so the Service path was never exposed
+	// -- but Derive is EXPORTED and is what the golden drives directly, so the
+	// parity claim is about Derive itself, not only about the caller that
+	// happens to reach it (codex round 7).
+	//
+	// DependenciesRead stays 0 deliberately: Python returns BEFORE its
+	// dependency read, so "nothing was read" is the faithful accounting, and
+	// the conservation identity holds trivially rather than by exception.
+	if inputs.OrgID == "" {
+		return result
+	}
+
+	result.DependenciesRead = len(inputs.Dependencies)
 	if len(inputs.Dependencies) == 0 {
 		return result
 	}

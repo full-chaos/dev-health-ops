@@ -354,3 +354,40 @@ func TestDeriveSkipsARepoWithNoSlug(t *testing.T) {
 	inputs.Repos = []RepoRow{{OrgID: testOrg, ID: testRepoID, Repo: ""}}
 	assertSingleRejection(t, Derive(inputs), ReasonUnknownRepo)
 }
+
+// TestDeriveRefusesAnEmptyOrg is codex round-7 F7, the fourth instance of the
+// gate-divergence meta-class.
+//
+// Python's very first statement is `if not self.config.org_id: return 0`
+// (builder.py:645-646) — an org-less build reads nothing and writes nothing.
+// Derive had no such guard, so it would map rows and stamp `OrgID: ""` on every
+// link. A row written with an empty org_id lands in the wrong partition of
+// `work_graph_issue_pr`'s (org_id, repo_id, work_item_id, pr_number) merge key.
+//
+// `Load` already rejects an empty org, so the Service path was never exposed —
+// but `Derive` is EXPORTED and is what the golden test drives directly, so the
+// parity claim is about Derive, not only about the path that happens to call
+// it. The golden cannot reach this: its generator hard-codes a non-empty org.
+func TestDeriveRefusesAnEmptyOrg(t *testing.T) {
+	inputs := baseInputs()
+	inputs.OrgID = ""
+	// The rows still carry their own org, so only the BUILD org is missing —
+	// the exact shape that would otherwise derive and stamp an empty org_id.
+
+	result := Derive(inputs)
+	if result.Written() != 0 {
+		t.Fatalf(
+			"wrote %d links for an org-less build; Python returns 0 and writes nothing (links %+v)",
+			result.Written(), result.Links,
+		)
+	}
+	if result.DependenciesRead != 0 {
+		t.Errorf(
+			"DependenciesRead = %d, want 0: Python returns before reading dependencies at all",
+			result.DependenciesRead,
+		)
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}

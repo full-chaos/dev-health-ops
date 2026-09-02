@@ -234,29 +234,35 @@ log = logging.getLogger(__name__)
 
 
 def _table_exists(client, table: str) -> bool:
-    res = client.query(
-        "SELECT count() FROM system.tables "
-        "WHERE database = currentDatabase() AND name = {name:String}",
-        parameters={"name": table},
-    )
+    """Whether the table exists, via EXISTS TABLE rather than system.tables.
+
+    `EXISTS TABLE` answers 0 or 1 from the server's own catalogue. system.tables
+    is a system table, and a row policy or a restricted grant on system tables
+    can make a real, populated table look absent -- which would silently skip
+    this migration rather than fail it.
+
+    A non-count answer RAISES. On a real server the answer is always 0 or 1, so
+    an unparseable cell means the client is not answering the question asked,
+    and continuing would rebuild -- or decline to rebuild -- on a fiction.
+    Production is not bent to accommodate a fake client; a fake that answers
+    every query with one canned row is the test's problem to fix.
+    """
+    res = client.query(f"EXISTS TABLE `{table}`")
     rows = getattr(res, "result_rows", None) or []
     if not rows or not rows[0]:
-        return False
+        raise RuntimeError(
+            f"EXISTS TABLE `{table}` returned no rows; the client is not "
+            "answering the question asked. Refusing to guess whether the table "
+            "is there."
+        )
     try:
         return int(rows[0][0]) > 0
-    except (TypeError, ValueError):
-        # The cell was not a count. On a real server it always is, so this is
-        # the fake-client path -- the clean-install runner's stub answers every
-        # query with the same canned row, which here held a migration FILENAME
-        # and made int() raise, aborting the whole runner from inside this
-        # migration's existence check.
-        #
-        # Answering "does not exist" is the correct fallback rather than a test
-        # accommodation: with no readable count there is no table this can
-        # safely rebuild, and the caller's next action is to skip. Raising here
-        # would let one migration's probe fail an unrelated install.
-        log.warning(f"  {table}: existence count unreadable, treating as absent")
-        return False
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"EXISTS TABLE `{table}` returned {rows[0][0]!r}, which is not 0 or "
+            "1. The client is not answering the question asked; refusing to "
+            "guess whether the table is there."
+        ) from exc
 
 
 def _engine_full(client, table: str) -> str:
@@ -418,13 +424,20 @@ def _canonical_expression(client, expression: str) -> str:
 
 
 def _column_shape(client, table: str) -> list[tuple[str, str, str]]:
-    """(name, type, default_kind) for a table, in position order."""
-    res = client.query(
-        "SELECT name, type, default_kind FROM system.columns "
-        "WHERE database = currentDatabase() AND table = {name:String} "
-        "ORDER BY position",
-        parameters={"name": table},
-    )
+    """(name, type, default_kind) for a table, in position order.
+
+    DESCRIBE TABLE, not system.columns. DESCRIBE reads the table's own metadata;
+    system.columns is a system table and can be filtered by a row policy or
+    hidden by a restricted grant, which would make a real, fully-populated table
+    read as SHAPELESS. Under the earlier system.columns implementation that
+    produced an empty list, and an empty list was treated as "nothing to
+    migrate" -- so a permissions quirk could have silently skipped the whole
+    rebuild instead of failing it.
+
+    DESCRIBE's first three columns are name, type and default_type, which is the
+    same triple system.columns gave as name/type/default_kind.
+    """
+    res = client.query(f"DESCRIBE TABLE `{table}`")
     rows = getattr(res, "result_rows", None) or []
     return [(str(r[0]), str(r[1]), str(r[2] or "")) for r in rows]
 
@@ -510,20 +523,24 @@ def _rebuild(client) -> None:
         log.warning(f"  {TABLE}: does not exist, skipping")
         return
 
-    # A table that reports NO columns is not a table this can migrate, and the
-    # copy would have nothing to carry. A real ClickHouse server never reports an
-    # existing table with an empty column list, so in practice this is the
-    # mock-client path: a MagicMock answers the existence count truthily (its
-    # __int__ is 1) and yields nothing for the column query (its __iter__ is
-    # empty), which made _assert_carried_columns_match below raise "has stored
-    # columns []" and fail a unit test that only ever meant to exercise the store.
+    # An existing table with no readable shape RAISES. It is never a skip.
     #
-    # Skipping is the correct behaviour rather than a test accommodation: with no
-    # readable shape there is no safe copy to perform, and proceeding would be the
-    # silent-column-loss failure that assertion exists to prevent.
+    # The distinction matters because the two look identical from here: a query
+    # that legitimately returns no rows and a client that cannot answer both
+    # produce an empty list. Treating empty as "nothing to migrate" would mean a
+    # restricted grant, a row policy, or a broken client silently skips the
+    # rebuild -- the guard's whole purpose is to fail rather than proceed on an
+    # unreadable table, and skipping is proceeding by another name.
+    #
+    # DESCRIBE TABLE above removes the most likely cause (system-table
+    # visibility); this removes the possibility of it passing unnoticed if some
+    # other cause remains.
     if not _column_shape(client, TABLE):
-        log.warning(f"  {TABLE}: no readable column shape, skipping")
-        return
+        raise RuntimeError(
+            f"cannot read column shape for {TABLE}; DESCRIBE TABLE returned no "
+            "rows. The table exists but its shape is unreadable, so no safe copy "
+            "can be planned. Refusing to migrate."
+        )
 
     # Skip path, which also converges a crash between EXCHANGE and DROP.
     if VERSION_COLUMN in _engine_full(client, TABLE):

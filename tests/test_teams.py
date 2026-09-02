@@ -81,10 +81,29 @@ async def test_clickhouse_store_teams():
     """Test Team storage in ClickHouse (mocked)."""
     with patch("clickhouse_connect.get_client") as mock_get_client:
         mock_client = MagicMock()
+
+        # A bare MagicMock reports every table PRESENT -- its __int__ is 1, so an
+        # `EXISTS TABLE` probe reads as 1 -- while yielding no rows for DESCRIBE,
+        # because its __iter__ is empty. Migrations run on __aenter__ and rightly
+        # refuse that combination: a table that exists with no readable shape is
+        # an error, not a skip. Answer the probe truthfully instead; this test is
+        # about the store, and none of these tables exist in it.
+        def _answer(query: str, *args: object, **kwargs: object) -> MagicMock:
+            result = MagicMock()
+            result.result_rows = [(0,)] if "EXISTS TABLE" in query.upper() else []
+            return result
+
+        mock_client.query.side_effect = _answer
         mock_get_client.return_value = mock_client
 
         store = ClickHouseStore("clickhouse://localhost")
         await store.__aenter__()
+        # The probe answers were only needed while migrations ran inside
+        # __aenter__. Clearing the side_effect hands `query` back to the
+        # return_value the rest of this test configures -- a side_effect takes
+        # precedence over return_value, so leaving it set would starve
+        # get_all_teams of its rows.
+        mock_client.query.side_effect = None
 
         # Mock insert_teams
         teams = [Team(id="t1", name="Team 1")]

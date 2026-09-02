@@ -369,6 +369,24 @@ def _production_window_digest() -> str:
             f"(start={start} end={end}). The anchors moved -- re-anchor this "
             "digest and RE-VERIFY that _derive_window still reproduces production."
         )
+    # ORDERING. `start < 0 or end < 0` does not catch anchors that are present
+    # but REVERSED: the slice would then be empty, `ast.parse("")` succeeds, and
+    # the digest becomes e3b0c442... -- the SHA of nothing. Stable, plausible,
+    # covering NOTHING, and green forever including after a regeneration.
+    #
+    # That is precisely what this function's own docstring warns about: a digest
+    # that silently degrades is worse than none, because it still reads as a
+    # check. The `< 0` guard does not watch this door. Ordering holds today only
+    # by accident of how the production function is written, and an accident of
+    # production layout must not be load-bearing for a guard whose whole purpose
+    # is noticing that layout change. Found by lane-4441 on re-review.
+    if start >= end:
+        raise SystemExit(
+            f"the end anchor precedes the start anchor in {path} "
+            f"(start={start} end={end}); the region would be EMPTY and its digest "
+            "would be the SHA of nothing. Re-anchor before trusting this digest."
+        )
+
     # Ambiguity INSIDE the function is what the first version got wrong at module
     # scope. Assert it here too rather than trusting that one search fixed it.
     span = source[within:end]

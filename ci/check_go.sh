@@ -1758,7 +1758,14 @@ integration_image_declaration() {
 }
 
 integration_image_requires_digest() {
-  [ "$1" != "reaper" ]
+  # reaper: testcontainers-go picks its own tag, so we match the library.
+  # clickhouse: tracks the 26.7 MINOR by tag so patch upgrades apply -- ruled by
+  # chris (CHAOS-4854), same policy CHAOS-4851 used for the CI service
+  # containers. Both are still required to name an image AND tag below.
+  case "$1" in
+    reaper | clickhouse) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 discover_test_dependency_image() {

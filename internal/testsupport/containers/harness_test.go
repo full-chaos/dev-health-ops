@@ -10,10 +10,17 @@ import (
 func TestDependencyImagesAreDigestPinned(t *testing.T) {
 	t.Parallel()
 
-	for _, image := range []string{PostgresImage, ClickHouseImage, ValkeyImage} {
+	// ClickHouseImage is deliberately absent: it tracks the 26.7 MINOR by tag so
+	// patch upgrades apply, ruled by chris (CHAOS-4854) and matching what
+	// CHAOS-4851 did for the CI service containers. Adding it back here would
+	// fail that pin, not protect it.
+	for _, image := range []string{PostgresImage, ValkeyImage} {
 		if !strings.Contains(image, "@sha256:") {
 			t.Errorf("dependency image is not digest pinned: %s", image)
 		}
+	}
+	if !strings.Contains(ClickHouseImage, ":") {
+		t.Errorf("ClickHouse image must name an image and tag: %s", ClickHouseImage)
 	}
 }
 

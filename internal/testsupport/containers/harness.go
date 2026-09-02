@@ -17,22 +17,18 @@ import (
 const (
 	PostgresImage = "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 
-	// ClickHouseImage MUST equal the digest deploy/docker-compose/compose.production.yml
-	// runs. This harness exists to prove parity against production's engine, and a
-	// version gap changes what SQL is accepted at all -- CHAOS-4549 measured a
-	// multi-arm `JOIN ... ON (... OR ...)` accepted on 26.7 and rejected on 24.8.
-	// Testing against a different build than prod runs is the one thing this
-	// package cannot do and still mean anything.
+	// ClickHouseImage tracks the 26.7 MINOR, not a digest. Ruled by chris
+	// (2026-09-02): "26.7 will pull all tags, 'matching' != matching exact. It's
+	// major version MATCHING." Patch drift inside 26.7 is allowed by design, the
+	// same policy CHAOS-4851 applied to the CI service containers.
 	//
 	// CHAOS-4854 moved it off sha256:1d1f6508 (26.6.1.1193), a minor BELOW the
-	// 26.7 floor. tests/tooling/test_clickhouse_pin_matches_production.py fails
-	// if the two digests ever diverge again, so this is a guarded invariant
-	// rather than a comment.
+	// 26.7 floor -- that gap was the defect, not the patch level.
 	//
 	// Read the version with `com.clickhouse.build.version`. The obvious label,
 	// `org.opencontainers.image.version`, reports the Ubuntu BASE (22.04) on
 	// every ClickHouse image and will tell you nothing about ClickHouse.
-	ClickHouseImage = "clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
+	ClickHouseImage = "clickhouse/clickhouse-server:26.7"
 	ValkeyImage     = "valkey/valkey@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02"
 
 	// ReaperImage is testcontainers-go's own garbage collector (Ryuk). Nothing

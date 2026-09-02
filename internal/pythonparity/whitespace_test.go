@@ -1,6 +1,7 @@
 package pythonparity
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,12 +11,21 @@ import (
 	"unicode"
 )
 
+type splitLinesCase struct {
+	InputHex string   `json:"input_hex"`
+	LinesHex []string `json:"lines_hex"`
+}
+
 type whitespaceGolden struct {
-	IsSpaceCodePoints         []int `json:"isspace_code_points"`
-	PythonOnlyCodePoints      []int `json:"python_only_code_points"`
-	GoOnlyCodePoints          []int `json:"go_only_code_points"`
-	SplitDisagreesWithIsSpace []int `json:"split_disagrees_with_isspace"`
-	SplitSplitsOnNonIsSpace   []int `json:"split_splits_on_non_isspace"`
+	IsSpaceCodePoints         []int            `json:"isspace_code_points"`
+	SplitLinesBoundaries      []int            `json:"splitlines_boundary_code_points"`
+	IsSpaceOnlyVsSplitLines   []int            `json:"isspace_only_vs_splitlines_code_points"`
+	CRLFIsOneBoundary         bool             `json:"crlf_is_one_boundary"`
+	SplitLinesCases           []splitLinesCase `json:"splitlines_cases"`
+	PythonOnlyCodePoints      []int            `json:"python_only_code_points"`
+	GoOnlyCodePoints          []int            `json:"go_only_code_points"`
+	SplitDisagreesWithIsSpace []int            `json:"split_disagrees_with_isspace"`
+	SplitSplitsOnNonIsSpace   []int            `json:"split_splits_on_non_isspace"`
 }
 
 func loadWhitespaceGolden(t *testing.T) whitespaceGolden {
@@ -224,4 +234,93 @@ func TestRuneLenAndTruncateCountCodePoints(t *testing.T) {
 	if got := TruncateRunes("abc", 0); got != "" {
 		t.Errorf("TruncateRunes(%q, 0) = %q, want empty", "abc", got)
 	}
+}
+
+// TestSplitLinesMatchesCPython drives every case the generator captured from
+// str.splitlines() itself, and drives strings.Split alongside so the wrong
+// answer is visible rather than merely avoided.
+func TestSplitLinesMatchesCPython(t *testing.T) {
+	golden := loadWhitespaceGolden(t)
+	if len(golden.SplitLinesCases) == 0 {
+		t.Fatal("golden contains no splitlines cases")
+	}
+	if !golden.CRLFIsOneBoundary {
+		t.Fatal("golden says CRLF is not a single boundary; SplitLines assumes it is")
+	}
+
+	var newlineOnlyDisagreements int
+	for _, testCase := range golden.SplitLinesCases {
+		input := decodeHexString(t, testCase.InputHex)
+		want := make([]string, len(testCase.LinesHex))
+		for index, encoded := range testCase.LinesHex {
+			want[index] = decodeHexString(t, encoded)
+		}
+
+		got := SplitLines(input)
+		if len(got) == 0 && len(want) == 0 {
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("SplitLines(%q) = %q, CPython = %q", input, got, want)
+		}
+
+		// How far the obvious implementation would have been off.
+		if naive := strings.Split(input, "\n"); !reflect.DeepEqual(naive, want) {
+			newlineOnlyDisagreements++
+		}
+	}
+
+	// The point of the exercise: a newline-only split is wrong on a large
+	// fraction of these, so the divergence is not an exotic corner.
+	if newlineOnlyDisagreements == 0 {
+		t.Error("strings.Split(value, \"\\n\") agreed with CPython on every case; " +
+			"the corpus is no longer covering the boundaries that motivated SplitLines")
+	}
+	t.Logf("strings.Split on newline alone disagrees with CPython on %d of %d cases",
+		newlineOnlyDisagreements, len(golden.SplitLinesCases))
+}
+
+// TestSplitLinesBoundarySetIsNotTheWhitespaceSet pins the non-nesting that
+// makes a single shared predicate impossible.
+func TestSplitLinesBoundarySetIsNotTheWhitespaceSet(t *testing.T) {
+	golden := loadWhitespaceGolden(t)
+
+	boundaries := make(map[rune]bool, len(golden.SplitLinesBoundaries))
+	for _, codePoint := range golden.SplitLinesBoundaries {
+		boundaries[rune(codePoint)] = true
+	}
+	if len(boundaries) == 0 {
+		t.Fatal("golden lists no line boundaries")
+	}
+
+	for codePoint := rune(0); codePoint <= 0x10FFFF; codePoint++ {
+		if got, want := isLineBoundary(codePoint), boundaries[codePoint]; got != want {
+			t.Errorf("isLineBoundary(U+%04X) = %v, CPython splitlines = %v",
+				codePoint, got, want)
+		}
+	}
+
+	// 0x1f is the asymmetry: whitespace, but NOT a line boundary. If a future
+	// refactor points both helpers at one predicate, this fails.
+	if !IsSpace(0x1f) {
+		t.Error("U+001F must be whitespace to CPython")
+	}
+	if isLineBoundary(0x1f) {
+		t.Error("U+001F must NOT be a line boundary; the two sets are not nested")
+	}
+	// And the reverse asymmetry does not exist for 0x0b/0x0c -- both are both.
+	for _, codePoint := range []rune{0x0b, 0x0c} {
+		if !IsSpace(codePoint) || !isLineBoundary(codePoint) {
+			t.Errorf("U+%04X should be both whitespace and a line boundary", codePoint)
+		}
+	}
+}
+
+func decodeHexString(t *testing.T, encoded string) string {
+	t.Helper()
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode hex %q: %v", encoded, err)
+	}
+	return string(decoded)
 }

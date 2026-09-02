@@ -3,6 +3,7 @@ package pythonparity
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // IsSpace reports whether a code point is whitespace to CPython -- that is,
@@ -20,7 +21,7 @@ import (
 // Python rejects, because strings.TrimSpace left it non-empty. Python raised
 // before any fetch; Go proceeded into a silent zero-row run.
 //
-// # PYTHON HAS TWO WHITESPACE RULES AND THIS IS ONLY ONE OF THEM
+// # PYTHON HAS THREE OVERLAPPING RULES AND THIS IS ONLY ONE OF THEM
 //
 // `str.strip()`, `str.split()` and `str.rstrip()` all use THIS predicate. But
 // `int()` and `float()` do NOT -- they REJECT the four separators:
@@ -32,6 +33,10 @@ import (
 // why parsePythonInt and confidenceFromString correctly use it and must not be
 // "unified for consistency" with this function. Doing so would break the
 // parsers while fixing nothing.
+//
+// The third rule is `str.splitlines()` -- see isLineBoundary. It is not a
+// subset or superset of this one: 0x1f is whitespace but not a line boundary,
+// while 0x0b and 0x0c are both. Three rules, three predicates, deliberately.
 func IsSpace(r rune) bool {
 	// The four CPython treats as whitespace and Go does not.
 	if r >= 0x1c && r <= 0x1f {
@@ -109,4 +114,70 @@ func TruncateRunes(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+// isLineBoundary reports whether a code point ends a line for CPython's
+// `str.splitlines()`.
+//
+// This is a THIRD character class, distinct from both of the others this port
+// deals with, and the sets are NOT nested:
+//
+//	str.isspace()     0x1c 0x1d 0x1e 0x1f  + the unicode spaces
+//	str.splitlines()  0x1c 0x1d 0x1e       + 0x0b 0x0c 0x85 U+2028 U+2029
+//
+// 0x1f is whitespace but NOT a line boundary; 0x0b/0x0c are both. So a port
+// that reuses one predicate for both is wrong in one direction or the other,
+// and no amount of care with a single "python whitespace" helper fixes it.
+// Frozen in tests/fixtures/python_whitespace_python_golden.json.
+func isLineBoundary(r rune) bool {
+	switch r {
+	case '\n', '\v', '\f', '\r', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+		return true
+	}
+	return false
+}
+
+// SplitLines is CPython's `str.splitlines()`.
+//
+// `strings.Split(value, "\n")` is the obvious Go equivalent and misses NINE of
+// the ten boundaries. The consequence in this port is concrete rather than
+// theoretical: evidence._commit_subject takes the first non-empty line of a
+// commit message, so for a message like "first\x1csecond" CPython yields the
+// subject "first" while a newline-only split yields the ENTIRE message. That
+// text is truncated into source_texts and hashed into input_hash.
+//
+// Two details the obvious implementation also gets wrong:
+//
+//   - "\r\n" is ONE boundary, not two. Splitting on each separately emits a
+//     spurious empty line between them, which _commit_subject skips but
+//     text_char_count would not.
+//   - a trailing boundary produces NO trailing empty element: "a\n" splits to
+//     ["a"], not ["a", ""]. strings.Split gets this backwards.
+func SplitLines(value string) []string {
+	if value == "" {
+		return nil
+	}
+
+	var lines []string
+	start := 0
+	for index := 0; index < len(value); {
+		codePoint, size := utf8.DecodeRuneInString(value[index:])
+		if !isLineBoundary(codePoint) {
+			index += size
+			continue
+		}
+
+		lines = append(lines, value[start:index])
+		index += size
+		// CRLF is a single boundary.
+		if codePoint == '\r' && index < len(value) && value[index] == '\n' {
+			index++
+		}
+		start = index
+	}
+	// No trailing empty element when the string ends on a boundary.
+	if start < len(value) {
+		lines = append(lines, value[start:])
+	}
+	return lines
 }

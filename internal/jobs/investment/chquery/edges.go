@@ -26,16 +26,31 @@ type EdgeQueryOptions struct {
 	OrganizationID string
 	// RepoIDs, when non-empty, restricts to those repositories.
 	RepoIDs []string
-	// ExcludeHeuristic defaults ON in Python (CHAOS-2775) and is expressed here
-	// as an explicit field so a caller cannot get the dangerous default by
-	// forgetting a parameter. Callers that group work units MUST leave it true.
-	ExcludeHeuristic bool
+	// IncludeHeuristic is the INVERSE of Python's `exclude_heuristic: bool = True`
+	// (queries.py:18-23), and the inversion is the point.
+	//
+	// An earlier revision of this file spelled it `ExcludeHeuristic` and claimed
+	// in this very comment that an explicit field stopped a caller getting the
+	// dangerous default by forgetting a parameter. That was wrong, and codex
+	// round 1 on CHAOS-4441 PR2 constructed it: Go's zero value for a bool is
+	// FALSE, so `EdgeQueryOptions{OrganizationID: org}` -- the obvious way to
+	// write it -- silently DISABLED the exclusion, while Python's omitted
+	// argument ENABLES it. The safe case has to be the zero value, not a field
+	// the caller must remember to set.
+	//
+	// Heuristic edges are rule-inferred (same repo + time window) and percolate
+	// thousands of unrelated issues/PRs/commits into one component (CHAOS-2775),
+	// so letting them into unit grouping is the pathology the cap exists to
+	// contain. Set this true ONLY for a caller that wants the full edge set for
+	// display and is not grouping work units.
+	IncludeHeuristic bool
 }
 
-// DefaultEdgeQueryOptions returns options with the CHAOS-2775 heuristic
-// exclusion ON, matching fetch_work_graph_edges' `exclude_heuristic: bool = True`.
+// DefaultEdgeQueryOptions returns options matching Python's defaults for a
+// work-unit grouping read. Retained for callers that prefer it, but it is no
+// longer load-bearing: the zero value is now the safe one.
 func DefaultEdgeQueryOptions(organizationID string) EdgeQueryOptions {
-	return EdgeQueryOptions{OrganizationID: organizationID, ExcludeHeuristic: true}
+	return EdgeQueryOptions{OrganizationID: organizationID}
 }
 
 // EdgeRow is one deduplicated work_graph_edges row, carrying both the fields
@@ -90,7 +105,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 	}
 
 	havingSQL := ""
-	if opts.ExcludeHeuristic {
+	if !opts.IncludeHeuristic {
 		// HAVING must reference the SELECT ALIAS, not repeat
 		// argMax(provenance, ...): the alias shadows the raw column and
 		// re-aggregating it raises ILLEGAL_AGGREGATION (184). Same ClickHouse

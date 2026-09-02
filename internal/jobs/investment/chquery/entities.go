@@ -86,7 +86,10 @@ func (reader *Reader) FetchWorkItems(ctx context.Context, workItemIDs []string, 
 	}
 	ids := dedupeStrings(workItemIDs)
 	if len(ids) == 0 {
-		return nil, nil
+		// Python returns [] here, not None (queries.py:99-101). An empty slice
+		// rather than nil keeps the shapes identical for any caller that
+		// serialises or reflect-compares the result.
+		return []WorkItem{}, nil
 	}
 
 	whereSQL := "WHERE work_item_id IN {work_item_ids:Array(String)}"
@@ -517,7 +520,8 @@ func (reader *Reader) ResolveRepoIDsForTeams(ctx context.Context, teamIDs []stri
 		}
 	}
 	if len(teams) == 0 {
-		return nil, nil
+		// Python returns [] here, not None (queries.py:322-324).
+		return []string{}, nil
 	}
 
 	whereSQL := "WHERE team_id IN {team_ids:Array(String)}"

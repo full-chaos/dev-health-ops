@@ -134,7 +134,7 @@ func TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant(t *testing.T) {
 		t.Fatalf("scoped read returned %d edges, want exactly org alpha's 1", len(scoped))
 	}
 
-	unscoped, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{ExcludeHeuristic: true})
+	unscoped, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,5 +423,126 @@ func TestActiveHoursUnscopedCollapsesTenants(t *testing.T) {
 				"port exists to prevent",
 			unscoped[sharedID],
 		)
+	}
+}
+
+// TestZeroValueOptionsExcludeHeuristicEdges is the red-proof for codex round
+// 1's P2 on this PR, and the reason the option is spelled IncludeHeuristic.
+//
+// Go's zero value for a bool is false. With the option spelled
+// `ExcludeHeuristic`, the obvious construction -- `EdgeQueryOptions{
+// OrganizationID: org}` -- silently DISABLED the CHAOS-2775 heuristic
+// exclusion, while Python's omitted `exclude_heuristic` argument ENABLES it.
+// A heuristic edge would then reach component grouping and percolate unrelated
+// nodes into one work unit.
+//
+// This asserts the ZERO VALUE behaves like Python's default. If someone
+// re-inverts the field to make it "read more naturally", this fails.
+func TestZeroValueOptionsExcludeHeuristicEdges(t *testing.T) {
+	reader, conn, ctx := newTestReader(t)
+
+	seedEdge(t, ctx, conn, orgAlpha, "native-edge", "native", 1.0, "2026-01-01 00:00:00.000")
+	seedEdge(t, ctx, conn, orgAlpha, "heuristic-edge", "heuristic", 0.3, "2026-01-01 00:00:00.000")
+
+	// The bare struct literal -- no exclusion flag set anywhere.
+	rows, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{OrganizationID: orgAlpha})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Provenance == "heuristic" {
+			t.Fatalf(
+				"a heuristic edge (%s) survived a ZERO-VALUE EdgeQueryOptions. "+
+					"Python's omitted exclude_heuristic argument excludes it; if the "+
+					"Go zero value does not, every caller who writes the obvious "+
+					"struct literal silently disables CHAOS-2775's exclusion",
+				row.Edge.SourceID,
+			)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want exactly the one native edge, got %d rows", len(rows))
+	}
+
+	// And the opt-in still works, for a display caller that wants everything.
+	all, err := reader.FetchWorkGraphEdges(ctx,
+		EdgeQueryOptions{OrganizationID: orgAlpha, IncludeHeuristic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("IncludeHeuristic must return both edges, got %d", len(all))
+	}
+}
+
+// TestParentTitlesAndCommitChurnAreExercised closes codex round 1's P3: neither
+// fetcher was invoked by any test, so a reader returning an empty map for
+// either would have passed the whole suite.
+func TestParentTitlesAndCommitChurnAreExercised(t *testing.T) {
+	reader, conn, ctx := newTestReader(t)
+	repoID := uuid.New().String()
+
+	// Two parents: one with a title, one with an EMPTY title. Python drops the
+	// empty one (`if row.get("work_item_id") and row.get("title")`), so it must
+	// be ABSENT from the map rather than mapped to "".
+	for _, parent := range []struct{ id, title string }{
+		{id: "parent-with-title", title: "Epic: investment port"},
+		{id: "parent-empty-title", title: ""},
+	} {
+		mustExec(t, ctx, conn, `
+            INSERT INTO work_items (
+                org_id, work_item_id, provider, repo_id, title, description, type,
+                labels, parent_id, epic_id, created_at, updated_at, completed_at
+            ) VALUES (?, ?, 'linear', ?, ?, NULL, 'epic', [], '', '', ?, ?, NULL)
+        `, orgAlpha, parent.id, repoID, parent.title,
+			"2026-01-01 00:00:00.000", "2026-01-01 00:00:00.000")
+	}
+
+	titles, err := reader.FetchParentTitles(ctx,
+		[]string{"parent-with-title", "parent-empty-title", "parent-absent"}, orgAlpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if titles["parent-with-title"] != "Epic: investment port" {
+		t.Errorf("titled parent missing or wrong: %q", titles["parent-with-title"])
+	}
+	if _, present := titles["parent-empty-title"]; present {
+		t.Error("an EMPTY title must be absent from the map, not mapped to \"\" -- " +
+			"python drops it on truthiness and the text bundle asks whether a " +
+			"parent title EXISTS")
+	}
+	if _, present := titles["parent-absent"]; present {
+		t.Error("an id with no row must be absent from the map")
+	}
+
+	// Churn: two commits, one with stats split across two rows (the sum must
+	// aggregate), one with no stats row at all (absent, not zero).
+	for _, stat := range []struct {
+		hash                 string
+		additions, deletions int32
+	}{
+		{hash: "aaa111", additions: 10, deletions: 5},
+		{hash: "aaa111", additions: 3, deletions: 2},
+	} {
+		mustExec(t, ctx, conn, `
+            INSERT INTO git_commit_stats (org_id, repo_id, commit_hash, additions, deletions)
+            VALUES (?, ?, ?, ?, ?)
+        `, orgAlpha, repoID, stat.hash, stat.additions, stat.deletions)
+	}
+
+	churn, err := reader.FetchCommitChurn(ctx,
+		map[string][]string{repoID: {"aaa111", "bbb222"}}, orgAlpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKey := repoID + "@aaa111"
+	if churn[wantKey] != 20 {
+		t.Errorf("churn for %s = %v, want 20 (10+5+3+2 summed across both stat rows)",
+			wantKey, churn[wantKey])
+	}
+	if _, present := churn[repoID+"@bbb222"]; present {
+		t.Error("a commit with no stats row must be ABSENT from the map, not zero -- " +
+			"the caller's lookup defaults to 0, and a present zero would be " +
+			"indistinguishable from a real zero-churn commit")
 	}
 }

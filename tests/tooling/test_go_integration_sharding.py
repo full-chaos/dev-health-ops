@@ -1889,6 +1889,37 @@ def test_container_derivation_still_sees_the_known_verbs() -> None:
     assert derived.isdisjoint({"fmt", "vet", "build", "integration-shard-plan"})
 
 
+# A `go test` carrying ANY -tags flag is treated as container-starting. Every one
+# of the 169 real callers of containers.Start{Postgres,ClickHouse,Valkey} sits
+# behind `//go:build integration`, so an untagged `go test` cannot compile them in
+# — but the tag VALUE may be a shell variable, so the value is not inspected.
+_GO_TEST_WITH_TAGS = re.compile(r"go test\b[^\n]*-tags[= ]")
+_CHECK_GO_INVOCATION = re.compile(r"ci/check_go\.sh\s+(\S+)")
+
+
+def _run_starts_containers(command: str) -> bool:
+    """Fail closed at the STEP level, not just the verb level.
+
+    Recognising one literal `ci/check_go.sh <verb>` shape and skipping everything
+    else meant any other spelling was silently treated as safe. A codex round
+    showed two: a job running `go test -tags=integration ... ./cmd/dev-health-worker`
+    directly, and `bash ci/check_go.sh "${requested}"` through a variable. Both
+    start containers; both were accepted.
+
+    A step is now container-starting unless it can be SHOWN otherwise: a check_go
+    verb must be a literal on the safe list, and a `go test` must carry no tags.
+    """
+    if _GO_TEST_WITH_TAGS.search(command):
+        return True
+    for match in _CHECK_GO_INVOCATION.finditer(command):
+        verb = match.group(1)
+        if re.fullmatch(r"[a-z0-9-]+", verb) is None:
+            return True  # indirection: cannot be shown safe, so it is not
+        if verb not in _NON_CONTAINER_VERBS:
+            return True
+    return False
+
+
 def _step_kind(step: dict[str, Any]) -> str | None:
     """Classify a workflow step as login / prepull / container-running."""
     uses = str(step.get("uses", ""))
@@ -1903,9 +1934,7 @@ def _step_kind(step: dict[str, Any]) -> str | None:
     # a valid pre-pull here and the job would fail late instead of in review.
     if re.search(rf"{re.escape(_PREPULL_COMMAND)}\s*$", command.strip()):
         return "prepull"
-    match = re.search(r"ci/check_go\.sh\s+([a-z0-9-]+)", command)
-    # Fail closed: anything not explicitly declared safe counts as container-running.
-    if match is not None and match.group(1) not in _NON_CONTAINER_VERBS:
+    if _run_starts_containers(command):
         return "container"
     return None
 
@@ -1955,3 +1984,55 @@ def test_docker_hub_login_is_skipped_on_forks() -> None:
             assert "github.event_name != 'pull_request'" in condition, (
                 f"{job_name}: Docker Hub login would be skipped on push/merge_group"
             )
+
+
+def test_step_classifier_fails_closed_on_known_evasions() -> None:
+    """Every shape a review round has used to slip past this guard.
+
+    These are not hypotheticals: each was constructed against an earlier revision
+    of the guard and ACCEPTED by it. They are pinned here because the guard is
+    static analysis of shell, where the failure mode is always "a spelling nobody
+    thought of reads as safe" — so the classifier must be shown to reject the
+    spellings we have actually been caught by.
+    """
+    must_be_container = [
+        # A container-starting verb reached through a shell variable.
+        'requested=ci\nbash ci/check_go.sh "${requested}"',
+        # The Testcontainers test invoked directly, bypassing check_go.sh.
+        "go test -tags=integration -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' ./cmd/dev-health-worker",
+        # A build tag supplied indirectly, invisible to any literal scan.
+        "tag=integration\ngo test -mod=readonly -tags=${tag} -count=1 ./cmd/dev-health-worker",
+        # A verb that exists but nobody classified.
+        "bash ci/check_go.sh some-new-verb",
+        # Known container verbs, spelled plainly.
+        "bash ci/check_go.sh ci",
+        "bash ci/check_go.sh fast",
+        'bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"',
+    ]
+    for command in must_be_container:
+        assert _run_starts_containers(command), f"classified as safe: {command!r}"
+
+    must_be_safe = [
+        "bash ci/check_go.sh fmt",
+        "bash ci/check_go.sh integration-vet",
+        "bash ci/check_go.sh integration-prepull",
+        "go test ./...",  # no -tags: cannot compile an integration-tagged caller
+        "bash ci/check_river_compat_static.sh",
+        "python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt",
+    ]
+    for command in must_be_safe:
+        assert not _run_starts_containers(command), (
+            f"classified as container: {command!r}"
+        )
+
+
+def test_prepull_subset_does_not_read_as_a_valid_pre_pull() -> None:
+    """A leftover subset must fail review, not fail late in CI.
+
+    `integration-prepull clickhouse` is refused at runtime now, but if the guard
+    still accepted it as a pre-pull step the job would reach CI before saying so.
+    """
+    assert _step_kind({"run": "bash ci/check_go.sh integration-prepull"}) == "prepull"
+    assert _step_kind(
+        {"run": "bash ci/check_go.sh integration-prepull clickhouse"}
+    ) != ("prepull")

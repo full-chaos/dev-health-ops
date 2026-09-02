@@ -1648,12 +1648,17 @@ def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> No
     )
 
 
-def test_clickhouse_prepull_retries_the_exact_source_pinned_image(
-    tmp_path: Path,
-) -> None:
-    attempts = tmp_path / "attempts"
-    docker_args = tmp_path / "docker-args"
-    sleep_args = tmp_path / "sleep-args"
+def _declared_image(constant: str) -> str:
+    match = re.search(
+        rf'(?m)^\s*{constant}\s*=\s*"(?P<image>[^"]+)"',
+        CONTAINER_HARNESS.read_text(encoding="utf-8"),
+    )
+    assert match is not None, f"{constant} is not declared in {CONTAINER_HARNESS}"
+    return match.group("image")
+
+
+def _prepull_stub_bin(tmp_path: Path) -> Path:
+    """A docker+sleep pair that fails until the DOCKER_SUCCEED_ON'th call."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -1681,8 +1686,16 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
         encoding="utf-8",
     )
     sleep.chmod(0o755)
+    return bin_dir
 
-    image = _pinned_clickhouse_image()
+
+def test_prepull_retries_the_exact_source_declared_image(tmp_path: Path) -> None:
+    attempts = tmp_path / "attempts"
+    docker_args = tmp_path / "docker-args"
+    sleep_args = tmp_path / "sleep-args"
+    bin_dir = _prepull_stub_bin(tmp_path)
+
+    postgres = _declared_image("PostgresImage")
     env = os.environ.copy()
     env.update(
         {
@@ -1704,14 +1717,18 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert attempts.read_text(encoding="utf-8") == "3\n"
+    # Postgres is first and takes three attempts; the stub's counter is past its
+    # threshold by then, so the remaining three images succeed first time.
     assert docker_args.read_text(encoding="utf-8").splitlines() == [
-        f"pull {image}",
-        f"pull {image}",
-        f"pull {image}",
+        f"pull {postgres}",
+        f"pull {postgres}",
+        f"pull {postgres}",
+        f"pull {_pinned_clickhouse_image()}",
+        f"pull {_declared_image('ValkeyImage')}",
+        f"pull {_declared_image('ReaperImage')}",
     ]
     assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
-    assert f"pre-pulled pinned ClickHouse image {image} on attempt 3/3" in (
+    assert f"pre-pulled postgres test dependency image {postgres} on attempt 3/3" in (
         result.stdout
     )
 
@@ -1729,104 +1746,444 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
         timeout=30,
     )
     assert failed.returncode == 1
-    assert attempts.read_text(encoding="utf-8") == "3\n"
+    # Exhausting one image's budget stops the run; the later images are never
+    # attempted, so a registry outage fails loudly instead of degrading into a
+    # retry storm across every declared image.
     assert docker_args.read_text(encoding="utf-8").splitlines() == [
-        f"pull {image}",
-        f"pull {image}",
-        f"pull {image}",
+        f"pull {postgres}",
+        f"pull {postgres}",
+        f"pull {postgres}",
     ]
     assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
-    assert f"failed to pre-pull pinned ClickHouse image {image} after 3 attempts" in (
-        failed.stderr
-    )
-
-
-def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
-    workflow = _workflow()
-    jobs = workflow["jobs"]
-
-    planner = jobs["go-storage-integration-plan"]
-    assert planner["outputs"]["matrix"] == "${{ steps.plan.outputs.matrix }}"
-    assert any(
-        step.get("id") == "plan"
-        and step.get("run") == "bash ci/check_go.sh integration-shard-plan"
-        for step in planner["steps"]
-    )
-
-    shards = jobs["go-storage-integration-shard"]
-    assert shards["needs"] == "go-storage-integration-plan"
-    assert shards["timeout-minutes"] == 25
-    assert shards["strategy"]["fail-fast"] is False
-    assert shards["strategy"]["matrix"] == (
-        "${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}"
-    )
-    shard_commands = [str(step.get("run", "")) for step in shards["steps"]]
-    assert "bash ci/check_go.sh integration-prepull" in shard_commands
     assert (
-        'bash ci/check_go.sh integration-shard "${{ matrix.target }}" '
-        '"${{ matrix.shard }}"'
-    ) in shard_commands
-    assert shard_commands.index("bash ci/check_go.sh integration-prepull") < (
-        shard_commands.index(
-            'bash ci/check_go.sh integration-shard "${{ matrix.target }}" '
-            '"${{ matrix.shard }}"'
-        )
-    )
-    assert all("--dry-run" not in command for command in shard_commands)
-    assert shards["name"] == (
-        "go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}"
-    )
+        f"failed to pre-pull postgres test dependency image {postgres} after 3 attempts"
+    ) in failed.stderr
 
-    for job in (planner, shards):
-        go_setup = next(
-            step
-            for step in job["steps"]
-            if str(step.get("uses", "")).startswith("actions/setup-go@")
-        )
-        assert go_setup["uses"] == (
-            "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
-        )
-        assert go_setup["with"] == {
-            "go-version-file": "go.mod",
-            "cache-dependency-path": "**/go.sum",
+
+def test_prepull_warms_every_declared_image(tmp_path: Path) -> None:
+    """The set warmed is the harness's, not a list maintained in the workflow.
+
+    The reaper is in it because testcontainers-go starts one before the first
+    container of any test binary, whether or not a test asks for it -- which is
+    precisely why no human-maintained list would have included it.
+    """
+    docker_args = tmp_path / "docker-args"
+    bin_dir = _prepull_stub_bin(tmp_path)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "DOCKER_ATTEMPTS_FILE": str(tmp_path / "attempts"),
+            "DOCKER_ARGS_FILE": str(docker_args),
+            "DOCKER_SUCCEED_ON": "1",
+            "SLEEP_ARGS_FILE": str(tmp_path / "sleep-args"),
         }
-    assert re.search(
-        r"(?m)^go 1\.27\.0$", (ROOT / "go.mod").read_text(encoding="utf-8")
+    )
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
-    aggregate = jobs["go-storage-integration"]
-    assert aggregate["name"] == "go-storage-integration"
-    assert aggregate["if"] == "${{ always() }}"
-    assert set(aggregate["needs"]) == {
-        "go-storage-integration-plan",
-        "go-storage-integration-shard",
-    }
-    assert aggregate["env"] == {
-        "PLAN_RESULT": "${{ needs.go-storage-integration-plan.result }}",
-        "SHARD_RESULT": "${{ needs.go-storage-integration-shard.result }}",
-    }
-    aggregate_command = "\n".join(
-        str(step.get("run", "")) for step in aggregate["steps"]
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert docker_args.read_text(encoding="utf-8").splitlines() == [
+        f"pull {_declared_image('PostgresImage')}",
+        f"pull {_pinned_clickhouse_image()}",
+        f"pull {_declared_image('ValkeyImage')}",
+        f"pull {_declared_image('ReaperImage')}",
+    ]
+
+
+def test_prepull_refuses_a_per_job_subset(tmp_path: Path) -> None:
+    """Subsets are refused by construction, not validated.
+
+    An earlier revision let a job name the images it needed. Nothing related that
+    list to what the job actually started, so `integration-prepull clickhouse`
+    followed by `ci` passed every guard while leaving PostgreSQL cold. The verb
+    now takes no arguments, which removes the class rather than checking it.
+    """
+    bin_dir = _prepull_stub_bin(tmp_path)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "DOCKER_ATTEMPTS_FILE": str(tmp_path / "attempts"),
+            "DOCKER_ARGS_FILE": str(tmp_path / "docker-args"),
+            "DOCKER_SUCCEED_ON": "1",
+            "SLEEP_ARGS_FILE": str(tmp_path / "sleep-args"),
+        }
     )
-    assert (
-        'if [ "${PLAN_RESULT}" != "success" ] '
-        '|| [ "${SHARD_RESULT}" != "success" ]; then'
-    ) in aggregate_command
-    assert "exit 1" in aggregate_command
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull", "postgres"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2
+    assert "integration-prepull accepts no arguments" in result.stderr
 
-    workflow_source = WORKFLOW.read_text(encoding="utf-8")
-    assert workflow_source.count("- 'ci/go_integration_shards.tsv'") == 2
-    assert workflow_source.count("- 'ci/go_providersync_test_shards.tsv'") == 2
 
-    check_go_source = CHECK_GO.read_text(encoding="utf-8")
-    assert 'GO_TOOLCHAIN="go1.27.0"' in check_go_source
-    assert 'export GOTOOLCHAIN="${GO_TOOLCHAIN}"' in check_go_source
-    assert 'export GOCACHE="${DEV_HEALTH_GO_CACHE}"' in check_go_source
+# --- CHAOS-4778: every job that starts a container must warm its images -------
+#
+# The defect this guards is not "go-quality lacked a pre-pull step". It is "a CI
+# job starts Testcontainers against images nobody warmed, so the first pull is
+# cold and anonymous against Docker Hub". Asserting the fixed job would let the
+# next such job reintroduce it.
+#
+# The guard therefore FAILS CLOSED. A check_go.sh verb is container-running
+# unless it appears in _NON_CONTAINER_VERBS below; a new verb is dangerous by
+# default and its job must log in and pre-pull. Deriving the dangerous set was
+# the first design and a codex round broke it: a verb building
+# `go test ... -tags=${tag}` through shell indirection is invisible to any static
+# leaf scan, so it was omitted from the derived set and its job passed with no
+# pre-pull at all. Under a safe-list the same verb is dangerous by default.
+#
+# The derivation survives as a CROSS-CHECK on the safe-list, and it earns its
+# keep: it immediately caught `fast` being added to that list by mistake. `fast`
+# ends in check_multi_replica_workers exactly as `ci` does -- the same two-hop
+# chain whose invisibility caused the original defect.
+
+_CONTAINER_LEAF_PATTERN = re.compile(r"go test\b[^\n]*-tags=integration")
+_PREPULL_COMMAND = "ci/check_go.sh integration-prepull"
+_DOCKER_LOGIN_ACTION = "docker/login-action@"
+
+# Verbs asserted NOT to start a container. Adding a verb to check_go.sh without
+# adding it here fails test_every_check_go_verb_is_classified, which is the
+# point: the safe default is "this might start containers".
+_NON_CONTAINER_VERBS = frozenset(
+    {
+        "fmt",
+        "vet",
+        "test",
+        "race",
+        "live-python-oracles",
+        "build",
+        "contract",
+        "integration-vet",
+        "integration-shard-plan",
+        "integration-prepull",
+        # `integration-coverage` only discovers and prints packages -- no go test,
+        # no docker. `fast` is deliberately NOT here: like `ci`, it ends in
+        # check_multi_replica_workers and starts Testcontainers. Writing this list
+        # is exactly where the original defect came from, so the cross-check below
+        # is not optional.
+        "integration-coverage",
+    }
+)
+
+
+def _check_go_functions() -> dict[str, str]:
+    """Map every top-level check_go.sh function to its body."""
+    source = CHECK_GO.read_text(encoding="utf-8")
+    bodies: dict[str, str] = {}
+    for match in re.finditer(r"(?m)^(?P<name>[a-z_][a-z0-9_]*)\(\) \{$", source):
+        end = source.find("\n}\n", match.end())
+        assert end != -1, f"unterminated function {match.group('name')}"
+        bodies[match.group("name")] = source[match.end() : end]
+    assert bodies, "parsed no functions out of check_go.sh"
+    return bodies
+
+
+def _check_go_dispatch() -> dict[str, str]:
+    """Map every public verb to the dispatch arm that runs it."""
+    source = CHECK_GO.read_text(encoding="utf-8")
+    arms: dict[str, str] = {}
+    for match in re.finditer(
+        r"(?m)^  (?P<verbs>[a-z0-9|_-]+)\)\n(?P<body>.*?)^    ;;$",
+        source,
+        re.DOTALL,
+    ):
+        for verb in match.group("verbs").split("|"):
+            arms[verb] = match.group("body")
+    assert "ci" in arms, "did not parse check_go.sh's verb dispatch"
+    return arms
+
+
+def _verbs_reaching_a_container_leaf() -> set[str]:
+    """Cross-check only. Static, so it under-reports; never used to grant safety."""
+    functions = _check_go_functions()
+    leaves = {
+        name for name, body in functions.items() if _CONTAINER_LEAF_PATTERN.search(body)
+    }
+    assert leaves, "found no function running an integration-tagged go test"
+
+    def reaches(body: str, seen: frozenset[str]) -> bool:
+        for name in functions:
+            if name in seen or not re.search(rf"\b{re.escape(name)}\b", body):
+                continue
+            if name in leaves or reaches(functions[name], seen | {name}):
+                return True
+        return False
+
+    return {
+        verb
+        for verb, body in _check_go_dispatch().items()
+        if reaches(body, frozenset())
+    }
+
+
+def test_no_verb_declared_safe_actually_starts_containers() -> None:
+    """The declaration must not contradict the code.
+
+    The static derivation under-reports, so it cannot grant safety -- but where it
+    does fire it is authoritative, and it catches a verb wrongly declared safe.
+    """
+    overlap = _NON_CONTAINER_VERBS & _verbs_reaching_a_container_leaf()
+    assert not overlap, (
+        f"verbs declared non-container reach an integration go test: {sorted(overlap)}"
+    )
+
+
+def test_container_derivation_still_sees_the_known_verbs() -> None:
+    """Keeps the cross-check above from rotting into a no-op."""
+    derived = _verbs_reaching_a_container_leaf()
+
+    assert {"ci", "all", "integration", "integration-shard"} <= derived
+    assert derived.isdisjoint({"fmt", "vet", "build", "integration-shard-plan"})
+
+
+# A `go test` carrying ANY -tags flag is treated as container-starting. Every one
+# of the 169 real callers of containers.Start{Postgres,ClickHouse,Valkey} sits
+# behind `//go:build integration`, so an untagged `go test` cannot compile them in
+# — but the tag VALUE may be a shell variable, so the value is not inspected.
+_GO_TEST_WITH_TAGS = re.compile(r"go test\b[^\n]*-tags[= ]")
+_CHECK_GO_INVOCATION = re.compile(r"ci/check_go\.sh\s+(\S+)")
+# Any shell word ending in .sh, however it is spelled. `ext=.sh` in an assembled
+# command path matches, which is the point.
+_SCRIPT_TOKEN = re.compile(r"\S*\.sh\b")
+# A container runtime named anywhere in the step, and a build tag arriving
+# through the environment rather than the command line.
+_CONTAINER_TOOL = re.compile(r"\b(docker|podman|compose|nerdctl)\b")
+_TAGS_VIA_ENV = re.compile(r"\b(GOFLAGS|GOEXPERIMENT)\b")
+
+# Scripts asserted not to start containers. `ci/check_go.sh` is absent on purpose:
+# it is judged by its verb, not by its name.
+_SAFE_SCRIPTS = frozenset({"ci/check_river_compat_static.sh"})
+
+
+def _run_starts_containers(command: str) -> bool:
+    """Fail closed at the STEP level, not just the verb level.
+
+    Recognising one literal `ci/check_go.sh <verb>` shape and skipping everything
+    else meant any other spelling was silently treated as safe. A codex round
+    showed two: a job running `go test -tags=integration ... ./cmd/dev-health-worker`
+    directly, and `bash ci/check_go.sh "${requested}"` through a variable. Both
+    start containers; both were accepted.
+
+    A step is now container-starting unless it can be SHOWN otherwise: a check_go
+    verb must be a literal on the safe list, and a `go test` must carry no tags.
+    """
+    if _GO_TEST_WITH_TAGS.search(command) or _CONTAINER_TOOL.search(command):
+        return True
+    if _TAGS_VIA_ENV.search(command):
+        # check_go.sh scrubs both now, so this is defence in depth: a step that
+        # sets them is doing something the safe-list cannot vouch for.
+        return True
+    for match in _CHECK_GO_INVOCATION.finditer(command):
+        verb = match.group(1)
+        if re.fullmatch(r"[a-z0-9-]+", verb) is None:
+            return True  # indirection: cannot be shown safe, so it is not
+        if verb not in _NON_CONTAINER_VERBS:
+            return True
+    for match in _SCRIPT_TOKEN.finditer(command):
+        script = match.group(0).strip("\"'").lstrip("./")
+        if script.endswith("check_go.sh"):
+            continue  # judged by its verb above
+        if script not in _SAFE_SCRIPTS:
+            return True
+    return False
+
+
+def _run_uses_go_test_harness(command: str) -> bool:
+    """Does this step start containers via internal/testsupport/containers?
+
+    Only those are warmed by `integration-prepull`. A step that builds from a
+    Python base image or brings up a compose stack needs the Docker Hub login but
+    would gain nothing from warming the Go harness images, so the two obligations
+    are tracked separately rather than demanding a pre-pull that cannot help.
+    """
+    if _GO_TEST_WITH_TAGS.search(command) or _TAGS_VIA_ENV.search(command):
+        return True
+    for match in _CHECK_GO_INVOCATION.finditer(command):
+        verb = match.group(1)
+        if re.fullmatch(r"[a-z0-9-]+", verb) is None:
+            return True
+        if verb not in _NON_CONTAINER_VERBS:
+            return True
+    return False
+
+
+def _step_kind(step: dict[str, Any]) -> str | None:
+    """Classify a workflow step as login / prepull / container-running."""
+    uses = str(step.get("uses", ""))
+    if uses.startswith(_DOCKER_LOGIN_ACTION):
+        registry = str((step.get("with") or {}).get("registry", ""))
+        return "login" if registry == "docker.io" else None
+    command = str(step.get("run", ""))
+    if not command:
+        return None
+    # The step must BE the pre-pull, not merely contain the text. A substring
+    # match accepted `: bash ci/check_go.sh integration-prepull` -- `:` is a
+    # successful shell no-op, so nothing was warmed and the next step pulled cold.
+    # It also rejects a leftover subset argument, which is refused at runtime now
+    # but would otherwise fail in CI rather than in review.
+    if re.fullmatch(rf"(?:bash\s+)?{re.escape(_PREPULL_COMMAND)}", command.strip()):
+        return "prepull"
+    if _run_uses_go_test_harness(command):
+        return "harness"
+    if _run_starts_containers(command):
+        return "pulls"
+    return None
+
+
+def test_every_workflow_job_starting_containers_authenticates_and_pre_pulls() -> None:
+    """The class, not the two jobs that happened to be caught failing."""
+    offenders: list[str] = []
+
+    for job_name, job in _workflow()["jobs"].items():
+        kinds = [_step_kind(step) for step in job.get("steps", [])]
+        pulling = [i for i, k in enumerate(kinds) if k in {"harness", "pulls"}]
+        if not pulling:
+            continue
+        first_pull = pulling[0]
+        harness = next((i for i, k in enumerate(kinds) if k == "harness"), None)
+        login = next((i for i, k in enumerate(kinds) if k == "login"), None)
+        prepull = next((i for i, k in enumerate(kinds) if k == "prepull"), None)
+
+        # Every job that pulls an image at all needs the authenticated pull.
+        if login is None:
+            offenders.append(f"{job_name}: pulls images with no docker.io login step")
+        elif login > first_pull:
+            offenders.append(f"{job_name}: logs in AFTER pulling images")
+
+        # Only jobs using the Go test harness benefit from warming ITS images; a
+        # step that builds from a python base or brings up compose does not.
+        if harness is not None:
+            if prepull is None:
+                offenders.append(
+                    f"{job_name}: starts Testcontainers with no "
+                    f"`{_PREPULL_COMMAND}` step"
+                )
+            elif prepull > harness:
+                offenders.append(f"{job_name}: pre-pulls AFTER starting Testcontainers")
+            elif login is not None and login > prepull:
+                offenders.append(f"{job_name}: logs in AFTER pre-pulling")
+
+    assert not offenders, "\n".join(offenders)
+
+
+def test_docker_hub_login_is_skipped_on_forks() -> None:
+    """`secrets.*` are empty on fork pull requests.
+
+    Without the condition the login step fails there and takes the whole job with
+    it; with it, forks fall back to anonymous pulls plus the bounded retry.
+    """
+    for job_name, job in _workflow()["jobs"].items():
+        for step in job.get("steps", []):
+            if not str(step.get("uses", "")).startswith(_DOCKER_LOGIN_ACTION):
+                continue
+            condition = str(step.get("if", ""))
+            assert "head.repo.full_name == github.repository" in condition, (
+                f"{job_name}: Docker Hub login has no fork guard"
+            )
+            assert "github.event_name != 'pull_request'" in condition, (
+                f"{job_name}: Docker Hub login would be skipped on push/merge_group"
+            )
+
+
+def test_step_classifier_fails_closed_on_known_evasions() -> None:
+    """Every shape a review round has used to slip past this guard.
+
+    These are not hypotheticals: each was constructed against an earlier revision
+    of the guard and ACCEPTED by it. They are pinned here because the guard is
+    static analysis of shell, where the failure mode is always "a spelling nobody
+    thought of reads as safe" — so the classifier must be shown to reject the
+    spellings we have actually been caught by.
+    """
+    must_be_container = [
+        # A container-starting verb reached through a shell variable.
+        'requested=ci\nbash ci/check_go.sh "${requested}"',
+        # The Testcontainers test invoked directly, bypassing check_go.sh.
+        "go test -tags=integration -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' ./cmd/dev-health-worker",
+        # A build tag supplied indirectly, invisible to any literal scan.
+        "tag=integration\ngo test -mod=readonly -tags=${tag} -count=1 ./cmd/dev-health-worker",
+        # A verb that exists but nobody classified.
+        "bash ci/check_go.sh some-new-verb",
+        # Known container verbs, spelled plainly.
+        "bash ci/check_go.sh ci",
+        "bash ci/check_go.sh fast",
+        'bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"',
+        # The command PATH assembled from fragments, so no literal script name
+        # appears at the call site.
+        'script=ci/check_go; ext=.sh; verb=ci; "$script$ext" "$verb"',
+        # A container started with no Go involvement at all.
+        "docker run --rm postgres:18-alpine",
+        "docker compose -f compose.yml up -d postgres",
+        # A build tag arriving through the environment rather than the command
+        # line, turning a verb declared safe into an integration run. check_go.sh
+        # scrubs GOFLAGS now, so this is belt and braces.
+        "GOFLAGS=-tags=integration bash ci/check_go.sh test",
+        # Any other script: not analysable from here, so not assumed safe.
+        "bash ci/check_go_containers.sh smoke",
+        "tests/compatibility/river/run.sh",
+    ]
+    for command in must_be_container:
+        assert _run_starts_containers(command), f"classified as safe: {command!r}"
+
+    must_be_safe = [
+        "bash ci/check_go.sh fmt",
+        "bash ci/check_go.sh integration-vet",
+        "bash ci/check_go.sh integration-prepull",
+        "go test ./...",  # no -tags: cannot compile an integration-tagged caller
+        "bash ci/check_river_compat_static.sh",
+        "python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt",
+    ]
+    for command in must_be_safe:
+        assert not _run_starts_containers(command), (
+            f"classified as container: {command!r}"
+        )
+
+
+def test_prepull_subset_does_not_read_as_a_valid_pre_pull() -> None:
+    """A leftover subset must fail review, not fail late in CI.
+
+    `integration-prepull clickhouse` is refused at runtime now, but if the guard
+    still accepted it as a pre-pull step the job would reach CI before saying so.
+    """
+    assert _step_kind({"run": "bash ci/check_go.sh integration-prepull"}) == "prepull"
+    assert _step_kind({"run": "ci/check_go.sh integration-prepull"}) == "prepull"
+
+    not_a_prepull = [
+        # A leftover subset argument: refused at runtime, and must fail review too.
+        "bash ci/check_go.sh integration-prepull clickhouse",
+        # `:` is a successful shell no-op. The text is present, nothing is warmed,
+        # and the next step pulls cold -- which a substring match accepted.
+        ": bash ci/check_go.sh integration-prepull",
+        "echo bash ci/check_go.sh integration-prepull",
+    ]
+    for command in not_a_prepull:
+        assert _step_kind({"run": command}) != "prepull", f"accepted: {command!r}"
+
+
+def test_pulling_and_harness_obligations_are_distinguished() -> None:
+    """A job that pulls needs the login; only harness jobs need the pre-pull.
+
+    Demanding `integration-prepull` from a job that builds off a Python base image
+    would be a guard asking for something that cannot help, which is how guards
+    get worked around rather than satisfied.
+    """
+    assert _step_kind({"run": "bash ci/check_go.sh ci"}) == "harness"
     assert (
-        "GOWORK=off go test -mod=readonly -tags=integration -count=1 "
-        '-timeout=30m "${run_pkgs[@]}"'
-    ) in check_go_source
-    assert (
-        "GOWORK=off go test -mod=readonly -tags=integration -count=1 "
-        '-timeout=30m -run "${test_regex}" ./internal/providersync'
-    ) in check_go_source
+        _step_kind({"run": "go test -tags=integration ./cmd/dev-health-worker"})
+        == "harness"
+    )
+    assert _step_kind({"run": "docker run --rm postgres:18-alpine"}) == "pulls"
+    assert _step_kind({"run": "bash ci/check_go_containers.sh smoke"}) == "pulls"

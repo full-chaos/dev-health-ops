@@ -192,6 +192,34 @@ jobs:
           git archive "${BASE_SHA}" contracts/jobs/v1 | tar -x -C "${base_dir}"
           echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
 
+      # Authenticated Docker Hub pulls. Anonymous pulls are rate limited per IP,
+      # and a hosted runner shares that IP with everyone else on it -- which is
+      # how run 33572737859 got `unauthorized: authentication required` while
+      # creating a container (CHAOS-4778). The pre-pull step below turns a
+      # transient rejection into three visible attempts; this step is what stops
+      # the rejection happening in the first place.
+      #
+      # Skipped on fork pull requests, where `secrets.*` are empty by design:
+      # those runs fall back to anonymous pulls plus the bounded retry rather
+      # than failing at login.
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # `ci` ends in check_multi_replica_workers, which starts a Testcontainers
+      # PostgreSQL -- and testcontainers-go starts its own reaper first. Both
+      # were pulled cold and anonymously from Docker Hub until CHAOS-4778: run
+      # 33572737859 failed here with `reaper: new reaper: run container: Error
+      # response from daemon: unauthorized: authentication required`, before the
+      # test executed a line of its own logic. ClickHouse is deliberately not in
+      # this subset; no test in this job starts one.
+      - name: Pre-pull pinned test dependency images with bounded retry
+        run: bash ci/check_go.sh integration-prepull
+
       - name: Run Go quality gate
         # `ci`, not `all`: CHAOS-3948 made `all` genuinely execute the full
         # unsharded integration suite (~24m measured) instead of only
@@ -254,7 +282,25 @@ jobs:
       - name: Install locked ClickHouse migration dependencies
         run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
 
-      - name: Pre-pull pinned ClickHouse image with bounded retry
+      # Authenticated Docker Hub pulls. Anonymous pulls are rate limited per IP,
+      # and a hosted runner shares that IP with everyone else on it -- which is
+      # how run 33572737859 got `unauthorized: authentication required` while
+      # creating a container (CHAOS-4778). The pre-pull step below turns a
+      # transient rejection into three visible attempts; this step is what stops
+      # the rejection happening in the first place.
+      #
+      # Skipped on fork pull requests, where `secrets.*` are empty by design:
+      # those runs fall back to anonymous pulls plus the bounded retry rather
+      # than failing at login.
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
         run: bash ci/check_go.sh integration-prepull
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
@@ -291,6 +337,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build and smoke Go images
         run: bash ci/check_go_containers.sh smoke
 
@@ -303,6 +357,14 @@ jobs:
         target: [worker, scheduler, reconciler, stream-runner, operator, contractcheck, migrate]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build ${{ matrix.target }} security image
         env:
@@ -348,6 +410,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Verify reproducible Go images
         run: bash ci/check_go_containers.sh reproducible
 
@@ -367,6 +437,14 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13.14'
+
+      - name: Log in to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Install pinned Python compatibility dependencies
         run: >-

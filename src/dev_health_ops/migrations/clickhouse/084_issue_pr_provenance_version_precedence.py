@@ -147,12 +147,32 @@ import re
 # See HAZARD 2 for why this is 2**45 and not 2**40.
 VERSION_MULTIPLIER = 2**45
 
+# `rank + 1`, not `rank`, and that +1 is load-bearing rather than cosmetic.
+#
+# `toUnixTimestamp64Milli` is SIGNED: any pre-1970 stamp is negative, and the
+# column is UInt64. With a bare rank, an unsupported provenance falls through
+# multiIf to 0, so the expression is `0 * M + <negative>` -- which WRAPS to
+# ~1.8e19 and outranks every legitimate row, physically deleting the native one
+# during the copy. Measured on 26.6.1.1193 (codex round 2, P1):
+#
+#     provenance='unknown', last_synced='1900-01-01'  ->  18446741864720751616
+#
+# The builder emits only the three known values, but storage accepts arbitrary
+# strings (metrics/schemas.py:931, sinks/clickhouse/work_graph.py:591), so
+# legacy, external or corrupt rows reach this expression.
+#
+# Shifting the ranks to 1..4 gives even the unknown bucket a full multiplier of
+# headroom, so the sum stays positive across the ENTIRE DateTime64(3) range:
+#
+#     rank 0, year 1900  ->      32,975,383,288,832   (minimum)
+#     rank 3, year 2100  ->     144,839,933,155,328   (maximum)
+#     UInt64 max         -> 18,446,744,073,709,551,615
 VERSION_EXPRESSION = (
-    "multiIf("
+    "(multiIf("
     "provenance = 'native', 3, "
     "provenance = 'explicit_text', 2, "
     "provenance = 'heuristic', 1, "
-    f"0) * {VERSION_MULTIPLIER} + toUnixTimestamp64Milli(last_synced)"
+    f"0) + 1) * {VERSION_MULTIPLIER} + toUnixTimestamp64Milli(last_synced)"
 )
 
 # Explicit, so the copy does not depend on whether version_rank is MATERIALIZED
@@ -275,6 +295,23 @@ def _replace_table_name(ddl: str, old: str, new: str) -> str:
     return result
 
 
+def _version_expression(client, table: str) -> str:
+    """The MATERIALIZED expression actually stored for the version column."""
+    res = client.query(
+        "SELECT default_expression FROM system.columns "
+        "WHERE database = currentDatabase() AND table = {name:String} "
+        "AND name = {col:String}",
+        parameters={"name": table, "col": VERSION_COLUMN},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    return str(rows[0][0]) if rows and rows[0] else ""
+
+
+def _normalize_expression(expression: str) -> str:
+    """Whitespace- and backtick-insensitive comparison of two SQL expressions."""
+    return re.sub(r"\s+", "", expression.replace("`", ""))
+
+
 def _column_shape(client, table: str) -> list[tuple[str, str, str]]:
     """(name, type, default_kind) for a table, in position order."""
     res = client.query(
@@ -329,7 +366,12 @@ def _copy(client, source: str, target: str) -> None:
 
     The column list is explicit rather than `SELECT *` so the copy does not
     depend on whether the version column is MATERIALIZED (absent from
-    `SELECT *`) or DEFAULT (present), and survives later column drift.
+    `SELECT *`) or DEFAULT (present).
+
+    It does NOT survive column drift -- it is precisely what drift breaks, and
+    an earlier version of this docstring claimed the opposite.
+    `_assert_carried_columns_match` is what makes drift safe, by refusing to
+    run at all.
     """
     columns = ", ".join(f"`{c}`" for c in CARRIED_COLUMNS)
     client.command(
@@ -359,6 +401,18 @@ def _rebuild(client) -> None:
 
     # Skip path, which also converges a crash between EXCHANGE and DROP.
     if VERSION_COLUMN in _engine_full(client, TABLE):
+        # Validate the EXPRESSION, not merely that the engine names the column.
+        # A partial or manual run leaving `version_rank UInt64 MATERIALIZED 0`
+        # would otherwise be skipped forever while keeping part-recency
+        # behaviour -- migrated in name only. Codex round 2, P2.
+        actual = _version_expression(client, TABLE)
+        if _normalize_expression(actual) != _normalize_expression(VERSION_EXPRESSION):
+            raise RuntimeError(
+                f"{TABLE} is already versioned on {VERSION_COLUMN}, but its "
+                f"expression is {actual!r}, not this migration's "
+                f"{VERSION_EXPRESSION!r}. Refusing to skip: the table would keep "
+                "whatever ranking that expression encodes. Resolve by hand."
+            )
         log.info(f"  {TABLE}: already ReplacingMergeTree({VERSION_COLUMN})")
         if _table_exists(client, SHADOW):
             _catch_up_and_drop(client, TABLE, SHADOW)

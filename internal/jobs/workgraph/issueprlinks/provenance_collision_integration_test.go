@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,7 +98,7 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	// them. The test was measuring merge scheduling, not the engine's ranking.
 	//
 	// Merges are restarted before step 4, which needs a real merge to run.
-	exec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
 
 	const (
 		org   = "00000000-4769-0000-0000-000000000001"
@@ -147,7 +148,7 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	seed(ctx, t, conn, org, repo, keyC, prC, "native", 1.00, "2026-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyC, prC, "heuristic", 0.50, "2100-01-01 00:00:00.000")
 	for _, pr := range []int{prA, prB, prC} {
-		exec(ctx, t, conn, fmt.Sprintf(
+		mustExec(ctx, t, conn, fmt.Sprintf(
 			`INSERT INTO git_pull_requests (repo_id, number, org_id, created_at, last_synced)
 			 VALUES ('%s', %d, '%s', '2025-12-01 00:00:00.000', '2025-12-01 00:00:00.000')`,
 			repo, pr, org))
@@ -179,8 +180,8 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 
 	// STEP 4. The measurement that decided the fix. Merges must be running
 	// again for OPTIMIZE ... FINAL to do anything.
-	exec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
-	exec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
+	mustExec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
+	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
 	assertRowCount(ctx, t, conn, keyA, 1)
 	assertRowCount(ctx, t, conn, keyB, 1)
 	// FLIP: after the fix, native (A) and explicit_text (B) must be what remain.
@@ -215,7 +216,7 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 				order = []string{"heuristic", "native"}
 			}
 			table := fmt.Sprintf("chaos4769_tie_%d", trial)
-			exec(ctx, t, conn, "DROP TABLE IF EXISTS "+table)
+			mustExec(ctx, t, conn, "DROP TABLE IF EXISTS "+table)
 			// `AS work_graph_issue_pr` copies the MIGRATED structure and engine,
 			// version column included, rather than restating them here. That is
 			// load-bearing: an earlier version of this subtest wrote its own DDL
@@ -223,17 +224,17 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 			// kept the pre-084 behaviour and the subtest failed against a
 			// working migration. A hand-written fixture schema can drift from
 			// the thing it is meant to be testing; a copied one cannot.
-			exec(ctx, t, conn, fmt.Sprintf("CREATE TABLE %s AS work_graph_issue_pr", table))
+			mustExec(ctx, t, conn, fmt.Sprintf("CREATE TABLE %s AS work_graph_issue_pr", table))
 			for _, prov := range order {
 				// One INSERT is one PART, which is what distinct writer calls
 				// produce. The part boundary IS the mechanism here.
-				exec(ctx, t, conn, fmt.Sprintf(
+				mustExec(ctx, t, conn, fmt.Sprintf(
 					`INSERT INTO %s (repo_id, work_item_id, pr_number, confidence,
 					 provenance, evidence, last_synced, org_id)
 					 VALUES ('%s','%s',4771,0.5,'%s','tie','%s','%s')`,
 					table, repo, tieID, prov, tie, org))
 			}
-			exec(ctx, t, conn, "OPTIMIZE TABLE "+table+" FINAL")
+			mustExec(ctx, t, conn, "OPTIMIZE TABLE "+table+" FINAL")
 			var survivor string
 			if err := conn.QueryRow(ctx,
 				"SELECT provenance FROM "+table+" LIMIT 1").Scan(&survivor); err != nil {
@@ -253,7 +254,7 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 				t.Errorf("trial %d (insertion order %v): survivor = %q, want \"native\" -- "+
 					"provenance rank must beat part recency", trial, order, survivor)
 			}
-			exec(ctx, t, conn, "DROP TABLE "+table)
+			mustExec(ctx, t, conn, "DROP TABLE "+table)
 		}
 	})
 
@@ -262,13 +263,23 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 
 func connect(ctx context.Context, t *testing.T) driver.Conn {
 	t.Helper()
+	instance := startClickHouse(ctx, t)
+	chschema.Apply(ctx, t, instance)
+	return openConn(ctx, t, instance)
+}
+
+func startClickHouse(ctx context.Context, t *testing.T) *containers.Instance {
+	t.Helper()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
 		t.Fatalf("start ClickHouse: %v", err)
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	chschema.Apply(ctx, t, instance)
+	return instance
+}
 
+func openConn(ctx context.Context, t *testing.T, instance *containers.Instance) driver.Conn {
+	t.Helper()
 	opts, err := stdclickhouse.ParseDSN(instance.URI)
 	if err != nil {
 		t.Fatalf("parse ClickHouse DSN: %v", err)
@@ -281,7 +292,7 @@ func connect(ctx context.Context, t *testing.T) driver.Conn {
 	return conn
 }
 
-func exec(ctx context.Context, t *testing.T, conn driver.Conn, sql string) {
+func mustExec(ctx context.Context, t *testing.T, conn driver.Conn, sql string) {
 	t.Helper()
 	if err := conn.Exec(ctx, sql); err != nil {
 		t.Fatalf("exec %.90s: %v", sql, err)
@@ -291,7 +302,7 @@ func exec(ctx context.Context, t *testing.T, conn driver.Conn, sql string) {
 func seed(ctx context.Context, t *testing.T, conn driver.Conn,
 	org, repo, workItem string, pr int, provenance string, confidence float64, lastSynced string) {
 	t.Helper()
-	exec(ctx, t, conn, fmt.Sprintf(
+	mustExec(ctx, t, conn, fmt.Sprintf(
 		`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence,
 		 provenance, evidence, last_synced, org_id)
 		 VALUES ('%s','%s',%d,%f,'%s','%s','%s','%s')`,
@@ -430,5 +441,164 @@ func assertSurvivingRowIntact(
 	}
 	if !strings.HasPrefix(gotSynced, lastSynced[:19]) {
 		t.Errorf("%s: last_synced = %q, want prefix %q", workItem, gotSynced, lastSynced[:19])
+	}
+}
+
+// TestMigration084CarriesExistingRows is the ONLY test that exercises the
+// migration's copy. Everything else in this file runs against a table the
+// chain already migrated while it was EMPTY.
+//
+// That gap was invisible and total: made `_copy` return without copying, the
+// whole rest of the suite still passed (codex round 2, P1). A `_copy`
+// regression would EXCHANGE in an empty shadow and lose every pre-existing
+// key in production, silently, with a green suite.
+//
+// So this test does what production does: it puts rows in a PRE-084 table and
+// then migrates them.
+func TestMigration084CarriesExistingRows(t *testing.T) {
+	ctx := context.Background()
+	instance := startClickHouse(ctx, t)
+	chschema.Apply(ctx, t, instance)
+	conn := openConn(ctx, t, instance)
+
+	// Rewind to the pre-084 shape: the chain has already migrated the table,
+	// so recreate it as migration 014+024 left it and let 084 do the work.
+	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS work_graph_issue_pr")
+	mustExec(ctx, t, conn, `CREATE TABLE work_graph_issue_pr (
+		repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32,
+		provenance String, evidence String, last_synced DateTime64(3,'UTC'),
+		org_id String DEFAULT 'default'
+	) ENGINE = ReplacingMergeTree(last_synced)
+	ORDER BY (org_id, repo_id, work_item_id, pr_number)`)
+	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+
+	const (
+		org  = "00000000-4769-0000-0000-000000000001"
+		repo = "00000000-4769-0000-0000-000000000002"
+		keyA = "00000000-4769-0000-0000-000000000003"
+		keyB = "00000000-4769-0000-0000-000000000004"
+		keyC = "00000000-4769-0000-0000-000000000006"
+		keyE = "00000000-4769-0000-0000-000000000007"
+		keyF = "00000000-4769-0000-0000-000000000008"
+	)
+	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyB, 4770, "explicit_text", 0.90, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyB, 4770, "heuristic", 0.99, "2026-01-02 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyC, 4772, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyC, 4772, "heuristic", 0.50, "2100-01-01 00:00:00.000")
+
+	// Key E: an unsupported provenance with a PRE-EPOCH stamp. Under a bare
+	// `rank * M` this wraps UInt64 to ~1.8e19 and DELETES the native row during
+	// the copy -- the migration destroying the data it exists to protect.
+	seed(ctx, t, conn, org, repo, keyE, 4773, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyE, 4773, "unknown", 0.10, "1900-01-01 00:00:00.000")
+
+	// Key F: same provenance, differing ONLY in milliseconds, and the LATER one
+	// is inserted FIRST. Under `toUnixTimestamp` (seconds) the two tie and the
+	// last-inserted part wins, so the .000 row survives and this fails. Under
+	// milliseconds the .500 row survives. That makes the precision load-bearing
+	// rather than merely documented.
+	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.500")
+	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.000")
+
+	before := countRows(ctx, t, conn)
+	if before != 10 {
+		t.Fatalf("seeded %d rows, want 10 -- fixture broken before the migration runs", before)
+	}
+
+	applyMigration084(ctx, t, instance)
+
+	// The copy carried every key. A no-op copy leaves zero.
+	if got := countRows(ctx, t, conn); got == 0 {
+		t.Fatal("the migrated table is EMPTY: the copy carried nothing and EXCHANGE " +
+			"swapped in an empty shadow -- this is the total-data-loss case")
+	}
+	mustExec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
+	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
+
+	for _, c := range []struct{ key, want, why string }{
+		{keyA, "native", "native must outrank a later heuristic"},
+		{keyB, "explicit_text", "explicit_text must outrank a later, higher-confidence heuristic"},
+		{keyC, "native", "rank must beat a 74-year recency gap"},
+		{keyE, "native", "an unknown provenance with a pre-epoch stamp must not wrap and win"},
+		{keyF, "heuristic", "the later MILLISECOND must win among equal provenance"},
+	} {
+		assertOnlyProvenance(ctx, t, conn, c.key, c.want)
+	}
+	// Full precision, not truncated to seconds: this is what fails under a
+	// toUnixTimestamp mutant.
+	assertLastSynced(ctx, t, conn, keyF, "2026-01-04 00:00:00.500")
+	assertLastSynced(ctx, t, conn, keyA, "2026-01-01 00:00:00.000")
+}
+
+// applyMigration084 runs ONE migration against the live container, the way the
+// production runner does, so the copy is exercised on rows that already exist.
+func applyMigration084(ctx context.Context, t *testing.T, instance *containers.Instance) {
+	t.Helper()
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("http dsn: %v", err)
+	}
+	root := repoRootForMigration(t)
+	script := `
+import sys, runpy
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+sink = ClickHouseMetricsSink(dsn=sys.argv[1])
+try:
+    runpy.run_path(sys.argv[2])["upgrade"](sink.client)
+finally:
+    sink.close()
+print("MIGRATION_084_APPLIED")
+`
+	python := os.Getenv("DEV_HEALTH_PYTHON")
+	if python == "" {
+		python = "python3"
+	}
+	migration := filepath.Join(root, "src", "dev_health_ops", "migrations",
+		"clickhouse", "084_issue_pr_provenance_version_precedence.py")
+	command := exec.CommandContext(ctx, python, "-c", script, dsn, migration)
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+	out, err := command.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "MIGRATION_084_APPLIED") {
+		t.Fatalf("apply migration 084: %v\n%s", err, out)
+	}
+}
+
+func repoRootForMigration(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 8 {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
+	t.Fatal("could not locate the repository root")
+	return ""
+}
+
+func countRows(ctx context.Context, t *testing.T, conn driver.Conn) uint64 {
+	t.Helper()
+	var n uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM work_graph_issue_pr").Scan(&n); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	return n
+}
+
+func assertLastSynced(ctx context.Context, t *testing.T, conn driver.Conn, workItem, want string) {
+	t.Helper()
+	var got string
+	if err := conn.QueryRow(ctx,
+		"SELECT toString(last_synced) FROM work_graph_issue_pr WHERE work_item_id = ? LIMIT 1",
+		workItem).Scan(&got); err != nil {
+		t.Fatalf("read last_synced for %s: %v", workItem, err)
+	}
+	if got != want {
+		t.Errorf("%s: last_synced = %q, want %q (full millisecond precision)", workItem, got, want)
 	}
 }

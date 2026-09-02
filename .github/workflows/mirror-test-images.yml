@@ -166,7 +166,11 @@ jobs:
                       # Owner-qualified, not merely `ghcr.io/`. Another owner's
                       # namespace is somebody else's registry: the runner would
                       # pull THEIRS while this workflow publishes OURS.
-                      if not str(image).startswith(prefix):
+                      # Registry HOSTS are case-insensitive DNS names, so
+                      # `GHCR.IO/...` is the same registry and must not be
+                      # refused; the repository PATH after it is case-sensitive
+                      # and is sliced out unchanged.
+                      if not str(image).casefold().startswith(prefix.casefold()):
                           bad.append(f"{path}: {job_name}.{where} pulls {image!r}, not under {prefix}")
                           continue
                       out.append(str(image)[len(prefix):])

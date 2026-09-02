@@ -299,6 +299,65 @@ func TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts(t *testing.T) {
 	}
 }
 
+// TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues is EXECUTED
+// coverage for the cross-issue invariant codex round 3 verified only
+// statically ("Tests: only single-issue cap coverage exists; no dedicated
+// multi-issue exhaustion test... unverified by execution"): two issues, a
+// budget of 2, and the first issue alone (via retries on a transient
+// failure) exhausts it -- the second issue must be skipped via
+// dev_status_cap_skipped, not attempt any wire call, and the running
+// devStatusRequestsIssued total must carry forward correctly between issues
+// in one Collect call.
+func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
+	devStatusCalls := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Path == "/rest/api/3/search/jql":
+			body := `{"issues":[` +
+				`{"id":"20001","key":"OPS-301","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-301","fields":{"project":{"key":"OPS"},"summary":"First","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}},` +
+				`{"id":"20002","key":"OPS-302","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-302","fields":{"project":{"key":"OPS"},"summary":"Second","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T00:00:00Z","updated":"2026-08-01T00:00:00Z"},"changelog":{"histories":[]}}` +
+				`],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/") && strings.HasSuffix(request.URL.Path, "/changelog"):
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"values":[],"total":0,"isLast":true}`)), Request: request}, nil
+		case request.URL.Path == "/rest/dev-status/1.0/issue/detail":
+			devStatusCalls++
+			// Every wire attempt is a transient 503: with a budget of 2 and a
+			// retrying client (MaxAttempts=3), OPS-301 alone should consume
+			// exactly the remaining budget (2), leaving 0 for OPS-302.
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	claim := nativeTestClaim("jira", "work-items")
+	claim.SourceExternalID = "OPS"
+	claim.DatasetOptions = map[string]any{
+		"fetch_dev_status": true, "dev_status_max_requests": 2,
+	}
+	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devStatusCalls != 2 {
+		t.Fatalf("dev-status wire calls=%d want=2 (OPS-301 alone must exhaust the shared budget of 2, leaving none for OPS-302)", devStatusCalls)
+	}
+	if got := batch.Result["dev_status_cap_skipped"]; got != 1 {
+		t.Fatalf("result=%v (OPS-302 must be skipped via the cap, not attempted)", batch.Result)
+	}
+	if got := batch.Result["dev_status_unavailable_count"]; got != 0 {
+		t.Fatalf("result=%v (these are genuine 503 failures, not the clean 400/404 no-op)", batch.Result)
+	}
+	if batch.Watermark != nil {
+		t.Fatalf("a genuine dev-status fetch failure must withhold the watermark: batch=%+v", batch)
+	}
+}
+
 func TestJiraAtlassianRouteReferenceCacheSkipsBoardEnumeration(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	claim.DatasetOptions["fetch_worklogs"] = false

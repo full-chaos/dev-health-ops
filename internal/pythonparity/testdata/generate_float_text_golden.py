@@ -75,9 +75,28 @@ _MAGNITUDES = [1e-8, 1e-4, 1e-2, 1e0, 1e2, 1e5, 1e10, 1e15]
 # hand-picked value. A corpus that stopped at -2 (as the first version of this
 # file did) could not represent the raising case at all, and the Go mirror
 # silently returned +Inf there.
+# The POSITIVE side needs the same treatment as the negative one. Jumping from
+# 10 straight to 400 left the whole 11..399 range unrepresented, so a mutant
+# that moved the short-circuit down to `ndigits > 300` passed the corpus AND
+# the live rot guard while returning the input for Round(0x1p-1073, 301) --
+# bits 0x2 where CPython gives +0.0. The interesting structure is a TRANSITION,
+# not a single edge: for the smallest subnormal, round(x, n) is +0.0 up to
+# about n=320 and the value itself from about n=350, because that is where the
+# requested decimal place starts to reach the value's own digits. Sweep across
+# it rather than picking one point on either side.
 _NDIGITS = (
     [0, 1, 2, 3, 4, 6, 10, -1, -2, -3, -5]
     + list(range(-320, -290))
+    + [20, 50, 100, 200, 300, 301]
+    + list(range(310, 361, 5))
+    + [370, 380, 390, 399]
+    # The boundary that actually bites, in both directions. 323 is the largest
+    # ndigits at which round(x, n) != x for ANY float64 (witnessed by the
+    # smallest subnormal); at 324 and beyond every value is returned unchanged.
+    # Covering 321..325 is what makes lowering the short-circuit observable --
+    # a threshold anywhere above 324 is a genuine equivalent and no test can
+    # distinguish it.
+    + [321, 322, 323, 324, 325, -321, -322, -323, -324, -325]
     + [-400, -401, 400, 401, 1000]
 )
 

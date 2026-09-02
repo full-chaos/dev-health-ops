@@ -87,16 +87,29 @@ func Round(value float64, ndigits int) (float64, error) {
 		return value, nil
 	}
 
-	// Guard the exponent arithmetic. Beyond these bounds the requested decimal
-	// place is far outside the range where any float64 has significant digits,
-	// so CPython's dtoa round-trip returns the input unchanged (large positive
-	// ndigits) or zero (large negative ndigits). Computing 10**ndigits as a
-	// big.Int at those magnitudes would allocate without changing the answer.
-	const maxDecimalExponent = 400
-	if ndigits > maxDecimalExponent {
+	// Short-circuit the exponent arithmetic outside the range where rounding
+	// can still change a float64, so 10**ndigits is never built as a big.Int
+	// at a magnitude that cannot affect the answer.
+	//
+	// The positive bound is MEASURED, not chosen. Sweeping ndigits 0..399 over
+	// both float64 extremes plus 400 random bit patterns, the largest ndigits
+	// at which round(x, n) != x is 323, witnessed by the smallest subnormal
+	// (5e-324, 0x0.0000000000001p-1022). No float64 carries a digit below the
+	// 323rd decimal place, so for every value and every n >= 324 the exact path
+	// returns the input and this short-circuit is its exact equivalent.
+	//
+	// The constant was 400 before, which is why a mutant lowering it to 300
+	// escaped the corpus for a round: any threshold above 324 is behaviourally
+	// identical, so a test can only pin the boundary that actually bites.
+	// Setting it AT the boundary makes 323 a case the corpus covers, and
+	// therefore makes any lowering of this guard observable.
+	const roundingReachLimit = 324
+	if ndigits >= roundingReachLimit {
 		return value, nil
 	}
-	if ndigits < -maxDecimalExponent {
+	if ndigits <= -roundingReachLimit {
+		// Symmetric: rounding to the nearest 10**324 or coarser cannot leave a
+		// nonzero result, because 10**324 exceeds the largest float64.
 		return math.Copysign(0, value), nil
 	}
 

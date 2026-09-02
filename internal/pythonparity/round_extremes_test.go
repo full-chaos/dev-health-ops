@@ -5,14 +5,18 @@ import (
 	"testing"
 )
 
-// TestRoundAtExtremeNDigitsMatchesMeasuredPython pins the short-circuit in
-// Round that the golden corpus cannot reach.
+// TestRoundAtExtremeNDigitsMatchesMeasuredPython pins Round's short-circuit
+// against measured interpreter output.
 //
-// The corpus sweeps ndigits in [-2, 10], so the `maxDecimalExponent = 400`
-// branch is invisible to it -- the branch was originally justified by a
-// comment alone, which is exactly the shape ("prose standing in for a
-// measurement") that a port review is supposed to reject. These expectations
-// are the measured output of the shipped interpreter (CPython 3.14.7, arm64):
+// History worth keeping, because it took two review rounds to get right. The
+// branch was first justified by a comment alone ("prose standing in for a
+// measurement"), with the corpus sweeping only ndigits [-2, 10] so nothing
+// could reach it. Widening the corpus was not enough either: with the constant
+// at an arbitrary 400, a mutant lowering it to 300 still escaped, because every
+// threshold above the real boundary is a GENUINE EQUIVALENT and no test can
+// distinguish one. The constant is now the measured boundary itself (324), so
+// the corpus case at 323 makes any lowering observable. These expectations are
+// the measured output of the shipped interpreter (CPython 3.14.7, arm64):
 //
 //	round(1.2345, 401)   == 1.2345      round(1.2345, -401)   == 0.0
 //	round(-1.2345, 401)  == -1.2345     round(-1.2345, -401)  == -0.0
@@ -33,18 +37,18 @@ func TestRoundAtExtremeNDigitsMatchesMeasuredPython(t *testing.T) {
 		ndigits int
 		want    float64
 	}{
-		{"positive value, ndigits just past the short-circuit", 1.2345, 401, 1.2345},
-		{"positive value, ndigits at the short-circuit", 1.2345, 400, 1.2345},
-		{"positive value, ndigits far past it", 1.2345, 1000, 1.2345},
+		{"positive value, well past the reach limit", 1.2345, 401, 1.2345},
+		{"positive value, at the measured reach limit", 1.2345, 324, 1.2345},
+		{"positive value, one below the reach limit still rounds to itself here", 1.2345, 323, 1.2345},
 		{"negative value keeps its digits", -1.2345, 401, -1.2345},
 		{"smallest subnormal survives", smallestSubnormal, 1000, smallestSubnormal},
-		{"max float survives", maxFloat, 400, maxFloat},
+		{"max float survives at the reach limit", maxFloat, 324, maxFloat},
 
 		{"positive value rounds away to +0", 1.2345, -401, 0.0},
-		{"positive value rounds away at the boundary", 1.2345, -400, 0.0},
+		{"positive value rounds away at the negative reach limit", 1.2345, -324, 0.0},
 		{"negative value rounds away to -0", -1.2345, -401, math.Copysign(0, -1)},
 		{"negative value rounds away far past it", -1.2345, -1000, math.Copysign(0, -1)},
-		{"subnormal rounds away to +0", smallestSubnormal, -400, 0.0},
+		{"subnormal rounds away to +0", smallestSubnormal, -324, 0.0},
 		{"max float rounds away to +0", maxFloat, -1000, 0.0},
 	}
 

@@ -1,0 +1,105 @@
+{
+  "accept": [
+    {
+      "file": "valid-deep-action-namespace.json"
+    },
+    {
+      "file": "valid-human-impersonated.json"
+    },
+    {
+      "file": "valid-human-minimal.json"
+    },
+    {
+      "file": "valid-human-superuser-unverified.json"
+    },
+    {
+      "file": "valid-human-superuser-verified.json"
+    },
+    {
+      "file": "valid-infrastructure-orgless.json"
+    },
+    {
+      "file": "valid-workload.json"
+    }
+  ],
+  "description": "The single fixture inventory for contracts/auth/v1/jsonschema/principal.v1.schema.json, read by the Go, Python and TypeScript golden runners. ONE manifest, ONE fixture directory, three runners -- three copies of the same fixtures is the drift class G-70 exists to catch, so a runner that maintains its own list is a review defect.\n\n`accept` is a positive control corpus and carries equal weight to `reject`: a validator that is too strict passes every rejection test while breaking every real caller, and that failure mode is invisible to a suite that only asserts rejections.",
+  "format_assertion_note": "Two different things, do not conflate them. (1) CROSS-LANGUAGE FLOOR: every constraint a reject fixture asserts must be expressible in a keyword all three validators enforce -- in practice `pattern`, never `format`, because github.com/google/jsonschema-go records `format` and ignores it during validation (its own doc.go, \"Deviations from the specification\"). (2) DEFENCE IN DEPTH where available: the Python and TypeScript runners MUST still enable format assertion (Python: Draft202012Validator(format_checker=...), which needs rfc3339-validator installed or it silently registers no date-time checker; TypeScript: ajv-formats) and MUST FAIL rather than skip if they cannot -- a format check that silently checks nothing while exiting 0 is the exact defect this contract exists to prevent.",
+  "reject": [
+    {
+      "expect_instance_location": "/permissions/0",
+      "expect_keyword": "pattern",
+      "file": "invalid-bare-action-name.json",
+      "why": "ACP-ADR-05 decision 4 / G-27: a single-segment action is the is_admin shape, made unrepresentable rather than merely discouraged."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-entitlement-claim-smuggled.json",
+      "why": "ACP-ADR-07 decision 2 and G-14: entitlement must never travel inside a credential. This fixture is the executable form of that ADR -- re-adding tier/licensed_features to the principal turns this red."
+    },
+    {
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-expires-at-not-rfc3339.json",
+      "why": "Draft 2020-12 makes `format` annotation-only unless the validator opts in, and github.com/google/jsonschema-go ignores it outright (its doc.go, \"Deviations from the specification\"). The enforced keyword here is therefore `pattern`, which all three validators apply identically; the schema also carries `format: date-time`, which Python and TypeScript assert as a stricter calendar check on top. Asserting `pattern` rather than `format` is what makes this fixture mean the same thing in all three languages."
+    },
+    {
+      "file": "invalid-expires-at-unicode-digits.json",
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "why": "REGRESSION GUARD for a MEASURED cross-language divergence, not a hypothetical one. With the digit class spelled \\d this exact document was ACCEPTED by the Python validator and REJECTED by the Go one: Python's `re` treats \\d as Unicode and matches Devanagari digits, while Go RE2 and ECMA-262 treat it as ASCII. The schemas now spell every digit class [0-9], and this fixture is what stops a future edit reintroducing \\d -- under \\d it turns green in Python and stays red in Go, which is precisely the one-language-disagrees drift the cross-language corpus exists to catch."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-impersonation-key-absent.json",
+      "why": "impersonation is REQUIRED and explicitly nullable, so a deserializer that defaults a missing object to a zero value cannot silently read absent as not-impersonating."
+    },
+    {
+      "expect_instance_location": "/impersonation",
+      "expect_keyword": "oneOf",
+      "file": "invalid-impersonation-missing-expiry.json",
+      "why": "ACP-ADR-03 bounds the impersonation session at 15 minutes; an impersonation object with no expiry is an unbounded delegated session."
+    },
+    {
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "minLength",
+      "file": "invalid-organization-id-empty-string.json",
+      "why": "Empty string is not null. Python treats \"\" as falsy where Go nil-checks a pointer, so a contract that accepted \"\" would mean two different things in two runtimes."
+    },
+    {
+      "expect_instance_location": "/permissions",
+      "expect_keyword": "uniqueItems",
+      "file": "invalid-permissions-duplicated.json",
+      "why": "A duplicated action makes set-cardinality reasoning about the permission set wrong."
+    },
+    {
+      "expect_instance_location": "/revisions",
+      "expect_keyword": "required",
+      "file": "invalid-revisions-entitlement-missing.json",
+      "why": "ACP-ADR-05 decision 3 / G-31: every allow-cache key binds all four revisions. A partial revisions object would let a consumer build a cache key that a bump cannot invalidate."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "A relying party must reject an unrecognised contract version rather than parse optimistically."
+    },
+    {
+      "expect_instance_location": "/token_version",
+      "expect_keyword": "minimum",
+      "file": "invalid-token-version-negative.json",
+      "why": "A credential generation counter is monotonic and non-negative."
+    },
+    {
+      "expect_instance_location": "/principal_type",
+      "expect_keyword": "enum",
+      "file": "invalid-unknown-principal-type.json",
+      "why": "ACP-ADR-05 decision 1: unknown denies. The vocabulary is the Wave 0 closed set."
+    }
+  ],
+  "requires_format_assertion": true,
+  "schema": "../../jsonschema/principal.v1.schema.json",
+  "schema_version": "contract-fixture-manifest.v1",
+  "regex_dialect_note": "Every `pattern` in these schemas must stay inside the common subset of Go RE2, ECMA-262 and Python `re`. RE2 has no back-references and no lookaround, so a pattern using them either errors or means something different in Go than in the other two -- silently, on the permissive side. google/jsonschema-go names this deviation explicitly. Guarded by a test, not left to review."
+}

@@ -1,0 +1,17 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Dev Health Auth Control Plane v1",
+    "version": "1.0.0",
+    "summary": "Wire contract for the Go Auth Control Plane service.",
+    "description": "OpenAPI 3.1 description of the Auth Control Plane v1 wire surface.\n\nWHY 3.1 AND NOT 3.0: OpenAPI 3.1 uses JSON Schema draft 2020-12 as its schema dialect directly, so the `$ref`s below point at the SAME schema files the Go, Python and TypeScript validators read. OpenAPI 3.0 uses a modified subset of draft-04 and would have required a second, translated copy of every schema -- and two copies of one contract is the drift class the cross-language golden fixtures exist to catch.\n\nWHY JSON AND NOT YAML: this document is validated by three runtimes. JSON needs no parser beyond the one each already has; YAML would add a parser dependency to the Go and TypeScript sides purely for the sake of convention, and a document that is harder to check is not a better contract.\n\nWHY `paths` IS EMPTY: it is empty on purpose and is not an omission. The auth service shipped DORMANT in CHAOS-4881 -- `authruntime.Routes()` returns no routes, and dormancy lives at that one call site. Two Wave 2 blockers must land before any route mounts: CHAOS-4893 (no request concurrency or connection limit exists on the listener) and CHAOS-4894 (`ServeMux`'s trailing-slash redirect answers a registered `/v1/tokens/` pattern with a bare 307, bypassing the JSON envelope and every middleware). Writing paths here now would publish a route contract for endpoints that deliberately do not exist and cannot yet be safely mounted. The schema components below are the real deliverable of this wave; paths land with the routes."
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Principal": {
+        "$ref": "../jsonschema/principal.v1.schema.json"
+      }
+    }
+  }
+}

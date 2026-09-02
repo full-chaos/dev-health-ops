@@ -1,0 +1,24 @@
+{
+  "audience": "dev-health-query-api",
+  "expires_at": "2026-09-02T23:20:00Z",
+  "impersonation": null,
+  "is_superuser": false,
+  "is_superuser_verified": false,
+  "issued_at": "2026-09-02T23:15:00Z",
+  "issuer": "https://auth.fullchaos.dev/",
+  "organization_id": "org_01J9Z2Q4H8M3K7N0P5R6S8T1V3",
+  "permissions": [
+    "jobs.sync.execute"
+  ],
+  "principal_id": "wl_01J9Z2Q4H8M3K7N0P5R6S8T1X4",
+  "principal_type": "workload",
+  "revisions": {
+    "entitlement_revision": 3,
+    "grant_revision": 12,
+    "membership_revision": 7,
+    "policy_revision": 41
+  },
+  "role": null,
+  "schema_version": "principal.v1",
+  "token_version": 0
+}

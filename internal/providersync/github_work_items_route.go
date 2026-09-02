@@ -350,6 +350,18 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 				break
 			}
 			appendGitHubWorkItemRows(&rows, bundle)
+			// codex round 2b (P2, CHAOS-4757): closingIssuesReferences is
+			// evidence-bearing (team-attribution edges), not cosmetic like
+			// Comments/Events, so a PR at the fetch cap must never look complete
+			// when it is not — record it as optional-data incompleteness (D17)
+			// rather than a silent truncation. Non-fatal: does not `break`, the
+			// rows already captured for this and every other PR still land.
+			if adapted.ClosingIssueRefsTruncated {
+				incomplete = append(incomplete, GitHubWorkItemsIncomplete{
+					Component: "pull_request_processing", SubjectID: subject,
+					Cause: "closing_references_truncated",
+				})
+			}
 		}
 	}
 

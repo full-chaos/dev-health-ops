@@ -440,3 +440,58 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 		t.Fatalf("merged transition=%+v", merged)
 	}
 }
+
+// TestGitHubWorkItemPRSocialFetcherSignalsClosingReferenceTruncation is the
+// red-first test for codex round 2b's P2 finding: a PR at or beyond
+// gitHubWorkItemPRSocialClosingRefsLimit must surface that as
+// ClosingIssueRefsTruncated (pageInfo.hasNextPage), not silently report a
+// synced count that looks complete. The nodes count here does not need to
+// reach the actual cap (20) -- TestGitHubWorkItemPRSocialFetcherHonorsDeclaredLimitsWithoutOverfetch
+// already proves the shared append primitive truncates at the cap; this test
+// isolates the pageInfo signal itself.
+func TestGitHubWorkItemPRSocialFetcherSignalsClosingReferenceTruncation(t *testing.T) {
+	doer := &gitHubWorkItemPRSocialFetchDoer{t: t, replies: []string{
+		`{"data":{"repository":{"pr0":{"number":42,"comments":` + gitHubWorkItemPRSocialConnectionJSON(`[]`, false, nil) +
+			`,"timelineItems":` + gitHubWorkItemPRSocialConnectionJSON(`[]`, false, nil) +
+			`,"closingIssuesReferences":{"nodes":[{"number":501,"repository":{"nameWithOwner":"acme/api"}}],"pageInfo":{"hasNextPage":true}}}}}}`,
+	}}
+	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
+		context.Background(), gitHubWorkItemPRSocialClaim(),
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+	)
+	if err != nil || !result.Complete() {
+		t.Fatalf("fetch result=%+v error=%v", result, err)
+	}
+	payload := result.Payloads[42]
+	if len(payload.ClosingIssueRefs) != 1 || !payload.ClosingIssueRefsTruncated {
+		t.Fatalf("expected 1 captured ref and truncation flagged, got payload=%+v", payload)
+	}
+	adapted, err := adaptGitHubWorkItemPRSocialPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !adapted.ClosingIssueRefsTruncated {
+		t.Fatalf("adapter dropped the truncation signal: adapted=%+v", adapted)
+	}
+}
+
+// TestGitHubWorkItemPRSocialFetcherClosingReferenceCompletePageIsNotTruncated
+// is the negative case: a page that exhausts the connection (hasNextPage
+// false, or the field absent entirely) must NOT be flagged.
+func TestGitHubWorkItemPRSocialFetcherClosingReferenceCompletePageIsNotTruncated(t *testing.T) {
+	doer := &gitHubWorkItemPRSocialFetchDoer{t: t, replies: []string{
+		`{"data":{"repository":{"pr0":{"number":42,"comments":` + gitHubWorkItemPRSocialConnectionJSON(`[]`, false, nil) +
+			`,"timelineItems":` + gitHubWorkItemPRSocialConnectionJSON(`[]`, false, nil) +
+			`,"closingIssuesReferences":{"nodes":[{"number":501,"repository":{"nameWithOwner":"acme/api"}}],"pageInfo":{"hasNextPage":false}}}}}}`,
+	}}
+	result, err := (GitHubWorkItemPRSocialFetcher{}).Fetch(
+		context.Background(), gitHubWorkItemPRSocialClaim(),
+		gitHubPullRequestClient(t, doer, "https://api.github.com"), []int{42}, 500, 1000,
+	)
+	if err != nil || !result.Complete() {
+		t.Fatalf("fetch result=%+v error=%v", result, err)
+	}
+	if payload := result.Payloads[42]; payload.ClosingIssueRefsTruncated {
+		t.Fatalf("a complete page must not be flagged truncated: payload=%+v", payload)
+	}
+}

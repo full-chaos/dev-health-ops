@@ -49,6 +49,9 @@ type githubWorkItemPRSocialSemanticPayload struct {
 	// extractGitHubClosingIssueReferences parses the GraphQL node shape
 	// directly rather than through an intermediate semantic struct.
 	ClosingIssueRefs []json.RawMessage
+	// ClosingIssueRefsTruncated passes through
+	// GitHubWorkItemPRSocialPayload.ClosingIssueRefsTruncated (codex round 2b).
+	ClosingIssueRefsTruncated bool
 }
 
 type githubWorkItemPRSocialRawComment struct {
@@ -74,9 +77,10 @@ func adaptGitHubWorkItemPRSocialPayload(
 	payload GitHubWorkItemPRSocialPayload,
 ) (githubWorkItemPRSocialSemanticPayload, error) {
 	adapted := githubWorkItemPRSocialSemanticPayload{
-		Comments:         make([]json.RawMessage, 0, len(payload.Comments)),
-		Events:           make([]json.RawMessage, 0, len(payload.Events)),
-		ClosingIssueRefs: append([]json.RawMessage(nil), payload.ClosingIssueRefs...),
+		Comments:                  make([]json.RawMessage, 0, len(payload.Comments)),
+		Events:                    make([]json.RawMessage, 0, len(payload.Events)),
+		ClosingIssueRefs:          append([]json.RawMessage(nil), payload.ClosingIssueRefs...),
+		ClosingIssueRefsTruncated: payload.ClosingIssueRefsTruncated,
 	}
 	for _, raw := range payload.Comments {
 		comment, err := adaptGitHubWorkItemPRSocialComment(raw)

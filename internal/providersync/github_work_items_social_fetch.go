@@ -23,9 +23,15 @@ const (
 	// requested once per PR on the top-level (non-continuation) batch page only —
 	// unlike comments/events this has no drain/pagination loop, since a PR
 	// realistically closes at most a handful of issues. A PR at or beyond this
-	// limit degrades gracefully (the extra references are simply not captured;
-	// no incompleteness record), consistent with treating this as best-effort
-	// supplementary data rather than a completeness-bearing fetch.
+	// limit degrades gracefully -- the extra references are not captured -- but
+	// unlike a purely cosmetic field, this IS evidence-bearing data (it feeds
+	// team-attribution edges), so the truncation itself is never silent: codex
+	// round 2b (P2) correctly flagged that an unbounded-looking truncation with
+	// no signal is a silent-failure defect for data this consequential.
+	// GitHubWorkItemPRSocialPayload.ClosingIssueRefsTruncated carries the
+	// pageInfo.hasNextPage bit through to the route, which records a
+	// pull_request_processing incompleteness entry (D17) rather than silently
+	// completing.
 	gitHubWorkItemPRSocialClosingRefsLimit = 20
 )
 
@@ -44,6 +50,12 @@ type GitHubWorkItemPRSocialPayload struct {
 	// fetch runs at all, so treating its absence strictly would fail every
 	// caller that does not also stub it in a mocked response.
 	ClosingIssueRefs []json.RawMessage
+	// ClosingIssueRefsTruncated is true when this PR has more closing
+	// references than gitHubWorkItemPRSocialClosingRefsLimit captured
+	// (pageInfo.hasNextPage on the first, only-fetched page). The route turns
+	// this into a durable pull_request_processing incompleteness entry rather
+	// than reporting a synced count that looks complete but is not.
+	ClosingIssueRefsTruncated bool
 }
 
 // GitHubWorkItemPRSocialUsage is safe provider-budget evidence. It records
@@ -186,6 +198,10 @@ func (fetcher GitHubWorkItemPRSocialFetcher) Fetch(
 					&payload.ClosingIssueRefs, pull.ClosingIssuesReferences.Nodes,
 					gitHubWorkItemPRSocialClosingRefsLimit,
 				)
+				// codex round 2b (P2): a PR with more references than the cap must
+				// signal truncation, not silently report a complete-looking count —
+				// this is evidence-bearing data, unlike Comments/Events' social color.
+				payload.ClosingIssueRefsTruncated = pull.ClosingIssuesReferences.PageInfo.HasNextPage
 			}
 			result.Payloads[number] = payload
 		}
@@ -442,7 +458,7 @@ func gitHubWorkItemPRSocialQuery(
 		}
 		if topLevelBatchPage {
 			fields = append(fields, fmt.Sprintf(
-				"closingIssuesReferences(first: %d) { nodes { number repository { nameWithOwner } } }",
+				"closingIssuesReferences(first: %d) { nodes { number repository { nameWithOwner } } pageInfo { hasNextPage } }",
 				gitHubWorkItemPRSocialClosingRefsLimit,
 			))
 		}

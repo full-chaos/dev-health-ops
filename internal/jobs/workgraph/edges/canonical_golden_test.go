@@ -167,21 +167,7 @@ func TestEveryInputRowGetsExactlyOneOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("frozen_now: %v", err)
 	}
-	rows := make([]DependencyRow, 0, len(document.Dependencies))
-	for index, frozen := range document.Dependencies {
-		resolve := func(at int) string {
-			value, err := document.String(frozen[at])
-			if err != nil {
-				t.Fatalf("dependency %d field %d: %v", index, at, err)
-			}
-			return value
-		}
-		rows = append(rows, DependencyRow{
-			SourceWorkItemID: resolve(0), TargetWorkItemID: resolve(1),
-			RelationshipType: resolve(2), RelationshipRaw: resolve(3),
-			SemanticsVersion: resolve(4), LastSynced: resolve(5),
-		})
-	}
+	rows := goldenDependencyRows(t, document)
 
 	result, err := DeriveIssueIssueEdges(rows, buildClock)
 	if err != nil {
@@ -206,4 +192,27 @@ func TestEveryInputRowGetsExactlyOneOutcome(t *testing.T) {
 		t.Fatalf("%d rows marked emitted but %d edges produced", emitted, len(result.Edges))
 	}
 	t.Logf("accounting over %d rows: %v", len(rows), result.Counts)
+}
+
+// goldenDependencyRows resolves the frozen intern indexes into rows. Shared so
+// that a second decoder cannot drift from this one on field order — the six
+// columns are all strings, so a transposition would type-check silently.
+func goldenDependencyRows(t *testing.T, document *GoldenDocument) []DependencyRow {
+	t.Helper()
+	rows := make([]DependencyRow, 0, len(document.Dependencies))
+	for index, frozen := range document.Dependencies {
+		resolve := func(at int) string {
+			value, err := document.String(frozen[at])
+			if err != nil {
+				t.Fatalf("dependency %d field %d: %v", index, at, err)
+			}
+			return value
+		}
+		rows = append(rows, DependencyRow{
+			SourceWorkItemID: resolve(0), TargetWorkItemID: resolve(1),
+			RelationshipType: resolve(2), RelationshipRaw: resolve(3),
+			SemanticsVersion: resolve(4), LastSynced: resolve(5),
+		})
+	}
+	return rows
 }

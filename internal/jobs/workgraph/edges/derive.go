@@ -21,6 +21,19 @@ const (
 	OutcomeMalformedPRID   Outcome = "malformed_pr_id"   // the ruled divergence
 )
 
+// allOutcomes is the deriver's declared vocabulary, in a stable order.
+//
+// It exists so other code can be checked FOR EXHAUSTIVENESS against it rather
+// than re-listing the constants and drifting. A Go switch over a string type
+// has no compiler exhaustiveness check, so without this a sixth outcome would
+// compile everywhere and simply be missing from the places that matter.
+func allOutcomes() []Outcome {
+	return []Outcome{
+		OutcomeEmitted, OutcomeDeduped, OutcomeSkippedEmptyID,
+		OutcomeSkippedPRShaped, OutcomeMalformedPRID,
+	}
+}
+
 // DeriveResult is the edges plus a full accounting of every input row.
 type DeriveResult struct {
 	Edges []Row

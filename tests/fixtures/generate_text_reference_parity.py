@@ -125,6 +125,59 @@ DIGIT_BODIES = [
     ("mixed_ascii_arabic", "4٤"),
 ]
 
+# The whitespace axis, which exists because `\s` is the easiest class to read as
+# formatting and the one that changes an edge's SEMANTIC TYPE when it diverges:
+# 'closes<WS>#42' is ref_type='closes' if <WS> matches \s and 'references' if it
+# does not, because the closing pattern fails and the plain pattern still hits.
+#
+# Two groups, and the SECOND is the one that tests the rewrite rather than the
+# naive port. Measured on CPython 3.14.7 / Go 1.24:
+#
+#     Python re \s  ==  str.isspace()            29 runes  (identical sets)
+#     Go RE2 \s                                   5 runes  ([\t\n\f\r ])
+#     Go unicode.IsSpace                         25 runes
+#     Python \s  MINUS  Go unicode.IsSpace       {U+001C, U+001D, U+001E, U+001F}
+#     Go unicode.IsSpace  MINUS  Python \s       {} (empty)
+#
+# So Python's \s is Go's unicode.IsSpace plus exactly the four information
+# separators, and the correct substitution is
+#
+#     unicode.IsSpace(r) || (r >= 0x1C && r <= 0x1F)
+#
+# Group 1 (unicode_ws) catches a port that left RE2's \s in place. Group 2
+# (isspace_gap) is the only group that can tell the CORRECT substitution from
+# `unicode.IsSpace` alone -- every rune in group 1 is already handled by plain
+# IsSpace, so a corpus containing only group 1 would pass a rewrite that is
+# wrong on four runes. U+200B is the negative control: it looks like a space,
+# reads like one in a bug report, and is \s on NEITHER plane.
+WHITESPACE_VARIANTS = [
+    ("ascii_space", " ", "unicode_ws"),
+    ("tab", "\t", "unicode_ws"),
+    ("nbsp", " ", "unicode_ws"),
+    ("nel", "", "unicode_ws"),
+    ("line_separator", " ", "unicode_ws"),
+    ("paragraph_separator", " ", "unicode_ws"),
+    ("ideographic_space", "　", "unicode_ws"),
+    ("en_quad", " ", "unicode_ws"),
+    ("narrow_nbsp", " ", "unicode_ws"),
+    ("file_separator", "", "isspace_gap"),
+    ("group_separator", "", "isspace_gap"),
+    ("record_separator", "", "isspace_gap"),
+    ("unit_separator", "", "isspace_gap"),
+    ("zero_width_space", "​", "negative_control"),
+    ("word_joiner", "⁠", "negative_control"),
+]
+
+# The shapes whose meaning depends on \s. Each has a separator position where a
+# whitespace variant decides which pattern wins, and therefore the ref_type.
+WHITESPACE_SHAPES = [
+    ("github_closing", "closes{}#42"),
+    ("github_closing_fixes", "fixes{}#42"),
+    ("github_merge_pr", "merge{}pull{}request{}#42"),
+    ("github_squash_trailing", "fix the thing (#42){}"),
+    ("revert_body", "{}this reverts commit abc"),
+]
+
 # Cardinality and overlap: a corpus of single-match strings cannot see an
 # extractor that returns matches in the wrong order, drops duplicates it should
 # keep, or keeps ones it should drop.
@@ -241,6 +294,21 @@ def build_corpus() -> dict:
     # Axis 3: cardinality and overlap.
     for label, text in MULTI:
         cases.append(_case(f"cardinality/{label}", "cardinality", text))
+
+    # Axis 3b: whitespace variants at the separator position of every shape
+    # whose ref_type depends on \s. The group label travels into the case id so
+    # a failure says WHICH equivalence broke -- RE2-\s-left-in-place, or the
+    # four-rune isspace gap, or a negative control that should never match.
+    for shape_name, template in WHITESPACE_SHAPES:
+        slots = template.count("{}")
+        for ws_name, ws_char, group in WHITESPACE_VARIANTS:
+            cases.append(
+                _case(
+                    f"whitespace/{shape_name}/{group}/{ws_name}",
+                    "whitespace",
+                    template.format(*([ws_char] * slots)),
+                )
+            )
 
     # Axis 4: the reference at the very end of the string, and followed by each
     # neighbour class. `\b` and `(?<!\w)` are asymmetric -- a corpus that only

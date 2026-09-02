@@ -10635,6 +10635,4470 @@
       "patterns": {}
     },
     {
+      "id": "whitespace/github_closing/unicode_ws/ascii_space",
+      "axis": "whitespace",
+      "text": "closes #42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+0020",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes #42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes #42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/tab",
+      "axis": "whitespace",
+      "text": "closes\t#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+0009",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\t#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\t#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/nbsp",
+      "axis": "whitespace",
+      "text": "closes\u00a0#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+00A0",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u00a0#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u00a0#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/nel",
+      "axis": "whitespace",
+      "text": "closes\u0085#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+0085",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u0085#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u0085#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/line_separator",
+      "axis": "whitespace",
+      "text": "closes\u2028#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+2028",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u2028#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u2028#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/paragraph_separator",
+      "axis": "whitespace",
+      "text": "closes\u2029#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+2029",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u2029#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u2029#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/ideographic_space",
+      "axis": "whitespace",
+      "text": "closes\u3000#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+3000",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u3000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u3000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/en_quad",
+      "axis": "whitespace",
+      "text": "closes\u2000#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+2000",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u2000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u2000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/unicode_ws/narrow_nbsp",
+      "axis": "whitespace",
+      "text": "closes\u202f#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+202F",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u202f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u202f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/isspace_gap/file_separator",
+      "axis": "whitespace",
+      "text": "closes\u001c#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+001C",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u001c#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u001c#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/isspace_gap/group_separator",
+      "axis": "whitespace",
+      "text": "closes\u001d#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+001D",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u001d#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u001d#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/isspace_gap/record_separator",
+      "axis": "whitespace",
+      "text": "closes\u001e#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+001E",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u001e#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u001e#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/isspace_gap/unit_separator",
+      "axis": "whitespace",
+      "text": "closes\u001f#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+001F",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "closes\u001f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "closes\u001f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/negative_control/zero_width_space",
+      "axis": "whitespace",
+      "text": "closes\u200b#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+200B",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing/negative_control/word_joiner",
+      "axis": "whitespace",
+      "text": "closes\u2060#42",
+      "codepoints": [
+        "U+0063",
+        "U+006C",
+        "U+006F",
+        "U+0073",
+        "U+0065",
+        "U+0073",
+        "U+2060",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 7,
+            "end": 10,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/ascii_space",
+      "axis": "whitespace",
+      "text": "fixes #42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+0020",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes #42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes #42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/tab",
+      "axis": "whitespace",
+      "text": "fixes\t#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+0009",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\t#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\t#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/nbsp",
+      "axis": "whitespace",
+      "text": "fixes\u00a0#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+00A0",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u00a0#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u00a0#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/nel",
+      "axis": "whitespace",
+      "text": "fixes\u0085#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+0085",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u0085#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u0085#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/line_separator",
+      "axis": "whitespace",
+      "text": "fixes\u2028#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+2028",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u2028#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u2028#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/paragraph_separator",
+      "axis": "whitespace",
+      "text": "fixes\u2029#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+2029",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u2029#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u2029#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/ideographic_space",
+      "axis": "whitespace",
+      "text": "fixes\u3000#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+3000",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u3000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u3000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/en_quad",
+      "axis": "whitespace",
+      "text": "fixes\u2000#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+2000",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u2000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u2000#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/unicode_ws/narrow_nbsp",
+      "axis": "whitespace",
+      "text": "fixes\u202f#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+202F",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u202f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u202f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/isspace_gap/file_separator",
+      "axis": "whitespace",
+      "text": "fixes\u001c#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+001C",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u001c#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u001c#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/isspace_gap/group_separator",
+      "axis": "whitespace",
+      "text": "fixes\u001d#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+001D",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u001d#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u001d#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/isspace_gap/record_separator",
+      "axis": "whitespace",
+      "text": "fixes\u001e#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+001E",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u001e#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u001e#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/isspace_gap/unit_separator",
+      "axis": "whitespace",
+      "text": "fixes\u001f#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+001F",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "fixes\u001f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "fixes\u001f#42",
+            "issue_key": "42",
+            "ref_type": "closes",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_CLOSING_REF_PATTERN": [
+          {
+            "start": 0,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/negative_control/zero_width_space",
+      "axis": "whitespace",
+      "text": "fixes\u200b#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+200B",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_closing_fixes/negative_control/word_joiner",
+      "axis": "whitespace",
+      "text": "fixes\u2060#42",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0065",
+        "U+0073",
+        "U+2060",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 6,
+            "end": 9,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/ascii_space",
+      "axis": "whitespace",
+      "text": "merge pull request #42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+0020",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+0020",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/tab",
+      "axis": "whitespace",
+      "text": "merge\tpull\trequest\t#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+0009",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+0009",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+0009",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/nbsp",
+      "axis": "whitespace",
+      "text": "merge\u00a0pull\u00a0request\u00a0#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+00A0",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+00A0",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+00A0",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/nel",
+      "axis": "whitespace",
+      "text": "merge\u0085pull\u0085request\u0085#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+0085",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+0085",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+0085",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/line_separator",
+      "axis": "whitespace",
+      "text": "merge\u2028pull\u2028request\u2028#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+2028",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+2028",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+2028",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/paragraph_separator",
+      "axis": "whitespace",
+      "text": "merge\u2029pull\u2029request\u2029#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+2029",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+2029",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+2029",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/ideographic_space",
+      "axis": "whitespace",
+      "text": "merge\u3000pull\u3000request\u3000#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+3000",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+3000",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+3000",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/en_quad",
+      "axis": "whitespace",
+      "text": "merge\u2000pull\u2000request\u2000#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+2000",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+2000",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+2000",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/unicode_ws/narrow_nbsp",
+      "axis": "whitespace",
+      "text": "merge\u202fpull\u202frequest\u202f#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+202F",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+202F",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+202F",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/isspace_gap/file_separator",
+      "axis": "whitespace",
+      "text": "merge\u001cpull\u001crequest\u001c#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+001C",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+001C",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+001C",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/isspace_gap/group_separator",
+      "axis": "whitespace",
+      "text": "merge\u001dpull\u001drequest\u001d#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+001D",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+001D",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+001D",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/isspace_gap/record_separator",
+      "axis": "whitespace",
+      "text": "merge\u001epull\u001erequest\u001e#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+001E",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+001E",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+001E",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/isspace_gap/unit_separator",
+      "axis": "whitespace",
+      "text": "merge\u001fpull\u001frequest\u001f#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+001F",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+001F",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+001F",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [
+          42
+        ],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_MERGE_PR_PATTERN": [
+          {
+            "start": 0,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/negative_control/zero_width_space",
+      "axis": "whitespace",
+      "text": "merge\u200bpull\u200brequest\u200b#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+200B",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+200B",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+200B",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_merge_pr/negative_control/word_joiner",
+      "axis": "whitespace",
+      "text": "merge\u2060pull\u2060request\u2060#42",
+      "codepoints": [
+        "U+006D",
+        "U+0065",
+        "U+0072",
+        "U+0067",
+        "U+0065",
+        "U+2060",
+        "U+0070",
+        "U+0075",
+        "U+006C",
+        "U+006C",
+        "U+2060",
+        "U+0072",
+        "U+0065",
+        "U+0071",
+        "U+0075",
+        "U+0065",
+        "U+0073",
+        "U+0074",
+        "U+2060",
+        "U+0023",
+        "U+0034",
+        "U+0032"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 19,
+            "end": 22,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/ascii_space",
+      "axis": "whitespace",
+      "text": "fix the thing (#42) ",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+0020"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/tab",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\t",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+0009"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/nbsp",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u00a0",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+00A0"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/nel",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u0085",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+0085"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/line_separator",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u2028",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+2028"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/paragraph_separator",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u2029",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+2029"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/ideographic_space",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u3000",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+3000"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/en_quad",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u2000",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+2000"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/unicode_ws/narrow_nbsp",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u202f",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+202F"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/isspace_gap/file_separator",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u001c",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+001C"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/isspace_gap/group_separator",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u001d",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+001D"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/isspace_gap/record_separator",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u001e",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+001E"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/isspace_gap/unit_separator",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u001f",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+001F"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": [
+          42
+        ]
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ],
+        "GITHUB_SQUASH_PR_PATTERN": [
+          {
+            "start": 14,
+            "end": 20,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/negative_control/zero_width_space",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u200b",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+200B"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/github_squash_trailing/negative_control/word_joiner",
+      "axis": "whitespace",
+      "text": "fix the thing (#42)\u2060",
+      "codepoints": [
+        "U+0066",
+        "U+0069",
+        "U+0078",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0065",
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+006E",
+        "U+0067",
+        "U+0020",
+        "U+0028",
+        "U+0023",
+        "U+0034",
+        "U+0032",
+        "U+0029",
+        "U+2060"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_gitlab_issue_refs": [
+          {
+            "raw_match": "#42",
+            "issue_key": "42",
+            "ref_type": "references",
+            "project_key": null
+          }
+        ],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "GITHUB_PLAIN_REF_PATTERN": [
+          {
+            "start": 15,
+            "end": 18,
+            "groups": [
+              "42"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/ascii_space",
+      "axis": "whitespace",
+      "text": " this reverts commit abc",
+      "codepoints": [
+        "U+0020",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/tab",
+      "axis": "whitespace",
+      "text": "\tthis reverts commit abc",
+      "codepoints": [
+        "U+0009",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/nbsp",
+      "axis": "whitespace",
+      "text": "\u00a0this reverts commit abc",
+      "codepoints": [
+        "U+00A0",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/nel",
+      "axis": "whitespace",
+      "text": "\u0085this reverts commit abc",
+      "codepoints": [
+        "U+0085",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/line_separator",
+      "axis": "whitespace",
+      "text": "\u2028this reverts commit abc",
+      "codepoints": [
+        "U+2028",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/paragraph_separator",
+      "axis": "whitespace",
+      "text": "\u2029this reverts commit abc",
+      "codepoints": [
+        "U+2029",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/ideographic_space",
+      "axis": "whitespace",
+      "text": "\u3000this reverts commit abc",
+      "codepoints": [
+        "U+3000",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/en_quad",
+      "axis": "whitespace",
+      "text": "\u2000this reverts commit abc",
+      "codepoints": [
+        "U+2000",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/unicode_ws/narrow_nbsp",
+      "axis": "whitespace",
+      "text": "\u202fthis reverts commit abc",
+      "codepoints": [
+        "U+202F",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/isspace_gap/file_separator",
+      "axis": "whitespace",
+      "text": "\u001cthis reverts commit abc",
+      "codepoints": [
+        "U+001C",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/isspace_gap/group_separator",
+      "axis": "whitespace",
+      "text": "\u001dthis reverts commit abc",
+      "codepoints": [
+        "U+001D",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/isspace_gap/record_separator",
+      "axis": "whitespace",
+      "text": "\u001ethis reverts commit abc",
+      "codepoints": [
+        "U+001E",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/isspace_gap/unit_separator",
+      "axis": "whitespace",
+      "text": "\u001fthis reverts commit abc",
+      "codepoints": [
+        "U+001F",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {
+        "REVERT_BODY_PATTERN": [
+          {
+            "start": 0,
+            "end": 20,
+            "groups": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "whitespace/revert_body/negative_control/zero_width_space",
+      "axis": "whitespace",
+      "text": "\u200bthis reverts commit abc",
+      "codepoints": [
+        "U+200B",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {}
+    },
+    {
+      "id": "whitespace/revert_body/negative_control/word_joiner",
+      "axis": "whitespace",
+      "text": "\u2060this reverts commit abc",
+      "codepoints": [
+        "U+2060",
+        "U+0074",
+        "U+0068",
+        "U+0069",
+        "U+0073",
+        "U+0020",
+        "U+0072",
+        "U+0065",
+        "U+0076",
+        "U+0065",
+        "U+0072",
+        "U+0074",
+        "U+0073",
+        "U+0020",
+        "U+0063",
+        "U+006F",
+        "U+006D",
+        "U+006D",
+        "U+0069",
+        "U+0074",
+        "U+0020",
+        "U+0061",
+        "U+0062",
+        "U+0063"
+      ],
+      "extractors": {
+        "extract_github_issue_refs": [],
+        "extract_gitlab_issue_refs": [],
+        "extract_jira_keys": [],
+        "extract_pr_refs": [],
+        "extract_squash_pr_refs": []
+      },
+      "patterns": {}
+    },
+    {
       "id": "trailing/github_plain/ascii_letter",
       "axis": "trailing_position",
       "text": "#42x",

@@ -52,17 +52,31 @@ type fmaFinding struct {
 // parent is then a conversion call to float64/float32, which the Go spec
 // documents as forcing rounding and preventing fusion.
 //
-// It CANNOT catch the second, less obvious CHAOS-4818 exposure this sweep
-// found (deployPercentile, deploy.go, and its four siblings): a value that
-// gets fused with a LATER STATEMENT's subtraction after the compiler
-// rematerializes it across an intervening function call (fusion "across
-// statements", which the Go spec explicitly permits and which measurably
-// happened here even with the multiply visually nowhere near a `+`/`-` in
-// source). That class has no purely syntactic signature -- it depends on
-// register-allocation pressure around a specific call site -- and is
-// covered instead by the bit-pattern regression tests (fma_golden_test.go
-// and its per-package copies), not by this lint. RISK-NOTES in the PR body
-// says this explicitly rather than implying the lint is a complete guard.
+// It also flags one level of indirection through a non-conversion wrapper
+// call -- `identity(a*b) + c` -- because codex round 1 constructed exactly
+// that (EXECUTED: arm64 assembly showed `FMADDD` for it) and the original
+// version of this check, which looked only at the MUL's immediate parent,
+// missed it (the immediate parent there is the CallExpr, not the +/-).
+//
+// This lint is NOT a soundness guarantee against arbitrary indirection --
+// no purely syntactic check can be, once inlining is in play. Two classes
+// it structurally cannot catch, both real, both found by this sweep:
+//
+//  1. Deeper indirection than one call (the MUL stored in a variable that a
+//     LATER, unrelated statement adds to something, a value threaded through
+//     two function boundaries, a struct field).
+//  2. The second, less obvious CHAOS-4818 exposure this sweep found
+//     (deployPercentile, deploy.go, and its four siblings): a value that
+//     gets fused with a LATER STATEMENT's subtraction after the compiler
+//     rematerializes it across an intervening function call (fusion "across
+//     statements", which the Go spec explicitly permits and which
+//     measurably happened here even with the multiply visually nowhere near
+//     a `+`/`-` in source).
+//
+// Both classes have no purely syntactic signature and are covered instead
+// by the bit-pattern regression tests (fma_golden_test.go and its
+// per-package copies), not by this lint. RISK-NOTES in the PR body says
+// this explicitly rather than implying the lint is a complete guard.
 func TestNoUnguardedFloatFMAInJobsPackages(t *testing.T) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
@@ -111,8 +125,10 @@ func TestNoUnguardedFloatFMAInJobsPackages(t *testing.T) {
 // TestFMALintDetectsTheKnownShape proves the checker itself works, using an
 // embedded fixture package rather than mutating real source: one unguarded
 // case (must be flagged), one float64()-wrapped case (must NOT be flagged),
-// and one integer case that looks the same syntactically (must NOT be
-// flagged -- integer multiply-add is exact, never FMA-exposed).
+// one integer case that looks the same syntactically (must NOT be flagged
+// -- integer multiply-add is exact, never FMA-exposed), and codex round 1's
+// construction -- a non-conversion wrapper call around the multiply, which
+// the round-1 version of this checker missed (must be flagged).
 func TestFMALintDetectsTheKnownShape(t *testing.T) {
 	const src = `package fixture
 
@@ -127,15 +143,24 @@ func Guarded(a, b, c, d float64) float64 {
 func IntegerMath(a, b, c, d int) int {
 	return a*b + c*d
 }
+
+func identity(v float64) float64 { return v }
+
+func WrappedByNonConversionCall(a, b, c float64) float64 {
+	return identity(a*b) + c
+}
 `
 	// Both a*b and c*d in `Unguarded` are individually flagged: each is a
 	// direct multiply operand of the same `+`, so EITHER could be the one
 	// Go fuses (fusing the right operand into an add is the common case,
 	// but the compiler is free to choose either side) -- both need the
-	// float64() wrap, matching every real fix in this PR.
+	// float64() wrap, matching every real fix in this PR. WrappedByNon
+	// ConversionCall's a*b is the codex round-1 P1 repro: identity() is not
+	// a float64()/float32() conversion, so it gives no rounding guarantee,
+	// and if inlined the compiler can still fuse straight-line a*b + c.
 	findings := parseAndCheckFixture(t, src)
-	if len(findings) != 2 {
-		t.Fatalf("got %d findings, want exactly 2 (a*b and c*d, both unguarded operands of + in Unguarded): %+v", len(findings), findings)
+	if len(findings) != 3 {
+		t.Fatalf("got %d findings, want exactly 3 (a*b and c*d in Unguarded, a*b in WrappedByNonConversionCall): %+v", len(findings), findings)
 	}
 }
 
@@ -182,21 +207,62 @@ func (v *fmaVisitor) Visit(n ast.Node) ast.Visitor {
 }
 
 // directOperandOfUnguardedAddSub inspects the ancestor stack (paren-stripped,
-// innermost node -- the MUL under test -- last) for whether the MUL's
-// immediate parent is a +/- BinaryExpr. If the MUL were instead wrapped in
-// float64(...)/float32(...), that CallExpr (not the MUL) would be the
-// direct operand of the +/-, so the MUL's immediate parent would be the
-// CallExpr, not the BinaryExpr, and this returns false.
+// innermost node -- the MUL under test -- last) for whether the MUL feeds a
+// +/- BinaryExpr either DIRECTLY, or through exactly one wrapping call that
+// is NOT a float64()/float32() conversion.
+//
+// The second case exists because of a codex round-1 finding (P1, EXECUTED):
+// `identity(a*b) + c`, where `identity` is a small Go function that returns
+// its argument unchanged, is NOT protected the way `float64(a*b) + c` is --
+// only an explicit conversion is documented by the Go spec as forcing
+// rounding, so a generic wrapper call gives no such guarantee, and if it
+// gets inlined the compiler can still see straight-line `a*b + c` and fuse
+// it (codex's repro: `FMADDD` in the arm64 assembly for exactly this shape).
+// Syntactically, the MUL's immediate parent there is the CallExpr, not the
+// +/- -- so the original (round-1) version of this check, which only looked
+// one level up, missed it. This flags one level further: MUL -> non-
+// float64/float32 CallExpr -> +/-.
+//
+// This does NOT make the lint sound against arbitrarily deep indirection
+// (the MUL stored in a variable, returned from a helper, passed through two
+// function boundaries, etc.) -- no purely syntactic check can be, once
+// inlining is in play. That residual class is exactly why fma_golden_test.go
+// exists: a bit-pattern regression test catches what static analysis
+// structurally cannot. See this function's package doc comment.
 func directOperandOfUnguardedAddSub(stack []ast.Node) bool {
 	if len(stack) < 2 {
 		return false
 	}
 	parent := stack[len(stack)-2]
-	parentBinary, ok := parent.(*ast.BinaryExpr)
+	if isAddSubBinary(parent) {
+		return true
+	}
+	call, ok := parent.(*ast.CallExpr)
+	if !ok || isFloatConversionCall(call) {
+		return false
+	}
+	if len(stack) < 3 {
+		return false
+	}
+	grandparent := stack[len(stack)-3]
+	return isAddSubBinary(grandparent)
+}
+
+func isAddSubBinary(n ast.Node) bool {
+	binary, ok := n.(*ast.BinaryExpr)
+	return ok && (binary.Op == token.ADD || binary.Op == token.SUB)
+}
+
+// isFloatConversionCall reports whether call is exactly `float64(...)` or
+// `float32(...)` -- the only wrapping this codebase's established CHAOS-4818
+// fix idiom uses, and the only one the Go spec documents as forcing
+// rounding and preventing fusion.
+func isFloatConversionCall(call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
 	if !ok {
 		return false
 	}
-	return parentBinary.Op == token.ADD || parentBinary.Op == token.SUB
+	return ident.Name == "float64" || ident.Name == "float32"
 }
 
 // isFloatBinaryExpr reports whether the given expression's static type is

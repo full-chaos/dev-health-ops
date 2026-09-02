@@ -97,6 +97,51 @@ FALSY: list[Any] = [None, "", False, 0, 0.0, -0.0, [], {}]
 WHITESPACE: list[Any] = [" ", "\t", "\n", "  \t "]
 NON_STRINGS: list[Any] = [True, 1, 123, 1.5, ["2026-08-15"], {"a": 1}]
 
+# The MAGNITUDE axis (contributed by lane-4752-go: its corpus had no positive id
+# above 42, and a port bounding values at 2^31 mislabelled large rows silently).
+# Boundaries matter here in BOTH representations -- as JSON numbers, where a
+# port's decoder may overflow, and as STRINGS, where a port's integer parser
+# may bound at a width the reference does not have. Python's int() is unbounded;
+# every Go integer type is not, so every boundary is a candidate divergence.
+MAGNITUDES: list[Any] = [
+    0,
+    -0,
+    1,
+    -1,
+    2147483647,
+    2147483648,
+    -2147483648,
+    -2147483649,  # int32
+    4294967295,
+    4294967296,  # uint32
+    9223372036854775807,
+    9223372036854775808,  # int64
+    18446744073709551615,
+    18446744073709551616,  # uint64
+    int("9" * 40),
+    int("1" + "0" * 40),
+    0.0,
+    -0.0,
+    1e308,
+    # NOT 1e309. `json.loads("1e309")` yields `inf`, so the value IS reachable
+    # over the wire -- but `json.dumps(inf)` emits the bare token `Infinity`,
+    # which is not valid JSON and which Go's decoder refuses. Including it would
+    # make this corpus file unreadable by the differential it feeds.
+    #
+    # That is a real cross-plane divergence in the TOOLING rather than in the
+    # adapter, and it is the same class lane-4441 flagged for U+2028: two
+    # encoders that mostly agree, differing on a carve-out. Both planes DO
+    # agree on the input itself -- Python finds `inf` truthy and raises in
+    # fromisoformat, and the Go adapter's float parse returns out-of-range
+    # and then fails its not-a-string check -- so the case is covered by a
+    # direct test rather than a corpus row it cannot survive.
+]
+MAGNITUDE_STRINGS: list[Any] = [str(value) for value in MAGNITUDES] + [
+    "0" * 40,  # collapses to zero in both planes
+    "9" * 40,
+    "00000000000000000000000000000001",
+]
+
 _UUID = "7b9583ee-4d24-2be7-4d09-34f815bebdd7"
 UUID_PREFIXES = ["", "urn:uuid:", "URN:UUID:", "urn:", "uuid:", "urn:urn:uuid:"]
 UUID_BODIES = [_UUID, _UUID.upper(), _UUID.replace("-", ""), _UUID[:-1]]
@@ -143,6 +188,8 @@ def value_alphabet() -> list[Any]:
     values.extend(NON_STRINGS)
     values.extend(datetime_values())
     values.extend(uuid_values())
+    values.extend(MAGNITUDES)
+    values.extend(MAGNITUDE_STRINGS)
     values.extend(["not-a-date", "15/08/2026", "2026-13-45"])
     return values
 
@@ -281,7 +328,11 @@ def main() -> int:
             "cases": cases,
         }
 
-    rendered = json.dumps(payload, indent=1, sort_keys=True) + "\n"
+    # allow_nan=False: json.dumps otherwise emits the bare tokens `Infinity`,
+    # `-Infinity` and `NaN`, which are NOT valid JSON and which Go's decoder
+    # rejects with a bare "invalid character 'I'". Failing here names the
+    # offending value instead of writing a corpus that silently cannot be read.
+    rendered = json.dumps(payload, indent=1, sort_keys=True, allow_nan=False) + "\n"
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
             handle.write(rendered)

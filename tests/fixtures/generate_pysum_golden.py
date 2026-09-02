@@ -73,7 +73,7 @@ def _window_stats(churns: list[float]) -> list[CommitStatRow]:
 
 
 def _gini_corpus() -> list[list[float]]:
-    return [
+    corpus: list[list[float]] = [
         [1, 5, 20],  # 3 authors: the minimum where compensation is nonzero
         [1, 1, 1, 1, 1],  # perfect equality
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -82,6 +82,22 @@ def _gini_corpus() -> list[list[float]]:
         [7, 7, 7, 13, 13, 13, 13, 91, 91, 5000],
         list(range(1, 41)),  # 40 authors, a realistic-sized team churn spread
     ]
+    # codex round 1 on #2107 (P2, EXECUTED): every value above is small enough
+    # that BOTH every individual term AND the running numerator sum stay well
+    # under 2**53 -- which is the actual condition for naive and compensated
+    # summation to agree, not "every input is an integer" as an earlier
+    # RISK-NOTES draft claimed. `numerator = sum((i+1)*val for i, val in
+    # enumerate(churns))` grows roughly as len(churns)**2/2 * max(churns), so
+    # a large CONTRIBUTOR COUNT is enough to cross 2**53 even with every
+    # individual churn value comfortably inside int32. 3000 authors at
+    # int32-max churn each (a schema-valid, if extreme, input -- additions is
+    # int32 in ClickHouse and the 30-day loader has no row cap) reproduces
+    # codex's divergence with a much smaller, faster corpus entry than their
+    # 100,000-author repro:
+    #   naive numerator   bits 0x43412bfeffdda81c
+    #   sum() numerator    bits 0x43412bfeffdda802   (measured, this session)
+    corpus.append([2_147_483_647] * 3000)
+    return corpus
 
 
 def _gini_cases() -> list[dict[str, Any]]:

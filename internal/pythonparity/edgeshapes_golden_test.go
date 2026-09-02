@@ -118,9 +118,21 @@ func TestEdgeShapesActuallyCoverWhatTheyClaim(t *testing.T) {
 	}
 
 	for _, required := range []struct{ token, why string }{
-		{"NaN", "the NaN token"},
-		{"Infinity", "the +Infinity token"},
-		{"-Infinity", "the -Infinity token, which no real corpus row carries"},
+		// Matched in VALUE POSITION (": " prefix) and with NO trailing quote.
+		//
+		// Both halves are load-bearing. Without the prefix, `"Infinity"` is a
+		// SUBSTRING of `"-Infinity"`, so a fixture carrying only -Infinity
+		// satisfies the +Infinity check -- this test passed on a planted case
+		// holding NaN, -Infinity, -Infinity, which is the exact two-distinct-
+		// token mislabel it was written to catch. And a trailing quote would
+		// match NOTHING, because these tokens are BARE: they are followed by
+		// `}` or `,`, never `"`. That version fails on a CORRECT fixture.
+		//
+		// `": Infinity"` cannot be satisfied by -Infinity, because there the
+		// colon-space is followed by `-`.
+		{": NaN", "the NaN token"},
+		{": Infinity", "the +Infinity token"},
+		{": -Infinity", "the -Infinity token, which no real corpus row carries"},
 		// Searched as SIX-CHARACTER TEXT, not as the characters themselves.
 		// ensure_ascii output contains the escape SEQUENCE, so the literal rune
 		// never appears -- searching for it would fail on a CORRECT fixture. It
@@ -142,7 +154,7 @@ func TestEdgeShapesActuallyCoverWhatTheyClaim(t *testing.T) {
 
 	// The mislabel that was actually found, pinned so it cannot come back.
 	if got := byName["all-three-tokens"]; got != "" {
-		for _, token := range []string{"NaN", "Infinity", "-Infinity"} {
+		for _, token := range []string{": NaN", ": Infinity", ": -Infinity"} {
 			if !strings.Contains(got, token) {
 				t.Errorf("case `all-three-tokens` does not contain %q; a case whose "+
 					"NAME promises coverage must actually carry it, or the next "+

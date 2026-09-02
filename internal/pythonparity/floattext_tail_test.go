@@ -14,6 +14,14 @@ import (
 // finding its last nonzero fractional digit.
 const maxSignificantFractionPlace = 1074
 
+// expectedTailLawValueCount pins the size of the law's domain.
+//
+// Not a style assertion: every test in this file ranges over tailLawValues, so
+// emptying or shrinking it silently disables them all while they continue to
+// report ok. Raise this deliberately when adding a value -- the corpus overlap
+// test will then also require the new value to be pinned.
+const expectedTailLawValueCount = 12
+
 // tailLawValues is the domain the tail law is asserted over.
 //
 // DELIBERATELY EXCLUDES inf and nan: the law is "baseline + zero padding", and
@@ -172,8 +180,26 @@ func TestTailLawValuesArePinnedByTheCorpus(t *testing.T) {
 
 	// A corpus that lost its 1074-precision entries entirely would make the
 	// loop above vacuous, so assert the oracle is non-empty rather than trust it.
+	// Both sides must be non-empty, and for different reasons.
+	//
+	// An empty corpus side makes the loop above vacuous. An empty tailLawValues
+	// makes EVERY test in this file vacuous -- TestFormatFixedTailIsPureZeroPadding
+	// and TestFormatFixedLengthGrowsWithPrecision both range over it, so clearing
+	// the list disables the law, the length check and this invariant at once,
+	// and all three still report ok. Verified by planting it.
+	//
+	// That is the defect class this whole PR exists to close, reproduced inside
+	// the fix: an enforcement that can be silently switched off is not an
+	// enforcement. The count is asserted against the domain's actual size rather
+	// than merely non-zero, so deleting values is as loud as clearing the list.
 	if len(pinned) == 0 {
 		t.Fatal("no corpus entries at precision 1074; this test would pass vacuously")
+	}
+	if len(tailLawValues) < expectedTailLawValueCount {
+		t.Fatalf("tailLawValues has %d entries, expected at least %d: the law, the "+
+			"length check and this invariant all range over it, so shrinking it "+
+			"disables all three while every test still reports ok",
+			len(tailLawValues), expectedTailLawValueCount)
 	}
 	t.Logf("baselines pinned at precision %d: %d; law values checked: %d",
 		maxSignificantFractionPlace, len(pinned), len(tailLawValues))

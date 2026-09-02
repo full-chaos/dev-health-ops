@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import math
 import platform
+import struct
 import sys
 import unicodedata
 
@@ -245,13 +246,24 @@ def main() -> None:
     # Assert rather than document: a declared value that cannot be covered is a
     # generator bug, and it must fail here rather than produce a corpus that
     # quietly omits it.
+    # Compare by BIT PATTERN, not `==`. Python's -0.0 == 0.0 is True, so an
+    # equality check reports -0.0 as present whenever +0.0 is, and removing
+    # -0.0 from _SPECIALS produces a corpus with no negative-zero entry while
+    # this refusal accepts it (verified: generator exited 0, zero -0.0 rows).
+    #
+    # The Go half of this same enforcement already compares math.Float64bits.
+    # Using `==` here made the two halves of one guard disagree about what
+    # "the same value" means -- and signed zero is exactly the case the corpus
+    # exists to pin, since it survives into str() output as "-0.0".
+    def _bits(value: float) -> bytes:
+        return struct.pack("<d", value)
+
+    present = {_bits(existing) for existing in values if not math.isnan(existing)}
+    has_nan = any(math.isnan(existing) for existing in values)
     missing_from_values = [
         candidate
         for candidate in tail_values
-        if not any(
-            math.isnan(candidate) if math.isnan(existing) else candidate == existing
-            for existing in values
-        )
+        if not (has_nan if math.isnan(candidate) else _bits(candidate) in present)
     ]
     if missing_from_values:
         raise SystemExit(

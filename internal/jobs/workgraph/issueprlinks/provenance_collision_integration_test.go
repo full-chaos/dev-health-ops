@@ -530,6 +530,24 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 	// toUnixTimestamp mutant.
 	assertLastSynced(ctx, t, conn, keyF, "2026-01-04 00:00:00.500")
 	assertLastSynced(ctx, t, conn, keyA, "2026-01-01 00:00:00.000")
+
+	// EVERY key survived, not merely "some rows are present". A copy that
+	// carried one key and dropped four would satisfy a non-zero count.
+	var keys uint64
+	if err := conn.QueryRow(ctx,
+		"SELECT uniqExact(work_item_id) FROM work_graph_issue_pr").Scan(&keys); err != nil {
+		t.Fatalf("count distinct keys: %v", err)
+	}
+	if keys != 5 {
+		t.Errorf("%d distinct keys survived the migration, want 5 -- the copy lost keys", keys)
+	}
+
+	// EVERY CARRIED COLUMN, with values distinct per row, on a row that was
+	// written BEFORE the migration and carried through it. The other test
+	// checks this on rows written after; only here does it prove the copy
+	// preserves column values rather than merely row identity.
+	assertSurvivingRowIntact(ctx, t, conn, keyA, org, repo, 4769,
+		1.00, "native", "seed-native", "2026-01-01 00:00:00.000")
 }
 
 // applyMigration084 runs ONE migration against the live container, the way the

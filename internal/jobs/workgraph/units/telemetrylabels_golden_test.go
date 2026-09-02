@@ -201,3 +201,84 @@ func TestStripUsesTheIsSpaceClassNotTheNumericOne(t *testing.T) {
 	t.Logf("%d of %d probes distinguish str.isspace() from unicode.IsSpace",
 		divergent, len(golden.WhitespaceProbes))
 }
+
+// TestSigmaLookaheadDivergesAtThirtyOne pins the exact boundary of the one known
+// difference between x/text and CPython's str.lower().
+//
+// Recorded as a measurement rather than a caveat: "x/text is approximately
+// right" is not a fact anyone can act on, whereas "it diverges at exactly 31
+// case-ignorable runes" tells a future reader where to look and lets them notice
+// if a Go or x/text release moves it.
+func TestSigmaLookaheadDivergesAtThirtyOne(t *testing.T) {
+	sigmaForm := func(dotCount int) rune {
+		input := "AΣ" + strings.Repeat(".", dotCount) + "B"
+		for _, character := range pythonLower(input) {
+			if character == 'σ' || character == 'ς' {
+				return character
+			}
+		}
+		t.Fatalf("no sigma survived lowering %q", input)
+		return 0
+	}
+
+	// CPython yields the MEDIAL sigma at every length, because the trailing "B"
+	// is a cased letter at any distance.
+	for _, dotCount := range []int{0, 1, 29, 30} {
+		if got := sigmaForm(dotCount); got != 'σ' {
+			t.Errorf("with %d case-ignorable runes: x/text gave %q, want medial σ "+
+				"(CPython gives medial at every length)", dotCount, got)
+		}
+	}
+	for _, dotCount := range []int{31, 32, 50} {
+		if got := sigmaForm(dotCount); got != 'ς' {
+			t.Errorf("with %d case-ignorable runes: x/text gave %q, expected the "+
+				"known FINAL-sigma divergence ς. If x/text has been fixed, delete "+
+				"this half of the test and the containment comment in "+
+				"telemetrylabels.go -- do not just widen the bound", dotCount, got)
+		}
+	}
+}
+
+// TestSigmaFormCannotChangeABucket is the containment proof that makes the
+// divergence above acceptable.
+//
+// Both sigma spellings are non-ASCII; every allow-list entry and every
+// ModelBucket prefix is ASCII. So no bucket decision can depend on which form
+// appears. This test fails the moment that stops being true -- a non-ASCII
+// allow-list entry, a non-ASCII prefix, or pythonLower being exported to a
+// caller that does not bound its output.
+func TestSigmaFormCannotChangeABucket(t *testing.T) {
+	replaceSigma := func(value string, with rune) string {
+		var builder strings.Builder
+		for _, character := range value {
+			if character == 'Σ' {
+				builder.WriteRune(with)
+				continue
+			}
+			builder.WriteRune(character)
+		}
+		return builder.String()
+	}
+
+	for _, dotCount := range []int{0, 30, 31, 50} {
+		dots := strings.Repeat(".", dotCount)
+		for _, template := range []string{
+			"AΣ" + dots + "B",
+			"openaiΣ" + dots + "B",
+			"gpt-5-nanoΣ" + dots + "B",
+			"claudeΣ" + dots + "B",
+			"Σ" + dots + "Bopenai",
+		} {
+			medial := replaceSigma(template, 'σ')
+			final := replaceSigma(template, 'ς')
+			if ProviderBucket(medial) != ProviderBucket(final) {
+				t.Errorf("ProviderBucket depends on the sigma form for %q: %q vs %q",
+					template, ProviderBucket(medial), ProviderBucket(final))
+			}
+			if ModelBucket(medial) != ModelBucket(final) {
+				t.Errorf("ModelBucket depends on the sigma form for %q: %q vs %q",
+					template, ModelBucket(medial), ModelBucket(final))
+			}
+		}
+	}
+}

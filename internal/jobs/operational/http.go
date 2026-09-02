@@ -72,6 +72,10 @@ func (dispatcher *HTTPDispatcher) DispatchBilling(ctx context.Context, notificat
 		"notification_id":   notification.ID,
 		"organization_id":   notification.OrganizationID,
 		"notification_type": notification.NotificationType,
+		// CHAOS-3952: crossed so the bridge receiver can verify its own read
+		// of the durable row against Go's, and so the row's own completion
+		// fence is keyed on the same value both sides agree identifies it.
+		"idempotency_key": notification.IdempotencyKey,
 	}, "sent")
 }
 

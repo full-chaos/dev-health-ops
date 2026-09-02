@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +20,9 @@ from tests._helpers import tables_of
 
 
 class _CallableCeleryTask(Protocol):
-    def __call__(self, email_type: str, org_id: str, **kwargs: Any) -> dict: ...
+    def __call__(
+        self, email_type: str | None = None, org_id: str | None = None, **kwargs: Any
+    ) -> dict: ...
     def push_request(self, **kwargs: Any) -> None: ...
     def pop_request(self) -> None: ...
 
@@ -1786,3 +1789,136 @@ class TestInvalidOrgIdGuards:
         assert "private mail provider response" not in caplog.text
         assert org_id not in caplog.text
         assert "subscription_cancelled" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-3952: a lost HTTP response after Python already sent the email must
+# not resend it on the River retry. The durable row stays loadable across
+# retries (nothing marks it consumed), so two identical dispatches from the
+# bridge — same durable_notification_id, simulating "Go never saw success and
+# retried" — must still send exactly one email.
+# ---------------------------------------------------------------------------
+
+
+class TestBillingNotificationCompletionFence:
+    def test_duplicate_durable_dispatch_sends_exactly_one_email(self):
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        notification_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        key = "billing:fence-key"
+        task = cast(_CallableCeleryTask, send_billing_notification)
+
+        # A tiny in-memory stand-in for the durable row: real code marks
+        # completed_at via `_mark_billing_notification_completed`, which this
+        # fake honours, so the second `_load_billing_notification` call sees
+        # exactly what the first call's fence write left behind.
+        row: dict[str, Any] = {
+            "email_type": "invoice_receipt",
+            "org_id": org_id,
+            "attributes": {
+                "amount_cents": 500,
+                "currency": "usd",
+                "invoice_url": "https://x",
+            },
+            "idempotency_key": key,
+            "completed_at": None,
+        }
+
+        def fake_load(_id: str):
+            return (
+                row["email_type"],
+                row["org_id"],
+                row["attributes"],
+                row["idempotency_key"],
+                row["completed_at"],
+            )
+
+        def fake_mark(_id: str) -> None:
+            row["completed_at"] = datetime.now(timezone.utc)
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                side_effect=fake_load,
+            ),
+            patch(
+                "dev_health_ops.workers.system_ops._mark_billing_notification_completed",
+                side_effect=fake_mark,
+            ),
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as send_invoice_receipt,
+        ):
+            task.push_request(id="billing-fence-1", retries=0)
+            try:
+                first = task(
+                    durable_notification_id=notification_id, idempotency_key=key
+                )
+            finally:
+                task.pop_request()
+
+            task.push_request(id="billing-fence-2", retries=0)
+            try:
+                second = task(
+                    durable_notification_id=notification_id, idempotency_key=key
+                )
+            finally:
+                task.pop_request()
+
+        assert first["status"] == "sent"
+        assert first.get("already_sent") is not True
+        assert second["status"] == "sent"
+        assert second.get("already_sent") is True
+        # The defect (CHAOS-3952): a lost-response retry replays the durable
+        # row unchanged, so nothing distinguished the second dispatch from
+        # the first and the email went out twice.
+        assert send_invoice_receipt.call_count == 1, (
+            f"expected exactly one email dispatch across two identical "
+            f"durable retries, got {send_invoice_receipt.call_count}"
+        )
+
+    def test_idempotency_key_mismatch_is_dropped_without_sending(self):
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        notification_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        task = cast(_CallableCeleryTask, send_billing_notification)
+
+        with (
+            patch(
+                "dev_health_ops.workers.system_ops._load_billing_notification",
+                return_value=(
+                    "invoice_receipt",
+                    org_id,
+                    {
+                        "amount_cents": 500,
+                        "currency": "usd",
+                        "invoice_url": "https://x",
+                    },
+                    "billing:actual-key",
+                    None,
+                ),
+            ),
+            patch(
+                "dev_health_ops.api.services.billing_emails.send_invoice_receipt",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as send_invoice_receipt,
+        ):
+            task.push_request(id="billing-fence-mismatch", retries=0)
+            try:
+                result = task(
+                    durable_notification_id=notification_id,
+                    idempotency_key="billing:wrong-key",
+                )
+            finally:
+                task.pop_request()
+
+        assert result == {
+            "status": "dropped",
+            "reason": "idempotency_key_mismatch",
+        }
+        send_invoice_receipt.assert_not_called()

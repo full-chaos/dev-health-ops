@@ -8,6 +8,9 @@ from typing import Any, cast
 
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.system_ops_metrics import (
+    BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,7 @@ def send_billing_notification(
     days_remaining: int = 0,
     trial_end_date: str = "",
     durable_notification_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Send billing email notification via worker queue.
 
@@ -59,6 +63,14 @@ def send_billing_notification(
         tier: Current tier name (subscription_cancelled only)
         days_remaining: Trial days remaining (trial_expiring only)
         trial_end_date: Trial end ISO date (trial_started/trial_expiring only)
+        durable_notification_id: Row id in ``billing_notifications``; when set,
+                    all other fields are loaded from that row and this call
+                    is subject to the completion fence below (CHAOS-3952).
+        idempotency_key: The bridge's own copy of the durable row's
+                    idempotency key. Optional (older callers omit it), but
+                    when present it must match the row's stored key —
+                    a mismatch means the two sides disagree about identity
+                    and is never safe to act on.
 
     Returns:
         dict with send status
@@ -69,7 +81,27 @@ def send_billing_notification(
         durable = _load_billing_notification(durable_notification_id)
         if durable is None:
             return {"status": "dropped", "reason": "missing_durable_notification"}
-        email_type, org_id, attributes = durable
+        email_type, org_id, attributes, durable_idempotency_key, completed_at = durable
+        if idempotency_key is not None and idempotency_key != durable_idempotency_key:
+            logger.error("Billing notification dropped: idempotency key mismatch")
+            BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
+                outcome="key_mismatch"
+            ).inc()
+            return {"status": "dropped", "reason": "idempotency_key_mismatch"}
+        if completed_at is not None:
+            # CHAOS-3952: the durable row already recorded a completed send.
+            # This call is a retry that replayed the same row unchanged (the
+            # HTTP response back to Go was lost after Python already sent) —
+            # skip the effect entirely rather than sending the email again.
+            BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
+                outcome="duplicate_suppressed"
+            ).inc()
+            return {
+                "status": "sent",
+                "email_type": email_type,
+                "org_id": org_id,
+                "already_sent": True,
+            }
         amount_cents = int(cast(Any, attributes.get("amount_cents", 0)))
         currency = str(attributes.get("currency", "usd"))
         invoice_url = str(attributes.get("invoice_url", ""))
@@ -125,6 +157,12 @@ def send_billing_notification(
 
     try:
         run_async(fn(org_uuid))
+        if durable_notification_id:
+            # Record the fence only after the send call has returned
+            # successfully — never before — so a crash mid-send still
+            # allows a legitimate retry to send.
+            _mark_billing_notification_completed(durable_notification_id)
+            BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(outcome="sent").inc()
         return {"status": "sent", "email_type": email_type, "org_id": org_id}
     except Exception as exc:
         logger.warning(
@@ -137,7 +175,7 @@ def send_billing_notification(
 
 def _load_billing_notification(
     durable_notification_id: str,
-) -> tuple[str, str, dict[str, object]] | None:
+) -> tuple[str, str, dict[str, object], str, datetime | None] | None:
     try:
         notification_uuid = uuid.UUID(durable_notification_id)
     except ValueError:
@@ -160,10 +198,42 @@ def _load_billing_notification(
                 notification.notification_type,
                 str(notification.org_id),
                 dict(notification.attributes),
+                notification.idempotency_key,
+                notification.completed_at,
             )
     except Exception:
         logger.error("Unable to load durable billing notification")
         raise
+
+
+def _mark_billing_notification_completed(durable_notification_id: str) -> None:
+    """Set the CHAOS-3952 completion fence for one durable billing row.
+
+    A single ``UPDATE ... WHERE completed_at IS NULL`` is the atomicity
+    boundary: PostgreSQL serializes concurrent updates to the same row, so
+    whichever caller's UPDATE commits first is the one that actually claims
+    the fence — a second, truly concurrent caller matches zero rows rather
+    than racing a read-then-write.
+    """
+    try:
+        notification_uuid = uuid.UUID(durable_notification_id)
+    except ValueError:
+        return
+    from sqlalchemy import update
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.operational_deliveries import BillingNotification
+
+    with get_postgres_session_sync() as session:
+        # get_postgres_session_sync commits on clean exit from this block.
+        session.execute(
+            update(BillingNotification)
+            .where(
+                BillingNotification.id == notification_uuid,
+                BillingNotification.completed_at.is_(None),
+            )
+            .values(completed_at=datetime.now(timezone.utc))
+        )
 
 
 @celery_app.task(

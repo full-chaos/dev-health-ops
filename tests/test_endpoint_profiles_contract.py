@@ -1842,6 +1842,67 @@ def test_shallow_ancestry_is_unverifiable_even_when_the_object_is_present(tmp_pa
     assert "truncated" in note, note
 
 
+def test_shallow_still_reports_a_stale_commit_it_can_actually_disprove(tmp_path):
+    """Shallow is not a blanket excuse -- the counterweight to the test above.
+
+    A shallow clone that retained BOTH divergent paths and their merge base can
+    still PROVE a commit is off this history. Downgrading that to UNVERIFIED
+    would let a genuinely stale `source_commit` through a gate whose whole job is
+    to catch it, so the downgrade is keyed on whether the ancestry question
+    actually crossed the boundary (`merge-base` computable) rather than on
+    shallowness alone.
+    """
+    origin = _tiny_repo(tmp_path)
+    for text in ("b", "c"):
+        (origin / "f").write_text(f"{text}\n")
+        _git(origin, "commit", "-qam", text)
+    _git(origin, "checkout", "-q", "-b", "side")
+    (origin / "f").write_text("side\n")
+    _git(origin, "commit", "-qam", "side")
+    abandoned = _git(origin, "rev-parse", "HEAD")
+    _git(origin, "checkout", "-q", "main")
+    for text in ("d", "e", "f"):
+        (origin / "f").write_text(f"{text}\n")
+        _git(origin, "commit", "-qam", text)
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--depth",
+            "4",
+            "-b",
+            "main",
+            f"file://{origin}",
+            str(clone),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(clone), "fetch", "-q", "--depth", "4", "origin", "side"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Shallow, the commit is present, it is NOT an ancestor -- and unlike the
+    # truncated case above, the merge base IS retained, so this is provable.
+    assert _git(clone, "rev-parse", "--is-shallow-repository") == "true"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(clone), "merge-base", abandoned, "HEAD"],
+            capture_output=True,
+        ).returncode
+        == 0
+    ), "fixture no longer reproduces: the merge base must be retained"
+
+    errors, note = checker.check_source_commit(clone, {"source_commit": abandoned})
+    assert any("does not descend" in e for e in errors), (errors, note)
+    assert note is None, note
+
+
 def test_the_committed_inventory_source_commit_is_an_ancestor_of_head():
     inventory = checker.load_json(_INVENTORY_PATH)
     errors, _note = checker.check_source_commit(_REPO_ROOT, inventory)

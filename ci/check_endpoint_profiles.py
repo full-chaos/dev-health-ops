@@ -491,7 +491,17 @@ def check_source_commit(root: Path, inventory: dict) -> tuple[list[str], str | N
         return errors, None
 
     if _git(root, "merge-base", "--is-ancestor", commit, "HEAD").returncode != 0:
-        if shallow:
+        # Shallow alone is NOT enough to excuse the answer. A shallow clone can
+        # still PROVE divergence whenever it retained both paths and their merge
+        # base -- an abandoned side branch inside the fetched depth is exactly
+        # that, and downgrading it would let a genuinely stale source_commit
+        # through. The question is narrower: did this ancestry question cross the
+        # boundary? `merge-base` answers it. A computable base means the two
+        # histories connect in the retained graph, so "not an ancestor" is
+        # conclusive; no base means the connection was truncated away, and only
+        # then is the honest answer "cannot tell".
+        truncated = _git(root, "merge-base", commit, "HEAD").returncode != 0
+        if shallow and truncated:
             # The object is PRESENT but its history is cut at the shallow
             # boundary, so `--is-ancestor` answers "no" where the truthful
             # answer is "cannot tell". Guarding only the absent case above left

@@ -189,6 +189,18 @@ CARRIED_COLUMNS = (
 )
 
 TABLE = "work_graph_issue_pr"
+
+# TEST SEAM. None in production, and there is exactly one call site: between the
+# snapshot key-count and the copy.
+#
+# The window between those two steps is the one a background merge can use to
+# delete the older (native) row while the conservation check still passes, and
+# it is not reachable deterministically from outside -- a pre-084 table with
+# merges enabled may collapse a contested key at any instant, so "native still
+# present, merges running, migration mid-snapshot" cannot be held open by
+# arranging the fixture. The acceptance test sets this hook to force a merge
+# exactly there instead of racing for it.
+after_snapshot_hook = None
 SHADOW = f"{TABLE}_new"
 VERSION_COLUMN = "version_rank"
 
@@ -295,6 +307,33 @@ def _replace_table_name(ddl: str, old: str, new: str) -> str:
     return result
 
 
+def _source_fingerprint(client, table: str) -> tuple[tuple[str, ...], int]:
+    """The source's active part names and exact row count.
+
+    Taken once after STOP MERGES and again before EXCHANGE. If it moved, a
+    merge ran under the copy despite the guard, and on a contested key a merge
+    deletes the OLDER row -- the native one. The conservation check cannot see
+    that: one key remains one key.
+
+    This exists because `SYSTEM STOP MERGES` is not a counter. Measured: two
+    STOPs followed by ONE START re-enable merges. So any concurrent START --
+    an operator, or another migration's own `finally` -- silently re-arms
+    merges underneath this copy, and the guard alone cannot be trusted to have
+    held for the whole window. Detection turns a silent fallback promotion into
+    a loud refusal.
+    """
+    parts = client.query(
+        "SELECT name FROM system.parts "
+        "WHERE database = currentDatabase() AND table = {name:String} AND active "
+        "ORDER BY name",
+        parameters={"name": table},
+    )
+    rows = client.query(f"SELECT count() FROM `{table}`")
+    part_names = tuple(str(r[0]) for r in (getattr(parts, "result_rows", None) or []))
+    count_rows = getattr(rows, "result_rows", None) or []
+    return part_names, int(count_rows[0][0]) if count_rows and count_rows[0] else 0
+
+
 def _version_expression(client, table: str) -> str:
     """The MATERIALIZED expression actually stored for the version column."""
     res = client.query(
@@ -307,9 +346,36 @@ def _version_expression(client, table: str) -> str:
     return str(rows[0][0]) if rows and rows[0] else ""
 
 
-def _normalize_expression(expression: str) -> str:
-    """Whitespace- and backtick-insensitive comparison of two SQL expressions."""
-    return re.sub(r"\s+", "", expression.replace("`", ""))
+def _canonical_expression(client, expression: str) -> str:
+    """What ClickHouse STORES for `expression`, obtained by round-tripping it.
+
+    Text comparison cannot work here. ClickHouse canonicalises a MATERIALIZED
+    expression when it stores it -- notably by adding grouping parentheses:
+
+        given  (multiIf(...) + 1) * 35184372088832 + toUnixTimestamp64Milli(x)
+        stored ((multiIf(...) + 1) * 35184372088832) + toUnixTimestamp64Milli(x)
+
+    so a table THIS MIGRATION CREATED failed its own skip-path check on every
+    rerun (codex round 3, P1). Normalising harder is not the fix: stripping
+    parentheses would let genuinely different expressions compare equal, and
+    the next canonicalisation change would break it again.
+
+    Instead both sides are put through the SAME canonicaliser -- ClickHouse's
+    own -- by creating a scratch table with the intended expression and reading
+    back what `system.columns` holds for it.
+    """
+    scratch = f"{TABLE}_expr_probe"
+    client.command(f"DROP TABLE IF EXISTS `{scratch}`")
+    try:
+        client.command(
+            f"CREATE TABLE `{scratch}` (provenance String, "
+            f"last_synced DateTime64(3, 'UTC'), "
+            f"`{VERSION_COLUMN}` UInt64 MATERIALIZED {expression}) "
+            f"ENGINE = MergeTree ORDER BY provenance"
+        )
+        return _version_expression(client, scratch)
+    finally:
+        client.command(f"DROP TABLE IF EXISTS `{scratch}`")
 
 
 def _column_shape(client, table: str) -> list[tuple[str, str, str]]:
@@ -406,7 +472,7 @@ def _rebuild(client) -> None:
         # would otherwise be skipped forever while keeping part-recency
         # behaviour -- migrated in name only. Codex round 2, P2.
         actual = _version_expression(client, TABLE)
-        if _normalize_expression(actual) != _normalize_expression(VERSION_EXPRESSION):
+        if actual != _canonical_expression(client, VERSION_EXPRESSION):
             raise RuntimeError(
                 f"{TABLE} is already versioned on {VERSION_COLUMN}, but its "
                 f"expression is {actual!r}, not this migration's "
@@ -425,6 +491,29 @@ def _rebuild(client) -> None:
     # Fail closed BEFORE building anything if the table is not what we copy.
     _assert_carried_columns_match(client, TABLE)
 
+    # STOP MERGES ON THE SOURCE, and this is the difference between a migration
+    # that promotes the native row and one that destroys it.
+    #
+    # The source is still `ReplacingMergeTree(last_synced)` while we snapshot
+    # and copy it. A background merge landing after the key count but before
+    # `_copy` physically removes the OLDER row -- which on a contested key is
+    # exactly the native one -- and the conservation check cannot see it,
+    # because one key remains one key. The fallback is then swapped in and the
+    # original dropped (codex round 3, P1).
+    #
+    # The window is the migration's own, so the guard belongs here rather than
+    # in whatever happens to be running around it. An earlier version of the
+    # acceptance test stopped merges around its migration call, which
+    # manufactured this protection and hid the defect.
+    client.command(f"SYSTEM STOP MERGES `{TABLE}`")
+    try:
+        _rebuild_guarded(client)
+    finally:
+        client.command(f"SYSTEM START MERGES `{TABLE}`")
+
+
+def _rebuild_guarded(client) -> None:
+    """The rebuild proper, with the source's merges already stopped."""
     original_key = _sorting_key(client, TABLE)
     key_columns = [c.strip() for c in original_key.strip("() ").split(",") if c.strip()]
 
@@ -454,6 +543,9 @@ def _rebuild(client) -> None:
     _assert_shadow_matches(client, TABLE, SHADOW)
 
     before = _distinct_key_count(client, TABLE, key_columns)
+    fingerprint = _source_fingerprint(client, TABLE)
+    if after_snapshot_hook is not None:
+        after_snapshot_hook()
     _copy(client, TABLE, SHADOW)
     after = _distinct_key_count(client, SHADOW, key_columns)
     # Distinct KEY TUPLES, not raw rows. Raw counts legitimately differ: the copy
@@ -464,6 +556,20 @@ def _rebuild(client) -> None:
         raise RuntimeError(
             f"{TABLE}: {before} distinct sorting-key tuples but the shadow has "
             f"{after}; aborting without swapping"
+        )
+
+    # Refuse if the source moved under the copy. Checked BEFORE the swap, so a
+    # failure leaves the original table untouched and the shadow disposable.
+    moved = _source_fingerprint(client, TABLE)
+    if moved != fingerprint:
+        client.command(f"DROP TABLE IF EXISTS `{SHADOW}`")
+        raise RuntimeError(
+            f"{TABLE} changed between the snapshot and the copy: parts/rows went "
+            f"{fingerprint!r} -> {moved!r}. A merge ran under the copy despite "
+            "SYSTEM STOP MERGES (which is not a counter -- any concurrent START "
+            "re-arms merges), so the copy may be missing the native rows this "
+            "migration exists to promote. Refusing to EXCHANGE; the source is "
+            "untouched. Re-run with writers and operator merges quiesced."
         )
 
     log.info(f"  {TABLE}: EXCHANGE with `{SHADOW}` ({before} distinct keys carried)")

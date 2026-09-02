@@ -461,16 +461,31 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 	chschema.Apply(ctx, t, instance)
 	conn := openConn(ctx, t, instance)
 
-	// Rewind to the pre-084 shape: the chain has already migrated the table,
-	// so recreate it as migration 014+024 left it and let 084 do the work.
-	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS work_graph_issue_pr")
-	mustExec(ctx, t, conn, `CREATE TABLE work_graph_issue_pr (
-		repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32,
-		provenance String, evidence String, last_synced DateTime64(3,'UTC'),
-		org_id String DEFAULT 'default'
-	) ENGINE = ReplacingMergeTree(last_synced)
-	ORDER BY (org_id, repo_id, work_item_id, pr_number)`)
+	// Rewind to the pre-084 shape by DERIVING it from the live chain, not by
+	// hand-writing it.
+	//
+	// A hand-written rewind is the trial-table defect one level up: if the real
+	// 014+024 leave a setting, codec or default this test does not reproduce,
+	// the migration is exercised against something EASIER than production and
+	// stays green on a shape it was never tested against.
+	//
+	// So the shape comes from `SHOW CREATE TABLE` on the chain-migrated table,
+	// with only what 084 itself changed inverted: drop the version column,
+	// restore ReplacingMergeTree(last_synced). Everything else -- columns,
+	// types, ORDER BY, settings -- comes from the chain.
+	rewindToPre084(ctx, t, conn)
+
+	// Merges are stopped only while the FIXTURE is built, so the seeded rows are
+	// all present when the migration starts. They are restarted immediately
+	// before the migration call below -- see the note there.
 	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+
+	// NOTE: merges are deliberately RUNNING across the migration call.
+	// An earlier version did, which manufactured the protection the migration
+	// lacked and hid a P1: a background merge inside the migration's own copy
+	// window removes the older (native) row while the key-count conservation
+	// check still passes. The migration now stops merges itself; this test must
+	// exercise that guard rather than substitute for it.
 
 	const (
 		org  = "00000000-4769-0000-0000-000000000001"
@@ -507,14 +522,42 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 		t.Fatalf("seeded %d rows, want 10 -- fixture broken before the migration runs", before)
 	}
 
-	applyMigration084(ctx, t, instance)
+	// Merges stay STOPPED across this call, deliberately, and that is not the
+	// masking this test was criticised for.
+	//
+	// Re-enabling them here was tried and is worse than useless: between the
+	// START and the migration's own STOP there is a window nothing controls,
+	// and a background merge collapses the contested keys by `last_synced`
+	// BEFORE the migration begins. Measured: 10 rows present immediately
+	// before the call, and native already gone by the time the copy ran. That
+	// is the ledger's accepted pre-migration limitation, not the P1, and it
+	// makes the test flaky about the wrong thing.
+	//
+	// The hook below reaches the real window deterministically instead.
+	t.Logf("rows immediately before the migration: %d", countRows(ctx, t, conn))
+
+	// Force a merge INSIDE the migration's snapshot->copy window.
+	//
+	// WHAT THIS PROVES: the migration's own SYSTEM STOP MERGES is load-bearing.
+	// Guarded, ClickHouse ABORTS this OPTIMIZE (Code 236 "Cancelled merging
+	// parts" -- measured on 26.6.1.1193 and 26.7.6.57) and every native row
+	// survives. With the guard removed the same statement collapses the
+	// contested keys by `last_synced` and the fallback wins, which is the
+	// migration destroying the rows it exists to promote.
+	//
+	// WHAT THIS DOES NOT PROVE: that the unguarded window is reachable by a
+	// BACKGROUND merge in a live race. That state cannot be held open from
+	// outside -- a pre-084 table with merges enabled may collapse a contested
+	// key at any instant -- so this FORCES the window rather than waiting for
+	// it. The guard is shown necessary and sufficient against a merge landing
+	// there; how likely one is to land there is not measured.
+	applyMigration084(ctx, t, instance, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
 
 	// The copy carried every key. A no-op copy leaves zero.
 	if got := countRows(ctx, t, conn); got == 0 {
 		t.Fatal("the migrated table is EMPTY: the copy carried nothing and EXCHANGE " +
 			"swapped in an empty shadow -- this is the total-data-loss case")
 	}
-	mustExec(ctx, t, conn, "SYSTEM START MERGES work_graph_issue_pr")
 	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
 
 	for _, c := range []struct{ key, want, why string }{
@@ -552,7 +595,18 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 
 // applyMigration084 runs ONE migration against the live container, the way the
 // production runner does, so the copy is exercised on rows that already exist.
-func applyMigration084(ctx context.Context, t *testing.T, instance *containers.Instance) {
+func applyMigration084(
+	ctx context.Context, t *testing.T, instance *containers.Instance, afterSnapshotSQL string,
+) {
+	t.Helper()
+	if err := runMigration084(ctx, t, instance, afterSnapshotSQL); err != nil {
+		t.Fatalf("apply migration 084: %v", err)
+	}
+}
+
+func runMigration084(
+	ctx context.Context, t *testing.T, instance *containers.Instance, afterSnapshotSQL string,
+) error {
 	t.Helper()
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
 	if err != nil {
@@ -560,11 +614,34 @@ func applyMigration084(ctx context.Context, t *testing.T, instance *containers.I
 	}
 	root := repoRootForMigration(t)
 	script := `
-import sys, runpy
+import sys, importlib.util
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 sink = ClickHouseMetricsSink(dsn=sys.argv[1])
 try:
-    runpy.run_path(sys.argv[2])["upgrade"](sink.client)
+    # importlib, NOT runpy.run_path: run_path returns a COPY of the namespace,
+    # so assigning the hook on it would never reach the module's functions and
+    # the seam would be silently inert -- a control that cannot fail. Verified.
+    spec = importlib.util.spec_from_file_location("m084", sys.argv[2])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if len(sys.argv) > 3 and sys.argv[3]:
+        def _hook(sql=sys.argv[3], client=sink.client):
+            # Split on ";": the driver's command() takes ONE statement, so a
+            # multi-statement hook (START MERGES then OPTIMIZE) must be issued
+            # as separate calls. Sending both in one string is rejected, which
+            # reads as HOOK_REFUSED and silently turns the red into a green.
+            print("HOOK_RAN")
+            outcome = "HOOK_SUCCEEDED"
+            for statement in [part.strip() for part in sql.split(";") if part.strip()]:
+                try:
+                    client.command(statement)
+                except Exception as error:
+                    outcome = "HOOK_REFUSED"
+                    print("HOOK_STATEMENT_REFUSED", statement[:60],
+                          type(error).__name__, error)
+            print(outcome)
+        module.after_snapshot_hook = _hook
+    module.upgrade(sink.client)
 finally:
     sink.close()
 print("MIGRATION_084_APPLIED")
@@ -575,12 +652,20 @@ print("MIGRATION_084_APPLIED")
 	}
 	migration := filepath.Join(root, "src", "dev_health_ops", "migrations",
 		"clickhouse", "084_issue_pr_provenance_version_precedence.py")
-	command := exec.CommandContext(ctx, python, "-c", script, dsn, migration)
+	command := exec.CommandContext(ctx, python, "-c", script, dsn, migration, afterSnapshotSQL)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
 	out, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "MIGRATION_084_APPLIED") {
-		t.Fatalf("apply migration 084: %v\n%s", err, out)
+	if afterSnapshotSQL != "" && !strings.Contains(string(out), "HOOK_RAN") {
+		t.Fatalf("the after-snapshot hook never fired, so nothing was forced into "+
+			"the copy window and this run proves nothing:\n%s", out)
 	}
+	if afterSnapshotSQL != "" {
+		t.Logf("after-snapshot hook outcome: %s", hookOutcome(string(out)))
+	}
+	if err != nil || !strings.Contains(string(out), "MIGRATION_084_APPLIED") {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return nil
 }
 
 func repoRootForMigration(t *testing.T) string {
@@ -619,4 +704,166 @@ func assertLastSynced(ctx context.Context, t *testing.T, conn driver.Conn, workI
 	if got != want {
 		t.Errorf("%s: last_synced = %q, want %q (full millisecond precision)", workItem, got, want)
 	}
+}
+
+// rewindToPre084 recreates work_graph_issue_pr as the chain left it BEFORE
+// migration 084, deriving the shape rather than restating it.
+//
+// It also asserts the derived shape matches the DDL this test used to
+// hand-write. That assertion is the red-first for the change: if the chain
+// ever leaves a shape the hand-written version did not reproduce, this fails
+// and names the difference instead of silently testing an easier table.
+func rewindToPre084(ctx context.Context, t *testing.T, conn driver.Conn) {
+	t.Helper()
+	var live string
+	if err := conn.QueryRow(ctx, "SHOW CREATE TABLE work_graph_issue_pr").Scan(&live); err != nil {
+		t.Fatalf("SHOW CREATE TABLE: %v", err)
+	}
+
+	// Invert exactly what 084 did, and nothing else.
+	var kept []string
+	for _, line := range strings.Split(live, "\n") {
+		if strings.Contains(line, "version_rank") && strings.Contains(line, "MATERIALIZED") {
+			continue // the column 084 added
+		}
+		kept = append(kept, line)
+	}
+	derived := strings.Join(kept, "\n")
+	derived = strings.Replace(derived, "ReplacingMergeTree(version_rank)",
+		"ReplacingMergeTree(last_synced)", 1)
+	// A trailing comma is left behind when the dropped column was last.
+	derived = strings.Replace(derived, ",\n)", "\n)", 1)
+	if strings.Contains(derived, "version_rank") {
+		t.Fatalf("derived pre-084 DDL still mentions version_rank:\n%s", derived)
+	}
+
+	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS work_graph_issue_pr")
+	mustExec(ctx, t, conn, derived)
+
+	// The former hand-written shape, built in a scratch table, must match.
+	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS pre084_handwritten_probe")
+	mustExec(ctx, t, conn, `CREATE TABLE pre084_handwritten_probe (
+		repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32,
+		provenance String, evidence String, last_synced DateTime64(3,'UTC'),
+		org_id String DEFAULT 'default'
+	) ENGINE = ReplacingMergeTree(last_synced)
+	ORDER BY (org_id, repo_id, work_item_id, pr_number)`)
+	derivedShape := columnShape(ctx, t, conn, "work_graph_issue_pr")
+	handShape := columnShape(ctx, t, conn, "pre084_handwritten_probe")
+	if derivedShape != handShape {
+		t.Errorf("the pre-084 shape DERIVED from the chain differs from the "+
+			"hand-written one this test used to rely on:\n derived: %s\n hand:    %s",
+			derivedShape, handShape)
+	}
+	if a, b := sortingKey(ctx, t, conn, "work_graph_issue_pr"),
+		sortingKey(ctx, t, conn, "pre084_handwritten_probe"); a != b {
+		t.Errorf("derived sorting key %q != hand-written %q", a, b)
+	}
+	mustExec(ctx, t, conn, "DROP TABLE pre084_handwritten_probe")
+}
+
+func columnShape(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
+	t.Helper()
+	rows, err := conn.Query(ctx,
+		"SELECT name, type, default_kind FROM system.columns "+
+			"WHERE database = currentDatabase() AND table = ? ORDER BY position", table)
+	if err != nil {
+		t.Fatalf("column shape for %s: %v", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var parts []string
+	for rows.Next() {
+		var name, typ, kind string
+		if err := rows.Scan(&name, &typ, &kind); err != nil {
+			t.Fatal(err)
+		}
+		parts = append(parts, name+" "+typ+" "+kind)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func sortingKey(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
+	t.Helper()
+	var key string
+	if err := conn.QueryRow(ctx,
+		"SELECT sorting_key FROM system.tables "+
+			"WHERE database = currentDatabase() AND name = ?", table).Scan(&key); err != nil {
+		t.Fatalf("sorting key for %s: %v", table, err)
+	}
+	return key
+}
+
+// hookOutcome reports whether the forced statement was refused (the guard held)
+// or succeeded (the guard was absent).
+func hookOutcome(out string) string {
+	switch {
+	case strings.Contains(out, "HOOK_REFUSED"):
+		return "REFUSED — the migration's SYSTEM STOP MERGES held"
+	case strings.Contains(out, "HOOK_SUCCEEDED"):
+		return "SUCCEEDED — no guard was in force"
+	default:
+		return "unknown"
+	}
+}
+
+// TestMigration084RefusesWhenAMergeLandsMidCopy is the deterministic red for
+// the merge-landed detection.
+//
+// WHY DETECTION EXISTS ALONGSIDE THE GUARD: `SYSTEM STOP MERGES` is not a
+// counter. Measured on 26.7.6.57 -- two STOPs followed by ONE START re-enable
+// merges. So any concurrent START (an operator, or another migration's own
+// `finally`) silently re-arms merges underneath the copy, and the guard alone
+// cannot be trusted to have held for the whole window.
+//
+// The hook here does exactly that: START MERGES, then OPTIMIZE FINAL. With
+// detection the migration compares the source's part set and row count against
+// the snapshot and REFUSES before EXCHANGE, leaving the original untouched.
+// Without detection it swaps in a copy that is missing the native rows.
+func TestMigration084RefusesWhenAMergeLandsMidCopy(t *testing.T) {
+	ctx := context.Background()
+	instance := startClickHouse(ctx, t)
+	chschema.Apply(ctx, t, instance)
+	conn := openConn(ctx, t, instance)
+
+	rewindToPre084(ctx, t, conn)
+	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+
+	const (
+		org  = "00000000-4769-0000-0000-000000000001"
+		repo = "00000000-4769-0000-0000-000000000002"
+		keyA = "00000000-4769-0000-0000-000000000003"
+	)
+	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
+	before := countRows(ctx, t, conn)
+	if before != 2 {
+		t.Fatalf("seeded %d rows, want 2", before)
+	}
+
+	err := runMigration084(ctx, t, instance,
+		"SYSTEM START MERGES work_graph_issue_pr; OPTIMIZE TABLE work_graph_issue_pr FINAL")
+	if err == nil {
+		t.Fatal("the migration COMPLETED while a merge ran under its copy: it would " +
+			"have swapped in a table missing the native rows it exists to promote")
+	}
+	if !strings.Contains(err.Error(), "changed between the snapshot and the copy") {
+		t.Errorf("migration failed for the wrong reason: %v", err)
+	}
+
+	// Refusal must leave the ORIGINAL table usable, not half-migrated.
+	if got := engineOf(ctx, t, conn, "work_graph_issue_pr"); !strings.Contains(got, "last_synced") {
+		t.Errorf("after refusing, the source engine is %q -- expected the "+
+			"pre-084 ReplacingMergeTree(last_synced), untouched", got)
+	}
+}
+
+func engineOf(ctx context.Context, t *testing.T, conn driver.Conn, table string) string {
+	t.Helper()
+	var engine string
+	if err := conn.QueryRow(ctx,
+		"SELECT engine_full FROM system.tables "+
+			"WHERE database = currentDatabase() AND name = ?", table).Scan(&engine); err != nil {
+		t.Fatalf("engine for %s: %v", table, err)
+	}
+	return engine
 }

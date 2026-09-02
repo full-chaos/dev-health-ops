@@ -147,7 +147,7 @@ func TestIssuePRProvenanceCollisionSurvivesMerge(t *testing.T) {
 	// be a test that cannot fail on the thing it appears to check.
 	seed(ctx, t, conn, org, repo, keyC, prC, "native", 1.00, "2026-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyC, prC, "heuristic", 0.50, "2100-01-01 00:00:00.000")
-	for _, pr := range []int{prA, prB, prC} {
+	for _, pr := range []int{prA, prB, prC, 4773, 4774, 4775, 4776} {
 		mustExec(ctx, t, conn, fmt.Sprintf(
 			`INSERT INTO git_pull_requests (repo_id, number, org_id, created_at, last_synced)
 			 VALUES ('%s', %d, '%s', '2025-12-01 00:00:00.000', '2025-12-01 00:00:00.000')`,
@@ -495,6 +495,8 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 		keyC = "00000000-4769-0000-0000-000000000006"
 		keyE = "00000000-4769-0000-0000-000000000007"
 		keyF = "00000000-4769-0000-0000-000000000008"
+		keyG = "00000000-4769-0000-0000-000000000009"
+		keyH = "00000000-4769-0000-0000-00000000000a"
 	)
 	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
 	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
@@ -517,9 +519,35 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.500")
 	seed(ctx, t, conn, org, repo, keyF, 4774, "heuristic", 0.50, "2026-01-04 00:00:00.000")
 
+	// !! KEY G IS BLIND ON THE CI IMAGE PIN. Measured, both engines:
+	//
+	//     26.6.1.1193 (ci/go pin)  '9999-12-31' stores as 2299-12-31, millis
+	//                              10,413,791,999,999  -> 2**45 margin x3.38
+	//     26.7.6.57   (prod line)  '9999-12-31' stores as written, millis
+	//                              253,402,300,799,000 -> 2**45 margin x0.14
+	//
+	// DateTime64(3) SATURATES at 2299 on the pinned image and does not on the
+	// prod line. So the 2**45 defect is UNREACHABLE in CI and live in
+	// production, and the mutant proof for this key is only valid on 26.7:
+	//     26.6.1 + 2**45 mutant -> PASSES (clamped, cannot see it)
+	//     26.7   + 2**45 mutant -> FAILS, "surviving provenance heuristic, want native"
+	// Do not read a green here as certifying the multiplier. That is recorded
+	// in the PR body as a CI-vs-prod gap wider than this migration.
+	//
+	// Keys G and H sit at DateTime64(3)'s REPRESENTABLE extremes, not at a
+	// plausible-looking one. Key C used year 2100 -- an imagined extreme -- and
+	// that is exactly why the corpus could not see that 2**45 was too small:
+	// year 9999's milliseconds (253,402,300,799,000) exceed two rank steps at
+	// 2**45, so a heuristic row there outranked native and the copy discarded
+	// it. The constant is now certified against what the TYPE can hold.
+	seed(ctx, t, conn, org, repo, keyG, 4775, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyG, 4775, "heuristic", 0.50, "9999-12-31 23:59:59.999")
+	seed(ctx, t, conn, org, repo, keyH, 4776, "native", 1.00, "1900-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyH, 4776, "heuristic", 0.50, "2026-01-01 00:00:00.000")
+
 	before := countRows(ctx, t, conn)
-	if before != 10 {
-		t.Fatalf("seeded %d rows, want 10 -- fixture broken before the migration runs", before)
+	if before != 14 {
+		t.Fatalf("seeded %d rows, want 14 -- fixture broken before the migration runs", before)
 	}
 
 	// Merges stay STOPPED across this call, deliberately, and that is not the
@@ -566,6 +594,8 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 		{keyC, "native", "rank must beat a 74-year recency gap"},
 		{keyE, "native", "an unknown provenance with a pre-epoch stamp must not wrap and win"},
 		{keyF, "heuristic", "the later MILLISECOND must win among equal provenance"},
+		{keyG, "native", "rank must beat DateTime64(3)'s MAXIMUM representable stamp"},
+		{keyH, "native", "rank must hold at DateTime64(3)'s MINIMUM representable stamp"},
 	} {
 		assertOnlyProvenance(ctx, t, conn, c.key, c.want)
 	}
@@ -581,8 +611,8 @@ func TestMigration084CarriesExistingRows(t *testing.T) {
 		"SELECT uniqExact(work_item_id) FROM work_graph_issue_pr").Scan(&keys); err != nil {
 		t.Fatalf("count distinct keys: %v", err)
 	}
-	if keys != 5 {
-		t.Errorf("%d distinct keys survived the migration, want 5 -- the copy lost keys", keys)
+	if keys != 7 {
+		t.Errorf("%d distinct keys survived the migration, want 7 -- the copy lost keys", keys)
 	}
 
 	// EVERY CARRIED COLUMN, with values distinct per row, on a row that was
@@ -793,14 +823,26 @@ func sortingKey(ctx context.Context, t *testing.T, conn driver.Conn, table strin
 	return key
 }
 
-// hookOutcome reports whether the forced statement was refused (the guard held)
-// or succeeded (the guard was absent).
+// hookOutcome reports WHAT happened to the forced statement, never WHY.
+//
+// It used to say "REFUSED — the migration's SYSTEM STOP MERGES held", which
+// asserts a cause it cannot observe. A refusal for ANY reason took that label:
+// lane-4752-go demonstrated it with `OPTIMIZE TABLE no_such_table_at_all FINAL`,
+// which is refused because the table does not exist and was reported as the
+// guard holding. That is the same misreading the per-statement split was added
+// to remove -- fixed in the behaviour, left standing in the label.
+//
+// It cannot fake a green (a test failing for the wrong reason still fails), so
+// it is a false EXPLANATION on a red rather than a false pass. The accompanying
+// HOOK_STATEMENT_REFUSED line names the statement and the exception, which is
+// where the actual reason lives.
 func hookOutcome(out string) string {
 	switch {
 	case strings.Contains(out, "HOOK_REFUSED"):
-		return "REFUSED — the migration's SYSTEM STOP MERGES held"
+		return "REFUSED — a hook statement was rejected; this does NOT establish " +
+			"that the guard held (see HOOK_STATEMENT_REFUSED for which and why)"
 	case strings.Contains(out, "HOOK_SUCCEEDED"):
-		return "SUCCEEDED — no guard was in force"
+		return "SUCCEEDED — every hook statement ran"
 	default:
 		return "unknown"
 	}
@@ -866,4 +908,81 @@ func engineOf(ctx context.Context, t *testing.T, conn driver.Conn, table string)
 		t.Fatalf("engine for %s: %v", table, err)
 	}
 	return engine
+}
+
+// TestMigration084ConvergesFromAPartialRun covers the state codex round 4 found
+// unrecoverable: the version COLUMN already exists but the ENGINE was never
+// swapped, which a run interrupted between the two leaves behind.
+//
+// `_assert_shadow_matches` used to build its expected shape as "source columns
+// + version_rank". With the column already present that named it TWICE, the
+// check aborted, and the rerun dropped the shadow and failed identically
+// forever -- the precedence defect left in place permanently by the very check
+// meant to protect it.
+func TestMigration084ConvergesFromAPartialRun(t *testing.T) {
+	ctx := context.Background()
+	instance := startClickHouse(ctx, t)
+	chschema.Apply(ctx, t, instance)
+	conn := openConn(ctx, t, instance)
+
+	rewindToPre084(ctx, t, conn)
+	// The partial state: column added, engine still the old one.
+	mustExec(ctx, t, conn, "ALTER TABLE work_graph_issue_pr ADD COLUMN `version_rank` UInt64 "+
+		"MATERIALIZED (multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, "+
+		"provenance = 'heuristic', 1, 0) + 1) * 1125899906842624 + toUnixTimestamp64Milli(last_synced)")
+	if got := engineOf(ctx, t, conn, "work_graph_issue_pr"); !strings.Contains(got, "last_synced") {
+		t.Fatalf("fixture wrong: engine is %q, expected the pre-084 one", got)
+	}
+
+	const (
+		org  = "00000000-4769-0000-0000-000000000001"
+		repo = "00000000-4769-0000-0000-000000000002"
+		keyA = "00000000-4769-0000-0000-000000000003"
+	)
+	mustExec(ctx, t, conn, "SYSTEM STOP MERGES work_graph_issue_pr")
+	seed(ctx, t, conn, org, repo, keyA, 4769, "native", 1.00, "2026-01-01 00:00:00.000")
+	seed(ctx, t, conn, org, repo, keyA, 4769, "heuristic", 0.50, "2026-01-03 00:00:00.000")
+
+	applyMigration084(ctx, t, instance, "")
+
+	if got := engineOf(ctx, t, conn, "work_graph_issue_pr"); !strings.Contains(got, "version_rank") {
+		t.Errorf("after a partial-run rerun the engine is %q, want ReplacingMergeTree(version_rank)", got)
+	}
+	mustExec(ctx, t, conn, "OPTIMIZE TABLE work_graph_issue_pr FINAL")
+	assertOnlyProvenance(ctx, t, conn, keyA, "native")
+}
+
+// TestMigration084RefusesADefaultVersionColumn covers round 4's second P2.
+//
+// A DEFAULT column canonicalises to the same expression as a MATERIALIZED one,
+// so an expression-only check accepted it and recorded 084 as applied. DEFAULT
+// stays explicitly WRITABLE, so a client can supply its own version -- the
+// reviewer showed UInt64 max letting heuristic beat native after a merge. The
+// skip path must therefore check the column KIND, not only its expression.
+func TestMigration084RefusesADefaultVersionColumn(t *testing.T) {
+	ctx := context.Background()
+	instance := startClickHouse(ctx, t)
+	chschema.Apply(ctx, t, instance)
+	conn := openConn(ctx, t, instance)
+
+	mustExec(ctx, t, conn, "DROP TABLE IF EXISTS work_graph_issue_pr")
+	mustExec(ctx, t, conn, "CREATE TABLE work_graph_issue_pr ("+
+		"repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32, "+
+		"provenance String, evidence String, last_synced DateTime64(3,'UTC'), "+
+		"org_id String DEFAULT 'default', "+
+		"`version_rank` UInt64 DEFAULT (multiIf(provenance = 'native', 3, "+
+		"provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0) + 1) "+
+		"* 1125899906842624 + toUnixTimestamp64Milli(last_synced)) "+
+		"ENGINE = ReplacingMergeTree(version_rank) "+
+		"ORDER BY (org_id, repo_id, work_item_id, pr_number)")
+
+	err := runMigration084(ctx, t, instance, "")
+	if err == nil {
+		t.Fatal("the migration ACCEPTED a DEFAULT version column and recorded itself " +
+			"as applied: the column stays writable, so a caller can supply its own " +
+			"version and outrank native")
+	}
+	if !strings.Contains(err.Error(), "not MATERIALIZED") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
 }

@@ -145,28 +145,33 @@ import re
 
 # rank(provenance) * MULTIPLIER + toUnixTimestamp64Milli(last_synced).
 # See HAZARD 2 for why this is 2**45 and not 2**40.
-VERSION_MULTIPLIER = 2**45
+VERSION_MULTIPLIER = 2**50
 
-# `rank + 1`, not `rank`, and that +1 is load-bearing rather than cosmetic.
+# `rank + 1`, not `rank`, and 2**50 rather than a smaller constant. Both are
+# bounded by what DateTime64(3) can REPRESENT, not by what a stamp is likely to
+# hold -- that distinction has now produced two defects on this file.
 #
-# `toUnixTimestamp64Milli` is SIGNED: any pre-1970 stamp is negative, and the
-# column is UInt64. With a bare rank, an unsupported provenance falls through
-# multiIf to 0, so the expression is `0 * M + <negative>` -- which WRAPS to
-# ~1.8e19 and outranks every legitimate row, physically deleting the native one
-# during the copy. Measured on 26.6.1.1193 (codex round 2, P1):
+# WHY +1: `toUnixTimestamp64Milli` is SIGNED. An unsupported provenance falls
+# through multiIf to 0, so a bare rank gives `0 * M + <negative>` for any
+# pre-1970 stamp, which WRAPS to ~1.8e19 and outranks everything. Measured:
+#     provenance='unknown', last_synced='1900-01-01' -> 18446741864720751616
+# Ranks 1..4 give even the unknown bucket a full multiplier of headroom.
 #
-#     provenance='unknown', last_synced='1900-01-01'  ->  18446741864720751616
-#
-# The builder emits only the three known values, but storage accepts arbitrary
-# strings (metrics/schemas.py:931, sinks/clickhouse/work_graph.py:591), so
-# legacy, external or corrupt rows reach this expression.
-#
-# Shifting the ranks to 1..4 gives even the unknown bucket a full multiplier of
-# headroom, so the sum stays positive across the ENTIRE DateTime64(3) range:
-#
-#     rank 0, year 1900  ->      32,975,383,288,832   (minimum)
-#     rank 3, year 2100  ->     144,839,933,155,328   (maximum)
-#     UInt64 max         -> 18,446,744,073,709,551,615
+# WHY 2**50: the multiplier must exceed the LARGEST representable stamp, or a
+# far-future value crosses a rank step and a fallback outranks native. 2**45 did
+# not, and the acceptance corpus could not see it because its far-future key was
+# year 2100 -- a plausible extreme, not the representable one:
+#     max DateTime64(3) (9999-12-31) = 253,402,300,799,000
+#     2**45                          =  35,184,372,088,832   margin x0.14
+#     native@2026    = 142,504,713,955,328
+#     heuristic@9999 = 323,771,044,976,664   FALLBACK WINS
+# 2**48 clears it at x1.11, which is the same thin margin that produced the
+# defect, so:
+#     2**50 = 1,125,899,906,842,624   margin x4.44 over the representable max
+#     worst case 4*M + max  = 4,757,001,928,169,496  (UInt64 max 1.8e19)
+#     min case   1*M + min(1900-01-01) = 1,123,690,918,042,624, still positive
+# The corpus now carries keys at BOTH representable extremes so the constant is
+# certified against the type's range rather than against an imagined one.
 VERSION_EXPRESSION = (
     "(multiIf("
     "provenance = 'native', 3, "
@@ -416,9 +421,15 @@ def _assert_carried_columns_match(client, table: str) -> None:
 
 def _assert_shadow_matches(client, table: str, shadow: str) -> None:
     """The shadow must be the source plus exactly the version column."""
-    expected = _column_shape(client, table) + [
-        (VERSION_COLUMN, "UInt64", "MATERIALIZED")
-    ]
+    # Drop any EXISTING version column from the source shape before appending
+    # the one the shadow must have. A partial run can leave the column present
+    # while the engine is still ReplacingMergeTree(last_synced); without this,
+    # `expected` would name version_rank TWICE, the check would abort, and the
+    # rerun would drop the shadow and fail identically forever -- leaving the
+    # precedence defect in place permanently (codex round 4, P2).
+    expected = [
+        column for column in _column_shape(client, table) if column[0] != VERSION_COLUMN
+    ] + [(VERSION_COLUMN, "UInt64", "MATERIALIZED")]
     actual = _column_shape(client, shadow)
     if actual != expected:
         raise RuntimeError(
@@ -471,6 +482,27 @@ def _rebuild(client) -> None:
         # A partial or manual run leaving `version_rank UInt64 MATERIALIZED 0`
         # would otherwise be skipped forever while keeping part-recency
         # behaviour -- migrated in name only. Codex round 2, P2.
+        # The column must be MATERIALIZED, not merely expression-equal. A
+        # DEFAULT column canonicalises identically but stays explicitly
+        # WRITABLE, so a client can supply its own version -- the reviewer
+        # showed UInt64 max letting heuristic beat native after a merge. Kind
+        # first, because an accepted DEFAULT would record 084 as applied and
+        # leave that door open (codex round 4, P2).
+        kind = next(
+            (
+                k
+                for name, _, k in _column_shape(client, TABLE)
+                if name == VERSION_COLUMN
+            ),
+            "",
+        )
+        if kind != "MATERIALIZED":
+            raise RuntimeError(
+                f"{TABLE}.{VERSION_COLUMN} is {kind or 'an ordinary column'}, not "
+                "MATERIALIZED. A DEFAULT column canonicalises the same but stays "
+                "writable, so a caller could supply its own version and outrank "
+                "native. Refusing to skip; resolve by hand."
+            )
         actual = _version_expression(client, TABLE)
         if actual != _canonical_expression(client, VERSION_EXPRESSION):
             raise RuntimeError(
@@ -505,6 +537,26 @@ def _rebuild(client) -> None:
     # in whatever happens to be running around it. An earlier version of the
     # acceptance test stopped merges around its migration call, which
     # manufactured this protection and hid the defect.
+    # The `finally` below does NOT undo this STOP, and the pairing is misleading
+    # unless that is written down.
+    #
+    # Measured by lane-4752-go on a container: SYSTEM STOP MERGES follows the
+    # STORAGE, not the name. Across EXCHANGE TABLES:
+    #
+    #     before EXCHANGE  OPTIMIZE <table>  -> Code 236 ABORTED   (stopped)
+    #     after  EXCHANGE  OPTIMIZE <table>  -> collapses          (NOT stopped)
+    #     after  EXCHANGE  OPTIMIZE <shadow> -> Code 236 ABORTED   (still stopped)
+    #
+    # So after the swap this name points at storage that was never stopped, and
+    # the `finally` STARTs merges on that -- a no-op, not a restore. The stopped
+    # storage is the OLD one, which the catch-up drops moments later, so nothing
+    # leaks today.
+    #
+    # It is benign for a reason unrelated to the guard: the new table is
+    # ReplacingMergeTree(version_rank), so any merge on it keeps the native row
+    # by construction. WHOEVER REORDERS THIS -- moving the catch-up out of the
+    # guarded window, or retaining the shadow -- loses that argument and leaves
+    # a global STOP on live storage. Do not rely on the try/finally pairing.
     client.command(f"SYSTEM STOP MERGES `{TABLE}`")
     try:
         _rebuild_guarded(client)

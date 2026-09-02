@@ -404,3 +404,68 @@ func TestDecimalDigitsGoldenMatchesLivePython(t *testing.T) {
 		t.Fatalf("write live-python-oracle proof: %v", writeErr)
 	}
 }
+
+// TestTimeBoundsGoldenMatchesLivePython is the rot guard for
+// tests/fixtures/time_bounds_python_golden.json.
+//
+// Its own marker: a different producer again (evidence.compute_time_bounds and
+// _node_time_bounds), and one whose per-type fallback chains are the kind of
+// detail that gets "tidied" -- completed_at before updated_at, merged_at before
+// closed_at, an absent end standing in as the start.
+//
+// A change here moves stored TimeBounds on work_unit_investments. It does not
+// touch input_hash, so it will not re-bill categorisation, but it will silently
+// re-date work units.
+func TestTimeBoundsGoldenMatchesLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+
+	repoRoot := repositoryRootPath(t)
+	python := workgraphComponentsLivePython(t, repoRoot)
+	generator := filepath.Join(
+		repoRoot, "tests", "fixtures", "generate_time_bounds_golden.py",
+	)
+	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("time-bounds generator is missing at %s: %v", generator, err)
+	}
+
+	command := exec.Command(python, generator, "--stdout")
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
+	rendered, err := command.Output()
+	if err != nil {
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("run the time-bounds generator against live Python: %v: %s", err, stderr)
+	}
+
+	frozen, err := os.ReadFile(filepath.Join(
+		repoRoot, "tests", "fixtures", "time_bounds_python_golden.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(frozen) == string(rendered) {
+		if writeErr := os.WriteFile(
+			filepath.Join(proofDirectory, "time-bounds-golden"), []byte("executed"), 0o644,
+		); writeErr != nil {
+			t.Fatalf("write live-python-oracle proof: %v", writeErr)
+		}
+		return
+	}
+	t.Error(
+		"live Python no longer reproduces the frozen time-bounds golden.\n" +
+			"Regenerate with\n" +
+			"    PYTHONPATH=src python tests/fixtures/generate_time_bounds_golden.py\n" +
+			"and read the diff: the per-type fallback chains (completed_at before\n" +
+			"updated_at, merged_at before closed_at, an absent end standing in as the\n" +
+			"start) decide the stored TimeBounds on every work unit.",
+	)
+}

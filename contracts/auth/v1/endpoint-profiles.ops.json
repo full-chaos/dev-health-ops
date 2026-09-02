@@ -15310,7 +15310,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_operational.py",
-        "line": 91,
+        "line": 96,
         "router_local_path": "/webhook"
       },
       "gaps": [],
@@ -15323,7 +15323,7 @@
         "description": "Local _authorize() checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN env var with hmac.compare_digest; fails closed (401) if the env var is unset. Duplicated per-file rather than using the shared api/internal/worker_auth.py helper used by worker_metrics.py/worker_workgraph.py.",
         "anchor": {
           "path": "src/dev_health_ops/api/internal/worker_operational.py",
-          "line": 87
+          "line": 92
         }
       },
       "token_shape": {
@@ -15373,7 +15373,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_operational.py",
-        "line": 104,
+        "line": 109,
         "router_local_path": "/billing"
       },
       "gaps": [],
@@ -15386,7 +15386,7 @@
         "description": "Local _authorize() checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN env var with hmac.compare_digest; fails closed (401) if the env var is unset. Duplicated per-file rather than using the shared api/internal/worker_auth.py helper used by worker_metrics.py/worker_workgraph.py.",
         "anchor": {
           "path": "src/dev_health_ops/api/internal/worker_operational.py",
-          "line": 87
+          "line": 92
         }
       },
       "token_shape": {
@@ -15436,7 +15436,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_operational.py",
-        "line": 117,
+        "line": 123,
         "router_local_path": "/heartbeat"
       },
       "gaps": [],
@@ -15449,7 +15449,7 @@
         "description": "Local _authorize() checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN env var with hmac.compare_digest; fails closed (401) if the env var is unset. Duplicated per-file rather than using the shared api/internal/worker_auth.py helper used by worker_metrics.py/worker_workgraph.py.",
         "anchor": {
           "path": "src/dev_health_ops/api/internal/worker_operational.py",
-          "line": 87
+          "line": 92
         }
       },
       "token_shape": {
@@ -15499,7 +15499,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_operational.py",
-        "line": 129,
+        "line": 135,
         "router_local_path": "/pagerduty"
       },
       "gaps": [],
@@ -15512,7 +15512,7 @@
         "description": "Local _authorize() checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN env var with hmac.compare_digest; fails closed (401) if the env var is unset. Duplicated per-file rather than using the shared api/internal/worker_auth.py helper used by worker_metrics.py/worker_workgraph.py.",
         "anchor": {
           "path": "src/dev_health_ops/api/internal/worker_operational.py",
-          "line": 87
+          "line": 92
         }
       },
       "token_shape": {

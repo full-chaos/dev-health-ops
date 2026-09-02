@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -13,6 +14,14 @@ from dev_health_ops.workers.system_ops_metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+# CHAOS-3952: a claim older than this with no completion is reported as
+# stale rather than silently treated as an ordinary in-flight duplicate.
+# River's own backoff for this task tops out well under this window (three
+# retries at 30/60/120s), so a claim still unclaimed-but-uncompleted past it
+# is far more likely a crashed/stuck attempt than a slow one. No reaper /
+# auto-resend acts on this in this PR — it is surfaced for an operator.
+_STALE_CLAIM_THRESHOLD_SECONDS = 900
 
 
 @celery_app.task(bind=True, name="dev_health_ops.workers.tasks.health_check")
@@ -77,22 +86,82 @@ def send_billing_notification(
     """
     from dev_health_ops.api.services import billing_emails
 
+    claimed_durable_notification_id: str | None = None
     if durable_notification_id:
         durable = _load_billing_notification(durable_notification_id)
         if durable is None:
             return {"status": "dropped", "reason": "missing_durable_notification"}
-        email_type, org_id, attributes, durable_idempotency_key, completed_at = durable
+        email_type, org_id, attributes, durable_idempotency_key = durable
         if idempotency_key is not None and idempotency_key != durable_idempotency_key:
             logger.error("Billing notification dropped: idempotency key mismatch")
             BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
                 outcome="key_mismatch"
             ).inc()
             return {"status": "dropped", "reason": "idempotency_key_mismatch"}
-        if completed_at is not None:
-            # CHAOS-3952: the durable row already recorded a completed send.
-            # This call is a retry that replayed the same row unchanged (the
-            # HTTP response back to Go was lost after Python already sent) —
-            # skip the effect entirely rather than sending the email again.
+        # CHAOS-3952: claim the fence BEFORE sending, not after. A read-then
+        # -send-then-write ordering (check completed_at, send, mark complete)
+        # leaves two open windows: two concurrent attempts can both observe
+        # completed_at=NULL and both send (codex round 1, P2, executed), and a
+        # process crash between a successful send and the write leaves the
+        # fence unset for a retry to duplicate (codex round 1, P1, executed).
+        # Claiming first via a single atomic `UPDATE ... WHERE claimed_at IS
+        # NULL` makes the DECISION itself atomic — its rowcount, not a
+        # separate read, says who won — closing both windows.
+        #
+        # The residual risk moves rather than disappears: a crash strictly
+        # between the claim committing and the send call starting now means
+        # the email is SKIPPED, not duplicated — the except branch below
+        # releases the claim on every raised exception so an ordinary send
+        # failure still retries; only an unhandled process death in that
+        # narrow window is unrecoverable by a normal retry. For a
+        # customer-visible billing email this is the intended trade (a rare
+        # silent miss over a rare duplicate) and matches the ticket's
+        # "checked before send" wording — but "intended" does not mean
+        # invisible: claimed_at and completed_at are separate columns
+        # specifically so a claim that never completed is a queryable,
+        # observable state, not indistinguishable from a real send. This PR
+        # surfaces it (below, `stale_claim_detected`) rather than acting on
+        # it — no reaper/auto-resend here.
+        claim = _claim_billing_notification_completion(durable_notification_id)
+        if not claim.claimed:
+            if claim.completed_at is not None:
+                BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
+                    outcome="duplicate_suppressed"
+                ).inc()
+                return {
+                    "status": "sent",
+                    "email_type": email_type,
+                    "org_id": org_id,
+                    "already_sent": True,
+                }
+            stale = (
+                claim.claimed_at is not None
+                and (datetime.now(timezone.utc) - claim.claimed_at).total_seconds()
+                > _STALE_CLAIM_THRESHOLD_SECONDS
+            )
+            if stale:
+                # A claim this old with no completion did not merely lose a
+                # concurrent race (that resolves in seconds) — the attempt
+                # that made it almost certainly crashed before sending.
+                # Report it as its own distinct, non-"sent" outcome rather
+                # than masquerading as a duplicate: we do NOT know whether
+                # the email went out.
+                logger.error(
+                    "Billing notification claim is stale: claimed but never completed"
+                )
+                BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
+                    outcome="stale_claim_detected"
+                ).inc()
+                return {
+                    "status": "error",
+                    "reason": "stale_claim",
+                    "email_type": email_type,
+                    "org_id": org_id,
+                }
+            # Within the normal in-flight/backoff window: treat as an
+            # ordinary duplicate suppression. If the other attempt is itself
+            # stuck, a later retry's claim will find the same claimed_at and
+            # cross the staleness threshold above instead.
             BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
                 outcome="duplicate_suppressed"
             ).inc()
@@ -102,6 +171,7 @@ def send_billing_notification(
                 "org_id": org_id,
                 "already_sent": True,
             }
+        claimed_durable_notification_id = durable_notification_id
         amount_cents = int(cast(Any, attributes.get("amount_cents", 0)))
         currency = str(attributes.get("currency", "usd"))
         invoice_url = str(attributes.get("invoice_url", ""))
@@ -157,14 +227,19 @@ def send_billing_notification(
 
     try:
         run_async(fn(org_uuid))
-        if durable_notification_id:
-            # Record the fence only after the send call has returned
-            # successfully — never before — so a crash mid-send still
-            # allows a legitimate retry to send.
-            _mark_billing_notification_completed(durable_notification_id)
+        if claimed_durable_notification_id:
+            _mark_billing_notification_completed(claimed_durable_notification_id)
             BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(outcome="sent").inc()
         return {"status": "sent", "email_type": email_type, "org_id": org_id}
     except Exception as exc:
+        if claimed_durable_notification_id:
+            # The claim above already reserved this row before the send was
+            # attempted; an ordinary send failure (the case self.retry()
+            # exists for) must release it, or the fence would permanently
+            # skip a delivery that never actually happened.
+            _release_billing_notification_completion_claim(
+                claimed_durable_notification_id
+            )
         logger.warning(
             "Billing notification delivery failed (attempt %d/%d)",
             self.request.retries + 1,
@@ -175,7 +250,7 @@ def send_billing_notification(
 
 def _load_billing_notification(
     durable_notification_id: str,
-) -> tuple[str, str, dict[str, object], str, datetime | None] | None:
+) -> tuple[str, str, dict[str, object], str] | None:
     try:
         notification_uuid = uuid.UUID(durable_notification_id)
     except ValueError:
@@ -199,21 +274,84 @@ def _load_billing_notification(
                 str(notification.org_id),
                 dict(notification.attributes),
                 notification.idempotency_key,
-                notification.completed_at,
             )
     except Exception:
         logger.error("Unable to load durable billing notification")
         raise
 
 
-def _mark_billing_notification_completed(durable_notification_id: str) -> None:
-    """Set the CHAOS-3952 completion fence for one durable billing row.
+@dataclass(frozen=True, slots=True)
+class _ClaimResult:
+    """Outcome of one `_claim_billing_notification_completion` call.
 
-    A single ``UPDATE ... WHERE completed_at IS NULL`` is the atomicity
-    boundary: PostgreSQL serializes concurrent updates to the same row, so
-    whichever caller's UPDATE commits first is the one that actually claims
-    the fence — a second, truly concurrent caller matches zero rows rather
-    than racing a read-then-write.
+    ``claimed`` True means this call won and must send the email. Otherwise
+    ``completed_at``/``claimed_at`` describe the row AS OF THE FAILED CLAIM,
+    so the caller can tell a genuine prior success (`completed_at` set) from
+    an unresolved claim (`claimed_at` set, `completed_at` still NULL) —
+    which the caller further classifies as normal-in-flight or stale by age.
+    """
+
+    claimed: bool
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+def _claim_billing_notification_completion(
+    durable_notification_id: str,
+) -> _ClaimResult:
+    """Atomically claim the CHAOS-3952 dedup fence for one durable row.
+
+    A single ``UPDATE ... WHERE claimed_at IS NULL`` is both the decision
+    and the write: PostgreSQL serializes concurrent updates to the same row,
+    so exactly one concurrent caller's UPDATE matches (rowcount 1) and every
+    other one matches zero rows — there is no separate read to race against.
+    On a lost claim, one follow-up read reports the row's current
+    claimed_at/completed_at so the caller can classify why.
+    """
+    try:
+        notification_uuid = uuid.UUID(durable_notification_id)
+    except ValueError:
+        return _ClaimResult(claimed=False)
+    from sqlalchemy import select, update
+    from sqlalchemy.engine import CursorResult
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.operational_deliveries import BillingNotification
+
+    with get_postgres_session_sync() as session:
+        # get_postgres_session_sync commits on clean exit from this block.
+        result = cast(
+            CursorResult,
+            session.execute(
+                update(BillingNotification)
+                .where(
+                    BillingNotification.id == notification_uuid,
+                    BillingNotification.claimed_at.is_(None),
+                )
+                .values(claimed_at=datetime.now(timezone.utc))
+            ),
+        )
+        if result.rowcount == 1:
+            return _ClaimResult(claimed=True)
+        row = session.execute(
+            select(
+                BillingNotification.claimed_at, BillingNotification.completed_at
+            ).where(BillingNotification.id == notification_uuid)
+        ).one_or_none()
+        if row is None:
+            return _ClaimResult(claimed=False)
+        return _ClaimResult(
+            claimed=False, claimed_at=row.claimed_at, completed_at=row.completed_at
+        )
+
+
+def _mark_billing_notification_completed(durable_notification_id: str) -> None:
+    """Record that the send this attempt claimed actually went out.
+
+    Only called after `run_async(fn(org_uuid))` has returned without
+    raising. Separate from the claim (see `BillingNotification.claimed_at`
+    vs `completed_at`) so a claim with no matching completion is a queryable
+    fact, not an assumption.
     """
     try:
         notification_uuid = uuid.UUID(durable_notification_id)
@@ -225,14 +363,38 @@ def _mark_billing_notification_completed(durable_notification_id: str) -> None:
     from dev_health_ops.models.operational_deliveries import BillingNotification
 
     with get_postgres_session_sync() as session:
-        # get_postgres_session_sync commits on clean exit from this block.
         session.execute(
             update(BillingNotification)
-            .where(
-                BillingNotification.id == notification_uuid,
-                BillingNotification.completed_at.is_(None),
-            )
+            .where(BillingNotification.id == notification_uuid)
             .values(completed_at=datetime.now(timezone.utc))
+        )
+
+
+def _release_billing_notification_completion_claim(
+    durable_notification_id: str,
+) -> None:
+    """Undo a claim this attempt made but never delivered on.
+
+    Only called after an exception from the send itself (the ordinary
+    self.retry() path) — never after a successful send. Restoring
+    ``claimed_at`` to NULL lets the next retry claim and actually send;
+    without this, a transient email-provider error would claim the fence
+    once and then silently never send at all.
+    """
+    try:
+        notification_uuid = uuid.UUID(durable_notification_id)
+    except ValueError:
+        return
+    from sqlalchemy import update
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.operational_deliveries import BillingNotification
+
+    with get_postgres_session_sync() as session:
+        session.execute(
+            update(BillingNotification)
+            .where(BillingNotification.id == notification_uuid)
+            .values(claimed_at=None)
         )
 
 

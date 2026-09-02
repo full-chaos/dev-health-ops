@@ -94,6 +94,17 @@ type PRSource struct {
 // recorded here (and covered by a test) rather than bug-compatibly reproduced,
 // because reproducing it would mean either crashing on "²" or accepting a
 // digit shape no producer emits.
+//
+// # Second, output-equivalent divergence: numbers above uint32
+//
+// Python's int() is unbounded, so `ghpr:o/r#4294967296` parses; the resulting
+// lookup key can then never match a row, because `git_pull_requests.number` is
+// `UInt32` -- so the dependency is dropped at the PR-existence gate. Go rejects
+// it here instead. Both planes write NO link for such an id; only the rejection
+// reason differs (`pr_not_found_or_out_of_window` vs `unparseable_source`).
+// Recorded because the counters are load-bearing, and because "same output,
+// different attribution" is the kind of difference an accounting assertion
+// cannot see.
 func ParsePRSource(value string) (PRSource, bool) {
 	var (
 		body      string
@@ -380,7 +391,17 @@ func Derive(inputs Inputs) Result {
 	// built even when empty so the rejection accounting stays exact.
 	repoLookup := make(map[[2]string]uuid.UUID, len(inputs.Repos))
 	for _, repo := range inputs.Repos {
-		if repo.Repo == "" || repo.ID == uuid.Nil {
+		// Only the slug is checked, matching Python's `if not repo_slug or not
+		// repo_id` (builder.py:700) EXACTLY. An all-zero UUID must NOT be
+		// excluded here: `uuid.UUID` defines no `__bool__`, so Python treats a
+		// zero UUID as truthy and keeps the row -- only a missing (None)
+		// repo_id is skipped, and `repos.id` is a non-nullable `UUID` in the
+		// live schema, so None is unreachable from ClickHouse. A
+		// `repo.ID == uuid.Nil` exclusion would therefore be a gate Python does
+		// not have, turning a row Python maps into `unknown_repo`: a false
+		// negative, which an accounting assertion cannot catch because the row
+		// IS counted, just under the wrong outcome (codex round 6).
+		if repo.Repo == "" {
 			continue
 		}
 		repoLookup[[2]string{rowOrgID(repo.OrgID, inputs.OrgID), repo.Repo}] = repo.ID

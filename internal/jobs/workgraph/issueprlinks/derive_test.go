@@ -312,3 +312,45 @@ func TestAdmittedCounterCountsRowsThatPassedAdmission(t *testing.T) {
 		t.Fatalf("accounting does not balance: %+v", result)
 	}
 }
+
+// TestDeriveKeepsAnAllZeroRepoUUID is codex round-6 F6.
+//
+// Python's repo filter is `if not repo_slug or not repo_id` (builder.py:700).
+// `uuid.UUID` defines no `__bool__`, so an all-zero UUID is TRUTHY and Python
+// keeps the row; only a missing (None) repo_id is skipped. Since
+// `repos.id` is a non-nullable `UUID` in the live schema, None is unreachable
+// from ClickHouse — so the sole behaviour that filter can change is the
+// all-zero case, and Python keeps it.
+//
+// A Go `repo.ID == uuid.Nil` exclusion was therefore a gate PYTHON DOES NOT
+// HAVE: it turned a row Python maps into `unknown_repo`. A false negative, not
+// an unaccounted drop, which is exactly the shape that survives an accounting
+// assertion. The frozen golden cannot catch it — it contains no zero UUID.
+func TestDeriveKeepsAnAllZeroRepoUUID(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Repos = []RepoRow{{OrgID: testOrg, ID: uuid.Nil, Repo: testSlug}}
+	inputs.PullRequests = []PullRequestRow{{OrgID: testOrg, RepoID: uuid.Nil, Number: 12}}
+
+	result := Derive(inputs)
+	if result.Written() != 1 {
+		t.Fatalf(
+			"wrote %d links, want 1: Python keeps an all-zero repo UUID (rejections %v)",
+			result.Written(), result.Rejected,
+		)
+	}
+	if got := result.Links[0].RepoID; got != uuid.Nil {
+		t.Errorf("repo_id = %s, want the all-zero UUID", got)
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}
+
+// TestDeriveSkipsARepoWithNoSlug keeps the surviving half of Python's filter
+// pinned: `not repo_slug` really does skip, so removing the UUID half must not
+// remove this one too.
+func TestDeriveSkipsARepoWithNoSlug(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Repos = []RepoRow{{OrgID: testOrg, ID: testRepoID, Repo: ""}}
+	assertSingleRejection(t, Derive(inputs), ReasonUnknownRepo)
+}

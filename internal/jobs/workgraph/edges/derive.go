@@ -106,7 +106,7 @@ func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveRe
 				prShaped = true
 				break
 			}
-			if reference.PRNumber != 0 {
+			if reference.IsPR() {
 				result.Outcomes[index] = OutcomeSkippedPRShaped
 				result.Counts[OutcomeSkippedPRShaped]++
 				prShaped = true

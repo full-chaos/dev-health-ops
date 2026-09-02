@@ -2,6 +2,7 @@ package edges
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"unicode"
 )
@@ -13,6 +14,21 @@ type PRReference struct {
 	RepoSlug string
 	PRNumber int
 	Provider string
+	// NumberExceedsInt64 marks a PR number Python parsed as a real positive
+	// integer that Go cannot represent. PRNumber is 0 in that case and MUST NOT
+	// be read; IsPR() stays correct. A consumer that needs the value has to
+	// handle this explicitly rather than receive a silently truncated one.
+	NumberExceedsInt64 bool
+}
+
+// IsPR reports whether this id belongs to the issue<->PR pipeline.
+//
+// Classification never reads PRNumber. A zero PRNumber means two different
+// things -- "not PR-shaped" and "PR-shaped but larger than int64" -- and a
+// caller comparing the number would silently hand the second case to the
+// issue<->issue build, which does not own it.
+func (reference PRReference) IsPR() bool {
+	return reference.Provider != "" && (reference.PRNumber > 0 || reference.NumberExceedsInt64)
 }
 
 // ErrMalformedPRID marks an id that looks PR-shaped but whose number Python
@@ -85,16 +101,22 @@ func ParsePRDependencySource(value string) (PRReference, error) {
 		return PRReference{}, nil
 	}
 
-	parsed, ok := pythonIntFromDigits(number)
+	parsed, positive, exceedsInt64, ok := pythonIntFromDigits(number)
 	if !ok {
 		// isdigit() said yes, int() would say no. Python raises here; we reject
 		// the row instead. Named, counted, and the only deliberate divergence.
 		return PRReference{}, ErrMalformedPRID
 	}
-	if parsed <= 0 {
+	if !positive {
+		// Python's `int(number) > 0` is false: an all-zero id is a SILENT skip,
+		// not an error. Tested with thirty zeros, which no bounded conversion
+		// would have distinguished from a large value.
 		return PRReference{}, nil
 	}
-	return PRReference{RepoSlug: repoSlug, PRNumber: parsed, Provider: provider}, nil
+	return PRReference{
+		RepoSlug: repoSlug, PRNumber: parsed, Provider: provider,
+		NumberExceedsInt64: exceedsInt64,
+	}, nil
 }
 
 // numericTypeDigitNotDecimal is every rune for which Python's `str.isdigit()` is
@@ -160,20 +182,54 @@ func isPythonDigitString(value string) bool {
 //
 // `int()` takes Nd only, so any rune from numericTypeDigitNotDecimal makes it
 // fail — which in Python is an uncaught ValueError. ok=false is that case.
-func pythonIntFromDigits(value string) (int, bool) {
-	total := 0
+// pythonIntFromDigits replicates `int(value)` for the decision Python makes.
+//
+// # MAGNITUDE IS NOT A REJECTION REASON
+//
+// An earlier version of this function refused anything above 1<<31, with the
+// comment "a PR number this large is not real". That was MY judgement standing
+// in for the reference's behaviour, which is the one thing a port must never
+// do. Python's ints are arbitrary-precision: there is no value `int()` refuses
+// for being large, and the deployed reference parses a thirty-digit id happily
+// (measured, codex round 1 P2).
+//
+// The cost was not a missed edge but a MISLABELLED one. `ghpr:o/r#3000000000`
+// is an ordinary PR-shaped row that the issue<->PR pipeline owns; the bound
+// bucketed it as `malformed_pr_id`, which is the counter reserved for the one
+// ruled divergence -- a row that would have aborted the whole build under
+// Python. Corrupting that counter with rows that are merely large would make
+// the single most important signal in this port untrustworthy, and totals
+// would still balance.
+//
+// `ok` is therefore false ONLY where Python's `int()` actually raises: a
+// Numeric_Type=Digit rune that is not decimal. Every rune is examined even
+// after the accumulator saturates, because `int()` scans the whole string and
+// a trailing superscript still raises.
+//
+// `exceedsInt64` reports a value that is real and positive but not
+// representable in Go. The CLASSIFICATION stays Python's; only the number is
+// unavailable, and callers that need it must check this flag rather than read
+// a silently truncated PRNumber.
+func pythonIntFromDigits(value string) (number int, positive bool, exceedsInt64 bool, ok bool) {
 	for _, r := range value {
 		digit := decimalValue(r)
 		if digit < 0 {
-			return 0, false
+			return 0, false, false, false
 		}
-		total = total*10 + digit
-		if total > 1<<31 {
-			// A PR number this large is not real; refuse rather than overflow.
-			return 0, false
+		if digit != 0 {
+			positive = true
 		}
+		if exceedsInt64 {
+			continue // keep validating the remaining runes; stop accumulating
+		}
+		if number > (math.MaxInt-digit)/10 {
+			exceedsInt64 = true
+			number = 0
+			continue
+		}
+		number = number*10 + digit
 	}
-	return total, true
+	return number, positive, exceedsInt64, true
 }
 
 // decimalValue returns a rune's decimal value, or -1 if it has none.

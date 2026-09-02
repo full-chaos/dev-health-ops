@@ -244,10 +244,10 @@ jobs:
   # the bit-pattern goldens pass regardless of whether the arm64-only bug is
   # present. This job runs those bit-pattern goldens on a REAL arm64
   # runner -- not QEMU, which does not reproduce host FMA instruction
-  # selection. (An earlier draft of this job also ran a static AST lint for
-  # the same unguarded shape; the lint was dropped from #2106 after codex
-  # found real blind spots in it and ships separately as its own follow-up
-  # PR, so it is not referenced here.)
+  # selection. (An earlier draft of this job also ran a companion static
+  # lint for the same unguarded shape; codex found real blind spots in it
+  # during #2106's review, so it was dropped from that PR and now ships
+  # separately as its own follow-up. This job does not depend on it.)
   #
   # Based on main post-#2106 (the FMA fix this job proves ran on real
   # arm64, already merged) -- the tests named in the -run pattern below
@@ -289,11 +289,10 @@ jobs:
         # lets us count actual RUN events for named Test* functions and
         # fail loud if none ran, rather than trusting the bare exit code.
         #
-        # No longer includes the AST lint's test names
-        # (NoUnguardedFloatFMAInJobsPackages/FMALintDetectsTheKnownShape):
-        # the lint was dropped from the merged FMA PR (#2106) after codex
-        # found real blind spots in it and ships as its own follow-up --
-        # those tests do not exist on main.
+        # This pattern intentionally matches only the bit-pattern golden
+        # tests -- it does not name any test from the companion static
+        # lint mentioned above, since that lint (and its tests) do not
+        # exist on main.
         run: |
           set -euo pipefail
           go test -mod=readonly -count=1 -json ./internal/jobs/... \

@@ -114,7 +114,11 @@ func TestRotGuardComparisonCatchesPlantedDrift(t *testing.T) {
 // or storing confidence as float64. Either would reproduce 1,833 components
 // where production has 1,832, with a different component set.
 func TestQuantizeIsNotAnIdentityOnFloat64(t *testing.T) {
-	if float64(Quantize(0.9)) == 0.9 {
+	quantized, err := Quantize(0.9)
+	if err != nil {
+		t.Fatalf("0.9 is a valid confidence: %v", err)
+	}
+	if float64(quantized) == 0.9 {
 		t.Fatal(
 			"Quantize(0.9) round-trips to the float64 literal, so the Float32 narrowing " +
 				"this package depends on is not happening",
@@ -122,8 +126,12 @@ func TestQuantizeIsNotAnIdentityOnFloat64(t *testing.T) {
 	}
 	// It must, however, be idempotent: narrowing an already-narrow value is a
 	// no-op, which is what makes a re-read equal to a write.
-	once := Quantize(0.9)
-	if twice := Quantize(float64(once)); twice != once {
+	once := quantized
+	twice, err := Quantize(float64(once))
+	if err != nil {
+		t.Fatalf("re-quantizing a narrowed value must stay valid: %v", err)
+	}
+	if twice != once {
 		t.Fatalf("Quantize is not idempotent: %v then %v", once, twice)
 	}
 }
@@ -346,5 +354,118 @@ func TestProvenanceAndEvidenceOracleRejectsACorruptedRegeneration(t *testing.T) 
 	// And provenance, which is unconditional.
 	if ProvenanceNative == ProvenanceHeuristic || ProvenanceNative == ProvenanceExplicitText {
 		t.Fatal("the provenance constants collapsed; the assertion cannot distinguish them")
+	}
+}
+
+// TestConfidenceAcceptSetIsPythonsNotOurs pins the validator against the
+// measured behaviour of `WorkGraphEdge.__post_init__`, not against what a
+// reasonable validator would do.
+//
+// The distinction is the point. A stricter Go check rejects rows Python writes;
+// a looser one mints rows Python refuses. Both are divergences, and neither
+// fails a test that asserts only the author's intuition.
+func TestConfidenceAcceptSetIsPythonsNotOurs(t *testing.T) {
+	// Measured 2026-09-02 against the deployed dataclass, see confidence.go.
+	pythonRejects := map[string]float32{
+		"NaN":  float32(math.NaN()),
+		"+Inf": float32(math.Inf(1)),
+		"1.5":  1.5,
+		"-0.5": -0.5,
+	}
+	pythonAccepts := map[string]float32{
+		"0.9": 0.9,
+		"0.0": 0.0,
+		// The two tiers this port actually writes must both be inside the
+		// reference's accept-set, or the policy mints rows Python would refuse.
+		"delivery tier":    DeliveryConfidence,
+		"associative tier": AssociativeConfidence,
+	}
+	for name, value := range pythonRejects {
+		if err := ValidateConfidence(value); err == nil {
+			t.Errorf("Python rejects %s but this port accepts it — it would mint a row "+
+				"the reference refuses", name)
+		}
+	}
+	for name, value := range pythonAccepts {
+		if err := ValidateConfidence(value); err != nil {
+			t.Errorf("Python accepts %s but this port rejects it (%v) — it would drop a row "+
+				"the reference writes", name, err)
+		}
+	}
+	// The boundaries are inclusive in Python (`0.0 <= c <= 1.0`), so the exact
+	// endpoints must pass; an exclusive Go comparison would silently drop them.
+	for name, value := range map[string]float32{"exactly 0": 0, "exactly 1": 1} {
+		if err := ValidateConfidence(value); err != nil {
+			t.Errorf("%s must be accepted — Python's bounds are inclusive: %v", name, err)
+		}
+	}
+}
+
+// TestNarrowingCannotLaunderAnInvalidConfidence pins codex round 3's P3.
+//
+// Float32 narrowing is lossy in the direction that HIDES a violation:
+// 1.00000001 becomes exactly 1, and -1e-50 becomes -0. Both then satisfy every
+// downstream range check, while Python's `WorkGraphEdge.__post_init__` raises on
+// the originals. Validating after narrowing therefore accepts values the
+// reference refuses — so the check has to be on the float64, and Quantize is the
+// only way to narrow.
+func TestNarrowingCannotLaunderAnInvalidConfidence(t *testing.T) {
+	for _, value := range []float64{1.00000001, -1e-50, 1.5, -0.5, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		narrowed, err := Quantize(value)
+		if err == nil {
+			t.Errorf("Quantize(%v) returned %v with no error; Python raises ValueError on this "+
+				"value, and after narrowing nothing downstream can tell", value, narrowed)
+		}
+	}
+	// The boundary values Python accepts must still pass, including negative
+	// zero, which `0.0 <= -0.0` admits.
+	for _, value := range []float64{0, 1, 0.9, math.Copysign(0, -1)} {
+		if _, err := Quantize(value); err != nil {
+			t.Errorf("Quantize(%v) was refused, but Python accepts it: %v", value, err)
+		}
+	}
+}
+
+// TestEveryDivergenceIsImplemented keeps the fidelity contract from going
+// stale the way its predecessor did.
+//
+// The previous contract was a sentence claiming "exactly ONE enumerated
+// divergence" while a second file separately claimed to hold "THE ONE
+// deliberate divergence". Both were true when written and neither was revisited
+// as divergences accumulated. A list with a probe per entry cannot drift that
+// way: remove the code and the entry fails.
+//
+// What this proves and does not: every LISTED divergence is real. It cannot
+// prove no UNLISTED divergence exists, and saying otherwise would repeat the
+// overclaim it replaces.
+func TestEveryDivergenceIsImplemented(t *testing.T) {
+	if len(Divergences) == 0 {
+		t.Fatal("the divergence list is empty; the port has at least the variant-C policy")
+	}
+	goldenCanSee := 0
+	for _, divergence := range Divergences {
+		if divergence.Authority == "" {
+			t.Errorf("%q has no authority; a divergence without a ruling or ticket is a defect",
+				divergence.Name)
+		}
+		if divergence.implemented == nil {
+			t.Errorf("%q has no probe, so the list cannot detect its removal", divergence.Name)
+			continue
+		}
+		if !divergence.implemented() {
+			t.Errorf("%q is LISTED but not implemented — either the code lost it or the "+
+				"list went stale, and both are the failure this test exists to catch",
+				divergence.Name)
+		}
+		if divergence.GoldenCanSee {
+			goldenCanSee++
+		}
+	}
+	// Pinned rather than asserted loosely: if a second divergence ever becomes
+	// golden-visible that is a real improvement, and it should be a deliberate
+	// edit here rather than a silent change in what the oracle covers.
+	if goldenCanSee != 1 {
+		t.Errorf("%d divergences claim the golden can see them, expected exactly 1 (variant-C); "+
+			"the golden holds no malformed id and is a scoped run", goldenCanSee)
 	}
 }

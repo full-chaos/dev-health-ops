@@ -761,7 +761,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestWorkgraphIssueEdgesGoldenMatchesLivePython$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -774,6 +774,57 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-issue-edges-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, per the capacity-forecast reasoning: this guard derives
+  # a Unicode property table from the live interpreter, a different producer from
+  # the edge golden above it, and it is the only thing standing between a Python
+  # upgrade and a silent parity break in which pipeline owns a dependency row.
+  proof_file="${proof_dir}/workgraph-numeric-digit-table"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the Numeric_Type=Digit table was not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: a different Unicode property from the digit table above, and
+  # the one that decides which BRANCH of the canonicalisation a row takes.
+  proof_file="${proof_dir}/workgraph-python-lower"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pythonLower was not re-derived against live str.lower()\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: this one reads an interpreter SETTING rather than a Unicode
+  # property, so it rots for a different reason from every guard above --
+  # sys.set_int_max_str_digits() can change it at runtime, and it did not exist
+  # before Python 3.11. A deployment that raised or lowered it would leave this
+  # port disagreeing about which PR ids are convertible, in the direction that
+  # mislabels a build-aborting row as an ordinary PR.
+  # Its own marker: this is the guard that stops Go's unicode package being the
+  # oracle for a Python-facing predicate. It derives Python's DECIMAL set (the
+  # direction the digit-table guard above does not cover) and compares the two
+  # planes' Unicode versions, which is how a Go-only Nd rune parsed a PR number
+  # Python does not recognise.
+  # Its own marker: this one enumerates EVERY code point rather than a derived
+  # subset, because the two previous case guards were each blind to a one-rune
+  # property they did not think to vary -- context-sensitive final sigma, then
+  # Unicode version skew between x/text and the interpreter.
+  proof_file="${proof_dir}/workgraph-python-lower-allrunes"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the all-runes lowercase comparison was not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/workgraph-python-decimal-blocks"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: Python decimal-digit blocks were not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/workgraph-int-max-str-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

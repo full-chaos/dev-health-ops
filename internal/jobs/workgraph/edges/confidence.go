@@ -117,8 +117,27 @@ var AssociativeConfidenceExceptions = func() []GoldenException {
 // This is not hypothetical: the same quantisation changed the measured component
 // count from 1,833 to 1,832 and produced a DIFFERENT component set on the proof
 // org. A port that reproduces 1,833 has skipped this.
-func Quantize(confidence float64) float32 {
-	return float32(confidence)
+// It returns an error rather than a bare float32 because NARROWING CAN MAKE AN
+// INVALID VALUE LOOK VALID. `Quantize(1.00000001)` is exactly 1 in Float32, and
+// `-1e-50` becomes `-0`; both then pass every downstream check while Python's
+// `WorkGraphEdge.__post_init__` raises on the originals (executed, both).
+//
+// So the check has to happen on the float64, BEFORE the narrowing, and the only
+// way to guarantee that is to make it impossible to narrow without checking.
+// A doc comment saying "validate first" would be the same class of defect this
+// port has already been bitten by three times: prose asserting a property that
+// nothing enforces.
+func Quantize(confidence float64) (float32, error) {
+	// Python's predicate verbatim (models.py): `if not 0.0 <= confidence <= 1.0`.
+	// Written as the negation of the range test rather than as separate NaN and
+	// Inf checks, because that is how the reference excludes them -- every
+	// comparison with NaN is false, so NaN fails the range test without being
+	// named. Reproducing the SHAPE keeps the two in step if the bound moves.
+	if !(0.0 <= confidence && confidence <= 1.0) {
+		return 0, fmt.Errorf(
+			"confidence must be between 0 and 1, got %v: %w", confidence, ErrUngroupableConfidence)
+	}
+	return float32(confidence), nil
 }
 
 // ValidateConfidence rejects a confidence that cannot be grouped.
@@ -150,3 +169,24 @@ func ValidateConfidence(confidence float32) error {
 
 // ErrUngroupableConfidence marks a confidence this writer refuses to emit.
 var ErrUngroupableConfidence = fmt.Errorf("ungroupable confidence")
+
+// ValidateConfidence's accept-set is Python's, not a stricter one we preferred.
+//
+// `WorkGraphEdge.__post_init__` (work_graph/models.py:125-128) raises unless
+// `0.0 <= confidence <= 1.0`. NaN fails that chain because every comparison
+// against NaN is false, so `not (False)` raises — meaning Python rejects NaN
+// through the same guard rather than needing a separate check.
+//
+// Measured against the deployed dataclass rather than reasoned about:
+//
+//	NaN   -> ValueError      +Inf  -> ValueError
+//	1.5   -> ValueError      -0.5  -> ValueError
+//	0.9   -> accepted        0.0   -> accepted
+//
+// Recorded because a validator is exactly the place where "obviously correct"
+// and "matches the reference" quietly part company: a stricter Go check would
+// reject rows Python writes, and a looser one would mint rows Python refuses.
+// Either is a divergence, and neither would fail a test that only asserted what
+// the author thought reasonable. (Sibling lane, CHAOS-4757 round 1: its own test
+// had asserted the wrong behaviour as desirable, so passing was not the same
+// claim as matching.)

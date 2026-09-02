@@ -10,19 +10,28 @@
 // column is the reason this package exists at all -- see the confidence
 // contract in confidence.go.
 //
-// # FIDELITY CONTRACT, AND THE ONE DELIBERATE EXCEPTION
+// # FIDELITY CONTRACT: FOUR ENUMERATED DIVERGENCES
 //
-// This is a bit-exact port of the current Python behaviour, with exactly ONE
-// enumerated divergence: the CHAOS-4752/CHAOS-4758 variant-C confidence policy
-// (confidence.go). Python writes every dependency-derived issue<->issue edge at
-// 1.0, which makes an associative tracker link indistinguishable from a PR's
-// delivery link and drives the oversized-component split into deleting nodes;
-// this port ranks the associative family strictly below the delivery tier.
+// This is a bit-exact port of the current Python behaviour except where the
+// Divergences list below says otherwise. That list is the single place they are
+// enumerated, and TestEveryDivergenceIsImplemented asserts each entry is real,
+// so a divergence that is REMOVED cannot sit in the list stale.
 //
-// That exception is DATA, not a comment: AssociativeConfidenceExceptions is
-// enumerated in confidence.go and the golden test fails on any divergence from
-// the frozen Python output that the list does not name. Nothing else about the
-// port is allowed to differ.
+// This replaced a sentence claiming "exactly ONE enumerated divergence" while a
+// second file separately claimed to hold "THE ONE deliberate divergence". Both
+// were true when written; three of the divergences arrived afterwards and
+// neither sentence was revisited.
+//
+// # WHAT THIS CONTRACT DOES AND DOES NOT ENFORCE
+//
+// Stated plainly because the previous version read as more enforced than it
+// was: the golden test fails on any delta from the frozen Python output that
+// the exception list does not name -- but the golden can only exercise
+// divergence 1. It contains no malformed PR id and is a scoped run, so 2 and 3
+// are outside its reach and rest on their own targeted tests.
+//
+// The test below proves every LISTED divergence is real. It cannot prove no
+// UNLISTED one exists; claiming otherwise would repeat the failure it replaces.
 //
 // Proven by tests/fixtures/workgraph_issue_edges_python_golden.json -- 6,531
 // dependency rows and the 3,548 edges, 1 projection watermark and 5 mutations
@@ -32,6 +41,7 @@ package edges
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"time"
 )
 
@@ -124,4 +134,93 @@ func EdgeID(sourceType, sourceID, edgeType, targetType, targetID string) string 
 func DayFor(eventTs time.Time) time.Time {
 	utc := eventTs.UTC()
 	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// Divergence is one place this port knowingly differs from the Python it
+// replaces.
+type Divergence struct {
+	// Name is what the divergence is, in one phrase.
+	Name string
+	// Authority is the ruling or ticket that permits it. A divergence without
+	// one is a defect.
+	Authority string
+	// GoldenCanSee reports whether the frozen oracle can detect a regression in
+	// it. Only variant-C can; recording that stops the contract reading as more
+	// enforced than it is.
+	GoldenCanSee bool
+	// implemented reports whether the code still does this. Its purpose is to
+	// fail when a divergence is removed and the list is not updated.
+	implemented func() bool
+}
+
+// Divergences is the complete enumerated list. See the fidelity contract above.
+var Divergences = []Divergence{
+	{
+		Name:         "variant-C confidence: the associative family ranks strictly below delivery",
+		Authority:    "CHAOS-4752 / CHAOS-4758",
+		GoldenCanSee: true,
+		// Probes the BEHAVIOUR, not the exception list. `len(list) > 0` was the
+		// first version and it proves nothing: neutering DependencyConfidence to
+		// return DeliveryConfidence always, while leaving the list populated,
+		// left this probe passing. A probe that a removed divergence survives is
+		// not a probe.
+		implemented: func() bool {
+			return DependencyConfidence("relates") != DeliveryConfidence &&
+				DependencyConfidence("relates") == AssociativeConfidence
+		},
+	},
+	{
+		Name:         "malformed_pr_id where Python raises an uncaught ValueError and aborts the org's build",
+		Authority:    "CHAOS-4811, team-lead ruling",
+		GoldenCanSee: false,
+		implemented: func() bool {
+			_, err := ParsePRDependencySource("ghpr:o/r#\u00b2")
+			return errors.Is(err, ErrMalformedPRID)
+		},
+	},
+	{
+		Name:         "refusing an unscoped run, making audit gates 14/15/21/23/29/32 unreachable rather than replicated",
+		Authority:    "CHAOS-4441 RequireOrganizationScope",
+		GoldenCanSee: false,
+		implemented:  func() bool { return requireEdgeScope("") != nil },
+	},
+	{
+		// The honest one: this divergence was INTRODUCED by the fix for a
+		// previous divergence. Replacing `strings.ToLower` with
+		// `cases.Lower(language.Und)` corrected context-sensitive final sigma
+		// and moved the oracle from Go's stdlib Unicode table to x/text's --
+		// which is Unicode 17 where the deployed interpreter is UCD 16.
+		//
+		// 28 code points differ, all Unicode 17 additions CPython treats as
+		// unassigned and therefore leaves alone. Pinned exactly by
+		// TestEveryRuneLowercasesLikeLivePython, which compares EVERY code point
+		// rather than a derived subset.
+		//
+		// WHY THIS CANNOT CHANGE AN ANSWER. Two arguments, and the second is the
+		// one to rely on:
+		//
+		// Input-side: relationship types are ASCII by provider spec, and all 11
+		// distinct values in the frozen corpus are ASCII. That is an assumption
+		// about upstream data and it is ENFORCED NOWHERE -- a provider emitting
+		// a non-ASCII type silently invalidates it.
+		//
+		// Structural: the only consumers of the folded value are membership
+		// tests against `blockerTypes` and `dependencyTypeMap`, whose keys are
+		// pure ASCII. Lowercasing a non-ASCII rune yields a non-ASCII rune, so
+		// a string containing one cannot become a member under EITHER plane --
+		// membership is identical whatever arrives, and the divergence cannot
+		// reach an outcome. Verified across every skew rune in every position
+		// against every blocker key: 0 strings where membership differs
+		// (lane-4441, delta review of this change).
+		//
+		// The structural argument holds under a data change that breaks the
+		// input-side one, which is why both are recorded and why this order.
+		Name:         "case-folding 28 Unicode 17 code points the deployed CPython leaves unchanged",
+		Authority:    "CHAOS-4766 re-cert P3a, team-lead ruling; full derivation tracked as CHAOS-4869",
+		GoldenCanSee: false,
+		implemented: func() bool {
+			// U+A7CE is one of the 28: x/text lowers it, CPython 16 does not.
+			return pythonLower("\uA7CE") != "\uA7CE"
+		},
+	},
 }

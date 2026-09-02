@@ -97,8 +97,20 @@ func loadGolden(t *testing.T) *GoldenDocument {
 	if document.Schema != "workgraph_issue_edges_python_golden.v1" {
 		t.Fatalf("unexpected golden schema %q", document.Schema)
 	}
+	// "No error" is not evidence that anything decoded: json.Unmarshal of `null`
+	// into a slice succeeds and yields nil. Every collection the oracles derive
+	// from is checked for presence explicitly.
 	if len(document.Edges) == 0 {
 		t.Fatal("golden carries no edges")
+	}
+	if len(document.Dependencies) == 0 {
+		t.Fatal("golden carries no dependencies — every derived expectation would be vacuous")
+	}
+	if len(document.Strings) == 0 {
+		t.Fatal("golden carries no intern table")
+	}
+	if len(document.Mutations) == 0 {
+		t.Fatal("golden carries no mutations")
 	}
 	return document
 }
@@ -159,8 +171,15 @@ func TestFrozenConfidencesSurviveTheFloat32RoundTrip(t *testing.T) {
 	document := loadGolden(t)
 	for index, edge := range document.Edges {
 		if !math.IsInf(edge.Confidence, 0) && !math.IsNaN(edge.Confidence) {
-			narrowed := Quantize(edge.Confidence)
-			if float64(narrowed) != float64(Quantize(float64(narrowed))) {
+			narrowed, err := Quantize(edge.Confidence)
+			if err != nil {
+				t.Fatalf("frozen confidence %v is rejected: %v", edge.Confidence, err)
+			}
+			renarrowed, err := Quantize(float64(narrowed))
+			if err != nil {
+				t.Fatalf("re-quantizing %v failed: %v", narrowed, err)
+			}
+			if float64(narrowed) != float64(renarrowed) {
 				t.Fatalf("edge %d: narrowing %v is not idempotent", index, edge.Confidence)
 			}
 			continue
@@ -170,7 +189,11 @@ func TestFrozenConfidencesSurviveTheFloat32RoundTrip(t *testing.T) {
 	// The value the variant-C policy writes must be a Float32 fixed point, or the
 	// split's (confidence, edge_id) sort puts a freshly written edge in a
 	// different tier from the identical edge read back.
-	if got := Quantize(float64(AssociativeConfidence)); got != AssociativeConfidence {
+	got, err := Quantize(float64(AssociativeConfidence))
+	if err != nil {
+		t.Fatalf("AssociativeConfidence is rejected by its own validator: %v", err)
+	}
+	if got != AssociativeConfidence {
 		t.Fatalf("AssociativeConfidence %v is not a Float32 fixed point (got %v)", AssociativeConfidence, got)
 	}
 	if float64(AssociativeConfidence) == 0.9 {
@@ -823,4 +846,23 @@ func TestFrozenRelationshipValuesNeedNoCaseFolding(t *testing.T) {
 	}
 	sort.Strings(values)
 	t.Logf("relationship_type values, all ASCII-lowercase: %v", values)
+}
+
+// TestAPlantedNullProjectionRowIsRejected. The GoldenProjectionRun decoder
+// existed for two commits while the struct field was still [][7]int, so nothing
+// called it and a null row still fabricated one from intern index 0 — the exact
+// defect it was written to prevent.
+//
+// It plants the null in a DOCUMENT rather than calling UnmarshalJSON directly.
+// A direct call would have passed the whole time the field was unwired; only
+// decoding a document proves the decoder is actually reached.
+func TestAPlantedNullProjectionRowIsRejected(t *testing.T) {
+	raw := []byte(`{"schema":"workgraph_issue_edges_python_golden.v1","strings":["a","b"],
+		"dependencies":[[0,1,0,1,0,1]],"projection_runs":[null],"edges":[],"counts":{}}`)
+	var document GoldenDocument
+	if err := json.Unmarshal(raw, &document); err == nil {
+		t.Fatalf("a null projection row decoded to %v — it would fabricate a row from the "+
+			"first interned string, and every count would still reconcile",
+			document.ProjectionRuns)
+	}
 }

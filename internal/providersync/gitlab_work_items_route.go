@@ -90,8 +90,16 @@ type gitlabWorkItemsDeriver interface {
 // events, notes, links, and milestones while retaining the live
 // fetch_gitlab_work_items boundary for issue status/type normalization.
 //
-// The handler is intentionally not registered here. Activation, alias
-// watermarks, configuration loading, and deployment wiring are separate work.
+// WIRING: LIVE. cmd/dev-health-worker/provider_sync.go's
+// `provider == "gitlab" && dataset == "work-items"` case constructs this
+// handler and assigns it to routeHandler, with
+// NewGitLabWorkItemFamilyClickHouseEffects as sink and readback and
+// NewGitLabWorkItemDeriver as Derived.
+//
+// The superseded text read "The handler is intentionally not registered here.
+// Activation, alias watermarks, configuration loading, and deployment wiring
+// are separate work." Activation happened; kept visible rather than deleted so
+// the wrong model is refuted rather than merely absent (CHAOS-4848).
 type GitLabWorkItemsRouteHandler struct {
 	PerPage         int
 	MaxPages        int

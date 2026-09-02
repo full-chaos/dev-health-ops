@@ -88,9 +88,20 @@ type JiraAtlassianWorkItemsResult struct {
 // provider path.  It is intentionally not a registry or activation hook.
 type JiraSprintReferenceSink func([]jiraSprintRow) error
 
-// JiraAtlassianRouteHandler is intentionally unregistered.  It is a complete
-// provider-local route for parity and recovery tests; registry/activation is a
-// separate migration slice.
+// JiraAtlassianRouteHandler is Jira's LIVE work-items route.
+//
+// WIRING: cmd/dev-health-worker/provider_sync.go's
+// `provider == "jira" && dataset == "work-items"` case constructs this handler
+// and assigns it to routeHandler, with NewJiraWorkItemCompositeClickHouseEffects
+// as sink and readback and NewJiraWorkItemDeriver as Derived. Note this is the
+// handler jira actually runs -- JiraWorkItemsRouteHandler
+// (jira_work_items_route.go) is the one that is genuinely unconstructed, and
+// its "intentionally unregistered" comment is TRUE and must stay.
+//
+// The superseded text read "JiraAtlassianRouteHandler is intentionally
+// unregistered. It is a complete provider-local route for parity and recovery
+// tests; registry/activation is a separate migration slice." Kept visible as a
+// correction rather than deleted (CHAOS-4848).
 type JiraAtlassianRouteHandler struct {
 	StatusMapping *StatusMapping
 	Identity      jiraIdentityResolver

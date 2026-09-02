@@ -1519,7 +1519,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (production confirmed correct by codex's own mutation probes; this closes
     # the missing regression oracle). 1312 -> 1313 top-level; 152 -> 152
     # integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1313
+    # CHAOS-4848 (comment-only PR + its drift guard): seven doc-comments in
+    # internal/providersync asserted their symbol was unregistered/inactive while
+    # cmd/dev-health-worker/provider_sync.go constructs it. Corrected the comments
+    # and added a guard so the class stops being hand-maintained -- the previous
+    # "fix" for this class was enumerating one more site, which then silently
+    # missed four. +3 ordinary tests (1313 -> 1316):
+    # TestNoLiveSymbolIsDocumentedAsUnregistered (the guard; red on the four
+    # unfixed sites before the comment fixes), TestDriftGuardCatchesAPlantedStaleClaim
+    # (drives the real detector against a planted violation AND against quoted
+    # retractions, so a matcher that stopped matching cannot read as clean), and
+    # TestDriftGuardSeesTheSymbolsItMustCover (validates the discovery mechanism
+    # against a known superset, plus a negative control that
+    # JiraWorkItemsRouteHandler is NOT reported wired -- its "intentionally
+    # unregistered" comment is true and must stay). All three parse source with
+    # go/ast and touch no database, so the integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1316
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1536,7 +1551,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1313
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1316
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1603,7 +1618,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1313
+    assert len(selected_tests) == len(set(selected_tests)) == 1316
     assert set(selected_tests) == expected_tests
 
 

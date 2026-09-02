@@ -2024,7 +2024,7 @@ def _run_uses_go_test_harness(command: str) -> bool:
 def _mentions_mirror(value: Any) -> bool:
     """True if any nested string references the ghcr mirror."""
     if isinstance(value, str):
-        return _MIRROR_HOST.search(value) is not None
+        return _MIRROR_HOST.search(_normalise_scheme(value)) is not None
     if isinstance(value, dict):
         return any(_mentions_mirror(v) for v in value.values())
     if isinstance(value, list):
@@ -2095,7 +2095,7 @@ def _step_kind(step: dict[str, Any]) -> str | None:
     # two shapes that exist today was fail-open: a future job running
     # `docker pull ghcr.io/<owner>/...` with no login classified as None and was
     # skipped by BOTH assertions, leaving the suite green while the job failed.
-    if _MIRROR_HOST.search(command):
+    if _MIRROR_HOST.search(_normalise_scheme(command)):
         return "mirror"
     # A ref held in the step's env and pulled as `docker pull "$IMAGE"` is a
     # mirror pull too, and it leaves no trace in the run text.
@@ -2170,7 +2170,7 @@ def test_ci_holds_no_docker_hub_credentials() -> None:
     # login reintroduced in test.yml or live-e2e.yml exhausts the same shared
     # quota and takes the same fleet down; scanning two files was the same
     # enumerate-the-known-cases mistake as the image guards.
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+    for path in _workflow_files():
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
@@ -2305,7 +2305,28 @@ def test_mirrored_image_matches_testcontainers_prefix_semantics() -> None:
 # merely mistaken ref would be classified as OUR mirror. CodeQL flagged this as
 # incomplete URL substring sanitization and it was right: the lookbehind rejects
 # anything where the host is a suffix of a longer label.
-_MIRROR_HOST = re.compile(r"(?<![A-Za-z0-9.-])ghcr\.io/")
+_MIRROR_HOST = re.compile(r"(?<![A-Za-z0-9.:/-])ghcr\.io(?::\d+)?/")
+
+
+def _workflow_files() -> list[Path]:
+    """Every workflow file. GitHub honours BOTH extensions.
+
+    Scanning only `*.yml` meant `escape.yaml` was invisible to every guard in
+    this file -- an allowlist that does not see a file cannot refuse it.
+    """
+    directory = ROOT / ".github" / "workflows"
+    return sorted(list(directory.glob("*.yml")) + list(directory.glob("*.yaml")))
+
+
+def _normalise_scheme(text: str) -> str:
+    """Turn `scheme://host` into `scheme host` before host matching.
+
+    Without this the lookbehind cannot both reject a PATH segment
+    (`https://registry.example/ghcr.io/x` -- not our host) and accept the
+    legitimate `docker://ghcr.io/x` form, because the character before the host
+    is `/` in each case.
+    """
+    return text.replace("://", " ")
 
 
 _ALLOWED_IMAGE_REGISTRIES = ("ghcr.io/full-chaos/", "mirror.gcr.io/", "gcr.io/")
@@ -2315,17 +2336,74 @@ _ALLOWED_IMAGE_REGISTRIES = ("ghcr.io/full-chaos/", "mirror.gcr.io/", "gcr.io/")
 # mirroring change. The test asserts each one is STILL PRESENT, so the list
 # cannot rot: mirror one of these and the stale entry fails until it is deleted.
 _UNMIRRORED_IMAGE_DEBT = {
-    ("live-e2e.yml", "live-e2e", "services.postgres"),
-    ("live-e2e.yml", "live-e2e", "services.clickhouse"),
-    ("live-e2e.yml", "live-e2e", "services.valkey"),
-    ("live-e2e.yml", "metrics-executed-proof", "services.postgres"),
-    ("live-e2e.yml", "metrics-executed-proof", "services.clickhouse"),
-    ("live-e2e.yml", "metrics-executed-proof", "services.valkey"),
-    ("test.yml", "test-matrix", "services.postgres"),
-    ("test.yml", "test-matrix", "services.clickhouse"),
-    ("test.yml", "coverage", "services.postgres"),
-    ("test.yml", "coverage", "services.clickhouse"),
+    (
+        "live-e2e.yml",
+        "live-e2e",
+        "services.postgres",
+        "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+    ),
+    (
+        "live-e2e.yml",
+        "live-e2e",
+        "services.clickhouse",
+        "clickhouse/clickhouse-server:25.1",
+    ),
+    ("live-e2e.yml", "live-e2e", "services.valkey", "valkey/valkey:8-alpine"),
+    (
+        "live-e2e.yml",
+        "metrics-executed-proof",
+        "services.postgres",
+        "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+    ),
+    (
+        "live-e2e.yml",
+        "metrics-executed-proof",
+        "services.clickhouse",
+        "clickhouse/clickhouse-server:25.1",
+    ),
+    (
+        "live-e2e.yml",
+        "metrics-executed-proof",
+        "services.valkey",
+        "valkey/valkey:8-alpine",
+    ),
+    (
+        "test.yml",
+        "test-matrix",
+        "services.postgres",
+        "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+    ),
+    (
+        "test.yml",
+        "test-matrix",
+        "services.clickhouse",
+        "clickhouse/clickhouse-server:25.1",
+    ),
+    (
+        "test.yml",
+        "coverage",
+        "services.postgres",
+        "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+    ),
+    (
+        "test.yml",
+        "coverage",
+        "services.clickhouse",
+        "clickhouse/clickhouse-server:25.1",
+    ),
 }
+
+# Actions that pull an image themselves. `docker/setup-buildx-action` pulls
+# `moby/buildkit:buildx-stable-1` from Docker Hub before any login runs -- the
+# reason it was removed from the mirror workflow, where it deadlocked against
+# the very quota that workflow exists to escape. These four are ticketed debt.
+_IMAGE_PULLING_ACTION_DEBT = {
+    ("docker-images.yml", "build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "merge", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+}
+_IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 
 
 def _resolve_image_expressions(image: str) -> str:
@@ -2371,7 +2449,7 @@ def _all_image_declarations() -> list[tuple[str, str, str, str]]:
     being overlooked.
     """
     found: list[tuple[str, str, str, str]] = []
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+    for path in _workflow_files():
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job_name, job in (document.get("jobs") or {}).items():
             if not isinstance(job, dict):
@@ -2408,10 +2486,13 @@ def test_every_pulled_image_resolves_to_an_approved_registry() -> None:
     pulling from the mirror without credentials.
     """
     offenders: list[str] = []
-    seen_debt: set[tuple[str, str, str]] = set()
+    seen_debt: set[tuple[str, str, str, str]] = set()
 
     for workflow, job_name, where, image in _all_image_declarations():
-        key = (workflow, job_name, where)
+        # The image is PART of the key. Keying on the coordinate alone made this
+        # an exemption rather than a ratchet: swapping any other Docker Hub
+        # image into a debt slot kept the coordinate present and passed.
+        key = (workflow, job_name, where, image)
         if key in _UNMIRRORED_IMAGE_DEBT:
             seen_debt.add(key)
             continue
@@ -2439,7 +2520,7 @@ def test_mirror_pulled_container_images_declare_credentials() -> None:
     declaration itself.
     """
     offenders: list[str] = []
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+    for path in _workflow_files():
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job_name, job in (document.get("jobs") or {}).items():
             if not isinstance(job, dict):
@@ -2465,7 +2546,7 @@ def test_no_unscanned_local_reusable_workflows_or_composite_actions() -> None:
     indirection: adding one fails this test until the guards learn to follow it.
     """
     offenders: list[str] = []
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+    for path in _workflow_files():
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job_name, job in (document.get("jobs") or {}).items():
             if not isinstance(job, dict):
@@ -2485,3 +2566,58 @@ def test_no_unscanned_local_reusable_workflows_or_composite_actions() -> None:
         "\n".join(offenders)
         + "\n\nTeach the image/login guards to follow this indirection before adding it."
     )
+
+
+def test_image_pulling_action_steps_are_allowlisted_or_ticketed() -> None:
+    """Actions pull images too, and the allowlist could not see them.
+
+    Two shapes reach a registry without any `container:`/`services:`
+    declaration:
+
+    * `uses: docker://<image>` -- a container action, pulled directly.
+    * an action that pulls internally. `docker/setup-buildx-action` fetches
+      `moby/buildkit:buildx-stable-1` from Docker Hub before any login step
+      runs. That is not theoretical here: it deadlocked the mirror workflow
+      against the very Docker Hub quota the mirror exists to escape, and was
+      removed for exactly this reason.
+
+    `docker://` refs must resolve to an approved registry. Internally-pulling
+    actions are ticketed debt, asserted STILL PRESENT so the list cannot rot.
+    """
+    offenders: list[str] = []
+    seen_debt: set[tuple[str, str, str]] = set()
+
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                uses = str(step.get("uses", ""))
+                if uses.startswith("docker://"):
+                    image = uses[len("docker://") :]
+                    if not _image_is_allowed(image):
+                        offenders.append(
+                            f"{path.name}: {job_name} runs container action "
+                            f"{uses!r}, which does not resolve to an approved "
+                            f"registry {_ALLOWED_IMAGE_REGISTRIES}"
+                        )
+                    continue
+                action = uses.split("@", 1)[0]
+                if action in _IMAGE_PULLING_ACTIONS:
+                    key = (path.name, job_name, action)
+                    if key in _IMAGE_PULLING_ACTION_DEBT:
+                        seen_debt.add(key)
+                    else:
+                        offenders.append(
+                            f"{path.name}: {job_name} uses {action!r}, which "
+                            "pulls its own image from Docker Hub; mirror it or "
+                            "add it to _IMAGE_PULLING_ACTION_DEBT with a ticket"
+                        )
+
+    stale = sorted(_IMAGE_PULLING_ACTION_DEBT - seen_debt)
+    assert not stale, (
+        "ticketed action debt is stale -- these steps no longer exist; delete "
+        f"them so the list cannot rot into a silent allowlist:\n  {stale}"
+    )
+    assert not offenders, "\n".join(offenders)

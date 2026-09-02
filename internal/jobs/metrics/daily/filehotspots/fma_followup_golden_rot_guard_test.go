@@ -9,15 +9,15 @@ import (
 
 // TestFMAFollowupGoldenMatchesLivePython is the rot guard for
 // tests/fixtures/fma_followup_golden.json, the AST-lint follow-up's own
-// golden (hotspot_risk_score family here; ownership_gini family consumed by
-// repouser's TestCodeOwnershipGiniFMAFollowupMatchesLivePythonBitExact).
-// One rot guard test suffices for the whole file regardless of how many
-// packages consume it -- see internal/jobs/metrics/numerical's
-// fma_golden_rot_guard_test.go for the same one-guard-per-golden-file
-// convention with fma_golden.json (which is likewise consumed by more than
-// one package). Reuses this package's own fileHotspotsRepositoryRoot/
-// fileHotspotsLivePython helpers (golden_rot_guard_test.go) rather than
-// redefining them.
+// golden (hotspot_risk_score family, TestSampleZScoresMatchesLivePythonBitExact
+// in this package). The golden used to carry a second family,
+// ownership_gini, testing CodeOwnershipGini's own compound-assignment FMA
+// site -- removed once this branch rebased onto PR #2123 (CHAOS-4824,
+// merged), which rewrote CodeOwnershipGini to use math/big.Int exclusively
+// and eliminated the float64 arithmetic that site's FMA-fusion risk
+// depended on; see generate_fma_followup_golden.py's module doc comment.
+// Reuses this package's own fileHotspotsRepositoryRoot/fileHotspotsLivePython
+// helpers (golden_rot_guard_test.go) rather than redefining them.
 func TestFMAFollowupGoldenMatchesLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -62,11 +62,10 @@ func TestFMAFollowupGoldenMatchesLivePython(t *testing.T) {
 	t.Errorf(
 		"live Python no longer reproduces the frozen golden.\n" +
 			"This is Python drift, not a Go bug: tests/fixtures/fma_followup_golden.json " +
-			"was generated from production Python (hotspots.compute_file_risk_hotspots, " +
-			"knowledge.compute_code_ownership_gini) and frozen. Regenerate with\n" +
+			"was generated from production Python (hotspots.compute_file_risk_hotspots) " +
+			"and frozen. Regenerate with\n" +
 			"    python tests/fixtures/generate_fma_followup_golden.py\n" +
 			"and review the diff as a real behaviour change -- if Go should follow, port the " +
-			"change and re-verify TestSampleZScoresMatchesLivePythonBitExact and " +
-			"TestCodeOwnershipGiniFMAFollowupMatchesLivePythonBitExact too.",
+			"change and re-verify TestSampleZScoresMatchesLivePythonBitExact too.",
 	)
 }

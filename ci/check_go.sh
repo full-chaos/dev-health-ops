@@ -533,9 +533,11 @@ check_live_python_oracles() {
     return 1
   fi
   # CHAOS-4818 AST-lint follow-up: sampleZScores' compound-assignment FMA
-  # site (hotspot_risk_score family) and CodeOwnershipGini's own
-  # compound-assignment FMA site (ownership_gini family, repouser package --
-  # one golden file, one rot guard, per the fma-golden precedent above).
+  # site (hotspot_risk_score family). Used to also cover CodeOwnershipGini's
+  # own compound-assignment FMA site (ownership_gini family) -- dropped once
+  # this branch rebased onto PR #2123 (CHAOS-4824), which rewrote
+  # CodeOwnershipGini to use math/big.Int exclusively and made that site's
+  # FMA-fusion risk structurally impossible, not merely guarded.
   proof_file="${proof_dir}/fma-followup-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2

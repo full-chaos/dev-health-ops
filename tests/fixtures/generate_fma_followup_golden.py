@@ -1,10 +1,10 @@
-"""Golden generator for the CHAOS-4818 AST-lint follow-up's two live findings.
+"""Golden generator for the CHAOS-4818 AST-lint follow-up's live finding.
 
 Rebuilding the lint (internal/jobs/fma_lint_test.go) to cover compound
 assignment (`total += a*b`, previously invisible to a checker that only
 inspected explicit `+`/`-` `*ast.BinaryExpr` nodes -- codex round 3 on
-#2106) found two unguarded sites STILL LIVE on main, in functions #2107
-(closed, not merged) would also have touched:
+#2106) found two unguarded sites STILL LIVE on main at the time, in
+functions #2107 (then closed, not yet merged) would also have touched:
 
   - hotspot_risk_score: internal/jobs/metrics/daily/filehotspots.sampleZScores
     (`sumSquares += diff * diff`) vs dev_health_ops.metrics.hotspots.
@@ -13,13 +13,21 @@ inspected explicit `+`/`-` `*ast.BinaryExpr` nodes -- codex round 3 on
     variance 0 -> z_comp is exactly [0.0]*n on both sides via the shared
     "stdev == 0" early return), so `risk_score = z_churn[i] + z_comp[i]`
     reduces to `z_churn[i]` alone -- the site under test, and nothing else.
+    STILL a real float64 site after #2123 merged (the compound assignment
+    was extracted away, but the underlying multiply-and-store is still
+    float64 arithmetic) -- kept here.
   - ownership_gini: internal/jobs/metrics/daily/repouser.CodeOwnershipGini
     (`numerator += float64(index+1) * value` -- only the int operand was
-    converted, not the product) vs dev_health_ops.metrics.knowledge.
-    compute_code_ownership_gini. Every churn value here is a small, exact
-    integer well under 2**53 (this golden is scoped to the FMA-fusion
-    class alone, CHAOS-4818 -- NOT the separate CHAOS-4824 compensated-sum/
-    big.Int class #2107 was addressing for the same function).
+    converted, not the product). REMOVED from this golden once this branch
+    rebased onto PR #2123 (CHAOS-4824, merged): that PR rewrote
+    CodeOwnershipGini to use math/big.Int exclusively until the one final
+    division, eliminating float64 arithmetic from this loop entirely --
+    the FMA-fusion class this golden existed to catch is now structurally
+    impossible at that site, not merely guarded, and #2123's own
+    pysum_golden.json (`gini`/`gini_multi_row` families) already covers
+    CodeOwnershipGini's correctness at a scale (magnitudes past 2**53 and
+    2**63) this golden never attempted. Keeping a redundant golden for a
+    site with no remaining float64 arithmetic would test nothing new.
 
 Same discipline as generate_fma_golden.py: IMPORTS and calls the real
 production functions, never reimplements their formulas; `expected_bits`
@@ -38,7 +46,6 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.metrics.hotspots import compute_file_risk_hotspots
-from dev_health_ops.metrics.knowledge import compute_code_ownership_gini
 from dev_health_ops.metrics.schemas import CommitStatRow, FileComplexitySnapshot
 
 OUTPUT = Path(__file__).with_name("fma_followup_golden.json")
@@ -137,45 +144,10 @@ def _hotspot_risk_score_cases() -> list[dict[str, Any]]:
     return cases
 
 
-def _ownership_gini_cases() -> list[dict[str, Any]]:
-    # Small exact-integer churns only (see module docstring) -- this golden
-    # is scoped to the FMA-fusion class, not CHAOS-4824's separate
-    # compensated-sum/big.Int class for the same function.
-    churn_sets = [
-        [10, 20, 30],
-        [1, 1, 1, 1, 1],
-        [100, 1, 1, 1, 1, 1, 1, 1],
-        [7, 13, 29, 41, 53, 71, 97, 131, 163, 197],
-        [5],
-        [3, 7],
-        list(range(1, 26)),  # 25 authors, ascending churn 1..25
-        [1000000, 500000, 250000, 125000, 1],
-        [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048],
-    ]
-    cases: list[dict[str, Any]] = []
-    for set_index, churns in enumerate(churn_sets):
-        window_stats = [
-            _commit_row("src/shared.go", churn, 0, index)
-            for index, churn in enumerate(churns)
-        ]
-        # compute_code_ownership_gini identifies authors by author_email,
-        # one row per author (matches _commit_row's per-index author_email).
-        gini = compute_code_ownership_gini(str(REPO_ID), window_stats)
-        cases.append(
-            {
-                "case": f"set{set_index}",
-                "churns": churns,
-                "expected_bits": bits_hex(gini),
-            }
-        )
-    return cases
-
-
 def render() -> str:
     value = {
         "schema_version": 1,
         "hotspot_risk_score": _hotspot_risk_score_cases(),
-        "ownership_gini": _ownership_gini_cases(),
     }
     return (
         json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n"

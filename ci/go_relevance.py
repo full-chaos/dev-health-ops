@@ -55,7 +55,16 @@ def github_glob_to_regex(pattern: str) -> re.Pattern[str]:
     out: list[str] = []
     index = 0
     while index < len(pattern):
-        if pattern.startswith("**", index):
+        if pattern.startswith("**/", index):
+            # `**/` matches ZERO OR MORE leading directories, so `**/*.go` must
+            # match `root.go` as well as `internal/x/y.go`. Translating it as
+            # `.*/` required at least one directory, which classified every
+            # root-level `*.go`, `go.mod` and `go.sum` as IRRELEVANT -- a false
+            # green on exactly the change class this module exists to catch, in
+            # the mechanism that replaced the vacuous no-op.
+            out.append("(?:.*/)?")
+            index += 3
+        elif pattern.startswith("**", index):
             out.append(".*")
             index += 2
         elif pattern[index] == "*":

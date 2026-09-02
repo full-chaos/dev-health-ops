@@ -34,13 +34,14 @@ only while it matches the shipped 3.14 line, and the header records which ran):
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import json
 import pathlib
 import platform
-import re
 import sys
+import textwrap
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -290,6 +291,7 @@ VALUES += [value for value in _RANGE_VALUES if value not in VALUES]
 # The production source this file COPIES, anchored by text rather than by line
 # number so the check survives unrelated edits above it.
 _PRODUCTION_SOURCE = "src/dev_health_ops/workers/work_graph_tasks.py"
+_ENCLOSING = "def run_work_graph_build("
 _REGION_START = "now = datetime.now(timezone.utc)"
 _REGION_END = "parsed_repo_id = uuid.UUID(repo_id) if repo_id else None"
 
@@ -303,22 +305,33 @@ def _production_window_digest() -> str:
     calling it, because the surrounding function opens a database. That copy is
     invisible to every guard built on this file: change production's
     `timedelta(days=30)` to 31 and this generator emits byte-identical output,
-    so the fixture stays "fresh" while the reference has moved. A review round
-    constructed exactly that (CHAOS-4837 round 1, P1).
+    so the fixture stays "fresh" while the reference has moved (CHAOS-4837
+    round 1, P1).
 
     Embedding this digest in the payload closes it WITHOUT a second mechanism:
-    if the production region changes, the digest changes, the regenerated
-    fixture differs, and the existing rot guard goes red saying REFERENCE
-    drift -- which is precisely what it means.
+    production changes -> digest changes -> regenerated fixture differs -> the
+    existing rot guard goes red saying REFERENCE drift.
 
-    Anchored on TEXT, not line numbers, and it raises rather than returning a
-    sentinel if either anchor is missing: a digest that silently degrades to
-    "could not find it" is worse than no digest, because it reads as a check.
+    # Anchoring, and why it asserts so much
+
+    The first version anchored on `now = datetime.now(timezone.utc)` and used a
+    bare `find()`. That string occurs TWICE in the module, and `find()` took the
+    earlier one -- so the digest silently covered lines 63-136: a DIFFERENT
+    window derivation, a Celery decorator, and a full docstring, of which the
+    six intended lines were a small part. It still contained the target, so the
+    round-1 falsification passed and the bug was invisible from the outside.
+
+    Two consequences, both measured by lane-4441 on review:
+      * a comma changed to a semicolon IN A DOCSTRING flipped the digest and
+        turned the guard red claiming REFERENCE drift, with behaviour unchanged
+      * the docstring's own claim was false -- it digested ~60 lines it does not
+        reproduce, so anyone checking the region boundaries would read the wrong
+        span
+
+    So the search now starts inside the function, and EVERY assumption raises
+    rather than degrading: an ambiguous anchor is exactly the condition that
+    made the first version silently wrong, so it is now the loudest failure.
     """
-    # The generator runs BOTH from the checkout (tests/fixtures/...) and from
-    # /tmp inside the api container, where the repo-relative walk lands on "/".
-    # Resolve the module through the import system instead of guessing a path:
-    # that is the same file the bridge itself would execute, in either place.
     # Importing this module initialises Celery, which configures logging to
     # STDOUT -- and stdout is the payload. Left unredirected it interleaved log
     # lines into the JSON and produced a fixture that would not parse. Contain
@@ -330,20 +343,53 @@ def _production_window_digest() -> str:
 
     path = pathlib.Path(production.__file__).resolve()
     source = path.read_text(encoding="utf-8")
-    start = source.find(_REGION_START)
-    end = source.find(_REGION_END)
+
+    if source.count(_ENCLOSING) != 1:
+        raise SystemExit(
+            f"{_ENCLOSING!r} occurs {source.count(_ENCLOSING)} times in {path}; "
+            "the digest cannot locate the enclosing function unambiguously."
+        )
+    within = source.index(_ENCLOSING)
+
+    start = source.find(_REGION_START, within)
+    end = source.find(_REGION_END, within)
     if start < 0 or end < 0:
         raise SystemExit(
-            f"cannot locate the window-derivation region in {path}: "
-            f"start={start} end={end}. The anchors moved -- re-anchor this digest "
-            "and RE-VERIFY that _derive_window still reproduces production."
+            f"cannot locate the window-derivation region in {path} "
+            f"(start={start} end={end}). The anchors moved -- re-anchor this "
+            "digest and RE-VERIFY that _derive_window still reproduces production."
         )
+    # Ambiguity INSIDE the function is what the first version got wrong at module
+    # scope. Assert it here too rather than trusting that one search fixed it.
+    span = source[within:end]
+    if span.count(_REGION_START) != 1:
+        raise SystemExit(
+            f"start anchor {_REGION_START!r} is ambiguous within {_ENCLOSING!r}: "
+            f"{span.count(_REGION_START)} matches. Re-anchor before trusting this digest."
+        )
+
+    # Take whole LINES so the block dedents cleanly.
+    start = source.rfind("\n", 0, start) + 1
     region = source[start : end + len(_REGION_END)]
-    # Comments and blank-line/indent churn are not behaviour; normalise them out
-    # so the digest reports SEMANTIC drift rather than reformatting.
-    region = re.sub(r"#.*", "", region)
-    region = " ".join(region.split())
-    return hashlib.sha256(region.encode("utf-8")).hexdigest()
+
+    # Normalise via the AST, not a regex.
+    #
+    # The regex this replaces was `re.sub(r"#.*", "")`, which strips from any `#`
+    # to end of line INCLUDING one inside a string literal -- so
+    # `url = "http://x/#frag"; window = 30` and the same line with 31 both
+    # normalise to `url = "http://x/` and digest EQUAL, swallowing the change.
+    # Latent today (no such line in the region) but the exact "safe because
+    # today's inputs are tame" shape. ast.unparse drops comments and formatting
+    # without touching string contents, and RAISES on malformed input rather
+    # than silently truncating it.
+    try:
+        normalised = ast.unparse(ast.parse(textwrap.dedent(region)))
+    except SyntaxError as error:
+        raise SystemExit(
+            f"the window-derivation region in {path} does not parse: {error}. "
+            "The anchors are probably spanning the wrong block."
+        ) from error
+    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
 
 
 def _derive_window(arguments: dict[str, Any]) -> dict[str, Any]:

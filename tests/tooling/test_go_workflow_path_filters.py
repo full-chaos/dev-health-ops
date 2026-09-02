@@ -195,6 +195,12 @@ def _fixture_like_files_on_disk() -> set[str]:
 
 _GO_DATA_SUFFIXES = (
     ".json",
+    # `.py` is here because Go tests read PYTHON as an input: a parity test
+    # scrapes the real sink module, a migration file, a model. Excluding it made
+    # the scanner blind to exactly the files whose drift the Go test exists to
+    # catch -- a PR touching only one of them was classified irrelevant, the Go
+    # contract test never ran, and this oracle passed anyway.
+    ".py",
     ".sql",
     ".csv",
     ".tsv",
@@ -280,9 +286,22 @@ def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> s
             found.add(relative.as_posix())
 
     # (1) and (3): data-suffixed string literals, including filepath.Join parts.
+    #
+    # Resolved against BOTH the naming file's directory and the repository root,
+    # because Go names inputs in both spellings and only one of them was tried.
+    # A sibling fixture is written `"testdata/x.json"`; a cross-tree input is
+    # written whole -- `"src/dev_health_ops/.../work_graph.py"` -- and handed to
+    # a helper that joins it onto the repo root itself. Resolving that second
+    # spelling against `internal/providersync/` yields a path that does not
+    # exist, so `add` dropped it and the file was invisible to the oracle while
+    # LOOKING covered: the literal is right there in the test.
+    #
+    # `add` already requires the candidate to be a real file, so trying both
+    # anchors cannot invent coverage -- at most one of them can exist.
     for literal in re.findall(r'"([^"\n]+)"', source):
         if literal.endswith(_GO_DATA_SUFFIXES):
             add(base / literal)
+            add(anchor / literal)
 
     # (3) filepath.Join("a", "b.json") -- the segments are separate literals, so
     # the literal scan above sees "b.json" and resolves it against the wrong
@@ -361,7 +380,8 @@ def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
         f"only one of them is classified non-Go and go-quality is satisfied "
         f"VACUOUSLY by the no-op workflow -- the guard never runs:\n  "
         + "\n  ".join(unmatched)
-        + "\n\nEither add a pattern covering them to ALL FOUR lists, or add the "
+        + "\n\nEither add a pattern covering them to BOTH path lists in go.yml "
+        "(push and pull_request), or add the "
         "directory to UNCOVERED_FIXTURE_DIRECTORIES with a reason. Do not add "
         "individual files: that is the enumeration this test exists to end."
     )
@@ -483,6 +503,58 @@ def test_every_covered_reader_shape_is_found(tmp_path: Path) -> None:
             f"wrong -- and an overstated coverage claim is worse than an admitted "
             f"gap, because a reader stops checking."
         )
+
+
+def test_a_repo_root_relative_literal_is_found(tmp_path: Path) -> None:
+    """A whole-path literal resolves against the ROOT, not just its own directory.
+
+    Go names inputs in two spellings. A sibling fixture is written relative to
+    the test -- `"testdata/x.json"` -- but a cross-tree input is written whole,
+    `"src/dev_health_ops/.../work_graph.py"`, and handed to a helper that joins
+    it onto the repository root.
+
+    Only the first spelling used to resolve. The second produced
+    `internal/providersync/src/dev_health_ops/...`, which does not exist, so it
+    was dropped -- and the file looked covered, because the literal is right
+    there in the test. Nine real Go inputs were invisible this way, including
+    two YAML configs and a SQL migration that no `.py` fix would have reached.
+    """
+    # Deliberately a `.json`, not a `.py`: this test isolates the ANCHOR fix.
+    # A `.py` fixture here would also fail when the suffix-set fix is reverted,
+    # so one test would report two different defects and neither would be named.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "contract.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / "internal" / "providersync"
+    package.mkdir(parents=True)
+
+    found = _resolve_named_files(
+        'readSource(t, "src/contract.json")', package, tmp_path
+    )
+
+    assert "src/contract.json" in found, (
+        "a repo-root-relative literal was not resolved. It is named verbatim in "
+        "Go source, so it reads as covered; if only the naming file's directory "
+        "is tried, the path silently resolves to nothing and the input drops out "
+        f"of the oracle entirely. found={sorted(found)}"
+    )
+
+
+def test_python_named_by_go_is_an_input(tmp_path: Path) -> None:
+    """`.py` is a Go INPUT suffix, because Go tests read Python as data.
+
+    A parity test scrapes the real sink module; another reads a migration. The
+    suffix set excluded `.py`, so those reads were invisible: a PR touching only
+    the Python file was classified non-Go, the contract test never ran, and the
+    coverage oracle passed anyway -- the exact vacuous green it exists to stop.
+    """
+    (tmp_path / "sink.py").write_text("x = 1", encoding="utf-8")
+
+    found = _resolve_named_files('readSource(t, "sink.py")', tmp_path, tmp_path)
+
+    assert "sink.py" in found, (
+        "a Python file named by Go source was not treated as an input; the Go "
+        f"test that reads it would skip on a PR that changed it. found={sorted(found)}"
+    )
 
 
 def test_the_runtime_built_path_limit_is_real(tmp_path: Path) -> None:

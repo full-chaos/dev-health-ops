@@ -61,6 +61,7 @@ WHAT THIS TEST ASSERTS
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -266,6 +267,37 @@ def _files_named_by_go_tests() -> set[str]:
     return found
 
 
+@lru_cache(maxsize=8)
+def _files_by_basename(anchor: Path) -> dict[str, tuple[str, ...]]:
+    """Every real file under *anchor*, indexed by basename.
+
+    Cached because it is consulted once per Go source file and rebuilding it
+    each time is quadratic over the tree.
+    """
+    index: dict[str, list[str]] = {}
+    for path in anchor.rglob("*"):
+        relative = path.relative_to(anchor)
+        if _SKIP_DIRECTORIES.intersection(relative.parts) or not path.is_file():
+            continue
+        index.setdefault(path.name, []).append(relative.as_posix())
+    return {name: tuple(paths) for name, paths in index.items()}
+
+
+def _looks_like_a_path(literal: str) -> bool:
+    """Reject prose that happens to end in a data suffix.
+
+    Three Go error messages in this repo end in a real path -- "httpx2 is added
+    to ci/requirements-live-python-oracles.txt" is a sentence, not a literal
+    naming an input. Whitespace or a format verb is the tell.
+    """
+    return not (
+        " " in literal
+        or "\t" in literal
+        or "%" in literal
+        or literal.startswith(("http://", "https://"))
+    )
+
+
 def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> set[str]:
     """Resolve every file the Go source names, relative to its own directory.
 
@@ -300,8 +332,21 @@ def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> s
     # anchors cannot invent coverage -- at most one of them can exist.
     for literal in re.findall(r'"([^"\n]+)"', source):
         if literal.endswith(_GO_DATA_SUFFIXES):
+            before = len(found)
             add(base / literal)
             add(anchor / literal)
+            # Neither anchor worked, so the literal is relative to a directory
+            # only known at runtime -- `filepath.Join(contractsDir, "x.json")`,
+            # or a helper that joins the repo root itself. If exactly ONE file in
+            # the tree carries that basename, the reference is unambiguous and
+            # resolving it is strictly more coverage. Ambiguity is NOT resolved
+            # here: it is reported by _unresolvable_named_paths instead, because
+            # guessing between candidates is how an oracle starts asserting
+            # coverage it does not have.
+            if len(found) == before and _looks_like_a_path(literal):
+                candidates = _files_by_basename(anchor).get(Path(literal).name, ())
+                if len(candidates) == 1:
+                    add(anchor / candidates[0])
 
     # (3) filepath.Join("a", "b.json") -- the segments are separate literals, so
     # the literal scan above sees "b.json" and resolves it against the wrong
@@ -369,6 +414,105 @@ def _resolve_named_files(source: str, base: Path, root: Path | None = None) -> s
                 add(entry)
 
     return found
+
+
+# The one class that cannot be decided by property.
+#
+# A provider file-listing fixture fabricates a repository layout and names
+# `__init__.py` in it. Over a hundred real `__init__.py` files exist, so the
+# literal matches many candidates while referring to NONE of them -- it is not a
+# reference to this repository at all.
+#
+# Every other case is decided by a property and needs no entry here: prose is
+# filtered by _looks_like_a_path, absolute paths are deployment locations,
+# a basename matching no file has nothing to cover, and an ambiguous literal
+# passes when every candidate is already covered. This is the residue, and it is
+# deliberately two lines rather than a growing list.
+FABRICATED_PATH_LITERALS: dict[str, str] = {
+    "__init__.py": "synthetic name in a fabricated provider file listing",
+    "src/__init__.py": "same fixture, same fabricated layout",
+}
+
+
+def _unresolvable_named_paths() -> list[tuple[str, str, tuple[str, ...]]]:
+    """Every data-suffixed literal naming a real file we could not resolve.
+
+    THIS is the guard keyed on the PROPERTY rather than on a list of shapes.
+    Four instances of one root cause reached review as separate findings --
+    a missing suffix, a plain literal, a filepath.Join, a go:embed prefix --
+    because each was a new WAY of naming a path, and the resolver's answer to
+    every one of them was the same: resolve to nothing, and say nothing.
+
+    A fifth way will exist. This does not try to enumerate it; it fails on the
+    property all five share -- a literal that names a real file, which this
+    resolver could not locate. The shape does not matter.
+
+    Ambiguity is reported rather than guessed, and there is deliberately NO
+    exception list: the caller decides whether an ambiguous literal is safe by
+    the only question that matters -- whether EVERY candidate it could mean is
+    already covered. If they all are, the ambiguity cannot hide a gap. If even
+    one is not, it can.
+    """
+    root = REPO_ROOT
+    index = _files_by_basename(root)
+    unresolvable: list[tuple[str, str, tuple[str, ...]]] = []
+
+    for source_file in root.rglob("*.go"):
+        relative = source_file.relative_to(root)
+        if _SKIP_DIRECTORIES.intersection(relative.parts):
+            continue
+        try:
+            source = source_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        unresolvable.extend(
+            (f"{relative.as_posix()}:{number}", literal, candidates)
+            for number, literal, candidates in _unresolvable_in_source(
+                source, source_file.parent, root, index
+            )
+        )
+    return unresolvable
+
+
+def _unresolvable_in_source(
+    source: str,
+    base: Path,
+    root: Path,
+    index: dict[str, tuple[str, ...]],
+) -> list[tuple[int, str, tuple[str, ...]]]:
+    """The guard's core, split out so it can be exercised against a fixture tree.
+
+    A guard that only runs against the real repository cannot be tested with a
+    CONSTRUCTED input, and an untestable guard is how the last three versions of
+    this oracle each shipped a coverage claim nobody had checked.
+    """
+    out: list[tuple[int, str, tuple[str, ...]]] = []
+    for number, line in enumerate(source.splitlines(), 1):
+        for literal in re.findall(r'"([^"\n]+)"', line):
+            if not literal.endswith(_GO_DATA_SUFFIXES):
+                continue
+            if not _looks_like_a_path(literal) or literal.startswith("/"):
+                # Prose, or a deployment path such as /app/config/x.yaml,
+                # whose repo-side original is covered on its own path.
+                continue
+            if literal in FABRICATED_PATH_LITERALS:
+                continue
+            candidates = index.get(Path(literal).name, ())
+            if not candidates:
+                # Names no file in the tree, so there is nothing to cover.
+                continue
+            # Ask the same questions the resolver asks, rather than
+            # string-matching its OUTPUT against the literal. The output is
+            # normalised (`internal/x/../../tests/f.json` becomes
+            # `tests/f.json`) while the literal is not, so a substring
+            # comparison reported seven `../..` paths as unresolvable when
+            # the resolver had resolved every one of them.
+            if (base / literal).is_file() or (root / literal).is_file():
+                continue
+            if len(candidates) == 1:
+                continue  # the unique-basename fallback resolves it
+            out.append((number, literal, candidates))
+    return out
 
 
 def _is_excused(path: str) -> str | None:
@@ -682,6 +826,94 @@ def test_go_embed_prefix_and_directory_forms_are_found(tmp_path: Path) -> None:
     assert resolve("data") == {"data/plain.json", "data/sub/deep.json"}, (
         "a bare directory embeds its tree but EXCLUDES dot/underscore names; "
         "including them would claim coverage Go does not actually give"
+    )
+
+
+def test_no_named_path_resolves_to_nothing() -> None:
+    """A literal naming a real file must never be dropped in silence.
+
+    THE POINT OF THIS TEST, which is different from every other test here.
+
+    Four instances of one root cause reached review as four separate findings:
+    a missing `.py` suffix, a plain repo-root-relative literal, a variable-rooted
+    `filepath.Join`, and a `go:embed all:` prefix. Each was a new WAY of naming a
+    path, each was found by a different round, and the resolver's response to all
+    four was identical -- resolve to nothing, report nothing, stay green.
+
+    Enumerating shapes cannot end that, because the next shape is by definition
+    the one nobody listed. This keys on the PROPERTY the four share instead: a
+    literal that names a file which really exists, that this resolver could not
+    locate. When the fifth shape arrives it fails here, named, with its
+    file:line -- rather than silently subtracting from coverage.
+
+    Ambiguous literals are not guessed at. They pass only when EVERY candidate
+    is already covered, which is the question that actually decides whether the
+    ambiguity can hide a gap.
+    """
+    go_paths = (_on_block(_load(GO_WORKFLOW)).get("pull_request") or {}).get(
+        "paths"
+    ) or []
+
+    dangerous = []
+    for location, literal, candidates in _unresolvable_named_paths():
+        uncovered = [c for c in candidates if not _matches_any(c, go_paths)]
+        if uncovered:
+            dangerous.append((location, literal, uncovered))
+
+    assert not dangerous, (
+        "these literals name a real file the resolver could not locate, and at "
+        "least one candidate matches no path filter -- so a PR changing it is "
+        "classified non-Go and the Go test that reads it never runs:\n  "
+        + "\n  ".join(
+            f"{location}: {literal!r} could mean {uncovered}"
+            for location, literal, uncovered in dangerous
+        )
+        + "\n\nEither teach _resolve_named_files the shape that names it, or add "
+        "a pattern covering every candidate. Do NOT add the literal to an "
+        "exception list: the whole point of this check is that it keys on the "
+        "property rather than on a list of known shapes."
+    )
+
+
+def test_a_sixth_unknown_shape_fails_loud_instead_of_vanishing(tmp_path: Path) -> None:
+    """The guard must fire on a naming shape the resolver has never heard of.
+
+    Four instances of one root cause arrived as four separate findings, each a
+    new WAY of naming a path. A fifth and a sixth will exist. This constructs
+    one the resolver genuinely does not implement -- `os.DirFS` plus a relative
+    `Open` -- and asserts it is REPORTED rather than silently dropped.
+
+    The file is deliberately ambiguous (two `data.json` in the tree) so the
+    unique-basename fallback cannot rescue it. That is the honest test: the
+    resolver still cannot locate it, and the requirement is that it says so.
+    """
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "data.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "b" / "data.json").write_text("{}", encoding="utf-8")
+    package = tmp_path / "cmd" / "svc"
+    package.mkdir(parents=True)
+
+    source = 'fsys := os.DirFS(repoRoot)\n f, _ := fsys.Open("data.json")'
+
+    assert not _resolve_named_files(source, package, tmp_path), (
+        "the resolver is not expected to understand os.DirFS; if it now does, "
+        "this test's premise is stale and should be rewritten around a shape "
+        "that is genuinely unknown"
+    )
+
+    index: dict[str, tuple[str, ...]] = {"data.json": ("a/data.json", "b/data.json")}
+    reported = _unresolvable_in_source(source, package, tmp_path, index)
+
+    assert reported, (
+        "a literal naming a real file was neither resolved NOR reported -- it "
+        "vanished. That is the exact failure mode four review rounds found in "
+        "four different shapes, and the guard exists to end it."
+    )
+    assert reported[0][1] == "data.json"
+    assert set(reported[0][2]) == {"a/data.json", "b/data.json"}, (
+        "the report must name every candidate, so the reader can decide whether "
+        "the ambiguity can hide a gap"
     )
 
 

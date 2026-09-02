@@ -106,10 +106,12 @@ type gitlabWorkItemsDeriver interface {
 // this route runs for a given org is a question about that gate and the org's
 // dataset selection, not about the wiring documented above.
 //
-// The superseded text read "The handler is intentionally not registered here.
-// Activation, alias watermarks, configuration loading, and deployment wiring
-// are separate work." Activation happened; kept visible rather than deleted so
-// the wrong model is refuted rather than merely absent (CHAOS-4848).
+// SUPERSEDED: "The handler is intentionally not registered here. Activation,
+// SUPERSEDED: alias watermarks, configuration loading, and deployment wiring
+// SUPERSEDED: are separate work."
+//
+// Activation happened; kept visible rather than deleted so the wrong model is
+// refuted rather than merely absent (CHAOS-4848).
 type GitLabWorkItemsRouteHandler struct {
 	PerPage         int
 	MaxPages        int

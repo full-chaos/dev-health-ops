@@ -109,10 +109,11 @@ type JiraSprintReferenceSink func([]jiraSprintRow) error
 // Execute is reached -- the condition that silently vetoed github/work-items
 // for two months under CHAOS-4060/CHAOS-4731.
 //
-// The superseded text read "JiraAtlassianRouteHandler is intentionally
-// unregistered. It is a complete provider-local route for parity and recovery
-// tests; registry/activation is a separate migration slice." Kept visible as a
-// correction rather than deleted (CHAOS-4848).
+// SUPERSEDED: "JiraAtlassianRouteHandler is intentionally unregistered. It is
+// SUPERSEDED: a complete provider-local route for parity and recovery tests;
+// SUPERSEDED: registry/activation is a separate migration slice."
+//
+// Kept visible as a correction rather than deleted (CHAOS-4848).
 type JiraAtlassianRouteHandler struct {
 	StatusMapping *StatusMapping
 	Identity      jiraIdentityResolver

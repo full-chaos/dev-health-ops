@@ -399,9 +399,10 @@ type linearWorkItemRows struct {
 // Execute is reached -- the condition that silently vetoed github/work-items
 // for two months under CHAOS-4060/CHAOS-4731.
 //
-// The superseded text read "It is intentionally not registered or activated
-// here; the family planner and route gate remain separate work." Kept visible
-// as a correction rather than deleted (CHAOS-4848).
+// SUPERSEDED: "It is intentionally not registered or activated here; the
+// SUPERSEDED: family planner and route gate remain separate work."
+//
+// Kept visible as a correction rather than deleted (CHAOS-4848).
 type LinearWorkItemsRouteHandler struct {
 	PerPage       int
 	MaxPages      int

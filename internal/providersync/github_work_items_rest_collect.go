@@ -81,11 +81,13 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 // Execute is reached -- the condition that silently vetoed github/work-items
 // for two months under CHAOS-4060/CHAOS-4731.
 //
-// The superseded text read "It remains intentionally unregistered until the PR
-// GraphQL social layer and every direct/derived effect are composed
-// atomically." Both preconditions are met: the Social fetcher is a sibling
-// field on the same handler and the derived effects are wired. Kept visible as
-// a correction rather than deleted (CHAOS-4848).
+// SUPERSEDED: "It remains intentionally unregistered until the PR GraphQL
+// SUPERSEDED: social layer and every direct/derived effect are composed
+// SUPERSEDED: atomically."
+//
+// Both preconditions are met: the Social fetcher is a sibling field on the same
+// handler and the derived effects are wired. Kept visible as a correction
+// rather than deleted (CHAOS-4848).
 type GitHubWorkItemsRESTCollector struct {
 	MaxPages int
 }

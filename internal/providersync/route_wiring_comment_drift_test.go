@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,13 +51,27 @@ var staleRegistrationClaims = []string{
 	"only thing that can reach this constructor today is a test",
 }
 
-// quotedSpan matches a double-quoted run, including across newlines once the
-// comment has been joined. A stale phrase INSIDE a quotation is a citation of
-// superseded text, not an assertion -- every corrected comment in this package
-// keeps the old sentence quoted so the wrong model stays visible next to its
-// refutation. Stripping quotations before matching is what lets a correction
-// quote the very phrase it retracts without tripping this guard.
-var quotedSpan = regexp.MustCompile(`(?s)"[^"]*"`)
+// supersededTag is how a comment cites text it is retracting. A stale phrase
+// must stay visible next to its refutation, so the guard needs to tell a
+// CITATION from an ASSERTION -- and that distinction is now made by an exact
+// token, never by reading the prose around it.
+//
+// WHY A TAG AND NOT A HEURISTIC. Three consecutive codex rounds each found a
+// defect in a hand-rolled prose discriminator, and each fix caused the next:
+// stripping every quoted span let a live claim hide in scare quotes; a
+// 240-character marker window let an unrelated retraction shelter a planted
+// assertion; sentence-scoped markers then failed BOTH ways at once -- an
+// unrelated "previously said" in the same sentence shielded a real falsehood,
+// and a period inside `planner.go:401` or `v1.27` severed a legitimate
+// retraction from its marker and rejected a correct comment. Deciding from
+// English whether a sentence asserts or cites is natural-language
+// understanding; a fourth heuristic tier would buy a fifth defect. So the
+// surface is eliminated rather than tiered: a retraction declares itself.
+//
+// CONTRACT: every line of a citation begins with this tag, including each line
+// of a multi-line quotation. Lines carrying it are excluded from the assertion
+// text; everything else is an assertion. Mechanical, exact, no grammar.
+const supersededTag = "SUPERSEDED:"
 
 func wiringFilePath(t *testing.T) string {
 	t.Helper()
@@ -245,53 +258,23 @@ func packageTypeDecls(t *testing.T) []packageTypeDecl {
 	return decls
 }
 
-// retractionMarker introduces a quotation of superseded text. Only a quote a
-// marker introduces is stripped -- codex round 2 showed that stripping EVERY
-// quoted span lets a live assertion hide inside scare quotes
-// (`is "intentionally unregistered" by the worker`), turning the
-// false-positive fix into a false negative, which is the worse direction for a
-// guard.
-var retractionMarker = regexp.MustCompile(
-	`(?i)(previously read|previously said|used to say|superseded text read|it read:|the dropped clause was|this comment previously)`,
-)
-
-// collapseWhitespace joins the doc into one space-separated run. Without it a
-// claim split across two `//` lines ("intentionally\nunregistered") evades
-// every literal, which codex round 2 demonstrated with a passing mutation.
+// collapseWhitespace joins the doc into one space-separated run.
 func collapseWhitespace(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
 func assertedStaleClaims(doc string) []string {
-	assertions := collapseWhitespace(doc)
-	// Strip only quotations that a retraction marker introduces, walking left
-	// from each quote to the nearest preceding marker within the same sentence
-	// region.
-	for {
-		location := quotedSpan.FindStringIndex(assertions)
-		if location == nil {
-			break
-		}
-		prefix := assertions[:location[0]]
-		// Scope the marker search to the SENTENCE containing the quote, not a
-		// fixed character window. A window is proximity, and proximity is not
-		// grammar: a legitimate retraction elsewhere in the same doc block
-		// sheltered a freshly planted scare-quoted assertion a few hundred
-		// characters later, which is a false negative in the direction that
-		// matters. Verified by mutation before and after this change.
-		window := prefix
-		if cut := strings.LastIndexAny(window, ".;"); cut >= 0 {
-			window = window[cut+1:]
-		}
-		if retractionMarker.MatchString(window) {
-			assertions = assertions[:location[0]] + " " + assertions[location[1]:]
+	// Drop tagged citation lines, then collapse what remains. Whitespace is
+	// collapsed so a claim split across two comment lines cannot evade a
+	// literal (codex round 2 proved that with a passing mutation).
+	var assertionLines []string
+	for _, line := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), supersededTag) {
 			continue
 		}
-		// Not a retraction: keep the quoted text as an assertion, but neutralise
-		// the delimiters so the scan advances instead of looping forever.
-		assertions = assertions[:location[0]] + " " +
-			assertions[location[0]+1:location[1]-1] + " " + assertions[location[1]:]
+		assertionLines = append(assertionLines, line)
 	}
+	assertions := collapseWhitespace(strings.Join(assertionLines, " "))
 	var found []string
 	for _, claim := range staleRegistrationClaims {
 		if strings.Contains(assertions, claim) {
@@ -326,62 +309,75 @@ func TestNoLiveSymbolIsDocumentedAsUnregistered(t *testing.T) {
 	}
 }
 
-// TestDriftGuardCatchesAPlantedStaleClaim drives the real detector against a
-// planted violation. Without it, a matcher that silently stopped matching --
-// a renamed phrase, a broken quote-stripper -- would report the package clean
-// forever, which is the failure mode this whole guard exists to prevent. A
-// direct assertion that "the phrase list is non-empty" could not fail in the
-// interesting direction.
+// TestDriftGuardCatchesAPlantedStaleClaim drives the real detector against
+// planted violations. Without it, a matcher that silently stopped matching
+// would report the package clean forever -- the failure mode this guard exists
+// to prevent. A direct assertion that "the phrase list is non-empty" could not
+// fail in the interesting direction.
 func TestDriftGuardCatchesAPlantedStaleClaim(t *testing.T) {
 	planted := "SomeHandler is intentionally unregistered. It owns only the compute boundary."
 	if claims := assertedStaleClaims(planted); len(claims) != 1 || claims[0] != "intentionally unregistered" {
 		t.Fatalf("detector missed a planted stale claim: got %v", claims)
 	}
 
-	// The corrected form: the SAME phrase, but quoted as superseded text. This
-	// must NOT fire, or every correction in this package would be unfixable.
-	corrected := `WIRING: LIVE. provider_sync.go constructs this handler. This comment ` +
-		`previously read "It is intentionally unregistered: the provider route wiring ` +
-		`remains a separate slice." That is now false.`
-	if claims := assertedStaleClaims(corrected); len(claims) != 0 {
-		t.Fatalf("detector fired on a QUOTED retraction, which would make corrections impossible: %v", claims)
+	tagged := "WIRING: WIRED. provider_sync.go constructs this handler.\n" +
+		"SUPERSEDED: \"It is intentionally unregistered: wiring is a separate slice.\"\n" +
+		"That is now false."
+	if claims := assertedStaleClaims(tagged); len(claims) != 0 {
+		t.Fatalf("a TAGGED citation fired, which would make corrections impossible: %v", claims)
 	}
 
-	// A multi-line quotation, the shape github_work_items_composition.go uses.
-	multiline := "WIRING: LIVE, and this paragraph used to say the opposite. It read:\n\n" +
-		"\t\"It REGISTERS AND ACTIVATES NOTHING. provider_sync.go\n\tgains no case for the work-item family here.\"\n\n" +
+	multiline := "WIRING: WIRED, and this paragraph used to say the opposite:\n" +
+		"SUPERSEDED: \"It REGISTERS AND ACTIVATES NOTHING. provider_sync.go\n" +
+		"SUPERSEDED: gains no case for the work-item family here.\"\n" +
 		"All of those claims are now false."
 	if claims := assertedStaleClaims(multiline); len(claims) != 0 {
-		t.Fatalf("detector fired on a MULTI-LINE quoted retraction: %v", claims)
+		t.Fatalf("a MULTI-LINE tagged citation fired: %v", claims)
 	}
 
-	// Codex round 2 mutations, each of which the detector ACCEPTED before this
-	// commit. Pinned by name so a future simplification cannot quietly reopen
-	// them.
 	t.Run("line wrap across // boundaries", func(t *testing.T) {
 		// doc.Text() keeps the newline, so the literal was split in half.
+		// Codex round 2 mutation.
 		wrapped := "This handler is intentionally\nunregistered by the worker."
 		if claims := assertedStaleClaims(wrapped); len(claims) != 1 {
 			t.Fatalf("a claim split across two comment lines evaded the detector: %v", claims)
 		}
 	})
 
-	t.Run("scare quotes are an assertion, not a retraction", func(t *testing.T) {
-		// No retraction marker, so the quotes are the author's emphasis and the
-		// sentence still asserts the falsehood. Stripping EVERY quoted span --
-		// the previous behaviour -- turned a false positive into a false
-		// negative, the worse direction for a guard.
+	t.Run("scare quotes are an assertion, not a citation", func(t *testing.T) {
+		// Codex round 2 mutation. Quoting alone never exempts anything now:
+		// only the tag does, so this is red by construction.
 		scare := `This handler is "intentionally unregistered" by the worker.`
 		if claims := assertedStaleClaims(scare); len(claims) != 1 {
-			t.Fatalf("a quoted assertion hid behind the retraction stripper: %v", claims)
+			t.Fatalf("a quoted assertion escaped the detector: %v", claims)
 		}
 	})
 
-	t.Run("a marked retraction still does not fire", func(t *testing.T) {
-		// The discriminator is the marker, not the quotes.
-		marked := `WIRING: LIVE. The superseded text read "intentionally unregistered".`
-		if claims := assertedStaleClaims(marked); len(claims) != 0 {
-			t.Fatalf("a marked retraction fired, which would make corrections impossible: %v", claims)
+	// The two round-3 defects, which killed the prose-marker heuristic. Both
+	// are red on the sentence-scoped implementation and green on the tag.
+	t.Run("R3 F1: unrelated marker must not shield an assertion", func(t *testing.T) {
+		// Under sentence-scoped markers this returned [] -- an unrelated
+		// "previously said" in the same sentence exempted a live falsehood.
+		f1 := `Something was previously said about scope, and this handler is ` +
+			`"intentionally unregistered" by the worker.`
+		if claims := assertedStaleClaims(f1); len(claims) != 1 {
+			t.Fatalf("an unrelated retraction marker shielded a real assertion: %v", claims)
+		}
+	})
+
+	t.Run("R3 F2: a file:line or version period must not reject a citation", func(t *testing.T) {
+		// Under sentence-scoped markers a period inside planner.go:401 or
+		// v1.27 severed the marker from its quote and REJECTED a correct
+		// comment. With the tag there is no sentence to split.
+		f2 := "The superseded text, per planner.go:401, no longer holds.\n" +
+			"SUPERSEDED: \"intentionally unregistered\""
+		if claims := assertedStaleClaims(f2); len(claims) != 0 {
+			t.Fatalf("a legitimate tagged citation was rejected because of a file:line period: %v", claims)
+		}
+		f2b := "This comment previously read, before v1.27, something else.\n" +
+			"SUPERSEDED: \"intentionally unregistered\""
+		if claims := assertedStaleClaims(f2b); len(claims) != 0 {
+			t.Fatalf("a legitimate tagged citation was rejected because of a version period: %v", claims)
 		}
 	})
 }

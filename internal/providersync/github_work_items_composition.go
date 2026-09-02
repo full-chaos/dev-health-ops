@@ -24,14 +24,16 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // NewGitHubWorkItemClickHouseEffects wires every landed destination adapter
 // onto the composite sink.
 //
-// WIRING: WIRED, and this paragraph used to say the opposite. It read:
+// WIRING: WIRED, and this paragraph used to say the opposite:
 //
-//	"It REGISTERS AND ACTIVATES NOTHING. cmd/dev-health-worker/provider_sync.go
-//	gains no case for the work-item family here, the provider matrix still
-//	marks all five aliases route_ready: false, and the route still returns a
-//	nil watermark -- so the only thing that can reach this constructor today is
-//	a test. Activation is a separate change that must first satisfy the unmet
-//	D17 obligation recorded on GitHubWorkItemsIncomplete."
+// SUPERSEDED: "It REGISTERS AND ACTIVATES NOTHING.
+// SUPERSEDED: cmd/dev-health-worker/provider_sync.go gains no case for the
+// SUPERSEDED: work-item family here, the provider matrix still marks all five
+// SUPERSEDED: aliases route_ready: false, and the route still returns a nil
+// SUPERSEDED: watermark -- so the only thing that can reach this constructor
+// SUPERSEDED: today is a test. Activation is a separate change that must first
+// SUPERSEDED: satisfy the unmet D17 obligation recorded on
+// SUPERSEDED: GitHubWorkItemsIncomplete."
 //
 // All four of those claims are now false. Corrected, each against what
 // actually implements it:

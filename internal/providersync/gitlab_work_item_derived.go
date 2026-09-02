@@ -102,11 +102,12 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 // above rather than the line numbers alone -- the names are what survive an
 // edit that shifts these anchors.
 //
-// This comment previously read "It is intentionally unregistered: the provider
-// route/cutover wiring remains a separate slice." That was accurate while the
-// compute boundary landed ahead of its route, and is now false. Left as a
-// correction rather than a silent deletion because the stale form made a live
-// writer read as dead code (CHAOS-4731 lost time to exactly that).
+// SUPERSEDED: "It is intentionally unregistered: the provider route/cutover
+// SUPERSEDED: wiring remains a separate slice."
+//
+// That was accurate while the compute boundary landed ahead of its route, and
+// is now false. Kept visible rather than silently deleted because the stale
+// form made a WIRED writer read as dead code (CHAOS-4731 lost time to it).
 type GitLabWorkItemDeriver struct {
 	Source               githubWorkItemDerivationContextSource
 	statusMapping        *StatusMapping

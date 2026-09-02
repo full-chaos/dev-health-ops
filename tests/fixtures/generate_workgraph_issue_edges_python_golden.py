@@ -123,11 +123,15 @@ class RecordingSink:
         self.projection_runs: list[Any] = []
 
     def query_dicts(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        # The read barrier is HERE, not only in __getattr__. `query_dicts` is an
+        # allowed method that forwards arbitrary SQL to the real ClickHouse
+        # client, so refusing every OTHER attribute does not make this generator
+        # read-only -- a producer change that routed a mutation through this
+        # method would execute it against the shared stack. Gate the statement.
+        _refuse_non_read(query)
         rows = self._inner.query_dicts(query, params)
         self.reads.append(rows)
-        self.queries.append(
-            {"statement": " ".join(query.split()), "parameters": params or {}}
-        )
+        self.queries.append(_normalize_query(query, params))
         return rows
 
     def write_work_graph_edges(self, records: Any) -> None:
@@ -165,6 +169,24 @@ class StringTable:
 
     def values(self) -> list[str]:
         return self._values
+
+
+_READ_PREFIXES = ("select", "with")
+
+
+def _refuse_non_read(statement: str) -> None:
+    """Refuse anything that is not a read before it reaches ClickHouse."""
+    head = statement.strip().lstrip("(").lstrip().lower()
+    if not head.startswith(_READ_PREFIXES):
+        raise AssertionError(
+            "generator refuses a non-read statement through query_dicts; the "
+            f"golden run must stay read-only: {' '.join(statement.split())[:200]}"
+        )
+
+
+def _normalize_query(statement: str, params: Any) -> dict[str, Any]:
+    """Canonical form of one read, for freezing and for replay comparison."""
+    return {"statement": " ".join(statement.split()), "parameters": params or {}}
 
 
 def _iso(value: Any) -> str:
@@ -364,8 +386,13 @@ class ReplaySink:
     answer a different, unanswerable question.
     """
 
-    def __init__(self, reads: list[list[dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        reads: list[list[dict[str, Any]]],
+        queries: list[dict[str, Any]],
+    ) -> None:
         self._reads = list(reads)
+        self._queries = list(queries)
         self.client = RecordingClient()
         self.edges: list[Any] = []
         self.projection_runs: list[Any] = []
@@ -373,6 +400,26 @@ class ReplaySink:
     def query_dicts(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if not self._reads:
             raise AssertionError("producer issued more reads than the golden froze")
+        # Serving rows by ordinal while IGNORING the statement would make the rot
+        # guard blind to the thing it exists to catch: if Python changed its query
+        # -- dropped the org predicate, added a time bound, reordered the
+        # projection -- the guard would hand the NEW query the OLD rows and go
+        # green. The frozen query contract is checked here, so a producer whose
+        # reads have changed shape fails loudly instead of being fed answers to a
+        # question it no longer asks.
+        expected = self._queries.pop(0)
+        actual = _normalize_query(query, params)
+        if actual != expected:
+            raise AssertionError(
+                "the producer's read contract changed; the golden froze\n"
+                f"  statement: {expected['statement']}\n"
+                f"  parameters: {expected['parameters']}\n"
+                "but the deployed producer now issues\n"
+                f"  statement: {actual['statement']}\n"
+                f"  parameters: {actual['parameters']}\n"
+                "Replaying frozen rows against a changed query would prove nothing. "
+                "If the change is intended, regenerate the golden."
+            )
         return self._reads.pop(0)
 
     def write_work_graph_edges(self, records: Any) -> None:
@@ -427,7 +474,7 @@ def replay_golden(path: str) -> dict[str, Any]:
         from_date=_parse_iso(frozen_config["from_ts"]),
         to_date=_parse_iso(frozen_config["to_ts"]),
     )
-    sink = ReplaySink([dependency_rows, *existing_pages])
+    sink = ReplaySink([dependency_rows, *existing_pages], golden["queries"])
     builder = object.__new__(WorkGraphBuilder)
     builder.config = config
     builder.sink = cast(Any, sink)

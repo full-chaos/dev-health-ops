@@ -130,6 +130,20 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse frozen_now: %v", err)
 	}
+	// Every event_ts an edge may legitimately carry: the last_synced of some
+	// frozen dependency row, or the build clock (the producer's documented
+	// fallback for a row whose last_synced will not parse). Binding to the INPUT
+	// is what makes this an assertion about derivation rather than about shape.
+	permitted := map[int64]struct{}{frozenNow.UnixNano(): {}}
+	for index, dependency := range document.Dependencies {
+		lastSynced, err := document.Instant(dependency[5])
+		if err != nil {
+			t.Fatalf("dependency %d last_synced: %v", index, err)
+		}
+		permitted[lastSynced.UnixNano()] = struct{}{}
+	}
+
+	distinct := map[int64]struct{}{}
 	perRow := 0
 	for index, edge := range document.Edges {
 		row, err := document.EdgeRow(edge)
@@ -142,6 +156,14 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 		if !row.LastSynced.Equal(frozenNow) {
 			t.Fatalf("edge %d last_synced %s is not the build clock %s", index, row.LastSynced, frozenNow)
 		}
+		if _, ok := permitted[row.EventTs.UnixNano()]; !ok {
+			t.Fatalf(
+				"edge %d event_ts %s is not the last_synced of any frozen dependency row, "+
+					"nor the build clock — it did not come from this fixture's input",
+				index, row.EventTs,
+			)
+		}
+		distinct[row.EventTs.UnixNano()] = struct{}{}
 		if !row.EventTs.Equal(frozenNow) {
 			perRow++
 		}
@@ -155,6 +177,18 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 				"a per-row timestamp from a per-build one — the contract it is meant to pin",
 		)
 	}
+	// "At least one differs from the build clock" is too weak on its own: a golden
+	// in which all 3,548 edges shared ONE non-build instant would satisfy it, so a
+	// Python regression that collapsed dependency freshness to a constant would be
+	// accepted on regeneration. Require the timestamps to actually vary.
+	if len(distinct) < 2 {
+		t.Fatalf(
+			"all %d edges carry the same event_ts; a producer that collapsed per-row "+
+				"freshness to a constant would pass every other assertion here",
+			len(document.Edges),
+		)
+	}
+	t.Logf("event_ts: %d distinct values across %d edges", len(distinct), len(document.Edges))
 }
 
 // TestVariantCExceptionListIsClosedAndNecessary asserts the shape of the ONE

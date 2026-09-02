@@ -3,6 +3,7 @@ package units
 import (
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Edge is one deduplicated work_graph_edges row, reduced to the fields the
@@ -73,7 +74,14 @@ func ConfidenceFromValue(value any) float64 {
 	case int64:
 		return float64(typed)
 	case string:
-		parsed, err := strconv.ParseFloat(typed, 64)
+		// Python's float() strips surrounding whitespace before parsing;
+		// ParseFloat does not, so " 1 " would be 1.0 there and 0.0 here --
+		// a confidence silently collapsing to zero re-partitions the split.
+		// Measured against this checkout's interpreter: with the trim, the two
+		// parsers agree on every form tested including "1_0", "+3", "1e3",
+		// "inf", "Infinity", "NaN", and the rejections "1__0", "_1", "1_".
+		// See TestConfidenceFromValueMatchesPythonCoercion.
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
 		if err != nil {
 			return 0.0
 		}

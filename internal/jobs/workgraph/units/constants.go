@@ -59,20 +59,85 @@ func ResolveMaxComponentNodes(explicit *int) int {
 	if !present {
 		return DefaultMaxComponentNodes
 	}
-	// Python's int() strips surrounding whitespace before parsing; Atoi does
-	// not, so " 150 " would resolve to 150 in Python and silently fall back to
-	// the default here -- the precise cross-plane divergence this function must
-	// not have. Trimming closes it.
-	//
-	// KNOWN RESIDUAL DIVERGENCE: Python's int() also accepts PEP 515 digit
-	// separators ("1_0" -> 10), which Atoi rejects and this function would
-	// therefore resolve to the default. Left unhandled deliberately -- writing
-	// an underscore into a node-count environment variable is not a real
-	// configuration, and emulating it would mean hand-rolling an int parser.
-	// Recorded rather than silently accepted.
-	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || parsed < 1 {
+	parsed, ok := parsePythonInt(raw)
+	if !ok || parsed < 1 {
 		return DefaultMaxComponentNodes
 	}
 	return parsed
+}
+
+// parsePythonInt accepts what Python's int() accepts for the forms an operator
+// can realistically put in an environment variable, and rejects what it rejects.
+//
+// This exists because a divergence here is EXACTLY the CHAOS-2779 hazard, not a
+// cosmetic parser difference: this variable is read independently by the Go
+// materializer and the Python membership projection, and if the two resolve it
+// to different numbers they split components differently, compute different
+// work_unit_ids, and silently write to non-existent unit ids on one plane.
+// `INVESTMENT_MAX_COMPONENT_NODES=1_000` is a perfectly ordinary thing to write
+// -- PEP 515 digit separators exist for readability and Python honours them --
+// and bare strconv.Atoi rejects it, silently falling back to 150 on the Go side
+// while Python resolves 1000. An earlier revision of this file dismissed that as
+// "not a real configuration"; codex round 2 on CHAOS-4441 PR1 constructed it and
+// showed the two planes producing different components. The dismissal was wrong.
+//
+// Accepted (measured against this checkout's interpreter): surrounding
+// whitespace, a single leading + or -, and single underscores BETWEEN digits.
+// Rejected, matching Python: leading, trailing or doubled underscores, empty or
+// whitespace-only input, non-integers such as "12.5", and anything else.
+//
+// KNOWN RESIDUAL, now tested rather than asserted: Python's int() also accepts
+// non-ASCII decimal digits (int("\u0661\u0662") == 12); this returns false and the caller
+// falls back to the default. That remains a silent cross-plane divergence, and
+// the honest mitigation is structural, not lexical -- the parity harness asserts
+// the RESOLVED cap is equal on both planes (CHAOS-4441 plan, O1b item 4), which
+// catches any residual regardless of which exotic literal caused it. Chasing
+// Python's full numeric grammar in Go would be an unbounded and unverifiable
+// commitment; asserting equality of the resolved value is bounded and provable.
+// Pinned by TestResolveMaxComponentNodesMatchesPythonInt.
+func parsePythonInt(raw string) (int, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, false
+	}
+
+	sign := ""
+	digits := trimmed
+	switch digits[0] {
+	case '+':
+		digits = digits[1:]
+	case '-':
+		sign, digits = "-", digits[1:]
+	}
+	if digits == "" {
+		return 0, false
+	}
+
+	// PEP 515: an underscore must sit BETWEEN two digits. Rejecting leading,
+	// trailing and doubled underscores is what Python does, so a malformed
+	// value falls back to the default on both planes rather than on neither.
+	var builder strings.Builder
+	builder.Grow(len(digits))
+	previousWasDigit := false
+	for index := 0; index < len(digits); index++ {
+		character := digits[index]
+		switch {
+		case character >= '0' && character <= '9':
+			builder.WriteByte(character)
+			previousWasDigit = true
+		case character == '_':
+			if !previousWasDigit || index == len(digits)-1 {
+				return 0, false
+			}
+			previousWasDigit = false
+		default:
+			return 0, false
+		}
+	}
+
+	parsed, err := strconv.Atoi(sign + builder.String())
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }

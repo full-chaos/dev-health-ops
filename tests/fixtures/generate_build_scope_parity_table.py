@@ -186,6 +186,23 @@ UUID_VALUES: list[Any] = [
     _UUID + "x",
     _UUID[:-1],
     "not-a-uuid",
+    # Shapes CPython accepts that a "prefix + literal braces" description of the
+    # accept set gets WRONG: `replace` removes every occurrence anywhere, and
+    # `strip('{}')` removes any number of leading/trailing braces, balanced or
+    # not. Measured, not described.
+    "{{" + _UUID + "}}",
+    "{{{" + _UUID + "}}}",
+    "{" + _UUID,
+    _UUID + "}",
+    "urn:" + _UUID,
+    "uuid:" + _UUID,
+    "urn:urn:uuid:" + _UUID,
+    # Arbitrary surrounding characters. google/uuid.Parse strips these at length
+    # 38 WITHOUT checking they are braces; CPython raises. The dangerous
+    # direction, and the reason this corpus exists.
+    "X" + _UUID + "X",
+    "[" + _UUID + "]",
+    "!" + _UUID + "?",
 ]
 
 # The FIELD axis. Every scope field the bridge admits, crossed with every value

@@ -10,7 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
-	"github.com/google/uuid"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // issuePRLinksPreStep adapts the provider-attached PR-issue mapping producer
@@ -168,46 +168,13 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 	if text, present, err := scopeString(scope["repo_id"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", err)
 	} else if present {
-		repoID, parseErr := parsePythonUUID(text)
+		repoID, parseErr := pythonparity.ParseUUID(text)
 		if parseErr != nil {
 			return issueprlinks.Window{}, fmt.Errorf("build scope repo_id: %w", parseErr)
 		}
 		window.RepoID = &repoID
 	}
 	return window, nil
-}
-
-// parsePythonUUID mirrors `uuid.UUID(hex=...)`'s own normalisation rather than
-// using a general-purpose parser, because the two accept DIFFERENT SETS.
-//
-// CPython does, in order: strip a `urn:` prefix, strip a `uuid:` prefix, strip
-// surrounding braces, remove hyphens, then require exactly 32 hex digits. Every
-// step is CASE-SENSITIVE, which is the whole point: `urn:uuid:X` is accepted and
-// `URN:UUID:X` is NOT, because the uppercase prefix is never stripped and the
-// leftover colons fail the length check.
-//
-// google/uuid.Parse is case-INSENSITIVE about that prefix, so it accepted
-// `URN:UUID:X` — a value the reference rejects. This step runs before the
-// bridge and writes rows, so that direction persists mapping rows for a build
-// the bridge is about to fail. It also REJECTED three spellings the reference
-// accepts (`{unhyphenated}`, `urn:uuid:unhyphenated`, `urn:uuid:{...}`).
-//
-// Measured, not inferred: the accepted set is a row of the parity corpus under
-// the repo_id field, so a change to either plane fails the differential.
-func parsePythonUUID(value string) (uuid.UUID, error) {
-	hex := strings.Replace(value, "urn:", "", 1)
-	hex = strings.Replace(hex, "uuid:", "", 1)
-	hex = strings.TrimPrefix(hex, "{")
-	hex = strings.TrimSuffix(hex, "}")
-	hex = strings.ReplaceAll(hex, "-", "")
-	if len(hex) != 32 {
-		return uuid.Nil, fmt.Errorf("%q is not a UUID the reference accepts", value)
-	}
-	parsed, err := uuid.Parse(hex)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("%q is not a UUID the reference accepts", value)
-	}
-	return parsed, nil
 }
 
 // parseScopeInstant accepts the forms Python's `datetime.fromisoformat` accepts

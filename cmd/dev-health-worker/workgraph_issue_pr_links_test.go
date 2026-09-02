@@ -164,7 +164,7 @@ func TestBuildPreStepOrderIsPinned(t *testing.T) {
 				"NOTE (CHAOS-4766, lane-4766-go): `issue_issue_edges` does NOT appear here. It "+
 				"was expected to register before `issue_pr_links`, and it does not read the "+
 				"mapping, so that placement was correct by this rule — but Python's build() "+
-				"OVERWRITES what it writes (confidence=1.0 at builder.py:787, and "+
+				"OVERWRITES what it writes (confidence=1.0 at builder.py:905, and "+
 				"work_graph_edges is ReplacingMergeTree(last_synced)), so it runs as a POST-step "+
 				"instead; see buildPostStepOrder. A later PR of that lane ports "+
 				"`_build_issue_pr_edges_from_fast_path`, which DOES read work_graph_issue_pr and "+

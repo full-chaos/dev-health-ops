@@ -18,8 +18,11 @@ import (
 // # Why after the bridge rather than before
 //
 // Python's `build()` runs every stage unconditionally, and its issue-issue
-// stage writes `confidence=1.0` (builder.py:787). `work_graph_edges` is
-// `ReplacingMergeTree(last_synced)`, so the later writer wins. Registered as a
+// stage writes `confidence=1.0` (builder.py:905) where this port writes 0.9.
+// `work_graph_edges` is `ReplacingMergeTree(last_synced)` and its ORDER BY
+// excludes `confidence`, so the two are THE SAME ROW to the engine and collapse
+// by `last_synced` -- the divergence is erased because the dedup key excludes
+// the column that diverges. Registered as a
 // pre-step, this producer would write variant-C's 0.9 for the associative
 // family and Python would replace it with 1.0 microseconds later, on every
 // build, with every count reconciling and no error raised.

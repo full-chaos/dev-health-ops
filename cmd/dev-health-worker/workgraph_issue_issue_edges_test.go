@@ -19,7 +19,7 @@ func TestBuildPostStepOrderIsPinned(t *testing.T) {
 		t.Fatalf(
 			"build post-step order is %v, want %v.\n"+
 				"A step belongs here only if the Python stage that still runs would OVERWRITE "+
-				"its rows — `issue_issue_edges` is here because builder.py:787 writes "+
+				"its rows — `issue_issue_edges` is here because builder.py:905 writes "+
 				"confidence=1.0 over variant-C's 0.9 and work_graph_edges is "+
 				"ReplacingMergeTree(last_synced). If the Python stage has retired, the step "+
 				"should MOVE to buildPreStepOrder rather than stay here: being last writer is a "+

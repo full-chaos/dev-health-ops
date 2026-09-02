@@ -21,10 +21,19 @@ import (
 // the row is identical, which is why the issue-PR mapping runs as a pre-step.
 //
 // It is not harmless for a producer that deliberately computes a DIFFERENT
-// value. `work_graph_edges` is `ReplacingMergeTree(last_synced)`, so the later
-// writer wins; Python's `_build_issue_issue_edges` writes `confidence=1.0`
-// (`builder.py:787`) and would silently replace a native step's variant-C 0.9
-// on every build. Counts reconcile, no error is raised, and the policy the port
+// value. Python's `_build_issue_issue_edges` writes `confidence=1.0`
+// (`builder.py:905`) where this port writes variant-C's 0.9, and the two rows
+// do not coexist -- which is the part worth stating as a MECHANISM rather than
+// as "last writer wins":
+//
+//	ENGINE = ReplacingMergeTree(last_synced)
+//	ORDER BY (org_id, source_type, source_id, edge_type, target_type, target_id)
+//
+// The dedup key does NOT include `confidence`. So the 0.9 row and the 1.0 row
+// are THE SAME ROW to the engine and collapse by `last_synced` -- the
+// divergence is erased precisely because the key excludes the column that
+// diverges. Saying only "the later writer wins" leaves a reader wondering why
+// two different confidences do not simply sit side by side. Counts reconcile, no error is raised, and the policy the port
 // exists to apply is gone. Running that step AFTER the bridge makes the native
 // writer the last writer, which is the only ordering under which its value
 // survives while the Python stage still runs.

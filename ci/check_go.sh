@@ -503,6 +503,48 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/daily/filehotspots (frozen file-hotspots goldens vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython)$' \
+        ./internal/jobs/metrics/daily/filehotspots
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # TestFileHotspotsGoldenMatchesLivePython (CHAOS-4277) had NO registration
+  # anywhere in this function before this block -- found while adding the
+  # AST-lint follow-up's own guard to this same package and checking for a
+  # sibling block to extend, per lane-4441's CHAOS-4849 finding that a guard
+  # missing from this -run filter does not fail, it silently never runs. Its
+  # own marker for the reason spelled out above every other entry here: a
+  # shared marker is satisfied by whichever guard happened to run.
+  proof_file="${proof_dir}/file-hotspots-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: file_hotspots golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4818 AST-lint follow-up: sampleZScores' compound-assignment FMA
+  # site (hotspot_risk_score family). Used to also cover CodeOwnershipGini's
+  # own compound-assignment FMA site (ownership_gini family) -- dropped once
+  # this branch rebased onto PR #2123 (CHAOS-4824), which rewrote
+  # CodeOwnershipGini to use math/big.Int exclusively and made that site's
+  # FMA-fusion risk structurally impossible, not merely guarded.
+  proof_file="${proof_dir}/fma-followup-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/workgraph/issueprlinks (frozen issue-PR mapping golden vs live Python)\n'
   if ! (
     cd "${ROOT}"

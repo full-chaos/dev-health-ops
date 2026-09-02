@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2573,6 +2574,25 @@ _DOCKER_NON_PULLING_SUBCOMMANDS = frozenset(
         "exec",
         "cp",
         "system",
+        "ls",
+        "list",
+        "history",
+        "prune",
+        "df",
+        "stats",
+        "top",
+        "port",
+        "start",
+        "restart",
+        "pause",
+        "unpause",
+        "rename",
+        "wait",
+        "diff",
+        "attach",
+        "events",
+        "commit",
+        "export",
     }
 )
 # Management NOUNS, not verbs. `docker image pull` is the modern spelling of
@@ -2727,3 +2747,107 @@ def test_run_steps_do_not_pull_from_unapproved_registries() -> None:
                         "image that cannot be determined is refused, not assumed safe"
                     )
     assert not offenders, "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    "command,expected_refused",
+    [
+        # `image` and `container` are management NOUNS. Exempting the noun
+        # exempted every verb beneath it, so the modern spelling of a pull was
+        # silently allowed while the old spelling was caught.
+        ("docker image pull postgres:16", True),
+        ("podman image pull postgres:16", True),
+        ("docker container run postgres:16", True),
+        ("docker container create postgres:16", True),
+        # The same forms against the mirror must still be ACCEPTED. A guard that
+        # refuses valid syntax is as broken as one that admits a bad image, and
+        # only the accepting half proves the noun is resolved rather than banned.
+        ("docker image pull ghcr.io/full-chaos/postgres:18-alpine", False),
+        ("docker container run ghcr.io/full-chaos/postgres:18-alpine", False),
+        # Genuinely harmless verbs under a noun stay quiet.
+        ("docker image rm stale", False),
+        ("docker image ls", False),
+        # A noun with no verb is unknown, and unknown is refused.
+        ("docker image", True),
+    ],
+)
+def test_management_noun_forms_resolve_to_their_verb(
+    command: str, expected_refused: bool
+) -> None:
+    """`docker image pull` is `docker pull` spelled the modern way."""
+    images, unknown = _run_pulled_images(command)
+    refused = bool(unknown) or any(not _image_is_allowed(image) for image in images)
+    assert refused is expected_refused, (
+        f"{command!r}: refused={refused}, expected {expected_refused}. Management "
+        "nouns must be resolved to the verb after them, not treated as verbs."
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "docker compose up -d",
+        "docker-compose up -d",
+        "docker-compose -f tests/compose.yml up",
+        "podman-compose up",
+        "nerdctl-compose up",
+    ],
+)
+def test_every_compose_spelling_is_refused(command: str) -> None:
+    """Compose is refused rather than scanned -- in all of its spellings.
+
+    Its images live in the compose file, so this scanner cannot see them. The
+    hyphenated legacy binary is the same thing under another name: it matched
+    the container-tool regex but not the basename check, so it passed silently
+    while `docker compose` was correctly refused.
+    """
+    _, unknown = _run_pulled_images(command)
+    assert unknown, (
+        f"{command!r} was not refused. Compose images are invisible to this "
+        "scanner, so every spelling of it must be refused rather than skipped."
+    )
+
+
+def test_no_orphaned_module_level_helpers() -> None:
+    """No helper in this file may be defined and never called.
+
+    `_run_starts_containers` sat here defined-and-uncalled after the guards were
+    reduced for #2111 -- and survived a round of me asserting I had rewired it.
+    Dead code in a guard file is worse than absent code: it reads as protection,
+    and an audit counts it as coverage.
+
+    The control below guards the detector itself. An earlier hand-rolled version
+    of this check reported ten orphans because it miscounted single-call
+    functions; a detector with no control is a finding generator, not evidence.
+    """
+    import ast
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("_")
+    }
+    used = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    used |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+
+    # CONTROL: a helper known to be called must be seen as called. If this fails
+    # the detector is broken and its orphan list means nothing.
+    assert "_image_is_allowed" in used, (
+        "detector control failed: _image_is_allowed is called by "
+        "test_every_pulled_image_resolves_to_an_approved_registry but was not "
+        "seen as used -- the orphan list below cannot be trusted"
+    )
+
+    orphans = sorted(name for name in defined if name not in used)
+    assert not orphans, (
+        f"helper(s) defined and never called: {orphans}. Wire them in or delete "
+        "them -- an uncalled guard helper reads as protection while providing "
+        "none."
+    )

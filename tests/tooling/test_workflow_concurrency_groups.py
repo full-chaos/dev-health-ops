@@ -87,7 +87,14 @@ def _evaluate(expression: str, context: dict[str, str]) -> str:
     for alternative in expression.split("||"):
         token = alternative.strip()
         if token.startswith(("'", '"')) and token.endswith(("'", '"')):
-            return token[1:-1]
+            literal = token[1:-1]
+            if literal:
+                return literal
+            # `''` is FALSY in Actions, so `${{ '' || github.ref }}` falls
+            # through to the ref. Returning the empty literal made both events
+            # model as empty and therefore equal -- a false alarm, but the model
+            # must match GitHub, not be conservative in a direction of its own.
+            continue
         if token in context:
             if context[token]:
                 return context[token]
@@ -129,25 +136,69 @@ def test_there_is_something_to_check() -> None:
     )
 
 
+# Events whose runs would collide on a feature branch. `merge_group`, `schedule`
+# and `workflow_dispatch` are excluded: none produces a second run for a PR tip.
+_COLLIDING_EVENTS = ("push", "pull_request")
+
+
+def _branch_patterns(triggers: dict, event: str) -> list[str]:
+    config = triggers.get(event)
+    if not isinstance(config, dict):
+        return []
+    branches = config.get("branches")
+    if branches is None:
+        return ["**"]  # no filter means every branch
+    return [str(b) for b in branches]
+
+
+def _fires_on_feature_branches(patterns: list[str]) -> bool:
+    """True if the pattern list can match a branch other than main."""
+    return any(p not in {"main", "master"} for p in patterns)
+
+
 @pytest.mark.parametrize(
     "path,group",
     _workflows_with_both_triggers(),
     ids=lambda value: value.name if isinstance(value, Path) else "",
 )
-def test_push_and_pull_request_do_not_share_a_concurrency_group(
+def test_a_shared_group_requires_that_only_one_event_fires_on_a_branch(
     path: Path, group: str
 ) -> None:
-    """The twins must land in different groups, or they can cancel each other."""
-    on_push = _render(group, _PUSH_CONTEXT)
-    on_pull_request = _render(group, _PULL_REQUEST_CONTEXT)
+    """Two ways to be safe; a workflow must pick one.
 
-    assert on_push != on_pull_request, (
-        f"{path.name}: concurrency group {group!r} evaluates to the SAME value "
-        f"for both events ({on_push!r}), so a push run and a pull_request run "
-        "for one commit share a group and `cancel-in-progress` lets them race. "
-        "The loser leaves a cancelled check-run carrying a required context "
-        "name on the head commit, and branch protection refuses the merge while "
-        "every workflow run reports success. Key on "
-        "`github.event.pull_request.number || github.ref` as the other "
-        "workflows do."
+    Either the events land in DIFFERENT concurrency groups, or only ONE of them
+    can fire on a feature branch. `go.yml` takes the second: CHAOS-4676 wants a
+    single group so GitHub arbitrates "one authoritative run per branch tip",
+    and CHAOS-4814 removes the twin by restricting `push` to `main` rather than
+    splitting the group.
+
+    This fails if `push` ever widens back to `**` while the group stays shared,
+    which is the exact regression that would silently restore the cancelled-twin
+    tax -- and it would look like a routine trigger change in review.
+    """
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    triggers = document.get(True) or document.get("on") or {}
+
+    groups = {
+        event: _render(
+            group, _PUSH_CONTEXT if event == "push" else _PULL_REQUEST_CONTEXT
+        ).casefold()
+        for event in _COLLIDING_EVENTS
+    }
+    if len(set(groups.values())) == len(groups):
+        return  # distinct groups: the twins cannot cancel each other
+
+    firing = [
+        event
+        for event in _COLLIDING_EVENTS
+        if _fires_on_feature_branches(_branch_patterns(triggers, event))
+    ]
+    assert len(firing) <= 1, (
+        f"{path.name}: {firing} all fire on feature branches AND share the "
+        f"concurrency group {group!r} (both render {groups['push']!r}). The two "
+        "runs will race to cancel each other, and the loser leaves a cancelled "
+        "check-run carrying a required context name on the head commit -- "
+        "branch protection then refuses the merge while every run reports "
+        "success. Either split the group, or restrict a trigger so only one "
+        "event fires on a branch."
     )

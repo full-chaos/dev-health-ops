@@ -546,3 +546,85 @@ func TestParentTitlesAndCommitChurnAreExercised(t *testing.T) {
 			"indistinguishable from a real zero-churn commit")
 	}
 }
+
+// TestInvalidUTF8StringsAreHexedLikeThePythonDriver is the end-to-end proof for
+// the decode policy measured under CHAOS-4441 plan section 5d.
+//
+// ClickHouse `String` is arbitrary bytes. clickhouse-connect decodes it as
+// UTF-8 and, on failure, substitutes the LOWERCASE HEX OF THE WHOLE VALUE
+// (driver/buffer.py:135-138). clickhouse-go returns the raw bytes instead, so
+// the fetchers apply pythonparity.DecodeClickHouseStringValue to close the gap.
+//
+// Nothing else in the suite can catch the removal of those calls. A unit test
+// cannot, because the divergence only exists once real bytes come off a real
+// wire; the frozen goldens cannot, because they were captured from decodable
+// data. This test seeds the undecodable bytes deliberately, which is the only
+// way the substitution is observable at all.
+//
+// Why it matters more than an encoding curiosity: source_id and target_id are
+// hashed into work_unit_id, which addresses rows in BOTH
+// work_unit_investments and work_unit_membership -- two tables written by two
+// different jobs. If the planes spell one byte sequence differently they mint
+// different work_unit_ids, and the two tables stop agreeing with no error.
+func TestInvalidUTF8StringsAreHexedLikeThePythonDriver(t *testing.T) {
+	reader, conn, ctx := newTestReader(t)
+
+	// 0xFF is never valid in UTF-8; 0xED 0xA0 0x80 is a lone surrogate encoded
+	// WTF-8, which strict UTF-8 also rejects. Both are written as raw bytes via
+	// unhex() so the driver's own encoding cannot launder them on the way in.
+	const (
+		badSourceHex = "6100FF62" // "a" 0x00 0xFF "b" -- mixed valid/invalid
+		badTargetHex = "EDA080"   // lone high surrogate
+	)
+	edgeID := uuid.NewString()
+
+	if err := conn.Exec(ctx, `
+        INSERT INTO work_graph_edges
+            (org_id, edge_id, source_type, source_id, edge_type, target_type,
+             target_id, repo_id, provider, provenance, confidence, evidence, last_synced)
+        SELECT ?, ?, 'issue', unhex(?), 'relates', 'pr', unhex(?),
+               ?, 'github', 'model', 0.9, '', now()
+    `, orgAlpha, edgeID, badSourceHex, badTargetHex, uuid.Nil.String()); err != nil {
+		t.Fatalf("seed edge with invalid utf-8: %v", err)
+	}
+
+	rows, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{OrganizationID: orgAlpha})
+	if err != nil {
+		t.Fatalf("fetch edges: %v", err)
+	}
+
+	var found bool
+	for _, row := range rows {
+		if row.Edge.EdgeID != edgeID {
+			continue
+		}
+		found = true
+
+		// The WHOLE value is hexed, including the valid 'a' and 'b' around the
+		// bad byte -- not just the offending byte. A per-byte substitution
+		// would produce something like "a<x>b" and diverge on every mixed
+		// value.
+		if want := "6100ff62"; row.Edge.SourceID != want {
+			t.Errorf("source_id = %q, python driver yields %q (whole value hexed, "+
+				"lowercase)", row.Edge.SourceID, want)
+		}
+		if want := "eda080"; row.Edge.TargetID != want {
+			t.Errorf("target_id = %q, python driver yields %q", row.Edge.TargetID, want)
+		}
+
+		// And the substituted values must be pure ASCII, which is what makes
+		// MarshalPythonJSON's invalid-UTF-8 branch unreachable via this path.
+		for _, value := range []string{row.Edge.SourceID, row.Edge.TargetID} {
+			for index := 0; index < len(value); index++ {
+				if value[index] >= 0x80 {
+					t.Errorf("substituted value %q has a non-ASCII byte at %d",
+						value, index)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the seeded edge was not returned; the row may have been filtered " +
+			"before the decode could be observed")
+	}
+}

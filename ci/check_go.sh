@@ -513,7 +513,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython)$' \
+        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython|TestRiskHotspotsOrderGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily/filehotspots
   ); then
     rm -rf -- "${proof_dir}"
@@ -541,6 +541,18 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/fma-followup-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4863: ComputeFileRiskHotspots' risk_score must not depend on
+  # iteration order. This generator does more than the others above -- it
+  # re-verifies at generation time that live Python's own output is still
+  # order-invariant across several separate python3 invocations per case,
+  # so a failure here can mean either Go drift OR that Python itself has
+  # become order-dependent (the generator's own stderr distinguishes them).
+  proof_file="${proof_dir}/risk-hotspots-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: risk-hotspots order-invariance golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -654,7 +666,14 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/workgraph/units (frozen work-unit component golden vs live Python)\n'
+  # NOTE: this -run list is itself an enumeration, and it is the SECOND place a
+  # rot guard has to be remembered -- once when the test is written, again here
+  # before it can ever execute. A guard missing from this list does not fail; it
+  # silently never runs. TestEveryDiscoverableCorpusStillMatchesLivePython is
+  # listed first because it DISCOVERS its subjects from tests/fixtures/ and so
+  # covers every conforming corpus without anyone editing this line again. See
+  # CHAOS-4849.
+  printf 'go test -count=1: internal/jobs/workgraph/units (frozen goldens vs live Python; the first test discovers its own subjects)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -664,7 +683,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython)$' \
+        -run '^(TestEveryDiscoverableCorpusStillMatchesLivePython|TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython|TestTimeBoundsGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -676,6 +695,18 @@ check_live_python_oracles() {
   # work_unit_id addresses work_unit_investments (Go, once CHAOS-4441 lands) and
   # work_unit_membership (still Python until CHAOS-4282). A shared marker could
   # be satisfied by another guard while this one was filtered out of -run.
+  # The DISCOVERY guard's own marker. It walks tests/fixtures for generators and
+  # enforces the undiscoverable-corpus ratchet, and it SKIPS without
+  # DEV_HEALTH_LIVE_PYTHON_ORACLES=1 -- at which point Go's package-level `ok`
+  # counts the skip as a pass. Asserting the marker is what makes a skipped
+  # discovery guard fail the gate instead of passing it silently.
+  proof_file="${proof_dir}/workgraph-units-corpus-discovery"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: corpus discovery guard did not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   proof_file="${proof_dir}/workgraph-components-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: work-unit component golden rot guard did not compare against live Python\n' >&2
@@ -689,6 +720,55 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/confidence-coercion-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: confidence coercion corpus did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again: this fixture spans FOUR producers across TWO modules
+  # (utils/normalization's clamp and evidence_quality_band, plus evidence's
+  # _graph_density, _float_value and compute_evidence_quality), and it records
+  # whether evidence._float_value still agrees with components._edge_confidence
+  # -- two Python copies of one coercion that the Go port collapses into a
+  # single function. clamp() in particular lives outside work_graph/investment
+  # entirely, so nothing else would tell a reviewer editing it that this port
+  # depends on its NaN behaviour.
+  proof_file="${proof_dir}/investment-quality-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: investment evidence-quality golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding a value that appears in NO source file on either
+  # side: sys.get_int_max_str_digits(). It is an interpreter runtime setting,
+  # so it can move with no diff in this repository and no change of CPython
+  # version. Every value between the old and new limits would then be parsed by
+  # one plane and refused by the other -- which, for
+  # INVESTMENT_MAX_COMPONENT_NODES, means one plane splits oversized components
+  # and the other does not.
+  proof_file="${proof_dir}/max-component-nodes-magnitude"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: max_component_nodes magnitude golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding the interpreter's Unicode category Nd set -- the
+  # characters int() accepts -- and each one's decimal value. Both come from the
+  # deployed interpreter's unicode data and move on a Python upgrade with no
+  # diff here. The guard also covers the GENERATED Go table, because a stale
+  # table alongside a fresh fixture leaves the parser on the old set with the
+  # tests green.
+  proof_file="${proof_dir}/python-decimal-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python decimal-digit set did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: compute_time_bounds and _node_time_bounds, whose per-type
+  # fallback chains decide the stored TimeBounds on every work unit. Does not
+  # touch input_hash, so a drift here re-dates units rather than re-billing
+  # categorisation.
+  proof_file="${proof_dir}/time-bounds-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: time-bounds golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -744,6 +824,71 @@ check_live_python_oracles() {
   # interpreter version with no diff in this repository, and the dependency runs
   # in BOTH directions -- a downgrade below 3.12 would make naive summation
   # correct and pythonparity.Sum's compensation WRONG, not merely unnecessary.
+  proof_file="${proof_dir}/python-sum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/pythonparity (frozen json.dumps golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
+        ./internal/pythonparity
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason the two above have theirs: a THIRD
+  # distinct producer -- CPython's json.dumps over evidence.build_text_bundle's
+  # payload -- and the only one whose divergence costs money rather than
+  # correctness. input_hash is categorization_input_hash, the LLM
+  # skip-existing key; a drifted hash matches no stored row and re-categorizes
+  # every work unit on every run, silently. A shared marker could be satisfied
+  # by either guard above while this one was filtered out of -run.
+  proof_file="${proof_dir}/python-json-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, and this one guards a producer that lives OUTSIDE
+  # this repository: CPython's str.isspace(), i.e. the interpreter's Unicode
+  # tables. A Python upgrade can move it with no diff in src/ for a reviewer to
+  # notice, and pythonparity.IsSpace hard-codes the current 0x1c-0x1f delta.
+  proof_file="${proof_dir}/python-whitespace-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python whitespace predicate did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding the most fragile producer here: a THIRD-PARTY
+  # DEPENDENCY. clickhouse-connect decodes String columns as UTF-8 and, on
+  # failure, substitutes the lowercase hex of the whole value -- two lines
+  # inside its read loop, not part of its documented API. A lockfile bump moves
+  # it with no diff anywhere in this repository. chquery applies that policy to
+  # every String column, and those strings are hashed into input_hash and into
+  # work_unit_id.
+  proof_file="${proof_dir}/clickhouse-string-decode-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: clickhouse String decode policy did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
+  # used Neumaier compensated summation for floats since 3.12 and was a naive
+  # accumulation before. The fixture therefore depends on the interpreter
+  # version with no diff in this repository, in BOTH directions -- a downgrade
+  # below 3.12 would make pythonparity.Sum's compensation wrong, not merely
+  # unnecessary.
   proof_file="${proof_dir}/python-sum-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2

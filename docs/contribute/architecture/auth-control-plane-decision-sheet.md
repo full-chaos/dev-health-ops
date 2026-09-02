@@ -12,11 +12,13 @@ lifecycle: active
 
 # Auth Control Plane decision sheet
 
-Every draft in [Auth Control Plane ADRs](auth-control-plane-adrs.md) is at status
-**Proposed**. This sheet exists so all of them can move to **Accepted** in a
-single pass: one recommendation each, the alternatives that were actually
-considered, and the risk of taking the recommendation. Wave 0's freeze is
-defined as *all drafts Proposed + this sheet delivered + a ratification pass*.
+**Ratified 2026-09-02** — recorded in
+[CHAOS-3270's "Wave 0 ratification pass" comment](https://linear.app/fullchaos/issue/CHAOS-3270/epic-build-the-dev-health-auth-control-plane).
+**Part A:** all twelve ADRs **Accepted** as recommended. **Part B:** **yes** to
+B1–B9 and B11; **B10 = shape (b)** (advisory fields become optional — absent
+means not applicable, null means undetermined). **Part C:** **acknowledged**,
+not resolved; **C3 = retain, fail-closed** — removal of the six legacy ingest
+routes is scheduled for Wave 10 (CHAOS-3283), after customer notice.
 {: .fc-page-lede }
 
 !!! info "How to use this"
@@ -52,6 +54,15 @@ defined as *all drafts Proposed + this sheet delivered + a ratification pass*.
 | **Alternatives** | (a) Select all six now — rejected: three of them had no candidate evaluated in Wave 0, and inventing one in an ADR is how an unreviewed dependency becomes a decision. (b) A third-party router — rejected: TRD §6 wants strict method+path registration, which `ServeMux` gives, and `query-api` already runs on it. (c) RS256 — rejected: `Ed25519JWKSVerifier` is Ed25519-only by design and the platform's other asymmetric key is already Ed25519. |
 | **Risk of accepting** | **Low.** The main risk is the deferral: if the Wave 1 addendum slips, Wave 2 (human identity parity) has no SAML/OIDC library and stalls. Mitigation: the addendum is a Wave 1 exit criterion, not a Wave 2 entry criterion. |
 | **Risk of rejecting** | Wave 1 starts with no pinned security dependencies, and the first PR picks them implicitly. |
+
+### ACP-ADR-01 Addendum — OAuth/OIDC, SAML, and password-hashing
+
+| | |
+|---|---|
+| **Recommend** | **Accept (Proposed).** `golang.org/x/oauth2` (+ `endpoints` for Google/GitHub/GitLab) layered with `github.com/coreos/go-oidc/v3` for OIDC discovery/ID-token verification; `github.com/crewjam/saml` for SAML; `golang.org/x/crypto/bcrypt` (explicit pinned cost factor) for password hashing, matching the existing `bcrypt`-format hashes byte-for-byte. Docs only — pinning in `go.mod` lands with the Wave 2 `internal/identity` work. |
+| **Alternatives** | (a) `github.com/zitadel/oidc` instead of `go-oidc` — rejected for Wave 1: heavier (also implements OP/issuer support this program doesn't need) and less track record in this exact relying-party-only shape; `go-oidc` is the narrower, more battle-tested fit (used by `kubectl`'s own OIDC plugin, Dex). (b) `github.com/russellhaering/gosaml2` instead of `crewjam/saml` — rejected: thinner wrapper requiring the integrator to hand-assemble the signature/issuer/audience/recipient/temporal/replay checklist, versus `crewjam/saml` implementing that checklist as first-class validation. (c) `golang.org/x/crypto/argon2` (Argon2id) instead of `bcrypt` — rejected as primary, not as inferior: Argon2id is the current OWASP-recommended default, but adopting it now means carrying two live hash formats and a rehash-on-login path for a property no Wave 1 criterion needs. Named explicitly as the target for a follow-up hashing-scheme ADR once password-hash algorithm versioning exists — not a silent deferral. |
+| **Risk of accepting** | **Low.** `golang.org/x/crypto` is already a direct `ops/go.mod` dependency and `golang.org/x/oauth2` is already an indirect `acr/go.mod` dependency, so two of the three picks add no wholly new supply-chain surface. The SAML/OIDC libraries are greenfield in this platform and need their own vulnerability/license review when the `go.mod` pin lands (Wave 2), not assumed clean here. |
+| **Risk of rejecting** | `internal/identity` (Wave 2) has no pinned library and the first identity PR picks one implicitly, repeating exactly the gap ACP-ADR-01 named and deferred. |
 
 ### ACP-ADR-02 — Signing-key custody and the KMS adapter
 

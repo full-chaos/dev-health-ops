@@ -1,6 +1,6 @@
 ---
 page_id: con-auth-control-plane-adrs
-summary: The eleven ADRs TRD section 26 requires before Auth Control Plane cutover, plus one proposed by the threat model, drafted at status Proposed — each stating its decision, what it supersedes, what it deliberately leaves open, and the anchored evidence from the Wave 0 inventory that constrains it.
+summary: The eleven ADRs TRD section 26 requires before Auth Control Plane cutover, plus one proposed by the threat model, ratified Accepted on 2026-09-02 (CHAOS-3270) — each stating its decision, what it supersedes, what it deliberately leaves open, and the anchored evidence from the Wave 0 inventory that constrains it.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -15,10 +15,11 @@ lifecycle: active
 
 # Auth Control Plane ADRs (Wave 0 drafts)
 
-TRD §26 requires eleven ADRs before cutover. All eleven are drafted here at
-status **Proposed**. None is Accepted; ratification is a single pass over the
-[decision sheet](auth-control-plane-decision-sheet.md), which carries the
-recommendation, the alternatives considered, and the risk for each.
+TRD §26 requires eleven ADRs before cutover. All twelve — the eleven plus
+ACP-ADR-12 — are **Accepted**, ratified 2026-09-02 in a single pass recorded
+in [CHAOS-3270's "Wave 0 ratification pass" comment](https://linear.app/fullchaos/issue/CHAOS-3270/epic-build-the-dev-health-auth-control-plane),
+over the [decision sheet](auth-control-plane-decision-sheet.md), which carries
+the recommendation, the alternatives considered, and the risk for each.
 {: .fc-page-lede }
 
 !!! info "What is and is not settled"
@@ -50,18 +51,18 @@ recommendation, the alternatives considered, and the risk for each.
 
 | ID | Title | Status | Blocks |
 |---|---|---|---|
-| ACP-ADR-01 | Go dependency selection for the auth service | Proposed | Wave 1 |
-| ACP-ADR-02 | Signing-key custody and the production KMS adapter | Proposed | Wave 1, Wave 3 |
-| ACP-ADR-03 | Access, refresh, and workload token TTLs | Proposed | Wave 3 |
-| ACP-ADR-04 | Auth schema ownership and aggregate transition | Proposed | Wave 4 |
-| ACP-ADR-05 | Policy representation and revision strategy | Proposed | Wave 5 |
-| ACP-ADR-06 | Compose bootstrap and Kubernetes federation | Proposed | Wave 8 |
-| ACP-ADR-07 | Entitlement snapshot and event contract | Proposed | Wave 5 |
-| ACP-ADR-08 | ACR lifecycle projection boundary | Proposed | Wave 9 |
-| ACP-ADR-09 | External Push lifecycle projection boundary | Proposed | Wave 9 |
-| ACP-ADR-10 | MFA and step-up requirements | Proposed | Wave 2 |
-| ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Proposed | Wave 4 |
-| ACP-ADR-12 | A single authentication seam for `query-api` | Proposed | Wave 6 |
+| ACP-ADR-01 | Go dependency selection for the auth service | Accepted | Wave 1 |
+| ACP-ADR-02 | Signing-key custody and the production KMS adapter | Accepted | Wave 1, Wave 3 |
+| ACP-ADR-03 | Access, refresh, and workload token TTLs | Accepted | Wave 3 |
+| ACP-ADR-04 | Auth schema ownership and aggregate transition | Accepted | Wave 4 |
+| ACP-ADR-05 | Policy representation and revision strategy | Accepted | Wave 5 |
+| ACP-ADR-06 | Compose bootstrap and Kubernetes federation | Accepted | Wave 8 |
+| ACP-ADR-07 | Entitlement snapshot and event contract | Accepted | Wave 5 |
+| ACP-ADR-08 | ACR lifecycle projection boundary | Accepted | Wave 9 |
+| ACP-ADR-09 | External Push lifecycle projection boundary | Accepted | Wave 9 |
+| ACP-ADR-10 | MFA and step-up requirements | Accepted | Wave 2 |
+| ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Accepted | Wave 4 |
+| ACP-ADR-12 | A single authentication seam for `query-api` | Accepted | Wave 6 |
 
 ACP-ADR-12 is **not** one of TRD §26's eleven. It is proposed by the Wave 0
 threat model (§2.9) because the migration removes a control that exists today
@@ -72,7 +73,7 @@ others; rejecting it is a legitimate outcome, but doing so silently is not.
 
 ## ACP-ADR-01 — Go dependency selection for the auth service
 
-**Status:** Proposed · **Decides:** TRD §26.1 · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.1 · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
 
 ### Context
 
@@ -145,9 +146,100 @@ in-wave.
 
 ---
 
+## ACP-ADR-01 Addendum — OAuth/OIDC client, SAML, and password-hashing library selection
+
+**Status:** Proposed · **Decides:** ACP-ADR-01's deferred item 6 (TRD §26.1) · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+
+### Context
+
+ACP-ADR-01 pinned four of six Wave 1 dependencies and explicitly deferred the
+other three — OAuth 2.0/OIDC client, SAML, and password hashing — because no
+candidate for any of them was evaluated in Wave 0. This addendum makes that
+selection. Docs only: the versions below are the recorded decision, not yet a
+`go.mod` change — pinning happens with the `internal/identity` implementation
+work (Wave 2), per TRD §26's own sequencing.
+
+Two dependencies are already present in the platform's Go module graph, which
+lowers the marginal supply-chain cost of promoting them to direct, reviewed
+dependencies rather than introducing something wholly new:
+
+* `golang.org/x/crypto` is already a **direct** dependency of `ops/go.mod`
+  (`v0.55.0`, `go.mod:25`) — it houses both the `bcrypt` and `argon2` packages
+  evaluated below.
+* `golang.org/x/oauth2` is already an **indirect** dependency of `acr/go.mod`
+  (`v0.35.0`, `go.mod:117`) — the same package that anchors the OAuth client
+  decision below.
+
+The current Python password-hashing implementation is `bcrypt` (the PyPI
+`bcrypt` package, not `passlib`), anchored at
+`src/dev_health_ops/api/services/users.py:30-36` (`_hash_password`/
+`_verify_password`, `bcrypt.hashpw`/`bcrypt.checkpw`),
+`api/auth/routers/login.py:42-43` (a fixed bcrypt hash used specifically for
+missing-user timing mitigation — TRD §13's timing-safe unknown-user handling,
+already implemented and worth replicating exactly rather than reinventing),
+`api/services/password_reset.py:116-118`, and
+`api/auth/routers/register.py:101`. No SAML or OIDC-client Go library exists
+anywhere in the platform today; this half of the addendum is a greenfield
+pick, same as ADR-01 itself found for the router.
+
+### Decision
+
+1. **OAuth 2.0/OIDC client: `golang.org/x/oauth2`** (core client/token
+   exchange, plus its `endpoints` subpackage for Google/GitHub/GitLab —
+   already the PRD's named local/social providers) **layered with
+   `github.com/coreos/go-oidc/v3`** for OIDC discovery
+   (`.well-known/openid-configuration`) and ID-token verification (issuer,
+   audience, signature, nonce) wherever a provider speaks OIDC rather than
+   plain OAuth. `go-oidc` is the de facto standard Go OIDC relying-party
+   library (used by `kubectl`'s own OIDC auth plugin and by Dex), Apache-2.0,
+   and it delegates token handling rather than reimplementing JOSE parsing by
+   hand.
+2. **SAML: `github.com/crewjam/saml`**, Apache-2.0. It validates signature,
+   issuer, audience, recipient/destination, subject, temporal conditions,
+   replay, and binding as first-class checks — matching TRD §13's SAML
+   requirement list point for point — rather than requiring the integrator to
+   hand-assemble that checklist against a lower-level XML-DSig library. The
+   current Python reference (`api/sso.py:796-812`, `signxml`) is confirmed
+   fail-closed and is the behavioural target for parity, not a library
+   constraint.
+3. **Password hashing: `golang.org/x/crypto/bcrypt`**, cost factor pinned
+   explicitly in code (never left at the library default), chosen specifically
+   to match the existing `$2b$...` hash format byte-for-byte — a Go verifier
+   using this package reads today's stored hashes with zero migration or
+   dual-format complexity, and the missing-user timing-mitigation pattern at
+   `login.py:42-43` is replicated exactly rather than redesigned.
+
+**Considered and rejected as primary:** `golang.org/x/crypto/argon2`
+(Argon2id) via a thin encoding wrapper such as `github.com/alexedwards/argon2id`.
+Argon2id is the current OWASP-recommended default and is memory-hard where
+bcrypt is not — a real advantage. It is rejected as the Wave 1 pick, not
+because it is worse, but because adopting it now means carrying two live hash
+formats (legacy bcrypt plus new Argon2id) and a rehash-on-login migration path
+for a property no Wave 1 acceptance criterion needs; bcrypt with an explicit,
+generous cost factor is adequate for this migration wave. **This is not a
+silent deferral:** Argon2id is named here as the recommended target for a
+follow-up hashing-scheme ADR once password-hash algorithm versioning (the same
+`kid`-style versioning ADR-02 gives signing keys) exists to support a clean
+two-format transition.
+
+### Supersedes
+
+Nothing new. Resolves ACP-ADR-01's item 6 deferral; ACP-ADR-01's other five
+decisions are unchanged.
+
+### Leaves open
+
+Whether the OIDC/SAML client code lives in `dev-health-go` (versioned,
+divergent pins across ops/acr) or an ops-local package — the same tension
+ACP-ADR-01 left open for the JWT verifier, and the same answer should govern
+both. Also open: timing of the follow-up Argon2id ADR, a Wave 2+ candidate,
+not committed here.
+
+---
+
 ## ACP-ADR-02 — Signing-key custody and the production KMS adapter
 
-**Status:** Proposed · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62
 
 ### Context
 
@@ -213,7 +305,7 @@ read set.
 
 ## ACP-ADR-03 — Access, refresh, and workload token TTLs
 
-**Status:** Proposed · **Decides:** TRD §26.3 · **Guardrails:** G-14, G-15, G-30, G-31, G-57, G-60
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.3 · **Guardrails:** G-14, G-15, G-30, G-31, G-57, G-60
 
 ### Context
 
@@ -271,7 +363,7 @@ place this gets falsified.
 
 ## ACP-ADR-04 — Auth schema ownership and aggregate transition
 
-**Status:** Proposed · **Decides:** TRD §26.4 · **Guardrails:** G-9, G-24, G-53, G-55, G-58, G-63, G-64
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.4 · **Guardrails:** G-9, G-24, G-53, G-55, G-58, G-63, G-64
 
 ### Context
 
@@ -317,7 +409,7 @@ decisions and both are noted as unresolved rather than assumed.**
 
 ## ACP-ADR-05 — Policy representation and revision strategy
 
-**Status:** Proposed · **Decides:** TRD §26.5 · **Guardrails:** G-26, G-27, G-24, G-29, G-31
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.5 · **Guardrails:** G-26, G-27, G-24, G-29, G-31
 
 ### Context
 
@@ -374,7 +466,7 @@ contract — not the engine — the stable interface.
 
 ## ACP-ADR-06 — Compose bootstrap and Kubernetes federation
 
-**Status:** Proposed · **Decides:** TRD §26.6 · **Guardrails:** G-33, G-34, G-36, G-37, G-59
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.6 · **Guardrails:** G-33, G-34, G-36, G-37, G-59
 
 ### Context
 
@@ -426,7 +518,7 @@ ADR-08's projection boundary. **Declared gap:** the acr-side outbound
 
 ## ACP-ADR-07 — Entitlement snapshot and event contract
 
-**Status:** Proposed · **Decides:** TRD §26.7 · **Guardrails:** G-6, G-9, G-14, G-45, G-59
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.7 · **Guardrails:** G-6, G-9, G-14, G-45, G-59
 
 ### Context
 
@@ -474,7 +566,7 @@ trade-off that Wave 5 should measure rather than assume.
 
 ## ACP-ADR-08 — ACR lifecycle projection boundary
 
-**Status:** Proposed · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
 
 ### Context
 
@@ -527,7 +619,7 @@ does not record as fact. Also open: acr's storage-table lifecycle model.
 
 ## ACP-ADR-09 — External Push lifecycle projection boundary
 
-**Status:** Proposed · **Decides:** TRD §26.9 · **Guardrails:** G-46, G-47, G-48, G-9
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.9 · **Guardrails:** G-46, G-47, G-48, G-9
 
 ### Context
 
@@ -583,7 +675,7 @@ traced in Wave 0.
 
 ## ACP-ADR-10 — MFA and step-up requirements
 
-**Status:** Proposed · **Decides:** TRD §26.10 · **Guardrails:** G-29, G-30, G-51, G-52
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.10 · **Guardrails:** G-29, G-30, G-51, G-52
 
 ### Context
 
@@ -635,7 +727,7 @@ separately satisfiable requirement.
 
 ## ACP-ADR-11 — SCIM and enterprise deprovisioning scope
 
-**Status:** Proposed · **Decides:** TRD §26.11 · **Guardrails:** G-24, G-53, G-54, G-55, G-58, G-68
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.11 · **Guardrails:** G-24, G-53, G-54, G-55, G-58, G-68
 
 ### Context
 
@@ -683,7 +775,7 @@ provisioning authority, violating G-9.
 
 ## ACP-ADR-12 — A single authentication seam for `query-api`
 
-**Status:** Proposed · **Decides:** nothing in TRD §26 — **raised by the Wave 0 threat model §2.9** · **Guardrails:** G-1, G-3, G-4, G-8, G-69
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** nothing in TRD §26 — **raised by the Wave 0 threat model §2.9** · **Guardrails:** G-1, G-3, G-4, G-8, G-69
 
 ### Context
 

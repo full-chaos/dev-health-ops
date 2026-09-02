@@ -134,9 +134,27 @@ func Recover(logger *slog.Logger, pattern string) func(http.Handler) http.Handle
 // protect is still unwritten.
 //
 // The cost is explicit: an undeclared-length request is buffered in memory up
-// to the limit. That is bounded per request by the limit itself, and in
-// aggregate by the route's rate limiter and the server's connection limits;
-// it is the price of a guarantee that does not depend on handler discipline.
+// to the limit. PER REQUEST that is a hard bound. IN AGGREGATE IT IS NOT
+// BOUNDED BY ANYTHING IN THIS PACKAGE, and an earlier version of this comment
+// claimed otherwise -- it said the total was held down by "the route's rate
+// limiter and the server's connection limits", and neither of those is such a
+// control. RateLimit runs BEFORE this middleware and is a token bucket: it
+// bounds the RATE of admission, not how many admitted requests sit here at
+// once. Server.Start uses a plain net.Listen with no netutil.LimitListener and
+// no ConnState accounting, so there is no connection cap either. Measured, not
+// argued: lane-auth-cp drove 64 concurrent requests through the real
+// RateLimit+MaxBody chain and confirmed all 64 sat inside the body-read step
+// simultaneously, each free to buffer up to the limit.
+//
+// Nothing is exposed today -- the service is dormant and no route is mounted,
+// so the only caller of this path is the test suite. BEFORE THE FIRST REAL
+// ROUTE GOES LIVE this needs an actual concurrency bound (a LimitListener, a
+// semaphore around the buffering step, or a per-connection accounting) rather
+// than a sentence asserting one exists. Recorded here rather than quietly
+// fixed, because inventing a limiter for a service nothing calls would be
+// unreviewed machinery, and because a comment that describes an imaginary
+// control is worse than one that names a real gap.
+//
 // A future route needing true streaming ingest wants its own middleware, not a
 // weakening of this one.
 func MaxBody(limit int64) func(http.Handler) http.Handler {
@@ -161,15 +179,30 @@ func MaxBody(limit int64) func(http.Handler) http.Handler {
 			// Undeclared length: read one byte past the limit so "exactly at
 			// the limit" and "over it" are distinguishable.
 			buffered, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
-			if err != nil {
-				// A transport failure reading the body, not a size violation.
-				// The client is usually already gone; answer honestly rather
-				// than reporting a size problem that did not occur.
-				WriteError(w, r, CodeInvalidRequest)
-				return
-			}
+			// ORDER MATTERS, and this is the order. A size violation is
+			// DISPOSITIVE: once limit+1 bytes have been seen, the body is too
+			// large no matter what happened to the connection immediately
+			// afterwards. Checking the error first inverted that -- a reader
+			// delivering limit+1 bytes and returning an error on the same Read
+			// call (io.Reader explicitly permits n > 0 with a non-nil error;
+			// a client reset at the moment it finishes over-sending is the
+			// real-world shape) was reported as a transport failure, telling
+			// the caller its connection glitched when its payload was
+			// genuinely too big. Neither ordering ever ADMITS such a request,
+			// so this was never a bypass -- it was this middleware
+			// contradicting the very distinction it exists to draw. Found by
+			// lane-auth-cp's executed attack on this repair and pinned by
+			// TestSizeViolationWinsOverAConcurrentReadError.
 			if int64(len(buffered)) > limit {
 				WriteError(w, r, CodePayloadTooLarge)
+				return
+			}
+			if err != nil {
+				// Within the limit, so the read genuinely failed: a transport
+				// problem, not a size problem. The client is usually already
+				// gone; answer honestly rather than reporting a size violation
+				// that did not occur.
+				WriteError(w, r, CodeInvalidRequest)
 				return
 			}
 			// Hand the handler an ordinary, fully-readable body. net/http owns

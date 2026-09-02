@@ -558,6 +558,75 @@ func TestUndeclaredBodyReadFailureIsNotReportedAsTooLarge(t *testing.T) {
 	}
 }
 
+// overSizedThenFailingReader delivers exactly n bytes and returns a non-nil
+// error on the SAME Read call that delivers the last of them -- a client that
+// is reset at the very moment it finishes over-sending. io.Reader permits
+// returning n > 0 together with an error, so this is a legal reader, not a
+// contrived one.
+type overSizedThenFailingReader struct {
+	remaining int
+	err       error
+}
+
+func (o *overSizedThenFailingReader) Read(p []byte) (int, error) {
+	if o.remaining <= 0 {
+		return 0, o.err
+	}
+	take := min(len(p), o.remaining)
+	for index := range take {
+		p[index] = 'x'
+	}
+	o.remaining -= take
+	if o.remaining == 0 {
+		return take, o.err
+	}
+	return take, nil
+}
+
+// TestSizeViolationWinsOverAConcurrentReadError pins which of two
+// simultaneously-true failures is reported.
+//
+// When a body both exceeds the limit AND its read fails, the size violation is
+// the dispositive fact: enough bytes were seen to know the request is too
+// large, whatever happened to the connection afterwards. Reporting 400
+// invalid_request there would tell a caller its connection glitched when its
+// payload was genuinely too big — the exact misclassification the
+// read-error-vs-size-violation split exists to prevent, inverted.
+//
+// Found by lane-auth-cp's executed attack on the MaxBody repair
+// (c82519bd0..5aaa29e1d review) and reproduced here before fixing: MaxBody
+// checked err != nil BEFORE the length, so a reader delivering limit+1 bytes
+// and erroring on the same call was classified as a transport failure.
+// Neither path admits the request, so this was never a bypass — it was the
+// code contradicting its own stated purpose.
+func TestSizeViolationWinsOverAConcurrentReadError(t *testing.T) {
+	const limit = 16
+	options := testOptions(Route{
+		Method:  http.MethodPost,
+		Pattern: "/v1/both",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("an oversized body reached the route handler")
+		}),
+	})
+	options.MaxBodyBytes = limit
+	handler := handlerFor(t, options)
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/v1/both",
+		&overSizedThenFailingReader{remaining: limit + 1, err: errors.New("connection reset")},
+	)
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: enough bytes were read to know the body is too large", response.Code)
+	}
+	if envelope := decodeEnvelope(t, response); envelope.Error.Code != CodePayloadTooLarge {
+		t.Fatalf("code = %q, want %q", envelope.Error.Code, CodePayloadTooLarge)
+	}
+}
+
 // TestDeclaredBodyLengthIsStillBoundedForAReadingHandler keeps the declared
 // path covered too: a body whose declared length is within the limit but which
 // lies about its size must still fail the read rather than stream unbounded.

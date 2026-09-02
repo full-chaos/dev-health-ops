@@ -100,6 +100,15 @@ CORPUS += [
     "ghpr:o/r#" + "0" * 40,  # not positive -> None, not an error
     "ghpr:o/r#0",  # the same rule at length 1
     "ghpr:o/r#" + "9" * 40 + "\u00b2",  # huge AND non-decimal: int() still raises
+    # CPython's own bound, found by codex round 2 AFTER round 1 removed a bound
+    # this port had invented. `sys.get_int_max_str_digits()` defaults to 4300;
+    # above it `int()` raises, so these two entries sit either side of a real
+    # cliff in the reference. Removing my bound without checking whether the
+    # reference had one of its own was an over-correction, and the corpus is
+    # where that gets caught rather than argued.
+    "ghpr:o/r#" + "9" * 4300,  # exactly at the limit: converts
+    "ghpr:o/r#" + "9" * 4301,  # one past: RAISES
+    "ghpr:o/r#" + "0" * 4301,  # leading zeros still count toward it
 ]
 
 # ENDPOINT_CORPUS varies the third axis: WHICH FIELD carries the value.

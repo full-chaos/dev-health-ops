@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"unicode"
 )
@@ -106,4 +108,56 @@ json.dump(out, sys.stdout)
 		t.Fatalf("write live-python-oracle proof: %v", err)
 	}
 	t.Logf("table matches live Python: %d runes", len(live))
+}
+
+// TestIntMaxStrDigitsMatchesLivePython reads the limit back from the deployed
+// interpreter rather than trusting the constant.
+//
+// It is a SETTING, not a language constant — `sys.set_int_max_str_digits()`
+// changes it at runtime and it did not exist before 3.11 — so a deployment that
+// raised or lowered it would leave this port disagreeing with the reference
+// about which ids are convertible, silently, in the direction that mislabels a
+// crashing row as an ordinary PR.
+//
+// Proof marker: workgraph-int-max-str-digits
+func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	python := os.Getenv("PYTHON")
+	if python == "" {
+		resolved, err := exec.LookPath("python3")
+		if err != nil {
+			t.Fatalf("python3 is required: %v", err)
+		}
+		python = resolved
+	}
+	output, err := exec.Command(python, "-c", "import sys; print(sys.get_int_max_str_digits())").Output()
+	if err != nil {
+		t.Fatalf("read int_max_str_digits from live python: %v", err)
+	}
+	live, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		t.Fatalf("parse int_max_str_digits %q: %v", output, err)
+	}
+	if live != pythonIntMaxStrDigits {
+		t.Fatalf("live python allows %d digits, this port models %d — ids between the two "+
+			"are convertible for one and a crash for the other", live, pythonIntMaxStrDigits)
+	}
+	// The boundary itself, executed on both planes rather than reasoned about.
+	if _, _, _, ok := pythonIntFromDigits(strings.Repeat("9", live)); !ok {
+		t.Errorf("%d digits must convert; python accepts exactly this many", live)
+	}
+	if _, _, _, ok := pythonIntFromDigits(strings.Repeat("9", live+1)); ok {
+		t.Errorf("%d digits must NOT convert; python raises", live+1)
+	}
+	if err := os.WriteFile(
+		filepath.Join(proofDirectory, "workgraph-int-max-str-digits"), []byte("executed"), 0o644,
+	); err != nil {
+		t.Fatalf("write proof marker: %v", err)
+	}
 }

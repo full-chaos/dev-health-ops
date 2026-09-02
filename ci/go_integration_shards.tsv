@@ -38,6 +38,15 @@
 # per test rather than to whatever an earlier test left behind, so the weight
 # scales with the TEST COUNT in that file, not with the assertions in them.
 # Re-time it if that file grows.
+# internal/storage/postgres/authschema (CHAOS-4882): weight 30s. MEASURED, not
+# estimated -- a local run of both Testcontainers-backed tests together took
+# 2.752s package time (two tests, each starting its own PostgreSQL container;
+# PostgreSQL starts far faster than the ClickHouse-backed packages above, which
+# is why this is two orders of magnitude cheaper than internal/streamhandlers).
+# Rounded UP to 30 rather than to 3 for CI headroom: the local run had a warm
+# image, and the weight is only used for shard BALANCING, so over-stating a
+# cheap package costs a little packing efficiency while under-stating one can
+# push a shard past the 25-minute job budget. Re-time it if tests are added.
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
@@ -67,6 +76,7 @@ internal/providersync	1166
 internal/scheduler/fixed	143
 internal/scheduler/sync	32
 internal/storage/postgres	91
+internal/storage/postgres/authschema	30
 internal/storage/river	9
 internal/streamhandlers	113
 internal/streamrunner	2

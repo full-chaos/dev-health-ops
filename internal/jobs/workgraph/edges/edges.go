@@ -192,11 +192,29 @@ var Divergences = []Divergence{
 		// which is Unicode 17 where the deployed interpreter is UCD 16.
 		//
 		// 28 code points differ, all Unicode 17 additions CPython treats as
-		// unassigned and therefore leaves alone. Absent in practice:
-		// relationship types are ASCII by provider spec and all 11 values in
-		// the frozen corpus are ASCII, so no input reaching this port can
-		// contain one. Pinned exactly by TestEveryRuneLowercasesLikeLivePython,
-		// which compares EVERY code point rather than a derived subset.
+		// unassigned and therefore leaves alone. Pinned exactly by
+		// TestEveryRuneLowercasesLikeLivePython, which compares EVERY code point
+		// rather than a derived subset.
+		//
+		// WHY THIS CANNOT CHANGE AN ANSWER. Two arguments, and the second is the
+		// one to rely on:
+		//
+		// Input-side: relationship types are ASCII by provider spec, and all 11
+		// distinct values in the frozen corpus are ASCII. That is an assumption
+		// about upstream data and it is ENFORCED NOWHERE -- a provider emitting
+		// a non-ASCII type silently invalidates it.
+		//
+		// Structural: the only consumers of the folded value are membership
+		// tests against `blockerTypes` and `dependencyTypeMap`, whose keys are
+		// pure ASCII. Lowercasing a non-ASCII rune yields a non-ASCII rune, so
+		// a string containing one cannot become a member under EITHER plane --
+		// membership is identical whatever arrives, and the divergence cannot
+		// reach an outcome. Verified across every skew rune in every position
+		// against every blocker key: 0 strings where membership differs
+		// (lane-4441, delta review of this change).
+		//
+		// The structural argument holds under a data change that breaks the
+		// input-side one, which is why both are recorded and why this order.
 		Name:         "case-folding 28 Unicode 17 code points the deployed CPython leaves unchanged",
 		Authority:    "CHAOS-4766 re-cert P3a, team-lead ruling; full derivation tracked as CHAOS-4869",
 		GoldenCanSee: false,

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPythonLowerMatchesStrLowerOnTheKnownDivergences pins the two cases where
@@ -136,4 +137,52 @@ func parseCodePoint(value string, into *rune) (rune, error) {
 	}
 	*into = rune(number)
 	return *into, nil
+}
+
+// TestPythonLowerHandlesContextSensitiveFinalSigma covers the axis the derived
+// rot guard above cannot reach.
+//
+// That guard enumerates every MULTI-RUNE lowercase mapping from the live
+// interpreter — properly derived, not hand-written — and is still blind here,
+// because final sigma is not a multi-rune mapping. It is a single rune whose
+// mapping depends on its POSITION in the string. The guard varied the rune
+// exhaustively and held position constant.
+//
+// Deriving a corpus from the reference removes the transcription risk, not the
+// axis risk: a generator can only enumerate along axes its author iterated.
+//
+// Positions covered: final, medial, both-in-one-string, and final-followed-by-a
+// case-ignorable (a trailing '.' or apostrophe still leaves the sigma
+// word-final to Unicode's rule).
+func TestPythonLowerHandlesContextSensitiveFinalSigma(t *testing.T) {
+	for _, testCase := range []struct{ input, python, position string }{
+		{"ΟΔΟΣ", "οδος", "final"},
+		{"ΣΟΦΟΣ", "σοφος", "initial and final in one string"},
+		{"ΑΣΒ", "ασβ", "medial — NOT final, stays σ"},
+		{"ΑΣ", "ας", "final, two runes"},
+		{"ΑΣ.", "ας.", "final followed by a case-ignorable period"},
+		{"ΑΣ'", "ας'", "final followed by a case-ignorable apostrophe"},
+	} {
+		if got := pythonLower(testCase.input); got != testCase.python {
+			t.Errorf("%s: pythonLower(%q) = %q, python .lower() gives %q",
+				testCase.position, testCase.input, got, testCase.python)
+		}
+	}
+}
+
+// TestTheReadPathCarriesAnInstantNotAString pins the property CHAOS-4819 was
+// closed on.
+//
+// That ticket was closed as unreachable-by-construction on the argument "the
+// production path carries a time.Time, so no ISO parse exists". Nothing
+// enforced it: zero tests pinned the type. If LastSynced becomes a string
+// again, a parser comes back with it and the whole fromisoformat accept-set
+// problem returns — silently, because nothing else in this package would fail.
+//
+// A compile-time pin rather than a behavioural test: the string field is what
+// FORCES a parse, so pinning the type closes the reintroduction path at its
+// root instead of testing for parser symptoms.
+func TestTheReadPathCarriesAnInstantNotAString(t *testing.T) {
+	var row DependencyRow
+	var _ time.Time = row.LastSynced // a string here stops the build
 }

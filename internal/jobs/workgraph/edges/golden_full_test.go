@@ -847,3 +847,22 @@ func TestFrozenRelationshipValuesNeedNoCaseFolding(t *testing.T) {
 	sort.Strings(values)
 	t.Logf("relationship_type values, all ASCII-lowercase: %v", values)
 }
+
+// TestAPlantedNullProjectionRowIsRejected. The GoldenProjectionRun decoder
+// existed for two commits while the struct field was still [][7]int, so nothing
+// called it and a null row still fabricated one from intern index 0 — the exact
+// defect it was written to prevent.
+//
+// It plants the null in a DOCUMENT rather than calling UnmarshalJSON directly.
+// A direct call would have passed the whole time the field was unwired; only
+// decoding a document proves the decoder is actually reached.
+func TestAPlantedNullProjectionRowIsRejected(t *testing.T) {
+	raw := []byte(`{"schema":"workgraph_issue_edges_python_golden.v1","strings":["a","b"],
+		"dependencies":[[0,1,0,1,0,1]],"projection_runs":[null],"edges":[],"counts":{}}`)
+	var document GoldenDocument
+	if err := json.Unmarshal(raw, &document); err == nil {
+		t.Fatalf("a null projection row decoded to %v — it would fabricate a row from the "+
+			"first interned string, and every count would still reconcile",
+			document.ProjectionRuns)
+	}
+}

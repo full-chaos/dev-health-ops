@@ -94,10 +94,27 @@ func ReadDependencies(
 			SemanticsVersion: semantics,
 			// work_item_dependencies.last_synced is DateTime64(3) with NO
 			// timezone, while work_graph_edges.last_synced is
-			// DateTime64(3,'UTC'). The driver hands back a time.Time either way;
-			// normalising to UTC here is the same coercion Python applies at
-			// builder.py:892-893, and skipping it would shift every event_ts by
-			// the driver's local offset.
+			// DateTime64(3,'UTC').
+			//
+			// Converting here matches Python, though NOT by the mechanism the
+			// shape suggests. clickhouse-connect returns the no-tz column as an
+			// AWARE datetime in the server's zone, so `_ensure_utc` CONVERTS it;
+			// the naive case arises only for the 'UTC'-declared column, where
+			// converting and reinterpreting coincide. Convert is therefore
+			// uniformly correct and there is no per-column branch to write.
+			//
+			// Measured on an Asia/Kolkata server (lane-4441 receipt), one
+			// literal written to both column types:
+			//
+			//	                     python _ensure_utc   reinterpret     .UTC()
+			//	DateTime64(3)        1788325200000        1788345000000   1788325200000
+			//	DateTime64(3,'UTC')  1788345000000        1788345000000   1788345000000
+			//
+			// Reinterpreting would be worse than wrong-on-a-non-UTC-server:
+			// with apply_server_timezone=False the driver attaches the CLIENT's
+			// zone, so a reinterpreting port is wrong by a PER-MACHINE offset
+			// and never reproduces for whoever is asked to confirm it.
+			// Converting never reads the wall clock.
 			LastSynced: lastSynced.UTC(),
 		})
 	}

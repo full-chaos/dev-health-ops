@@ -26,10 +26,10 @@ type GoldenDocument struct {
 	ExistingEdgeIDs [][]int      `json:"existing_edge_ids"`
 	Edges           []GoldenEdge `json:"edges"`
 	// [org_id*, projection_name*, scope_repo_id*, rule_version*, watermark*, row_count, completed_at*]
-	ProjectionRuns [][7]int     `json:"projection_runs"`
-	Mutations      []Mutation   `json:"mutations"`
-	Config         GoldenConfig `json:"config"`
-	Queries        []Query      `json:"queries"`
+	ProjectionRuns []GoldenProjectionRun `json:"projection_runs"`
+	Mutations      []Mutation            `json:"mutations"`
+	Config         GoldenConfig          `json:"config"`
+	Queries        []Query               `json:"queries"`
 
 	Counts map[string]int `json:"counts"`
 }

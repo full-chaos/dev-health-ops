@@ -3,6 +3,9 @@ package edges
 import (
 	"strings"
 	"time"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // DependencyRow is one `work_item_dependencies` row as the producer reads it.
@@ -180,8 +183,25 @@ func EvidenceFor(row DependencyRow) string {
 // TestPythonLowerMatchesLivePython re-derives the expansion set from the
 // interpreter, so a Unicode revision that adds another cannot pass unnoticed.
 func pythonLower(value string) string {
-	if strings.ContainsRune(value, '\u0130') {
-		value = strings.ReplaceAll(value, "\u0130", "i\u0307")
-	}
-	return strings.ToLower(value)
+	return pythonLowerCaser.String(value)
 }
+
+// pythonLowerCaser is `str.lower()`. `language.Und` is correct BY DESIGN, not by
+// observed agreement: CPython's `str.lower()` is locale-independent by
+// definition and never applies the Turkish or Lithuanian tailorings, so the
+// untailored caser is the only admissible choice. Saying "it matched my test
+// cases" would invite someone to swap in a tailored caser later.
+//
+// This replaced `strings.ToLower` plus a U+0130 special case. That pair handled
+// the one multi-rune mapping but missed CONTEXT-SENSITIVE final sigma, which is
+// a single rune whose mapping depends on its POSITION:
+//
+//	'ΟΔΟΣ'  python .lower() -> 'οδος'    strings.ToLower -> 'οδοσ'
+//
+// Reachable, and it flipped an edge's DIRECTION: the lowered values are
+// comparison-only, but one comparison is `raw == relationship`, which gates the
+// orientation flip. A positional sigma difference breaks that equality on one
+// plane only, so both planes emit the edge pointing opposite ways while every
+// total still balances. The U+0130 special case is gone because this caser
+// handles it correctly on its own.
+var pythonLowerCaser = cases.Lower(language.Und)

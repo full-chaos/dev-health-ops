@@ -95,6 +95,13 @@ GRAPHQL_SCHEMA = ("dev_health_ops.api.graphql.schema", "schema")
 # path (``/graphql`` is served by all three).
 WEBSOCKET_METHOD = "WEBSOCKET"
 
+# A mount wrapping an OPAQUE ASGI app (StaticFiles, a WSGI adapter, a bare
+# ASGI callable) exposes no routes to enumerate, but serves every request
+# under its prefix. It gets its own pseudo-verb rather than a guessed method
+# list: what it serves is the mounted app's business, and a row for it has to
+# say so explicitly instead of the gate covering nothing while looking full.
+MOUNT_METHOD = "MOUNT"
+
 
 class DiscoveryImportError(RuntimeError):
     """Raised when a deployed app or the GraphQL schema cannot be imported.
@@ -129,7 +136,14 @@ def _import_context(root: Path):
       which starts OTLP exporters and retries against ``localhost:4317``.
       ``OTEL_ENABLED`` is read inside ``init_tracing``, so it has to be set
       BEFORE the import. Set, not overridden: an environment that has
-      deliberately chosen a value keeps it.
+      deliberately chosen a value keeps it -- and RESTORED afterwards. It used
+      to be left behind: `setdefault` on a process where the variable was
+      absent changed it to "false" permanently, so anything the caller did
+      later ran under a setting this module chose for its own import. When we
+      are the one who set it, the modules imported under that synthetic
+      setting are purged on the way out too, since an app object built with
+      tracing suppressed must not be handed to a caller who never asked for
+      that.
     * ``import`` returns whatever is already in ``sys.modules``. Without the
       purge below, a discovery run against one root would silently enumerate
       an ALREADY-IMPORTED app from a different root and report that set as
@@ -139,7 +153,10 @@ def _import_context(root: Path):
       against several roots in one process (the gate's own contract tests do)
       gets each root's real set and leaves no cross-contamination behind.
     """
-    os.environ.setdefault("OTEL_ENABLED", "false")
+    otel_was = os.environ.get("OTEL_ENABLED")
+    we_set_otel = otel_was is None
+    if we_set_otel:
+        os.environ["OTEL_ENABLED"] = "false"
     src = (root / "src").resolve()
     saved_path = list(sys.path)
     cached = {
@@ -166,7 +183,10 @@ def _import_context(root: Path):
     # same root would import anyway, and re-importing `api.main` costs ~17s.
     # A later run against a different root sees them as foreign and purges
     # them, so the fast path cannot become a correctness problem.
-    purge = bool(foreign)
+    # `we_set_otel` joins the purge condition: the import ran under a tracing
+    # setting this module invented, so its modules are ours to clean up rather
+    # than a cache the caller can safely inherit.
+    purge = bool(foreign) or we_set_otel
     try:
         yield
     except BaseException:
@@ -174,6 +194,8 @@ def _import_context(root: Path):
         raise
     finally:
         sys.path[:] = saved_path
+        if we_set_otel:
+            os.environ.pop("OTEL_ENABLED", None)
         if purge:
             for name in [
                 n for n in sys.modules if n == PACKAGE or n.startswith(PACKAGE + ".")
@@ -256,6 +278,21 @@ def _walk_routes(routes: Any, prefix: str = "") -> list[tuple[str, Any]]:
     point. A router mounted twice appears as two distinct leaf entries with two
     distinct paths, which is what closes CHAOS-4760: the mount multiplicity is
     a property of the object graph, never of prefix arithmetic done here.
+
+    A mount whose recursion yields NOTHING is emitted as a surface in its own
+    right. ``Mount.routes`` is ``getattr(self.app, "routes", [])``, so a mount
+    wrapping an OPAQUE ASGI app -- ``StaticFiles``, a WSGI adapter, a bare ASGI
+    callable -- has no child routes to recurse into while still serving every
+    request under its prefix. Recursing and emitting nothing would have made
+    such a mount invisible to a gate whose entire claim is that a surface
+    cannot be added in a way that escapes it. Executed repro of the hole this
+    closes: `app.mount("/assets", StaticFiles(directory=...))` served
+    `GET /assets/x.txt -> 200` while the walk returned only `/example`.
+
+    The emitted record is the MOUNT, not a guess at what it serves: the
+    mounted app decides its own paths and methods, and this walk cannot see
+    them. That is the honest shape -- it forces an inventory row that has to
+    say what the mount exposes, rather than silently covering nothing.
     """
     from starlette.routing import Mount  # imported late: needs sys.path set up
 
@@ -270,7 +307,8 @@ def _walk_routes(routes: Any, prefix: str = "") -> list[tuple[str, Any]]:
             continue
         full = prefix + path
         if isinstance(route, Mount):
-            out.extend(_walk_routes(getattr(route, "routes", []) or [], full))
+            nested = _walk_routes(getattr(route, "routes", []) or [], full)
+            out.extend(nested or [(full, route)])
             continue
         out.append((full, route))
     return out
@@ -284,11 +322,22 @@ def discover_routes(root: Path, apps=DEPLOYED_APPS) -> list[dict]:
         app = _import_attr(module, attr, src)
         app_root = f"{module}::{attr}"
         for path, route in _walk_routes(getattr(app, "routes", []) or []):
+            # An opaque mount has no `endpoint` -- it has an `app`. Anchor it
+            # at the mounted application's CLASS, which is the only source
+            # location that exists for it, and give it its own pseudo-verb:
+            # the mounted app owns its paths and methods and this walk cannot
+            # enumerate them, so claiming a verb set here would be a guess.
+            is_opaque_mount = getattr(route, "endpoint", None) is None and hasattr(
+                route, "app"
+            )
             endpoint = getattr(route, "endpoint", None)
-            file, line, in_ops = _anchor(endpoint, root)
+            if is_opaque_mount:
+                file, line, in_ops = _anchor(type(route.app), root)
+            else:
+                file, line, in_ops = _anchor(endpoint, root)
             methods = sorted(getattr(route, "methods", None) or [])
             if not methods:
-                methods = [WEBSOCKET_METHOD]
+                methods = [MOUNT_METHOD if is_opaque_mount else WEBSOCKET_METHOD]
             records.append(
                 {
                     "app_root": app_root,
@@ -303,8 +352,16 @@ def discover_routes(root: Path, apps=DEPLOYED_APPS) -> list[dict]:
                     "file": file,
                     "line": line,
                     "endpoint_in_ops_source": in_ops,
-                    "endpoint_module": getattr(endpoint, "__module__", None),
-                    "endpoint_name": getattr(endpoint, "__name__", None),
+                    "endpoint_module": (
+                        type(route.app).__module__
+                        if is_opaque_mount
+                        else getattr(endpoint, "__module__", None)
+                    ),
+                    "endpoint_name": (
+                        type(route.app).__name__
+                        if is_opaque_mount
+                        else getattr(endpoint, "__name__", None)
+                    ),
                     "route_class": type(route).__name__,
                 }
             )

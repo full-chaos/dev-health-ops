@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1825,3 +1826,107 @@ def test_a_failed_import_leaves_no_partial_package_resident(tmp_path):
     }
     assert after == before, sorted(after - before)
     assert str((root / "src").resolve()) not in sys.path
+
+
+# ---------------------------------------------------------------------------
+# Codex round 2. Both findings reproduced against the real pinned frameworks
+# before either was fixed.
+# ---------------------------------------------------------------------------
+
+
+def test_an_opaque_asgi_mount_is_discovered(tmp_path):
+    """R2-1, EXECUTED repro then guard.
+
+    `Mount.routes` is `getattr(self.app, "routes", [])`, so a mount wrapping an
+    OPAQUE ASGI app -- StaticFiles, a WSGI adapter, a bare ASGI callable -- has
+    no child routes while still serving every request under its prefix.
+    Recursing into it and emitting nothing made such a mount invisible to a
+    gate whose whole claim is that a surface cannot be added in a way that
+    escapes it.
+
+    Repro before the fix, with the real pinned fastapi/starlette:
+    `app.mount("/assets", StaticFiles(directory=...))` served
+    `GET /assets/x.txt -> 200` while the walk returned only `/example`.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from starlette.staticfiles import StaticFiles
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "x.txt").write_text("hi\n")
+
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/example")
+    async def example():  # pragma: no cover -- never called, only registered
+        return {}
+
+    app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+    # The mount really serves -- proven, not argued.
+    with TestClient(app) as client:
+        assert client.get("/assets/x.txt").status_code == 200
+
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_mount")
+    walked = discoverer._walk_routes(app.routes)
+    paths = {path for path, _ in walked}
+    assert "/assets" in paths, sorted(paths)
+    assert "/example" in paths, sorted(paths)
+
+
+def test_an_opaque_mount_becomes_a_surface_the_gate_demands_a_row_for(tmp_path):
+    """The walk finding it is only half: it has to reach the parity check as a
+    surface, with a verb that does not pretend to know what the mount serves."""
+    root = _minimal_valid_root(tmp_path)
+    _write(
+        root / _MAIN_FILE,
+        "from fastapi import FastAPI\n"
+        "from starlette.staticfiles import StaticFiles\n"
+        "\n"
+        "from .routers.example import router as example_router\n"
+        "\n"
+        "app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)\n"
+        "app.include_router(example_router)\n"
+        'app.mount("/assets", StaticFiles(directory="."), name="assets")\n',
+    )
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_mount2")
+    records = discoverer.discover(root)["routes"]
+    mount = [r for r in records if r["path"] == "/assets"]
+    assert len(mount) == 1, records
+    assert mount[0]["method"] == "MOUNT", mount[0]
+    # Anchored at the mounted app's class, which is third-party -- so the row
+    # will also have to carry provenance.
+    assert mount[0]["endpoint_in_ops_source"] is False, mount[0]
+    assert mount[0]["endpoint_name"] == "StaticFiles", mount[0]
+
+    inventory_path, schema_path, cc_path = _paths(root)
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any("UNOWNED SURFACE" in e and "/assets" in e for e in errors), errors
+
+
+def test_discovery_restores_otel_enabled_when_it_set_it(tmp_path, monkeypatch):
+    """R2-2, EXECUTED. `setdefault` left OTEL_ENABLED=false behind on a process
+    that never had it, so everything the caller did afterwards ran under a
+    setting this module chose for its own import."""
+    monkeypatch.delenv("OTEL_ENABLED", raising=False)
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_otel")
+
+    with discoverer._import_context(root):
+        assert os.environ["OTEL_ENABLED"] == "false"
+    assert "OTEL_ENABLED" not in os.environ
+
+
+def test_discovery_does_not_override_a_caller_set_otel_enabled(tmp_path, monkeypatch):
+    """The other half: an environment that deliberately chose a value keeps it,
+    both during and after."""
+    monkeypatch.setenv("OTEL_ENABLED", "true")
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_otel2")
+
+    with discoverer._import_context(root):
+        assert os.environ["OTEL_ENABLED"] == "true"
+    assert os.environ["OTEL_ENABLED"] == "true"

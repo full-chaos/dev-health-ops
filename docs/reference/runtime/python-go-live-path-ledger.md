@@ -157,12 +157,21 @@ flowchart LR
 
 `testops_risk`'s native executor still reads its inputs (this-day pipeline/test/coverage rows) by recomputing them in-process from the same raw tables Python's `testops_pipeline`/`testops_test`/`testops_coverage` families read (`compute_testops.py`, still bridge/`"pending"` -- CHAOS-4284) -- Go's native families run BEFORE the one combined compatibility-bridge call each partition, so those bridge-written daily tables never carry the CURRENT day's rows yet when this executor runs; see `internal/jobs/metrics/daily/testops_risk_native_clickhouse.go`'s package doc comment. The recompute itself lives in the sibling `internal/jobs/metrics/testops` package (a full, exported port of `compute_testops.py`, reused rather than reimplemented once CHAOS-4284 ports those three families natively).
 
-`workgraph.build` and the `investment.*` family share a second, separate bridge endpoint (`/internal/worker/workgraph/v1/execute`) with zero Go-native compute anywhere -- only React-to-request/ledger plumbing is Go:
+`workgraph.build` and the `investment.*` family share a second, separate bridge endpoint (`/internal/worker/workgraph/v1/execute`). This section read "with zero Go-native compute anywhere -- only React-to-request/ledger plumbing is Go" until #2099; that is no longer true. Two native Go producers now run inside a `workgraph.build` execution, on either side of the bridge call:
+
+| step | seam | ported from | status |
+| --- | --- | --- | --- |
+| `issue_pr_links` | **pre**-step | `_derive_issue_pr_links_from_dependencies` (builder.py:644) | native; the Python build READS what it writes four lines later, so it must precede the bridge |
+| `issue_issue_edges` | **post**-step | `_build_issue_issue_edges` (builder.py:828) | native; **post-step, last writer by design, until `_build_issue_issue_edges` retires** |
+
+The Python stage still runs for both, because `builder.build()` takes no arguments and has no stage selection. For the mapping that is harmless -- both planes compute identical rows, so whichever write wins is the same row. For the edges it is not: this port applies variant-C confidence (0.9 for the associative family, CHAOS-4752/4758) where Python writes 1.0 (builder.py:905), and `work_graph_edges` is `ReplacingMergeTree(last_synced)` whose `ORDER BY` excludes `confidence` -- so the two writes address the SAME row and collapse by version. Running last is the only ordering under which the divergence survives while the Python stage still runs, and it stops being necessary the moment that stage retires.
+
+Everything else on this endpoint remains bridge-owned:
 
 ```mermaid
 flowchart LR
   subgraph Go["Go (request/ledger plumbing only)"]
-    WGREQ["workgraph.build<br/>internal/jobs/workgraph/postgres.go"]
+    WGREQ["workgraph.build<br/>internal/jobs/workgraph/postgres.go<br/>pre-step: issue_pr_links · post-step: issue_issue_edges"]
     INVREQ["investment.materialize<br/>internal/jobs/workgraph/handler.go"]
     DEAD["investment.dispatch / investment.chunk / investment.finalize<br/>handlers wired, never invoked -- DEAD CODE"]
   end

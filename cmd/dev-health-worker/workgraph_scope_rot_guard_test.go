@@ -45,6 +45,42 @@ import (
 // regenerate-and-byte-compare is therefore both sufficient and exact, and it
 // re-measures every one of the 1,492 cases rather than a replayed subset.
 //
+// # WHAT THIS GUARD CANNOT CATCH, measured rather than reasoned
+//
+// It runs the generator under the DEVELOPER'S interpreter, which is a superset
+// of CI's dependency closure. So a generator that imports something present
+// locally and absent in CI passes here and fails there, and this guard is
+// green on exactly the code CI rejects.
+//
+// Not hypothetical. Commit 348d02936 fails CI with
+// `ModuleNotFoundError: No module named 'limits'` -- reached via `_admit` ->
+// `api/internal/__init__` -> `.acr` -> `from limits import ...`. Run against
+// that commit in a detached worktree, this test reports:
+//
+//	ok 1.712s    proof marker: executed
+//
+// Two people ran it green four times each before CI said otherwise. Neither was
+// careless: the guard is blind on the axis that broke, so local care cannot
+// find it. That cost two review cycles.
+//
+// THE FIX, which is a separate piece of work: run the generator under an import
+// blocker whose ALLOW-SET is derived from
+// `ci/requirements-live-python-oracles.txt` -- stdlib, the pinned
+// distributions, interpreter privates, everything else blocked. Deriving the
+// set is what makes it a check rather than a probe: there is no next dependency
+// to discover, because anything outside the closure is blocked too. Two
+// separate attempts to GUESS that set failed in opposite directions, which is
+// the tell that the method was wrong rather than either guess.
+//
+// Two traps for whoever builds it, both paid for already:
+//   - `find_module` does nothing. Meta-path finders have not honoured it since
+//     Python 3.12, so a blocker built on it blocks nothing and cannot fail.
+//     Use `find_spec`.
+//   - Prove the blocker on a module that IS present. Probing one already
+//     absent reports "blocked" whether the blocker works or not -- a control
+//     that cannot distinguish a working mechanism from a broken one, which is
+//     worse than no control because it manufactures confidence.
+//
 // # The comparison is on BYTES, deliberately
 //
 // The generator sorts keys and fixes the indent, so its output is canonical by

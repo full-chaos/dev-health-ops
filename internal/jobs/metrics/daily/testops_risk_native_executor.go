@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // TestopsRiskExecutor is the NATIVE implementation of the testops_risk
@@ -33,13 +35,15 @@ import (
 //     the compatibility bridge (daily.go Work()), so those bridge-written
 //     tables do not carry today's rows yet when this executor runs. This
 //     executor therefore recomputes the same pipeline/test/coverage
-//     aggregation Python performs in-process (testops_risk_native_clickhouse.go's
-//     computeTestops{Pipeline,Test,Coverage}Metric* functions, ports of
-//     compute_testops.py) purely as private inputs to its own three
-//     risk-model functions -- it never writes
-//     testops_{pipeline,test,coverage}_metrics_daily itself; those tables
-//     stay the Python bridge's responsibility (CHAOS-4284, a separate
-//     family, still "pending" in families.json).
+//     aggregation Python performs in-process, via the sibling
+//     internal/jobs/metrics/testops package (a full, exported port of
+//     compute_testops.py -- see that package's doc comment for why it is
+//     its own package rather than private helpers here: CHAOS-4284 is
+//     meant to import and reuse it verbatim) -- purely as an in-memory
+//     input to this executor's own three risk-model functions. This
+//     executor never writes testops_{pipeline,test,coverage}_metrics_daily
+//     itself; those tables stay the Python bridge's responsibility
+//     (CHAOS-4284, a separate family, still "pending" in families.json).
 type TestopsRiskExecutor struct {
 	conn   driver.Conn
 	nowUTC func() time.Time
@@ -71,6 +75,25 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		return 0, fmt.Errorf("%w: partition %s repo_ids: %v", ErrInvalidState, partition.ID, err)
 	}
 
+	// job_daily.py builds repo_team_resolver/repo_names_by_id ONCE per run
+	// (build_repo_pattern_resolver(teams_data), discovered_repos) and
+	// passes the SAME pair into every family's compute call, testops
+	// included. Reuse the identical LoadWellbeingTeams/NewRepoPatternResolver/
+	// LoadRepoNames this package already built for team_wellbeing (CHAOS-4276)
+	// rather than a second implementation of the same query+resolver --
+	// codex adversarial review round 1 (CHAOS-4294) caught that testops_risk
+	// had NO team resolution at all in an earlier revision, silently
+	// dropping every repo-pattern-derived team_id to nil.
+	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
+	if err != nil {
+		return 0, err
+	}
+	repoResolver := NewRepoPatternResolver(teams)
+	repoNamesByID, err := LoadRepoNames(ctx, executor.conn, run.OrganizationID, repoIDs)
+	if err != nil {
+		return 0, err
+	}
+
 	day := chDate(run.TargetDay)
 	start := day
 	end := start.Add(24 * time.Hour)
@@ -83,11 +106,13 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 	var pipelineStability []testopsPipelineStabilityRow
 
 	for _, repoID := range repoIDs {
+		repoName := repoNamesByID[repoID.String()]
+
 		pipelineRuns, err := loadTestopsPipelineRuns(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
 			return 0, err
 		}
-		pipelineMetrics := computeTestopsPipelineMetrics(repoID, pipelineRuns)
+		pipelineMetrics := testops.ComputePipelineMetrics(repoID, pipelineRuns, repoName, repoResolver)
 
 		suites, cases, err := loadTestopsSuiteAndCaseRows(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
@@ -99,7 +124,7 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		if err != nil {
 			return 0, err
 		}
-		testMetrics := computeTestopsTestMetrics(repoID, suites, cases, historicalFailedNames)
+		testMetrics := testops.ComputeTestMetrics(repoID, suites, cases, historicalFailedNames, repoName, repoResolver)
 
 		coverageRows, err := loadTestopsCoverageSnapshots(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
@@ -109,19 +134,19 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		if err != nil {
 			return 0, err
 		}
-		coverageMetric := computeTestopsCoverageMetric(repoID, coverageRows, priorCoverageRows)
+		coverageMetric := testops.ComputeCoverageMetric(repoID, coverageRows, priorCoverageRows, repoName, repoResolver)
 
 		// pipe_by_repo[repo_id] in Python ends up as whichever
 		// (team_id, service_id) group sorts LAST for this repo -- see
-		// computeTestopsPipelineMetrics's doc comment. Its own per-repo
+		// testops.ComputePipelineMetrics's doc comment. Its own per-repo
 		// output is already in that sorted order, so the last element is
 		// the exact same "representative" pipeline row Python's dict
 		// overwrite would leave.
-		var pipeRepresentative *testopsPipelineMetric
+		var pipeRepresentative *testops.PipelineMetric
 		if n := len(pipelineMetrics); n > 0 {
 			pipeRepresentative = &pipelineMetrics[n-1]
 		}
-		var testRepresentative *testopsTestMetric
+		var testRepresentative *testops.TestMetric
 		if len(testMetrics) > 0 {
 			testRepresentative = &testMetrics[0]
 		}

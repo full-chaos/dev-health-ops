@@ -167,6 +167,35 @@ func jobruntimeRepositoryRoot(t *testing.T) string {
 	}
 }
 
+// TestDailyMetricsNativeFamilyAcceptsTestopsRisk pins testops_risk
+// (CHAOS-4294) into the registered set the same way team_wellbeing/
+// repo_user_commit already are -- without dailyMetricsNativeFamilies
+// listing it, ObserveDailyMetricsNativeFamily silently refuses every
+// observation TestopsRiskExecutor reports (the exact failure mode this
+// test guards: a family flips families.json to "go" and gets a real Go
+// executor, but its telemetry reports "not registered" forever because
+// this second, independent closed set was never updated to match).
+func TestDailyMetricsNativeFamilyAcceptsTestopsRisk(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	if err := collector.ObserveDailyMetricsNativeFamily(
+		"testops_risk", DailyMetricsNativeFamilyOutcomeComputed, 3, 5*time.Millisecond,
+	); err != nil {
+		t.Fatalf("testops_risk must be a registered native family: %v", err)
+	}
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		`worker_daily_metrics_native_family_outcome_total{family="testops_risk",outcome="computed"} 1`,
+		`worker_daily_metrics_native_family_rows_written_total{family="testops_risk"} 3`,
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q\nfull exposition:\n%s", want, exposition)
+		}
+	}
+}
+
 func TestDailyMetricsNativeFamilyRejectsUnregisteredFamily(t *testing.T) {
 	collector, err := NewMetricsCollector(MetricDimensions{})
 	if err != nil {

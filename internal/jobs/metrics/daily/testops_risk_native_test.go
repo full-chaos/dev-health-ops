@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 func mustTime(t *testing.T, hour, minute, second int) time.Time {
@@ -19,6 +21,7 @@ func mustTime(t *testing.T, hour, minute, second int) time.Time {
 
 func floatPtr(v float64) *float64 { return &v }
 func uintPtr(v uint32) *uint32    { return &v }
+func strPtr(v string) *string     { return &v }
 
 // buildTestopsFixture returns the SAME raw rows
 // testdata/python_testops_risk_oracle.py constructs, translated to this
@@ -26,11 +29,11 @@ func uintPtr(v uint32) *uint32    { return &v }
 // TestTestopsRiskComputeMatchesLivePythonProduction stops proving anything.
 func buildTestopsFixture(t *testing.T) (
 	repoID uuid.UUID, day time.Time,
-	pipelineRuns []testopsPipelineRunRow,
-	suites []testopsSuiteRow,
-	cases []testopsCaseRow,
+	pipelineRuns []testops.PipelineRunRow,
+	suites []testops.SuiteRow,
+	cases []testops.CaseRow,
 	historicalFailedNames map[string]struct{},
-	coverage, priorCoverage []testopsCoverageSnapshotRow,
+	coverage, priorCoverage []testops.CoverageSnapshotRow,
 ) {
 	t.Helper()
 	const orgID = "00000000-0000-4000-8000-000000000009"
@@ -39,7 +42,7 @@ func buildTestopsFixture(t *testing.T) (
 	teamA, svcA := strPtr("team-a"), strPtr("svc-a")
 	teamB, svcB := strPtr("team-b"), strPtr("svc-b")
 
-	pipelineRuns = []testopsPipelineRunRow{
+	pipelineRuns = []testops.PipelineRunRow{
 		{
 			RepoID: repoID, Status: strPtr("success"),
 			QueuedAt: timePtr(mustTime(t, 9, 0, 0)), StartedAt: mustTime(t, 9, 1, 0), FinishedAt: timePtr(mustTime(t, 9, 11, 0)),
@@ -57,22 +60,22 @@ func buildTestopsFixture(t *testing.T) (
 		},
 	}
 
-	suites = []testopsSuiteRow{
+	suites = []testops.SuiteRow{
 		{
 			RepoID: repoID, RunID: "run-1", SuiteID: "suite-1",
 			TotalCount: 10, PassedCount: 8, FailedCount: 2, QuarantinedCount: 1,
-			DurationSecs: floatPtr(42.0), StartedAt: timePtr(mustTime(t, 9, 1, 0)), FinishedAt: timePtr(mustTime(t, 9, 5, 0)),
+			DurationSeconds: floatPtr(42.0), StartedAt: timePtr(mustTime(t, 9, 1, 0)), FinishedAt: timePtr(mustTime(t, 9, 5, 0)),
 			TeamID: teamA, ServiceID: svcA, OrgID: orgID,
 		},
 		{
 			RepoID: repoID, RunID: "run-2", SuiteID: "suite-2",
 			TotalCount: 5, PassedCount: 3, FailedCount: 2,
-			DurationSecs: floatPtr(88.0), StartedAt: timePtr(mustTime(t, 10, 2, 0)), FinishedAt: timePtr(mustTime(t, 10, 10, 0)),
+			DurationSeconds: floatPtr(88.0), StartedAt: timePtr(mustTime(t, 10, 2, 0)), FinishedAt: timePtr(mustTime(t, 10, 10, 0)),
 			TeamID: teamA, ServiceID: svcA, OrgID: orgID,
 		},
 	}
 
-	cases = []testopsCaseRow{
+	cases = []testops.CaseRow{
 		{RepoID: repoID, RunID: "run-1", SuiteID: "suite-1", CaseName: "test_flaky", Status: strPtr("passed"), RetryAttempt: 1},
 		{RepoID: repoID, RunID: "run-1", SuiteID: "suite-1", CaseName: "test_flaky", Status: strPtr("failed"), RetryAttempt: 0},
 		{RepoID: repoID, RunID: "run-2", SuiteID: "suite-2", CaseName: "test_recurrent_failure", Status: strPtr("failed"), RetryAttempt: 0},
@@ -81,7 +84,7 @@ func buildTestopsFixture(t *testing.T) (
 
 	historicalFailedNames = map[string]struct{}{"test_recurrent_failure": {}}
 
-	coverage = []testopsCoverageSnapshotRow{
+	coverage = []testops.CoverageSnapshotRow{
 		{
 			RepoID: repoID, RunID: "run-1", SnapshotID: "snap-1",
 			LinesTotal: uintPtr(1000), LinesCovered: uintPtr(800),
@@ -89,7 +92,7 @@ func buildTestopsFixture(t *testing.T) (
 			TeamID: teamA, ServiceID: svcA, OrgID: orgID,
 		},
 	}
-	priorCoverage = []testopsCoverageSnapshotRow{
+	priorCoverage = []testops.CoverageSnapshotRow{
 		{
 			RepoID: repoID, RunID: "run-0", SnapshotID: "snap-0",
 			LinesTotal: uintPtr(1000), LinesCovered: uintPtr(850),
@@ -101,6 +104,13 @@ func buildTestopsFixture(t *testing.T) (
 }
 
 func timePtr(v time.Time) *time.Time { return &v }
+
+func derefStr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
 
 // releaseConfidenceAsMap/qualityDragAsMap/pipelineStabilityAsMap build the
 // exact snake_case shape testdata/python_testops_risk_oracle.py's
@@ -187,6 +197,10 @@ func TestTestopsRiskComputeMatchesLivePythonProduction(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
 	python := os.Getenv("PYTHON")
 	if python == "" {
 		t.Fatal("PYTHON is required for the live testops_risk Python oracle")
@@ -220,15 +234,15 @@ func TestTestopsRiskComputeMatchesLivePythonProduction(t *testing.T) {
 	repoID, day, pipelineRuns, suites, cases, historicalFailedNames, coverage, priorCoverage := buildTestopsFixture(t)
 	computedAt := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 
-	pipelineMetrics := computeTestopsPipelineMetrics(repoID, pipelineRuns)
-	testMetrics := computeTestopsTestMetrics(repoID, suites, cases, historicalFailedNames)
-	coverageMetric := computeTestopsCoverageMetric(repoID, coverage, priorCoverage)
+	pipelineMetrics := testops.ComputePipelineMetrics(repoID, pipelineRuns, "", nil)
+	testMetrics := testops.ComputeTestMetrics(repoID, suites, cases, historicalFailedNames, "", nil)
+	coverageMetric := testops.ComputeCoverageMetric(repoID, coverage, priorCoverage, "", nil)
 
-	var pipe *testopsPipelineMetric
+	var pipe *testops.PipelineMetric
 	if n := len(pipelineMetrics); n > 0 {
 		pipe = &pipelineMetrics[n-1]
 	}
-	var test *testopsTestMetric
+	var test *testops.TestMetric
 	if len(testMetrics) > 0 {
 		test = &testMetrics[0]
 	}
@@ -251,6 +265,10 @@ func TestTestopsRiskComputeMatchesLivePythonProduction(t *testing.T) {
 		t.Fatalf("pipeline_stability row count mismatch: python=%d go_nil=%v", len(oracle.PipelineStability), pipelineStabilityRow == nil)
 	}
 	assertJSONEqual(t, "pipeline_stability", normalizeOracleTeamService(oracle.PipelineStability[0]), pipelineStabilityAsMap(pipelineStabilityRow))
+
+	if writeErr := os.WriteFile(filepath.Join(proofDirectory, "testops-risk-golden"), []byte("executed"), 0o644); writeErr != nil {
+		t.Fatalf("write live-python-oracle proof: %v", writeErr)
+	}
 }
 
 func assertJSONEqual(t *testing.T, label string, want, got map[string]any) {

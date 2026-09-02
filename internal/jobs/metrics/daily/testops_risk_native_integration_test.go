@@ -160,11 +160,14 @@ INSERT INTO coverage_snapshots (repo_id, run_id, snapshot_id, lines_total, lines
 	if err := rows.Scan(&confidenceScore); err != nil {
 		t.Fatal(err)
 	}
-	// success_rate=1.0, pass_rate=1.0, coverage=90 -> pipeline_factor=0.4,
-	// test_factor=0.3, cov_factor=0.2*0.9=0.18, flake_factor=0.1*(1-0)=0.1;
-	// base=0.98; no flake/regression penalty -> confidence_score=0.98.
-	if confidenceScore < 0.97 || confidenceScore > 0.99 {
-		t.Fatalf("confidence_score=%v, want ~0.98", confidenceScore)
+	// pass_rate is suite-aggregate (passed_count/total_count = 9/10 = 0.9,
+	// NOT per-case), so: success_rate=1.0, pass_rate=0.9, coverage=90 ->
+	// pipeline_factor=0.4, test_factor=0.3*0.9=0.27, cov_factor=0.2*0.9=0.18,
+	// flake_factor=0.1*(1-0)=0.1; base=0.95; no flake/regression penalty
+	// (flake_rate=0, coverage_delta=0 with no prior snapshot,
+	// failure_recurrence=0) -> confidence_score=0.95.
+	if confidenceScore < 0.94 || confidenceScore > 0.96 {
+		t.Fatalf("confidence_score=%v, want ~0.95", confidenceScore)
 	}
 }
 

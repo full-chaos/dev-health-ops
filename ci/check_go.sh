@@ -377,6 +377,54 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/daily (testops_risk vs live Python compute_testops_risk.py, CHAOS-4294)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestTestopsRiskComputeMatchesLivePythonProduction$' \
+        ./internal/jobs/metrics/daily
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/testops-risk-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: testops_risk live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestComputePipelineMetricsMatchesLivePythonProductionOnRealRow|TestComputePipelineMetricsGroupingMatchesLivePythonProduction|TestComputeTestMetricsMatchesLivePythonProductionOnRealRows|TestComputeCoverageMetricMatchesLivePythonProductionOnRealRows)$' \
+        ./internal/jobs/metrics/testops
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  for marker in testops-pipeline-golden testops-pipeline-grouping-golden testops-test-golden testops-coverage-golden; do
+    proof_file="${proof_dir}/${marker}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: internal/jobs/metrics/testops live Python oracle measurement did not occur (%s)\n' "${marker}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
+
   printf 'go test -count=1: internal/jobs/metrics/numerical (frozen numerical golden vs live Python)\n'
   if ! (
     cd "${ROOT}"

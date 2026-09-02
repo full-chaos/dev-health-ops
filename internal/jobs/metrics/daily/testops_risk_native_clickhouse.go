@@ -10,6 +10,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // -----------------------------------------------------------------------
@@ -20,13 +22,17 @@ import (
 //     (compute_pipeline_metrics_daily, compute_test_metrics_daily,
 //     compute_coverage_metrics_daily -- these three families,
 //     testops_pipeline/testops_test/testops_coverage, families.json,
-//     CHAOS-4284 -- stay "pending"/bridge; they are ported here ONLY as
-//     unexported, in-memory helpers so this executor can reproduce the
-//     SAME-RUN inputs testops_risk's three risk-model functions read.)
+//     CHAOS-4284 -- stay "pending"/bridge; ported as the sibling
+//     internal/jobs/metrics/testops package, which THIS file loads raw
+//     rows for and calls, purely as an in-memory input to testops_risk's
+//     own three functions below. See that package's doc comment for why
+//     it is a separate, exported package rather than private helpers here
+//     -- CHAOS-4284 is meant to import and reuse it verbatim.)
 //   - src/dev_health_ops/metrics/compute_testops_risk.py
 //     (compute_release_confidence, compute_quality_drag,
-//     compute_pipeline_stability -- the family this executor actually
-//     ports and writes.)
+//     compute_pipeline_stability -- the family THIS file's
+//     compute{ReleaseConfidence,QualityDrag,PipelineStability} port and
+//     TestopsRiskExecutor writes.)
 //   - src/dev_health_ops/metrics/loaders/clickhouse.py
 //     (load_testops_pipeline_data, load_testops_test_data,
 //     load_testops_historical_failed_case_names, load_testops_coverage_data)
@@ -54,9 +60,14 @@ import (
 // In production this buffer therefore holds AT MOST the current day's own
 // row for that one repo: pipeline_stability's "7-day rolling window" is a
 // real capability of the underlying function, but the live per-repo/per-day
-// partition call site never gives it more than one day of history. This
-// executor mirrors that exact scope: one repo, one day, no synthetic
-// history. See TestopsRiskExecutor's doc comment for the loop structure.
+// partition call site never gives it more than one day of history. This is
+// a LATENT PYTHON DEFECT (team-lead, 2026-09-01): the buffer was clearly
+// meant to accumulate across days, and does not in the live per-repo/
+// per-day call shape. This executor reproduces that exact scope --
+// one repo, one day, no synthetic history -- rather than "fixing" it,
+// since fixing it here would silently diverge from Python's actual output
+// until a ticket rules on the intended behavior. See TestopsRiskExecutor's
+// doc comment for the loop structure, and CHAOS-4294's ticket comments.
 // -----------------------------------------------------------------------
 
 // testopsRiskConn is the narrow ClickHouse capability this file needs.
@@ -67,13 +78,6 @@ type testopsRiskConn interface {
 // testopsRiskBatchConn is the narrow write capability writeTestopsRisk needs.
 type testopsRiskBatchConn interface {
 	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
-}
-
-func derefStr(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 // testopsLoaderMaxRows ports _testops_loader_max_rows (loaders/clickhouse.py:99):
@@ -110,66 +114,8 @@ func (err *errTestopsRowCapExceeded) Error() string {
 }
 
 // -----------------------------------------------------------------------
-// Raw row shapes (ports of the TypedDicts in testops_schemas.py, narrowed to
-// the columns compute_testops.py actually reads).
-// -----------------------------------------------------------------------
-
-type testopsPipelineRunRow struct {
-	RepoID       uuid.UUID
-	Status       *string
-	QueuedAt     *time.Time
-	StartedAt    time.Time
-	FinishedAt   *time.Time
-	DurationSecs *float64
-	QueueSecs    *float64
-	RetryCount   uint32
-	TeamID       *string
-	ServiceID    *string
-	OrgID        string
-}
-
-type testopsSuiteRow struct {
-	RepoID           uuid.UUID
-	RunID            string
-	SuiteID          string
-	TotalCount       uint32
-	PassedCount      uint32
-	FailedCount      uint32
-	SkippedCount     uint32
-	ErrorCount       uint32
-	QuarantinedCount uint32
-	DurationSecs     *float64
-	StartedAt        *time.Time
-	FinishedAt       *time.Time
-	TeamID           *string
-	ServiceID        *string
-	OrgID            string
-}
-
-type testopsCaseRow struct {
-	RepoID       uuid.UUID
-	RunID        string
-	SuiteID      string
-	CaseName     string
-	Status       *string
-	RetryAttempt uint32
-}
-
-type testopsCoverageSnapshotRow struct {
-	RepoID            uuid.UUID
-	RunID             string
-	SnapshotID        string
-	LinesTotal        *uint32
-	LinesCovered      *uint32
-	LineCoveragePct   *float64
-	BranchCoveragePct *float64
-	TeamID            *string
-	ServiceID         *string
-	OrgID             string
-}
-
-// -----------------------------------------------------------------------
-// Loaders -- ports of ClickHouseDataLoader.load_testops_* (loaders/clickhouse.py).
+// Loaders -- ports of ClickHouseDataLoader.load_testops_* (loaders/clickhouse.py),
+// building the internal/jobs/metrics/testops package's row types directly.
 // Every loader here is scoped to exactly ONE repo (this executor's own
 // per-repo loop, mirroring the Python bridge's per-repo_id call) and one
 // organization, unlike the Python methods' optional org-wide mode -- a
@@ -185,7 +131,7 @@ type testopsCoverageSnapshotRow struct {
 
 func loadTestopsPipelineRuns(
 	ctx context.Context, conn testopsRiskConn, orgID string, repoID uuid.UUID, start, end time.Time,
-) ([]testopsPipelineRunRow, error) {
+) ([]testops.PipelineRunRow, error) {
 	rows, err := conn.Query(ctx, `
 SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
        retry_count, team_id, service_id, org_id
@@ -197,12 +143,12 @@ WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 	}
 	defer rows.Close()
 
-	var result []testopsPipelineRunRow
+	var result []testops.PipelineRunRow
 	for rows.Next() {
-		row := testopsPipelineRunRow{RepoID: repoID}
+		row := testops.PipelineRunRow{RepoID: repoID}
 		if err := rows.Scan(
 			&row.Status, &row.QueuedAt, &row.StartedAt, &row.FinishedAt,
-			&row.DurationSecs, &row.QueueSecs, &row.RetryCount,
+			&row.DurationSeconds, &row.QueueSeconds, &row.RetryCount,
 			&row.TeamID, &row.ServiceID, &row.OrgID,
 		); err != nil {
 			return nil, fmt.Errorf("scan testops pipeline run: %w", err)
@@ -223,7 +169,7 @@ WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 // enforced on both, suites first (mirrors the Python ordering rationale).
 func loadTestopsSuiteAndCaseRows(
 	ctx context.Context, conn testopsRiskConn, orgID string, repoID uuid.UUID, start, end time.Time,
-) ([]testopsSuiteRow, []testopsCaseRow, error) {
+) ([]testops.SuiteRow, []testops.CaseRow, error) {
 	maxRows := testopsLoaderMaxRows()
 	limit := maxRows + 1
 
@@ -239,13 +185,13 @@ LIMIT ?`,
 	if err != nil {
 		return nil, nil, fmt.Errorf("load testops suite results: %w", err)
 	}
-	var suites []testopsSuiteRow
+	var suites []testops.SuiteRow
 	for suiteRows.Next() {
-		var row testopsSuiteRow
+		var row testops.SuiteRow
 		if err := suiteRows.Scan(
 			&row.RepoID, &row.RunID, &row.SuiteID, &row.TotalCount, &row.PassedCount,
 			&row.FailedCount, &row.SkippedCount, &row.ErrorCount, &row.QuarantinedCount,
-			&row.DurationSecs, &row.StartedAt, &row.FinishedAt, &row.TeamID, &row.ServiceID, &row.OrgID,
+			&row.DurationSeconds, &row.StartedAt, &row.FinishedAt, &row.TeamID, &row.ServiceID, &row.OrgID,
 		); err != nil {
 			suiteRows.Close()
 			return nil, nil, fmt.Errorf("scan testops suite result: %w", err)
@@ -282,9 +228,9 @@ LIMIT ?`,
 	if err != nil {
 		return nil, nil, fmt.Errorf("load testops case results: %w", err)
 	}
-	var cases []testopsCaseRow
+	var cases []testops.CaseRow
 	for caseRows.Next() {
-		var row testopsCaseRow
+		var row testops.CaseRow
 		if err := caseRows.Scan(&row.RepoID, &row.RunID, &row.SuiteID, &row.CaseName, &row.Status, &row.RetryAttempt); err != nil {
 			caseRows.Close()
 			return nil, nil, fmt.Errorf("scan testops case result: %w", err)
@@ -363,7 +309,7 @@ LIMIT ?`,
 // starting in [start,end), for one repo.
 func loadTestopsCoverageSnapshots(
 	ctx context.Context, conn testopsRiskConn, orgID string, repoID uuid.UUID, start, end time.Time,
-) ([]testopsCoverageSnapshotRow, error) {
+) ([]testops.CoverageSnapshotRow, error) {
 	rows, err := conn.Query(ctx, `
 SELECT c.repo_id, c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
        c.line_coverage_pct, c.branch_coverage_pct, c.team_id, c.service_id, c.org_id
@@ -377,9 +323,9 @@ WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?`
 	}
 	defer rows.Close()
 
-	var result []testopsCoverageSnapshotRow
+	var result []testops.CoverageSnapshotRow
 	for rows.Next() {
-		var row testopsCoverageSnapshotRow
+		var row testops.CoverageSnapshotRow
 		if err := rows.Scan(
 			&row.RepoID, &row.RunID, &row.SnapshotID, &row.LinesTotal, &row.LinesCovered,
 			&row.LineCoveragePct, &row.BranchCoveragePct, &row.TeamID, &row.ServiceID, &row.OrgID,
@@ -394,313 +340,10 @@ WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?`
 	return result, nil
 }
 
-// -----------------------------------------------------------------------
-// Compute -- ports of compute_testops.py's three family functions, narrowed
-// to what testops_risk's own functions read.
-// -----------------------------------------------------------------------
-
-type testopsPipelineMetric struct {
-	RepoID                uuid.UUID
-	SuccessRate           float64
-	FailureCount          int
-	PipelinesCount        int
-	MedianDurationSeconds *float64
-	AvgQueueSeconds       *float64
-	RerunRate             float64
-	TeamID                *string
-	ServiceID             *string
-	OrgID                 string
-}
-
-type testopsTestMetric struct {
-	RepoID            uuid.UUID
-	PassRate          float64
-	FlakeRate         float64
-	FailureRecurrence float64
-	TotalCases        int
-	TeamID            *string
-	ServiceID         *string
-	OrgID             string
-}
-
-type testopsCoverageMetric struct {
-	RepoID           uuid.UUID
-	LineCoveragePct  *float64
-	CoverageDeltaPct *float64
-}
-
-func normalizePipelineStatus(status *string) string {
-	normalized := trimLower(derefStr(status))
-	switch normalized {
-	case "success", "succeeded", "passed":
-		return "success"
-	case "failure", "failed", "error", "errors", "timeout", "timed_out":
-		return "failure"
-	case "cancelled", "canceled", "cancel":
-		return "cancelled"
-	default:
-		return normalized
-	}
-}
-
-var testopsFailureStatuses = map[string]struct{}{
-	"failure": {}, "failed": {}, "error": {}, "errors": {}, "timeout": {}, "timed_out": {},
-}
-
-func normalizeTestStatus(status *string) string {
-	normalized := trimLower(derefStr(status))
-	switch normalized {
-	case "success", "succeeded", "passed":
-		return "passed"
-	default:
-		if _, ok := testopsFailureStatuses[normalized]; ok {
-			return "failed"
-		}
-		switch normalized {
-		case "quarantined", "quarantine":
-			return "quarantined"
-		case "skipped", "skip":
-			return "skipped"
-		default:
-			return normalized
-		}
-	}
-}
-
-// computeTestopsPipelineMetric ports compute_pipeline_metrics_daily
-// (compute_testops.py:114), narrowed to ONE repo (this executor's per-repo
-// loop already applied the (repo_id, day) scope the SQL WHERE clause
-// enforces in Python). Unlike Python, which groups by (repo_id, team_id,
-// service_id) and can emit several rows for one repo when rows disagree on
-// team/service, this returns one row PER (team_id, service_id) group within
-// the repo -- same grouping key, same shape, just pre-scoped to one repo_id.
-func computeTestopsPipelineMetrics(repoID uuid.UUID, rows []testopsPipelineRunRow) []testopsPipelineMetric {
-	type bucket struct {
-		pipelines, success, failure, cancelled, reruns int
-		durations, queues                              []float64
-		orgID                                          string
-	}
-	type key struct{ teamID, serviceID string }
-	byGroup := make(map[key]*bucket)
-	var order []key
-	for _, row := range rows {
-		k := key{teamID: derefStr(row.TeamID), serviceID: derefStr(row.ServiceID)}
-		b, ok := byGroup[k]
-		if !ok {
-			b = &bucket{orgID: row.OrgID}
-			byGroup[k] = b
-			order = append(order, k)
-		}
-		b.pipelines++
-		switch normalizePipelineStatus(row.Status) {
-		case "success":
-			b.success++
-		case "failure":
-			b.failure++
-		case "cancelled":
-			b.cancelled++
-		}
-		if row.RetryCount > 0 {
-			b.reruns++
-		}
-		if d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSecs, false); d != nil {
-			b.durations = append(b.durations, *d)
-		}
-		if q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSecs, true); q != nil {
-			b.queues = append(b.queues, *q)
-		}
-	}
-	sort.Slice(order, func(i, j int) bool {
-		if order[i].teamID != order[j].teamID {
-			return order[i].teamID < order[j].teamID
-		}
-		return order[i].serviceID < order[j].serviceID
-	})
-	result := make([]testopsPipelineMetric, 0, len(order))
-	for _, k := range order {
-		b := byGroup[k]
-		metric := testopsPipelineMetric{RepoID: repoID, OrgID: b.orgID, PipelinesCount: b.pipelines, FailureCount: b.failure}
-		if b.pipelines > 0 {
-			metric.SuccessRate = float64(b.success) / float64(b.pipelines)
-			metric.RerunRate = float64(b.reruns) / float64(b.pipelines)
-		}
-		if len(b.durations) > 0 {
-			v := median(b.durations)
-			metric.MedianDurationSeconds = &v
-		}
-		if len(b.queues) > 0 {
-			v := mean(b.queues)
-			metric.AvgQueueSeconds = &v
-		}
-		if k.teamID != "" {
-			metric.TeamID = strPtr(k.teamID)
-		}
-		if k.serviceID != "" {
-			metric.ServiceID = strPtr(k.serviceID)
-		}
-		result = append(result, metric)
-	}
-	return result
-}
-
-// safeDurationSeconds ports _safe_duration_seconds/_safe_queue_seconds
-// (compute_testops.py:72,85) -- both share this shape: prefer a
-// non-negative explicit value, else derive from a start/end pair, never
-// negative. isQueue picks the (queuedAt, startedAt) pair instead of
-// (startedAt, finishedAt).
-func safeDurationSeconds(queuedAt *time.Time, startedAt time.Time, finishedAt *time.Time, explicit *float64, isQueue bool) *float64 {
-	if explicit != nil && *explicit >= 0 {
-		v := *explicit
-		return &v
-	}
-	if isQueue {
-		if queuedAt == nil {
-			return nil
-		}
-		d := startedAt.Sub(*queuedAt).Seconds()
-		if d < 0 {
-			return nil
-		}
-		return &d
-	}
-	if finishedAt == nil {
-		return nil
-	}
-	d := finishedAt.Sub(startedAt).Seconds()
-	if d < 0 {
-		return nil
-	}
-	return &d
-}
-
-// computeTestopsTestMetrics ports compute_test_metrics_daily
-// (compute_testops.py:216), narrowed to one repo. suites/cases are already
-// scoped to this repo and day by the loader's semi-join; a repo with
-// neither produces no rows here, matching Python's `if not repo_suites and
-// not repo_cases: continue`.
-func computeTestopsTestMetrics(
-	repoID uuid.UUID, suites []testopsSuiteRow, cases []testopsCaseRow, historicalFailedNames map[string]struct{},
-) []testopsTestMetric {
-	if len(suites) == 0 && len(cases) == 0 {
-		return nil
-	}
-	var totalCases, passedCount, failedCount int
-	for _, s := range suites {
-		totalCases += int(s.TotalCount)
-		passedCount += int(s.PassedCount)
-		failedCount += int(s.FailedCount) + int(s.ErrorCount)
-	}
-
-	caseStatuses := make(map[string]map[string]struct{})
-	retryAttemptsByCase := make(map[string]map[uint32]struct{})
-	currentFailedNames := make(map[string]struct{})
-	for _, c := range cases {
-		if c.CaseName == "" {
-			continue
-		}
-		normalized := normalizeTestStatus(c.Status)
-		if caseStatuses[c.CaseName] == nil {
-			caseStatuses[c.CaseName] = make(map[string]struct{})
-		}
-		caseStatuses[c.CaseName][normalized] = struct{}{}
-		if retryAttemptsByCase[c.CaseName] == nil {
-			retryAttemptsByCase[c.CaseName] = make(map[uint32]struct{})
-		}
-		retryAttemptsByCase[c.CaseName][c.RetryAttempt] = struct{}{}
-		if normalized == "failed" {
-			currentFailedNames[c.CaseName] = struct{}{}
-		}
-	}
-	distinctCases := len(caseStatuses)
-	var flakeCases, retryDependentCases int
-	for name, statuses := range caseStatuses {
-		_, hasPassed := statuses["passed"]
-		_, hasFailed := statuses["failed"]
-		if hasPassed && hasFailed {
-			flakeCases++
-		}
-		if hasPassed {
-			for attempt := range retryAttemptsByCase[name] {
-				if attempt > 0 {
-					retryDependentCases++
-					break
-				}
-			}
-		}
-	}
-	recurrentFailures := 0
-	for name := range currentFailedNames {
-		if _, ok := historicalFailedNames[name]; ok {
-			recurrentFailures++
-		}
-	}
-
-	var first *testopsSuiteRow
-	if len(suites) > 0 {
-		first = &suites[0]
-	}
-	metric := testopsTestMetric{RepoID: repoID, TotalCases: totalCases}
-	if totalCases > 0 {
-		metric.PassRate = float64(passedCount) / float64(totalCases)
-	}
-	if distinctCases > 0 {
-		metric.FlakeRate = float64(flakeCases) / float64(distinctCases)
-	}
-	if len(currentFailedNames) > 0 {
-		metric.FailureRecurrence = float64(recurrentFailures) / float64(len(currentFailedNames))
-	}
-	if first != nil {
-		metric.TeamID = first.TeamID
-		metric.ServiceID = first.ServiceID
-		metric.OrgID = first.OrgID
-	}
-	return []testopsTestMetric{metric}
-}
-
-// computeTestopsCoverageMetric ports compute_coverage_metrics_daily
-// (compute_testops.py:371), narrowed to one repo: the latest (by
-// (run_id, snapshot_id) lexical order, matching Python's tuple-comparison
-// tie-break) current-window snapshot and, if present, the latest
-// prior-window snapshot for the coverage delta.
-func computeTestopsCoverageMetric(repoID uuid.UUID, current, prior []testopsCoverageSnapshotRow) *testopsCoverageMetric {
-	latest := latestSnapshot(current)
-	if latest == nil {
-		return nil
-	}
-	priorLatest := latestSnapshot(prior)
-	metric := &testopsCoverageMetric{RepoID: repoID, LineCoveragePct: latest.LineCoveragePct}
-	if latest.LineCoveragePct != nil && priorLatest != nil && priorLatest.LineCoveragePct != nil {
-		delta := *latest.LineCoveragePct - *priorLatest.LineCoveragePct
-		metric.CoverageDeltaPct = &delta
-	}
-	return metric
-}
-
-func latestSnapshot(rows []testopsCoverageSnapshotRow) *testopsCoverageSnapshotRow {
-	var latest *testopsCoverageSnapshotRow
-	for index := range rows {
-		row := &rows[index]
-		if latest == nil || snapshotKeyLess(*latest, *row) {
-			latest = row
-		}
-	}
-	return latest
-}
-
-func snapshotKeyLess(a, b testopsCoverageSnapshotRow) bool {
-	if a.RunID != b.RunID {
-		return a.RunID < b.RunID
-	}
-	return a.SnapshotID < b.SnapshotID
-}
-
-// median/mean mirror compute.py's module-level _median/_mean
-// (src/dev_health_ops/metrics/compute.py:43,53) -- only these two are
-// needed here since testops_risk's own functions never read
-// p95_duration_seconds/p95_queue_seconds (compute_testops_risk.py reads
-// only success_rate, median_duration_seconds, avg_queue_seconds off a
-// PipelineMetricsDailyRecord), so no percentile port is required for
-// row-identity on the family this executor actually writes.
+// median mirrors compute.py's module-level _median (compute.py:43) -- used
+// by computePipelineStability's median-recovery-time below. The pipeline/
+// test/coverage compute itself (including its own median/percentile use)
+// lives in internal/jobs/metrics/testops now.
 func median(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
@@ -713,23 +356,6 @@ func median(values []float64) float64 {
 	}
 	return (sorted[mid-1] + sorted[mid]) / 2
 }
-
-func mean(values []float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-	var sum float64
-	for _, value := range values {
-		sum += value
-	}
-	return sum / float64(len(values))
-}
-
-func trimLower(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
-}
-
-func strPtr(value string) *string { return &value }
 
 // pyRound ports Python's round(x, ndigits): correctly-rounded decimal at
 // ndigits, ties-to-even, based on the double's EXACT binary value -- not
@@ -884,7 +510,7 @@ type testopsPipelineStabilityRow struct {
 // list collapses to its LAST entry. Returns nil when none of pipe/test/cov
 // is present, matching Python's repo_ids union check.
 func computeReleaseConfidence(
-	repoID uuid.UUID, day time.Time, pipe *testopsPipelineMetric, test *testopsTestMetric, cov *testopsCoverageMetric, computedAt time.Time,
+	repoID uuid.UUID, day time.Time, pipe *testops.PipelineMetric, test *testops.TestMetric, cov *testops.CoverageMetric, computedAt time.Time,
 ) *testopsReleaseConfidenceRow {
 	if pipe == nil && test == nil && cov == nil {
 		return nil
@@ -960,7 +586,7 @@ func computeReleaseConfidence(
 // Unlike release confidence, coverage is never an input and the repo-id
 // eligibility set is pipe/test only (compute_testops_risk.py:117-126).
 func computeQualityDrag(
-	repoID uuid.UUID, day time.Time, pipe *testopsPipelineMetric, test *testopsTestMetric, computedAt time.Time,
+	repoID uuid.UUID, day time.Time, pipe *testops.PipelineMetric, test *testops.TestMetric, computedAt time.Time,
 ) *testopsQualityDragRow {
 	if pipe == nil && test == nil {
 		return nil
@@ -1023,13 +649,13 @@ func computeQualityDrag(
 // computePipelineStability ports compute_pipeline_stability
 // (compute_testops_risk.py:185), scoped to ONE repo: dayEntries is every
 // pipeline-metric row this repo produced for the partition's day (there can
-// be more than one -- see computeTestopsPipelineMetrics's doc comment on
+// be more than one -- see testops.ComputePipelineMetrics's doc comment on
 // (team_id, service_id) grouping), in the SAME order
-// computeTestopsPipelineMetrics returned them (mirrors Python's stable sort
-// by `.day`, which is a no-op tie for same-day rows and so preserves
+// testops.ComputePipelineMetrics returned them (mirrors Python's stable
+// sort by `.day`, which is a no-op tie for same-day rows and so preserves
 // pipeline_metrics_buffer's own insertion order). Returns nil when
 // dayEntries is empty, matching `if n == 0: continue`.
-func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []testopsPipelineMetric, computedAt time.Time) *testopsPipelineStabilityRow {
+func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []testops.PipelineMetric, computedAt time.Time) *testopsPipelineStabilityRow {
 	n := len(dayEntries)
 	if n == 0 {
 		return nil

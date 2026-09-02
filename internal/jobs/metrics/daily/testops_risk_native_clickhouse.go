@@ -403,6 +403,31 @@ func pyMax2(a, b float64) float64 {
 	return a
 }
 
+// pyOrZero ports Python's `value or 0.0` idiom (compute_testops_risk.py:55,
+// 58, 133, 136 -- `cov.line_coverage_pct or 0.0`, `cov.coverage_delta_pct or
+// 0.0`, `pipe.median_duration_seconds or 0.0`, `pipe.avg_queue_seconds or
+// 0.0`), a DIFFERENT non-finite-semantics gap than clampUnit's (codex round
+// 5, P2, EXECUTED): Python's `bool(float)` is `value != 0.0`, which is
+// False (falsy) for BOTH +0.0 and -0.0 -- not just for a missing/None
+// value. `X or 0.0` therefore silently collapses a genuine -0.0 to +0.0,
+// same as it does for a nil-turned-zero, while NaN and +-Inf are all
+// truthy (`bool(nan)` is True; NaN's own `!=` is defined True by IEEE754,
+// unlike its `<`/`>`/`==`) and pass through unchanged. A naive Go
+// `if ptr != nil { v = *ptr }` only replaces a missing (nil) value -- it
+// leaves a genuine -0.0 reading unchanged, diverging from Python's silent
+// sign-normalization. Reachable: `ci_pipeline_runs.duration_seconds`/
+// `queue_seconds` and `coverage_snapshots.line_coverage_pct` are all
+// unconstrained `Nullable(Float64)`, so a stored -0.0 is a real input, not
+// hypothetical -- EXECUTED repro: Go's `median_duration_seconds` field kept
+// a `-0.0` (sign bit set) where live Python's `pipe.median_duration_seconds
+// or 0.0` produces `0.0`.
+func pyOrZero(value float64) float64 {
+	if value == 0 {
+		return 0.0
+	}
+	return value
+}
+
 // clampUnit ports Python's `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi,
 // value))` (compute_testops_risk.py:20-21) bit-for-bit, including its NaN
 // behavior. A naive `if value < 0 { 0 } else if value > 1 { 1 } else {
@@ -656,10 +681,10 @@ func computeReleaseConfidence(
 		failureRecurrence = test.FailureRecurrence
 	}
 	if cov != nil && cov.LineCoveragePct != nil {
-		coveragePct = *cov.LineCoveragePct
+		coveragePct = pyOrZero(*cov.LineCoveragePct)
 	}
 	if cov != nil && cov.CoverageDeltaPct != nil {
-		coverageDelta = *cov.CoverageDeltaPct
+		coverageDelta = pyOrZero(*cov.CoverageDeltaPct)
 	}
 
 	pipelineFactor := 0.4 * successRate
@@ -726,12 +751,12 @@ func computeQualityDrag(
 	var avgQueue, rerunRate float64
 	if pipe != nil {
 		if pipe.MedianDurationSeconds != nil {
-			medianDur = *pipe.MedianDurationSeconds
+			medianDur = pyOrZero(*pipe.MedianDurationSeconds)
 		}
 		failureCount = pipe.FailureCount
 		pipelinesCount = pipe.PipelinesCount
 		if pipe.AvgQueueSeconds != nil {
-			avgQueue = *pipe.AvgQueueSeconds
+			avgQueue = pyOrZero(*pipe.AvgQueueSeconds)
 		}
 		rerunRate = pipe.RerunRate
 	}

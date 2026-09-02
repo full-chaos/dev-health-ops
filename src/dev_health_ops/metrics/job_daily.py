@@ -1132,8 +1132,9 @@ async def run_daily_metrics_job(
     this job must neither recompute nor rewrite them. ``None`` or an empty
     set is a no-op: every family computes and writes exactly as it did
     before this parameter existed. Only families with a Go native executor
-    check this set (currently just ``team_wellbeing``); naming any other
-    family here has no effect.
+    check this set (``team_wellbeing``, ``repo_user_commit``, ``incident``,
+    ``deploy``, ``work_item_state``, ``file_hotspots``,
+    ``file_risk_hotspots``); naming any other family here has no effect.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -1845,6 +1846,20 @@ async def run_daily_metrics_job(
         # row's generation -- the same class of gap CHAOS-4275's own guard
         # above exists to close, caught here by codex round 1 on this port.
         skip_deploy_write = "deploy" in skip_families
+        # CHAOS-4277: file_hotspots/file_risk_hotspots have native Go
+        # executors (FileHotspotsExecutor/FileRiskHotspotsExecutor). Same
+        # write-only-skip shape as repo_user_commit above: neither
+        # all_file_metrics nor all_file_hotspots feeds anything else
+        # downstream in this function, so compute could also be skipped,
+        # but is left unconditional to match the established, reviewed
+        # precedent with the smallest possible diff. Missing this gate is
+        # exactly the defect repo_user_commit's own comment warns about --
+        # the native executor and this unconditional write would otherwise
+        # BOTH fire for every partition, doubling every row in both
+        # append-only tables (file_metrics_daily, file_hotspot_daily) on
+        # every single run, not just on a recompute.
+        skip_file_hotspots_write = "file_hotspots" in skip_families
+        skip_file_risk_hotspots_write = "file_risk_hotspots" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1898,9 +1913,13 @@ async def run_daily_metrics_job(
                 s.write_work_graph_deployment_incident_edges(
                     ai_deployment_incident_edges
                 )
-            if all_file_metrics:
+            if all_file_metrics and not skip_file_hotspots_write:
                 s.write_file_metrics(all_file_metrics)
-            if all_file_hotspots and hasattr(s, "write_file_hotspot_daily"):
+            if (
+                all_file_hotspots
+                and hasattr(s, "write_file_hotspot_daily")
+                and not skip_file_risk_hotspots_write
+            ):
                 s.write_file_hotspot_daily(all_file_hotspots)
 
         # CHAOS-4246: cicd/deploy/incident are written unconditionally above

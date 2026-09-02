@@ -265,6 +265,35 @@ func buildDailyWorker(
 						"error", deployErr,
 					)
 				}
+				// CHAOS-4277: file_hotspots and file_risk_hotspots are
+				// the third pair of families to leave the Python
+				// compatibility bridge -- registered as TWO independent
+				// NativeFamilyExecutors (one per families.json entry,
+				// one per output table) so a construction or runtime
+				// failure in one never takes the other down with it,
+				// same discipline as every native family above.
+				if fileHotspotsExecutor, fileHotspotsErr := daily.NewFileHotspotsExecutor(clickhouseConnection); fileHotspotsErr == nil {
+					nativeFamilies["file_hotspots"] = fileHotspotsExecutor
+				} else {
+					logger.Error(
+						"file_hotspots native executor refused; the family "+
+							"stays on the Python compatibility bridge for "+
+							"every partition. Every other daily-metrics "+
+							"family is unaffected.",
+						"error", fileHotspotsErr,
+					)
+				}
+				if fileRiskHotspotsExecutor, fileRiskHotspotsErr := daily.NewFileRiskHotspotsExecutor(clickhouseConnection); fileRiskHotspotsErr == nil {
+					nativeFamilies["file_risk_hotspots"] = fileRiskHotspotsExecutor
+				} else {
+					logger.Error(
+						"file_risk_hotspots native executor refused; the family "+
+							"stays on the Python compatibility bridge for "+
+							"every partition. Every other daily-metrics "+
+							"family is unaffected.",
+						"error", fileRiskHotspotsErr,
+					)
+				}
 				// CHAOS-4278: work_item_state reads its team attribution
 				// from work_item_team_attributions.is_primary=1 rather than
 				// recomputing the 9-source cascade -- see

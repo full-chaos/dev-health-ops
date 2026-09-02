@@ -63,6 +63,16 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # table its own compute call actually writes.
     "complexity": "repo_complexity_daily",
     "file_hotspots": "file_metrics_daily",
+    # CHAOS-4277: file_risk_hotspots is file_hotspots' sibling family (same
+    # source file, hotspots.py:113 compute_file_risk_hotspots) writing
+    # file_hotspot_daily. Unlike every other REPO_DAY_FAMILIES entry it has
+    # no same-day activity gate (see FileRiskHotspotsExecutor's doc comment,
+    # internal/jobs/metrics/daily/file_hotspots_native_executor.go): it
+    # unions churned files with complexity-only files, so family_readback's
+    # generic (repo_id, count, max(computed_at)) grouping needs no file_path
+    # awareness -- a repo with either churn OR a complexity snapshot in the
+    # window produces rows here.
+    "file_risk_hotspots": "file_hotspot_daily",
 }
 
 # Team-keyed families (CHAOS-4276): unlike REPO_DAY_FAMILIES, these tables are

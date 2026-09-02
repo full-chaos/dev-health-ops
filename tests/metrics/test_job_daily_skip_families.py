@@ -35,6 +35,18 @@ partition, doubling every (org_id, repo_id, day) deploy_metrics_daily row's
 generation. `test_deploy_in_skip_families_writes_nothing_but_still_computes`
 is the red-on-baseline proof: it fails against the tree before this guard
 existed (write_deploy_metrics fires unconditionally) and passes after.
+
+CHAOS-4277 (file_hotspots + file_risk_hotspots) added the SAME write-only
+gate shape as repo_user_commit: `compute_file_hotspots`/
+`compute_file_risk_hotspots` are still called (neither `all_file_metrics`
+nor `all_file_hotspots` feeds anything else downstream, so this is a
+deliberate "smallest diff over the reviewed precedent" choice, not a hard
+requirement the way repo_user_commit's compounding_risk dependency is), but
+`write_file_metrics`/`write_file_hotspot_daily` are gated. This gate was
+caught MISSING ENTIRELY during cross-lane review (lane-4293's codex round
+flagged the same class on a sibling port, which pointed back at this PR) --
+the native Go executor and this unconditional write would otherwise both
+fire for every partition, doubling every row in both append-only tables.
 """
 
 from __future__ import annotations
@@ -423,3 +435,119 @@ async def test_deploy_not_skipped_writes_unconditionally(monkeypatch: Any) -> No
     )
 
     assert "write_deploy_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_file_hotspots_in_skip_families_skips_write_but_still_computes(
+    monkeypatch: Any,
+) -> None:
+    """file_hotspots has a native Go executor (FileHotspotsExecutor). Same
+    write-only-skip shape as repo_user_commit: compute_file_hotspots still
+    runs (it feeds nothing else downstream, but skipping compute too is not
+    required for correctness and this keeps the diff minimal against the
+    reviewed precedent), only write_file_metrics is gated."""
+    compute_calls: list[Any] = []
+    original = job_daily.compute_file_hotspots
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(job_daily, "compute_file_hotspots", _spy)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"file_hotspots"},
+    )
+
+    assert len(compute_calls) == 1
+    assert "write_file_metrics" not in sink.write_calls
+    # Unrelated families/writes are unaffected.
+    assert "team_metrics" in sink.write_calls
+    assert "repo_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_file_hotspots_skip_families_none_writes_it(monkeypatch: Any) -> None:
+    """Red-on-baseline counterpart: without the gate, write_file_metrics
+    fires every time regardless of skip_families -- this pins that it FIRES
+    when file_hotspots is NOT skipped, so the skip test above is meaningful
+    (not merely a family that never writes in this fixture)."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert "write_file_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_file_risk_hotspots_in_skip_families_skips_write_but_still_computes(
+    monkeypatch: Any,
+) -> None:
+    """file_risk_hotspots has a native Go executor (FileRiskHotspotsExecutor).
+    Same write-only-skip shape as file_hotspots/repo_user_commit above."""
+    compute_calls: list[Any] = []
+    original = job_daily.compute_file_risk_hotspots
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(job_daily, "compute_file_risk_hotspots", _spy)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"file_risk_hotspots"},
+    )
+
+    assert len(compute_calls) == 1
+    assert "write_file_hotspot_daily" not in sink.write_calls
+    assert "team_metrics" in sink.write_calls
+    assert "repo_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_file_risk_hotspots_skip_families_none_writes_it(
+    monkeypatch: Any,
+) -> None:
+    """Red-on-baseline counterpart for file_risk_hotspots, mirroring
+    test_file_hotspots_skip_families_none_writes_it above."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert "write_file_hotspot_daily" in sink.write_calls

@@ -526,7 +526,22 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // process start, exactly like the zero-rows-with-source series, so a
 // construction refusal is visible on the SAME counter a healthy deploy
 // would move, not absent from it.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "deploy", "work_item_state"}
+// "incident" (CHAOS-4295) is included here even though that PR did not add
+// it -- CHAOS-4295 registers IncidentExecutor into PartitionHandler's
+// nativeFamilies map (cmd/dev-health-worker/daily.go) and its
+// ComputeFamily runs through computeNativeFamilies exactly like every other
+// native family, but CHAOS-4295 gave incident its own SEPARATE telemetry
+// (incidentValidFromGuardRows) instead of also registering it here --
+// discovered while resolving this file's merge conflict against CHAOS-4295,
+// the exact same silent-telemetry-loss class this PR's own codex round 1
+// found and fixed for file_hotspots/file_risk_hotspots (a family absent
+// from this closed list gets ZERO generic outcome/rows/duration telemetry,
+// forever, since ObserveDailyMetricsNativeFamily's error is discarded at
+// its call site). Flagged to CHAOS-4295's owner; fixed here rather than
+// left broken since this exact line was already being resolved. "deploy"
+// (CHAOS-4293) and "work_item_state" (CHAOS-4278) added themselves
+// correctly -- included here from those merges.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "file_hotspots", "file_risk_hotspots"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

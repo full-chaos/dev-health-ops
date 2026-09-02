@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -106,17 +108,37 @@ func Recover(logger *slog.Logger, pattern string) func(http.Handler) http.Handle
 	}
 }
 
-// MaxBody bounds the request body two ways, because one way is not enough.
+// MaxBody bounds the request body BEFORE the handler runs, in both of the two
+// shapes a request can arrive in.
 //
-// A declared Content-Length over the bound is rejected before the body is
-// read at all, so an oversized upload costs nothing. A body with no declared
-// length (chunked transfer encoding) cannot be rejected that way, so the body
-// is additionally wrapped in http.MaxBytesReader, which fails the read at the
-// bound and -- since Go 1.19 -- reports a *http.MaxBytesError a handler can
-// classify.
+// A declared Content-Length over the limit is rejected outright, so an
+// oversized upload costs nothing.
 //
-// Checking only Content-Length is the bypass this pairing closes: a chunked
-// request declares no length at all.
+// A body with NO declared length (chunked transfer encoding, which net/http
+// represents as ContentLength == -1, and which HTTP/2 clients routinely send)
+// cannot be judged without reading, so this reads up to limit+1 bytes and
+// decides then. Over the limit is a 413 and the handler never runs; within it,
+// the buffered bytes are handed to the handler as an ordinary body, so a
+// conforming chunked client is unaffected.
+//
+// The earlier implementation wrapped an undeclared-length body in
+// http.MaxBytesReader and called the handler immediately. That bounds only a
+// handler that actually READS the body: a handler acting before or without
+// reading was never bounded at all, and a 64-byte chunked body against a
+// 16-byte limit reached a route handler which returned 204 (codex round 1, P2,
+// reproduced independently by this lane; the previous test passed against the
+// defect because it asserted only that a READING handler received an error).
+// A guard whose enforcement depends on every future handler remembering to
+// read its body is not a guard — which matters more here than in most places,
+// because no route is mounted yet, so every handler this bound will ever
+// protect is still unwritten.
+//
+// The cost is explicit: an undeclared-length request is buffered in memory up
+// to the limit. That is bounded per request by the limit itself, and in
+// aggregate by the route's rate limiter and the server's connection limits;
+// it is the price of a guarantee that does not depend on handler discipline.
+// A future route needing true streaming ingest wants its own middleware, not a
+// weakening of this one.
 func MaxBody(limit int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,9 +146,37 @@ func MaxBody(limit int64) func(http.Handler) http.Handler {
 				WriteError(w, r, CodePayloadTooLarge)
 				return
 			}
-			if r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, limit)
+			if r.Body == nil {
+				next.ServeHTTP(w, r)
+				return
 			}
+			if r.ContentLength >= 0 {
+				// The declared length is within the limit, but a body may
+				// still understate it, so the reader stays bounded too.
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Undeclared length: read one byte past the limit so "exactly at
+			// the limit" and "over it" are distinguishable.
+			buffered, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+			if err != nil {
+				// A transport failure reading the body, not a size violation.
+				// The client is usually already gone; answer honestly rather
+				// than reporting a size problem that did not occur.
+				WriteError(w, r, CodeInvalidRequest)
+				return
+			}
+			if int64(len(buffered)) > limit {
+				WriteError(w, r, CodePayloadTooLarge)
+				return
+			}
+			// Hand the handler an ordinary, fully-readable body. net/http owns
+			// draining and closing the original; replacing the reader here does
+			// not change that.
+			r.Body = io.NopCloser(bytes.NewReader(buffered))
+			r.ContentLength = int64(len(buffered))
 			next.ServeHTTP(w, r)
 		})
 	}

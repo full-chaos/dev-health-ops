@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
@@ -181,12 +180,24 @@ func configure(
 	// configure's caller exits the process, so a leaked pool would not
 	// out-live this call for long -- but a resource opened and abandoned on an
 	// error path is the shape that survives into the first caller that DOESN'T
-	// exit (a test, or the future unified binary that hosts this as a
-	// subcommand), and it is cheaper to get right now than to find later.
+	// exit (a test, or a future host that runs this as a subcommand), and it is
+	// cheaper to get right now than to find later.
+	// TestConfigureClosesThePoolWhenALaterStepFails is what keeps it true.
+	//
+	// The context carries no deadline, deliberately, and this comment says so
+	// rather than implying a bound that does not exist. Postgres.Shutdown ends
+	// in pgxpool.Close, which takes no context: it returns once every acquired
+	// connection is released, and cannot be cut short by one. On this path
+	// nothing has acquired a connection -- the failure happens during
+	// construction, before any component starts -- so Close returns
+	// immediately and there is nothing to bound. An earlier revision wrapped
+	// this in a five-second timeout, which read as a guarantee while enforcing
+	// nothing (team-lead ruling, 2026-09-02, after lane-auth-cp's executed
+	// check: correct the comment, do not build a bound for a call that cannot
+	// hang). WithoutCancel is kept so an already-cancelled parent cannot skip
+	// the close if a future adapter does start honouring the context.
 	closeStore := func() {
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		if closeErr := store.Shutdown(closeCtx); closeErr != nil {
+		if closeErr := store.Shutdown(context.WithoutCancel(ctx)); closeErr != nil {
 			logger.ErrorContext(ctx, "close auth store after a failed startup", "error", closeErr)
 		}
 	}

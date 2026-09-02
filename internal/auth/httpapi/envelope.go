@@ -45,6 +45,11 @@ const (
 	CodePayloadTooLarge Code = "payload_too_large"
 	// CodeRateLimited is returned when a route's bucket is empty.
 	CodeRateLimited Code = "rate_limited"
+	// CodeInvalidRequest is returned when the request itself could not be
+	// read — a transport failure part-way through a body, not a size
+	// violation. It is deliberately distinct from CodePayloadTooLarge so a
+	// caller is not told it sent too much when it sent too little.
+	CodeInvalidRequest Code = "invalid_request"
 	// CodeInternal is returned for a recovered panic or an unclassified
 	// handler failure. Its message is fixed and carries no detail.
 	CodeInternal Code = "internal_error"
@@ -64,6 +69,7 @@ var message = map[Code]string{
 	CodeMethodNotAllowed: "this method is not allowed on this path",
 	CodePayloadTooLarge:  "the request body exceeds the configured limit",
 	CodeRateLimited:      "too many requests for this route",
+	CodeInvalidRequest:   "the request body could not be read",
 	CodeInternal:         "the request could not be processed",
 }
 
@@ -73,6 +79,7 @@ var status = map[Code]int{
 	CodeMethodNotAllowed: http.StatusMethodNotAllowed,
 	CodePayloadTooLarge:  http.StatusRequestEntityTooLarge,
 	CodeRateLimited:      http.StatusTooManyRequests,
+	CodeInvalidRequest:   http.StatusBadRequest,
 	CodeInternal:         http.StatusInternalServerError,
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // reservePort binds an ephemeral port, records it, and releases it. The
@@ -308,6 +312,114 @@ func settledGoroutines(t *testing.T) int {
 func goroutineDump() string {
 	buffer := make([]byte, 1<<16)
 	return string(buffer[:runtime.Stack(buffer, true)])
+}
+
+// failedStartupConfig is a configuration that gets PAST authstore.Open and
+// then fails at a later construction step.
+//
+// The DSN is syntactically valid and unreachable, which matters: Open must
+// SUCCEED (it performs no network I/O), so the pool exists and pgxpool's
+// background goroutines are running by the time the later step fails. A
+// malformed DSN would fail at Open instead and exercise nothing. The later
+// failure is RequestTimeout=0, which trips httpapi.NewServer's own guard --
+// the last step in configure, strictly after Open. Every other field is valid
+// so the failure is unambiguous.
+//
+// The struct is built directly rather than through authconfig.Load, because
+// Load correctly refuses RequestTimeout=0: the state under test is reachable
+// inside configure, not through the configuration surface.
+func failedStartupConfig() authconfig.Config {
+	return authconfig.Config{
+		Service:                authconfig.Service,
+		LogLevel:               slog.LevelError,
+		ShutdownTimeout:        5 * time.Second,
+		HealthCheckTimeout:     time.Second,
+		APIAddress:             "127.0.0.1:0",
+		OperatorAddress:        "127.0.0.1:0",
+		RequestTimeout:         0,
+		MaxBodyBytes:           1024,
+		RateLimit:              authconfig.RateLimit{PerSecond: 10, Burst: 10},
+		DatabaseURI:            secrets.NewValue("postgres://auth@127.0.0.1:1/devhealth"),
+		DatabaseSchema:         "auth",
+		DatabaseMaxConns:       2,
+		DatabaseConnectTimeout: time.Second,
+		SigningKeyPath:         "/nonexistent/auth-signing-key.pem",
+		SigningKeyID:           "auth-2026-09",
+	}
+}
+
+// TestConfigureClosesThePoolWhenALaterStepFails proves that a construction
+// failure after authstore.Open does not abandon the pool it already opened.
+//
+// This test exists because the fix it covers shipped WITHOUT one. lane-auth-cp
+// caught that during their executed peer review of c82519bd0 and verified the
+// behaviour with a throwaway test of exactly this shape (their construction:
+// valid-but-unreachable DSN, RequestTimeout=0, goroutine baseline, red-first by
+// removing one closeStore call -- leaked exactly one goroutine, 2 -> 3). A
+// throwaway proves the fix on the day it is run; this makes it permanent, so
+// the next refactor that drops one of configure's four closeStore calls turns
+// the suite red instead of silently reinstating the leak.
+func TestConfigureClosesThePoolWhenALaterStepFails(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	// Warm-up: the first call through this path creates one-time lazily
+	// initialised runtime goroutines. Counting those as a leak would fail the
+	// assertion below for the wrong reason.
+	if _, err := configure(ctx, failedStartupConfig(), logger); err == nil {
+		t.Fatal("configure succeeded on a configuration that must fail after Open")
+	}
+	baseline := settledGoroutines(t)
+	t.Logf("goroutines after the warm-up failure: %d", baseline)
+
+	components, err := configure(ctx, failedStartupConfig(), logger)
+	if err == nil {
+		t.Fatal("configure succeeded on a configuration that must fail after Open")
+	}
+	if components != nil {
+		t.Fatalf("configure returned %d component(s) alongside an error", len(components))
+	}
+
+	after := settledGoroutines(t)
+	t.Logf("goroutines after the failed startup: %d (baseline %d)", after, baseline)
+	if after > baseline {
+		t.Fatalf(
+			"%d goroutine(s) outlived a failed configure (baseline %d, after %d); "+
+				"the pool opened before the failing step was not closed:\n%s",
+			after-baseline, baseline, after, goroutineDump(),
+		)
+	}
+}
+
+// TestFailedStartupConfigReachesTheStepUnderTest is the control for the test
+// above. If that configuration started failing EARLIER -- at authstore.Open
+// itself, because a bound or a DSN rule changed -- then no pool would ever be
+// opened, nothing could leak, and the leak test would pass while covering
+// nothing. This pins the failure to the intended step.
+func TestFailedStartupConfigReachesTheStepUnderTest(t *testing.T) {
+	cfg := failedStartupConfig()
+
+	// The DSN must be one authstore.Open ACCEPTS, or the pool is never built.
+	store, err := authstore.Open(context.Background(), authstore.Config{
+		URI:            cfg.DatabaseURI.Reveal(),
+		Schema:         cfg.DatabaseSchema,
+		MaxConns:       cfg.DatabaseMaxConns,
+		ConnectTimeout: cfg.DatabaseConnectTimeout,
+	})
+	if err != nil {
+		t.Fatalf("authstore.Open rejected the fixture DSN, so the leak test covers nothing: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Shutdown(context.Background()) })
+
+	// And the failure must come from the API server construction, not from
+	// some step before it.
+	if _, apiErr := httpapi.NewServer(httpapi.ServerOptions{
+		Address:        cfg.APIAddress,
+		RequestTimeout: cfg.RequestTimeout,
+		MaxBodyBytes:   cfg.MaxBodyBytes,
+	}); apiErr == nil {
+		t.Fatal("httpapi.NewServer accepted RequestTimeout=0, so the fixture no longer fails where the leak test assumes")
+	}
 }
 
 func TestExecuteRejectsAConfigurationFaultBeforeStarting(t *testing.T) {

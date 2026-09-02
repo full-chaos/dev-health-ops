@@ -279,14 +279,98 @@ func TestBodyOverTheDeclaredLimitIs413(t *testing.T) {
 	}
 }
 
-// TestUndeclaredBodyLengthIsStillBounded closes the bypass a Content-Length
-// check alone leaves: a chunked request declares no length at all, so the body
-// itself has to be bounded too.
-func TestUndeclaredBodyLengthIsStillBounded(t *testing.T) {
-	var readErr error
+// TestUndeclaredBodyLengthIsRejectedBeforeTheHandler closes the bypass a
+// Content-Length check alone leaves: a chunked request declares no length at
+// all (net/http represents that as ContentLength == -1).
+//
+// The assertion is that the handler is NEVER ENTERED, not merely that a
+// handler which chooses to read gets an error. That distinction is the whole
+// finding (codex round 1, P2, EXECUTED): wrapping the body in
+// http.MaxBytesReader only bounds a handler that actually reads it, so a
+// state-changing handler that acts without reading — or before reading — was
+// never bounded at all. A guard whose enforcement depends on every future
+// handler remembering to read its body is not a guard.
+//
+// The previous version of this test asserted only that a READING handler
+// received a *http.MaxBytesError, and discarded the recorder without checking
+// the status or whether the handler ran. It passed against the defect.
+func TestUndeclaredBodyLengthIsRejectedBeforeTheHandler(t *testing.T) {
+	var handlerRan bool
 	options := testOptions(Route{
 		Method:  http.MethodPost,
 		Pattern: "/v1/chunked",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Deliberately does NOT read the body, which is exactly the
+			// handler shape the old implementation failed to bound.
+			handlerRan = true
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	})
+	options.MaxBodyBytes = 16
+	handler := handlerFor(t, options)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chunked", strings.NewReader(strings.Repeat("x", 64)))
+	// -1 is how net/http represents "length not declared", the state a chunked
+	// request arrives in.
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if handlerRan {
+		t.Error("an oversized undeclared-length body reached the route handler")
+	}
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", response.Code)
+	}
+	if envelope := decodeEnvelope(t, response); envelope.Error.Code != CodePayloadTooLarge {
+		t.Fatalf("code = %q, want %q", envelope.Error.Code, CodePayloadTooLarge)
+	}
+}
+
+// TestUndeclaredBodyLengthUnderTheLimitStillReachesTheHandler is the control
+// for the test above. Rejecting every undeclared-length body would satisfy
+// that assertion just as well and would break every legitimate chunked client
+// — HTTP/2 clients routinely omit Content-Length — so this pins that a
+// conforming request still arrives, intact and fully readable.
+func TestUndeclaredBodyLengthUnderTheLimitStillReachesTheHandler(t *testing.T) {
+	const payload = "under the limit"
+	var seen string
+	options := testOptions(Route{
+		Method:  http.MethodPost,
+		Pattern: "/v1/chunked",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read body: %v", err)
+			}
+			seen = string(body)
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	})
+	options.MaxBodyBytes = 64
+	handler := handlerFor(t, options)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chunked", strings.NewReader(payload))
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", response.Code)
+	}
+	if seen != payload {
+		t.Fatalf("handler read %q, want %q", seen, payload)
+	}
+}
+
+// TestDeclaredBodyLengthIsStillBoundedForAReadingHandler keeps the declared
+// path covered too: a body whose declared length is within the limit but which
+// lies about its size must still fail the read rather than stream unbounded.
+func TestDeclaredBodyLengthIsStillBoundedForAReadingHandler(t *testing.T) {
+	var readErr error
+	options := testOptions(Route{
+		Method:  http.MethodPost,
+		Pattern: "/v1/lying",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, readErr = io.ReadAll(r.Body)
 			w.WriteHeader(http.StatusNoContent)
@@ -295,15 +379,15 @@ func TestUndeclaredBodyLengthIsStillBounded(t *testing.T) {
 	options.MaxBodyBytes = 16
 	handler := handlerFor(t, options)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/chunked", strings.NewReader(strings.Repeat("x", 64)))
-	// -1 is how net/http represents "length not declared", which is the state
-	// a chunked request arrives in.
-	request.ContentLength = -1
+	request := httptest.NewRequest(http.MethodPost, "/v1/lying", strings.NewReader(strings.Repeat("x", 64)))
+	// Understates the real body size, so the Content-Length gate passes and
+	// only the reader bound can catch it.
+	request.ContentLength = 8
 	handler.ServeHTTP(httptest.NewRecorder(), request)
 
 	var maxBytes *http.MaxBytesError
 	if readErr == nil {
-		t.Fatal("an undeclared oversized body was read in full")
+		t.Fatal("a body that understated its Content-Length was read in full")
 	}
 	if !errorAs(readErr, &maxBytes) {
 		t.Fatalf("read error = %v, want *http.MaxBytesError", readErr)

@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import platform
 import sys
 import unicodedata
 from pathlib import Path
@@ -107,6 +108,13 @@ def main() -> None:
             "versioned independently of the interpreter's and must not be used as "
             "the oracle."
         ),
+        # The GENERATING interpreter, recorded so a guard failure can say
+        # WHICH interpreter disagrees rather than only that the bytes differ.
+        # Unicode category Nd moves between CPython releases -- 3.13 ships
+        # Unicode 15.1 with 680 decimal code points, 3.14 ships 16.0 with 760 --
+        # so a fixture generated on one and checked on another fails for a
+        # CONFIG reason that looks exactly like a content drift.
+        "python_version": platform.python_version(),
         "unidata_version": unicodedata.unidata_version,
         "int_max_str_digits": sys.get_int_max_str_digits(),
         # [code_point, decimal_value] pairs.
@@ -174,6 +182,7 @@ def main() -> None:
 
     OUTPUT_PATH.write_text(rendered)
     print(f"wrote {OUTPUT_PATH}")
+    print(f"  generating interpreter:     {platform.python_version()}")
     print(f"  unicodedata version:        {unicodedata.unidata_version}")
     print(f"  isdecimal code points:      {len(decimal_points)}")
     print(f"  isdigit but not isdecimal:  {len(digit_not_decimal)} (int() rejects)")

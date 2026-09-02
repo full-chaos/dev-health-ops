@@ -81,6 +81,64 @@ def observe(value: str) -> dict:
     }
 
 
+# ENDPOINT_CORPUS varies the third axis: WHICH FIELD carries the value.
+#
+# The single-value corpus above cannot see this axis at all. builder.py:871-874
+# is one expression over TWO fields:
+#
+#     if self._parse_pr_dependency_source(source_id) or self._parse_pr_dependency_source(target_id):
+#         continue
+#
+# `or` SHORT-CIRCUITS, so the two endpoints are not interchangeable. A valid PR
+# in the source means the target is never parsed -- and therefore a malformed
+# target that would otherwise raise is masked entirely. Which field carries the
+# value decides whether the build survives.
+#
+# The frozen golden cannot exercise this: it holds 2828 PR-shaped sources and
+# ZERO PR-shaped targets, so every source-only implementation reproduces it
+# perfectly. Measured, not assumed.
+#
+# What is frozen here is the builder's OWN expression, evaluated over pairs --
+# the combined admission, not the single-field parse.
+ISSUE = "gh:acme/app#41"
+PR = "ghpr:acme/app#7"
+BAD = "ghpr:acme/app#5\u00b2"  # isdigit() accepts, int() rejects
+
+ENDPOINT_CORPUS = [
+    (ISSUE, ISSUE),
+    (PR, ISSUE),
+    (ISSUE, PR),
+    (PR, PR),
+    # The masking case: source parses truthy, so the malformed target is never
+    # reached. Python SKIPS this row rather than raising.
+    (PR, BAD),
+    # No short circuit: the source is falsy, so the malformed target is reached.
+    (ISSUE, BAD),
+    # The source raises before the target is looked at, whatever it holds.
+    (BAD, ISSUE),
+    (BAD, PR),
+    (BAD, BAD),
+    ("", BAD),
+    (BAD, ""),
+]
+
+
+def observe_pair(source: str, target: str) -> dict:
+    """Evaluate builder.py:871-874's expression verbatim over one row."""
+    record = {"source": source, "target": target}
+    try:
+        skipped = bool(
+            WorkGraphBuilder._parse_pr_dependency_source(source)
+            or WorkGraphBuilder._parse_pr_dependency_source(target)
+        )
+    except ValueError as error:
+        record["outcome"] = "raises"
+        record["exception"] = f"{type(error).__name__}: {error}"
+        return record
+    record["outcome"] = "skipped" if skipped else "kept"
+    return record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stdout", action="store_true")
@@ -88,7 +146,7 @@ def main() -> int:
     namespace = parser.parse_args()
 
     document = {
-        "schema": "pr_dependency_id_parity.v1",
+        "schema": "pr_dependency_id_parity.v2",
         "producer": "work_graph/builder.py::_parse_pr_dependency_source",
         "generated_by": "tests/fixtures/generate_pr_dependency_id_parity.py",
         "note": (
@@ -98,6 +156,9 @@ def main() -> int:
             "(CHAOS-4811)."
         ),
         "observations": [observe(value) for value in CORPUS],
+        "endpoint_observations": [
+            observe_pair(source, target) for source, target in ENDPOINT_CORPUS
+        ],
     }
     rendered = json.dumps(document, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
     if namespace.stdout:

@@ -1,4 +1,67 @@
 {
+ "endpoint_observations": [
+  {
+   "outcome": "kept",
+   "source": "gh:acme/app#41",
+   "target": "gh:acme/app#41"
+  },
+  {
+   "outcome": "skipped",
+   "source": "ghpr:acme/app#7",
+   "target": "gh:acme/app#41"
+  },
+  {
+   "outcome": "skipped",
+   "source": "gh:acme/app#41",
+   "target": "ghpr:acme/app#7"
+  },
+  {
+   "outcome": "skipped",
+   "source": "ghpr:acme/app#7",
+   "target": "ghpr:acme/app#7"
+  },
+  {
+   "outcome": "skipped",
+   "source": "ghpr:acme/app#7",
+   "target": "ghpr:acme/app#5²"
+  },
+  {
+   "exception": "ValueError: invalid literal for int() with base 10: '5²'",
+   "outcome": "raises",
+   "source": "gh:acme/app#41",
+   "target": "ghpr:acme/app#5²"
+  },
+  {
+   "exception": "ValueError: invalid literal for int() with base 10: '5²'",
+   "outcome": "raises",
+   "source": "ghpr:acme/app#5²",
+   "target": "gh:acme/app#41"
+  },
+  {
+   "exception": "ValueError: invalid literal for int() with base 10: '5²'",
+   "outcome": "raises",
+   "source": "ghpr:acme/app#5²",
+   "target": "ghpr:acme/app#7"
+  },
+  {
+   "exception": "ValueError: invalid literal for int() with base 10: '5²'",
+   "outcome": "raises",
+   "source": "ghpr:acme/app#5²",
+   "target": "ghpr:acme/app#5²"
+  },
+  {
+   "exception": "ValueError: invalid literal for int() with base 10: '5²'",
+   "outcome": "raises",
+   "source": "",
+   "target": "ghpr:acme/app#5²"
+  },
+  {
+   "exception": "ValueError: invalid literal for int() with base 10: '5²'",
+   "outcome": "raises",
+   "source": "ghpr:acme/app#5²",
+   "target": ""
+  }
+ ],
  "generated_by": "tests/fixtures/generate_pr_dependency_id_parity.py",
  "note": "Expectations are the reference's OWN output, not transcribed. `raises` is a real recorded outcome: Python's isdigit() accepts characters int() rejects, and the conversion is unguarded (CHAOS-4811).",
  "observations": [
@@ -101,5 +164,5 @@
   }
  ],
  "producer": "work_graph/builder.py::_parse_pr_dependency_source",
- "schema": "pr_dependency_id_parity.v1"
+ "schema": "pr_dependency_id_parity.v2"
 }

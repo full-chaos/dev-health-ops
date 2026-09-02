@@ -24,7 +24,7 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // NewGitHubWorkItemClickHouseEffects wires every landed destination adapter
 // onto the composite sink.
 //
-// WIRING: LIVE, and this paragraph used to say the opposite. It read:
+// WIRING: WIRED, and this paragraph used to say the opposite. It read:
 //
 //	"It REGISTERS AND ACTIVATES NOTHING. cmd/dev-health-worker/provider_sync.go
 //	gains no case for the work-item family here, the provider matrix still

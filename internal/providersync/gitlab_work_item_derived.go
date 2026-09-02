@@ -92,7 +92,7 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 
 // GitLabWorkItemDeriver owns the compute boundary for GitLab work items.
 //
-// WIRING: LIVE. cmd/dev-health-worker/provider_sync.go's
+// WIRING: WIRED. cmd/dev-health-worker/provider_sync.go's
 // `provider == "gitlab" && dataset == "work-items"` case (:351) constructs
 // this deriver through NewGitLabWorkItemDeriver (:362) and passes it as
 // GitLabWorkItemsRouteHandler{Derived: ...}; the effect sink and readback come

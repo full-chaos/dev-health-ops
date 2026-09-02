@@ -65,13 +65,21 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 // GitHubWorkItemsRESTCollector builds the REST half of GitHub's composite
 // work-item producer, and that composition has HAPPENED.
 //
-// WIRING: LIVE, as a FIELD rather than by direct assignment --
+// WIRING: WIRED, as a FIELD rather than by direct assignment --
 // github_work_items_route.go:182-183 declares
 // `REST GitHubWorkItemsRESTCollector` on GitHubWorkItemsRouteHandler, which
 // cmd/dev-health-worker/provider_sync.go's
 // `provider == "github" && dataset == "work-items"` case constructs and assigns
 // to routeHandler alongside NewGitHubWorkItemClickHouseEffects and
 // NewGitHubWorkItemDeriver.
+//
+// WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
+// admits a canonical work-items unit only when the descriptor satisfies
+// RouteReady AND Plannable AND ExecutedProofSatisfied
+// (internal/scheduler/sync/planner.go:401-423); an attempted-but-unproven
+// executed-proof state returns `PlannedUnit{}, false` before BuildExecutor or
+// Execute is reached -- the condition that silently vetoed github/work-items
+// for two months under CHAOS-4060/CHAOS-4731.
 //
 // The superseded text read "It remains intentionally unregistered until the PR
 // GraphQL social layer and every direct/derived effect are composed

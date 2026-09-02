@@ -378,7 +378,7 @@ type linearWorkItemRows struct {
 }
 
 // LinearWorkItemsRouteHandler is the canonical work-items vertical slice, and
-// it is LIVE -- reached as a FIELD, not by direct assignment, which is why a
+// it is WIRED -- reached as a FIELD, not by direct assignment, which is why a
 // grep for `routeHandler = .*LinearWorkItemsRouteHandler` finds nothing and
 // appears to confirm the superseded comment below.
 //
@@ -390,6 +390,14 @@ type linearWorkItemRows struct {
 // handler's own Collect reads Direct.FetchComments / FetchHistory / FetchCycles
 // and refuses the claim when any is unset, so this type is on the production
 // collect path.
+//
+// WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
+// admits a canonical work-items unit only when the descriptor satisfies
+// RouteReady AND Plannable AND ExecutedProofSatisfied
+// (internal/scheduler/sync/planner.go:401-423); an attempted-but-unproven
+// executed-proof state returns `PlannedUnit{}, false` before BuildExecutor or
+// Execute is reached -- the condition that silently vetoed github/work-items
+// for two months under CHAOS-4060/CHAOS-4731.
 //
 // The superseded text read "It is intentionally not registered or activated
 // here; the family planner and route gate remain separate work." Kept visible

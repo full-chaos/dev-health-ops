@@ -387,7 +387,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestTestopsRiskComputeMatchesLivePythonProduction$' \
+        -run '^(TestTestopsRiskComputeMatchesLivePythonProduction|TestPipelineStabilityFMAGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily
   ); then
     rm -rf -- "${proof_dir}"
@@ -396,6 +396,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/testops-risk-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: testops_risk live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY from testops-risk-golden above (same reasoning as the
+  # numerical package's sibling goldens): a single proof marker would be
+  # satisfied by whichever guard happened to run, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed.
+  proof_file="${proof_dir}/pipeline-stability-fma-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pipeline-stability FMA golden (CHAOS-4818 site 10) rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

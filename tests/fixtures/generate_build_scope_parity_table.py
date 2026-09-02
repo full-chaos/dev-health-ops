@@ -338,6 +338,16 @@ def _production_window_digest() -> str:
     # it rather than avoiding the import: resolving the module through the
     # import system is what makes this work both in the checkout and in the
     # container, where the generator runs from /tmp.
+    #
+    # This is durable BEYOND the import window, and only by luck of how logging
+    # works -- worth stating so nobody "simplifies" it. `logging` binds its
+    # handler to the stream OBJECT `sys.stderr` pointed at during the redirect,
+    # so later logging in measure() still goes to stderr after the block exits.
+    # Had it stored the NAME `sys.stdout` and looked it up lazily, this would
+    # have covered only the import and the payload would be corrupted later.
+    # Verified on review (lane-4441): root handler is ['stderr'] after the
+    # block, post-import logging writes 0 lines to stdout, and an exception
+    # raised inside the redirect PROPAGATES with sys.stdout restored.
     with contextlib.redirect_stdout(sys.stderr):
         import dev_health_ops.workers.work_graph_tasks as production
 

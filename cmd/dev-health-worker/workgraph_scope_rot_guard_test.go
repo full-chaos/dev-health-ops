@@ -147,13 +147,37 @@ func scopeParityLivePython(t *testing.T, repoRoot string) string {
 	if err != nil {
 		t.Fatalf("resolve dev_health_ops with %s: %v", resolved, err)
 	}
-	module := string(located)
-	if !strings.HasPrefix(module, repoRoot+string(os.PathSeparator)) {
+	// BOTH sides are resolved through symlinks before comparing, and that is
+	// load-bearing rather than tidiness.
+	//
+	// Python's `__file__` keeps the path it was IMPORTED by; it does not follow
+	// symlinks. The generator's digest uses `pathlib.Path(...).resolve()`, which
+	// does. So comparing the raw `__file__` here while the digest resolves means
+	// the two disagree about which file is being checked: with `src/` (or any
+	// parent) symlinked out of the tree, this check validates the SYMLINK path
+	// and passes, and the digest then reads a DIFFERENT file outside the
+	// checkout this function just certified.
+	//
+	// That is the exact failure this check exists to prevent, arriving through
+	// the one door it was not watching. Found by lane-4441 on review, and
+	// measured: `__file__` and `.resolve()` differ for a symlinked package.
+	//
+	// It cuts both ways -- before this, a legitimately symlinked checkout FAILED
+	// provenance for the same mismatch.
+	module, err := filepath.EvalSymlinks(strings.TrimSpace(string(located)))
+	if err != nil {
+		t.Fatalf("resolve symlinks for the imported dev_health_ops (%s): %v", located, err)
+	}
+	root, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		t.Fatalf("resolve symlinks for the repository root (%s): %v", repoRoot, err)
+	}
+	if !strings.HasPrefix(module, root+string(os.PathSeparator)) {
 		t.Fatalf(
 			"%s resolves dev_health_ops to %s, which is OUTSIDE this checkout (%s) -- "+
 				"the guard would be comparing another worktree's bridge against this "+
 				"worktree's frozen table; set PYTHONPATH to this checkout's src",
-			resolved, module, repoRoot,
+			resolved, module, root,
 		)
 	}
 	return resolved

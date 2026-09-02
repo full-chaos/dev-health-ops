@@ -180,13 +180,27 @@ func (doer jiraDevStatusCountingDoer) Do(request *http.Request) (*http.Response,
 // dev_status_max_requests cap reflects real wire cost (including retries),
 // not just logical calls. Returns the attempt count alongside the normal
 // result so the caller can advance its running total by the true amount.
+//
+// remainingBudget caps THIS call's own retry policy to at most that many
+// wire attempts (codex round 2, P2: counting attempts after the fact still
+// let one issue's retries alone exceed the configured cap -- a
+// dev_status_max_requests=1 budget permitted 3 real requests under
+// sustained 503s, because RetryPolicy.MaxAttempts was still 3 and nothing
+// stopped HTTPClient.Do's internal retry loop mid-flight). A remainingBudget
+// of 0 or less, or >= the client's own RetryPolicy.MaxAttempts, leaves the
+// client's policy untouched (no cap to enforce, or the client is already
+// stricter).
 func fetchJiraDevStatusPullRequestsCountingAttempts(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	issueID string,
+	remainingBudget int,
 ) (payload jiraDevStatusPayload, available bool, attempts int, err error) {
 	counted := *client
 	counted.Doer = jiraDevStatusCountingDoer{delegate: client.Doer, attempts: &attempts}
+	if remainingBudget > 0 && remainingBudget < counted.Retry.MaxAttempts {
+		counted.Retry.MaxAttempts = remainingBudget
+	}
 	payload, available, err = fetchJiraDevStatusPullRequests(ctx, &counted, issueID)
 	return payload, available, attempts, err
 }

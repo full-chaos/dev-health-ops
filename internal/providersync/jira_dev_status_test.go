@@ -148,7 +148,7 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries(t *testing.
 	}
 	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
 	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
-		context.Background(), client, "10050",
+		context.Background(), client, "10050", 0,
 	)
 	if err == nil || available {
 		t.Fatalf("expected a genuine error after exhausting retries, available=%v err=%v", available, err)
@@ -158,6 +158,34 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries(t *testing.
 	}
 	if doer.requests != 3 {
 		t.Fatalf("doer observed %d real wire requests, want=3", doer.requests)
+	}
+}
+
+// TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget is
+// the red-first test for codex round 2's P2 finding: counting attempts AFTER
+// the fact still let one issue's retries alone exceed
+// dev_status_max_requests (a budget of 1 permitted 3 real requests under
+// sustained 503s, since nothing capped HTTPClient.Do's own retry policy).
+// remainingBudget must cap the retry policy itself, not just the count.
+func TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget(t *testing.T) {
+	t.Parallel()
+	doer := &jiraDevStatusDoer{
+		t: t, statuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable},
+		body: `{"errorMessages":["temporarily unavailable"]}`,
+	}
+	// Client policy allows up to 3 attempts, but only 1 remains in the budget.
+	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
+	_, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
+		context.Background(), client, "10050", 1,
+	)
+	if err == nil || available {
+		t.Fatalf("expected a genuine error, available=%v err=%v", available, err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want=1 (remainingBudget must cap the retry policy, not just count after the fact)", attempts)
+	}
+	if doer.requests != 1 {
+		t.Fatalf("doer observed %d real wire requests, want=1", doer.requests)
 	}
 }
 
@@ -172,7 +200,7 @@ func TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess
 	}
 	client := jiraDevStatusTestClientWithRetries(t, doer, 3)
 	payload, available, attempts, err := fetchJiraDevStatusPullRequestsCountingAttempts(
-		context.Background(), client, "10050",
+		context.Background(), client, "10050", 0,
 	)
 	if err != nil || !available {
 		t.Fatalf("available=%v err=%v", available, err)

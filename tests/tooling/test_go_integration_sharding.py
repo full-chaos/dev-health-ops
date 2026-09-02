@@ -1490,7 +1490,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess,
     # jira_dev_status_test.go). Net +3. 1307 -> 1310 top-level; 152 -> 152
     # integration-tagged (unchanged).
-    assert len(expected_provider_tests) == 1310
+    # codex round 2 (P2): the cap must limit the retry policy itself, not just
+    # count after the fact -- TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts
+    # renamed to TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts (net 0) plus
+    # 1 new test, TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget
+    # (jira_dev_status_test.go). Net +1. 1310 -> 1311 top-level; 152 -> 152
+    # integration-tagged (unchanged).
+    assert len(expected_provider_tests) == 1311
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1507,7 +1513,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1310
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1311
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1571,7 +1577,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1310
+    assert len(selected_tests) == len(set(selected_tests)) == 1311
     assert set(selected_tests) == expected_tests
 
 

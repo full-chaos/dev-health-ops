@@ -263,19 +263,21 @@ func TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp(t *testing.T) {
 // actual wire requests (including HTTPClient.Do's internal retries), not
 // just logical fetch calls, or a transient outage can cost up to
 // RetryPolicy.MaxAttempts times the configured budget with no signal.
-func TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts(t *testing.T) {
+// TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts is the red-first
+// test for codex round 2's P2 finding: counting real wire attempts AFTER
+// the fact (round 1's fix) still let a single issue's own retries exceed
+// dev_status_max_requests -- a budget of 1 permitted 3 real requests under
+// sustained 503s, because nothing capped HTTPClient.Do's own retry policy
+// for that call. The budget must cap the retry policy itself.
+func TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	claim.DatasetOptions["fetch_dev_status"] = true
 	claim.DatasetOptions["dev_status_max_requests"] = 1
 	doer := &jiraAtlassianDoer{
 		t: t,
-		// Three transient failures: with a retrying client this single
-		// issue's dev-status fetch alone consumes 3 real wire requests,
-		// already exceeding the cap of 1 -- prove the route observes that
-		// (dev_status_cap_skipped stays 0 here since there is only one
-		// issue in this fixture; the assertion is on the wire-request count
-		// the counting Doer reports via Evidence.Requests, not on a second
-		// issue being skipped).
+		// The client's own RetryPolicy allows 3 attempts, but only 1 remains
+		// in the budget -- the fixed code must limit THIS call to 1 real
+		// wire request, not exhaust all 3 retries and only notice after.
 		devStatusStatuses: []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable},
 		devStatusBody:     `{"errorMessages":["temporarily unavailable"]}`,
 	}
@@ -287,8 +289,8 @@ func TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doer.devStatus != 3 {
-		t.Fatalf("dev-status wire requests=%d want=3 (the retrying client's real attempt count)", doer.devStatus)
+	if doer.devStatus != 1 {
+		t.Fatalf("dev-status wire requests=%d want=1 (dev_status_max_requests must cap the retry policy, not just count after the fact)", doer.devStatus)
 	}
 	// The failed fetch is recorded as optional incompleteness (a genuine
 	// error, not the clean no-op), so the watermark is withheld.

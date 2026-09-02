@@ -230,8 +230,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				devStatusCapSkipped++
 				client.Metrics.RecordJiraDevStatus("cap_skipped")
 			} else {
+				// codex round 2 (P2): cap this call's OWN retry policy to the
+				// remaining budget, not just count attempts after the fact --
+				// counting alone still let one issue's retries exceed the cap
+				// (dev_status_max_requests=1 permitted 3 real requests under
+				// sustained 503s, since nothing stopped HTTPClient.Do's
+				// internal retry loop mid-flight).
 				devStatusPayload, devStatusAvailable, devStatusAttempts, devStatusErr := fetchJiraDevStatusPullRequestsCountingAttempts(
-					ctx, client, issueID,
+					ctx, client, issueID, devStatusMaxRequests-devStatusRequestsIssued,
 				)
 				devStatusRequestsIssued += devStatusAttempts
 				requests += devStatusAttempts

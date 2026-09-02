@@ -1,6 +1,6 @@
 ---
 page_id: con-auth-control-plane-adrs
-summary: The eleven ADRs TRD section 26 requires before Auth Control Plane cutover, plus one proposed by the threat model, drafted at status Proposed — each stating its decision, what it supersedes, what it deliberately leaves open, and the anchored evidence from the Wave 0 inventory that constrains it.
+summary: The eleven ADRs TRD section 26 requires before Auth Control Plane cutover, plus one proposed by the threat model, ratified Accepted on 2026-09-02 (CHAOS-3270) — each stating its decision, what it supersedes, what it deliberately leaves open, and the anchored evidence from the Wave 0 inventory that constrains it.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -15,10 +15,11 @@ lifecycle: active
 
 # Auth Control Plane ADRs (Wave 0 drafts)
 
-TRD §26 requires eleven ADRs before cutover. All eleven are drafted here at
-status **Proposed**. None is Accepted; ratification is a single pass over the
-[decision sheet](auth-control-plane-decision-sheet.md), which carries the
-recommendation, the alternatives considered, and the risk for each.
+TRD §26 requires eleven ADRs before cutover. All twelve — the eleven plus
+ACP-ADR-12 — are **Accepted**, ratified 2026-09-02 in a single pass recorded
+in [CHAOS-3270's "Wave 0 ratification pass" comment](https://linear.app/fullchaos/issue/CHAOS-3270/epic-build-the-dev-health-auth-control-plane),
+over the [decision sheet](auth-control-plane-decision-sheet.md), which carries
+the recommendation, the alternatives considered, and the risk for each.
 {: .fc-page-lede }
 
 !!! info "What is and is not settled"
@@ -50,18 +51,18 @@ recommendation, the alternatives considered, and the risk for each.
 
 | ID | Title | Status | Blocks |
 |---|---|---|---|
-| ACP-ADR-01 | Go dependency selection for the auth service | Proposed | Wave 1 |
-| ACP-ADR-02 | Signing-key custody and the production KMS adapter | Proposed | Wave 1, Wave 3 |
-| ACP-ADR-03 | Access, refresh, and workload token TTLs | Proposed | Wave 3 |
-| ACP-ADR-04 | Auth schema ownership and aggregate transition | Proposed | Wave 4 |
-| ACP-ADR-05 | Policy representation and revision strategy | Proposed | Wave 5 |
-| ACP-ADR-06 | Compose bootstrap and Kubernetes federation | Proposed | Wave 8 |
-| ACP-ADR-07 | Entitlement snapshot and event contract | Proposed | Wave 5 |
-| ACP-ADR-08 | ACR lifecycle projection boundary | Proposed | Wave 9 |
-| ACP-ADR-09 | External Push lifecycle projection boundary | Proposed | Wave 9 |
-| ACP-ADR-10 | MFA and step-up requirements | Proposed | Wave 2 |
-| ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Proposed | Wave 4 |
-| ACP-ADR-12 | A single authentication seam for `query-api` | Proposed | Wave 6 |
+| ACP-ADR-01 | Go dependency selection for the auth service | Accepted | Wave 1 |
+| ACP-ADR-02 | Signing-key custody and the production KMS adapter | Accepted | Wave 1, Wave 3 |
+| ACP-ADR-03 | Access, refresh, and workload token TTLs | Accepted | Wave 3 |
+| ACP-ADR-04 | Auth schema ownership and aggregate transition | Accepted | Wave 4 |
+| ACP-ADR-05 | Policy representation and revision strategy | Accepted | Wave 5 |
+| ACP-ADR-06 | Compose bootstrap and Kubernetes federation | Accepted | Wave 8 |
+| ACP-ADR-07 | Entitlement snapshot and event contract | Accepted | Wave 5 |
+| ACP-ADR-08 | ACR lifecycle projection boundary | Accepted | Wave 9 |
+| ACP-ADR-09 | External Push lifecycle projection boundary | Accepted | Wave 9 |
+| ACP-ADR-10 | MFA and step-up requirements | Accepted | Wave 2 |
+| ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Accepted | Wave 4 |
+| ACP-ADR-12 | A single authentication seam for `query-api` | Accepted | Wave 6 |
 
 ACP-ADR-12 is **not** one of TRD §26's eleven. It is proposed by the Wave 0
 threat model (§2.9) because the migration removes a control that exists today
@@ -72,7 +73,7 @@ others; rejecting it is a legitimate outcome, but doing so silently is not.
 
 ## ACP-ADR-01 — Go dependency selection for the auth service
 
-**Status:** Proposed · **Decides:** TRD §26.1 · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.1 · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
 
 ### Context
 
@@ -147,7 +148,7 @@ in-wave.
 
 ## ACP-ADR-02 — Signing-key custody and the production KMS adapter
 
-**Status:** Proposed · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62
 
 ### Context
 
@@ -213,7 +214,7 @@ read set.
 
 ## ACP-ADR-03 — Access, refresh, and workload token TTLs
 
-**Status:** Proposed · **Decides:** TRD §26.3 · **Guardrails:** G-14, G-15, G-30, G-31, G-57, G-60
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.3 · **Guardrails:** G-14, G-15, G-30, G-31, G-57, G-60
 
 ### Context
 
@@ -271,7 +272,7 @@ place this gets falsified.
 
 ## ACP-ADR-04 — Auth schema ownership and aggregate transition
 
-**Status:** Proposed · **Decides:** TRD §26.4 · **Guardrails:** G-9, G-24, G-53, G-55, G-58, G-63, G-64
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.4 · **Guardrails:** G-9, G-24, G-53, G-55, G-58, G-63, G-64
 
 ### Context
 
@@ -317,7 +318,7 @@ decisions and both are noted as unresolved rather than assumed.**
 
 ## ACP-ADR-05 — Policy representation and revision strategy
 
-**Status:** Proposed · **Decides:** TRD §26.5 · **Guardrails:** G-26, G-27, G-24, G-29, G-31
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.5 · **Guardrails:** G-26, G-27, G-24, G-29, G-31
 
 ### Context
 
@@ -374,7 +375,7 @@ contract — not the engine — the stable interface.
 
 ## ACP-ADR-06 — Compose bootstrap and Kubernetes federation
 
-**Status:** Proposed · **Decides:** TRD §26.6 · **Guardrails:** G-33, G-34, G-36, G-37, G-59
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.6 · **Guardrails:** G-33, G-34, G-36, G-37, G-59
 
 ### Context
 
@@ -426,7 +427,7 @@ ADR-08's projection boundary. **Declared gap:** the acr-side outbound
 
 ## ACP-ADR-07 — Entitlement snapshot and event contract
 
-**Status:** Proposed · **Decides:** TRD §26.7 · **Guardrails:** G-6, G-9, G-14, G-45, G-59
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.7 · **Guardrails:** G-6, G-9, G-14, G-45, G-59
 
 ### Context
 
@@ -474,7 +475,7 @@ trade-off that Wave 5 should measure rather than assume.
 
 ## ACP-ADR-08 — ACR lifecycle projection boundary
 
-**Status:** Proposed · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
 
 ### Context
 
@@ -527,7 +528,7 @@ does not record as fact. Also open: acr's storage-table lifecycle model.
 
 ## ACP-ADR-09 — External Push lifecycle projection boundary
 
-**Status:** Proposed · **Decides:** TRD §26.9 · **Guardrails:** G-46, G-47, G-48, G-9
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.9 · **Guardrails:** G-46, G-47, G-48, G-9
 
 ### Context
 
@@ -583,7 +584,7 @@ traced in Wave 0.
 
 ## ACP-ADR-10 — MFA and step-up requirements
 
-**Status:** Proposed · **Decides:** TRD §26.10 · **Guardrails:** G-29, G-30, G-51, G-52
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.10 · **Guardrails:** G-29, G-30, G-51, G-52
 
 ### Context
 
@@ -635,7 +636,7 @@ separately satisfiable requirement.
 
 ## ACP-ADR-11 — SCIM and enterprise deprovisioning scope
 
-**Status:** Proposed · **Decides:** TRD §26.11 · **Guardrails:** G-24, G-53, G-54, G-55, G-58, G-68
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.11 · **Guardrails:** G-24, G-53, G-54, G-55, G-58, G-68
 
 ### Context
 
@@ -683,7 +684,7 @@ provisioning authority, violating G-9.
 
 ## ACP-ADR-12 — A single authentication seam for `query-api`
 
-**Status:** Proposed · **Decides:** nothing in TRD §26 — **raised by the Wave 0 threat model §2.9** · **Guardrails:** G-1, G-3, G-4, G-8, G-69
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** nothing in TRD §26 — **raised by the Wave 0 threat model §2.9** · **Guardrails:** G-1, G-3, G-4, G-8, G-69
 
 ### Context
 

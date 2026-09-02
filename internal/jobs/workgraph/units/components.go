@@ -1,12 +1,6 @@
 package units
 
-import (
-	"errors"
-	"math"
-	"sort"
-	"strconv"
-	"strings"
-)
+import "sort"
 
 // Edge is one deduplicated work_graph_edges row, reduced to the fields the
 // component builder reads.
@@ -85,50 +79,34 @@ func ConfidenceFromValue(value any) float64 {
 // confidenceFromString ports Python's `float(value)` for the string branch of
 // _edge_confidence (components.py:75-82), which returns 0.0 on ValueError.
 //
-// Go's strconv.ParseFloat is NOT a drop-in for Python's float(): it is broader in
-// one direction and narrower in the other, and both directions change which
-// edges the split protects.
+// It delegates to ParsePythonFloat rather than reimplementing the grammar. This
+// function previously had its own strconv.ParseFloat-based version, guarded by a
+// 68-case corpus, and it was WRONG on 9 of the 102 cases in the fuller float
+// corpus:
 //
-//   - BROADER: Go accepts C99 hexadecimal float literals ("0x1p2" -> 4). Python
-//     rejects every hex form. Accepting one invents a confidence out of a string
-//     Python scores 0, which can protect an edge Python drops and mint a
-//     work_unit_id that exists on only one plane.
-//   - NARROWER: Go reports ErrRange for magnitudes outside float64 and Python
-//     does not. float("1e309") is +Inf in Python; treating the error as a parse
-//     failure would score 0 instead, dropping an edge Python treats as the
-//     maximum-confidence one. On ErrRange, ParseFloat already returns the right
-//     saturated value (+/-Inf on overflow, 0 or a denormal on underflow), so the
-//     value is kept and only ErrSyntax maps to 0.
+//   - Four Unicode Nd cases. float("１２３") is 123.0; the old version scored
+//     0.0. CPython transforms every category-Nd digit to ASCII before parsing,
+//     so full-width, Arabic-Indic and Devanagari digits all parse. A confidence
+//     of 0.0 where Python has 123.0 changes which edges the split protects,
+//     which changes component membership, which mints a different work_unit_id.
+//   - Five NaN cases. Go's math.NaN() carries payload 0x…0001 where CPython's is
+//     0x…0000, and the old version discarded the sign, so float("-nan") differed
+//     in the sign bit as well as the payload.
 //
-// Agreement is not asserted from reasoning: TestConfidenceFromStringMatchesPythonCorpus
-// runs a checked-in corpus of 68 forms whose expectations were produced by the
-// interpreter itself, and a rot guard re-runs the generator against live Python.
-// A hand-written matrix is what let the hex and range cases through in the first
-// place -- an enumerated corpus is the instrument, not a longer list of guesses.
+// The old corpus held both axes constant -- it contained one non-ASCII case and
+// no Nd digits at all -- so it could not see either. That is the standing lesson
+// restated: a corpus is blind to any axis it does not vary, and 68 cases of the
+// same shape are one case.
+//
+// Underscores are NOT a divergence, contrary to what I expected before
+// measuring: Go's strconv.ParseFloat has accepted `_` between digits since 1.13,
+// matching PEP 515. Recorded because the prediction was wrong and the corpus is
+// what corrected it.
 func confidenceFromString(value string) float64 {
-	trimmed := strings.TrimSpace(value)
-
-	unsigned := trimmed
-	if len(unsigned) > 0 && (unsigned[0] == '+' || unsigned[0] == '-') {
-		unsigned = unsigned[1:]
-	}
-	if len(unsigned) > 1 && unsigned[0] == '0' && (unsigned[1] == 'x' || unsigned[1] == 'X') {
-		return 0.0
-	}
-	// Python accepts a SIGNED NaN word ("-nan", "+nan", "-NaN" are all nan);
-	// ParseFloat accepts only the unsigned spellings and rejects the rest, which
-	// would score 0.0 instead. Found by the generated corpus, not by hand -- it
-	// is the sort of form nobody writes down from memory.
-	if strings.EqualFold(unsigned, "nan") {
-		return math.NaN()
-	}
-
-	parsed, err := strconv.ParseFloat(trimmed, 64)
-	if err != nil {
-		var numError *strconv.NumError
-		if errors.As(err, &numError) && errors.Is(numError.Err, strconv.ErrRange) {
-			return parsed
-		}
+	// ParsePythonFloat returns ok=false exactly where CPython raises
+	// ValueError, and _edge_confidence's except branch yields 0.0.
+	parsed, ok := ParsePythonFloat(value)
+	if !ok {
 		return 0.0
 	}
 	return parsed

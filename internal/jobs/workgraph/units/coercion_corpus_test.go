@@ -12,11 +12,18 @@ import (
 const coercionGoldenFixture = "confidence_coercion_python_golden.json"
 
 type coercionGolden struct {
-	Note  string `json:"note"`
-	Cases []struct {
+	Note        string `json:"note"`
+	StringCases []struct {
 		Input    string `json:"input"`
 		Expected string `json:"expected"`
-	} `json:"cases"`
+	} `json:"string_cases"`
+	// TypeCases carry the Python repr() of the input rather than the value:
+	// the axis exists to vary the TYPE, and JSON would erase exactly that by
+	// coercing True to true and () to [].
+	TypeCases []struct {
+		InputRepr string `json:"input_repr"`
+		Expected  string `json:"expected"`
+	} `json:"type_cases"`
 }
 
 // TestConfidenceFromStringMatchesPythonCorpus is the differential test for the
@@ -35,7 +42,8 @@ type coercionGolden struct {
 // oversized-component split protects, which decides component membership, which
 // decides work_unit_id -- and that id addresses rows in two tables written by
 // two different jobs.
-func TestConfidenceFromStringMatchesPythonCorpus(t *testing.T) {
+func loadCoercionGolden(t *testing.T) ([]byte, coercionGolden) {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(repositoryRootPath(t), "tests", "fixtures", coercionGoldenFixture))
 	if err != nil {
 		t.Fatalf("read coercion golden: %v", err)
@@ -44,15 +52,21 @@ func TestConfidenceFromStringMatchesPythonCorpus(t *testing.T) {
 	if err := json.Unmarshal(raw, &golden); err != nil {
 		t.Fatalf("decode coercion golden: %v", err)
 	}
-	if len(golden.Cases) == 0 {
+	return raw, golden
+}
+
+func TestConfidenceFromStringMatchesPythonCorpus(t *testing.T) {
+	_, golden := loadCoercionGolden(t)
+
+	if len(golden.StringCases) == 0 {
 		t.Fatal("coercion golden is empty; the test would pass vacuously")
 	}
 
 	// Guard the corpus itself: if the distinguishing forms are dropped, every
 	// assertion below still passes while the coverage that matters is gone.
 	required := []string{"0x1p2", "1e309", "1e-400", " 1 ", "1_0", "nan", "infinity"}
-	present := make(map[string]bool, len(golden.Cases))
-	for _, testCase := range golden.Cases {
+	present := make(map[string]bool, len(golden.StringCases))
+	for _, testCase := range golden.StringCases {
 		present[testCase.Input] = true
 	}
 	for _, form := range required {
@@ -66,16 +80,36 @@ func TestConfidenceFromStringMatchesPythonCorpus(t *testing.T) {
 	// direction. Deleting the case would hide the divergence; asserting it pins
 	// the boundary.
 	//
-	// Python's float() accepts non-ASCII decimal digits. Replicating Python's
-	// full numeric grammar in Go is an unbounded and unverifiable commitment,
-	// whereas the parity harness asserting that both planes coerced to the same
-	// value is bounded and provable, and catches this residual along with any
-	// other. See the same argument on parsePythonInt in constants.go.
-	knownDivergence := map[string]string{
-		"\u0661\u0662": "python accepts non-ASCII decimal digits (float(\"\u0661\u0662\") == 12.0); Go does not",
-	}
+	// THIS MAP IS NOW EMPTY, AND THAT IS THE POINT OF KEEPING IT.
+	//
+	// It held one entry: Python's float() accepts non-ASCII decimal digits, so
+	// float("\u0661\u0662") is 12.0 while Go scored 0.0. The recorded reason for
+	// accepting it was that "replicating Python's full numeric grammar in Go is
+	// an unbounded and unverifiable commitment, whereas the parity harness
+	// asserting that both planes coerced to the same value is bounded and
+	// provable".
+	//
+	// That judgement was wrong, and it is worth saying how rather than quietly
+	// deleting it. The grammar is BOUNDED: the accepted digit set is Unicode
+	// category Nd as the DEPLOYED interpreter reports it, emitted as a generated
+	// table by generate_python_decimal_digits_golden.py, so it is a fixed list
+	// rather than an open-ended commitment to Unicode. And it is VERIFIABLE:
+	// ParsePythonFloat is checked bit-for-bit against 102 measured cases in
+	// python_float_python_golden.json. The estimate of the cost was wrong, not
+	// the principle -- "unbounded" was an assumption about the work, made
+	// without pricing it.
+	//
+	// The residual mattered. A confidence of 0.0 where Python has 12.0 changes
+	// which edges the split protects, which changes component membership, which
+	// mints a different work_unit_id. "Accepted divergence" was the right
+	// bookkeeping and the wrong disposition.
+	//
+	// The map stays so the next genuinely-accepted divergence has a home, and so
+	// a future reader sees that an entry here is a decision to be revisited
+	// rather than a permanent fact.
+	knownDivergence := map[string]string{}
 
-	for _, testCase := range golden.Cases {
+	for _, testCase := range golden.StringCases {
 		t.Run(strconv.Quote(testCase.Input), func(t *testing.T) {
 			if reason, known := knownDivergence[testCase.Input]; known {
 				got := ConfidenceFromValue(testCase.Input)
@@ -128,4 +162,115 @@ func parsePythonRendering(rendered string) (float64, bool) {
 	}
 	parsed, err := strconv.ParseFloat(rendered, 64)
 	return parsed, err == nil
+}
+
+// pythonReprToGo maps each type_cases entry to the Go value a ClickHouse driver
+// would hand ConfidenceFromValue for that Python type.
+//
+// The MAPPING is hand-written -- it has to be, since Go and Python types are not
+// the same set -- but the EXPECTATIONS are not: those come from calling
+// _edge_confidence itself. That split is the point. A hand-written expectation
+// encodes what the author believes; a hand-written mapping only says "this Go
+// value corresponds to that Python one", and the assertion still measures the
+// reference.
+//
+// An entry mapped to `unrepresentable` is one with no meaningful Go analogue on
+// this path. Those are listed EXPLICITLY rather than skipped silently, so the
+// corpus cannot grow a case that quietly tests nothing.
+var pythonReprToGo = map[string]struct {
+	value           any
+	unrepresentable string
+}{
+	// The reason this axis exists: bool subclasses int in Python, so
+	// _edge_confidence checks isinstance(value, bool) FIRST and True is 0.0,
+	// not 1.0. Go's type switch treats bool and the numerics as unrelated, so
+	// the ordering has to be reproduced deliberately.
+	"True":  {value: true},
+	"False": {value: false},
+
+	"0":  {value: 0},
+	"1":  {value: 1},
+	"-3": {value: -3},
+
+	"0.0": {value: 0.0},
+	"0.5": {value: 0.5},
+	"1.0": {value: 1.0},
+
+	"inf":  {value: math.Inf(1)},
+	"-inf": {value: math.Inf(-1)},
+	"nan":  {value: math.NaN()},
+
+	"None": {value: nil},
+
+	"[]":                  {value: []any{}},
+	"[1.0]":               {value: []any{1.0}},
+	"{}":                  {value: map[string]any{}},
+	"{'confidence': 1.0}": {value: map[string]any{"confidence": 1.0}},
+
+	// A Python tuple has no ClickHouse-driver analogue that could reach this
+	// function; Go's nearest equivalent would be a struct or array, neither of
+	// which the driver produces for a Float32 column. Listed so the row is
+	// accounted for rather than dropped.
+	"()": {unrepresentable: "no ClickHouse driver value corresponds to a Python tuple on this path"},
+
+	"'0.5'": {value: "0.5"},
+}
+
+// TestConfidenceFromValueMatchesPythonTypeAxis closes the axis gap recorded in
+// CHAOS-4803: before this, the string branch had a generated corpus and every
+// other branch had only a hand-written Go table -- including the bool case,
+// which is the one a port written from the type signature gets backwards.
+func TestConfidenceFromValueMatchesPythonTypeAxis(t *testing.T) {
+	_, golden := loadCoercionGolden(t)
+
+	if len(golden.TypeCases) == 0 {
+		t.Fatal("type axis is empty; the test would pass vacuously")
+	}
+	for _, required := range []string{"True", "False", "1", "None", "nan"} {
+		found := false
+		for _, testCase := range golden.TypeCases {
+			if testCase.InputRepr == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("type corpus no longer contains %q, the axis's distinguishing case", required)
+		}
+	}
+
+	for _, testCase := range golden.TypeCases {
+		t.Run(testCase.InputRepr, func(t *testing.T) {
+			mapped, known := pythonReprToGo[testCase.InputRepr]
+			if !known {
+				t.Fatalf(
+					"type corpus grew %q with no Go mapping. Add one, or mark it "+
+						"unrepresentable with a reason -- an unmapped row tests nothing",
+					testCase.InputRepr,
+				)
+			}
+			if mapped.unrepresentable != "" {
+				t.Skipf("no Go analogue: %s", mapped.unrepresentable)
+			}
+
+			expected, ok := parsePythonRendering(testCase.Expected)
+			if !ok {
+				t.Fatalf("unrenderable expectation %q", testCase.Expected)
+			}
+			got := ConfidenceFromValue(mapped.value)
+
+			if math.IsNaN(expected) {
+				if !math.IsNaN(got) {
+					t.Errorf("ConfidenceFromValue(%s) = %v, python = nan", testCase.InputRepr, got)
+				}
+				return
+			}
+			if got != expected {
+				t.Errorf(
+					"ConfidenceFromValue(%s) = %v, python = %v",
+					testCase.InputRepr, got, expected,
+				)
+			}
+		})
+	}
 }

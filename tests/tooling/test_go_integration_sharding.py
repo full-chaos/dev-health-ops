@@ -2638,6 +2638,15 @@ _NON_PULLING_NOUNS = frozenset(
 # it as resource-naming was wrong in the same way, and in the same file, as
 # `docker-compose` slipping past the refusal written for `docker compose`.
 _COMPOSE_LIKE_VERBS: dict[str, frozenset[str]] = {"stack": frozenset({"deploy"})}
+# The non-pulling verbs under a compose-like noun, ENUMERATED. The first cut let
+# any verb that was not the deploying one through, which is the shape that put
+# `image` in the exempt set: a category allowed wholesale because its known
+# members looked harmless. A verb added under `stack` later would have passed
+# unexamined. `config` is deliberately absent -- it reads a compose file, has no
+# instances here, and refusing it is the fail-closed answer to "probably fine".
+_COMPOSE_LIKE_SAFE_VERBS: dict[str, frozenset[str]] = {
+    "stack": frozenset({"ls", "ps", "rm", "services"})
+}
 _COMPOSE_LIKE_NOUNS = frozenset(_COMPOSE_LIKE_VERBS)
 _DOCKER_MANAGEMENT_NOUNS = (
     frozenset(_NOUN_PULLING_VERBS) - {""} | _NON_PULLING_NOUNS | _COMPOSE_LIKE_NOUNS
@@ -2699,10 +2708,14 @@ def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
                     )
                     continue
                 if noun in _COMPOSE_LIKE_NOUNS:
-                    # Only the file-deploying verb is unknowable. `stack ls`,
-                    # `stack ps` and `stack rm` name a resource and pull nothing;
-                    # refusing them would be a false failure on a valid workflow,
-                    # which this file has now produced five times.
+                    # Allowlist, not fall-through. Only these enumerated verbs
+                    # name a resource and pull nothing; anything else under this
+                    # noun is unknown and refused.
+                    if sub in _COMPOSE_LIKE_SAFE_VERBS.get(noun, frozenset()):
+                        continue
+                    unknown.append(
+                        f"unrecognised verb `docker {noun} {sub}`: {line[:60]}"
+                    )
                     continue
                 if noun in _NON_PULLING_NOUNS:
                     # Nothing under this noun takes an image; the next token is a
@@ -2946,10 +2959,19 @@ def test_pulling_verbs_are_resolved_per_noun(
         ("docker stack deploy --compose-file x.yml svc", True),
         # ...but only the file-deploying verb. These name a resource and pull
         # nothing; refusing them would be a false failure on a valid workflow.
+        # One accepting row per ENUMERATED safe verb: these are what the
+        # allowlist admits, and an accepting row is the only thing that proves
+        # the guard is resolving rather than banning.
         ("docker stack ls", False),
         ("docker stack ps mystack", False),
         ("docker stack rm mystack", False),
         ("docker stack services mystack", False),
+        # ...and anything NOT enumerated is refused, including a verb that does
+        # not exist. The previous cut allowed every non-deploying verb, so a
+        # pulling verb added under `stack` later would have passed unexamined --
+        # the same shape as `image` sitting in the exempt set.
+        ("docker stack frobnicate mystack", True),
+        ("docker stack config -c compose.yml", True),
     ],
 )
 def test_compose_like_nouns_refuse_only_their_deploying_verb(

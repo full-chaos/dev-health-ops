@@ -24,11 +24,24 @@ package analytics
 // review with no telemetry to point at.
 //
 // argMaxNullTransitionGuardQuery reproduces CHAOS-4759's own baseline
-// measurement exactly (recovered from system.query_log, query_id
+// measurement (recovered from system.query_log, query_id
 // c81b95bf-15fa-4828-8f61-8e00c18d08cb, executed against org
 // 70d529e0-3c06-4597-8480-794fd02328b6 where it measured
 // "0 0 0 0 203" -- independently reproduced byte-for-byte in this PR's own
-// TEST-EVIDENCE).
+// TEST-EVIDENCE), with ONE deliberate correction: the ticket's own SQL
+// used `HAVING uniqExact(computed_at) > 1` (candidate = more than one
+// DISTINCT timestamp); this guard uses `HAVING count() > 1` (candidate =
+// more than one ROW). Codex round 1 (xhigh) constructed and this lane
+// independently re-verified against a live engine: two rows for one work
+// unit at the IDENTICAL computed_at (one NULL repo_id inserted first, one
+// non-NULL inserted second) produce `argMax(repo_id, computed_at)` =
+// the non-NULL value while `(argMax(tuple(repo_id), computed_at)).1` =
+// NULL -- a genuine, reproducible divergence -- yet `uniqExact(computed_at)`
+// is 1, so the ticket's own criterion silently EXCLUDES this unit and the
+// guard would report no divergence. `count() > 1` has no corresponding
+// false-negative (a byte-identical duplicate row cannot itself produce a
+// py-non-null/go-null split) and is therefore strictly more inclusive
+// with no new false positives.
 
 import (
 	"context"
@@ -85,14 +98,24 @@ func (s ArgMaxNullTransitionState) columnCounts() []argMaxColumnCount {
 // own queryTimeoutSecs constant -- see settingsMaxExecutionTime's doc
 // comment (cost.go) for why this value may never carry request-supplied
 // input.
+//
+// Every projected column is wrapped in toInt64(...): count()/countIf()
+// return UInt64 in ClickHouse, and the native driver refuses to scan a
+// UInt64 column into a Go *int64 destination ("converting UInt64 to
+// *int64 is unsupported, try using *uint64") -- caught by the seeded
+// real-engine test (investmentargmaxtransitionguard_seeded_integration_test.go),
+// NOT by the fake-row-scanner unit tests, which happily accept an int64
+// fixture regardless of what the real driver would allow. Same fix
+// shape as investmentmembershipscope.go's membershipScopeStateQuery
+// wrapping lag_seconds in toInt64(...) for the identical reason.
 func argMaxNullTransitionGuardQuery(timeoutSeconds int) string {
 	return fmt.Sprintf(`
 SELECT
-  countIf(py_repo IS NOT NULL AND go_repo IS NULL) AS div_repo_id,
-  countIf(py_prov IS NOT NULL AND go_prov IS NULL) AS div_provider,
-  countIf(py_type IS NOT NULL AND go_type IS NULL) AS div_work_unit_type,
-  countIf(py_name IS NOT NULL AND go_name IS NULL) AS div_work_unit_name,
-  count() AS multi_generation_units
+  toInt64(countIf(py_repo IS NOT NULL AND go_repo IS NULL)) AS div_repo_id,
+  toInt64(countIf(py_prov IS NOT NULL AND go_prov IS NULL)) AS div_provider,
+  toInt64(countIf(py_type IS NOT NULL AND go_type IS NULL)) AS div_work_unit_type,
+  toInt64(countIf(py_name IS NOT NULL AND go_name IS NULL)) AS div_work_unit_name,
+  toInt64(count()) AS multi_generation_units
 FROM (
     SELECT work_unit_id,
         argMax(repo_id, computed_at) AS py_repo,        (argMax(tuple(repo_id), computed_at)).1 AS go_repo,
@@ -102,7 +125,7 @@ FROM (
     FROM work_unit_investments
     WHERE org_id = {org_id:String}
     GROUP BY work_unit_id
-    HAVING uniqExact(computed_at) > 1
+    HAVING count() > 1
 )
 %s
 `, settingsMaxExecutionTime(timeoutSeconds))

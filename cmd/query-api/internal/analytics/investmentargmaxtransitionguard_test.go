@@ -30,7 +30,7 @@ func resetArgMaxNullTransitionGate(t *testing.T) {
 // transposing two counts.
 func TestFetchArgMaxNullTransitionState_ScansRow(t *testing.T) {
 	client := &routingFakeClient{}
-	client.on("HAVING uniqExact(computed_at) > 1", &fakeRowScanner{rows: [][]any{
+	client.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{
 		{int64(1), int64(2), int64(3), int64(4), int64(203)},
 	}})
 
@@ -176,7 +176,7 @@ func TestRecordArgMaxNullTransitionGuard_OnlyFiresWhenDiverged(t *testing.T) {
 			t.Cleanup(func() { recordArgMaxNullTransition = origRecord })
 
 			client := &routingFakeClient{}
-			client.on("HAVING uniqExact(computed_at) > 1", &fakeRowScanner{rows: [][]any{tc.row}})
+			client.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{tc.row}})
 
 			RecordArgMaxNullTransitionGuard(context.Background(), client, "org-1", 30)
 
@@ -218,7 +218,7 @@ func TestRecordArgMaxNullTransitionGuard_CooldownSuppressesRepeatQueries(t *test
 	argMaxNullTransitionGateClock = func() time.Time { return now }
 
 	client := &routingFakeClient{}
-	client.on("HAVING uniqExact(computed_at) > 1", &fakeRowScanner{rows: [][]any{
+	client.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{
 		{int64(0), int64(0), int64(0), int64(0), int64(203)},
 	}})
 
@@ -240,7 +240,7 @@ func TestRecordArgMaxNullTransitionGuard_CooldownSuppressesRepeatQueries(t *test
 	// already consumed).
 	now = now.Add(argMaxNullTransitionCheckCooldown + time.Second)
 	client.rules = nil
-	client.on("HAVING uniqExact(computed_at) > 1", &fakeRowScanner{rows: [][]any{
+	client.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{
 		{int64(0), int64(0), int64(0), int64(0), int64(203)},
 	}})
 
@@ -262,13 +262,13 @@ func TestRecordArgMaxNullTransitionGuard_CooldownIsPerOrg(t *testing.T) {
 	resetArgMaxNullTransitionGate(t)
 
 	client := &routingFakeClient{}
-	client.on("HAVING uniqExact(computed_at) > 1", &fakeRowScanner{rows: [][]any{
+	client.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{
 		{int64(0), int64(0), int64(0), int64(0), int64(10)},
 	}})
 	RecordArgMaxNullTransitionGuard(context.Background(), client, "org-a", 30)
 
 	client2 := &routingFakeClient{}
-	client2.on("HAVING uniqExact(computed_at) > 1", &fakeRowScanner{rows: [][]any{
+	client2.on("HAVING count() > 1", &fakeRowScanner{rows: [][]any{
 		{int64(0), int64(0), int64(0), int64(0), int64(20)},
 	}})
 	RecordArgMaxNullTransitionGuard(context.Background(), client2, "org-b", 30)

@@ -84,66 +84,25 @@ def _on_block(document: dict) -> dict:
     return document.get(True) or document.get("on") or {}
 
 
-def _github_glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """Translate a GitHub path filter to a regex.
-
-    `**` spans separators; `*` does not; everything else is literal.
-
-    UNSUPPORTED METACHARACTERS ARE A HARD ERROR, not an escape. An earlier
-    revision escaped `?`, `[`, `]` and `!` into literal text, so a negation like
-    `!tests/fixtures/**` would have been translated into a pattern matching a
-    path that literally begins with "!" -- i.e. matching nothing, silently. This
-    test would then report "0 unmatched fixtures" and pass, which is precisely
-    the failure mode the whole file exists to prevent.
-
-    Raised by lane-ci-flakes, who took the same change in `ci/go_relevance.py`
-    where it is worse: there the translator DECIDES RELEVANCE on a live PR, so a
-    silently-empty pattern marks real changes irrelevant and skips the gate.
-    Same bug, one line of severity apart -- here it weakens an assertion, there
-    it skips a required check.
-
-    On `**` matching ZERO characters: the evidence is deliberately external to
-    this function, because lane-ci-flakes' implementation descends from this one
-    and two agreeing reimplementations are one implementation counted twice.
-    GitHub documents `docs/**` matching `docs/README.md`; this repo's `docs/**`
-    filter ran for PR #1472, which changed `docs/index.md` directly; and
-    `docs-guards.yml` run 30947483495 did the same. Observed behaviour of the
-    real matcher, not a second opinion from a sibling translator.
-    """
-    unsupported = sorted({character for character in "?[]!" if character in pattern})
-    if unsupported:
-        raise AssertionError(
-            f"path filter {pattern!r} uses {unsupported}, which this translator "
-            "does not implement. Extend _github_glob_to_regex rather than letting "
-            "the pattern be escaped into literal text -- a filter that matches "
-            "nothing silently reports full coverage."
-        )
-
-    out: list[str] = []
-    index = 0
-    # A LEADING `**/` means ZERO or more directories, so `**/testdata/**` matches
-    # a top-level `testdata/x.json` as well as a nested one. Translating it as
-    # `.*/` requires at least one directory and reports a covered file as
-    # UNCOVERED -- wrong in the direction that manufactures work, and latent only
-    # because no top-level testdata/ exists today.
-    if pattern.startswith("**/"):
-        out.append("(?:.*/)?")
-        index = 3
-    while index < len(pattern):
-        if pattern.startswith("**", index):
-            out.append(".*")
-            index += 2
-        elif pattern[index] == "*":
-            out.append("[^/]*")
-            index += 1
-        else:
-            out.append(re.escape(pattern[index]))
-            index += 1
-    return re.compile("^" + "".join(out) + "$")
+# ONE implementation of `**/` semantics, not two kept in sync.
+#
+# This file used to carry its own translator. It diverged from `ci/go_relevance.py`'s
+# within a day: mine special-cased only a LEADING `**/`, so `docs/**/x.md` did not
+# match `docs/x.md`, while theirs treats `**/` as a token at any position. Two
+# copies of a rule is two answers to the same question, and the guard and the
+# relevance decider disagreeing about which paths are covered is exactly the drift
+# both exist to prevent.
+#
+# IMPORT COUPLING, stated because it is a real cost: this makes a test depend on a
+# CI script at import time. `tests/tooling/conftest.py` puts the repo root on
+# sys.path and `ci/` resolves as an implicit namespace package. If go_relevance.py
+# ever grows a heavy import or a module-scope side effect, this file inherits it.
+# That is worth accepting -- a shared rule with one owner beats two that agree today.
+from ci.go_relevance import github_glob_to_regex  # noqa: E402
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
-    return any(_github_glob_to_regex(p).match(path) for p in patterns)
+    return any(github_glob_to_regex(p).match(path) for p in patterns)
 
 
 # Directories whose fixture-shaped files are deliberately NOT required to match
@@ -553,3 +512,59 @@ def test_the_runtime_built_path_limit_is_real(tmp_path: Path) -> None:
     } == {"runtime.json"}, (
         "the literal form is not found either, so the test above proves nothing"
     )
+
+
+@pytest.mark.parametrize(
+    "pattern,path,expected",
+    [
+        # The case this file's own translator got WRONG before consolidation: a
+        # LEADING `**/` means zero or more directories, so a top-level file
+        # matches. Kept from that translator's fixtures, per the consolidation.
+        ("**/testdata/**", "testdata/a.json", True),
+        ("**/testdata/**", "internal/x/testdata/a.json", True),
+        ("**/testdata/**", "notestdata/a.json", False),
+        # The case the SHARED translator handles and the deleted one did not:
+        # `**/` is a token at any position, not only at the start.
+        ("docs/**/x.md", "docs/x.md", True),
+        ("docs/**/x.md", "docs/a/b/x.md", True),
+        # Root-level under `**/`, the CHAOS-4834 false-green.
+        ("**/*.go", "root.go", True),
+        ("**/go.mod", "go.mod", True),
+        ("**/go.mod", "mygo.mod", False),
+        # `*` must not span a separator; `**` must.
+        ("docs/*.md", "docs/a/b.md", False),
+        ("docs/**", "docs/a/b.md", True),
+    ],
+)
+def test_the_shared_translator_matches_github_semantics(
+    pattern: str, path: str, expected: bool
+) -> None:
+    """Semantics of the ONE translator this file now shares with the relevance gate.
+
+    These moved here when this file's own copy was deleted. They are not
+    duplicated coverage: nothing else in `tests/` exercises
+    `github_glob_to_regex` directly -- the sharding suite only invokes
+    `go_relevance.py` as a subprocess, which cannot pin a per-pattern answer.
+
+    Both directions matter. A false *match* over-triggers the Go workflow, which
+    costs minutes. A false *non-match* marks a real change irrelevant and skips
+    a required gate, which is the defect CHAOS-4834 exists to prevent.
+    """
+    assert bool(github_glob_to_regex(pattern).match(path)) is expected
+
+
+def test_the_shared_translator_refuses_what_it_cannot_express() -> None:
+    """The hard error, which was pinned NOWHERE before this.
+
+    `?`, `[`, `]` and `!` are not implemented. Silently escaping them into
+    literal text yields a filter matching nothing, which reports full coverage
+    and skips the gate -- a false green in the direction that hides work.
+
+    It raises SystemExit rather than AssertionError: `go_relevance.py` is a CLI
+    first and a library second. Asserting the type here is deliberate, so a
+    future refactor to a normal exception fails this test instead of silently
+    changing how callers must guard.
+    """
+    for unsupported in ("a?b", "a[bc]d", "!negated"):
+        with pytest.raises(SystemExit):
+            github_glob_to_regex(unsupported)

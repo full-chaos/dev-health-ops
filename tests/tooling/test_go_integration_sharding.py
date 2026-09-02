@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -2568,4 +2569,151 @@ def test_image_pulling_action_steps_are_allowlisted_or_ticketed() -> None:
         "ticketed action debt is stale -- these steps no longer exist; delete "
         f"them so the list cannot rot into a silent allowlist:\n  {stale}"
     )
+    assert not offenders, "\n".join(offenders)
+
+
+# Docker subcommands that PULL an image, and those that provably do not. This is
+# an allowlist too: an unrecognised subcommand is refused rather than assumed
+# harmless, because the point of this file is that "assumed harmless" is how
+# twelve fail-opens happened.
+_DOCKER_PULLING_SUBCOMMANDS = frozenset({"pull", "run", "create"})
+_DOCKER_NON_PULLING_SUBCOMMANDS = frozenset(
+    {
+        "build",
+        "buildx",
+        "tag",
+        "push",
+        "save",
+        "load",
+        "login",
+        "logout",
+        "version",
+        "info",
+        "inspect",
+        "rm",
+        "rmi",
+        "stop",
+        "kill",
+        "ps",
+        "logs",
+        "exec",
+        "cp",
+        "system",
+        "image",
+    }
+)
+
+
+def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
+    """(images this run text pulls, reasons it could not be determined).
+
+    `container:` and `services:` are not the only way a job reaches a registry:
+    a step can simply `run: docker pull postgres:16`. That is a Docker Hub pull
+    on a required check, and the declaration walk cannot see it.
+    """
+    images: list[str] = []
+    unknown: list[str] = []
+    # Join backslash continuations so a multi-line command is one command.
+    joined = re.sub(r"\\\n\s*", " ", command)
+    for raw in re.split(r"[\n;]|&&|\|\|", joined):
+        line = raw.strip()
+        if not _CONTAINER_TOOL.search(line):
+            continue
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError:
+            unknown.append(f"unparseable shell: {line[:60]}")
+            continue
+        tools = [
+            i
+            for i, t in enumerate(tokens)
+            if Path(t).name in {"docker", "podman", "nerdctl"}
+        ]
+        if not tools:
+            continue
+        for start in tools:
+            rest = tokens[start + 1 :]
+            sub = next((t for t in rest if not t.startswith("-")), None)
+            if sub is None:
+                unknown.append(f"container tool with no subcommand: {line[:60]}")
+                continue
+            if sub == "compose":
+                # Images live in the compose file, not here. Refused rather than
+                # scanned: no workflow runs compose today, so a scanner would be
+                # untested code, and adding one should fail loudly.
+                unknown.append(f"`docker compose` invocation: {line[:60]}")
+                continue
+            if sub in _DOCKER_NON_PULLING_SUBCOMMANDS:
+                continue
+            if sub not in _DOCKER_PULLING_SUBCOMMANDS:
+                unknown.append(f"unrecognised docker subcommand {sub!r}: {line[:60]}")
+                continue
+            after = rest[rest.index(sub) + 1 :]
+            image = None
+            skip_next = False
+            for token in after:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if token.startswith("-"):
+                    # Flags taking a value; "=" forms carry their own value.
+                    if "=" not in token and token in {
+                        "-v",
+                        "--volume",
+                        "-e",
+                        "--env",
+                        "-p",
+                        "--publish",
+                        "--name",
+                        "--network",
+                        "-w",
+                        "--workdir",
+                        "--platform",
+                        "--entrypoint",
+                        "-u",
+                        "--user",
+                        "--label",
+                        "-l",
+                    }:
+                        skip_next = True
+                    continue
+                image = token
+                break
+            if image is None:
+                unknown.append(f"`docker {sub}` with no image argument: {line[:60]}")
+            else:
+                images.append(image)
+    return images, unknown
+
+
+def test_run_steps_do_not_pull_from_unapproved_registries() -> None:
+    """A `run:` step can reach a registry without any declaration.
+
+    `run: docker pull postgres:16` is a Docker Hub pull on a required check, and
+    the `container:`/`services:` walk is blind to it -- the same reach failure as
+    the `*.yml`-only glob, one surface over. The stated invariant is "do not pull
+    from Docker Hub", not "do not DECLARE a Docker Hub image".
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for index, step in enumerate(job.get("steps") or []):
+                command = str(step.get("run", ""))
+                if not command:
+                    continue
+                images, unknown = _run_pulled_images(command)
+                for image in images:
+                    if not _image_is_allowed(image):
+                        offenders.append(
+                            f"{path.name}: {job_name} step {index} pulls {image!r}, "
+                            f"which does not resolve to {_ALLOWED_IMAGE_REGISTRIES}"
+                        )
+                for reason in unknown:
+                    offenders.append(
+                        f"{path.name}: {job_name} step {index}: {reason} -- an "
+                        "image that cannot be determined is refused, not assumed safe"
+                    )
     assert not offenders, "\n".join(offenders)

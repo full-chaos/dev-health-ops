@@ -92,9 +92,10 @@ func (step *issuePRLinksPreStep) Run(ctx context.Context, claim workgraph.Claim)
 //
 // # The two-`now` boundary, analysed and accepted (codex round 1, F1)
 //
-// On a default scope (the fixed producer persists `{}`) this step takes `now`
-// when it runs and Python takes its own `now` moments later, so Python's `to`
-// bound is strictly LATER. A pull request created in that sliver is inside
+// On a scope with no `to_date` -- 66 of 612 rows on the proof org, all of them
+// the fixed-schedule membership backfill -- this step takes `now` when it runs
+// and Python takes its own `now` moments later, so Python's `to` bound is
+// strictly LATER. A pull request created in that sliver is inside
 // Python's window and outside this one. It cannot be removed: both planes
 // derive `now` independently and nothing is shared to anchor them, so the only
 // "fix" would be changing the reference producer.
@@ -264,204 +265,90 @@ func scopeString(raw json.RawMessage) (string, bool, error) {
 	return text, true, nil
 }
 
-// noOffsetLayouts are the date and date-time forms accepted WITHOUT an offset.
-// The offset, when present, is split off and parsed separately -- see
-// splitTrailingOffset -- so this list stays one-dimensional instead of being
-// multiplied by every offset spelling.
+// canonicalScopeShape is the ENTIRE accept set for a build-scope date.
 //
-// Fractional seconds need no layout of their own: time.Parse accepts a
-// fractional second immediately after seconds even when the layout omits it.
-var noOffsetLayouts = append([]string{
-	// Date-only forms. These are listed FIRST and are deliberately absent from
-	// dateTimeLayouts below: a bare date cannot carry an offset.
-	"2006-01-02", "20060102",
-}, dateTimeLayouts...)
-
-// dateTimeLayouts are the forms that may be followed by an offset.
+// # Why this is a regexp and not a grammar
 //
-// A DATE alone may not: `fromisoformat("2026-08-15Z")` raises, and so does the
-// basic spelling. Splitting the offset off and parsing the remainder against
-// the full layout list accepted both -- four rows in the dangerous direction,
-// caught by the grid the moment it was widened. An offset is only meaningful
-// once there is a time for it to offset.
-var dateTimeLayouts = []string{
-	"2006-01-02T15:04:05", "2006-01-02 15:04:05",
-	"2006-01-02T15:04", "2006-01-02 15:04",
-	// Basic (hyphen-less) date-times, which fromisoformat also accepts.
-	"20060102T150405", "20060102T1504",
-	"20060102 150405", "20060102 1504",
-}
+// Three consecutive review rounds found a dangerous-direction defect in this
+// parser, each one introduced by the previous round's fix. The parser was
+// trying to MIRROR `datetime.fromisoformat`, and that grammar is far larger and
+// stranger than anyone's model of it: it takes any single character as the
+// date/time separator, reads "+" as that separator when no time follows, folds
+// an hour of 24 into the next day, and accepts five offset spellings. Every
+// round closed a cell and left the surface intact.
+//
+// So the surface is gone. Go can only be guaranteed to accept nothing the
+// reference rejects if Go accepts almost nothing, and the accept set is now
+// exactly what the PRODUCERS emit, measured rather than imagined:
+//
+//	YYYY-MM-DDTHH:MM:SSZ        cmd/dev-health-worker/sync_dispatch.go:334,337
+//	                            `plan.To.UTC().Format(time.RFC3339)` -- the LIVE
+//	                            Go post-sync emitter, and all 744 dated values
+//	                            in the proof org's work_graph_execution_requests
+//	YYYY-MM-DDTHH:MM:SS+00:00   src/dev_health_ops/workers/post_sync_dispatch.py
+//	                            :111-118, the Python plane's midnight form
+//	YYYY-MM-DD                  the same file's `to_date_str` fallback, and the
+//	                            Go emitter's investment.materialize branch
+//
+// Everything else the reference accepts is REFUSED, fail-closed, under one
+// enumerated class. That direction costs a failed build for a scope no producer
+// writes; the other direction writes mapping rows for a build the bridge then
+// rejects.
+//
+// A "+00:00" is spelled literally here rather than parsed as an offset, so a
+// non-zero offset cannot match at all -- there is no arithmetic left to get
+// wrong. That deleted `splitTrailingOffset`, `parseOffsetSeconds`,
+// `offsetSpelling` and two layout tables, and with them every defect class the
+// three rounds found.
+var canonicalScopeShape = regexp.MustCompile(
+	`^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(Z|\+00:00))?$`)
 
+// parseScopeInstant accepts exactly the shapes above, then applies the
+// reference's own value checks.
+//
+// The shape gate is necessary but NOT sufficient: it constrains the digits'
+// POSITIONS, not their values. "2026-02-30" and "0000-01-01" both match it, and
+// the reference rejects both -- so calendar validity (from time.Parse) and the
+// year range still run behind it.
 func parseScopeInstant(value string) (time.Time, error) {
 	// NOT trimmed: the caller has already applied Python's truthiness, and a
-	// whitespace-only value must reach the parser and be REJECTED here, exactly
-	// as it is by fromisoformat.
-	trimmed := value
-	if trimmed == "" {
-		return time.Time{}, fmt.Errorf("empty value")
-	}
-	// The layouts `datetime.fromisoformat` accepts that a caller could plausibly
-	// send, verified against the deployed interpreter: extended and BASIC dates,
-	// and date-times at minute or second precision. ISO week dates
-	// ("2026-W33-6") and ordinal dates are accepted by Python and refused here;
-	// nothing in the tree writes a build scope with dates at all (the fixed
-	// producer persists `{}`), so those forms are unreachable, and a LOUD
-	// refusal is the right failure for an unreachable input -- far better than
-	// silently computing a different window than the reference would.
-	for _, layout := range noOffsetLayouts {
-		if parsed, err := time.ParseInLocation(layout, trimmed, time.UTC); err == nil {
-			return withPythonYearRange(trimmed, parsed)
-		}
-	}
-	// OFFSETS ARE SPLIT OFF, not enumerated as layouts.
-	//
-	// Pairing every offset spelling with every date form, separator and time
-	// precision is a combinatorial layout table, and building it by hand is what
-	// produced the gap a review round found: the offset layouts were all
-	// extended-date and second-precision, so basic dates and minute precision
-	// silently had no offset support. Seven rounds and two partial fixes later,
-	// the grid was measured instead -- 1,189 cases -- and the answer is that the
-	// offset is INDEPENDENT of everything before it. So it is parsed
-	// independently.
-	//
-	// Order matters: the no-offset layouts are tried FIRST, above, because a
-	// plain "2026-08-15" ends in "-15", which is a well-formed ±HH offset. Only
-	// a string no layout accepts is re-examined for a trailing offset.
-	body, offsetSeconds, hasOffset := splitTrailingOffset(trimmed)
-	if !hasOffset {
-		return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
-	}
-	// The BODY is validated before the offset's magnitude is judged, and the
-	// order is load-bearing for the error, not just for the verdict.
-	//
-	// A date's own trailing "-DD" is a well-formed +-HH offset, so "2026-02-30"
-	// splits into body "2026-02" and offset "-30". Judging the magnitude first
-	// reported that as "carries a non-zero UTC offset" -- a true-sounding reason
-	// for a value that has no offset at all. Same verdict, wrong story, and the
-	// next reader chases the offset rule instead of the invalid day.
-	//
-	// dateTimeLayouts, NOT noOffsetLayouts: a bare date with an offset is not a
-	// thing the reference accepts.
-	var parsed time.Time
-	var bodyParsed bool
-	for _, layout := range dateTimeLayouts {
-		if candidate, err := time.ParseInLocation(layout, body, time.UTC); err == nil {
-			parsed, bodyParsed = candidate, true
-			break
-		}
-	}
-	if !bodyParsed {
-		return time.Time{}, fmt.Errorf("%q is not a supported ISO date or date-time", trimmed)
-	}
-	if offsetSeconds != 0 {
-		// The one real divergence in this family, and it is deliberate. Python's
-		// strftime keeps the wall-clock fields and DISCARDS the offset, so a
-		// shifted bound would silently mean a different instant than the
-		// reference computes. Refused rather than guessed.
+	// whitespace-only value must reach here and be REJECTED, exactly as it is by
+	// fromisoformat.
+	if !canonicalScopeShape.MatchString(value) {
 		return time.Time{}, fmt.Errorf(
-			"%q carries a non-zero UTC offset; Python's strftime would discard it and mean a "+
-				"different instant (see issueprlinks.ErrNonUTCWindowBound)", trimmed,
-		)
+			"%q is not a canonical build-scope date; the producers emit only "+
+				"YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ and YYYY-MM-DDTHH:MM:SS+00:00", value)
 	}
-	// A ZERO offset ("Z", "+00:00", "+0000", "+00", "+00:00:00") is unambiguous:
-	// every spelling names the same instant the naive reading would give.
-	return withPythonYearRange(trimmed, parsed)
+	layout := "2006-01-02"
+	if len(value) > len("2006-01-02") {
+		// Both zero-offset spellings; the shape gate has already excluded every
+		// other offset, so a successful parse is necessarily UTC.
+		layout = "2006-01-02T15:04:05Z07:00"
+	}
+	// time.Parse supplies the calendar validity the reference also enforces: it
+	// rejects month 13, day 32, and 29 February in a common year.
+	parsed, err := time.ParseInLocation(layout, value, time.UTC)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%q is not a valid date: %w", value, err)
+	}
+	return withPythonYearRange(value, parsed.UTC())
 }
 
 // withPythonYearRange applies `datetime`'s own year bound to a parsed value.
 //
 // CPython raises "year must be in 1..9999, not 0" and Go's time.Parse does not:
-// the "2006" layout element happily reads "0000", so Go ACCEPTED
-// "0000-01-01T00:00:00+00:00" where the reference raises. That is the dangerous
-// direction -- the pre-step would derive mappings for a scope the bridge then
-// rejects -- and it is worse than an ordinary refusal downstream, because a
-// year-zero lower bound is not merely wrong but MEANINGLESS to ClickHouse,
-// which reads the Go driver's `0000-01-01 00:00:00` as `2026-01-01 00:00:00`
-// and returns thousands of rows for a window nobody asked for.
+// the "2006" layout element happily reads "0000". A year-zero bound is not
+// merely wrong but MEANINGLESS downstream -- ClickHouse reads the Go driver's
+// `0000-01-01 00:00:00` as `2026-01-01 00:00:00` and returns rows for a window
+// nobody asked for.
 //
-// Applied at every successful parse rather than at one of them: the value can
-// arrive through the plain layout path or through the zero-offset path, and a
-// check on only one of those is a check that looks complete.
+// Applied at the parse AND at the derived lower bound (see windowFor): the
+// parse is where a value enters, but `to - 30 days` is a SECOND value the
+// reference range-checks, and it can leave the range when the parse did not.
 func withPythonYearRange(original string, parsed time.Time) (time.Time, error) {
 	if year := parsed.Year(); year < 1 || year > 9999 {
 		return time.Time{}, fmt.Errorf(
 			"%q has year %d; the reference requires 1..9999", original, year)
 	}
 	return parsed, nil
-}
-
-// splitTrailingOffset separates an ISO 8601 UTC offset from the end of a value.
-//
-// It reports the body, the offset in seconds, and whether one was found. The
-// spellings are the ones `datetime.fromisoformat` accepts: "Z", and a signed
-// hour with optional minutes and seconds, with or without colons.
-//
-// It does NOT validate the body; the caller parses that. It is only ever
-// reached for strings the no-offset layouts already rejected.
-func splitTrailingOffset(value string) (body string, offsetSeconds int, ok bool) {
-	if strings.HasSuffix(value, "Z") {
-		return strings.TrimSuffix(value, "Z"), 0, true
-	}
-	// Scan back over the offset's digits and colons to find the sign.
-	for index := len(value) - 1; index >= 0 && len(value)-index <= 10; index-- {
-		switch character := value[index]; {
-		case character >= '0' && character <= '9', character == ':':
-			continue
-		case character == '+' || character == '-':
-			seconds, valid := parseOffsetSeconds(value[index:])
-			if !valid {
-				return value, 0, false
-			}
-			return value[:index], seconds, true
-		default:
-			return value, 0, false
-		}
-	}
-	return value, 0, false
-}
-
-// offsetSpelling is the exact set of offset spellings `fromisoformat` accepts:
-// ±HH, ±HHMM, ±HHMMSS, ±HH:MM and ±HH:MM:SS. Colons are permitted only in the
-// separated forms and only in those positions.
-//
-// Written as an exact pattern because the first version of this function
-// STRIPPED colons before counting digits, which made "+00:", "+0:0", "+:00",
-// "+::00", "+00::" and "+00:00:" all parse as a zero offset. The reference
-// rejects every one of them, so Go accepted six malformed values the bridge
-// refuses -- the dangerous direction, since this step writes before the bridge
-// validates. Found by a review round constructing malformed suffixes; the
-// generated grid could not find it, because the grid varies only WELL-FORMED
-// offsets. Well-formedness is its own axis and the grid did not have it.
-var offsetSpelling = regexp.MustCompile(`^[+-]\d{2}(\d{2}(\d{2})?|:\d{2}(:\d{2})?)?$`)
-
-// parseOffsetSeconds reads a signed offset in any spelling fromisoformat
-// accepts. The magnitude is NOT range-checked here: the reference requires
-// |offset| < 24h, but every non-zero offset is refused by the caller anyway, so
-// an out-of-range one is refused for a reason that reaches the same verdict.
-func parseOffsetSeconds(text string) (int, bool) {
-	if !offsetSpelling.MatchString(text) {
-		return 0, false
-	}
-	sign := 1
-	if text[0] == '-' {
-		sign = -1
-	}
-	digits := strings.ReplaceAll(text[1:], ":", "")
-	total := 0
-	for offset := 0; offset < len(digits); offset += 2 {
-		part, err := strconv.Atoi(digits[offset : offset+2])
-		if err != nil {
-			return 0, false
-		}
-		// hours, then minutes, then seconds
-		switch offset {
-		case 0:
-			total += part * 3600
-		case 2:
-			total += part * 60
-		default:
-			total += part
-		}
-	}
-	return sign * total, true
 }

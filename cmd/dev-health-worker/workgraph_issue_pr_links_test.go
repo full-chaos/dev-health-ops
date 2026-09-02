@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -73,37 +72,6 @@ func TestBuildWindowUsesToDateForTheFromDefault(t *testing.T) {
 	}
 	if want := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC); !window.From.Equal(want) {
 		t.Errorf("from = %s, want to-30d (%s), not now-30d", window.From, want)
-	}
-}
-
-func TestBuildWindowAcceptsADateTimeWithoutAnOffset(t *testing.T) {
-	step := frozenPreStep()
-	window, err := step.windowFor([]byte(`{"to_date":"2026-08-15T06:07:08"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := time.Date(2026, 8, 15, 6, 7, 8, 0, time.UTC); !window.To.Equal(want) {
-		t.Errorf("to = %s, want %s", window.To, want)
-	}
-}
-
-// TestBuildWindowRefusesAnOffsetBearingDate is the scope-level half of
-// issueprlinks.ErrNonUTCWindowBound. Python's strftime keeps the wall-clock
-// fields and DISCARDS the offset, so `2026-01-01T00:00:00+05:00` means
-// `2026-01-01 00:00:00 UTC` there and `2025-12-31T19:00:00Z` under any
-// instant-preserving reading. Different queries; nothing produces such a scope
-// today; guessing between them is what the refusal exists to prevent.
-func TestBuildWindowRefusesAnOffsetBearingDate(t *testing.T) {
-	step := frozenPreStep()
-	for _, value := range []string{
-		`{"to_date":"2026-01-01T00:00:00+05:00"}`,
-		`{"from_date":"2026-01-01T00:00:00-08:00"}`,
-	} {
-		if _, err := step.windowFor([]byte(value)); err == nil {
-			t.Errorf("windowFor(%s) accepted a shifted bound", value)
-		} else if !strings.Contains(err.Error(), "offset") {
-			t.Errorf("windowFor(%s) error = %v, want it to name the offset", value, err)
-		}
 	}
 }
 
@@ -267,28 +235,6 @@ func TestBuildWindowTreatsAnEmptyScopeValueAsAbsent(t *testing.T) {
 	}
 }
 
-// TestBuildWindowAcceptsTheOtherISOFormsPythonAccepts covers the rest of F2:
-// `datetime.fromisoformat` (3.11+) accepts basic dates and minute precision,
-// verified against the deployed interpreter.
-func TestBuildWindowAcceptsTheOtherISOFormsPythonAccepts(t *testing.T) {
-	step := frozenPreStep()
-	for _, testCase := range []struct {
-		scope string
-		want  time.Time
-	}{
-		{`{"to_date":"20260815"}`, time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)},
-		{`{"to_date":"2026-08-15T06:07"}`, time.Date(2026, 8, 15, 6, 7, 0, 0, time.UTC)},
-	} {
-		window, err := step.windowFor([]byte(testCase.scope))
-		if err != nil {
-			t.Fatalf("windowFor(%s): %v", testCase.scope, err)
-		}
-		if !window.To.Equal(testCase.want) {
-			t.Errorf("windowFor(%s) to = %s, want %s", testCase.scope, window.To, testCase.want)
-		}
-	}
-}
-
 // TestBuildWindowRejectsWhitespaceLikePython is codex round-2, and it is the
 // SECOND time this one gate caught me guessing.
 //
@@ -341,17 +287,70 @@ func TestBuildWindowRejectsATruthyNonString(t *testing.T) {
 	}
 }
 
-// TestBuildWindowAcceptsAColonLessZeroOffset closes a gap my own rule had:
-// I said zero offsets are accepted, but only RFC3339 forms were tried, so
-// "+0000" — which fromisoformat accepts — was rejected. Being inconsistent
-// with my own stated rule is its own defect.
-func TestBuildWindowAcceptsAColonLessZeroOffset(t *testing.T) {
+// TestBuildWindowAcceptsExactlyTheCanonicalShapes replaces four tests that each
+// asserted a WIDER accept set, and it is worth recording what they were,
+// because their history is the argument for this one.
+//
+//	TestBuildWindowAcceptsADateTimeWithoutAnOffset      round 2, F2
+//	TestBuildWindowAcceptsTheOtherISOFormsPythonAccepts round 2, basic dates + minute precision
+//	TestBuildWindowAcceptsAColonLessZeroOffset          round 4, "+0000"
+//	TestBuildWindowRefusesAnOffsetBearingDate           round 1, F1
+//
+// Each was written to close a real gap, each widened the parser toward
+// `datetime.fromisoformat`, and rounds 7, 8 and 9 then each found a
+// DANGEROUS-DIRECTION defect in the widened surface -- every one introduced by
+// the previous round's fix. The surface was the problem, not any of the fixes.
+//
+// So the accept set is now exactly the three shapes the producers emit, and
+// everything those four tests asserted is refused fail-closed. The forms are
+// still measured against the reference in the 1,492-case corpus; they are
+// enumerated there under one class rather than accepted here.
+func TestBuildWindowAcceptsExactlyTheCanonicalShapes(t *testing.T) {
 	step := frozenPreStep()
-	window, err := step.windowFor([]byte(`{"to_date":"2026-08-15T06:07:08+0000"}`))
-	if err != nil {
-		t.Fatalf("windowFor rejected a colon-less zero offset: %v", err)
+
+	for _, testCase := range []struct {
+		scope string
+		want  time.Time
+	}{
+		// The live Go emitter's shape: sync_dispatch.go formats with
+		// time.RFC3339, and all 744 dated values on the proof org look like this.
+		{`{"to_date":"2026-08-15T06:07:08Z"}`, time.Date(2026, 8, 15, 6, 7, 8, 0, time.UTC)},
+		// The Python plane's shape.
+		{`{"to_date":"2026-08-15T06:07:08+00:00"}`, time.Date(2026, 8, 15, 6, 7, 8, 0, time.UTC)},
+		// The date-only fallback.
+		{`{"to_date":"2026-08-15"}`, time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)},
+	} {
+		window, err := step.windowFor([]byte(testCase.scope))
+		if err != nil {
+			t.Fatalf("windowFor(%s) refused a shape a producer emits: %v", testCase.scope, err)
+		}
+		if !window.To.Equal(testCase.want) {
+			t.Errorf("windowFor(%s) to = %s, want %s", testCase.scope, window.To, testCase.want)
+		}
 	}
-	if want := time.Date(2026, 8, 15, 6, 7, 8, 0, time.UTC); !window.To.Equal(want) {
-		t.Errorf("to = %s, want %s", window.To, want)
+
+	for _, scope := range []string{
+		// What the four replaced tests used to require be ACCEPTED.
+		`{"to_date":"2026-08-15T06:07:08"}`,
+		`{"to_date":"20260815"}`,
+		`{"to_date":"2026-08-15T06:07"}`,
+		`{"to_date":"2026-08-15T06:07:08+0000"}`,
+		// And what one of them required be refused, which still is.
+		`{"to_date":"2026-01-01T00:00:00+05:00"}`,
+		`{"from_date":"2026-01-01T00:00:00-08:00"}`,
+		// Value checks behind the shape gate.
+		`{"to_date":"0000-01-01T00:00:00Z"}`,
+		`{"to_date":"2026-02-30"}`,
+		`{"to_date":"2026-13-01"}`,
+	} {
+		if _, err := step.windowFor([]byte(scope)); err == nil {
+			t.Errorf("windowFor(%s) accepted a non-canonical scope", scope)
+		}
+	}
+
+	// The DERIVED lower bound is range-checked too: this parses, and then
+	// `to - 30 days` leaves the reference's 1..9999 year range.
+	if _, err := step.windowFor([]byte(`{"to_date":"0001-01-01"}`)); err == nil {
+		t.Error("windowFor accepted a to_date whose default lower bound underflows year 1")
 	}
 }

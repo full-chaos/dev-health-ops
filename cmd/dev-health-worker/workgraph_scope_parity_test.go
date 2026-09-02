@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 	"time"
 )
@@ -70,9 +68,13 @@ type divergence struct {
 var enumeratedDivergences = map[string]divergence{
 	`"2026-W33-6"`: {
 		want: "RAISES",
-		reason: "ISO week date. Accepted by fromisoformat, refused here: nothing in the tree writes " +
-			"a build scope with dates at all (the fixed producer persists `{}`), so it is unreachable, " +
-			"and a loud refusal beats silently computing a different window.",
+		reason: "ISO week date. Accepted by fromisoformat, refused here because no producer emits " +
+			"it -- see canonicalScopeShape for the three shapes they do emit. A loud refusal " +
+			"beats silently computing a different window.\n\n" +
+			"NOTE, correcting an earlier claim in this file: it is NOT true that \"nothing writes " +
+			"a build scope with dates\". Measured on the proof org, 546 of 612 " +
+			"work_graph_execution_requests rows carry dates; only the 66 fixed-schedule rows are " +
+			"`{}`. The unreachability here is about the SPELLING, not about dates being absent.",
 	},
 	`"2026-243"`: {
 		want:   "RAISES",
@@ -101,69 +103,42 @@ var enumeratedDivergences = map[string]divergence{
 // fails a class that matches nothing, exactly as it fails a value entry that
 // has stopped diverging.
 type divergenceClass struct {
-	name    string
-	reason  string
-	matches func(value string) bool
+	name   string
+	reason string
+	// matches receives the FIELD as well as the value, because a class is
+	// field-specific in meaning even though the table is keyed by value.
+	//
+	// Two separate defects came from leaving the field out. A date/time
+	// separator class matched "1_1" inside an underscored UUID, and then a
+	// date-shape heuristic added to fix that matched "11111111-1111-..." --
+	// a UUID's leading hex digits satisfy `^\d{4}-?\d{2}-?\d{2}` perfectly
+	// well. Guessing the field from the value's shape is the wrong repair; the
+	// field is right here and was simply being discarded.
+	matches func(field, value string) bool
 }
 
 var divergenceClasses = []divergenceClass{
 	{
-		name: "non-zero UTC offset",
-		reason: "the reference's strftime keeps the wall-clock fields and DISCARDS the offset, so " +
-			"rendering a shifted bound would silently pick one of two possible instants. Refused " +
-			"rather than guessed; see issueprlinks.ErrNonUTCWindowBound, which refuses the same " +
-			"shape one layer down.",
-		matches: func(value string) bool {
-			offset := trailingOffsetText(value)
-			return offset != "" && offset != "Z" && strings.Trim(offset[1:], "0:") != ""
-		},
-	},
-	{
-		name: "arbitrary single-character date/time separator",
-		reason: "`fromisoformat` accepts ANY single character between the date and the time, so " +
-			"\"2026-08-15t06:07:08\" and \"2026-08-15_06:07:08\" both parse there. Go accepts " +
-			"only \"T\" and a space. Unreachable -- nothing writes a build scope with dates -- and " +
-			"a loud refusal beats accepting a separator no producer would emit.",
-		matches: func(value string) bool {
-			return looksLikeADate(value) && separatorRun.MatchString(value)
-		},
-	},
-	{
-		name: "hour-24 midnight rollover",
-		reason: "`fromisoformat` accepts an hour of 24 and ROLLS IT to 00:00 the next day: " +
-			"\"2026-08-15T24:00\" is 2026-08-16T00:00:00 there. Go's time.Parse rejects hour 24 " +
-			"outright. Fail-closed, and unreachable -- nothing writes a build scope with dates -- " +
-			"but note the reference's behaviour is a SILENT DAY SHIFT rather than an error, so " +
-			"matching it would mean reproducing a rollover no producer intends.",
-		matches: func(value string) bool {
-			return looksLikeADate(value) && hour24.MatchString(value)
-		},
-	},
-	{
-		name: "bare date carrying an offset",
-		reason: "the reference does NOT read this as a date with an offset. It reads the sign as " +
-			"the date/time separator and the rest as a WALL-CLOCK TIME: " +
-			"fromisoformat(\"20260815+05:00\") is 2026-08-15T05:00:00 with tzinfo=None. A value " +
-			"every reader parses as \"midnight at UTC+5\" becomes \"05:00, timezone unknown\", and " +
-			"the window moves five hours. Refused rather than reproduced.",
-		matches: func(value string) bool {
-			offset := trailingOffsetText(value)
-			return offset != "" && bareDate.MatchString(strings.TrimSuffix(value, offset))
+		name: "non-canonical spelling (no producer emits it)",
+		reason: "the adapter accepts EXACTLY the three shapes the producers emit -- " +
+			"YYYY-MM-DD, YYYY-MM-DDTHH:MM:SSZ and YYYY-MM-DDTHH:MM:SS+00:00 (see " +
+			"canonicalScopeShape) -- and refuses every other spelling the reference happens to " +
+			"accept. That covers basic dates, the `t`/`_`/space separators, minute and " +
+			"fractional precision, the +0000/+00/+00:00:00 offset spellings, non-zero offsets, " +
+			"hour-24 rollover and malformed suffixes.\n\n" +
+			"This replaced four narrower classes and a grammar that mirrored " +
+			"datetime.fromisoformat. Three consecutive review rounds each found a " +
+			"dangerous-direction defect in that grammar, and each was introduced by the previous " +
+			"round's fix, because closing a cell left the surface intact. Go can only be " +
+			"guaranteed to accept nothing the reference rejects if Go accepts almost nothing.\n\n" +
+			"Fail-closed by construction: a scope no producer writes fails a build. The other " +
+			"direction writes mapping rows for a build the bridge then rejects.",
+		matches: func(field, value string) bool {
+			return (field == "to_date" || field == "from_date") &&
+				!canonicalScopeShape.MatchString(value)
 		},
 	},
 }
-
-var (
-	trailingOffset = regexp.MustCompile(`(Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?)$`)
-	separatorRun   = regexp.MustCompile(`\d[t_]\d`)
-	bareDate       = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}$`)
-	datePrefix     = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}`)
-	// Hour 24 only: "T24:00" and "T24:00:00", not an offset of +24:00 (which is
-	// a different class, already covered by non-zero offset) and not hour 4 of
-	// some longer number.
-	hour24       = regexp.MustCompile(`[Tt _]24:?[0-5]\d(:?[0-5]\d)?(\.\d+)?$`)
-	dateTimeBody = regexp.MustCompile(`^\d{4}-?\d{2}-?\d{2}[Tt _]\d{2}:?\d{2}(:?\d{2}(\.\d+)?)?$`)
-)
 
 // looksLikeADate gates the DATE-family classes so they cannot claim a value
 // from another field.
@@ -178,40 +153,26 @@ var (
 // reference on that value. Had it disagreed, the class would have silenced a
 // real repo_id divergence behind a reason about date separators -- the precise
 // hazard a class carries that a per-value entry does not.
-func looksLikeADate(value string) bool {
-	return datePrefix.MatchString(value)
-}
-
-// trailingOffsetText returns the offset spelling at the end of a value, or "".
-//
-// A trailing "-15" is a well-formed ±HH offset, so "2026-08-15" matches the
-// pattern and is NOT an offset. The remainder is therefore required to be a
-// date or a date-time in its own right: for a bare date the remainder would be
-// "2026-08", which is neither.
-//
-// This mirrors the same precaution in parseScopeInstant, and it was NOT written
-// defensively -- the staleness check reported "2026-08-15" as a stale entry in
-// the non-zero-offset class the first time this ran.
-func trailingOffsetText(value string) string {
-	offset := trailingOffset.FindString(value)
-	if offset == "" {
-		return ""
-	}
-	body := strings.TrimSuffix(value, offset)
-	if !bareDate.MatchString(body) && !dateTimeBody.MatchString(body) {
-		return ""
-	}
-	return offset
-}
-
 // classifyDivergence reports the class covering a value, if any.
-func classifyDivergence(quotedValue string) (divergenceClass, bool) {
+func classifyDivergence(field, quotedValue string) (divergenceClass, bool) {
+	// Only a NON-EMPTY JSON STRING can reach a parser at all. Everything else is
+	// falsy to Python -- `null`, `""`, `false`, `0`, `0.0` -- so the field is
+	// treated as absent, the default window applies, and both planes agree.
+	//
+	// The `quotedValue[0] != '"'` test is load-bearing and not defensive:
+	// json.Unmarshal of the four bytes `null` into a string SUCCEEDS and leaves
+	// the string empty, so an err check alone lets `null` through. This class
+	// then claimed it, and the staleness check reported it -- the third time a
+	// class has claimed something outside its subject.
+	if len(quotedValue) == 0 || quotedValue[0] != '"' {
+		return divergenceClass{}, false
+	}
 	var value string
-	if err := json.Unmarshal([]byte(quotedValue), &value); err != nil {
+	if err := json.Unmarshal([]byte(quotedValue), &value); err != nil || value == "" {
 		return divergenceClass{}, false
 	}
 	for _, class := range divergenceClasses {
-		if class.matches(value) {
+		if class.matches(field, value) {
 			return class, true
 		}
 	}
@@ -245,19 +206,19 @@ var parsedScopeFields = map[string]struct{}{
 // through under `heuristic_window` (it does not), so Go correctly agrees with
 // the reference in the second case. Keying on the form alone marked those rows
 // as stale divergences; the field axis is what made that visible.
-func scopeValueKey(t *testing.T, raw json.RawMessage) (string, bool) {
+func scopeValueKey(t *testing.T, raw json.RawMessage) (field, key string, ok bool) {
 	t.Helper()
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil || len(fields) != 1 {
-		return "", false
+		return "", "", false
 	}
-	for field, value := range fields {
-		if _, parsed := parsedScopeFields[field]; !parsed {
-			return "", false
+	for name, value := range fields {
+		if _, parsed := parsedScopeFields[name]; !parsed {
+			return "", "", false
 		}
-		return canonicalScope(t, value), true
+		return name, canonicalScope(t, value), true
 	}
-	return "", false
+	return "", "", false
 }
 
 func loadScopeParityTable(t *testing.T) scopeParityTable {
@@ -319,10 +280,10 @@ func TestBuildScopeMatchesTheBridgeAdmission(t *testing.T) {
 
 			var diverge divergence
 			enumerated := false
-			if key, parsed := scopeValueKey(t, testCase.Scope); parsed {
+			if field, key, parsed := scopeValueKey(t, testCase.Scope); parsed {
 				diverge, enumerated = enumeratedDivergences[key]
 				if !enumerated {
-					if class, matched := classifyDivergence(key); matched {
+					if class, matched := classifyDivergence(field, key); matched {
 						diverge = divergence{want: "RAISES", reason: class.name + ": " + class.reason}
 						enumerated = true
 					}
@@ -399,10 +360,15 @@ func parseReferenceISO(value string) (time.Time, error) {
 // accumulating entries for shapes nobody measures any more.
 func TestEveryEnumeratedDivergenceIsInTheTable(t *testing.T) {
 	table := loadScopeParityTable(t)
+	// Keyed by field AND value: a class is field-specific, so "does this class
+	// still match anything" is only answerable with both.
+	type fieldValue struct{ field, key string }
 	measured := make(map[string]struct{}, len(table.Cases))
+	measuredPairs := make(map[fieldValue]struct{}, len(table.Cases))
 	for _, testCase := range table.Cases {
-		if key, parsed := scopeValueKey(t, testCase.Scope); parsed {
+		if field, key, parsed := scopeValueKey(t, testCase.Scope); parsed {
 			measured[key] = struct{}{}
+			measuredPairs[fieldValue{field, key}] = struct{}{}
 		}
 	}
 	for raw, diverge := range enumeratedDivergences {
@@ -422,12 +388,12 @@ func TestEveryEnumeratedDivergenceIsInTheTable(t *testing.T) {
 	// comment first, and it was not true until this loop existed.
 	for _, class := range divergenceClasses {
 		matched := 0
-		for raw := range measured {
+		for pair := range measuredPairs {
 			var value string
-			if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			if err := json.Unmarshal([]byte(pair.key), &value); err != nil {
 				continue
 			}
-			if class.matches(value) {
+			if class.matches(pair.field, value) {
 				matched++
 			}
 		}

@@ -236,8 +236,26 @@ print(json.dumps({
 		live.UnicodeVersion, live.Total, len(live.Blocks), unicode.Version)
 
 	if len(live.Blocks) != len(pythonDecimalBlocks) {
-		t.Fatalf("live python has %d decimal blocks, this port carries %d",
-			len(live.Blocks), len(pythonDecimalBlocks))
+		// PHRASED DELIBERATELY. This message once read "live python has 68
+		// decimal blocks, this port carries 76", which invites exactly the
+		// wrong repair: regenerate the table against whatever interpreter is
+		// running and make the port silently wrong for production.
+		//
+		// It happened. CI pinned Python 3.13.14 (Unicode 15.1, 68 blocks) while
+		// the shipped interpreter is 3.14 (Unicode 16.0, 76 blocks), and this
+		// guard was the first oracle sensitive enough to notice — the decimal
+		// set grew between those versions. Fixed on main in #2104.
+		//
+		// So the message names the SIDE to fix, not just the discrepancy.
+		t.Fatalf(
+			"INTERPRETER SKEW, not table drift.\n"+
+				"  running python: unicode %s (%d decimal blocks)\n"+
+				"  this port's table: %d blocks, derived from the SHIPPED interpreter\n"+
+				"Fix the ENVIRONMENT, not the table: this port must match the Python that runs\n"+
+				"builder.py in production (pyproject requires-python, docker/Dockerfile), not\n"+
+				"whichever interpreter this job happens to provide. Regenerating the table\n"+
+				"against a different version silently changes which runes are PR numbers.",
+			live.UnicodeVersion, len(live.Blocks), len(pythonDecimalBlocks))
 	}
 	for index, start := range live.Blocks {
 		if rune(start) != pythonDecimalBlocks[index] {

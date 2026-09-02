@@ -309,6 +309,17 @@ type DailyMetricsNativeFamilyObserver interface {
 	) error
 }
 
+// WorkGraphIssueEdgesObserver is the narrow capability the native
+// issue<->issue edge pre-step depends on after one build (CHAOS-4766). It is
+// deliberately narrower than Observer: the pre-step runs inside a lease and
+// has no business reaching any other counter, and a narrow interface keeps
+// its tests from having to stub thirty methods to assert one number.
+type WorkGraphIssueEdgesObserver interface {
+	ObserveWorkGraphIssueEdges(
+		rowsByOutcome map[WorkGraphIssueEdgeOutcome]int, rowsRead int, duration time.Duration,
+	) error
+}
+
 // IncidentValidFromGuardObserver is the narrow capability IncidentExecutor
 // depends on after every operational_service_repository_mappings join
 // (CHAOS-4269/CHAOS-4295). The Python `active_incidents_query` predicate

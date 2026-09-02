@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +50,7 @@ EXPECTED_PACKAGES = {
     "internal/jobs/report",
     "internal/jobs/system",
     "internal/jobs/workgraph",
+    "internal/jobs/workgraph/edges",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -288,8 +291,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # of the engine, so a fake connection cannot fail them. Weight 122s,
     # ceil() of a local run of all seven tests together (each starting its own
     # container).
-    assert "36 package(s) discovered, 0 denylisted, 36 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 36 package(s)" in result.stdout
+    # CHAOS-4766 added internal/jobs/workgraph/edges (36 -> 37 discovered,
+    # 36 -> 37 will run): the native issue<->issue edge derivation got its
+    # first -tags integration file. writeorder_integration_test.go proves the
+    # work_graph_edges ReplacingMergeTree collapse -- Python's confidence=1.0
+    # and this port's variant-C 0.9 are the SAME row, because the sorting key
+    # excludes confidence -- against the real migration chain in a real
+    # container, asserting BOTH write orders so a pre-step regression cannot
+    # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
+    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 37 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -318,7 +329,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4441: 36, not 35 -- internal/jobs/investment/chquery added. This
     # is the FLATTENED set across all shards, so unlike the selected-package
     # count above it INCLUDES the providersync shard-1 package.
-    assert len(flattened) == len(set(flattened)) == 36
+    # CHAOS-4766: 37, not 36 -- internal/jobs/workgraph/edges added.
+    assert len(flattened) == len(set(flattened)) == 37
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1615,7 +1627,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4441: 35, not 34 -- internal/jobs/investment/chquery added
     # (36 discovered - 1 for the providersync shard-1 package = 35 across
     # shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 35
+    # CHAOS-4766: 36, not 35 -- internal/jobs/workgraph/edges added
+    # (37 discovered - 1 for the providersync shard-1 package = 36 across
+    # shards 2/3).
+    assert len(selected_packages) == len(set(selected_packages)) == 36
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -1985,52 +2000,19 @@ def test_container_derivation_still_sees_the_known_verbs() -> None:
 # — but the tag VALUE may be a shell variable, so the value is not inspected.
 _GO_TEST_WITH_TAGS = re.compile(r"go test\b[^\n]*-tags[= ]")
 _CHECK_GO_INVOCATION = re.compile(r"ci/check_go\.sh\s+(\S+)")
-# Any shell word ending in .sh, however it is spelled. `ext=.sh` in an assembled
-# command path matches, which is the point.
-_SCRIPT_TOKEN = re.compile(r"\S*\.sh\b")
 # A container runtime named anywhere in the step, and a build tag arriving
 # through the environment rather than the command line.
 _CONTAINER_TOOL = re.compile(r"\b(docker|podman|compose|nerdctl)\b")
 _TAGS_VIA_ENV = re.compile(r"\b(GOFLAGS|GOEXPERIMENT)\b")
 
-# Scripts asserted not to start containers. `ci/check_go.sh` is absent on purpose:
-# it is judged by its verb, not by its name.
-_SAFE_SCRIPTS = frozenset({"ci/check_river_compat_static.sh"})
 
-
-def _run_starts_containers(command: str) -> bool:
-    """Fail closed at the STEP level, not just the verb level.
-
-    Recognising one literal `ci/check_go.sh <verb>` shape and skipping everything
-    else meant any other spelling was silently treated as safe. A codex round
-    showed two: a job running `go test -tags=integration ... ./cmd/dev-health-worker`
-    directly, and `bash ci/check_go.sh "${requested}"` through a variable. Both
-    start containers; both were accepted.
-
-    A step is now container-starting unless it can be SHOWN otherwise: a check_go
-    verb must be a literal on the safe list, and a `go test` must carry no tags.
-    """
-    if _GO_TEST_WITH_TAGS.search(command) or _CONTAINER_TOOL.search(command):
-        return True
-    if _TAGS_VIA_ENV.search(command):
-        # check_go.sh scrubs both now, so this is defence in depth: a step that
-        # sets them is doing something the safe-list cannot vouch for.
-        return True
-    for match in _CHECK_GO_INVOCATION.finditer(command):
-        verb = match.group(1)
-        if re.fullmatch(r"[a-z0-9-]+", verb) is None:
-            return True  # indirection: cannot be shown safe, so it is not
-        if verb not in _NON_CONTAINER_VERBS:
-            return True
-    for match in _SCRIPT_TOKEN.finditer(command):
-        script = match.group(0).strip("\"'").lstrip("./")
-        if script.endswith("check_go.sh"):
-            continue  # judged by its verb above
-        if script not in _SAFE_SCRIPTS:
-            return True
-    return False
-
-
+# `_run_starts_containers` lived here. It was defined and never called --
+# orphaned when the guards were reduced for #2111, and still orphaned after I
+# claimed to have rewired it: what I made load-bearing was its `_CONTAINER_TOOL`
+# regex, not the function. Everything it checked (`go test -tags`, tags via
+# GOFLAGS, an unsafe check_go verb) is checked by `_run_uses_go_test_harness`,
+# which IS called. Dead code in a guard file reads as protection while providing
+# none, so it is removed rather than left as a comfort.
 def _run_uses_go_test_harness(command: str) -> bool:
     """Does this step start containers via internal/testsupport/containers?
 
@@ -2304,3 +2286,754 @@ def test_mirrored_image_matches_testcontainers_prefix_semantics() -> None:
     refused = run("docker.io/postgres:1", prefix)
     assert refused.returncode != 0, refused.stdout
     assert "names docker.io explicitly" in refused.stderr, refused.stderr
+
+
+def _mentions_mirror(value: Any) -> bool:
+    """True if any nested string references the ghcr mirror.
+
+    Uses the anchored `_MIRROR_HOST` matcher rather than a substring test. The
+    earlier substring form was satisfied by `evil-ghcr.io/` and
+    `ghcr.io.attacker.net/` -- CodeQL raised it as incomplete URL substring
+    sanitization and was right.
+    """
+    if isinstance(value, str):
+        return _MIRROR_HOST.search(_normalise_scheme(value)) is not None
+    if isinstance(value, dict):
+        return any(_mentions_mirror(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_mentions_mirror(v) for v in value)
+    return False
+
+
+def _mirror_image_declarations(job: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Job-level `container:`/`services:` images that come from the mirror.
+
+    These are NOT reachable by a login step: the runner pulls them BEFORE the
+    first step executes, which is why GitHub requires declaration-level
+    `credentials:` for a private image. A `docker/login-action` step cannot
+    rescue them, so they need their own assertion rather than folding into the
+    step-ordering one.
+    """
+    found: list[tuple[str, dict[str, Any]]] = []
+    container = job.get("container")
+    if isinstance(container, str):
+        container = {"image": container}
+    if isinstance(container, dict) and _mentions_mirror(container.get("image", "")):
+        found.append(("container", container))
+    services = job.get("services") or {}
+    if isinstance(services, dict):
+        for service_name, service in services.items():
+            if isinstance(service, str):
+                service = {"image": service}
+            if isinstance(service, dict) and _mentions_mirror(service.get("image", "")):
+                found.append((f"services.{service_name}", service))
+    return found
+
+
+_ALLOWED_IMAGE_REGISTRIES = ("ghcr.io/full-chaos/", "mirror.gcr.io/", "gcr.io/")
+
+# EMPTY, and that is the point: CHAOS-4851 mirrored the last ten Docker Hub
+# service images, so nothing is exempt. The mechanism stays because an empty
+# exemption list is worth keeping honest -- each entry is (workflow, job, where,
+# IMAGE), and the test asserts every entry is STILL PRESENT, so a debt slot
+# cannot be quietly reused for a different image and a paid-off entry fails
+# until it is deleted. Keying on the coordinate alone made it an exemption
+# rather than a ratchet.
+_UNMIRRORED_IMAGE_DEBT: set[tuple[str, str, str, str]] = set()
+
+# Actions that pull an image themselves. `docker/setup-buildx-action` pulls
+# `moby/buildkit:buildx-stable-1` from Docker Hub before any login runs -- the
+# reason it was removed from the mirror workflow, where it deadlocked against
+# the very quota that workflow exists to escape. These four are ticketed debt.
+_IMAGE_PULLING_ACTION_DEBT = {
+    ("docker-images.yml", "build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "merge", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+}
+_IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
+
+
+def _resolve_image_expressions(image: str) -> str:
+    """Resolve the one GitHub expression we can prove, and only that one.
+
+    `ghcr.io/${{ github.repository_owner }}/x` provably resolves to the allowed
+    prefix in this repository. Every OTHER expression is left in place so the
+    caller rejects it -- deliberately, because an unresolvable expression is an
+    unknown shape and unknown shapes must fail.
+    """
+    return image.replace("${{ github.repository_owner }}", "full-chaos").replace(
+        "${{github.repository_owner}}", "full-chaos"
+    )
+
+
+def _image_is_allowed(image: str) -> bool:
+    """Allowlist, not blocklist. Anything not provably allowed is refused.
+
+    THIS IS THE INVERSION. Eight fail-opens on this surface were all the same
+    mistake: enumerate the dangerous spellings and let everything else through.
+    An image can be named through run text, step env, job env, `container:`,
+    `services:`, a matrix, a composite action, a reusable workflow or an
+    expression like `format('{0}/{1}', 'ghcr.io', owner)` -- that set is
+    unbounded and every round found another member of it.
+
+    The approved registries are three and change roughly never, so the test
+    enumerates THOSE and refuses everything else, including shapes nobody has
+    thought of yet.
+    """
+    reference = _resolve_image_expressions(str(image)).strip()
+    if "${{" in reference or "${" in reference:
+        return False  # unresolvable => unknown => refused
+    # Registry HOSTS are case-insensitive DNS names, so `GHCR.IO/full-chaos/x`
+    # names our mirror and must not be refused. This compares prefixes rather
+    # than calling `.startswith` on a casefolded string, because `casefold()`
+    # can CHANGE LENGTH -- `'\u00df'.casefold() == 'ss'` -- and a match on the folded
+    # form paired with a slice of the original mis-slices. Nothing is sliced
+    # here, but the comparison is written the safe way so it stays correct if a
+    # caller ever does.
+    folded = reference.casefold()
+    return any(
+        folded[: len(allowed)] == allowed.casefold()
+        for allowed in _ALLOWED_IMAGE_REGISTRIES
+    )
+
+
+def _all_image_declarations() -> list[tuple[str, str, str, str]]:
+    """(workflow, job, where, image) for every image the RUNNER pulls.
+
+    Job-level `container:` and `services:` only: those are pulled before the
+    first step, which is what makes them un-rescuable by a login step. A step's
+    `with: image:` (an SBOM scan of a locally built tag, say) is an action input,
+    not a registry pull, and is out of scope by construction rather than by
+    being overlooked.
+    """
+    found: list[tuple[str, str, str, str]] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            container = job.get("container")
+            if isinstance(container, str):
+                container = {"image": container}
+            if isinstance(container, dict) and container.get("image"):
+                found.append(
+                    (path.name, job_name, "container", str(container["image"]))
+                )
+            for service_name, service in (job.get("services") or {}).items():
+                if isinstance(service, str):
+                    service = {"image": service}
+                if isinstance(service, dict) and service.get("image"):
+                    found.append(
+                        (
+                            path.name,
+                            job_name,
+                            f"services.{service_name}",
+                            str(service["image"]),
+                        )
+                    )
+    return found
+
+
+def test_every_pulled_image_resolves_to_an_approved_registry() -> None:
+    """Allowlist every image the runner pulls; refuse unknown shapes.
+
+    Replaces a guard that had been patched eight times, each time to recognise
+    one more way of naming an image. The eighth was
+    `${{ format('{0}/{1}/postgres:18-alpine', 'ghcr.io', github.repository_owner) }}`,
+    which contains no literal `ghcr.io/` and so passed a literal check while
+    pulling from the mirror without credentials.
+    """
+    offenders: list[str] = []
+    seen_debt: set[tuple[str, str, str, str]] = set()
+
+    for workflow, job_name, where, image in _all_image_declarations():
+        # The image is PART of the key. Keying on the coordinate alone made this
+        # an exemption rather than a ratchet: swapping any other Docker Hub
+        # image into a debt slot kept the coordinate present and passed.
+        key = (workflow, job_name, where, image)
+        if key in _UNMIRRORED_IMAGE_DEBT:
+            seen_debt.add(key)
+            continue
+        if not _image_is_allowed(image):
+            offenders.append(
+                f"{workflow}: {job_name}.{where} pulls {image!r}, which does not "
+                f"resolve to an approved registry {_ALLOWED_IMAGE_REGISTRIES}. "
+                "An unresolvable expression counts as unapproved."
+            )
+
+    stale = sorted(_UNMIRRORED_IMAGE_DEBT - seen_debt)
+    assert not stale, (
+        "ticketed image debt is stale -- these declarations no longer exist or "
+        "were mirrored; delete them from _UNMIRRORED_IMAGE_DEBT so the list "
+        f"cannot rot into a silent allowlist:\n  {stale}"
+    )
+    assert not offenders, "\n".join(offenders)
+
+
+def test_mirror_pulled_container_images_declare_credentials() -> None:
+    """A mirror image on `container:`/`services:` needs its own credentials.
+
+    The runner pulls these BEFORE the first step, so no `docker/login-action`
+    step can authenticate them; GitHub requires `credentials:` on the
+    declaration itself.
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for where, declaration in _mirror_image_declarations(job):
+                credentials = declaration.get("credentials") or {}
+                if not credentials.get("username") or not credentials.get("password"):
+                    offenders.append(
+                        f"{path.name}: {job_name}.{where} pulls "
+                        f"{declaration.get('image')!r} from the mirror without "
+                        "`credentials:`; the runner pulls it before any login step"
+                    )
+    assert not offenders, "\n".join(offenders)
+
+
+def test_no_unscanned_local_reusable_workflows_or_composite_actions() -> None:
+    """Fail closed on indirection this file cannot see through.
+
+    A `go.yml` job calling `./.github/workflows/hidden.yml`, whose callee runs
+    `docker/login-action` with the registry omitted, is invisible to every guard
+    here -- and an omitted registry IS Docker Hub. None exist today, so rather
+    than write a scanner for a case with no instances, this REFUSES the
+    indirection: adding one fails this test until the guards learn to follow it.
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            if str(job.get("uses", "")).startswith("./"):
+                offenders.append(
+                    f"{path.name}: job {job_name!r} calls local reusable workflow "
+                    f"{job.get('uses')!r}, which no guard in this file follows"
+                )
+            for step in job.get("steps") or []:
+                if str(step.get("uses", "")).startswith("./"):
+                    offenders.append(
+                        f"{path.name}: {job_name} uses local action "
+                        f"{step.get('uses')!r}, which no guard in this file follows"
+                    )
+    assert not offenders, (
+        "\n".join(offenders)
+        + "\n\nTeach the image/login guards to follow this indirection before adding it."
+    )
+
+
+def test_image_pulling_action_steps_are_allowlisted_or_ticketed() -> None:
+    """Actions pull images too, and the allowlist could not see them.
+
+    Two shapes reach a registry without any `container:`/`services:`
+    declaration:
+
+    * `uses: docker://<image>` -- a container action, pulled directly.
+    * an action that pulls internally. `docker/setup-buildx-action` fetches
+      `moby/buildkit:buildx-stable-1` from Docker Hub before any login step
+      runs. That is not theoretical here: it deadlocked the mirror workflow
+      against the very Docker Hub quota the mirror exists to escape, and was
+      removed for exactly this reason.
+
+    `docker://` refs must resolve to an approved registry. Internally-pulling
+    actions are ticketed debt, asserted STILL PRESENT so the list cannot rot.
+    """
+    offenders: list[str] = []
+    seen_debt: set[tuple[str, str, str]] = set()
+
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                uses = str(step.get("uses", ""))
+                if uses.startswith("docker://"):
+                    image = uses[len("docker://") :]
+                    if not _image_is_allowed(image):
+                        offenders.append(
+                            f"{path.name}: {job_name} runs container action "
+                            f"{uses!r}, which does not resolve to an approved "
+                            f"registry {_ALLOWED_IMAGE_REGISTRIES}"
+                        )
+                    continue
+                action = uses.split("@", 1)[0]
+                if action in _IMAGE_PULLING_ACTIONS:
+                    key = (path.name, job_name, action)
+                    if key in _IMAGE_PULLING_ACTION_DEBT:
+                        seen_debt.add(key)
+                    else:
+                        offenders.append(
+                            f"{path.name}: {job_name} uses {action!r}, which "
+                            "pulls its own image from Docker Hub; mirror it or "
+                            "add it to _IMAGE_PULLING_ACTION_DEBT with a ticket"
+                        )
+
+    stale = sorted(_IMAGE_PULLING_ACTION_DEBT - seen_debt)
+    assert not stale, (
+        "ticketed action debt is stale -- these steps no longer exist; delete "
+        f"them so the list cannot rot into a silent allowlist:\n  {stale}"
+    )
+    assert not offenders, "\n".join(offenders)
+
+
+# Docker subcommands that PULL an image, and those that provably do not. This is
+# an allowlist too: an unrecognised subcommand is refused rather than assumed
+# harmless, because the point of this file is that "assumed harmless" is how
+# twelve fail-opens happened.
+# `buildx` in this set is LOAD-BEARING, not an oversight. Two scanned workflows
+# depend on it: mirror-test-images.yml runs `docker buildx imagetools create`
+# against a Docker Hub SOURCE -- that is the mirror's entire job -- and
+# docker-images.yml uses imagetools create/inspect. Removing `buildx` while
+# tidying would fail the mirror and the image build on a required check.
+_DOCKER_NON_PULLING_SUBCOMMANDS = frozenset(
+    {
+        "build",
+        "buildx",
+        "tag",
+        "push",
+        "save",
+        "load",
+        "login",
+        "logout",
+        "version",
+        "info",
+        "inspect",
+        "rm",
+        "rmi",
+        "stop",
+        "kill",
+        "ps",
+        "logs",
+        "exec",
+        "cp",
+        "system",
+        "ls",
+        "list",
+        "history",
+        "prune",
+        "df",
+        "stats",
+        "top",
+        "port",
+        "start",
+        "restart",
+        "pause",
+        "unpause",
+        "rename",
+        "wait",
+        "diff",
+        "attach",
+        "events",
+        "commit",
+        "export",
+    }
+)
+# Which verb pulls an image depends on the NOUN it sits under. `create` pulls
+# under `container` and bare (`docker create <image>`), but `docker volume
+# create myvol` creates a named volume from no image at all -- and the flat verb
+# set read `myvol` as an image, then reported it as unresolvable. Fail-closed,
+# so nothing bad was ever admitted, but it would fail a legitimate workflow on a
+# required check with a message naming the wrong cause.
+#
+# `run` has the same shape and is safe today only by accident: it exists solely
+# under `container`. Encoding the dependence makes that deliberate.
+_NOUN_PULLING_VERBS: dict[str, frozenset[str]] = {
+    "": frozenset({"pull", "run", "create"}),  # bare `docker <verb>`
+    "image": frozenset({"pull"}),
+    "container": frozenset({"run", "create"}),
+    "service": frozenset({"create"}),  # `docker service create <image>`
+    "plugin": frozenset({"install"}),
+}
+# Nouns under which NO verb takes an image: they name a resource instead.
+_NON_PULLING_NOUNS = frozenset(
+    {
+        "volume",
+        "network",
+        "config",
+        "secret",
+        "node",
+        "context",
+        "builder",
+        "trust",
+        "system",
+        "manifest",
+        "swarm",
+    }
+)
+# Nouns whose verbs deploy from a FILE that names images. `docker stack deploy
+# -c compose.yml` is the swarm analogue of `docker compose up`: it reads a
+# compose file this scanner cannot see and pulls what the file names. Classing
+# it as resource-naming was wrong in the same way, and in the same file, as
+# `docker-compose` slipping past the refusal written for `docker compose`.
+_COMPOSE_LIKE_VERBS: dict[str, frozenset[str]] = {"stack": frozenset({"deploy"})}
+# The non-pulling verbs under a compose-like noun, ENUMERATED. The first cut let
+# any verb that was not the deploying one through, which is the shape that put
+# `image` in the exempt set: a category allowed wholesale because its known
+# members looked harmless. A verb added under `stack` later would have passed
+# unexamined. `config` is deliberately absent -- it reads a compose file, has no
+# instances here, and refusing it is the fail-closed answer to "probably fine".
+_COMPOSE_LIKE_SAFE_VERBS: dict[str, frozenset[str]] = {
+    "stack": frozenset({"ls", "ps", "rm", "services"})
+}
+_COMPOSE_LIKE_NOUNS = frozenset(_COMPOSE_LIKE_VERBS)
+_DOCKER_MANAGEMENT_NOUNS = (
+    frozenset(_NOUN_PULLING_VERBS) - {""} | _NON_PULLING_NOUNS | _COMPOSE_LIKE_NOUNS
+)
+# Compose is refused rather than scanned; the legacy hyphenated binary is the
+# same thing under another name and must not slip past that refusal.
+_COMPOSE_BINARIES = frozenset({"docker-compose", "podman-compose", "nerdctl-compose"})
+# The container tools this scans. A DECISION, not a completeness claim: `ctr`,
+# `buildah` and `apptainer` are not scanned and have no instances here. The
+# invariant is registry-scoped, so widening belongs with evidence of use.
+_CONTAINER_BINARIES = frozenset({"docker", "podman", "nerdctl"})
+
+
+def _run_pulled_images(command: str) -> tuple[list[str], list[str]]:
+    """(images this run text pulls, reasons it could not be determined).
+
+    `container:` and `services:` are not the only way a job reaches a registry:
+    a step can simply `run: docker pull postgres:16`. That is a Docker Hub pull
+    on a required check, and the declaration walk cannot see it.
+    """
+    images: list[str] = []
+    unknown: list[str] = []
+    # Join backslash continuations so a multi-line command is one command.
+    joined = re.sub(r"\\\n\s*", " ", command)
+    for raw in re.split(r"[\n;]|&&|\|\|", joined):
+        line = raw.strip()
+        if not _CONTAINER_TOOL.search(line):
+            continue
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError:
+            unknown.append(f"unparseable shell: {line[:60]}")
+            continue
+        if any(Path(t).name in _COMPOSE_BINARIES for t in tokens):
+            unknown.append(f"`docker-compose` invocation: {line[:60]}")
+            continue
+        tools = [i for i, t in enumerate(tokens) if Path(t).name in _CONTAINER_BINARIES]
+        if not tools:
+            continue
+        for start in tools:
+            rest = tokens[start + 1 :]
+            words = [t for t in rest if not t.startswith("-")]
+            sub = words[0] if words else None
+            if sub is None:
+                unknown.append(f"container tool with no subcommand: {line[:60]}")
+                continue
+            noun = ""
+            if sub in _DOCKER_MANAGEMENT_NOUNS:
+                # `docker image pull x` -> noun `image`, verb `pull`. A noun with
+                # no verb after it is unknown, not harmless.
+                if len(words) < 2:
+                    unknown.append(f"`docker {sub}` with no verb: {line[:60]}")
+                    continue
+                noun, sub = sub, words[1]
+                if sub in _COMPOSE_LIKE_VERBS.get(noun, frozenset()):
+                    unknown.append(
+                        f"`docker {noun} {sub}` deploys from a compose file whose "
+                        f"images this cannot see: {line[:60]}"
+                    )
+                    continue
+                if noun in _COMPOSE_LIKE_NOUNS:
+                    # Allowlist, not fall-through. Only these enumerated verbs
+                    # name a resource and pull nothing; anything else under this
+                    # noun is unknown and refused.
+                    if sub in _COMPOSE_LIKE_SAFE_VERBS.get(noun, frozenset()):
+                        continue
+                    unknown.append(
+                        f"unrecognised verb `docker {noun} {sub}`: {line[:60]}"
+                    )
+                    continue
+                if noun in _NON_PULLING_NOUNS:
+                    # Nothing under this noun takes an image; the next token is a
+                    # resource name, not a ref.
+                    continue
+            if sub == "compose":
+                # Images live in the compose file, not here. Refused rather than
+                # scanned: no workflow runs compose today, so a scanner would be
+                # untested code, and adding one should fail loudly.
+                unknown.append(f"`docker compose` invocation: {line[:60]}")
+                continue
+            if sub in _DOCKER_NON_PULLING_SUBCOMMANDS:
+                continue
+            if sub not in _NOUN_PULLING_VERBS.get(noun, frozenset()):
+                where = f"`docker {noun} {sub}`" if noun else f"`docker {sub}`"
+                unknown.append(f"unrecognised subcommand {where}: {line[:60]}")
+                continue
+            after = rest[rest.index(sub) + 1 :]
+            image = None
+            skip_next = False
+            for token in after:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if token.startswith("-"):
+                    # Flags taking a value; "=" forms carry their own value.
+                    if "=" not in token and token in {
+                        "-v",
+                        "--volume",
+                        "-e",
+                        "--env",
+                        "-p",
+                        "--publish",
+                        "--name",
+                        "--network",
+                        "-w",
+                        "--workdir",
+                        "--platform",
+                        "--entrypoint",
+                        "-u",
+                        "--user",
+                        "--label",
+                        "-l",
+                    }:
+                        skip_next = True
+                    continue
+                image = token
+                break
+            if image is None:
+                unknown.append(f"`docker {sub}` with no image argument: {line[:60]}")
+            else:
+                images.append(image)
+    return images, unknown
+
+
+def test_run_steps_do_not_pull_from_unapproved_registries() -> None:
+    """A `run:` step can reach a registry without any declaration.
+
+    `run: docker pull postgres:16` is a Docker Hub pull on a required check, and
+    the `container:`/`services:` walk is blind to it -- the same reach failure as
+    the `*.yml`-only glob, one surface over. The stated invariant is "do not pull
+    from Docker Hub", not "do not DECLARE a Docker Hub image".
+    """
+    offenders: list[str] = []
+    for path in _workflow_files():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (document.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for index, step in enumerate(job.get("steps") or []):
+                command = str(step.get("run", ""))
+                if not command:
+                    continue
+                images, unknown = _run_pulled_images(command)
+                for image in images:
+                    if not _image_is_allowed(image):
+                        offenders.append(
+                            f"{path.name}: {job_name} step {index} pulls {image!r}, "
+                            f"which does not resolve to {_ALLOWED_IMAGE_REGISTRIES}"
+                        )
+                for reason in unknown:
+                    offenders.append(
+                        f"{path.name}: {job_name} step {index}: {reason} -- an "
+                        "image that cannot be determined is refused, not assumed safe"
+                    )
+    assert not offenders, "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    "command,expected_refused",
+    [
+        # `image` and `container` are management NOUNS. Exempting the noun
+        # exempted every verb beneath it, so the modern spelling of a pull was
+        # silently allowed while the old spelling was caught.
+        ("docker image pull postgres:16", True),
+        ("podman image pull postgres:16", True),
+        ("docker container run postgres:16", True),
+        ("docker container create postgres:16", True),
+        # The same forms against the mirror must still be ACCEPTED. A guard that
+        # refuses valid syntax is as broken as one that admits a bad image, and
+        # only the accepting half proves the noun is resolved rather than banned.
+        ("docker image pull ghcr.io/full-chaos/postgres:18-alpine", False),
+        ("docker container run ghcr.io/full-chaos/postgres:18-alpine", False),
+        # Genuinely harmless verbs under a noun stay quiet.
+        ("docker image rm stale", False),
+        ("docker image ls", False),
+        # A noun with no verb is unknown, and unknown is refused.
+        ("docker image", True),
+    ],
+)
+def test_management_noun_forms_resolve_to_their_verb(
+    command: str, expected_refused: bool
+) -> None:
+    """`docker image pull` is `docker pull` spelled the modern way."""
+    images, unknown = _run_pulled_images(command)
+    refused = bool(unknown) or any(not _image_is_allowed(image) for image in images)
+    assert refused is expected_refused, (
+        f"{command!r}: refused={refused}, expected {expected_refused}. Management "
+        "nouns must be resolved to the verb after them, not treated as verbs."
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "docker compose up -d",
+        "docker-compose up -d",
+        "docker-compose -f tests/compose.yml up",
+        "podman-compose up",
+        "nerdctl-compose up",
+    ],
+)
+def test_every_compose_spelling_is_refused(command: str) -> None:
+    """Compose is refused rather than scanned -- in all of its spellings.
+
+    Its images live in the compose file, so this scanner cannot see them. The
+    hyphenated legacy binary is the same thing under another name: it matched
+    the container-tool regex but not the basename check, so it passed silently
+    while `docker compose` was correctly refused.
+    """
+    _, unknown = _run_pulled_images(command)
+    assert unknown, (
+        f"{command!r} was not refused. Compose images are invisible to this "
+        "scanner, so every spelling of it must be refused rather than skipped."
+    )
+
+
+def test_no_orphaned_module_level_helpers() -> None:
+    """No helper in this file may be defined and never called.
+
+    `_run_starts_containers` sat here defined-and-uncalled after the guards were
+    reduced for #2111 -- and survived a round of me asserting I had rewired it.
+    Dead code in a guard file is worse than absent code: it reads as protection,
+    and an audit counts it as coverage.
+
+    The control below guards the detector itself. An earlier hand-rolled version
+    of this check reported ten orphans because it miscounted single-call
+    functions; a detector with no control is a finding generator, not evidence.
+    """
+    import ast
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("_")
+    }
+    # Module-level CONSTANTS too. The first version walked functions only, and
+    # `_DOCKER_PULLING_SUBCOMMANDS` went dead when the per-noun verb sets
+    # replaced it -- caught by CodeQL, not by this. A detector that watches one
+    # kind of definition reports "no orphans" while another kind rots, which is
+    # the reassuring-but-false answer this test exists to prevent.
+    for node in tree.body:
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        defined |= {
+            t.id for t in targets if isinstance(t, ast.Name) and t.id.startswith("_")
+        }
+    used = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    used |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+
+    # CONTROL: a helper known to be called must be seen as called. If this fails
+    # the detector is broken and its orphan list means nothing.
+    assert "_ALLOWED_IMAGE_REGISTRIES" in used, (
+        "detector control failed: _ALLOWED_IMAGE_REGISTRIES is used by "
+        "_image_is_allowed but was not seen as used -- the constant half of "
+        "the orphan list cannot be trusted"
+    )
+    assert "_image_is_allowed" in used, (
+        "detector control failed: _image_is_allowed is called by "
+        "test_every_pulled_image_resolves_to_an_approved_registry but was not "
+        "seen as used -- the orphan list below cannot be trusted"
+    )
+
+    orphans = sorted(name for name in defined if name not in used)
+    assert not orphans, (
+        f"helper(s) defined and never called: {orphans}. Wire them in or delete "
+        "them -- an uncalled guard helper reads as protection while providing "
+        "none."
+    )
+
+
+@pytest.mark.parametrize(
+    "command,expected_refused",
+    [
+        # A resource name is not an image. `create` pulls under `container` and
+        # bare, but `docker volume create myvol` names a volume -- the flat verb
+        # set read `myvol` as an image and reported it unresolvable, failing a
+        # legitimate workflow with a message naming the wrong cause.
+        ("docker volume create myvol", False),
+        ("docker network create ci-net", False),
+        ("docker volume create --label keep=1 myvol", False),
+        ("docker secret create tls ./cert.pem", False),
+        ("docker config create app ./app.conf", False),
+        # ...while `create` under container and bare STILL pulls.
+        ("docker create postgres:16", True),
+        ("docker container create postgres:16", True),
+        ("docker create ghcr.io/full-chaos/postgres:18-alpine", False),
+        ("docker container create ghcr.io/full-chaos/postgres:18-alpine", False),
+        # An unrecognised verb under a known noun stays fail-closed.
+        ("docker container frobnicate x", True),
+    ],
+)
+def test_pulling_verbs_are_resolved_per_noun(
+    command: str, expected_refused: bool
+) -> None:
+    """Which verb pulls depends on the noun above it.
+
+    `run` exists only under `container`, so the flat set was safe for it by
+    accident rather than by design; encoding the dependence makes that
+    deliberate and fixes `create`, which genuinely differs by noun.
+    """
+    images, unknown = _run_pulled_images(command)
+    refused = bool(unknown) or any(not _image_is_allowed(image) for image in images)
+    assert refused is expected_refused, (
+        f"{command!r}: refused={refused}, expected {expected_refused} "
+        f"(images={images}, unknown={unknown}). A resource name must not be "
+        "read as an image, and a real image must still be checked."
+    )
+
+
+@pytest.mark.parametrize(
+    "command,expected_refused",
+    [
+        # `docker stack deploy -c file` is the swarm analogue of `docker compose
+        # up`: it deploys from a compose file naming images this scanner cannot
+        # see. Classing `stack` as resource-naming was the same error, in the
+        # same file, as `docker-compose` slipping past the `docker compose`
+        # refusal -- same shape, opposite treatment.
+        ("docker stack deploy -c compose.yml mystack", True),
+        ("docker stack deploy --compose-file x.yml svc", True),
+        # ...but only the file-deploying verb. These name a resource and pull
+        # nothing; refusing them would be a false failure on a valid workflow.
+        # One accepting row per ENUMERATED safe verb: these are what the
+        # allowlist admits, and an accepting row is the only thing that proves
+        # the guard is resolving rather than banning.
+        ("docker stack ls", False),
+        ("docker stack ps mystack", False),
+        ("docker stack rm mystack", False),
+        ("docker stack services mystack", False),
+        # ...and anything NOT enumerated is refused, including a verb that does
+        # not exist. The previous cut allowed every non-deploying verb, so a
+        # pulling verb added under `stack` later would have passed unexamined --
+        # the same shape as `image` sitting in the exempt set.
+        ("docker stack frobnicate mystack", True),
+        ("docker stack config -c compose.yml", True),
+    ],
+)
+def test_compose_like_nouns_refuse_only_their_deploying_verb(
+    command: str, expected_refused: bool
+) -> None:
+    """A file-deploying verb is unknowable; its siblings are not."""
+    images, unknown = _run_pulled_images(command)
+    refused = bool(unknown) or any(not _image_is_allowed(image) for image in images)
+    assert refused is expected_refused, (
+        f"{command!r}: refused={refused}, expected {expected_refused} "
+        f"(images={images}, unknown={unknown})."
+    )

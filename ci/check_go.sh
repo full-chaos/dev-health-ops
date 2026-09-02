@@ -503,6 +503,48 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/daily/filehotspots (frozen file-hotspots goldens vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython)$' \
+        ./internal/jobs/metrics/daily/filehotspots
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # TestFileHotspotsGoldenMatchesLivePython (CHAOS-4277) had NO registration
+  # anywhere in this function before this block -- found while adding the
+  # AST-lint follow-up's own guard to this same package and checking for a
+  # sibling block to extend, per lane-4441's CHAOS-4849 finding that a guard
+  # missing from this -run filter does not fail, it silently never runs. Its
+  # own marker for the reason spelled out above every other entry here: a
+  # shared marker is satisfied by whichever guard happened to run.
+  proof_file="${proof_dir}/file-hotspots-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: file_hotspots golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4818 AST-lint follow-up: sampleZScores' compound-assignment FMA
+  # site (hotspot_risk_score family). Used to also cover CodeOwnershipGini's
+  # own compound-assignment FMA site (ownership_gini family) -- dropped once
+  # this branch rebased onto PR #2123 (CHAOS-4824), which rewrote
+  # CodeOwnershipGini to use math/big.Int exclusively and made that site's
+  # FMA-fusion risk structurally impossible, not merely guarded.
+  proof_file="${proof_dir}/fma-followup-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/workgraph/issueprlinks (frozen issue-PR mapping golden vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -852,7 +894,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestWorkgraphIssueEdgesGoldenMatchesLivePython$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -865,6 +907,57 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-issue-edges-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, per the capacity-forecast reasoning: this guard derives
+  # a Unicode property table from the live interpreter, a different producer from
+  # the edge golden above it, and it is the only thing standing between a Python
+  # upgrade and a silent parity break in which pipeline owns a dependency row.
+  proof_file="${proof_dir}/workgraph-numeric-digit-table"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the Numeric_Type=Digit table was not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: a different Unicode property from the digit table above, and
+  # the one that decides which BRANCH of the canonicalisation a row takes.
+  proof_file="${proof_dir}/workgraph-python-lower"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pythonLower was not re-derived against live str.lower()\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: this one reads an interpreter SETTING rather than a Unicode
+  # property, so it rots for a different reason from every guard above --
+  # sys.set_int_max_str_digits() can change it at runtime, and it did not exist
+  # before Python 3.11. A deployment that raised or lowered it would leave this
+  # port disagreeing about which PR ids are convertible, in the direction that
+  # mislabels a build-aborting row as an ordinary PR.
+  # Its own marker: this is the guard that stops Go's unicode package being the
+  # oracle for a Python-facing predicate. It derives Python's DECIMAL set (the
+  # direction the digit-table guard above does not cover) and compares the two
+  # planes' Unicode versions, which is how a Go-only Nd rune parsed a PR number
+  # Python does not recognise.
+  # Its own marker: this one enumerates EVERY code point rather than a derived
+  # subset, because the two previous case guards were each blind to a one-rune
+  # property they did not think to vary -- context-sensitive final sigma, then
+  # Unicode version skew between x/text and the interpreter.
+  proof_file="${proof_dir}/workgraph-python-lower-allrunes"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the all-runes lowercase comparison was not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/workgraph-python-decimal-blocks"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: Python decimal-digit blocks were not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/workgraph-int-max-str-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -962,6 +1055,34 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/query-api-principal-envelope"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the Go effective-principal verifier was not compared against a real Python-issued envelope\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: cmd/dev-health-worker (build-scope parity table vs the live bridge, CHAOS-4837)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestBuildScopeParityTableMatchesLivePython$' \
+        ./cmd/dev-health-worker
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Registering the guard here is the LOAD-BEARING half of CHAOS-4837, not
+  # bookkeeping. The issue/PR golden's rot guard was written first and did not
+  # run AT ALL until its dispatcher entry existed -- a guard nothing invokes is
+  # indistinguishable from a guard that passes. The proof marker is what makes
+  # "it ran" checkable rather than assumed.
+  proof_file="${proof_dir}/build-scope-parity-table"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the build-scope parity table was not re-measured against the live bridge\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

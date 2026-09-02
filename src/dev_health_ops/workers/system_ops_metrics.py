@@ -33,6 +33,11 @@ _meter: Any = load_otel_meter(__name__)
 #                             acted on (no reaper/auto-resend in this PR)
 #   key_mismatch            - Go's idempotency_key disagreed with the durable
 #                             row's own; dropped before any claim attempt
+#   permanent_drop          - claim WON, then dropped permanently (malformed
+#                             stored attributes, missing identity, unknown
+#                             email type, invalid org_id) -- claim released.
+#                             The operationally interesting case: a row was
+#                             claimed and nothing was ever sent for it
 BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL = build_counter(
     "devhealth_billing_notification_completion_fence_total",
     "Billing notification durable completion-fence outcomes by result",

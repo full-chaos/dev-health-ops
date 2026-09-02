@@ -545,12 +545,12 @@
       "notes": "registry kind operational.billing_notification; task name has no .tasks. prefix (dev_health_ops.workers.system_ops.send_billing_notification)"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:505",
+      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:522",
       "surface": "phone_home_heartbeat",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 505
+        "line": 522
       },
       "queue_or_cadence": "default",
       "dispatches": "invoked by api/internal/worker_operational.py::process_heartbeat_reference via phone_home_heartbeat.run() (HTTP bridge, not Beat)",

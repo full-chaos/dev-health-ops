@@ -2132,7 +2132,11 @@ class TestBillingNotificationCompletionFence:
         validation call site able to leave a held claim with no release.
         A malformed stored value (retrying never fixes stored data) must
         release the claim and drop -- not raise/retry, and not silently
-        leave the claim held for a later attempt to misreport as sent."""
+        leave the claim held for a later attempt to misreport as sent.
+
+        Also pins lane-4441's peer-review P3 (2026-09-02): a claim taken
+        and then permanently dropped must be its own counted outcome, not
+        invisible next to every other fence outcome."""
         from dev_health_ops.workers.system_ops import send_billing_notification
 
         notification_id = str(uuid.uuid4())
@@ -2159,6 +2163,9 @@ class TestBillingNotificationCompletionFence:
                 new_callable=AsyncMock,
                 return_value=None,
             ) as send_invoice_receipt,
+            patch(
+                "dev_health_ops.workers.system_ops.BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL"
+            ) as fence_counter,
         ):
             task.push_request(id="billing-malformed-attrs", retries=0)
             try:
@@ -2174,6 +2181,7 @@ class TestBillingNotificationCompletionFence:
         }
         send_invoice_receipt.assert_not_called()
         release_claim.assert_called_once_with(notification_id)
+        fence_counter.labels.assert_called_once_with(outcome="permanent_drop")
         assert row["claimed_at"] is None, (
             "a permanent drop must release the claim -- otherwise a later "
             "attempt misreports this never-sent email as already_sent"

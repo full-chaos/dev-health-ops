@@ -134,8 +134,15 @@ def send_billing_notification(
         # between the claim committing and the send call starting now means
         # the email is SKIPPED, not duplicated — the except branch below
         # releases the claim on every raised exception so an ordinary send
-        # failure still retries; only an unhandled process death in that
-        # narrow window is unrecoverable by a normal retry. For a
+        # failure still retries; only a failure in that narrow window that
+        # this function cannot itself catch is unrecoverable by a normal
+        # retry. That is not only an unhandled process death: lane-4441's
+        # review (2026-09-02) noted `_claim_billing_notification_completion`
+        # is called OUTSIDE this try block, and its session context manager
+        # commits before returning — a `session.close()` failure AFTER that
+        # commit reaches the caller as an exception with the claim already
+        # committed and `claimed_durable_notification_id` never assigned,
+        # so nothing releases it. Reachable without any crash. For a
         # customer-visible billing email this is the intended trade (a rare
         # silent miss over a rare duplicate) and matches the ticket's
         # "checked before send" wording — but "intended" does not mean
@@ -277,6 +284,16 @@ def send_billing_notification(
             _release_billing_notification_completion_claim(
                 claimed_durable_notification_id
             )
+            # lane-4441 peer review (2026-09-02, P3): every OTHER outcome
+            # this fence can reach is counted (key_mismatch, duplicate_
+            # suppressed, stale_claim_detected, sent, sent_fence_write_
+            # failed) except this one — a claim taken and then permanently
+            # dropped was invisible, though it is the more operationally
+            # interesting case: it means a row was claimed and NOTHING was
+            # ever sent for it.
+            BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL.labels(
+                outcome="permanent_drop"
+            ).inc()
         if drop.reason == "missing_notification_identity":
             return {"status": "dropped", "reason": drop.reason}
         if drop.reason == "unknown_email_type":

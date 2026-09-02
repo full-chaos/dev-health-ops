@@ -78,7 +78,7 @@ func TestDecimalDigitValueMatchesTheInterpreter(t *testing.T) {
 //
 // Go's unicode tables and CPython's are versioned INDEPENDENTLY, and on this
 // toolchain they ALREADY DISAGREE: Go 1.27 ships Unicode 17, the interpreter
-// reports 16, and U+11DA0-U+11DA9 are Nd to Go and unassigned to Python. Using
+// reports 16, and U+11DE0-U+11DE9 are Nd to Go and unassigned to Python. Using
 // unicode.IsDigit as the implementation would accept ten code points Python
 // refuses -- today, not hypothetically.
 //

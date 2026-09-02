@@ -425,3 +425,47 @@ func TestNarrowingCannotLaunderAnInvalidConfidence(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryDivergenceIsImplemented keeps the fidelity contract from going
+// stale the way its predecessor did.
+//
+// The previous contract was a sentence claiming "exactly ONE enumerated
+// divergence" while a second file separately claimed to hold "THE ONE
+// deliberate divergence". Both were true when written and neither was revisited
+// as divergences accumulated. A list with a probe per entry cannot drift that
+// way: remove the code and the entry fails.
+//
+// What this proves and does not: every LISTED divergence is real. It cannot
+// prove no UNLISTED divergence exists, and saying otherwise would repeat the
+// overclaim it replaces.
+func TestEveryDivergenceIsImplemented(t *testing.T) {
+	if len(Divergences) == 0 {
+		t.Fatal("the divergence list is empty; the port has at least the variant-C policy")
+	}
+	goldenCanSee := 0
+	for _, divergence := range Divergences {
+		if divergence.Authority == "" {
+			t.Errorf("%q has no authority; a divergence without a ruling or ticket is a defect",
+				divergence.Name)
+		}
+		if divergence.implemented == nil {
+			t.Errorf("%q has no probe, so the list cannot detect its removal", divergence.Name)
+			continue
+		}
+		if !divergence.implemented() {
+			t.Errorf("%q is LISTED but not implemented — either the code lost it or the "+
+				"list went stale, and both are the failure this test exists to catch",
+				divergence.Name)
+		}
+		if divergence.GoldenCanSee {
+			goldenCanSee++
+		}
+	}
+	// Pinned rather than asserted loosely: if a second divergence ever becomes
+	// golden-visible that is a real improvement, and it should be a deliberate
+	// edit here rather than a silent change in what the oracle covers.
+	if goldenCanSee != 1 {
+		t.Errorf("%d divergences claim the golden can see them, expected exactly 1 (variant-C); "+
+			"the golden holds no malformed id and is a scoped run", goldenCanSee)
+	}
+}

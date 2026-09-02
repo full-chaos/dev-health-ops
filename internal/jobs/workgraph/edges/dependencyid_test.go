@@ -171,10 +171,12 @@ func TestAtoiWouldDivergeInBothDirections(t *testing.T) {
 	}
 }
 
-// TestSuperscriptIsTheOnlyDeliberateDivergence keeps the exception closed: a
+// TestSuperscriptIsThisGatesOnlyDivergence keeps THIS GATE's exception closed.
+// Scope is the parse gate, not the port: the port has three divergences, listed
+// in Divergences (edges.go). Within this function, a
 // value must EITHER agree with Python's accept-set OR be the one ruled
 // divergence. Nothing else may return ErrMalformedPRID.
-func TestSuperscriptIsTheOnlyDeliberateDivergence(t *testing.T) {
+func TestSuperscriptIsThisGatesOnlyDivergence(t *testing.T) {
 	// isdigit true but no decimal value -- the whole class Python crashes on.
 	for _, number := range []string{"²", "³", "¹", "5²"} {
 		if !isPythonDigitString(number) {

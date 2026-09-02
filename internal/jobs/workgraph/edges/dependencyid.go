@@ -71,7 +71,7 @@ const (
 // accept-set deliberately instead — `unicode.IsDigit` is the Numeric_Type=Digit
 // property `str.isdigit()` tests, and the decimal-value conversion is `int()`'s.
 //
-// # THE ONE DELIBERATE DIVERGENCE
+// # A DELIBERATE DIVERGENCE — see Divergences in edges.go for the full list
 //
 // Python's `int()` rejects the superscripts that `isdigit()` accepts, and the
 // conversion is unguarded, so `ghpr:owner/repo#²` raises a ValueError that
@@ -105,7 +105,8 @@ func ParsePRDependencySource(value string) (PRReference, error) {
 	parsed, positive, exceedsInt64, ok := pythonIntFromDigits(number)
 	if !ok {
 		// isdigit() said yes, int() would say no. Python raises here; we reject
-		// the row instead. Named, counted, and the only deliberate divergence.
+		// the row instead. Named, counted, and enumerated as entry 2 in
+		// Divergences (edges.go) rather than claimed to be the only one.
 		return PRReference{}, ErrMalformedPRID
 	}
 	if !positive {

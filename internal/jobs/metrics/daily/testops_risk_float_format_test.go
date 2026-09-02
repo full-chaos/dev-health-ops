@@ -84,3 +84,41 @@ func TestPythonFloatJSONNonFiniteValuesDoNotPanic(t *testing.T) {
 		}
 	}
 }
+
+// TestClampUnitMatchesPythonClampSemantics pins clampUnit against Python's
+// `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi, value))`
+// (compute_testops_risk.py:20-21), including its NaN behavior -- codex
+// round 4 (P2, EXECUTED via a temporary go test -overlay calling the real
+// production computeReleaseConfidence): a naive `if value < 0 {0} else if
+// value > 1 {1} else {value}` implementation falls through to `value`
+// unchanged on NaN (both Go comparisons are false for NaN, same as
+// Python's), but CPython's min()/max() start from a specific FIRST
+// argument and only replace it on a strict comparison, so
+// `min(1.0, nan)` keeps 1.0 (nan < 1.0 is false) and `max(0.0, 1.0)` then
+// keeps 1.0 (1.0 > 0.0 is true) -- NaN always resolves to hi=1.0, not to
+// itself. Verified against a live `python3` interpreter:
+// `max(0.0, min(1.0, float('nan'))) == 1.0`. Reachable in production:
+// coverage_snapshots.line_coverage_pct is an unconstrained Nullable(Float64)
+// that flows into coveragePct/100.0 here.
+func TestClampUnitMatchesPythonClampSemantics(t *testing.T) {
+	cases := []struct {
+		name  string
+		value float64
+		want  float64
+	}{
+		{"in range unchanged", 0.5, 0.5},
+		{"below lo clamps to 0", -0.3, 0.0},
+		{"above hi clamps to 1", 1.5, 1.0},
+		{"exactly lo", 0.0, 0.0},
+		{"exactly hi", 1.0, 1.0},
+		{"NaN resolves to hi, matching Python", math.NaN(), 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := clampUnit(tc.value)
+			if got != tc.want {
+				t.Errorf("clampUnit(%v) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}

@@ -380,14 +380,42 @@ func pyRound(value float64, ndigits int) float64 {
 	return rounded
 }
 
+// pyMin2 and pyMax2 replicate CPython's two-argument min()/max() comparison
+// order exactly: the FIRST argument is the running candidate, and it is
+// replaced only on a strict "less than" (min) / "greater than" (max)
+// comparison against the second argument -- never on a tie, and never when
+// the comparison is unorderable (NaN). This matters because Go's `<`/`>`
+// on NaN are both always false, same as Python's, but CPython's algorithm
+// starts from a specific argument (not "value"), so a NaN input silently
+// resolves to whichever bound CPython happened to start from -- see
+// clampUnit below.
+func pyMin2(a, b float64) float64 {
+	if b < a {
+		return b
+	}
+	return a
+}
+
+func pyMax2(a, b float64) float64 {
+	if b > a {
+		return b
+	}
+	return a
+}
+
+// clampUnit ports Python's `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi,
+// value))` (compute_testops_risk.py:20-21) bit-for-bit, including its NaN
+// behavior. A naive `if value < 0 { 0 } else if value > 1 { 1 } else {
+// value }` looks equivalent but is NOT: for NaN, both Go comparisons are
+// false, so it falls through and returns NaN -- unlike Python, which always
+// resolves NaN to 1.0 here (min(1.0, nan) keeps its first arg 1.0 since
+// `nan < 1.0` is false; max(0.0, 1.0) then keeps 1.0 since `1.0 > 0.0` is
+// true). Verified against a live `python3` interpreter (codex round 4,
+// P2 EXECUTED finding): `max(0.0, min(1.0, float('nan'))) == 1.0`.
+// coverage_snapshots.line_coverage_pct is an unconstrained Nullable(Float64)
+// and reaches this function via coveragePct/100.0, making NaN a real input.
 func clampUnit(value float64) float64 {
-	if value < 0.0 {
-		return 0.0
-	}
-	if value > 1.0 {
-		return 1.0
-	}
-	return value
+	return pyMax2(0.0, pyMin2(1.0, value))
 }
 
 // factorsJSONField is one key/value pair of a factors_json payload, kept as

@@ -115,7 +115,7 @@ func ParsePythonFloat(s string) (float64, bool) {
 	// 7ff8000000000000. Comparing by value instead of by bits (v == math.NaN())
 	// can never see this -- NaN != NaN by IEEE 754 -- which is exactly why the
 	// golden test must compare math.Float64bits, never ==.
-	switch strings.ToLower(body) {
+	switch asciiLower(body) {
 	case "inf", "infinity":
 		if negative {
 			return math.Inf(-1), true
@@ -158,4 +158,41 @@ func ParsePythonFloat(s string) (float64, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+// asciiLower lowercases ONLY A-Z, leaving every other byte untouched.
+//
+// # WHY NOT strings.ToLower
+//
+// CPython matches the inf/infinity/nan words with ASCII-only case folding
+// (PyOS_strnicmp over bytes). strings.ToLower is full Unicode, and that
+// difference is reachable: it maps U+0130 (LATIN CAPITAL LETTER I WITH DOT
+// ABOVE) to 'i', so "\u0130NF" folds to "inf" and matches. CPython's transform
+// pass converts only category-Nd digits and Unicode spaces to ASCII, so the
+// U+0130 survives, "\u0130NF" never matches "inf", and float() raises.
+//
+// Measured, before the fix:
+//
+//	float("\u0130NF")        Python: ValueError -> 0.0   Go: +Inf
+//	float("iNF\u0130N\u0130TY")  Python: ValueError -> 0.0   Go: +Inf
+//
+// That is the exact "Go accepts what Python rejects" class this file exists to
+// eliminate, reintroduced by the case-folding step inside it. The consequence is
+// not cosmetic: +Inf instead of 0.0 clears the 0.2 membership threshold AND
+// sorts first in the argmax, so it also takes is_dominant.
+//
+// strings.EqualFold is not the fix either -- it applies Unicode simple folding,
+// which is a different relation again. Explicit ASCII folding is the only one
+// that matches a byte-wise tolower.
+func asciiLower(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for i := 0; i < len(value); i++ {
+		character := value[i]
+		if character >= 'A' && character <= 'Z' {
+			character += 'a' - 'A'
+		}
+		builder.WriteByte(character)
+	}
+	return builder.String()
 }

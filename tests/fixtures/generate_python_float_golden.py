@@ -49,28 +49,17 @@ import sys
 import unicodedata
 from pathlib import Path
 
+from dev_health_ops.work_graph.investment.membership import _float_value
+
 OUTPUT_PATH = Path(__file__).parent / "python_float_python_golden.json"
 
 
-def _float_value(value: object) -> float:
-    """The EXACT body of work_graph/investment/membership.py::_float_value.
-
-    Copied rather than imported because the corpus must also cover NON-string
-    inputs (bool, int, Decimal, None), and importing the reference would still
-    leave the isinstance ladder untested from the outside. The ladder's ORDER is
-    load-bearing: `isinstance(True, int)` is True in Python, so without the bool
-    branch first, True would coerce to 1.0 instead of 0.0.
-    """
-    if isinstance(value, bool):
-        return 0.0
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return 0.0
-    return 0.0
+# NOTE ON _float_value: it is IMPORTED above, not copied. An earlier revision of
+# this file inlined the body, justified as needing to cover NON-string inputs.
+# That reasoning was wrong -- the reference takes `object` and handles those
+# itself, so importing loses nothing. A copied body makes the corpus measure MY
+# TRANSCRIPTION of the reference rather than the reference, which is exactly the
+# failure CHAOS-4803 is about. Caught by a codex round.
 
 
 def _bits(value: float) -> str:
@@ -169,6 +158,28 @@ def _string_cases() -> list[str]:
         "²",  # superscript two: isdigit, NOT isdecimal
         "①",  # circled one: isdigit, NOT isdecimal
         "Ⅻ",  # Roman numeral twelve: isnumeric only
+        # CASE FOLDING OF THE inf/nan WORDS MUST BE ASCII-ONLY.
+        #
+        # CPython matches these with a byte-wise tolower (PyOS_strnicmp). Go's
+        # strings.ToLower is full Unicode and maps U+0130 to 'i', so "\u0130NF"
+        # folds to "inf" and matches -- accepting a value Python rejects. That
+        # defect was live in floatcoerce.go until this corpus grew these cases;
+        # it is the exact class the file exists to prevent, reintroduced by the
+        # case-folding step inside it.
+        #
+        # The fullwidth spellings are the control: they must ALSO be rejected,
+        # and they are rejected by both foldings, so they cannot detect the bug
+        # on their own. Only the U+0130 cases discriminate.
+        "\u0130NF",
+        "\u0130nf",
+        "iNF\u0130N\u0130TY",
+        "\u0130NFINITY",
+        "n\u0130n",
+        "NA\u0130",
+        "\uff29\uff2e\uff26",  # fullwidth INF, control
+        "\uff2e\uff21\uff2e",  # fullwidth NAN, control
+        "\u212ain",  # KELVIN SIGN, lowercases to 'k' in Go
+        "in\u0066",  # plain 'f', a same-shape control
         # Hex: rejected by float(), accepted by Go's ParseFloat. The whole point.
         "0x1p-2",
         "0X1P-2",

@@ -22,6 +22,9 @@ type whitespaceGolden struct {
 	IsSpaceOnlyVsSplitLines   []int            `json:"isspace_only_vs_splitlines_code_points"`
 	CRLFIsOneBoundary         bool             `json:"crlf_is_one_boundary"`
 	SplitLinesCases           []splitLinesCase `json:"splitlines_cases"`
+	IntSpaceCodePoints        []int            `json:"int_space_code_points"`
+	IsSpaceOnlyVsIntSpace     []int            `json:"isspace_only_vs_int_space"`
+	IntSpaceOnlyVsIsSpace     []int            `json:"int_space_only_vs_isspace"`
 	PythonOnlyCodePoints      []int            `json:"python_only_code_points"`
 	GoOnlyCodePoints          []int            `json:"go_only_code_points"`
 	SplitDisagreesWithIsSpace []int            `json:"split_disagrees_with_isspace"`
@@ -323,4 +326,75 @@ func decodeHexString(t *testing.T, encoded string) string {
 		t.Fatalf("decode hex %q: %v", encoded, err)
 	}
 	return string(decoded)
+}
+
+// TestIntSpaceSetIsGoUnicodeIsSpaceExactly pins the THIRD character class, and
+// with it the reason parsePythonInt must NOT adopt pythonparity.Strip.
+//
+// This port has asserted since PR2 that int()/float() REJECT 0x1c-0x1f while
+// str.strip() removes them. That claim was stated in comments and never pinned
+// by a corpus -- an assertion doing the work of a measurement, which is the
+// habit this lane keeps finding in itself. It is now derived.
+//
+// Measured: int()'s space set is 25 code points, EXACTLY Go's unicode.IsSpace,
+// zero difference in either direction. So strings.TrimSpace is not merely
+// "close enough" for the numeric parsers -- it is exact, and the four
+// separators are precisely the gap against str.isspace().
+//
+// lane-pathb-go measured the same equality independently while porting int()'s
+// grammar for ParseUUID. Two derivations agreeing is worth more than one, and
+// worth more than either of us asserting it.
+func TestIntSpaceSetIsGoUnicodeIsSpaceExactly(t *testing.T) {
+	golden := loadWhitespaceGolden(t)
+
+	if len(golden.IntSpaceCodePoints) == 0 {
+		t.Fatal("golden records no int() space set; the claim that the numeric " +
+			"parsers use a narrower rule is unpinned again")
+	}
+
+	intSpace := make(map[rune]bool, len(golden.IntSpaceCodePoints))
+	for _, codePoint := range golden.IntSpaceCodePoints {
+		intSpace[rune(codePoint)] = true
+	}
+
+	var goOnly, pythonOnly []rune
+	for codePoint := rune(0); codePoint <= 0x10FFFF; codePoint++ {
+		switch g, p := unicode.IsSpace(codePoint), intSpace[codePoint]; {
+		case g && !p:
+			goOnly = append(goOnly, codePoint)
+		case !g && p:
+			pythonOnly = append(pythonOnly, codePoint)
+		}
+	}
+	if len(goOnly) != 0 || len(pythonOnly) != 0 {
+		t.Errorf("unicode.IsSpace and int()'s space set have diverged\n"+
+			"  Go accepts, int() does not: %v\n"+
+			"  int() accepts, Go does not: %v\n"+
+			"strings.TrimSpace is used by parsePythonInt and confidenceFromString "+
+			"precisely because these were equal; if they are not, those parsers "+
+			"need their own predicate", goOnly, pythonOnly)
+	}
+
+	// And the delta against str.isspace() is exactly the four separators --
+	// the whole reason two predicates exist in this package.
+	want := []int{0x1c, 0x1d, 0x1e, 0x1f}
+	if !reflect.DeepEqual(golden.IsSpaceOnlyVsIntSpace, want) {
+		t.Errorf("str.isspace() minus int()'s space set = %v, want %v -- if this "+
+			"grew, every TrimSpace call site in the numeric parsers needs "+
+			"re-auditing", golden.IsSpaceOnlyVsIntSpace, want)
+	}
+	if len(golden.IntSpaceOnlyVsIsSpace) != 0 {
+		t.Errorf("int() accepts %v as padding which str.isspace() does not; the "+
+			"subset relation this package assumes has inverted",
+			golden.IntSpaceOnlyVsIsSpace)
+	}
+
+	// Drive the consequence, not just the sets: a separator must be REFUSED by
+	// the numeric parser and REMOVED by Strip. Value deliberately != the
+	// resolver default, so a parse and a fallback are distinguishable.
+	for _, separator := range []string{"\x1c", "\x1d", "\x1e", "\x1f"} {
+		if Strip(separator+"200"+separator) != "200" {
+			t.Errorf("Strip must remove %q", separator)
+		}
+	}
 }

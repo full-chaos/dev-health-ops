@@ -12,11 +12,13 @@ lifecycle: active
 
 # Auth Control Plane decision sheet
 
-Every draft in [Auth Control Plane ADRs](auth-control-plane-adrs.md) is at status
-**Proposed**. This sheet exists so all of them can move to **Accepted** in a
-single pass: one recommendation each, the alternatives that were actually
-considered, and the risk of taking the recommendation. Wave 0's freeze is
-defined as *all drafts Proposed + this sheet delivered + a ratification pass*.
+**Ratified 2026-09-02** — recorded in
+[CHAOS-3270's "Wave 0 ratification pass" comment](https://linear.app/fullchaos/issue/CHAOS-3270/epic-build-the-dev-health-auth-control-plane).
+**Part A:** all twelve ADRs **Accepted** as recommended. **Part B:** **yes** to
+B1–B9 and B11; **B10 = shape (b)** (advisory fields become optional — absent
+means not applicable, null means undetermined). **Part C:** **acknowledged**,
+not resolved; **C3 = retain, fail-closed** — removal of the six legacy ingest
+routes is scheduled for Wave 10 (CHAOS-3283), after customer notice.
 {: .fc-page-lede }
 
 !!! info "How to use this"

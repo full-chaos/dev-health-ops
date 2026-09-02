@@ -135,34 +135,93 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
     return any(_github_glob_to_regex(p).match(path) for p in patterns)
 
 
-def _fixture_files_on_disk() -> set[str]:
-    """Every file under `tests/fixtures/`, as repo-relative POSIX paths.
+# Directories whose fixture-shaped files are deliberately NOT required to match
+# the Go path filters, each with the reason and the condition that would remove
+# the exclusion.
+#
+# This map is the successor to a worse design. The first version of this test
+# walked `tests/fixtures/` and called itself "complete by construction" -- for
+# that directory. The DIRECTORY was the enumeration, and the docstring above it
+# said, in as many words, that a coverage oracle keyed on a pattern only checks
+# what its author thought to match. lane-3092 found the gap: their corpus under
+# `internal/pythonparity/testdata/` matched nothing, because `go.yml` has no
+# `internal/**` pattern -- only `**/*.go` (which does not cover a .json) and two
+# hand-listed testdata directories. Measured residue at that point: 63 unmatched
+# files across a dozen directories, belonging to five lanes that did not know.
+#
+# So the oracle now walks the whole tree, and a directory leaves coverage only by
+# being named here WITH a reason.
+UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
+    "src/dev_health_ops/fixtures": (
+        "the Python source tree, not Go testdata -- no Go test reads these, so "
+        "requiring them to trigger the Go workflow would make every Python-only "
+        "fixture change run the Go suite for nothing"
+    ),
+    "tests/testops/fixtures": (
+        "read by the Python testops suite, not by Go tests; covered by the "
+        "Python workflow's own filters"
+    ),
+    "tests/api/dev/fixtures": (
+        "read by the Python API test suite (tests/api/), not by Go tests; "
+        "covered by the Python workflow's own filters"
+    ),
+    "tests/docs/fixtures": (
+        "documentation-lint fixtures consumed by the docs workflow; markdown "
+        "and mkdocs config, with no Go reader"
+    ),
+    "tests/acceptance/corpus": (
+        "acceptance-suite corpus consumed by the acceptance workflow, which has "
+        "its own path filters and does not run under go-quality"
+    ),
+}
 
-    THIS is the coverage oracle, and it is complete by construction: it asks the
-    filesystem what exists rather than asking source code what it mentions. A
-    fixture cannot hide from it.
 
-    The first version of this file used a regex over `*_test.go` to find fixture
-    references instead. That was wrong in the specific way this whole file is
-    about. The regex only matches paths written as one contiguous literal, so it
-    silently missed every read assembled with `filepath.Join`:
+def _fixture_like_files_on_disk() -> set[str]:
+    """Every non-`.go` file under any `testdata/` or `fixtures/` directory.
 
-        filepath.Join(repoRoot(t), "tests", "fixtures", "cpython_random_golden.json")
-        filepath.Join(filepath.Dir(filename), "..", "..", "tests", "fixtures", ...)
+    THIS is the coverage oracle, and the scope is the whole tree rather than one
+    chosen directory.
 
-    It found 23 paths where a static inventory found 25. Both misses happened to
-    sit inside the new glob, so nothing was actually uncovered -- but a coverage
-    test whose oracle is a pattern only checks what the pattern's author thought
-    to match. That is the enumeration failure this PR replaced in the workflow,
-    reintroduced one layer up in the test meant to prevent it. Walking the
-    directory removes the oracle entirely.
+    The previous version walked `tests/fixtures/` only. It was complete for that
+    directory and blind to everywhere else fixtures live, which is at least a
+    dozen directories across five lanes. Replacing a regex with a directory walk
+    removed the pattern and kept the assumption -- the same enumeration failure,
+    one level up, inside the fix for that failure.
+
+    `.go` files are excluded because `**/*.go` already covers them; what is at
+    risk is data -- `.json`, `.py`, `.tsv`, `.txt` -- which no Go-source pattern
+    matches.
     """
-    root = REPO_ROOT / "tests" / "fixtures"
-    return {
-        path.relative_to(REPO_ROOT).as_posix()
-        for path in root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
+    root = REPO_ROOT
+    skip = {
+        ".git",
+        ".venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".ruff_cache",
     }
+    found: set[str] = set()
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        parts = path.relative_to(root).parts
+        if skip.intersection(parts):
+            continue
+        if path.suffix == ".go":
+            continue
+        if not any(segment in ("testdata", "fixtures") for segment in parts):
+            continue
+        found.add(path.relative_to(root).as_posix())
+    return found
+
+
+def _is_excused(path: str) -> str | None:
+    """Return the reason this path is excused from coverage, or None."""
+    for directory, reason in UNCOVERED_FIXTURE_DIRECTORIES.items():
+        if path == directory or path.startswith(directory + "/"):
+            return reason
+    return None
 
 
 def _fixture_paths_named_in_go_tests() -> set[str]:
@@ -226,33 +285,78 @@ def test_both_workflows_declare_the_shared_job_id() -> None:
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
 def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
-    """A change to any fixture must run the workflow that guards fixtures.
+    """A change to any Go-relevant fixture must run the workflow that guards it.
 
-    This is the assertion that would have caught the original defect. It tests
-    the WIRING, not the presence of any particular entry: a fixture added
-    tomorrow is covered by the glob automatically, and a future narrowing of the
-    filter fails here instead of silently going green.
-
-    The oracle is the directory, not a scan of source. Anything under
-    `tests/fixtures/` must trigger the workflow, whether a Go test reads it, a
-    Python test reads it, or nothing reads it yet -- because deciding which is
-    which requires the very source analysis that proved unreliable.
+    The oracle is the whole tree, not one directory. Anything under a `testdata/`
+    or `fixtures/` directory must either match the filter or be named in
+    UNCOVERED_FIXTURE_DIRECTORIES with a reason.
     """
     go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
-    fixtures = _fixture_files_on_disk()
+    fixtures = _fixture_like_files_on_disk()
 
     assert fixtures, (
-        "tests/fixtures/ is empty or missing -- this test would pass vacuously, "
-        "which is precisely the failure mode it exists to prevent"
+        "no fixture-like files found anywhere in the tree -- the walk has broken, "
+        "and this test would pass vacuously, which is the failure mode it exists "
+        "to prevent"
     )
 
-    unmatched = sorted(f for f in fixtures if not _matches_any(f, go_paths))
-    assert not unmatched, (
-        f"{len(unmatched)} of {len(fixtures)} fixture(s) do not match any "
-        f"{event} path filter in go.yml, so a PR changing only one of them is "
-        f"classified non-Go and go-quality is satisfied VACUOUSLY by the no-op "
-        f"workflow -- the guard never runs:\n  " + "\n  ".join(unmatched)
+    unmatched = sorted(
+        path
+        for path in fixtures
+        if not _matches_any(path, go_paths) and _is_excused(path) is None
     )
+    assert not unmatched, (
+        f"{len(unmatched)} of {len(fixtures)} fixture-like file(s) match no "
+        f"{event} path filter in go.yml and are not excused, so a PR changing "
+        f"only one of them is classified non-Go and go-quality is satisfied "
+        f"VACUOUSLY by the no-op workflow -- the guard never runs:\n  "
+        + "\n  ".join(unmatched)
+        + "\n\nEither add a pattern covering them to ALL FOUR lists, or add the "
+        "directory to UNCOVERED_FIXTURE_DIRECTORIES with a reason. Do not add "
+        "individual files: that is the enumeration this test exists to end."
+    )
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+def test_no_excused_directory_is_actually_covered(event: str) -> None:
+    """An exclusion that stops being necessary must fail, not linger.
+
+    Same discipline as a documented-divergence entry: it asserts the exclusion
+    rather than describing it. If a directory here becomes matched by the
+    filters, the entry is stale and should be deleted -- otherwise the map grows
+    into a list of things nobody rechecks, which is the enumeration failure
+    wearing a different hat.
+    """
+    go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
+    fixtures = _fixture_like_files_on_disk()
+
+    for directory, reason in UNCOVERED_FIXTURE_DIRECTORIES.items():
+        covered = sorted(
+            path
+            for path in fixtures
+            if (path == directory or path.startswith(directory + "/"))
+            and _matches_any(path, go_paths)
+        )
+        assert not covered, (
+            f"{directory!r} is excused because {reason!r}, but {len(covered)} of "
+            f"its files now MATCH the {event} filters. The exclusion is stale: "
+            f"delete the entry rather than leaving it to describe something that "
+            f"is no longer true.\n  " + "\n  ".join(covered[:5])
+        )
+
+
+def test_every_excused_directory_actually_exists() -> None:
+    """An exclusion naming a directory that is gone is dead weight.
+
+    A stale path here silently excuses nothing while looking like it excuses
+    something, so the map's length stops meaning what a reader assumes.
+    """
+    for directory in UNCOVERED_FIXTURE_DIRECTORIES:
+        assert (REPO_ROOT / directory).is_dir(), (
+            f"{directory!r} is excused from fixture coverage but does not exist. "
+            "Delete the entry; an exclusion for a missing directory reads as "
+            "coverage policy and is noise."
+        )
 
 
 def test_every_fixture_named_in_a_go_test_exists() -> None:
@@ -263,7 +367,7 @@ def test_every_fixture_named_in_a_go_test_exists() -> None:
     deliberately-incomplete literal scan, which is fine here -- a typo it misses
     is a typo, not a silent gap in a guard.
     """
-    on_disk = _fixture_files_on_disk()
+    on_disk = _fixture_like_files_on_disk()
     named = _fixture_paths_named_in_go_tests()
 
     missing = sorted(named - on_disk)

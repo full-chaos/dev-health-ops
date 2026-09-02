@@ -818,7 +818,11 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 	weights := make([]float64, n)
 	totalWeight := 0.0
 	for i := range dayEntries {
-		weights[i] = 1.0 + float64(i)*0.5
+		// float64(...) is load-bearing (CHAOS-4818): Go may otherwise fuse
+		// this into one FMA on arm64, rounding once where CPython's
+		// `weights = [1.0 + i * 0.5 for i in range(n)]` rounds the multiply
+		// and the add separately.
+		weights[i] = 1.0 + float64(float64(i)*0.5)
 		totalWeight += weights[i]
 	}
 	successRate7d := 0.0

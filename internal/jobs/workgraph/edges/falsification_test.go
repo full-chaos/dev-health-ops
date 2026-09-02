@@ -163,3 +163,82 @@ func TestValidateConfidenceIsReachedBeforeGrouping(t *testing.T) {
 		t.Fatal("the writer would mint an ungroupable NaN confidence")
 	}
 }
+
+// TestEventTimeBindingRejectsARotatedGolden reproduces adversarial review round
+// 2's attack and requires it to fail now.
+//
+// Round 2 rotated event_ts across the frozen edges: 2,053 of 3,548 values
+// changed, yet every one remained "some dependency's last_synced", so the
+// then-current assertion (membership in the fixture-wide set) accepted it. A Go
+// derivation that assigned another valid dependency's timestamp to an edge would
+// have passed while writing the wrong freshness — and event_ts is what readers
+// filter time windows on, and what the blocker projection's watermark maximises.
+func TestEventTimeBindingRejectsARotatedGolden(t *testing.T) {
+	document := loadGolden(t)
+
+	type pair struct{ low, high string }
+	key := func(a, b string) pair {
+		if a > b {
+			a, b = b, a
+		}
+		return pair{a, b}
+	}
+	permitted := map[pair]map[int64]struct{}{}
+	for index, dependency := range document.Dependencies {
+		source, err := document.String(dependency[0])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		target, err := document.String(dependency[1])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		instant, err := document.Instant(dependency[5])
+		if err != nil {
+			t.Fatalf("dependency %d: %v", index, err)
+		}
+		if permitted[key(source, target)] == nil {
+			permitted[key(source, target)] = map[int64]struct{}{}
+		}
+		permitted[key(source, target)][instant.UnixNano()] = struct{}{}
+	}
+
+	rows := make([]Row, 0, len(document.Edges))
+	for index, edge := range document.Edges {
+		row, err := document.EdgeRow(edge)
+		if err != nil {
+			t.Fatalf("edge %d: %v", index, err)
+		}
+		rows = append(rows, row)
+	}
+
+	// The attack: give every edge the NEXT edge's event_ts. Each value is still a
+	// genuine dependency instant from this very fixture.
+	rotated, rejected := 0, 0
+	for index, row := range rows {
+		donor := rows[(index+1)%len(rows)]
+		if donor.EventTs.Equal(row.EventTs) {
+			continue
+		}
+		rotated++
+		allowed := permitted[key(row.SourceID, row.TargetID)]
+		if _, ok := allowed[donor.EventTs.UnixNano()]; !ok {
+			rejected++
+		}
+	}
+	if rotated == 0 {
+		t.Fatal("the rotation changed no timestamps, so it cannot test the binding")
+	}
+	// Not every rotated value can be caught: 167 edges share an endpoint pair
+	// carrying more than one distinct last_synced (CHAOS-4788's unmerged
+	// duplicates), so a donor could coincidentally be permitted. The binding must
+	// still catch the overwhelming majority, or it is decoration.
+	if rejected*20 < rotated*19 {
+		t.Fatalf(
+			"the per-edge binding rejected only %d of %d rotated timestamps; round 2's "+
+				"attack would still pass",
+			rejected, rotated,
+		)
+	}
+	t.Logf("rotation attack: %d of %d moved timestamps rejected by the per-edge binding", rejected, rotated)
+}

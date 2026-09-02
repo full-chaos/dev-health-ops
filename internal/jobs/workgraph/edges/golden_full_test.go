@@ -130,21 +130,53 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse frozen_now: %v", err)
 	}
-	// Every event_ts an edge may legitimately carry: the last_synced of some
-	// frozen dependency row, or the build clock (the producer's documented
-	// fallback for a row whose last_synced will not parse). Binding to the INPUT
-	// is what makes this an assertion about derivation rather than about shape.
-	permitted := map[int64]struct{}{frozenNow.UnixNano(): {}}
+	// Every event_ts an edge may legitimately carry, bound to the edge's OWN
+	// source rows rather than to the whole fixture.
+	//
+	// Permitting any dependency's last_synced was not enough: rotating the
+	// timestamps across edges changes 2,053 of 3,548 values while every one of
+	// them remains "some dependency's instant", so a derivation that assigned the
+	// wrong freshness to an edge passed. Keying on the UNORDERED endpoint pair
+	// fixes that without needing _canonical_dependency (which is PR2's port and
+	// may swap source and target for blocker rows), and it is tight: 3,381 of
+	// 3,548 edges get exactly ONE permitted instant.
+	//
+	// The residual 167 are edges whose endpoint pair carries more than one
+	// distinct last_synced -- which is CHAOS-4788 itself, the unmerged duplicate
+	// versions the producer reads without FINAL. The ambiguity is the defect's,
+	// not this test's, and narrowing further would mean asserting a value the
+	// producer does not deterministically choose.
+	type endpointPair struct{ low, high string }
+	pairKey := func(a, b string) endpointPair {
+		if a > b {
+			a, b = b, a
+		}
+		return endpointPair{a, b}
+	}
+	permittedByPair := map[endpointPair]map[int64]struct{}{}
 	for index, dependency := range document.Dependencies {
+		source, err := document.String(dependency[0])
+		if err != nil {
+			t.Fatalf("dependency %d source: %v", index, err)
+		}
+		target, err := document.String(dependency[1])
+		if err != nil {
+			t.Fatalf("dependency %d target: %v", index, err)
+		}
 		lastSynced, err := document.Instant(dependency[5])
 		if err != nil {
 			t.Fatalf("dependency %d last_synced: %v", index, err)
 		}
-		permitted[lastSynced.UnixNano()] = struct{}{}
+		key := pairKey(source, target)
+		if permittedByPair[key] == nil {
+			permittedByPair[key] = map[int64]struct{}{}
+		}
+		permittedByPair[key][lastSynced.UnixNano()] = struct{}{}
 	}
 
 	distinct := map[int64]struct{}{}
 	perRow := 0
+	boundExactly := 0
 	for index, edge := range document.Edges {
 		row, err := document.EdgeRow(edge)
 		if err != nil {
@@ -156,12 +188,27 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 		if !row.LastSynced.Equal(frozenNow) {
 			t.Fatalf("edge %d last_synced %s is not the build clock %s", index, row.LastSynced, frozenNow)
 		}
-		if _, ok := permitted[row.EventTs.UnixNano()]; !ok {
-			t.Fatalf(
-				"edge %d event_ts %s is not the last_synced of any frozen dependency row, "+
-					"nor the build clock — it did not come from this fixture's input",
-				index, row.EventTs,
-			)
+		if !row.EventTs.Equal(frozenNow) {
+			allowed, known := permittedByPair[pairKey(row.SourceID, row.TargetID)]
+			if !known {
+				t.Fatalf(
+					"edge %d (%s <-> %s) has no dependency row with those endpoints; it "+
+						"was not derived from this fixture's input",
+					index, row.SourceID, row.TargetID,
+				)
+			}
+			if _, ok := allowed[row.EventTs.UnixNano()]; !ok {
+				t.Fatalf(
+					"edge %d (%s <-> %s) carries event_ts %s, which belongs to a DIFFERENT "+
+						"dependency row — the timestamp is not bound to this edge's own source",
+					index, row.SourceID, row.TargetID, row.EventTs,
+				)
+			}
+			exactlyOne := 0
+			if len(allowed) == 1 {
+				exactlyOne = 1
+			}
+			boundExactly += exactlyOne
 		}
 		distinct[row.EventTs.UnixNano()] = struct{}{}
 		if !row.EventTs.Equal(frozenNow) {
@@ -188,7 +235,19 @@ func TestBuildClockAndEventTimeAreDistinct(t *testing.T) {
 			len(document.Edges),
 		)
 	}
-	t.Logf("event_ts: %d distinct values across %d edges", len(distinct), len(document.Edges))
+	// The binding must actually pin most rows, or "bound to its own source" is a
+	// claim the fixture cannot support.
+	if boundExactly*4 < perRow*3 {
+		t.Fatalf(
+			"only %d of %d per-row timestamps are pinned to a single permitted value; "+
+				"the binding is too loose to detect a misassigned event_ts",
+			boundExactly, perRow,
+		)
+	}
+	t.Logf(
+		"event_ts: %d distinct values across %d edges; %d of %d per-row timestamps pinned to exactly one permitted instant",
+		len(distinct), len(document.Edges), boundExactly, perRow,
+	)
 }
 
 // TestVariantCExceptionListIsClosedAndNecessary asserts the shape of the ONE

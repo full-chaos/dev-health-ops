@@ -106,8 +106,17 @@ class RecordingClient:
 class RecordingSink:
     """Wraps the real sink: records every read, captures every write."""
 
-    def __init__(self, inner: Any) -> None:
-        self._inner = inner
+    def __init__(self, read: Any) -> None:
+        # A bound `query_dicts`, NOT the sink object.
+        #
+        # `__getattr__` only fires for attributes that do not exist, so holding
+        # the real sink as `self._inner` left it reachable: a producer path
+        # `self.sink._inner.ensure_schema()` would have reached the real
+        # ClickHouseMetricsSink, which runs migrations and `client.command`
+        # writes. Keeping only the one bound method means there is no writable
+        # object on this class to reach -- the barrier is structural rather than
+        # a set of names we remembered to refuse.
+        self._read = read
         self.client = RecordingClient()
         self.reads: list[list[dict[str, Any]]] = []
         # The QUERY TEXT is recorded, not just the rows. Rows alone cannot show
@@ -129,7 +138,7 @@ class RecordingSink:
         # read-only -- a producer change that routed a mutation through this
         # method would execute it against the shared stack. Gate the statement.
         _refuse_non_read(query)
-        rows = self._inner.query_dicts(query, params)
+        rows = self._read(query, params)
         self.reads.append(rows)
         self.queries.append(_normalize_query(query, params))
         return rows
@@ -237,8 +246,7 @@ def build_golden() -> dict[str, Any]:
         from_date=FROM_TS,
         to_date=TO_TS,
     )
-    inner = ClickHouseMetricsSink(config.dsn)
-    sink = RecordingSink(inner)
+    sink = RecordingSink(ClickHouseMetricsSink(config.dsn).query_dicts)
 
     # Deliberately NOT WorkGraphBuilder(config): __init__ calls
     # sink.ensure_schema(), which is write-capable. Construct the object and set
@@ -428,6 +436,16 @@ class ReplaySink:
     def write_work_graph_projection_runs(self, records: Any) -> None:
         self.projection_runs.extend(records)
 
+    def assert_fully_consumed(self) -> None:
+        if self._reads or self._queries:
+            remaining = [entry["statement"][:160] for entry in self._queries]
+            raise AssertionError(
+                f"the producer issued {len(self._reads)} fewer read(s) than the golden "
+                "froze; it has stopped performing a read it used to perform, and "
+                "replaying the rest proves nothing about the reads it dropped. "
+                f"Unconsumed: {remaining}"
+            )
+
     def __getattr__(self, name: str) -> Any:
         raise AssertionError(
             f"replay refuses sink.{name}: the guard must stay read-only"
@@ -480,6 +498,11 @@ def replay_golden(path: str) -> dict[str, Any]:
     builder.sink = cast(Any, sink)
     builder._now = _parse_iso(golden["frozen_now"])
     builder._build_issue_issue_edges()
+    # Validating only the reads that HAPPEN leaves a producer free to drop a
+    # trailing one: if its observable rows are unchanged the guard would go
+    # green on a read it no longer performs. The frozen sequence is a contract in
+    # both directions.
+    sink.assert_fully_consumed()
 
     # Seed the intern table with the golden's own strings so an unchanged replay
     # reproduces byte-identical indices. A genuinely new value appends at the

@@ -145,6 +145,100 @@ class TestReplayQueryContract:
             sink.ensure_schema()
 
 
+class TestReplayConsumesEveryFrozenRead:
+    """A dropped read is drift too, and it leaves no trace in the outputs.
+
+    Adversarial review round 2: validating only the reads that HAPPEN lets a
+    producer stop performing a terminal read and still go green, provided its
+    observable rows are unchanged. The frozen sequence is a contract in both
+    directions.
+    """
+
+    def test_unconsumed_reads_are_rejected(self, generator):
+        frozen = [
+            generator._normalize_query(SCOPED_READ, {}),
+            generator._normalize_query(
+                "SELECT edge_id FROM work_graph_edges FINAL", {}
+            ),
+        ]
+        sink = generator.ReplaySink([[{"edge_id": "a"}], [{"edge_id": "b"}]], frozen)
+        sink.query_dicts(SCOPED_READ, {})  # the producer stops here
+        with pytest.raises(AssertionError, match="fewer read"):
+            sink.assert_fully_consumed()
+
+    def test_the_message_names_what_was_dropped(self, generator):
+        frozen = [
+            generator._normalize_query(SCOPED_READ, {}),
+            generator._normalize_query(
+                "SELECT edge_id FROM work_graph_edges FINAL", {}
+            ),
+        ]
+        sink = generator.ReplaySink([[], []], frozen)
+        sink.query_dicts(SCOPED_READ, {})
+        with pytest.raises(AssertionError) as raised:
+            sink.assert_fully_consumed()
+        assert "work_graph_edges" in str(raised.value)
+
+    def test_a_fully_consumed_replay_is_accepted(self, generator):
+        frozen = [generator._normalize_query(SCOPED_READ, {})]
+        sink = generator.ReplaySink([[{"edge_id": "a"}]], frozen)
+        sink.query_dicts(SCOPED_READ, {})
+        sink.assert_fully_consumed()
+
+
+class TestRecordingSinkHoldsNoWritableObject:
+    """The barrier must be structural, not a list of names we remembered to refuse.
+
+    Adversarial review round 2: ``__getattr__`` only fires for attributes that do
+    NOT exist, so holding the real sink as ``_inner`` left it reachable — a
+    producer path ``self.sink._inner.ensure_schema()`` would have reached the real
+    ClickHouseMetricsSink, which runs migrations and ``client.command`` writes.
+    The sink now holds one bound read callable and nothing else.
+    """
+
+    def test_no_attribute_exposes_a_sink_like_object(self, generator):
+        calls: list[tuple[str, dict]] = []
+
+        def read(statement: str, params: dict) -> list[dict]:
+            calls.append((statement, params))
+            return [{"edge_id": "a"}]
+
+        sink = generator.RecordingSink(read)
+
+        # `client` is the recording stub, which exposes `command` on purpose --
+        # that is how the cleanup mutations reach the golden instead of the
+        # database, and it is proven connectionless by
+        # TestRecordedMutationsAreNotExecuted. Every OTHER attribute must be
+        # inert. The property is that nothing here can reach ClickHouse, not that
+        # nothing here has a method with an alarming name.
+        assert isinstance(sink.client, generator.RecordingClient)
+        for name, value in vars(sink).items():
+            if name == "client":
+                continue
+            # Sink-shaped names only. Generic ones like "insert" or "query" match
+            # ordinary builtins (a list has .insert), which would make this assert
+            # something about Python's data model instead of about the barrier.
+            for reachable in (
+                "ensure_schema",
+                "client",
+                "_client",
+                "write_work_graph_edges",
+                "write_work_graph_projection_runs",
+            ):
+                assert not hasattr(value, reachable), (
+                    f"RecordingSink.{name} exposes {reachable}; a producer path through "
+                    "it could reach the real sink and write to the shared stack"
+                )
+        # ...and the one thing it does hold still works.
+        assert sink.query_dicts(SCOPED_READ, {}) == [{"edge_id": "a"}]
+        assert calls == [(SCOPED_READ, {})]
+
+    def test_an_undefined_attribute_is_still_refused(self, generator):
+        sink = generator.RecordingSink(lambda statement, params: [])
+        with pytest.raises(AssertionError, match="generator refuses sink."):
+            sink.ensure_schema()
+
+
 class TestRecordedMutationsAreNotExecuted:
     """The cleanup mutations belong in the golden, never in the database."""
 

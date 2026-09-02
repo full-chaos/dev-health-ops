@@ -65,8 +65,31 @@ func parsePythonFloatLiteral(t *testing.T, text string) float64 {
 	return value
 }
 
+// sameFloatBits compares two results the way a BIT-FOR-BIT contract requires.
+//
+// An earlier version was `a == b || (both NaN)`, which is value equality
+// wearing a bitwise name. Two ways it was weaker than it claimed:
+//
+//   - `-0.0 == +0.0` is TRUE in Go, so a regression returning negative zero
+//     where CPython returns positive zero would have PASSED. The corpus
+//     contains [-0.0, -0.0], for which CPython returns +0.0 -- so the case that
+//     would catch it was already present and the comparator was letting it
+//     through. Found by codex round 1 (P3, EXECUTED).
+//   - all NaNs compared equal regardless of payload.
+//
+// Now: finite and zero results are compared by BITS, which distinguishes the
+// zeros. NaN is still compared by kind rather than payload, and that is a
+// deliberate limit of the FIXTURE, not of this function -- the golden stores
+// non-finite results as the string "nan", so the payload does not survive the
+// round trip and cannot be asserted. Codex verified separately that matching
+// NaN payloads are preserved by Sum; pinning that would need the fixture to
+// carry the payload, which is a corpus change rather than a comparator one.
 func sameFloatBits(a, b float64) bool {
-	return a == b || (math.IsNaN(a) && math.IsNaN(b))
+	if math.IsNaN(a) || math.IsNaN(b) {
+		// Both NaN is a match; one NaN is not. Payload unasserted -- see above.
+		return math.IsNaN(a) && math.IsNaN(b)
+	}
+	return math.Float64bits(a) == math.Float64bits(b)
 }
 
 // TestSumMatchesCPython drives every corpus case, and drives the NAIVE
@@ -157,5 +180,36 @@ func TestSumCompensationIsInvisibleBelowThreeSummands(t *testing.T) {
 	}
 	if got := Sum(three); got != 0.6 {
 		t.Errorf("Sum([0.1 0.2 0.3]) = %v, CPython = 0.6", got)
+	}
+}
+
+// TestComparatorDistinguishesSignedZero pins the comparator itself.
+//
+// A test helper that silently accepts a wrong answer is worse than a missing
+// test, because the suite reports green. This one claimed a bit-for-bit
+// contract while comparing values, so the corpus's own [-0.0, -0.0] case --
+// which CPython answers +0.0 -- could not have caught a negative-zero
+// regression.
+func TestComparatorDistinguishesSignedZero(t *testing.T) {
+	negativeZero := math.Copysign(0, -1)
+
+	if sameFloatBits(negativeZero, 0) {
+		t.Error("comparator treats -0.0 and +0.0 as equal; a regression " +
+			"returning negative zero would pass the bit-for-bit assertion")
+	}
+	if !sameFloatBits(negativeZero, negativeZero) || !sameFloatBits(0, 0) {
+		t.Error("comparator must accept a value equal to itself")
+	}
+	if !sameFloatBits(math.NaN(), math.NaN()) {
+		t.Error("both-NaN must compare equal; the corpus cannot carry payloads")
+	}
+	if sameFloatBits(math.NaN(), 0) || sameFloatBits(0, math.NaN()) {
+		t.Error("one-NaN must not compare equal")
+	}
+
+	// And the case the corpus already held: CPython sums [-0.0, -0.0] to +0.0.
+	if got := Sum([]float64{negativeZero, negativeZero}); math.Signbit(got) {
+		t.Errorf("Sum([-0.0, -0.0]) = %v with sign bit set; CPython returns +0.0",
+			got)
 	}
 }

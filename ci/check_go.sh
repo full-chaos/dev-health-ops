@@ -90,10 +90,14 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
-  integration-prepull
-         Pre-pull the exact pinned ClickHouse image declared by the Go test
-         container harness, retrying transient registry failures at most three
-         times before failing loudly. CI runs this before each real shard.
+  integration-prepull [KEY...]
+         Pre-pull the exact images declared by the Go test container harness,
+         retrying transient registry failures at most three times each before
+         failing loudly. With no KEY every declared dependency is warmed
+         (postgres, clickhouse, valkey, reaper); with KEYs only those, plus the
+         reaper, which testcontainers-go starts before the first container of
+         any test binary whether or not a test asks for it. CI runs this before
+         every job that starts a container.
   integration-shard TARGET SHARD [--dry-run]
          Run exactly one validated integration shard. TARGET is `packages` for
          a package-level shard or `providersync` for a top-level test shard of
@@ -1169,15 +1173,45 @@ check_integration_shard_plan() {
   emit_integration_shard_matrix
 }
 
-# Read the test dependency from the production Go harness instead of copying a
-# digest into the workflow. Exact hosted evidence for this retry is PR #1735,
+# Read the test dependencies from the production Go harness instead of copying
+# digests into the workflow. Exact hosted evidence for this retry is PR #1735,
 # run 31524982512, job 93891310235: Docker Hub returned 502 for this pinned
 # manifest and testcontainers made no second pull attempt. The bounded pre-pull
 # keeps the immutable digest contract and makes each registry attempt visible.
-discover_pinned_clickhouse_image() {
-  local image
+#
+# CHAOS-4778 widened this from ClickHouse alone to every image a container-backed
+# test pulls. Hosted evidence for the widening is run 33572737859, job
+# go-quality: `create container: reaper: new reaper: run container: Error
+# response from daemon: unauthorized: authentication required`. The image that
+# failed was testcontainers-go's own reaper, which no job pre-pulled and which
+# no job even names -- the library starts it before the first container of every
+# test binary.
+INTEGRATION_IMAGE_KEYS=(postgres clickhouse valkey reaper)
+
+# integration_image_declaration maps a key to the constant that declares it in
+# the harness. The reaper is the odd one out: it is a copy of a testcontainers-go
+# constant rather than a digest we choose (see harness.go), so it is exempt from
+# the digest contract below and TestReaperImageMatchesTestcontainers is what
+# keeps the copy current.
+integration_image_declaration() {
+  case "$1" in
+    postgres) printf 'PostgresImage\n' ;;
+    clickhouse) printf 'ClickHouseImage\n' ;;
+    valkey) printf 'ValkeyImage\n' ;;
+    reaper) printf 'ReaperImage\n' ;;
+    *) die "unknown test dependency image key '$1' (known: ${INTEGRATION_IMAGE_KEYS[*]})" ;;
+  esac
+}
+
+integration_image_requires_digest() {
+  [ "$1" != "reaper" ]
+}
+
+discover_test_dependency_image() {
+  local key="$1" declaration image
   local -a images=()
 
+  declaration="$(integration_image_declaration "${key}")"
   [ -f "${INTEGRATION_CONTAINER_HARNESS}" ] \
     || die "integration container harness not found: ${INTEGRATION_CONTAINER_HARNESS}"
   while IFS= read -r image; do
@@ -1185,42 +1219,73 @@ discover_pinned_clickhouse_image() {
     images+=("${image}")
   done < <(
     sed -nE \
-      's/^[[:space:]]*ClickHouseImage[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' \
+      "s/^[[:space:]]*${declaration}[[:space:]]*=[[:space:]]*\"([^\"]+)\".*\$/\1/p" \
       "${INTEGRATION_CONTAINER_HARNESS}"
   )
 
   [ "${#images[@]}" -eq 1 ] \
-    || die "expected exactly one ClickHouseImage declaration in ${INTEGRATION_CONTAINER_HARNESS}, found ${#images[@]}"
+    || die "expected exactly one ${declaration} declaration in ${INTEGRATION_CONTAINER_HARNESS}, found ${#images[@]}"
   image="${images[0]}"
-  if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
-    die "ClickHouseImage must be pinned by a full sha256 digest, got '${image}'"
+  if integration_image_requires_digest "${key}"; then
+    if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+      die "${declaration} must be pinned by a full sha256 digest, got '${image}'"
+    fi
+  elif [[ ! "${image}" =~ ^[^[:space:]]+:[^[:space:]]+$ ]]; then
+    die "${declaration} must name an image and tag, got '${image}'"
   fi
   printf '%s\n' "${image}"
 }
 
-check_integration_prepull() {
-  local image attempt delay
+prepull_one_image() {
+  local key="$1" image attempt delay
   local max_attempts=3
 
-  command -v docker >/dev/null 2>&1 || die "docker is required for integration-prepull"
-  image="$(discover_pinned_clickhouse_image)"
+  image="$(discover_test_dependency_image "${key}")"
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    printf 'pre-pull pinned ClickHouse image %s (attempt %d/%d)\n' \
-      "${image}" "${attempt}" "${max_attempts}"
+    printf 'pre-pull %s test dependency image %s (attempt %d/%d)\n' \
+      "${key}" "${image}" "${attempt}" "${max_attempts}"
     if docker pull "${image}"; then
-      printf 'pre-pulled pinned ClickHouse image %s on attempt %d/%d\n' \
-        "${image}" "${attempt}" "${max_attempts}"
+      printf 'pre-pulled %s test dependency image %s on attempt %d/%d\n' \
+        "${key}" "${image}" "${attempt}" "${max_attempts}"
       return 0
     fi
     if [ "${attempt}" -eq "${max_attempts}" ]; then
-      printf 'ERROR: failed to pre-pull pinned ClickHouse image %s after %d attempts\n' \
-        "${image}" "${max_attempts}" >&2
+      printf 'ERROR: failed to pre-pull %s test dependency image %s after %d attempts\n' \
+        "${key}" "${image}" "${max_attempts}" >&2
       return 1
     fi
     delay=$((attempt * 5))
-    printf 'WARN: ClickHouse image pull attempt %d/%d failed; retrying in %ds\n' \
-      "${attempt}" "${max_attempts}" "${delay}" >&2
+    printf 'WARN: %s image pull attempt %d/%d failed; retrying in %ds\n' \
+      "${key}" "${attempt}" "${max_attempts}" "${delay}" >&2
     sleep "${delay}"
+  done
+}
+
+# check_integration_prepull warms the images a job is about to need. With no
+# arguments it warms every declared dependency; a job that starts only some of
+# them names those, so go-quality does not drag the ClickHouse image into a job
+# that never starts one. The reaper is implicit in every subset because every
+# container-backed test binary starts it, whether or not the test asks for it.
+check_integration_prepull() {
+  local key
+  local -a keys=()
+
+  command -v docker >/dev/null 2>&1 || die "docker is required for integration-prepull"
+  if [ "$#" -eq 0 ]; then
+    keys=("${INTEGRATION_IMAGE_KEYS[@]}")
+  else
+    for key in "$@"; do
+      integration_image_declaration "${key}" >/dev/null
+      keys+=("${key}")
+    done
+    case " ${keys[*]} " in
+      *" reaper "*) ;;
+      *) keys+=(reaper) ;;
+    esac
+  fi
+
+  for key in "${keys[@]}"; do
+    prepull_one_image "${key}" || return 1
   done
 }
 
@@ -1456,8 +1521,8 @@ case "${1:-all}" in
     check_integration_shard_plan
     ;;
   integration-prepull)
-    [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"
-    check_integration_prepull
+    shift
+    check_integration_prepull "$@"
     ;;
   integration-shard)
     if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then

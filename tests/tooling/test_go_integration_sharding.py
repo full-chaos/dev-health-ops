@@ -1586,12 +1586,17 @@ def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> No
     )
 
 
-def test_clickhouse_prepull_retries_the_exact_source_pinned_image(
-    tmp_path: Path,
-) -> None:
-    attempts = tmp_path / "attempts"
-    docker_args = tmp_path / "docker-args"
-    sleep_args = tmp_path / "sleep-args"
+def _declared_image(constant: str) -> str:
+    match = re.search(
+        rf'(?m)^\s*{constant}\s*=\s*"(?P<image>[^"]+)"',
+        CONTAINER_HARNESS.read_text(encoding="utf-8"),
+    )
+    assert match is not None, f"{constant} is not declared in {CONTAINER_HARNESS}"
+    return match.group("image")
+
+
+def _prepull_stub_bin(tmp_path: Path) -> Path:
+    """A docker+sleep pair that fails until the DOCKER_SUCCEED_ON'th call."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -1619,8 +1624,17 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
         encoding="utf-8",
     )
     sleep.chmod(0o755)
+    return bin_dir
+
+
+def test_prepull_retries_the_exact_source_declared_image(tmp_path: Path) -> None:
+    attempts = tmp_path / "attempts"
+    docker_args = tmp_path / "docker-args"
+    sleep_args = tmp_path / "sleep-args"
+    bin_dir = _prepull_stub_bin(tmp_path)
 
     image = _pinned_clickhouse_image()
+    reaper = _declared_image("ReaperImage")
     env = os.environ.copy()
     env.update(
         {
@@ -1628,6 +1642,75 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
             "DOCKER_ATTEMPTS_FILE": str(attempts),
             "DOCKER_ARGS_FILE": str(docker_args),
             "DOCKER_SUCCEED_ON": "3",
+            "SLEEP_ARGS_FILE": str(sleep_args),
+        }
+    )
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull", "clickhouse"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Three attempts for ClickHouse, then the implicit reaper on the fourth call
+    # -- which the stub lets through, the counter being past its threshold.
+    assert docker_args.read_text(encoding="utf-8").splitlines() == [
+        f"pull {image}",
+        f"pull {image}",
+        f"pull {image}",
+        f"pull {reaper}",
+    ]
+    assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
+    assert f"pre-pulled clickhouse test dependency image {image} on attempt 3/3" in (
+        result.stdout
+    )
+
+    attempts.unlink()
+    docker_args.unlink()
+    sleep_args.unlink()
+    env["DOCKER_SUCCEED_ON"] = "4"
+    failed = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull", "clickhouse"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert failed.returncode == 1
+    # Exhausting one image's budget stops the run; the reaper is never reached,
+    # so a registry outage fails loudly instead of degrading into a long retry
+    # storm across every declared image.
+    assert docker_args.read_text(encoding="utf-8").splitlines() == [
+        f"pull {image}",
+        f"pull {image}",
+        f"pull {image}",
+    ]
+    assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
+    assert (
+        f"failed to pre-pull clickhouse test dependency image {image} after 3 attempts"
+    ) in failed.stderr
+
+
+def test_prepull_warms_every_declared_image_by_default(tmp_path: Path) -> None:
+    """The default set is the harness's, not a list maintained in the workflow."""
+    attempts = tmp_path / "attempts"
+    docker_args = tmp_path / "docker-args"
+    sleep_args = tmp_path / "sleep-args"
+    bin_dir = _prepull_stub_bin(tmp_path)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "DOCKER_ATTEMPTS_FILE": str(attempts),
+            "DOCKER_ARGS_FILE": str(docker_args),
+            "DOCKER_SUCCEED_ON": "1",
             "SLEEP_ARGS_FILE": str(sleep_args),
         }
     )
@@ -1642,23 +1725,40 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert attempts.read_text(encoding="utf-8") == "3\n"
     assert docker_args.read_text(encoding="utf-8").splitlines() == [
-        f"pull {image}",
-        f"pull {image}",
-        f"pull {image}",
+        f"pull {_declared_image('PostgresImage')}",
+        f"pull {_pinned_clickhouse_image()}",
+        f"pull {_declared_image('ValkeyImage')}",
+        f"pull {_declared_image('ReaperImage')}",
     ]
-    assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
-    assert f"pre-pulled pinned ClickHouse image {image} on attempt 3/3" in (
-        result.stdout
-    )
 
-    attempts.unlink()
-    docker_args.unlink()
-    sleep_args.unlink()
-    env["DOCKER_SUCCEED_ON"] = "4"
-    failed = subprocess.run(
-        ["bash", "ci/check_go.sh", "integration-prepull"],
+
+def test_prepull_always_includes_the_reaper(tmp_path: Path) -> None:
+    """CHAOS-4778's actual defect class.
+
+    Nothing in this repository asks for testcontainers-go's reaper, so a subset
+    a job names for itself will never mention it -- yet the library starts it
+    before the first container of every test binary, and its cold anonymous pull
+    is what failed run 33572737859. It must therefore be implicit in every
+    subset rather than something a caller can forget.
+    """
+    attempts = tmp_path / "attempts"
+    docker_args = tmp_path / "docker-args"
+    sleep_args = tmp_path / "sleep-args"
+    bin_dir = _prepull_stub_bin(tmp_path)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "DOCKER_ATTEMPTS_FILE": str(attempts),
+            "DOCKER_ARGS_FILE": str(docker_args),
+            "DOCKER_SUCCEED_ON": "1",
+            "SLEEP_ARGS_FILE": str(sleep_args),
+        }
+    )
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull", "postgres"],
         cwd=ROOT,
         env=env,
         check=False,
@@ -1666,17 +1766,37 @@ printf '%s\n' "$*" >> "${SLEEP_ARGS_FILE}"
         text=True,
         timeout=30,
     )
-    assert failed.returncode == 1
-    assert attempts.read_text(encoding="utf-8") == "3\n"
+
+    assert result.returncode == 0, result.stdout + result.stderr
     assert docker_args.read_text(encoding="utf-8").splitlines() == [
-        f"pull {image}",
-        f"pull {image}",
-        f"pull {image}",
+        f"pull {_declared_image('PostgresImage')}",
+        f"pull {_declared_image('ReaperImage')}",
     ]
-    assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
-    assert f"failed to pre-pull pinned ClickHouse image {image} after 3 attempts" in (
-        failed.stderr
+
+
+def test_prepull_rejects_an_unknown_image_key(tmp_path: Path) -> None:
+    bin_dir = _prepull_stub_bin(tmp_path)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "DOCKER_ATTEMPTS_FILE": str(tmp_path / "attempts"),
+            "DOCKER_ARGS_FILE": str(tmp_path / "docker-args"),
+            "DOCKER_SUCCEED_ON": "1",
+            "SLEEP_ARGS_FILE": str(tmp_path / "sleep-args"),
+        }
     )
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "integration-prepull", "mysql"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2
+    assert "unknown test dependency image key 'mysql'" in result.stderr
 
 
 def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
@@ -1768,3 +1888,107 @@ def test_workflow_runs_all_shards_and_preserves_required_check_name() -> None:
         "GOWORK=off go test -mod=readonly -tags=integration -count=1 "
         '-timeout=30m -run "${test_regex}" ./internal/providersync'
     ) in check_go_source
+
+
+# --- CHAOS-4778: every job that starts a container must warm its images -------
+#
+# The defect this guards is not "go-quality lacked a pre-pull step". It is "a CI
+# job starts Testcontainers against images nobody warmed, so the first pull is
+# cold and anonymous against Docker Hub". Asserting the fixed job would let the
+# next such job in reintroduce it, so the container-running verbs are DERIVED
+# from check_go.sh rather than listed here: a verb is container-running when its
+# dispatch reaches, directly or transitively, a function that runs
+# `go test -tags=integration`.
+
+_CONTAINER_LEAF_PATTERN = re.compile(r"go test\b[^\n]*-tags=integration")
+_PREPULL_COMMAND = "ci/check_go.sh integration-prepull"
+
+
+def _check_go_functions() -> dict[str, str]:
+    """Map every top-level check_go.sh function to its body."""
+    source = CHECK_GO.read_text(encoding="utf-8")
+    bodies: dict[str, str] = {}
+    for match in re.finditer(r"(?m)^(?P<name>[a-z_][a-z0-9_]*)\(\) \{$", source):
+        end = source.find("\n}\n", match.end())
+        assert end != -1, f"unterminated function {match.group('name')}"
+        bodies[match.group("name")] = source[match.end() : end]
+    assert bodies, "parsed no functions out of check_go.sh"
+    return bodies
+
+
+def _check_go_dispatch() -> dict[str, str]:
+    """Map every public verb to the dispatch arm that runs it."""
+    source = CHECK_GO.read_text(encoding="utf-8")
+    arms: dict[str, str] = {}
+    for match in re.finditer(
+        r"(?m)^  (?P<verbs>[a-z0-9|_-]+)\)\n(?P<body>.*?)^    ;;$",
+        source,
+        re.DOTALL,
+    ):
+        for verb in match.group("verbs").split("|"):
+            arms[verb] = match.group("body")
+    assert "ci" in arms, "did not parse check_go.sh's verb dispatch"
+    return arms
+
+
+def _container_running_verbs() -> set[str]:
+    functions = _check_go_functions()
+    leaves = {
+        name for name, body in functions.items() if _CONTAINER_LEAF_PATTERN.search(body)
+    }
+    assert leaves, "found no function running an integration-tagged go test"
+
+    def reaches_container(body: str, seen: frozenset[str]) -> bool:
+        for name in functions:
+            if name in seen or not re.search(rf"\b{re.escape(name)}\b", body):
+                continue
+            if name in leaves or reaches_container(functions[name], seen | {name}):
+                return True
+        return False
+
+    return {
+        verb
+        for verb, body in _check_go_dispatch().items()
+        if reaches_container(body, frozenset())
+    }
+
+
+def test_container_running_verbs_are_derived_not_assumed() -> None:
+    """The derivation must actually find the verbs we already know about.
+
+    Without this, a parsing regression would silently empty the set and make the
+    contract test below vacuously green.
+    """
+    verbs = _container_running_verbs()
+
+    assert {"ci", "all", "integration", "integration-shard"} <= verbs
+    # Planning and static verbs must NOT be swept in, or the contract test would
+    # demand a pre-pull from jobs that never start a container.
+    assert verbs.isdisjoint({"fmt", "vet", "build", "integration-shard-plan"})
+
+
+def test_every_workflow_job_starting_containers_pre_pulls_first() -> None:
+    container_verbs = _container_running_verbs()
+    offenders: list[str] = []
+
+    for job_name, job in _workflow()["jobs"].items():
+        commands = [str(step.get("run", "")) for step in job.get("steps", [])]
+        prepull_at = next(
+            (i for i, cmd in enumerate(commands) if _PREPULL_COMMAND in cmd),
+            None,
+        )
+        for index, command in enumerate(commands):
+            match = re.search(r"ci/check_go\.sh\s+([a-z0-9-]+)", command)
+            if match is None or match.group(1) not in container_verbs:
+                continue
+            if prepull_at is None:
+                offenders.append(
+                    f"{job_name}: runs `{match.group(1)}` (starts containers) "
+                    f"with no `{_PREPULL_COMMAND}` step"
+                )
+            elif prepull_at > index:
+                offenders.append(
+                    f"{job_name}: pre-pulls AFTER running `{match.group(1)}`"
+                )
+
+    assert not offenders, "\n".join(offenders)

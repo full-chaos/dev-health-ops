@@ -18,6 +18,28 @@ const (
 	PostgresImage   = "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 	ClickHouseImage = "clickhouse/clickhouse-server@sha256:1d1f6508eba2dccce2cee9913907c5f7766327debc57a6b1991f2c9e3176c163"
 	ValkeyImage     = "valkey/valkey@sha256:c9b77919daeba2c02ad954d0c844cc4e7142069d177b89c5fd771f405daf9e02"
+
+	// ReaperImage is testcontainers-go's own garbage collector (Ryuk). Nothing
+	// in this package asks for it, but the library starts it before the FIRST
+	// container of every test binary, so it is pulled from Docker Hub on every
+	// CI job that touches this package -- and it is the one image here that is
+	// a mutable tag rather than a digest.
+	//
+	// It cannot be pinned. In testcontainers-go v0.43.0 the reaper image is the
+	// constant config.ReaperDefaultImage, used literally at reaper.go's
+	// newReaper; there is no environment variable, properties key, container
+	// option or request field that overrides it (ContainerRequest.ReaperImage,
+	// NetworkRequest.ReaperImage and WithImageName are all declared, deprecated
+	// and never read). The only lever that reaches it is
+	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX, which redirects every Docker Hub
+	// pull at a mirror -- see CHAOS-4778 for that decision.
+	//
+	// So this is a COPY of the library's constant, not a pin, and it exists for
+	// exactly one reason: CI reads these declarations as text in order to
+	// pre-pull them, and a cold anonymous pull of this image is what failed in
+	// run 33572737859. TestReaperImageMatchesTestcontainers keeps the copy
+	// honest across a testcontainers-go bump.
+	ReaperImage = "testcontainers/ryuk:0.14.0"
 )
 
 type Instance struct {

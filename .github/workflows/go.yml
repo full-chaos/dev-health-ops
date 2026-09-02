@@ -186,6 +186,16 @@ jobs:
           git archive "${BASE_SHA}" contracts/jobs/v1 | tar -x -C "${base_dir}"
           echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
 
+      # `ci` ends in check_multi_replica_workers, which starts a Testcontainers
+      # PostgreSQL -- and testcontainers-go starts its own reaper first. Both
+      # were pulled cold and anonymously from Docker Hub until CHAOS-4778: run
+      # 33572737859 failed here with `reaper: new reaper: run container: Error
+      # response from daemon: unauthorized: authentication required`, before the
+      # test executed a line of its own logic. ClickHouse is deliberately not in
+      # this subset; no test in this job starts one.
+      - name: Pre-pull pinned test dependency images with bounded retry
+        run: bash ci/check_go.sh integration-prepull postgres
+
       - name: Run Go quality gate
         # `ci`, not `all`: CHAOS-3948 made `all` genuinely execute the full
         # unsharded integration suite (~24m measured) instead of only

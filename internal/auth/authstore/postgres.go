@@ -1,11 +1,8 @@
 // Package authstore is the Auth Control Plane's PostgreSQL boundary.
 //
 // Everything above it -- handlers, readiness, and the domain packages later
-// waves add -- depends on the interfaces declared here, never on pgx. That is
-// the plugin constraint ratified with the Wave 1 plan (chris, 2026-09-02:
-// "eventually all the binaries we have for servicing will likely need to be
-// plugins to replace dev-hops"): the transport and the storage driver must
-// both be replaceable without reshaping the domain.
+// waves add -- depends on the interfaces declared here, never on pgx, so the
+// storage driver can be replaced without reshaping the domain.
 //
 // # Ownership
 //

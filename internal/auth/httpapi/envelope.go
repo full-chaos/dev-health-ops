@@ -3,10 +3,8 @@
 // It owns routing, the middleware stack, and the error envelope. It owns no
 // domain behaviour: a route is constructed from a Route value whose Handler
 // closes over a domain interface, so nothing in this package knows what an
-// identity, a session or a token is. That is the plugin constraint ratified
-// with the Wave 1 plan -- the service has to be re-hostable as a subcommand of
-// a future unified binary without a rewrite, which it cannot be if transport
-// types leak into domain code or vice versa.
+// identity, a session or a token is. Transport types must not leak into domain
+// code, or vice versa.
 //
 // ACP-ADR-01 §3 pins the router: net/http with http.ServeMux and explicit
 // method-and-path registration. No third-party router, in this wave or later.

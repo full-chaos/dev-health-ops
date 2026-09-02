@@ -1,16 +1,21 @@
 // Command auth-service is the Go Auth Control Plane's HTTP service
 // (CHAOS-4881, Wave 1 of CHAOS-3274; plan ratified 2026-09-02).
 //
-// This file is a THIN ENTRYPOINT and must stay one. chris, 2026-09-02,
-// ratified alongside the Wave 1 plan: "eventually all the binaries we have for
-// servicing will likely need to be plugins to replace dev-hops" -- so flag and
-// environment parsing, dependency wiring, listener orchestration and graceful
-// shutdown all live in internal/auth/authruntime, and every domain concern
-// (identity, session, token, principal, authorization, provisioning, audit)
-// lives behind an internal/ interface with no dependency on main and no
-// dependency on HTTP transport types. Re-hosting this service as a subcommand
-// of a future unified binary is then a call to authruntime.Execute, not a
-// rewrite.
+// This file is a THIN ENTRYPOINT and must stay one: flag and environment
+// parsing, dependency wiring, listener orchestration and graceful shutdown all
+// live in internal/auth/authruntime, and every domain concern lives behind an
+// internal/ interface with no dependency on main and no dependency on HTTP
+// transport types. cmd/auth-service/main_test.go enforces the shape by parsing
+// this file's AST.
+//
+// Design note (chris, 2026-09-02): "eventually all the binaries we have for
+// servicing will likely need to be plugins to replace dev-hops" -- keeping
+// main thin is what leaves that door open. It is a NOTE, not a deliverable:
+// chris scoped it the same day -- "we don't need to write the shell/thin
+// client replacement yet ... if it's only for the auth control plane, right
+// now, that's fine" -- so there is deliberately no plugin host here, no shared
+// servicing-binary framework, and no abstraction beyond what CHAOS-4881 needs.
+// Do not build one on the strength of this comment.
 //
 // # The service is DORMANT
 //

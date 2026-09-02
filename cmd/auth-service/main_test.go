@@ -7,10 +7,8 @@ import (
 	"testing"
 )
 
-// TestMainStaysThin enforces the constraint chris ratified with the Wave 1
-// plan on 2026-09-02 -- "eventually all the binaries we have for servicing
-// will likely need to be plugins to replace dev-hops", recorded on CHAOS-4881
-// as: cmd/auth-service/main.go is a thin entrypoint only.
+// TestMainStaysThin enforces CHAOS-4881's binding constraint:
+// cmd/auth-service/main.go is a thin entrypoint only.
 //
 // A prose constraint in a doc comment is a constraint nothing checks. This
 // parses the file and asserts the shape structurally: exactly one function,

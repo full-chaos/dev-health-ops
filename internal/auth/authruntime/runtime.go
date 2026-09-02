@@ -1,13 +1,12 @@
 // Package authruntime composes the auth-service process.
 //
 // It exists so that cmd/auth-service/main.go can be a thin entrypoint and
-// nothing else. That is the constraint chris ratified with the Wave 1 plan on
-// 2026-09-02 -- "eventually all the binaries we have for servicing will likely
-// need to be plugins to replace dev-hops" -- expressed structurally: Execute
-// takes its arguments, its environment and its streams as parameters, touches
-// no package-level state, and returns an exit code instead of calling
-// os.Exit. Re-hosting this service as a subcommand of a future unified binary
-// is then one call to Execute, not a rewrite.
+// nothing else: Execute takes its arguments, its environment and its streams
+// as parameters, touches no package-level state, and returns an exit code
+// instead of calling os.Exit, so it is callable from a test as easily as from
+// main. See main.go's package doc for the one-line design note on why thin
+// mains are worth the small indirection -- and for why that note is not a
+// licence to build a plugin host here.
 //
 // Nothing here knows what an identity, a session or a token is. It wires
 // interfaces: keystore.Source for signing-key custody, authstore.Prober for

@@ -117,8 +117,15 @@ def _pinned_clickhouse_image() -> str:
     # expectations below, so whatever it accepts is what the mirror assertions
     # are then derived FROM -- a foreign registry accepted here would be
     # asserted as correct rather than caught.
+    # `[0-9]`, never `\d`. This same pattern is written in three dialects --
+    # bash ERE in ci/check_go.sh, Go RE2 in harness_test.go, and Python here --
+    # and they must accept the same set. Python's `\d` is UNICODE-aware, so it
+    # matches Arabic-Indic and other non-ASCII digits; bash `[0-9]` and Go RE2
+    # (whose Perl classes are ASCII-only) both reject them. Measured: the tag
+    # `26.\u0667` was ACCEPTED by Python's `\d` and rejected by the other two.
+    # `[0-9]` is the one spelling that means the same thing in all three.
     assert re.fullmatch(
-        r"clickhouse/clickhouse-server(:26(\.\d+)*|@sha256:[0-9a-f]{64})", image
+        r"clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})", image
     ), (
         "ClickHouseImage must be clickhouse/clickhouse-server pinned to a 26.x "
         f"tag or a sha256 digest, got {image!r}"

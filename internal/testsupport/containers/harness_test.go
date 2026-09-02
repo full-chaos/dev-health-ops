@@ -19,8 +19,13 @@ import (
 // accepted an empty tag, `:latest`, `: foo`, and
 // `quay.io/other/clickhouse-server:latest`. A foreign registry accepted here
 // then bypasses the ghcr mirror downstream.
+// `[0-9]` rather than `\d` is deliberate and must not be "simplified" back.
+// Go RE2's `\d` is already ASCII-only so this pair is equivalent HERE, but the
+// same pattern is also written in bash ERE and in Python, and Python's `\d`
+// matches non-ASCII digits. Spelling all three `[0-9]` makes them provably the
+// same set without a reader having to know three dialects' rules.
 var clickHouseReference = regexp.MustCompile(
-	`^clickhouse/clickhouse-server(:26(\.\d+)*|@sha256:[0-9a-f]{64})$`,
+	`^clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})$`,
 )
 
 func TestDependencyImagesAreDigestPinned(t *testing.T) {

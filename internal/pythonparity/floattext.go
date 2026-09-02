@@ -175,6 +175,9 @@ func buildExponentForm(digits string, decimalPointPosition int, negative bool) s
 // reference's `_safe_float` (recommendations/loader.py) strips NaN but PASSES
 // ±Inf through, so an infinite ratio can reach a rationale string.
 //
+// A precision outside CPython's accepted range is refused rather than
+// honoured, in both directions.
+//
 // A NEGATIVE precision is refused rather than honoured. Go treats precision -1
 // as "shortest representation that round-trips", so `FormatFixed(1.0, -1)`
 // would return "1" -- a perfectly plausible string. CPython has no such mode
@@ -183,8 +186,18 @@ func buildExponentForm(digits string, decimalPointPosition int, negative bool) s
 // the reference refuses is the divergence that is hardest to notice, because
 // the output looks like a successful format rather than like a bug.
 func FormatFixed(value float64, precision int) (string, error) {
+	// Both precision checks come BEFORE the non-finite shortcut, because
+	// CPython validates the spec before it looks at the value: measured,
+	// format(float("nan"), ".2147483648f") raises rather than returning "nan",
+	// even though the precision could not have changed that output. Checking
+	// the specials first would answer where the reference refuses -- and the
+	// specials are the reachable case here, since _safe_float passes +/-Inf
+	// through.
 	if precision < 0 {
 		return "", fmt.Errorf("%w: .%df", ErrPrecisionMissing, precision)
+	}
+	if precision > maxFormatPrecision {
+		return "", fmt.Errorf("%w: .%df", ErrPrecisionTooBig, precision)
 	}
 	switch {
 	case math.IsNaN(value):

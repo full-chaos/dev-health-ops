@@ -28,6 +28,21 @@ var ErrRoundOverflow = errors.New("pythonparity: rounded value too large to repr
 // precision", not a shortest-representation request.
 var ErrPrecisionMissing = errors.New("pythonparity: format specifier missing precision")
 
+// ErrPrecisionTooBig mirrors CPython's "ValueError: precision too big".
+//
+// The boundary is exact and was measured, not inferred: format() accepts a
+// precision up to 2147483647 (INT_MAX) and raises at 2147483648.
+//
+// The ORDER matters and is also measured. CPython validates the precision
+// BEFORE it takes the non-finite shortcut, so format(float("nan"),
+// ".2147483648f") raises rather than returning "nan" -- even though the
+// precision could not have affected the output. A mirror that checks the
+// specials first answers where the reference refuses.
+var ErrPrecisionTooBig = errors.New("pythonparity: precision too big")
+
+// maxFormatPrecision is CPython's INT_MAX ceiling on a format spec's precision.
+const maxFormatPrecision = 2147483647
+
 // Round mirrors CPython's two-argument builtin `round(value, ndigits)` for
 // floats.
 //

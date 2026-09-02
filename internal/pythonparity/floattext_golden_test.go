@@ -180,9 +180,19 @@ func TestFormatFixedMatchesLivePythonGolden(t *testing.T) {
 			if err == nil {
 				t.Errorf("FormatFixed(%s, %d) = %q with no error; python raised %s",
 					entry.ValueHex, entry.Precision, got, entry.Raises)
-			} else if !errors.Is(err, ErrPrecisionMissing) {
-				t.Errorf("FormatFixed(%s, %d) failed with %v; want ErrPrecisionMissing to mirror %s",
-					entry.ValueHex, entry.Precision, err, entry.Raises)
+			} else {
+				// The two refusals are distinct contracts and the corpus knows
+				// which one CPython raised, so assert the specific error rather
+				// than "some error" -- a mirror that refused everything for the
+				// wrong reason would otherwise pass.
+				want := ErrPrecisionMissing
+				if entry.Precision > 0 {
+					want = ErrPrecisionTooBig
+				}
+				if !errors.Is(err, want) {
+					t.Errorf("FormatFixed(%s, %d) failed with %v; want %v to mirror %s",
+						entry.ValueHex, entry.Precision, err, want, entry.Raises)
+				}
 			}
 			refusals++
 			continue

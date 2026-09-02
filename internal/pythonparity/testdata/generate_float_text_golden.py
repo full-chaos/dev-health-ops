@@ -100,11 +100,26 @@ _NDIGITS = (
     + [-400, -401, 400, 401, 1000]
 )
 
-# Precision includes 0 and NEGATIVE values. Go reads a negative precision as
-# "shortest representation" and would happily return "1"; CPython's format spec
-# raises ValueError. Holding this axis to [1, 2, 3] is what let a mutant that
-# mishandled precision 0 pass both the frozen corpus and the live rot guard.
-_PRECISIONS = [0, 1, 2, 3, 6, -1, -2]
+# Precision is SWEPT, not hand-listed. Three review rounds each found a
+# different unenumerated value on this corpus's axes -- the negative-precision
+# refusal, the positive-ndigits band, and then a mutant clamping precision > 6
+# that passed everything because the axis jumped 6 -> nothing. Hand-listing
+# reproduces the author's model of which values matter, so each round finds the
+# next value the author did not think of. Enumerate the small band exhaustively
+# and pin the boundaries instead.
+#
+# The accepted range is CPython's INT_MAX: format() takes a precision up to
+# 2147483647 and raises "ValueError: precision too big" at 2147483648
+# (measured). The huge accepted values are covered for NON-FINITE values only,
+# where the output is 3 characters -- format(1.0, ".2147483647f") would build a
+# two-gigabyte string, so a corpus cannot hold it and this file must not try.
+_PRECISIONS = list(range(0, 21)) + [30, 50, 100, -1, -2, -3, -10]
+
+#: Precisions covered only for non-finite values (cheap output) plus the
+#: refusal boundary, which raises for every value including the specials --
+#: CPython validates the spec before it looks at the value.
+_LARGE_PRECISIONS_SPECIALS_ONLY = [1000, 100000, 2147483646, 2147483647]
+_REFUSED_PRECISIONS = [2147483648, 4294967296]
 
 
 def _values() -> list[float]:
@@ -162,8 +177,17 @@ def main() -> None:
     ]
 
     formats = []
+    non_finite = [float("nan"), float("inf"), float("-inf")]
     for value in values:
-        for precision in _PRECISIONS:
+        precisions = list(_PRECISIONS) + _REFUSED_PRECISIONS
+        # The huge ACCEPTED precisions are only tractable for the non-finite
+        # values, whose output ignores the precision entirely.
+        if any(
+            math.isnan(value) if math.isnan(candidate) else value == candidate
+            for candidate in non_finite
+        ):
+            precisions += _LARGE_PRECISIONS_SPECIALS_ONLY
+        for precision in precisions:
             # Named distinctly from the rounds loop's `entry`: that one is
             # typed `dict[str, object] | None` (a skipped case is None), and
             # reusing the name here rebinds it to that union, so the indexed

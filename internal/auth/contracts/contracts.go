@@ -1,5 +1,15 @@
-// Package contractsv1 validates documents against the Auth Control Plane v1
+// Package contracts validates documents against the Auth Control Plane v1
 // wire contracts and provides the Go types for them.
+//
+// THE PACKAGE PATH CARRIES NO VERSION AND THE WIRE FORMAT DOES -- that
+// asymmetry is deliberate (chris, 2026-09-02: "Not sure auth versioning is a
+// thing"). The on-disk contracts stay under contracts/auth/v1/ and every
+// document still declares its own schema_version, because the WIRE is the
+// thing that has to stay compatible with deployed readers. The Go package is
+// an internal implementation of whatever the current wire contract is, and
+// versioning it too would mean carrying a second, redundant axis that can
+// disagree with the first. Do not "restore" a /v1 segment here to match the
+// directory: the directory is versioned for a reason this package is not.
 //
 // The JSON Schema documents under contracts/auth/v1/jsonschema/ are the
 // SOURCE OF TRUTH for the wire format; the Go types here are an
@@ -42,7 +52,7 @@
 //     A pattern using either means something different in Go than in the
 //     other two runtimes, silently and on the permissive side.
 //     TestEveryPatternStaysInTheCommonRegexSubset enforces the intersection.
-package contractsv1
+package contracts
 
 import (
 	"encoding/json"

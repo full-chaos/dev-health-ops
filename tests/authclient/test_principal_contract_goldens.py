@@ -1,6 +1,6 @@
 """Cross-language golden tests: the Python half of the principal.v1 corpus.
 
-Go (``internal/contracts/v1``) and TypeScript (dev-health-web) run the SAME
+Go (``internal/auth/contracts``) and TypeScript (dev-health-web) run the SAME
 manifest over the SAME fixture files. Three copies of one corpus is the drift
 class these tests exist to catch, so this module reads
 ``contracts/auth/v1/examples/principal/manifest.json`` and must never

@@ -3,7 +3,7 @@
 The JSON Schema documents under ``contracts/auth/v1/jsonschema/`` are the
 source of truth for the wire format. This module is the Python half of the
 three-language validation surface CHAOS-4884 requires; the Go half lives in
-``internal/contracts/v1`` and the TypeScript half in dev-health-web. All three
+``internal/auth/contracts`` and the TypeScript half in dev-health-web. All three
 read the SAME schema files and the SAME golden fixtures -- a language that
 maintains its own copy is the drift class the cross-language goldens exist to
 catch.

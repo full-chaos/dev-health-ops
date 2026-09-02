@@ -1,4 +1,4 @@
-package contractsv1
+package contracts
 
 import (
 	"encoding/json"

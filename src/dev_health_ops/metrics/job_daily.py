@@ -1820,6 +1820,19 @@ async def run_daily_metrics_job(
         # unconditional write path would otherwise both fire for every
         # partition, doubling every repo/user/commit row's generation.
         skip_repo_user_commit_write = "repo_user_commit" in skip_families
+        # CHAOS-4293: deploy has a native Go executor (DeployExecutor). Same
+        # shape as repo_user_commit above -- skip ONLY the write here, not
+        # the compute: `deploy_metrics` is also a live in-process input to
+        # `_note_family_zero_rows("deploy", deploy_metrics, day=d)` a few
+        # lines below (the CHAOS-4246/CHAOS-4263 staleness-with-source-data
+        # check), which has no other source for it and must keep observing
+        # a real "did compute_deploy_metrics_daily produce rows" signal
+        # regardless of which side wrote them. Without this guard the native
+        # executor and this unconditional write path both fire for every
+        # partition, doubling every (org_id, repo_id, day) deploy_metrics_daily
+        # row's generation -- the same class of gap CHAOS-4275's own guard
+        # above exists to close, caught here by codex round 1 on this port.
+        skip_deploy_write = "deploy" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1844,7 +1857,8 @@ async def run_daily_metrics_job(
             s.write_testops_pipeline_metrics(testops_pipeline_metrics)
             s.write_testops_test_metrics(testops_test_metrics)
             s.write_testops_coverage_metrics(testops_coverage_metrics)
-            s.write_deploy_metrics(deploy_metrics)
+            if not skip_deploy_write:
+                s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
             s.write_ai_policy_events(ai_policy_events)
             s.write_ai_governance_coverage_daily(ai_governance_coverage)

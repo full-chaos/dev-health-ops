@@ -1779,8 +1779,14 @@ integration_image_reference_pattern() {
     # The reaper's identity is pinned by TestReaperImageMatchesTestcontainers
     # against testcontainers-go's own exported constant, which is a stronger
     # control than a pattern here could be. This only rejects a bare repository.
+    #
+    # Deliberately UNCHANGED from the pattern this function replaced, including
+    # its acceptance of a digest form. Waiving the digest REQUIREMENT for a key
+    # should not also forbid a digest -- a digest is strictly more pinned than a
+    # tag, so refusing one here would reject an improvement. Narrowing this is
+    # out of scope for CHAOS-4854, which is about ClickHouse.
     *)
-      printf '%s\n' '^[^@[:space:]]+:[^@[:space:]]+$'
+      printf '%s\n' '^[^[:space:]]+:[^[:space:]]+$'
       ;;
   esac
 }

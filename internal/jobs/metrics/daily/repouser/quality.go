@@ -188,11 +188,16 @@ func CodeOwnershipGini(repoID uuid.UUID, windowStats []CommitStatRow) float64 {
 
 	// CHAOS-4818 note: this used to be a float64 compound assignment
 	// (`numerator += float64(index+1)*value`), an unguarded FMA-fusion
-	// site the lint (fma_lint_test.go) now catches. CHAOS-4824's rewrite
-	// below eliminated float64 arithmetic from this loop entirely --
-	// everything is exact math/big.Int until the one final division, so
-	// the FMA-fusion class is structurally impossible here, not merely
-	// guarded. Confirmed: the lint reports this file clean.
+	// site the lint (fma_lint_test.go) now catches -- confirmed via
+	// `go tool objdump` that FMADDD was present there on arm64 go1.27.1.
+	// CHAOS-4824's rewrite below eliminated float64 arithmetic from this
+	// loop entirely -- everything is exact math/big.Int until the one
+	// final division, so the FMA-fusion class is structurally impossible
+	// here now, not merely guarded. Confirmed: the lint reports this file
+	// clean, and this PR's own bit-pattern golden for this site
+	// (fma_followup_golden.json's ownership_gini family) is accordingly
+	// no longer exercised through this function -- CHAOS-4824's own
+	// pysum_golden.json gini corpus (PR #2123) supersedes it.
 	numerator := new(big.Int)
 	denominatorSum := new(big.Int)
 	term := new(big.Int)

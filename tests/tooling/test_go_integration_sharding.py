@@ -41,6 +41,7 @@ EXPECTED_PACKAGES = {
     "internal/jobrescue",
     "internal/jobroute",
     "internal/jobruntime",
+    "internal/jobs/investment/chquery",
     "internal/jobs/metrics/daily",
     "internal/jobs/metrics/remaining",
     "internal/jobs/pagerduty",
@@ -279,8 +280,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # the package picked up its first -tags=integration files. Weight 60s,
     # ceil() of a local run of both tests together (each starting its own
     # container).
-    assert "35 package(s) discovered, 0 denylisted, 35 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 35 package(s)" in result.stdout
+    # CHAOS-4441 added internal/jobs/investment/chquery (35 -> 36
+    # discovered, 35 -> 36 will run): the ClickHouse read side of the native
+    # investment materializer. Its correctness claims -- dedup-before-filter
+    # on a ReplacingMergeTree, type-exact scans of six nullable columns, and
+    # tz-naive vs tz-aware timestamps landing on one instant -- are properties
+    # of the engine, so a fake connection cannot fail them. Weight 122s,
+    # ceil() of a local run of all seven tests together (each starting its own
+    # container).
+    assert "36 package(s) discovered, 0 denylisted, 36 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 36 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -306,7 +315,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == 35
+    # CHAOS-4441: 36, not 35 -- internal/jobs/investment/chquery added. This
+    # is the FLATTENED set across all shards, so unlike the selected-package
+    # count above it INCLUDES the providersync shard-1 package.
+    assert len(flattened) == len(set(flattened)) == 36
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1534,7 +1546,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4655: 34, not 33 -- cmd/query-api/internal/workgraph added
     # (35 discovered - 1 for the providersync shard-1 package = 34 across
     # shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 34
+    # CHAOS-4441: 35, not 34 -- internal/jobs/investment/chquery added
+    # (36 discovered - 1 for the providersync shard-1 package = 35 across
+    # shards 2/3).
+    assert len(selected_packages) == len(set(selected_packages)) == 35
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

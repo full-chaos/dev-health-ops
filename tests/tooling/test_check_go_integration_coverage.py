@@ -78,7 +78,15 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # discovered, 34 -> 35 will run): the batch-membership pair-bound-match
     # fix needed a real-engine red/green proof against a real ClickHouse
     # container.
-    assert "35 package(s) discovered, 0 denylisted, 35 will run" in result.stdout
+    # CHAOS-4441 added internal/jobs/investment/chquery (35 -> 36
+    # discovered, 35 -> 36 will run): the ClickHouse read side of the native
+    # investment materializer. Its correctness claims -- dedup-before-filter
+    # on a ReplacingMergeTree, type-exact scans of six nullable columns, and
+    # tz-naive vs tz-aware timestamps landing on one instant -- are properties
+    # of the engine, so a fake connection cannot fail them. Weight 122s,
+    # ceil() of a local run of all seven tests together (each starting its own
+    # container).
+    assert "36 package(s) discovered, 0 denylisted, 36 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

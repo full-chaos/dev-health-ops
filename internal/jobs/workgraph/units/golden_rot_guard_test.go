@@ -256,3 +256,82 @@ func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 			"     The Go port shares one function for both; it must be split.",
 	)
 }
+
+// TestMaxComponentNodesGoldenMatchesLivePython is the rot guard for
+// tests/fixtures/max_component_nodes_python_golden.json.
+//
+// Its own marker, and this one guards a value that is not in any source file
+// on either side: sys.get_int_max_str_digits(). It is an INTERPRETER RUNTIME
+// SETTING, changeable with sys.set_int_max_str_digits() and adjustable by
+// command-line flag or environment variable, so it can move without a diff
+// anywhere in this repository OR in CPython's version.
+//
+// units.DefaultIntMaxStrDigits is therefore a claim about the DEPLOYED
+// interpreter, not a fact about Python. If the two part company, every value
+// between the old and new limits is parsed by one plane and refused by the
+// other -- and for INVESTMENT_MAX_COMPONENT_NODES that means one plane splits
+// oversized components while the other does not, minting different
+// work_unit_ids for the same graph.
+//
+// The corpus straddles the limit in both directions and pins the counting rule
+// (digits only; sign, whitespace and underscores excluded; leading zeros
+// included), so a regenerated fixture that disagrees is naming a real change
+// rather than a formatting one.
+func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDirectory == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+
+	repoRoot := repositoryRootPath(t)
+	python := workgraphComponentsLivePython(t, repoRoot)
+	generator := filepath.Join(
+		repoRoot, "tests", "fixtures", "generate_max_component_nodes_golden.py",
+	)
+	if info, err := os.Stat(generator); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("magnitude generator is missing at %s: %v", generator, err)
+	}
+
+	command := exec.Command(python, generator, "--stdout")
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
+	rendered, err := command.Output()
+	if err != nil {
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("run the magnitude generator against live Python: %v: %s", err, stderr)
+	}
+
+	frozen, err := os.ReadFile(filepath.Join(
+		repoRoot, "tests", "fixtures", "max_component_nodes_python_golden.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(frozen) == string(rendered) {
+		if writeErr := os.WriteFile(
+			filepath.Join(proofDirectory, "max-component-nodes-magnitude"),
+			[]byte("executed"), 0o644,
+		); writeErr != nil {
+			t.Fatalf("write live-python-oracle proof: %v", writeErr)
+		}
+		return
+	}
+	t.Error(
+		"live Python no longer reproduces the frozen magnitude golden.\n" +
+			"Regenerate with\n" +
+			"    PYTHONPATH=src python tests/fixtures/generate_max_component_nodes_golden.py\n" +
+			"then read the diff rather than accepting it. The likeliest cause is that\n" +
+			"sys.get_int_max_str_digits() has moved -- an interpreter RUNTIME setting that\n" +
+			"appears in no source file on either side. units.DefaultIntMaxStrDigits must be\n" +
+			"updated with it, or every value between the two limits is parsed by one plane\n" +
+			"and refused by the other. For INVESTMENT_MAX_COMPONENT_NODES that means one\n" +
+			"plane splits oversized components and the other does not, which mints\n" +
+			"different work_unit_ids for the same graph.",
+	)
+}

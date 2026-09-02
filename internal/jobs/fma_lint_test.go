@@ -149,6 +149,15 @@ func identity(v float64) float64 { return v }
 func WrappedByNonConversionCall(a, b, c float64) float64 {
 	return identity(a*b) + c
 }
+
+func ParenSibling(a, b, c float64) float64 {
+	return (c) + a*b
+}
+
+func ShadowedFloat64Conversion(a, b, c float64) float64 {
+	float64 := func(v float64) float64 { return v }
+	return float64(a*b) + c
+}
 `
 	// Both a*b and c*d in `Unguarded` are individually flagged: each is a
 	// direct multiply operand of the same `+`, so EITHER could be the one
@@ -158,9 +167,15 @@ func WrappedByNonConversionCall(a, b, c float64) float64 {
 	// ConversionCall's a*b is the codex round-1 P1 repro: identity() is not
 	// a float64()/float32() conversion, so it gives no rounding guarantee,
 	// and if inlined the compiler can still fuse straight-line a*b + c.
+	// ParenSibling and ShadowedFloat64Conversion are codex round-2's two P1
+	// repros: a parenthesized SIBLING operand corrupting the round-1
+	// hand-rolled ancestor stack (fixed by the parent-map rewrite), and a
+	// purely-syntactic "is this a float64() call" check accepting a locally
+	// shadowed identifier of that name (fixed by resolving through
+	// go/types' info.Uses instead of comparing ident.Name).
 	findings := parseAndCheckFixture(t, src)
-	if len(findings) != 3 {
-		t.Fatalf("got %d findings, want exactly 3 (a*b and c*d in Unguarded, a*b in WrappedByNonConversionCall): %+v", len(findings), findings)
+	if len(findings) != 5 {
+		t.Fatalf("got %d findings, want exactly 5 (a*b and c*d in Unguarded, a*b in WrappedByNonConversionCall, a*b in ParenSibling, a*b in ShadowedFloat64Conversion): %+v", len(findings), findings)
 	}
 }
 
@@ -168,48 +183,89 @@ func WrappedByNonConversionCall(a, b, c float64) float64 {
 // with Op MUL, both of whose operand types are float32/float64 (per info),
 // that is itself the direct (paren-stripped) operand of a +/- BinaryExpr,
 // with no intervening float64()/float32() conversion call.
+//
+// Codex round 2 (P1, EXECUTED) found the ROUND-1 implementation of this
+// walk -- a hand-rolled ast.Visitor with an explicit push/pop stack --
+// itself buggy: it pushed every non-ParenExpr node on entry but popped
+// UNCONDITIONALLY on every Visit(nil), including a ParenExpr's own exit
+// (which never pushed). For `(c) + a*b`, that extra pop after leaving the
+// `(c)` ParenExpr silently dropped the enclosing `+` from the stack before
+// the walk ever reached `a*b`, so the MUL's parent lookup came up empty and
+// the site went unflagged -- codex's repro showed a real fused-vs-separated
+// bit difference for exactly that construction. Building a NORMAL parent
+// map first (one pass, ast.Inspect's own paired nil-call is symmetric by
+// construction because it pairs with EVERY node, not just the ones this
+// code chose to track) and then walking up through it, skipping ParenExpr
+// explicitly at lookup time rather than at collection time, removes the
+// asymmetry class entirely.
 func findUnguardedFloatFMASites(fset *token.FileSet, info *types.Info, file *ast.File) []fmaFinding {
-	v := &fmaVisitor{fset: fset, info: info}
-	ast.Walk(v, file)
-	return v.findings
-}
-
-// fmaVisitor implements ast.Visitor with an explicit paren-stripped
-// ancestor stack. Go's ast.Walk calls Visit(nil) when leaving a node
-// (immediately after all its children have been visited), which is how the
-// stack pops symmetrically with the pushes on entry.
-type fmaVisitor struct {
-	fset     *token.FileSet
-	info     *types.Info
-	stack    []ast.Node
-	findings []fmaFinding
-}
-
-func (v *fmaVisitor) Visit(n ast.Node) ast.Visitor {
-	if n == nil {
-		if len(v.stack) > 0 {
-			v.stack = v.stack[:len(v.stack)-1]
+	parent := buildParentMap(file)
+	var findings []fmaFinding
+	ast.Inspect(file, func(n ast.Node) bool {
+		mul, ok := n.(*ast.BinaryExpr)
+		if !ok || mul.Op != token.MUL || !isFloatBinaryExpr(info, mul) {
+			return true
 		}
-		return nil
-	}
-	if _, isParen := n.(*ast.ParenExpr); !isParen {
-		v.stack = append(v.stack, n)
-	}
-	if mul, ok := n.(*ast.BinaryExpr); ok && mul.Op == token.MUL && isFloatBinaryExpr(v.info, mul) {
-		if directOperandOfUnguardedAddSub(v.stack) {
-			v.findings = append(v.findings, fmaFinding{
-				position: v.fset.Position(mul.Pos()).String(),
-				snippet:  exprString(v.fset, mul),
+		if directOperandOfUnguardedAddSub(info, parent, mul) {
+			findings = append(findings, fmaFinding{
+				position: fset.Position(mul.Pos()).String(),
+				snippet:  exprString(fset, mul),
 			})
 		}
-	}
-	return v
+		return true
+	})
+	return findings
 }
 
-// directOperandOfUnguardedAddSub inspects the ancestor stack (paren-stripped,
-// innermost node -- the MUL under test -- last) for whether the MUL feeds a
-// +/- BinaryExpr either DIRECTLY, or through exactly one wrapping call that
-// is NOT a float64()/float32() conversion.
+// buildParentMap does ONE full walk and records, for every node, the node
+// literally enclosing it in the AST (ParenExpr included -- callers skip
+// past those explicitly, rather than this map silently doing it for them,
+// which is exactly the kind of "collection-time" skip that caused the
+// round-1 bug).
+func buildParentMap(file *ast.File) map[ast.Node]ast.Node {
+	parent := make(map[ast.Node]ast.Node)
+	var stack []ast.Node
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			// ast.Inspect calls f(nil) once for EVERY node whose f(node)
+			// call returned true, immediately after that node's children
+			// are done -- paired 1:1 with every push below, unlike the
+			// round-1 visitor which only pushed non-ParenExpr nodes but
+			// popped on every exit.
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			return true
+		}
+		if len(stack) > 0 {
+			parent[n] = stack[len(stack)-1]
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return parent
+}
+
+// nonParenParent walks up the parent map from n, skipping any ParenExpr
+// ancestors, and returns the first non-ParenExpr ancestor (or nil at the
+// file root).
+func nonParenParent(parent map[ast.Node]ast.Node, n ast.Node) ast.Node {
+	for {
+		p, ok := parent[n]
+		if !ok {
+			return nil
+		}
+		if _, isParen := p.(*ast.ParenExpr); isParen {
+			n = p
+			continue
+		}
+		return p
+	}
+}
+
+// directOperandOfUnguardedAddSub reports whether mul feeds a +/- BinaryExpr
+// either DIRECTLY, or through exactly one wrapping call that is NOT a
+// float64()/float32() conversion.
 //
 // The second case exists because of a codex round-1 finding (P1, EXECUTED):
 // `identity(a*b) + c`, where `identity` is a small Go function that returns
@@ -229,23 +285,16 @@ func (v *fmaVisitor) Visit(n ast.Node) ast.Visitor {
 // inlining is in play. That residual class is exactly why fma_golden_test.go
 // exists: a bit-pattern regression test catches what static analysis
 // structurally cannot. See this function's package doc comment.
-func directOperandOfUnguardedAddSub(stack []ast.Node) bool {
-	if len(stack) < 2 {
-		return false
-	}
-	parent := stack[len(stack)-2]
-	if isAddSubBinary(parent) {
+func directOperandOfUnguardedAddSub(info *types.Info, parent map[ast.Node]ast.Node, mul ast.Node) bool {
+	p := nonParenParent(parent, mul)
+	if isAddSubBinary(p) {
 		return true
 	}
-	call, ok := parent.(*ast.CallExpr)
-	if !ok || isFloatConversionCall(call) {
+	call, ok := p.(*ast.CallExpr)
+	if !ok || isFloatConversionCall(info, call) {
 		return false
 	}
-	if len(stack) < 3 {
-		return false
-	}
-	grandparent := stack[len(stack)-3]
-	return isAddSubBinary(grandparent)
+	return isAddSubBinary(nonParenParent(parent, call))
 }
 
 func isAddSubBinary(n ast.Node) bool {
@@ -253,16 +302,35 @@ func isAddSubBinary(n ast.Node) bool {
 	return ok && (binary.Op == token.ADD || binary.Op == token.SUB)
 }
 
-// isFloatConversionCall reports whether call is exactly `float64(...)` or
-// `float32(...)` -- the only wrapping this codebase's established CHAOS-4818
-// fix idiom uses, and the only one the Go spec documents as forcing
-// rounding and preventing fusion.
-func isFloatConversionCall(call *ast.CallExpr) bool {
+// isFloatConversionCall reports whether call is genuinely the builtin
+// float64()/float32() conversion -- the only wrapping this codebase's
+// established CHAOS-4818 fix idiom uses, and the only one the Go spec
+// documents as forcing rounding and preventing fusion.
+//
+// Codex round 2 (P1, EXECUTED) found the round-1 version of this check was
+// purely syntactic (`ident.Name == "float64"`), so a LOCAL shadowing
+// identifier of that exact name -- `float64 := func(v float64) float64 {
+// return v }` -- passed it, and the lint exempted `float64(a*b) + c` even
+// though that "conversion" is just an ordinary function call the compiler
+// can inline and fuse through, same repro shape as identity() above. Using
+// `info.Uses[ident]` (populated by go/types) resolves what the identifier
+// ACTUALLY refers to at this position, not what it is spelled -- a
+// shadowing local resolves to that local's own object, never to the
+// universe-scope `float64`/`float32` type, so this correctly rejects it.
+func isFloatConversionCall(info *types.Info, call *ast.CallExpr) bool {
 	ident, ok := call.Fun.(*ast.Ident)
 	if !ok {
 		return false
 	}
-	return ident.Name == "float64" || ident.Name == "float32"
+	typeName, ok := info.Uses[ident].(*types.TypeName)
+	if !ok {
+		return false
+	}
+	basic, ok := typeName.Type().(*types.Basic)
+	if !ok {
+		return false
+	}
+	return basic.Kind() == types.Float64 || basic.Kind() == types.Float32
 }
 
 // isFloatBinaryExpr reports whether the given expression's static type is

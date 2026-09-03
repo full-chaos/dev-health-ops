@@ -42,16 +42,15 @@ type Component struct {
 // emits them as counters (see the executor's observer), so a recurrence trips a
 // metric rather than needing someone to read worker logs.
 //
-// DroppedNodes is CHAOS-4771's regression guard, not a live counter: removeHubs
-// no longer deletes nodes, so this field is expected to read 0 permanently
-// (worker_workgraph_component_split_nodes_dropped_total, once wired, should
-// never move again). It stays in the struct -- rather than being deleted --
-// because the frozen pre-fix golden JSON still deserializes into it, and a
-// nonzero live value now means the fix regressed, not that it fired correctly.
-// PartitionedHubs is the CHAOS-4771 replacement signal: it counts hub nodes
-// that were extracted into their own singleton fragment instead of being
-// deleted. Every node stays in the output, so this is observability, not a
-// data-loss counter.
+// DroppedNodes and PartitionedHubs are CHAOS-4771's two hub-fate counters,
+// EXACTLY ONE of which moves on a given call, selected by BuildComponents's
+// partitionHubs flag (see its doc for the flag-gate reason). DroppedNodes
+// moves under the legacy (partitionHubs=false) delete path; PartitionedHubs
+// moves under the fixed (partitionHubs=true) path, where every hub node stays
+// in the output as its own singleton fragment instead of being discarded --
+// so PartitionedHubs is observability, not a data-loss counter, while
+// DroppedNodes remains exactly what it always was: real, permanent data loss,
+// still live in production until the flag flips.
 type BuildStats struct {
 	OversizedComponents int
 	DroppedEdges        int
@@ -344,36 +343,58 @@ func degrees(edges []Edge, within *nodeIndex) map[NodeKey]int {
 	return degree
 }
 
-// removeHubs is CHAOS-4771's fix to components.py:180-220 _remove_hubs: instead
-// of deleting the highest-degree hub node, it CUTS the hub out of the oversized
-// fragment and keeps it as its own singleton fragment. Every node in the input
-// still appears in exactly one output fragment -- the invariant the original
-// deletion violated (CHAOS-4758: 242 real nodes, ~10% of org 70d529e0's graph,
-// vanished from every work unit; a PR whose linked issue was one of them was
-// orphaned into a one-node unit with no team bridge, surfacing on the
-// Investment page as "Unassigned team").
+// removeHubs ports components.py:180-220 _remove_hubs, GATED by partitionHubs
+// between two hub fates:
 //
-// This is the variant CHAOS-4758's own suggested direction names explicitly:
-// "cut the hub's incident edges while keeping the hub as its own fragment."
-// Chosen over a min-cut/bisection because it is a one-line change to the
-// existing deterministic loop -- same hub selection, same tie-break, same
-// termination argument -- rather than a new algorithm with its own determinism
-// proof to write.
+//   - partitionHubs=false (LEGACY, the default zero value, and what runs in
+//     production until the flag below flips): the pre-fix, bit-exact port. The
+//     highest-degree hub is DELETED ENTIRELY -- excluded from every output
+//     fragment, its incident edges gone with it. This is CHAOS-4758: 242 real
+//     nodes, ~10% of org 70d529e0's graph, vanish from every work unit; a PR
+//     whose linked issue was one of them is orphaned into a one-node unit with
+//     no team bridge, surfacing on the Investment page as "Unassigned team".
+//   - partitionHubs=true (the CHAOS-4771 fix): the hub is CUT out of the
+//     oversized fragment and kept as its own singleton fragment instead of
+//     discarded -- the variant CHAOS-4758's own suggested direction names
+//     explicitly ("cut the hub's incident edges while keeping the hub as its
+//     own fragment"). Every node in the input appears in exactly one output
+//     fragment; no data loss.
 //
-// Deterministic: among the nodes of every still-oversized fragment, the node
-// with the highest degree is selected, ties broken by the SMALLEST node id --
-// unchanged from the pre-fix selection. Terminates because every iteration
+// # Why this is gated rather than simply fixed
+//
+// `units.BuildComponents` is the SINGLE implementation shared by the
+// materializer (still Python, still live) and the Go-native membership
+// backfill (CHAOS-4282). Both must group nodes IDENTICALLY, because
+// `work_unit_membership` rows (written by the Go backfill, keyed by
+// `work_unit_id`) must point at `work_unit_investments` rows (minted by
+// whichever plane is live) that exist. While Python is live and still deletes
+// hubs, an unconditionally-partitioning Go grouping would mint membership rows
+// for work_unit_ids Python's investments table never created -- the exact
+// cross-table corruption CHAOS-4771's own acceptance condition #4 warned
+// about, just arriving through the membership backfill instead of a Python
+// edit. The flag is `WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED` -- the
+// SAME one that gates the native materializer cutover -- so partitioning turns
+// on at the exact moment Python stops being the plane anything must agree
+// with. Every caller (chquery's read path, the membership backfill's write
+// path) must pass the SAME flag-derived value; BuildComponents cannot enforce
+// that itself since it does not read the environment (kept pure/testable,
+// same reasoning as Derive elsewhere in this codebase) -- callers own it.
+//
+// Both branches share hub SELECTION: among the nodes of every still-oversized
+// fragment, the node with the highest degree is chosen, ties broken by the
+// SMALLEST node id. CHAOS-4771 changes only what happens to the chosen hub,
+// never which node is chosen. Both branches terminate because every iteration
 // shrinks the active node set by exactly one node.
-func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats) [][]NodeKey {
+func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, partitionHubs bool, stats *BuildStats) [][]NodeKey {
 	active := newNodeIndex()
 	for _, node := range nodes.order {
 		active.intern(node)
 	}
 
-	// Hubs cut out of the active set, each kept as its own singleton fragment.
-	// Appended to the final fragment list once no oversized fragment remains --
-	// this is the entire behavioural delta from the pre-fix version, which
-	// dropped the hub instead of remembering it here.
+	// Hubs cut out of the active set under partitionHubs=true, each kept as its
+	// own singleton fragment. Appended to the final fragment list once no
+	// oversized fragment remains. Left empty and unused under
+	// partitionHubs=false, where a hub is discarded instead of remembered.
 	hubFragments := make([][]NodeKey, 0)
 
 	for {
@@ -402,7 +423,10 @@ func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats)
 			}
 		}
 		if len(oversized.order) == 0 {
-			return append(fragments, hubFragments...)
+			if partitionHubs {
+				return append(fragments, hubFragments...)
+			}
+			return fragments
 		}
 
 		degree := degrees(activeEdges, oversized)
@@ -431,9 +455,13 @@ func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats)
 		}
 
 		active = withoutNode(active, hub)
-		hubFragments = append(hubFragments, []NodeKey{hub})
-		if stats != nil {
-			stats.PartitionedHubs++
+		if partitionHubs {
+			hubFragments = append(hubFragments, []NodeKey{hub})
+			if stats != nil {
+				stats.PartitionedHubs++
+			}
+		} else if stats != nil {
+			stats.DroppedNodes++
 		}
 	}
 }
@@ -474,8 +502,9 @@ func nodeLess(left, right NodeKey) bool {
 // to the node-destroying phase (b).
 //
 // Phase (b): whatever the edge phase cannot resolve -- a fragment held together
-// purely by max-confidence edges -- goes to removeHubs.
-func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, stats *BuildStats) []Component {
+// purely by max-confidence edges -- goes to removeHubs, gated by partitionHubs
+// (see removeHubs's doc for what the flag means and why it exists).
+func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, partitionHubs bool, stats *BuildStats) []Component {
 	nodeSet := newNodeIndex()
 	for _, node := range nodes {
 		nodeSet.intern(node)
@@ -569,7 +598,7 @@ func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, stats 
 		for _, node := range fragment {
 			fragmentIndex.intern(node)
 		}
-		fragmentNodeLists = append(fragmentNodeLists, removeHubs(fragmentIndex, keptEdges, maxNodes, stats)...)
+		fragmentNodeLists = append(fragmentNodeLists, removeHubs(fragmentIndex, keptEdges, maxNodes, partitionHubs, stats)...)
 	}
 
 	result := make([]Component, 0, len(fragmentNodeLists))
@@ -632,11 +661,33 @@ func nodeListLess(left, right []NodeKey) bool {
 // maxComponentNodes nil resolves through ResolveMaxComponentNodes (explicit >
 // environment > default). stats may be nil.
 //
+// # partitionHubs -- CHAOS-4771's flag gate, READ THIS BEFORE PASSING true
+//
+// This selects hub FATE when the oversized-component split falls through to
+// removeHubs (see its doc for the full mechanism and why the gate exists at
+// all). false (the safe zero value) reproduces the pre-fix, bit-exact port:
+// a hub is DELETED, data is lost, and the result matches whatever the LIVE
+// Python materializer currently produces. true is the CHAOS-4771 fix: a hub is
+// partitioned into its own singleton fragment, and no data is lost.
+//
+// The caller must pass the SAME value every other live consumer of this
+// package is passing, sourced from `WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED`
+// -- the SAME flag that gates the native materializer cutover, not a
+// per-caller decision. Two consumers of this package disagreeing (one
+// partitioning, one deleting) for the same edge input mints DIFFERENT
+// work_unit_ids for the same graph, which is the exact cross-table corruption
+// CHAOS-4771's own acceptance condition #4 warned about: a Go-native
+// membership-backfill write (CHAOS-4282) keyed by a work_unit_id the LIVE
+// Python materializer's `work_unit_investments` table never minted. Flip this
+// to true only at the moment the native materializer (and therefore this
+// package's true output) becomes the plane every consumer agrees is
+// authoritative -- i.e., at CHAOS-4924 cutover, not before.
+//
 // Heuristic edges are excluded UPSTREAM, at the fetch_work_graph_edges choke
 // point, not here (queries.py:25-35) -- this function groups whatever it is
 // given, and a caller that fetches without that filter will percolate thousands
 // of unrelated nodes into one component.
-func BuildComponents(edges []Edge, maxComponentNodes *int, stats *BuildStats) []Component {
+func BuildComponents(edges []Edge, maxComponentNodes *int, partitionHubs bool, stats *BuildStats) []Component {
 	maxNodes := ResolveMaxComponentNodes(maxComponentNodes)
 
 	result := make([]Component, 0)
@@ -659,7 +710,7 @@ func BuildComponents(edges []Edge, maxComponentNodes *int, stats *BuildStats) []
 		if stats != nil {
 			stats.OversizedComponents++
 		}
-		result = append(result, splitOversizedComponent(unitNodes, discovered.Edges, maxNodes, stats)...)
+		result = append(result, splitOversizedComponent(unitNodes, discovered.Edges, maxNodes, partitionHubs, stats)...)
 	}
 	return result
 }

@@ -317,7 +317,24 @@ jobs:
       - name: Run FMA bit-pattern goldens on real arm64
         run: |
           set -euo pipefail
-          go test -mod=readonly -count=1 -json ./internal/jobs/... \
+          # -timeout 8m: the DOUBLE-BOUND lesson from acr's own self-hosted
+          # sibling (CF, 09-03) -- that job's `timeout-minutes: 10` alone
+          # measured 9m58s-10m03s wall time, close enough that ordinary
+          # variance turned an ordinary run into a CANCELLED job, which
+          # this contract's own job_status() then reads as claimed-failure
+          # (a red required check for a test that was actually passing,
+          # just slow to report). `go test`'s own `-timeout` fires INSIDE
+          # the job and produces a real test failure with a goroutine dump
+          # -- an actionable signal -- well before either job-level cap
+          # (10m self-hosted, 20m fallback) can turn a slow-but-passing run
+          # into an ambiguous cancellation. 8m leaves >2m of headroom under
+          # the tighter (self-hosted) 10m cap for checkout/setup-go/binary
+          # startup, which this job's own one real measurement (1m12s
+          # total, run 33728426935, job 100573965740) shows is generous --
+          # but that measurement is n=1, which is exactly why the INNER
+          # bound matters here: it fails loud on its own terms rather than
+          # depending on that single data point staying representative.
+          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... \
             -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
             | tee go-test-output.json
           ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
@@ -751,7 +768,24 @@ jobs:
         # exist on main.
         run: |
           set -euo pipefail
-          go test -mod=readonly -count=1 -json ./internal/jobs/... \
+          # -timeout 8m: the DOUBLE-BOUND lesson from acr's own self-hosted
+          # sibling (CF, 09-03) -- that job's `timeout-minutes: 10` alone
+          # measured 9m58s-10m03s wall time, close enough that ordinary
+          # variance turned an ordinary run into a CANCELLED job, which
+          # this contract's own job_status() then reads as claimed-failure
+          # (a red required check for a test that was actually passing,
+          # just slow to report). `go test`'s own `-timeout` fires INSIDE
+          # the job and produces a real test failure with a goroutine dump
+          # -- an actionable signal -- well before either job-level cap
+          # (10m self-hosted, 20m fallback) can turn a slow-but-passing run
+          # into an ambiguous cancellation. 8m leaves >2m of headroom under
+          # the tighter (self-hosted) 10m cap for checkout/setup-go/binary
+          # startup, which this job's own one real measurement (1m12s
+          # total, run 33728426935, job 100573965740) shows is generous --
+          # but that measurement is n=1, which is exactly why the INNER
+          # bound matters here: it fails loud on its own terms rather than
+          # depending on that single data point staying representative.
+          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... \
             -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
             | tee go-test-output.json
           ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)

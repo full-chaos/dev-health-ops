@@ -194,9 +194,10 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 	env := newAuditFixture(t, ctx)
 
 	var retained TxOps
+	var ran bool
 	err := Commit(ctx, env.pool, env.schema, Mutation{
 		Apply: func(ctx context.Context, tx TxOps) error {
-			retained = tx // the caller error this test exists to characterise
+			retained, ran = tx, true // the caller error this test exists to characterise
 			return nil
 		},
 		Audit: AuditEvent{EventType: "retention.probe", Outcome: OutcomeAllowed},
@@ -208,7 +209,7 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	if retained == nil {
+	if !ran {
 		t.Fatal("the callback did not run")
 	}
 
@@ -227,5 +228,67 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 	}
 	if orgs != 0 {
 		t.Errorf("the retained handle wrote %d row(s); it must write none", orgs)
+	}
+}
+
+// TestCallbackEndingTheTransactionIsRefused is the executed proof for round 2's
+// High finding, which the type system cannot close.
+//
+// Exec must exist for a mutation to write anything, so Exec(ctx, "ROLLBACK")
+// and Exec(ctx, "COMMIT") reach the server whatever the parameter type is. The
+// damage is asymmetric and the ROLLBACK direction is the worse one: after it,
+// pgx's wrapper is still logically open, so the helper's outbox and audit
+// inserts would run OUTSIDE the rolled-back transaction and Commit could return
+// SUCCESS -- an event and an audit row for a state mutation that never
+// committed, reported as fine.
+//
+// Commit now reads the connection's transaction status after Apply returns and
+// refuses unless it is still in a transaction block. This asserts the refusal
+// and, more importantly, that NOTHING was written by either half.
+func TestCallbackEndingTheTransactionIsRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+
+	count := func(table string) int {
+		t.Helper()
+		var n int
+		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.`+table).Scan(&n); err != nil {
+			t.Fatalf("counting %s: %v", table, err)
+		}
+		return n
+	}
+	before := [3]int{count("organizations"), count("auth_outbox_events"), count("security_audit_events")}
+
+	for _, verb := range []string{"ROLLBACK", "COMMIT"} {
+		t.Run("callback runs raw "+verb, func(t *testing.T) {
+			err := Commit(ctx, env.pool, env.schema, Mutation{
+				Apply: func(ctx context.Context, tx TxOps) error {
+					if _, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
+						VALUES (gen_random_uuid(), $1, $1)`, "raw-"+verb); err != nil {
+						return err
+					}
+					_, err := tx.Exec(ctx, verb)
+					return err // nil on success: the callback reports everything is fine
+				},
+				Audit: AuditEvent{EventType: "raw." + verb, Outcome: OutcomeAllowed},
+				Event: OutboxEvent{
+					AggregateType: "probe", AggregateID: verb,
+					EventType: "raw." + verb, IdempotencyKey: "raw-" + verb,
+				},
+			})
+			if err == nil {
+				t.Fatal("Commit reported SUCCESS after the callback ended the transaction itself")
+			}
+			if !errors.Is(err, ErrMutationFailed) {
+				t.Errorf("err = %v, want ErrMutationFailed", err)
+			}
+			t.Logf("refused: %v", err)
+
+			after := [3]int{count("organizations"), count("auth_outbox_events"), count("security_audit_events")}
+			if after != before {
+				t.Errorf("rows survived a refused mutation: before=%v after=%v", before, after)
+			}
+		})
 	}
 }

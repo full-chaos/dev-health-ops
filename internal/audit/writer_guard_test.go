@@ -28,9 +28,17 @@ var guardedTables = []string{"auth_outbox_events", "security_audit_events"}
 // table is deleted by a failing test rather than left to rot into permission
 // nobody re-examined.
 var permittedWriters = map[string]string{
-	"internal/audit/audit.go": "the two intended inserts; this is the mechanism",
 	"internal/storage/postgres/authschema/capability_integration_test.go": "the grant probe: it must INSERT to prove the runtime role HOLDS Insert on both tables",
 	"internal/storage/postgres/authschema/posture_integration_test.go":    "the posture control: its INSERT exercises the SEQUENCE grant as well as the table grant, so it must write rather than assert",
+}
+
+// guardPattern is the ONE definition of what counts as a write, shared by the
+// tree walk and by TestGuardPatternRejectsKnownBypasses. Two copies of this
+// regex would be two things that must agree and nothing making them.
+func guardPattern(table string) *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?is)INSERT(?:\s|/\*.*?\*/|--[^\n]*\n)+INTO(?:\s|/\*.*?\*/|--[^\n]*\n)+[^;]{0,120}` +
+			regexp.QuoteMeta(table))
 }
 
 // TestNothingOutsideThisPackageWritesTheGuardedTables scans RAW SOURCE rather
@@ -58,7 +66,11 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 	// are formatted across several lines in every real writer.
 	patterns := make(map[string]*regexp.Regexp, len(guardedTables))
 	for _, table := range guardedTables {
-		patterns[table] = regexp.MustCompile(`(?is)INSERT\s+INTO\s+[^;]{0,120}` + regexp.QuoteMeta(table))
+		// Comments and line comments are token separators in PostgreSQL, so
+		// `INSERT /* x */ INTO` is valid SQL that `INSERT\s+INTO` does not
+		// match. Round 2 found that bypass; TestGuardPatternRejectsKnownBypasses
+		// keeps it from coming back.
+		patterns[table] = guardPattern(table)
 	}
 
 	matched := map[string]bool{}
@@ -76,6 +88,20 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// THIS package is what the rule is about -- "nothing OUTSIDE
+		// internal/audit" -- so its own files are permitted by the rule rather
+		// than by an allowlist entry. Enumerating them was wrong twice over:
+		// audit.go needed permission to contain the mechanism, and widening the
+		// pattern for comments made this very test file match its own bypass
+		// fixtures. A rule stated as "outside X" should skip X, not list it.
+		//
+		// The bound, since it is real: a write added INSIDE this package is not
+		// caught here. That is in-package discipline, the same residue as the
+		// zero-value ValidatedIdentifier -- the guard is over the boundary.
+		if rel, err := filepath.Rel(root, path); err == nil &&
+			strings.HasPrefix(rel, filepath.Join("internal", "audit")+string(filepath.Separator)) {
 			return nil
 		}
 		body, err := os.ReadFile(path)
@@ -136,5 +162,41 @@ func repoRoot(t *testing.T) string {
 			t.Fatal("no go.mod above the working directory")
 		}
 		dir = parent
+	}
+}
+
+// TestGuardPatternRejectsKnownBypasses is the permanent red fixture for the
+// syntax round 2 slipped past the guard.
+//
+// The guard's value is entirely in what it MATCHES, and a pattern that misses
+// valid SQL is worse than no guard: it reports clean and licenses the belief
+// that nothing outside this package writes these tables. Each string below is
+// SQL PostgreSQL accepts, so each must match.
+func TestGuardPatternRejectsKnownBypasses(t *testing.T) {
+	pattern := guardPattern("auth_outbox_events")
+	for _, c := range []struct{ name, sql string }{
+		{"plain", `INSERT INTO auth.auth_outbox_events (a) VALUES (1)`},
+		{"block comment between the tokens", `INSERT /* guard bypass */ INTO auth.auth_outbox_events (a) VALUES (1)`},
+		{"line comment between the tokens", "INSERT --x\n INTO auth.auth_outbox_events (a) VALUES (1)"},
+		{"newline and tabs", "INSERT\n\t\tINTO auth.auth_outbox_events (a) VALUES (1)"},
+		{"comment after INTO", `INSERT INTO /* x */ auth.auth_outbox_events (a) VALUES (1)`},
+		{"lowercase", `insert into auth.auth_outbox_events (a) values (1)`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if !pattern.MatchString(c.sql) {
+				t.Errorf("the guard does not match valid SQL, so a writer using this form "+
+					"would pass unnoticed: %s", c.sql)
+			}
+		})
+	}
+	// The accepting row: the pattern must not match text that is merely ABOUT
+	// the table, or every comment mentioning it becomes a false offender.
+	for _, benign := range []string{
+		`// auth_outbox_events is written only through Commit`,
+		`SELECT count(*) FROM auth.auth_outbox_events`,
+	} {
+		if pattern.MatchString(benign) {
+			t.Errorf("the guard matched text that writes nothing: %s", benign)
+		}
 	}
 }

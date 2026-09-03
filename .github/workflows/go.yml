@@ -304,6 +304,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # This job runs on the self-hosted oci-arc-runners pool, which
+          # exports GOMODCACHE/GOCACHE to a SHARED hostPath across every pod
+          # the pool schedules -- unlike a GitHub-hosted runner's ephemeral,
+          # per-job filesystem. setup-go's default cache (enabled when
+          # `cache` is unset) would extract its cache tarball into that
+          # shared path, racing any other job the pool runs concurrently.
+          # See tests/tooling/test_go_self_hosted_setup_go_cache_disabled.py.
+          cache: false
 
       - name: Confirm this runner is actually arm64
         run: |

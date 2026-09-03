@@ -281,6 +281,12 @@
       "expect_keyword": "required",
       "file": "invalid-missing-occurred-at.json",
       "why": "`occurred_at` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-token-shaped.json",
+      "why": "CODEX ROUND 1 P1. The earlier pattern (`req_` + 1-60 chars) accepted this in full, and the field's own description blessed echoing a caller-supplied ID once it passed that lexical check -- so a caller could put a credential fragment in a field documented as safe, and the server would reflect it into a response body. A character class cannot tell an opaque correlation ID from a secret. The producer obligation (server-minted, never echoed) is the real control; the pinned 26-character length is a stated-partial mitigation that makes the common token shapes unrepresentable here. This fixture is the regression test for the length half. The first draft of this fixture used a real GitHub personal-access-token prefix to make the smuggling concrete, and TestNoFixtureCarriesARealLookingSecret REFUSED it -- correctly, and on a fixture written by the person who reads that guard's output. The value here is over-length and synthetic instead: it matches the OLD `{1,60}` pattern, so it demonstrates exactly what used to be accepted, and fails the new 26-character pin. The prefix was illustration; the length and character class are the defect. Naming the prefix in THIS note tripped the scanner a second time -- an explanation of the rule is scanned exactly like a violation of it, which is the right behaviour and the second time it has caught me describing a shape instead of naming it."
     }
   ],
   "reject_by_client": [
@@ -298,6 +304,16 @@
       "file": "client-rejected-occurred-at-far-future.json",
       "http_status": 403,
       "why": "Stamped a year ahead. Schema-valid -- the pattern constrains SHAPE, not plausibility -- and no reasonable clock skew explains it. A future timestamp in an audit trail reorders events silently, so the client refuses beyond a bounded tolerance rather than storing it."
+    },
+    {
+      "file": "client-rejected-status-integral-decimal.json",
+      "http_status": 403,
+      "why": "CODEX ROUND 1 P1. JSON Schema `integer` admits a zero-fraction decimal, so the SCHEMA accepts `403.0` in all three languages. Go's client then re-decodes the raw bytes into an `int` field and refuses it; Python kept it as a float and carried on. Same document, opposite outcomes -- the exact cross-language split CHAOS-4884 already found and fixed for principal.v1 revisions, reproduced here in a new surface. Both clients now refuse it, and this fixture is what keeps them agreeing."
+    },
+    {
+      "file": "client-rejected-retry-after-integral-decimal.json",
+      "http_status": 429,
+      "why": "The same split on the other integer field. Filed separately because `retry_after_seconds` reaches the decode through the `if`/`then` branch rather than the base object, and a fix that covered only `status` would leave this one passing in Python and failing in Go."
     }
   ],
   "reject_by_client_note": "These documents are VALID against the schema and a client MUST still refuse them. That distinction is the category's whole reason to exist, and it was corrected once already during CHAOS-4884: filing them as `reject` would assert the schema catches something it provably does not, and would fail that category's own must-not-validate half.\n\nEach entry carries `http_status`, the status of the response line the document arrived on. The schema never sees it -- validators are handed a document, not an exchange -- which is exactly why these checks live in the client. Two of the three below are status disagreements, and the 404-versus-403 case is a genuine disclosure rather than bookkeeping: trusting the body would tell the caller a hidden resource exists."

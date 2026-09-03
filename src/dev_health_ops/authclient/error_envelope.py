@@ -56,6 +56,44 @@ MAX_CLOCK_SKEW: Final = timedelta(minutes=5)
 TRANSIENT_STATUSES: Final = frozenset({429, 503})
 
 
+def _require_wire_int(document: Any, field: str) -> int | None:
+    """Return an integer field, refusing a zero-fraction decimal.
+
+    JSON Schema's ``integer`` admits ``403.0`` -- it means "a number with no
+    fractional part", not "a JSON integer literal" -- so the schema accepts it
+    in all three languages and cannot be the place this is caught.
+
+    Go's client re-decodes the raw bytes into an ``int`` field and refuses
+    ``403.0`` outright. Python's ``json`` hands back a ``float`` and, without
+    this check, carried it into a parsed envelope: the SAME document accepted
+    by one client and rejected by the other. Codex round 1 found it, and it is
+    the same cross-language split CHAOS-4884 already fixed for principal.v1
+    revisions -- rediscovered here because a new surface re-derived the shape
+    instead of reusing the guard.
+
+    Refusing in Python (rather than teaching Go to coerce) is the direction
+    that keeps both clients agreeing on the STRICTER reading, and a status of
+    ``403.0`` is a producer defect in any case. The corresponding fixtures are
+    ``reject_by_client``, not ``reject``: the schema validates these documents,
+    and filing them as ``reject`` would assert a check that provably does not
+    exist.
+    """
+    raw = document.get(field)
+    if raw is None:
+        return None
+    # bool is a subclass of int in Python; a JSON `true` here is not a number.
+    if isinstance(raw, bool):
+        raise ContractError(f"{SURFACE}: /{field} is a boolean, not an integer")
+    if isinstance(raw, int):
+        return raw
+    raise ContractError(
+        f"{SURFACE}: /{field} = {raw!r} is a decimal, not an integer. The schema "
+        f"accepts it because JSON Schema's `integer` admits a zero fractional "
+        f"part, and Go's client refuses the identical document -- so accepting "
+        f"it here would split the two clients on one wire format"
+    )
+
+
 def _parse_timestamp(raw: str, field: str) -> datetime:
     """Parse one RFC 3339 timestamp the schema has already accepted.
 
@@ -118,7 +156,8 @@ def parse(
     """
     validate(SURFACE, document)
 
-    status = document["status"]
+    status = _require_wire_int(document, "status")
+    retry_after = _require_wire_int(document, "retry_after_seconds")
     if status != http_status:
         raise ContractError(
             f"{SURFACE}: envelope status {status} disagrees with the HTTP "
@@ -142,5 +181,5 @@ def parse(
         reason_code=document["reason_code"],
         request_id=document["request_id"],
         occurred_at=occurred_at,
-        retry_after_seconds=document.get("retry_after_seconds"),
+        retry_after_seconds=retry_after,
     )

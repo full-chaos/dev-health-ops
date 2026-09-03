@@ -1,7 +1,7 @@
 {
   "occurred_at": "2026-09-03T05:00:00-07:00",
   "reason_code": "grant_absent",
-  "request_id": "req_EXAMPLE0000000000000001",
+  "request_id": "req_EXAMPLE0000000000000000001",
   "schema_version": "error.v1",
   "status": 403
 }

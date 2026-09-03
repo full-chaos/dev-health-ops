@@ -20,5 +20,29 @@
 -- Partial rather than total, mirroring the predicate: the unpublished rows are
 -- already served by auth_outbox_events_pending_idx, and excluding them keeps
 -- this index proportional to the reclaimable backlog instead of the table.
+-- WHEN THIS CAN BE APPLIED, which is not visible from the statement below.
+--
+-- This is a plain CREATE INDEX, so it holds a lock that blocks INSERT, UPDATE
+-- and DELETE on auth_outbox_events for the whole build. Every security-state
+-- mutation inserts into this table inside its transaction, so on a live system
+-- that lock blocks every mutation in the product, not merely the reaper.
+--
+-- CREATE INDEX CONCURRENTLY is not available here, and that is STRUCTURAL
+-- rather than an oversight: apply.go runs each migration inside a single
+-- transaction on purpose -- the version row commits with the DDL so the two
+-- can never disagree -- and PostgreSQL forbids a concurrent index build inside
+-- a transaction block. Expressing one would need a second, non-transactional
+-- application path, which is a change to the lineage and not to this file.
+--
+-- Today that costs nothing: authruntime.Routes() returns nil, nothing in
+-- production reads or writes these tables, the table is empty and the lock is
+-- instantaneous. The point is the SCHEDULE. This index exists because an
+-- unindexed reap is slowest exactly when the backlog is largest; building the
+-- index is also slowest, and its lock most damaging, at exactly that same
+-- moment. Same curve, same worst point. Applied before the first route mounts
+-- it is free forever; applied after, it becomes a maintenance-window job on
+-- the busiest table in the schema.
+--
+-- Found by lane-auth-contracts reading the lineage, not the diff.
 CREATE INDEX auth_outbox_events_reapable_idx
     ON auth_outbox_events (published_at, id) WHERE published_at IS NOT NULL;

@@ -216,12 +216,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.membership_backfill": {
         "producer": "`internal/scheduler/fixed/inventory.go:176` (membership_backfill_daily_fanout)",
         "trigger": "schedule (DailyAt 03:30 UTC, safety net) + event-driven post-sync materializer (primary)",
-        "gate": "none",
-        "writer": "Python `backfill_memberships` `src/dev_health_ops/work_graph/investment/backfill.py:176`",
-        "tables": "`work_unit_membership`, `work_unit_membership_runs`",
-        "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-3092 (metrics families)",
+        "gate": "schema check in `NewMembershipExecutor` (`internal/jobs/metrics/remaining/membership_native.go:91`); no readiness gate of its own -- the scheduler-level RequiresGraphBuild prerequisite (`internal/scheduler/fixed/producers.go`) already withholds the partition until the org's work-graph build has durably completed",
+        "writer": "Go `internal/jobs/metrics/remaining/membership_native_clickhouse.go:86`",
+        "tables": "`work_unit_membership`, `work_unit_membership_runs`, `work_unit_membership_scoped_runs`",
+        "evidence": "argued — wired `daily.go:389-436,469-478`",
+        "state": "native",
+        "ticket": "CHAOS-4282 -- Python `backfill_memberships` (`work_graph/investment/backfill.py:176`) retired to the cutover",
     },
     "metrics.remaining.recommendations": {
         "producer": "`internal/scheduler/fixed/inventory.go:127` (recommendations_daily_fanout)",

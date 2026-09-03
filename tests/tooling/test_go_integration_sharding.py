@@ -2387,7 +2387,7 @@ _UNMIRRORED_IMAGE_DEBT: set[tuple[str, str, str, str]] = set()
 # Actions that pull an image themselves. `docker/setup-buildx-action` pulls
 # `moby/buildkit:buildx-stable-1` from Docker Hub before any login runs -- the
 # reason it was removed from the mirror workflow, where it deadlocked against
-# the very quota that workflow exists to escape. These five are ticketed debt.
+# the very quota that workflow exists to escape. These seven are ticketed debt.
 _IMAGE_PULLING_ACTION_DEBT = {
     ("docker-images.yml", "build", "docker/setup-buildx-action"),
     ("docker-images.yml", "merge", "docker/setup-buildx-action"),
@@ -2399,6 +2399,19 @@ _IMAGE_PULLING_ACTION_DEBT = {
     # same tradeoff docker-images.yml already carries as debt above, not a
     # new one.
     ("arc-runner-image.yml", "build", "docker/setup-buildx-action"),
+    # CHAOS-4906: the (worker, linux/arm64) self-hosted-pool pilot pair --
+    # same tradeoff as go-build/go-merge above (mirrors the exact same
+    # build-and-push steps for one matrix combination), not a new one.
+    (
+        "docker-images.yml",
+        "go-build-worker-arm64-self-hosted",
+        "docker/setup-buildx-action",
+    ),
+    (
+        "docker-images.yml",
+        "go-build-worker-arm64-fallback",
+        "docker/setup-buildx-action",
+    ),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

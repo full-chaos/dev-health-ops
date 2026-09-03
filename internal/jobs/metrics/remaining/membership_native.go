@@ -173,14 +173,6 @@ func verifyMembershipSchema(ctx context.Context, conn driver.Conn) error {
 	return nil
 }
 
-// wallClock never returns nil, matching recommendations' wallClock method.
-func (executor *MembershipExecutor) wallClock() func() time.Time {
-	if executor.nowUTC != nil {
-		return executor.nowUTC
-	}
-	return func() time.Time { return time.Now().UTC() }
-}
-
 // ComputePartition satisfies CompatibilityExecutor: the seam the partition
 // handler drives.
 //
@@ -210,7 +202,17 @@ func (executor *MembershipExecutor) ComputePartition(
 			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
 	}
 
-	outcome, err := executor.ComputeOrg(ctx, run.OrganizationID, scope.RepoIDs, executor.wallClock()())
+	// Resolved via nowOrRefuse (executor_clock.go), never a nil-safe
+	// wallClock() accessor -- CHAOS-4954, same refuse-loud shape as
+	// DORA/Capacity/Recommendations. NewMembershipExecutor sets nowUTC
+	// unconditionally on its only non-nil-returning path, so a refusal here
+	// is reachable only through a bare zero-valued struct literal in a test.
+	now, err := executor.nowOrRefuse()
+	if err != nil {
+		return CompatibilityOutcome{}, err
+	}
+
+	outcome, err := executor.ComputeOrg(ctx, run.OrganizationID, scope.RepoIDs, now)
 	written := outcome.MembershipRows
 	if err != nil {
 		return CompatibilityOutcome{RowsWritten: &written}, err

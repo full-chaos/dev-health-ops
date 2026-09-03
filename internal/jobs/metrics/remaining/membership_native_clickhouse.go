@@ -117,7 +117,17 @@ func (executor *MembershipExecutor) ComputeOrg(
 	}
 
 	stats := &units.BuildStats{}
-	components := units.BuildComponents(chquery.ComponentEdges(edgeRows), nil, stats)
+	// partitionHubs: false, the safe zero value (units.BuildComponents' own
+	// doc comment) -- the native materializer has not cut over yet (Python
+	// is still the live producer of work_unit_investments, CHAOS-4771/
+	// CHAOS-4924), so this backfill must keep minting the SAME work_unit_ids
+	// Python's still-live hub-deletion grouping produces. Flipping this
+	// independently of WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED --
+	// which no Go caller reads yet -- would mint membership rows keyed by
+	// work_unit_ids the live investments table never created, the exact
+	// cross-table corruption BuildComponents' doc warns about. Flip in
+	// lockstep with every other consumer at CHAOS-4924 cutover, not before.
+	components := units.BuildComponents(chquery.ComponentEdges(edgeRows), nil, false, stats)
 	if len(components) == 0 {
 		outcome := MembershipOutcome{
 			OversizedComponents: stats.OversizedComponents,
@@ -201,7 +211,16 @@ func (executor *MembershipExecutor) ComputeOrg(
 		}
 	}
 
-	markerCompletedAt := executor.wallClock()()
+	// Resolved via nowOrRefuse (executor_clock.go), never a nil-safe
+	// wallClock() accessor -- CHAOS-4954, same refuse-loud shape as
+	// DORA/Capacity/Recommendations. Rows are already written above at this
+	// point; a refusal here still surfaces as an error (no marker gets
+	// published), matching the write-then-marker protocol's own
+	// incomplete-run handling.
+	markerCompletedAt, err := executor.nowOrRefuse()
+	if err != nil {
+		return MembershipOutcome{}, err
+	}
 	isOrgWide := len(repoIDs) == 0
 	if isOrgWide {
 		if err := executor.writer.WriteMembershipRun(ctx, MembershipRunRecord{

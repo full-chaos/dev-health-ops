@@ -37,7 +37,11 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	})
 	chschema.Apply(ctx, t, instance)
 
-	conn := openLoaderClickHouse(t, ctx, instance.URI)
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
 	seedLoaderFixture(t, ctx, conn)
 
 	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
@@ -192,7 +196,11 @@ func TestASecondRunSupersedesTheFirstOnUnchangedData(t *testing.T) {
 	})
 	chschema.Apply(ctx, t, instance)
 
-	conn := openLoaderClickHouse(t, ctx, instance.URI)
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
 	seedLoaderFixture(t, ctx, conn)
 
 	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)

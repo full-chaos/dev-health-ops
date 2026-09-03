@@ -315,14 +315,44 @@ jobs:
           # these two checks would fail every #2152-descended feature branch
           # that has not merged main.
           #
-          # KNOWN RESIDUAL, recorded rather than chased: a branch that
-          # cherry-picks #2152's Dockerfile change WITHOUT ci/python_base_ref.sh
-          # and never merges #2152 has 6fbd7dc8d as a non-ancestor, so it skips
-          # while consuming a mirrored base. It only bites when the referenced
-          # base is not ALREADY mirrored -- a first landing or a base bump --
-          # because otherwise there is nothing for this step to ensure. That
-          # narrowness is why the rule is still right; the previous textual
-          # guard closed this case and lost nine others to Dockerfile grammar.
+          # THE CHERRY-PICK RESIDUAL IS CLOSED, not documented (round 4 P1).
+          # A branch that cherry-picks #2152's Dockerfile WITHOUT
+          # ci/python_base_ref.sh has 6fbd7dc8d as a non-ancestor, so ancestry
+          # alone says "pre-mirror" and skips -- while the tree consumes a
+          # mirrored base. Round 4 reproduced that topology and got
+          # `Nothing to ensure; skipping.`, which is a confident FALSE
+          # statement in the log.
+          #
+          # Severity checked rather than assumed: docker/Dockerfile:17 holds
+          # `ARG PYTHON_BASE_IMAGE="ghcr.io/<owner>/python:...@sha256:..."` and
+          # ci/python_base_ref.sh only READS it. So a scriptless tree can name
+          # a digest that was never mirrored, and the build then fails right
+          # after this step announced there was nothing to ensure.
+          #
+          # THE CHECK BELOW IS A FIXED-STRING CONTAINMENT TEST, NOT THE TEXTUAL
+          # GUARD THAT WAS REMOVED. That guard lost nine defects to Dockerfile
+          # GRAMMAR -- assembled refs, bare FROM, lowercase `from`, escaped
+          # newlines, RUN heredocs, token boundaries, `#` outside line start.
+          # This has no grammar: one literal substring, no anchors, no
+          # instruction model. Its only false positive is the string appearing
+          # in a comment, and that direction FAILS CLOSED (a loud error on a
+          # tree that needed no ensuring) rather than silently skipping a tree
+          # that did.
+          #
+          # IT CAN ONLY TURN A SKIP INTO AN ERROR, NEVER AN ERROR INTO A SKIP
+          # (084-prod). It runs only inside the branch where ancestry already
+          # answered "not an ancestor", so every path it can reach was
+          # previously a skip. That asymmetry is what makes it a safety net
+          # rather than a relapse into the guard rounds 1-3 deleted -- a future
+          # reader who remembers those rounds should read this paragraph before
+          # concluding the textual guard came back.
+          #
+          # THE STRING IS `.../python`, NOT THE BARE OWNER PREFIX (084-prod).
+          # The property is "consumes the mirrored PYTHON base", not
+          # "references ghcr at all". A genuinely pre-mirror branch whose
+          # Dockerfile pulls some other ghcr.io/<owner>/... image -- a tool
+          # stage, a builder -- is doing nothing wrong, and the bare prefix
+          # would hard-fail it while telling it its tree is inconsistent.
           if [ ! -f ci/python_base_ref.sh ]; then
             # A SHALLOW CLONE CANNOT ANSWER THE ANCESTRY QUESTION. Refuse before
             # asking it, so the failure names the cause rather than surfacing as
@@ -378,9 +408,47 @@ jobs:
               exit 1
             fi
 
-            echo "ci/python_base_ref.sh is absent and #2152 (${MIRROR_LANDED}) is not" \
-                 "an ancestor of HEAD: this tree predates the mirror and pulls its" \
-                 "Python base directly. Nothing to ensure; skipping."
+            # grep is three-valued in the same way --is-ancestor is: 1 means
+            # "read the file, no match", >=2 means "could not read it". This
+            # guard already made the collapse-them mistake once, so they are
+            # separated here too. A MISSING Dockerfile is handled before the
+            # grep, because "no Dockerfile" genuinely means "no mirrored base
+            # referenced" -- that is an answer, not a failure to answer.
+            if [ ! -f docker/Dockerfile ]; then
+              mirrored=no
+            elif grep -qF "ghcr.io/${{ github.repository_owner }}/python" docker/Dockerfile; then
+              mirrored=yes
+            else
+              grep_status=$?
+              if [ "$grep_status" -eq 1 ]; then
+                mirrored=no
+              else
+                echo "::error::docker/Dockerfile exists but could not be read" \
+                     "(grep exited ${grep_status}). Refusing to guess whether this" \
+                     "tree consumes the mirrored base." >&2
+                exit 1
+              fi
+            fi
+
+            if [ "$mirrored" = yes ]; then
+              echo "::error::cherry-picked mirror Dockerfile without" \
+                   "ci/python_base_ref.sh: the script is absent, #2152" \
+                   "(${MIRROR_LANDED}) is not an ancestor of HEAD, yet" \
+                   "docker/Dockerfile names" \
+                   "ghcr.io/${{ github.repository_owner }}/python." \
+                   "This tree consumes the mirrored base with no derivation" \
+                   "available, so the ref cannot be ensured and the build will" \
+                   "fail pulling it. Merge #2152 or drop the cherry-picked" \
+                   "Dockerfile change." >&2
+              exit 1
+            fi
+
+            echo "ci/python_base_ref.sh is absent, #2152 (${MIRROR_LANDED}) is not" \
+                 "an ancestor of HEAD, and docker/Dockerfile does not name" \
+                 "ghcr.io/${{ github.repository_owner }}/python: this tree predates" \
+                 "the" \
+                 "mirror and pulls its Python base directly. Nothing to ensure;" \
+                 "skipping."
             exit 0
           fi
           # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).

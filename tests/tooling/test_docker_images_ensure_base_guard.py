@@ -58,6 +58,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -95,9 +96,34 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _scratch_repo(tmp_path: Path, *, script: bool) -> Path:
-    """Build a real repo in one of the three states the guard distinguishes."""
-    repo = tmp_path / ("scratch-with-script" if script else "scratch-no-script")
+MIRRORED_FROM = (
+    'ARG PYTHON_BASE_IMAGE="ghcr.io/full-chaos/python:3.14-slim@sha256:aa"\n'
+    "FROM ${PYTHON_BASE_IMAGE} AS builder\n"
+)
+DIRECT_FROM = "FROM python:3.14-slim\n"
+# A pre-mirror tree that references ghcr for something that is NOT the Python
+# base. The guard must skip this: it predates the mirror and consumes no
+# mirrored base, so failing it would break a branch doing nothing wrong.
+OTHER_GHCR_FROM = (
+    "FROM ghcr.io/full-chaos/other-tool:1.0 AS tools\nFROM python:3.14-slim\n"
+)
+
+
+def _scratch_repo(
+    tmp_path: Path, *, script: bool, mirrored: bool = False, other_ghcr: bool = False
+) -> Path:
+    """Build a real repo in one of the states the guard distinguishes.
+
+    ``mirrored`` controls whether docker/Dockerfile names the ghcr mirror. It is
+    the axis the cherry-pick residual turns on: a tree can carry the mirrored
+    Dockerfile while lacking the derivation script.
+    """
+    name = "scratch-with-script" if script else "scratch-no-script"
+    if mirrored:
+        name += "-mirrored"
+    if other_ghcr:
+        name += "-otherghcr"
+    repo = tmp_path / name
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@example.invalid")
@@ -106,9 +132,13 @@ def _scratch_repo(tmp_path: Path, *, script: bool) -> Path:
     _git(repo, "add", "seed")
     _git(repo, "commit", "-qm", "seed")
     (repo / "docker").mkdir()
-    (repo / "docker" / "Dockerfile").write_text(
-        "FROM python:3.14-slim\n", encoding="utf-8"
-    )
+    if other_ghcr:
+        dockerfile_text = OTHER_GHCR_FROM
+    elif mirrored:
+        dockerfile_text = MIRRORED_FROM
+    else:
+        dockerfile_text = DIRECT_FROM
+    (repo / "docker" / "Dockerfile").write_text(dockerfile_text, encoding="utf-8")
     (repo / "ci").mkdir()
     if script:
         (repo / "ci" / "python_base_ref.sh").write_text(
@@ -180,6 +210,13 @@ def test_absent_and_not_ancestor_skips(tmp_path: Path) -> None:
     _git(repo, "commit", "-qm", "side commit -- exists but is not an ancestor of main")
     side = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "main")
+    # NEGATIVE CONTROL for the cherry-pick check. This row is only a skip case
+    # because the Dockerfile does NOT name the mirror; assert that rather than
+    # rely on _scratch_repo's default, so a change to the default surfaces here
+    # instead of silently turning this into a different test.
+    assert "ghcr.io/full-chaos/" not in (repo / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    ), "this row's premise is a Dockerfile that does not reference the mirror"
     code, out, calls = _run_guard(repo, tmp_path, mirror_sha=side)
     assert code == 0, f"a deliberate skip must exit 0, got {code}\n{out}"
     assert SKIP_MARKER in out, f"the skip must say why\n{out}"
@@ -346,3 +383,195 @@ def test_build_checkouts_keep_full_history() -> None:
             "return 1 (object absent reads as 'not an ancestor' only if the object "
             "is reachable-but-absent), i.e. a WRONG ANSWER rather than a failure."
         )
+
+
+def test_cherry_picked_mirror_dockerfile_without_script_fails_loudly(
+    tmp_path: Path,
+) -> None:
+    """Round 4's P1: the residual the ancestry-only guard left open.
+
+    A branch that cherry-picks #2152's Dockerfile WITHOUT ci/python_base_ref.sh
+    has 6fbd7dc8d as a non-ancestor, so ancestry alone concludes "pre-mirror"
+    and skips -- while the tree consumes a mirrored base whose digest may never
+    have been mirrored. docker/Dockerfile holds the digest and the script only
+    reads it, so that state is expressible.
+
+    Before the fixed-string check this printed `Nothing to ensure; skipping.`,
+    a confident false statement, and the build then failed pulling a ghcr ref
+    nothing had created.
+
+    The assertion names the cherry-pick message specifically, NOT merely a
+    non-zero exit: the ancestor branch and the >=2 branch also exit 1 with an
+    `::error::`, so an outcome-shaped assertion would pass whichever fired.
+    """
+    repo = _scratch_repo(tmp_path, script=False, mirrored=True)
+    assert "ghcr.io/full-chaos/" in (repo / "docker" / "Dockerfile").read_text(
+        encoding="utf-8"
+    ), "the fixture must actually name the mirror, or this row proves nothing"
+    _git(repo, "checkout", "-q", "-b", "sidebranch")
+    (repo / "side").write_text("side\n", encoding="utf-8")
+    _git(repo, "add", "side")
+    _git(repo, "commit", "-qm", "side commit -- exists but is not an ancestor of main")
+    side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    code, out, calls = _run_guard(repo, tmp_path, mirror_sha=side)
+    assert code == 1, f"a cherry-picked mirror Dockerfile must fail, got {code}\n{out}"
+    assert "cherry-picked mirror Dockerfile without" in out, (
+        f"the failure must name the cherry-pick case. If this fails while the "
+        f"exit code is 1, a different error branch fired -- right outcome, "
+        f"wrong path.\n{out}"
+    )
+    assert SKIP_MARKER not in out, f"must not also claim it skipped\n{out}"
+    assert not calls, f"a refusal must not invoke docker: {calls!r}"
+
+
+def test_shallow_with_target_present_but_unreachable_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Round 4's P2: the case the previous shallow row did NOT observe.
+
+    test_shallow_repository_refuses clones at depth 1 from a repo that has never
+    heard of the target sha, so the target is ABSENT. That makes this mutation
+    survive -- verified, it left all seven rows green:
+
+        if [ "$(git rev-parse --is-shallow-repository ...)" = true ] \\
+          && ! git cat-file -e "${MIRROR_LANDED}^{commit}" 2>/dev/null; then
+
+    The narrowed condition is still true when the object is absent, so the row
+    passed without observing the class its own comment claimed it caught.
+
+    This fixture builds the load-bearing state instead: shallow AND the target
+    object PRESENT AND non-ancestral, where `--is-ancestor` returns 1 -- a wrong
+    answer rather than an error. Only the pre-flight shallow refusal catches it.
+    """
+    source = _scratch_repo(tmp_path, script=False)
+    _git(source, "checkout", "-q", "-b", "sidebranch")
+    (source / "side").write_text("side\n", encoding="utf-8")
+    _git(source, "add", "side")
+    _git(source, "commit", "-qm", "side commit")
+    side = _git(source, "rev-parse", "HEAD")
+    _git(source, "checkout", "-q", "main")
+
+    shallow = tmp_path / "shallow-present"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", f"file://{source}", str(shallow)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "fetch", "--depth", "1", "origin", "sidebranch"],
+        cwd=shallow,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    # THE THREE PRECONDITIONS THIS ROW EXISTS FOR. Asserted, not assumed: a
+    # fixture that silently fails to establish them is a row that passes for
+    # the wrong reason, which is the same defect one level down.
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true", (
+        "the fixture must be shallow"
+    )
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{side}^{{commit}}"], cwd=shallow
+        ).returncode
+        == 0
+    ), "the target object must be PRESENT -- that is what distinguishes this row"
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", side, "HEAD"], cwd=shallow
+        ).returncode
+        == 1
+    ), (
+        "ancestry must return 1 (a wrong answer), not 128 (an error). If this "
+        "fails, the fixture has collapsed into the object-absent case and this "
+        "row is a duplicate of test_shallow_repository_refuses."
+    )
+
+    (shallow / "ci").mkdir(exist_ok=True)
+    code, out, calls = _run_guard(shallow, tmp_path, mirror_sha=side)
+    assert code == 1, f"a shallow repository must be refused, got {code}\n{out}"
+    assert "this is a shallow repository" in out, (
+        f"the pre-flight refusal must fire. Ancestry here returns 1, so without "
+        f"the refusal the guard would SKIP -- exit 0 with the pre-mirror "
+        f"message -- which is the wrong answer this row exists to catch.\n{out}"
+    )
+    assert SKIP_MARKER not in out, f"must not treat this as pre-mirror\n{out}"
+    assert not calls, f"a refusal must not invoke docker: {calls!r}"
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root reads mode-000 files, so grep cannot return >=2"
+)
+def test_unreadable_dockerfile_fails_closed(tmp_path: Path) -> None:
+    """The grep >=2 branch, which nothing observed until this row.
+
+    Found by mutating my own fix rather than by review: collapsing the status
+    check to `-ge 1` left all nine rows green, so "could not read the file" was
+    silently becoming "the file does not name the mirror" -- the same
+    grep-1-vs-2 collapse this guard already made once, reintroduced by the fix
+    for a different defect.
+
+    That is the fifth deliberately-written branch on this guard to be written
+    without an observer. The pattern is consistent: branches reasoned about
+    while writing the GUARD get no row; only branches reasoned about while
+    writing a TEST do.
+    """
+    repo = _scratch_repo(tmp_path, script=False, mirrored=True)
+    _git(repo, "checkout", "-q", "-b", "sidebranch")
+    (repo / "side").write_text("side\n", encoding="utf-8")
+    _git(repo, "add", "side")
+    _git(repo, "commit", "-qm", "side commit")
+    side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    dockerfile = repo / "docker" / "Dockerfile"
+    dockerfile.chmod(0o000)
+    assert not os.access(dockerfile, os.R_OK), (
+        "the fixture must actually be unreadable, or this row proves nothing"
+    )
+    try:
+        code, out, calls = _run_guard(repo, tmp_path, mirror_sha=side)
+    finally:
+        dockerfile.chmod(0o644)
+    assert code == 1, f"an unreadable Dockerfile must fail closed, got {code}\n{out}"
+    assert "could not be read" in out, (
+        f"the failure must name the unreadable-file case, not the cherry-pick "
+        f"one: both exit 1 with an ::error::, so an outcome-shaped assertion "
+        f"would pass whichever fired.\n{out}"
+    )
+    assert SKIP_MARKER not in out, f"must not skip a tree it could not read\n{out}"
+
+
+def test_other_ghcr_image_is_not_the_mirrored_base(tmp_path: Path) -> None:
+    """NEGATIVE CONTROL for the containment string's breadth (084-prod).
+
+    The check matches `ghcr.io/<owner>/python`, not the bare owner prefix. A
+    genuinely pre-mirror branch whose Dockerfile pulls some OTHER ghcr image --
+    a tool stage, a builder -- is doing nothing wrong. The bare prefix would
+    hard-fail it and tell it its tree was inconsistent, which is both a broken
+    build and a wrong diagnosis.
+
+    This row fails if the string is ever widened back to the owner prefix.
+    """
+    repo = _scratch_repo(tmp_path, script=False, other_ghcr=True)
+    text = (repo / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    assert "ghcr.io/full-chaos/" in text, "the fixture must reference ghcr at all"
+    assert "ghcr.io/full-chaos/python" not in text, (
+        "...but must NOT name the mirrored Python base, or this row proves nothing"
+    )
+    _git(repo, "checkout", "-q", "-b", "sidebranch")
+    (repo / "side").write_text("side\n", encoding="utf-8")
+    _git(repo, "add", "side")
+    _git(repo, "commit", "-qm", "side commit")
+    side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    code, out, calls = _run_guard(repo, tmp_path, mirror_sha=side)
+    assert code == 0, (
+        f"a pre-mirror tree using an unrelated ghcr image must skip, got {code}. "
+        f"If this fails, the containment string is matching more than the "
+        f"mirrored Python base.\n{out}"
+    )
+    assert SKIP_MARKER in out, f"the skip must say why\n{out}"
+    assert not calls, f"a skip must not invoke docker: {calls!r}"

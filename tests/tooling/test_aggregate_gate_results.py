@@ -1227,24 +1227,101 @@ def test_typecheck_relevance_treats_workflow_dispatch_as_always_relevant() -> No
     )
 
 
-def test_typecheck_relevance_script_matches_the_registered_patterns() -> None:
-    # ci/typecheck_relevance.py's RELEVANT_PATTERNS is a COPY of the old
-    # `changes` job's filter list (see that module's own docstring for why it
-    # is copied, not derived). This is the guard against the copy silently
-    # diverging from what _patterns_of/_GATES' typecheck row believes it is --
-    # if this ever fails, either the module or this test's expectation
-    # changed without the other, which is exactly the drift CHAOS-4843 exists
-    # to close, one level up.
-    patterns = _typecheck_relevance_patterns()
-    assert "**/*.py" in patterns, (
-        "ci/typecheck_relevance.py no longer selects on every Python file "
-        "anywhere -- this is the CHAOS-4281 fix the old filter needed; "
-        "losing it reopens that regression for the new relevance script"
+TYPECHECK_RELEVANCE_SCRIPT = ROOT / "ci" / "typecheck_relevance.py"
+
+
+@pytest.mark.parametrize(
+    ("changed_files", "expected_relevant"),
+    [
+        # CHAOS-4281: a live-Python-oracle generator under internal/, not
+        # covered by any enumerated directory in the pattern list -- only
+        # `**/*.py` catches it.
+        pytest.param(["internal/generate_thing.py"], True, id="internal-py-CHAOS-4281"),
+        # `**/*.py` must also match a file with NO directory prefix at all --
+        # `**/` translating to "one-or-more" instead of "zero-or-more"
+        # directories (the exact bug class this module's own docstring
+        # names) would silently stop matching this and nothing else here.
+        pytest.param(["conftest.py"], True, id="root-level-py"),
+        # CHAOS-3513: editing the workflow that OWNS this gate must not read
+        # as irrelevant to it.
+        pytest.param(
+            [".github/workflows/typecheck.yml"], True, id="workflow-CHAOS-3513"
+        ),
+        pytest.param(["mypy.ini"], True, id="mypy-ini"),
+        pytest.param(["pyproject.toml"], True, id="pyproject-toml"),
+        pytest.param(["setup.cfg"], True, id="setup-cfg"),
+        # A change with nothing typecheck-relevant in it.
+        pytest.param(["worker/main.go", "README.md"], False, id="go-and-docs-only"),
+        # Empty diff: fail closed (main()'s own stated reason -- an empty
+        # diff usually means the base ref was wrong, not that nothing
+        # changed).
+        pytest.param([], True, id="empty-diff-fails-closed"),
+    ],
+)
+def test_typecheck_relevance_script_behaviour(
+    changed_files: list[str], expected_relevant: bool
+) -> None:
+    # FINDING 1 (lane-4752-go peer read of #2169): every other relevance test
+    # is structural -- none of them ever calls is_relevant() or
+    # github_glob_to_regex(). A bug in the glob translator (e.g. `**/`
+    # matching one-or-more directories instead of zero-or-more) would make
+    # `relevant=false` on real changes and every existing test would still
+    # pass. This test actually runs the script, end to end, the same way the
+    # workflow step does.
+    proc = subprocess.run(
+        ["python3", str(TYPECHECK_RELEVANCE_SCRIPT)],
+        input="\n".join(changed_files),
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    assert ".github/workflows/**" in patterns, (
-        "ci/typecheck_relevance.py no longer selects on workflow files -- a "
-        "PR editing only typecheck.yml would report itself irrelevant and "
-        "skip the very gate it changed (CHAOS-3513's defect, one level up)"
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    expected_line = f"relevant={'true' if expected_relevant else 'false'}"
+    assert expected_line in proc.stdout, (
+        f"changed={changed_files!r}: expected {expected_line!r}, got: {proc.stdout!r}"
+    )
+
+
+def test_typecheck_relevance_script_matches_the_registered_patterns() -> None:
+    # FINDING 2 (lane-4752-go peer read of #2169): this test used to compare
+    # _typecheck_relevance_patterns() -- which reads RELEVANT_PATTERNS from
+    # ci/typecheck_relevance.py -- against itself via _patterns_of(), which
+    # for TYPECHECK_PATH calls the exact same function. That comparison is a
+    # tautology by construction: it can never fail, and deleting 15 of the
+    # 17 patterns (everything except **/*.py and .github/workflows/**) left
+    # it green while silently un-gating pyproject.toml, mypy.ini, setup.cfg,
+    # requirements.txt and uv.lock -- the highest-value entries, since they
+    # are exactly what changes when mypy's own behaviour changes.
+    #
+    # The fix is a FROZEN list, typed by hand here, independent of the
+    # module under test. A future edit to RELEVANT_PATTERNS is now a visible,
+    # reviewable diff against this list -- the property the module's own
+    # docstring already claimed, which only actually held for 2 of 17 items
+    # before this change.
+    expected = [
+        ".github/workflows/**",
+        "src/**",
+        ".gitignore",
+        ".ignore",
+        "ruff.toml",
+        ".ruff.toml",
+        "mypy.ini",
+        ".mypy.ini",
+        "setup.cfg",
+        "tests/**",
+        "ci/**",
+        "migrations/**",
+        "requirements.txt",
+        "pyproject.toml",
+        "uv.lock",
+        "scripts/**",
+        "**/*.py",
+    ]
+    assert _typecheck_relevance_patterns() == expected, (
+        "ci/typecheck_relevance.py's RELEVANT_PATTERNS no longer matches the "
+        "list frozen in this test -- if the change is deliberate, update "
+        "`expected` above by hand (never by reading it back from the "
+        "module); if it is not, a pattern was lost silently"
     )
 
 

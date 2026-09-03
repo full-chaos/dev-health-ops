@@ -60,7 +60,7 @@ func TestPythonJSONInsertionOrderGoldenMatchesLivePython(t *testing.T) {
 
 	frozen, err := os.ReadFile(filepath.Join(
 		repoRoot, "tests", "fixtures",
-		"python_json_insertion_order_python_golden.json",
+		insertionOrderGuard.fixture,
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestPythonJSONInsertionOrderGoldenMatchesLivePython(t *testing.T) {
 	// `environment` record an interpreter that drifts without anyone deciding
 	// anything, and freezing that inside the comparison already produced one
 	// false "has ROTTED" pointing at loader.py. See comparePayload.
-	if err := comparePayload(frozen, rendered, "cases"); err == nil {
+	if err := comparePayload(frozen, rendered, insertionOrderGuard); err == nil {
 		if writeErr := os.WriteFile(
 			filepath.Join(proofDirectory, "python-json-insertion-order-golden"),
 			[]byte("executed"), 0o644,

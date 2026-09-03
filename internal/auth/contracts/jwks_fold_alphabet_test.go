@@ -162,10 +162,34 @@ func nonASCIIFoldsOf(name string) []rune {
 // produce one, not over every non-ASCII fold, or it would demand the
 // impossible of Kelvin and fail permanently.
 func discriminatingFoldsOf(name string) []string {
+	// BUILT FROM foldCycle DIRECTLY, not by filtering foldVariantsOf.
+	//
+	// foldVariantsOf is what the GENERATOR iterates, so filtering it made this
+	// expectation reachable from the code it measures -- a break there moved
+	// both sides together. lane-auth-contracts asserted the opposite in a
+	// message ("a break in foldVariantsOf leaves the expectation intact"),
+	// which is true of nonASCIIFoldsOf and of the differential's
+	// expectedSpellings and was false here; lane-auth-wave1 traced the call
+	// graph and found it, after their own CLEAN had missed it.
+	//
+	// It was SAFE only by cardinality, which is worse than it sounds. This set
+	// has exactly ONE element today, so a break empties it and the collapse
+	// Fatal fires. At a count of TWO -- a Unicode table update adding another
+	// lowercase fold, which is precisely what deriving the alphabet was meant
+	// to absorb -- losing one would leave the set non-empty, the Fatal quiet,
+	// the floor ranging over the survivor, and the loss silent. A guard whose
+	// protection is a count rather than a rule stops working without anyone
+	// editing the line that depends on it.
 	var out []string
-	for _, v := range foldVariantsOf(name) {
-		if v == strings.ToLower(v) && v != name {
-			out = append(out, v)
+	runes := []rune(name)
+	for i, r := range runes {
+		for _, f := range foldCycle(r) {
+			candidate := make([]rune, len(runes))
+			copy(candidate, runes)
+			candidate[i] = f
+			if v := string(candidate); v == strings.ToLower(v) && v != name {
+				out = append(out, v)
+			}
 		}
 	}
 	sort.Strings(out)

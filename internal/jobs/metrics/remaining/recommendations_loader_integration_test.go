@@ -340,7 +340,34 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	// matters BETWEEN insert and merge, which is exactly the window production
 	// reads in, and it is the window a fixture has to preserve deliberately
 	// because the test's own inserts are small enough to merge immediately.
-	exec("SYSTEM STOP MERGES")
+	//
+	// SCOPED PER TABLE, and restarted. The bare `SYSTEM STOP MERGES` this used
+	// to issue is SERVER-WIDE, not per-table (CHAOS-4952), so one fixture
+	// silently disabled merges for every table in the instance and never turned
+	// them back on. On a shared or reused server that leaks into other tests as
+	// a condition none of them declared -- and a test that depends on a global
+	// another test happens to have set is not a test, it is a coincidence.
+	//
+	// recommendations_daily is in this list even though the fixture never seeds
+	// it: it is the WRITE target, it is ReplacingMergeTree(computed_at), and two
+	// assertions downstream depend on its rows not collapsing -- the two-run
+	// supersession test needs both generations to survive, and the row-count
+	// comparison needs raw count to equal what was written. Omitting it because
+	// "the fixture does not seed it" is exactly the reasoning that would make
+	// those assertions merge-dependent.
+	mergeStopped := []string{
+		"work_item_metrics_daily", "repo_metrics_daily", "user_metrics_daily",
+		"team_metrics_daily", "repo_complexity_daily", "file_hotspot_daily",
+		"compounding_risk_daily", "recommendations_daily",
+	}
+	for _, table := range mergeStopped {
+		exec("SYSTEM STOP MERGES " + table)
+	}
+	t.Cleanup(func() {
+		for _, table := range mergeStopped {
+			exec("SYSTEM START MERGES " + table)
+		}
+	})
 
 	repoAlpha := "11111111-1111-1111-1111-111111111111"
 	repoBeta := "22222222-2222-2222-2222-222222222222"

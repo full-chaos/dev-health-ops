@@ -109,7 +109,7 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
         SELECT team_id, org_id, rule_id, rule_version,
                window_start, window_end, fired, severity,
                title, rationale, success_criterion, evidence_json, computed_at
-        FROM recommendations_daily
+        FROM recommendations_daily FINAL
         WHERE org_id = ?`, loaderOrgID)
 	if err != nil {
 		t.Fatalf("read back: %v", err)
@@ -435,8 +435,15 @@ func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
 	// ON DISK. Without the detached write context the insert cannot execute at
 	// all, and those tombstones are lost exactly when the run is torn down.
 	var persisted uint64
+	// FINAL, deliberately. recommendations_daily is
+	// ReplacingMergeTree(computed_at), so a raw count() equals what was written
+	// only while merges are stopped -- which the fixture does, but relying on
+	// that makes this assertion depend on a global set elsewhere in the file.
+	// FINAL makes the comparison mean the same thing whether or not a merge has
+	// run, so narrowing or removing the fixture's merge stop cannot silently
+	// turn this row-count check flaky (found by 4752-go's peer read).
 	if err := conn.QueryRow(ctx,
-		`SELECT count() FROM recommendations_daily WHERE org_id = ?`, loaderOrgID,
+		`SELECT count() FROM recommendations_daily FINAL WHERE org_id = ?`, loaderOrgID,
 	).Scan(&persisted); err != nil {
 		t.Fatalf("count persisted rows: %v", err)
 	}

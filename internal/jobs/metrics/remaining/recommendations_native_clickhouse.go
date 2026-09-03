@@ -210,6 +210,19 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	written, err := executor.writeRecommendations(writeCtx, records, executor.wallClock()())
 	stopWrite()
 	if err != nil {
+		// A WRITE FAILURE OUTRANKS THE CANCELLATION, deliberately. On a run that
+		// was both interrupted and failed to persist, the caller sees the write
+		// error rather than context.Canceled.
+		//
+		// That is the more actionable of the two: a cancellation is an orderly
+		// teardown needing no intervention, while a failed insert means the
+		// clean teams' tombstones did NOT land and their stale fired guidance
+		// survives -- the outcome this whole path exists to prevent. Reporting
+		// the cancellation would describe why the run stopped and hide what it
+		// lost.
+		//
+		// Nothing is dropped silently: outcome carries Teams, FailedTeams and
+		// RowsWritten, and the caller receives it alongside this error.
 		return outcome, err
 	}
 	outcome.RowsWritten = written

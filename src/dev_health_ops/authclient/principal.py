@@ -45,6 +45,19 @@ SURFACE = "principal.v1"
 #: This is the "a property the code CLAIMED but did not ENFORCE" class, so the
 #: bound is a named constant with the ADR beside it rather than a literal
 #: buried in a comparison.
+#:
+#: The ``>`` in the comparison below is load-bearing in Go for a reason that
+#: does NOT apply here yet, and the difference is worth knowing before someone
+#: makes the two "consistent". Go's Timestamp.MarshalJSON truncates to
+#: microseconds, which can lengthen a hop by up to 999ns across a round trip --
+#: to exactly the bound, never past it -- so ``>`` there is what keeps a valid
+#: delegation from being refused after serialisation. Python has no such
+#: coupling TODAY only because this client is parse-only and datetime is
+#: already microsecond-resolution: nothing here ever narrows an instant.
+#:
+#: That is a property of what this module does not do, not a property of
+#: Python. The day a Python PRODUCER emits principals, it acquires Go's
+#: coupling and must truncate the same way, in the same direction.
 MAX_DELEGATION_DURATION = timedelta(minutes=15)
 
 

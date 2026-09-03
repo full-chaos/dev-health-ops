@@ -157,6 +157,13 @@ func (r *Revision) UnmarshalJSON(data []byte) error {
 type Timestamp struct{ time.Time }
 
 // MarshalJSON emits at most six fractional digits.
+//
+// The truncation here is what MaxDelegationDuration's `>` comparison depends
+// on: truncating moves instants earlier by unequal amounts, which can lengthen
+// a delegation by up to 999ns across a round trip -- to exactly the bound,
+// never past it. See the note on MaxDelegationDuration before changing the
+// rounding mode here; switching to Round would move an instant FORWARD and
+// break that one-directional guarantee.
 func (t Timestamp) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.Time.Truncate(time.Microsecond).Format(time.RFC3339Nano))
 }
@@ -305,6 +312,23 @@ type Principal struct {
 // This is the "a property the code CLAIMED but did not ENFORCE" class, so the
 // bound is a named constant with its ADR beside it rather than a literal
 // buried in a comparison.
+//
+// COUPLED TO Timestamp.MarshalJSON's truncation -- do NOT change the
+// comparison below from > to >= without reading this.
+//
+// Truncation moves an instant EARLIER, and started_at and expires_at can lose
+// different remainders, so a round trip through the wire format can LENGTHEN a
+// hop by up to 999ns. The worst case lands exactly on MaxDelegationDuration
+// and never past it:
+//
+//	true duration     14m59.999999001s   accepted in memory
+//	after truncation  15m0s              still accepted, because the test is >
+//	                                     REFUSED if the test were >=
+//
+// So `duration > MaxDelegationDuration` is load-bearing, not stylistic. A
+// tightening to >= would start rejecting delegations that were valid before
+// they were serialised. Nothing else in the type system says these two are
+// connected, which is why it is said here.
 const MaxDelegationDuration = 15 * time.Minute
 
 // checkDelegationBounds refuses an actor chain the schema cannot police.

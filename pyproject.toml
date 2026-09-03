@@ -230,6 +230,11 @@ exclude = [
   "dist",
   "migrations",
   "site",
+  # tools/codex-review ships bytes synced verbatim from an external source
+  # (installed codex-review.sh, and verify-round-repros.py from bigboy).
+  # ruff-format must not rewrap them on commit -- keep the shipped bytes
+  # canonical.
+  "tools/codex-review",
 ]
 
 [tool.ruff.lint]

@@ -92,6 +92,19 @@
 # destination, then a bare origin); the old tab-strip was the non-`-z` spelling,
 # so it was dead code and the origin record was parsed as a status line.
 #
+# v4.8.1 (2026-09-03) fixes two false positives found on bigboy rounds 2174/2179:
+#   1. HARNESS WARNING fired on lines where a non-go command (`go doc`) hit a
+#      DNS/network refusal, not a write-path refusal; the check now requires
+#      the matching exec block to be BOTH a go test/run/build AND itself
+#      reported failed, not just any occurrence of the string in the log.
+#   2. the lost-findings guard fired on a COMPLETE verdict that cited files
+#      with the review worktree's absolute path in markdown links; verdict
+#      text is now normalized (worktree prefix stripped, incl. /private/tmp
+#      and $TMPDIR variants) before the guard runs, and the guard escalates
+#      to SUSPECT only when the verdict is short (<20 lines, the existing
+#      NOTE threshold) AND the residue dir holds files beyond the prompt/
+#      context inputs the wrapper itself copies in.
+#
 # Usage: scripts/codex-review.sh [options]   (run from the lane worktree,
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
@@ -587,14 +600,39 @@ warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build)"
 # 'Read-only file system' is v4.8's addition: Linux (landlock) denies writes
 # with that string, not the 'operation not permitted' macOS gives, so a round
 # that hit the pre-v4.8 Linux defect would have passed this check silently.
-BLOCKED_HITS=$(grep -cE 'operation not permitted|cannot create entries|failed to initialize build cache|Read-only file system' "$L" 2>/dev/null || true)
+#
+# v4.8.1: scoped to exec blocks that are BOTH a go test/run/build AND
+# themselves reported failed, not any occurrence of the string anywhere in
+# the log. round chaos-4757-2174-gate-r2-bigboy-20260903T182647 fired this on
+# `go doc strconv.ParseUint` -- a background module lookup blocked by the
+# sandbox's NETWORK policy ("dial udp ... socket: operation not permitted"),
+# unrelated to workspace-write's file bounds -- inside an exec block that
+# itself reported ` succeeded in 0ms`. Every exec block in that log
+# succeeded; the old any-occurrence grep could not tell a benign network
+# refusal a successful command shrugged off from an actual write refusal
+# that broke the command. A go/test invocation that truly cannot write still
+# reports ` failed in`, so gating on that keeps the real signal (v4.3/v4.8's
+# denied-GOCACHE cases) while dropping this one.
+BLOCKED_PAT='operation not permitted|cannot create entries|failed to initialize build cache|Read-only file system'
+BLOCKED_HITS=$(awk -v pat="$BLOCKED_PAT" '
+  function flush() { if (in_block && is_go && failed && blocked) hits++ }
+  /^exec$/ { flush(); in_block=1; is_go=0; failed=0; blocked=0; want_cmd=1; want_status=0; next }
+  in_block && want_cmd {
+    if ($0 ~ /go (test|run|build)/) is_go=1
+    want_cmd=0; want_status=1; next
+  }
+  in_block && want_status {
+    if ($0 ~ /^ *failed in/) failed=1
+    want_status=0; next
+  }
+  in_block && $0 ~ pat { blocked=1 }
+  END { flush(); print hits+0 }
+' "$L" 2>/dev/null || true)
 BLOCKED_HITS=${BLOCKED_HITS:-0}
 if [ "$BLOCKED_HITS" -gt 0 ]; then
-  warn "HARNESS WARNING: $BLOCKED_HITS line(s) show the sandbox refusing a path this"
-  warn "  wrapper configured. The round may have succeeded ANYWAY by relocating on"
-  warn "  its own -- which is a working round with a broken harness, and looks"
-  warn "  identical in the counts above. Check GOCACHE/GOTMPDIR before trusting"
-  warn "  that this round had the environment it was given."
+  warn "HARNESS WARNING: $BLOCKED_HITS go test/run/build exec block(s) FAILED with the"
+  warn "  sandbox refusing a path this wrapper configured. Check GOCACHE/GOTMPDIR"
+  warn "  before trusting that this round had the environment it was given."
 fi
 if [ "$EXEC_BLOCKS" -eq 0 ]; then
   warn "NO COMMANDS WERE EXECUTED in this round. Any '\$ cmd' output the verdict quotes was produced, not observed. Verify with verify-round-repros.py before grading it."
@@ -606,6 +644,46 @@ HEAD_AFTER=$(git -C "$WT" rev-parse HEAD)
 
 [ "$RC" -eq 0 ] || { warn "codex exited rc=$RC — read $L"; echo "VERDICT=$V"; exit "$RC"; }
 [ -s "$V" ] || die "codex exited 0 but wrote no verdict file — treat as NO VERDICT, re-run; log: $L"
+
+# CITATION NORMALIZATION (v4.8.1, CHAOS-4757 round 2179).
+#
+# A reviewer citing evidence naturally links the absolute path it read the
+# file at, which under this wrapper IS the review worktree ($RW) — a path
+# that is correct and complete at write time and about to be REMOVED by
+# cleanup(). round chaos-4757-2179-gate-r2-bigboy-20260903T183720 wrote a
+# COMPLETE, well-evidenced NOT CLEAN verdict whose citations happened to use
+# that absolute prefix; the old check read the mere presence of $RW as proof
+# the report was lost and exited 3 on a working round.
+#
+# Strip it BEFORE either check below reads the file, so a citation like
+# `$RW/internal/foo.go:12` becomes the repo-relative `internal/foo.go:12` a
+# reader can actually follow once $RW is gone. Three prefix spellings can
+# denote the same directory and all get stripped: $RW itself, its resolved
+# physical path (macOS symlinks /tmp -> /private/tmp, so `mktemp -d
+# "${TMPDIR:-/tmp}/..."` can print as either), and the equivalent path under
+# a $TMPDIR the caller had set (mktemp's actual base, if not plain /tmp).
+RW_PREFIXES=("$RW")
+RW_REAL=$(cd "$RW" 2>/dev/null && pwd -P || true)
+[ -n "$RW_REAL" ] && [ "$RW_REAL" != "$RW" ] && RW_PREFIXES+=("$RW_REAL")
+case "$RW" in
+  /tmp/*) RW_PREFIXES+=("/private$RW") ;;
+esac
+if [ -n "${TMPDIR:-}" ]; then
+  RW_PREFIXES+=("${TMPDIR%/}/$(basename "$RW")")
+fi
+V_NORM="$V.normalized.tmp"
+cp "$V" "$V_NORM"
+for prefix in "${RW_PREFIXES[@]}"; do
+  [ -n "$prefix" ] || continue
+  # Escape sed/BRE metacharacters in the path (mktemp suffixes are
+  # alphanumeric, but this must not silently corrupt a verdict on a host
+  # whose $TMPDIR contains one). `#` is the delimiter, not `/`, since the
+  # prefix itself is full of slashes.
+  esc=$(printf '%s' "$prefix" | sed -e 's/[.[\*^$()+?{}|\\#]/\\&/g')
+  sed -i.bak -e "s#${esc}/##g" -e "s#${esc}##g" "$V_NORM" 2>/dev/null || true
+  rm -f "$V_NORM.bak"
+done
+mv "$V_NORM" "$V"
 
 # A non-empty verdict is not a verdict. The lost CF round wrote one line naming a
 # file inside the review worktree, which `test -s` accepted and cleanup then
@@ -699,9 +777,38 @@ elif ! printf '%s' "$VLAST" \
   warn "RECOVERY -- the report is NOT lost, it is in the codex session: (1) raw transcripts in ~/.codex/sessions/*.jsonl, (2) \`deja\` indexes those sessions and can search them, (3) \`codex rescue\`. Recover the findings from one of those BEFORE re-running a round; a re-run costs the tokens again and returns a different review."
   VSUSPECT=1
 fi
-if grep -qF "$RW" "$V" 2>/dev/null; then
-  warn "SUSPECT VERDICT: $V references the review worktree path $RW, which is about to be REMOVED — the findings are probably in a file inside it. Check the residue dir."
-  VSUSPECT=1
+# v4.8.1: the citation normalization above already stripped every
+# recognised $RW spelling, so a hit here means either an unrecognised
+# spelling survived or genuine content still names the path. That alone is
+# no longer proof of a lost report (round 2179 above): escalate to SUSPECT
+# only when it is corroborated by BOTH of the signals that actually mean
+# "the report is not here" — short (<20 lines, the existing NOTE threshold)
+# AND the residue dir holds something beyond the prompt/context files this
+# wrapper itself copies into every review worktree at start (those are
+# inputs, not reviewer output, and their mere presence proves nothing).
+RW_LEAKED=0
+for prefix in "${RW_PREFIXES[@]}"; do
+  [ -n "$prefix" ] && grep -qF "$prefix" "$V" 2>/dev/null && RW_LEAKED=1
+done
+if [ "$RW_LEAKED" -eq 1 ]; then
+  RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"
+  RESIDUE_HAS_FINDINGS=0
+  if [ -d "$RESIDUE_DIR" ] && find "$RESIDUE_DIR" -type f \
+       ! -name 'prompt.md' ! -name '.codex-review-context.md' ! -name 'LEDGER.md' \
+       -print -quit 2>/dev/null | grep -q .; then
+    RESIDUE_HAS_FINDINGS=1
+  fi
+  if [ "$VLINES" -lt 20 ] && [ "$RESIDUE_HAS_FINDINGS" -eq 1 ]; then
+    warn "SUSPECT VERDICT: $V still references the review worktree path $RW after"
+    warn "  normalization, is short ($VLINES lines), and residue dir $RESIDUE_DIR"
+    warn "  holds files beyond prompt/context — the findings are probably in a file"
+    warn "  inside it. Check the residue dir."
+    VSUSPECT=1
+  else
+    warn "note: $V still references $RW after normalization, but is $VLINES line(s)"
+    warn "  and residue holds only prompt/context files (or none) — treating as"
+    warn "  citation text, not a lost report."
+  fi
 fi
 if [ "$VSUSPECT" -eq 1 ]; then
   warn "verdict is suspect — exiting 3 rather than 0 so a wrapper cannot read this as a clean round"

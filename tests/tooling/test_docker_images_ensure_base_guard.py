@@ -95,15 +95,9 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _scratch_repo(tmp_path: Path, *, script: bool, ancestor: bool) -> Path:
-    """Build a real repo in one of the three states the guard distinguishes.
-
-    `ancestor=True` fabricates a commit with #2152's exact sha so that
-    `merge-base --is-ancestor` answers yes. Faking history is the only way to
-    exercise state 2 without the real repository, and it is honest here because
-    the guard's question is precisely "is that sha in this history".
-    """
-    repo = tmp_path / ("scratch" if script else f"scratch-{ancestor}")
+def _scratch_repo(tmp_path: Path, *, script: bool) -> Path:
+    """Build a real repo in one of the three states the guard distinguishes."""
+    repo = tmp_path / ("scratch-with-script" if script else "scratch-no-script")
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@example.invalid")
@@ -111,19 +105,10 @@ def _scratch_repo(tmp_path: Path, *, script: bool, ancestor: bool) -> Path:
     (repo / "seed").write_text("seed\n", encoding="utf-8")
     _git(repo, "add", "seed")
     _git(repo, "commit", "-qm", "seed")
-    if ancestor:
-        # Graft a commit carrying MIRROR_LANDED's sha into this history.
-        subprocess.run(
-            ["git", "replace", "--graft", _git(repo, "rev-parse", "HEAD")],
-            cwd=repo, capture_output=True, text=True,
-        )
-        (repo / ".git" / "info").mkdir(exist_ok=True)
-        (repo / ".git" / "info" / "grafts").write_text("", encoding="utf-8")
-        # Simplest reliable route: create the object under the wanted name via a
-        # ref alias the guard's `--is-ancestor` will resolve.
-        _git(repo, "update-ref", "refs/heads/mirror", _git(repo, "rev-parse", "HEAD"))
     (repo / "docker").mkdir()
-    (repo / "docker" / "Dockerfile").write_text("FROM python:3.14-slim\n", encoding="utf-8")
+    (repo / "docker" / "Dockerfile").write_text(
+        "FROM python:3.14-slim\n", encoding="utf-8"
+    )
     (repo / "ci").mkdir()
     if script:
         (repo / "ci" / "python_base_ref.sh").write_text(
@@ -144,7 +129,7 @@ def _run_guard(
     log = tmp_path / "docker-invocations.txt"
     shim = bindir / "docker"
     shim.write_text(
-        "#!/usr/bin/env bash\n" f'printf "%s\\n" "$*" >> {log}\n' "exit 0\n",
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> {log}\nexit 0\n',
         encoding="utf-8",
     )
     shim.chmod(0o755)
@@ -154,7 +139,11 @@ def _run_guard(
         script = script.replace(MIRROR_LANDED, mirror_sha)
     proc = subprocess.run(
         ["bash", "-c", script],
-        cwd=repo, capture_output=True, text=True, timeout=60, env=env,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
     )
     calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
     return proc.returncode, proc.stdout + proc.stderr, calls
@@ -162,7 +151,7 @@ def _run_guard(
 
 def test_script_present_runs_the_ensure_work(tmp_path: Path) -> None:
     """State 1. Presence of the script IS the mirror; the work must actually run."""
-    repo = _scratch_repo(tmp_path, script=True, ancestor=False)
+    repo = _scratch_repo(tmp_path, script=True)
     code, out, calls = _run_guard(repo, tmp_path)
     assert SKIP_MARKER not in out, f"must not skip when the script is present\n{out}"
     assert any("imagetools" in c for c in calls), (
@@ -184,7 +173,7 @@ def test_absent_and_not_ancestor_skips(tmp_path: Path) -> None:
     it tests a state that cannot occur and would have argued for weakening the
     128 handling.
     """
-    repo = _scratch_repo(tmp_path, script=False, ancestor=False)
+    repo = _scratch_repo(tmp_path, script=False)
     _git(repo, "checkout", "-q", "-b", "sidebranch")
     (repo / "side").write_text("side\n", encoding="utf-8")
     _git(repo, "add", "side")
@@ -199,7 +188,7 @@ def test_absent_and_not_ancestor_skips(tmp_path: Path) -> None:
 
 def test_absent_but_ancestor_fails_loudly(tmp_path: Path) -> None:
     """State 2. Script gone from a tree that contains #2152: inconsistent, not pre-mirror."""
-    repo = _scratch_repo(tmp_path, script=False, ancestor=False)
+    repo = _scratch_repo(tmp_path, script=False)
     # Make MIRROR_LANDED resolvable AND an ancestor by pointing a ref at HEAD~,
     # then asking the guard the same question against that ref.
     head = _git(repo, "rev-parse", "HEAD")
@@ -211,11 +200,17 @@ def test_absent_but_ancestor_fails_loudly(tmp_path: Path) -> None:
     (bindir / "docker").chmod(0o755)
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
     proc = subprocess.run(
-        ["bash", "-c", script], cwd=repo, capture_output=True, text=True,
-        timeout=60, env=env,
+        ["bash", "-c", script],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
     )
     out = proc.stdout + proc.stderr
-    assert proc.returncode == 1, f"an inconsistent tree must fail, got {proc.returncode}\n{out}"
+    assert proc.returncode == 1, (
+        f"an inconsistent tree must fail, got {proc.returncode}\n{out}"
+    )
     assert "::error::" in out, f"the failure must say what it found\n{out}"
     assert SKIP_MARKER not in out, f"must not skip an inconsistent tree\n{out}"
 
@@ -233,7 +228,7 @@ def test_unresolvable_mirror_sha_fails_loudly(tmp_path: Path) -> None:
     other test passing. Careful three-valued handling with no row for the third
     value is a decision nothing observes.
     """
-    repo = _scratch_repo(tmp_path, script=False, ancestor=False)
+    repo = _scratch_repo(tmp_path, script=False)
     # A well-formed sha that exists nowhere: `--is-ancestor` exits 128, not 1.
     absent_sha = "0" * 40
     code, out, calls = _run_guard(repo, tmp_path, mirror_sha=absent_sha)

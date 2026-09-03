@@ -32,6 +32,7 @@ import unicodedata
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -143,7 +144,9 @@ ROUNDING_TRAPS = [2.675, 0.125, 0.135, 2.5, 0.5, 1.005, 8.835, 1e16 + 2.0, 5e-32
 
 
 def snapshot(**overrides) -> MetricsSnapshot:
-    base = dict(
+    # Annotated so the ** unpack below reaches MetricsSnapshot's typed fields.
+    # Without it mypy infers dict[str, object] and rejects every field.
+    base: dict[str, Any] = dict(
         team_id=TEAM_ID,
         org_id=ORG_ID,
         window_start=WINDOW_START,

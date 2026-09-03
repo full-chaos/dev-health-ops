@@ -16,6 +16,7 @@ from dev_health_ops.storage import (
     detect_db_type,
     model_to_dict,
 )
+from tests.conftest import answer_catalogue_probes
 
 
 class TestDetectDbType:
@@ -792,6 +793,9 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
     mock_client.command = MagicMock()
     mock_client.insert = MagicMock()
     mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    # Migrations run on store construction and probe the catalogue; see
+    # answer_catalogue_probes. This client has no tables, so 0 is true.
+    answer_catalogue_probes(mock_client)
     mock_client.close = MagicMock()
 
     # Mock filesystem operations
@@ -866,6 +870,9 @@ async def test_clickhouse_store_insert_git_file_data_calls_insert():
     mock_client.command = MagicMock()
     mock_client.insert = MagicMock()
     mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    # Migrations run on store construction and probe the catalogue; see
+    # answer_catalogue_probes. This client has no tables, so 0 is true.
+    answer_catalogue_probes(mock_client)
     mock_client.close = MagicMock()
 
     import sys
@@ -909,6 +916,9 @@ async def test_clickhouse_store_insert_repo_refreshes_org_id_on_existing_row():
     # ``query`` is only invoked during migration init (SHOW TABLES, etc.).
     # The post-fix ``insert_repo`` no longer performs an existence query.
     mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    # Migrations run on store construction and probe the catalogue; see
+    # answer_catalogue_probes. This client has no tables, so 0 is true.
+    answer_catalogue_probes(mock_client)
     mock_client.close = MagicMock()
 
     import sys
@@ -957,6 +967,9 @@ async def test_clickhouse_store_insert_repo_writes_under_self_org_id():
     mock_client.command = MagicMock()
     mock_client.insert = MagicMock()
     mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    # Migrations run on store construction and probe the catalogue; see
+    # answer_catalogue_probes. This client has no tables, so 0 is true.
+    answer_catalogue_probes(mock_client)
     mock_client.close = MagicMock()
 
     import sys

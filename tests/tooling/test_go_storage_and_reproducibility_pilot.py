@@ -1,37 +1,36 @@
 """go.yml's storage-integration-shard and container-reproducibility
-self-hosted-pool pilots (CHAOS-4906).
+self-hosted-pool routing (CHAOS-4906, runner contract v1.6).
 
 WHY THIS TEST EXISTS
 ---------------------
-Same pick-runner/attempt/fallback/aggregator shape as go-arm64-numeric-
-parity (#2145), applied to two more jobs: `go-storage-integration-shard`
-(a MATRIX job, generalising the pattern to one attempt+fallback PAIR per
-matrix leg) and `go-container-reproducibility` (a single job, the closest
-shape to #2145's own pilot).
+Contract v1.6 (signed 2026-09-03, chris via CF team-lead; supersedes
+v1.5.1's fallback-poller pattern for routed jobs, see
+/Users/chris/projects/full-chaos/dev-health/.remember/lanes/
+lane-4904-acr-runners/contract-v1.6-signed.md): when SELF_HOSTED_RUNNERS
+is on, the self-hosted job IS the required check and the aggregator
+`needs` it directly; the hosted job runs only when the variable is off
+(or the event is a fork PR). Exactly one of the two runs per workflow
+run. Both legs share one stable `name:`, so flipping the variable never
+leaves a stuck or renamed required check.
 
 This file asserts the structural invariants a future edit could silently
 break without any test noticing:
-1. Each self-hosted attempt job depends on `pick-runner` (and, for the
-   shard bundle, `go-storage-integration-plan` too) via a real `needs:`
-   dependency, gated on `needs.pick-runner.outputs.try_self_hosted`.
-2. Each fallback job's own build/test step carries an inner `timeout`
-   shorter than its job's own `timeout-minutes` -- the double-bound
-   lesson from #2145/#2180's own pilots (CF, 09-03, acr's near-miss).
-3. Each aggregator (`go-storage-integration`, `go-container-
-   reproducibility`) needs ONLY the fallback leg, never the self-hosted
-   attempt directly -- a permanently `queued` attempt has no terminal
-   state, and a `needs:` on it directly would block the aggregator for up
-   to GitHub's 24h self-hosted backstop instead of the fallback's own
-   bounded poll.
-4. The shard bundle's self-hosted and fallback jobs share the IDENTICAL
-   matrix source -- a future edit to one but not the other would silently
-   run a different SET of shards through each leg.
-5. Each fallback's poll script targets the CORRECT self-hosted job name
-   (a fixed string for reproducibility, the matrix-templated own-shard
-   name for the shard bundle) -- never a hardcoded name that would poll
-   the wrong shard, or another job's name entirely.
-6. The gh api query stays SAME-RUN shaped (F2 exemption, same reasoning
-   as #2145's own guard) for both fallback poll scripts.
+1. The hosted and self-hosted legs of both bundles are gated on
+   COMPLEMENTARY conditions over the same variable (+ fork-PR exclusion)
+   -- exactly one runs, never both, never neither.
+2. Both legs of both bundles share the SAME `name:`.
+3. Both self-hosted jobs depend on `dind-smoke-test` (a real `needs:`,
+   not just an `if:`) -- both need a working Docker daemon (testcontainers
+   for the shards, container builds for reproducibility).
+4. Each self-hosted job's real-work step carries an inner `timeout`
+   strictly shorter than its own job's `timeout-minutes` -- the
+   contract's own "inner test timeouts strictly shorter" clause.
+5. The shard bundle's two legs share the identical matrix source.
+6. The `go-storage-integration` aggregator needs BOTH shard legs, and its
+   own check treats "both skipped" as a routing bug, not a pass.
+7. NEITHER self-hosted job's steps contain a poll/wait step (structural
+   confirmation the v1.5.1 poller pattern was actually retired here, not
+   left dangling alongside the new gate).
 """
 
 from __future__ import annotations
@@ -44,20 +43,30 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "go.yml"
 
-_PICK_RUNNER_JOB = "pick-runner"
+_DIND_JOB = "dind-smoke-test"
 _PLAN_JOB = "go-storage-integration-plan"
 
+_SHARD_HOSTED = "go-storage-integration-shard"
 _SHARD_SELF_HOSTED = "go-storage-integration-shard-self-hosted"
-_SHARD_FALLBACK = "go-storage-integration-shard-fallback"
 _SHARD_AGGREGATOR = "go-storage-integration"
 _SHARD_RUN_STEP = (
     "Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}"
 )
 
+_REPRO_HOSTED = "go-container-reproducibility"
 _REPRO_SELF_HOSTED = "go-container-reproducibility-self-hosted"
-_REPRO_FALLBACK = "go-container-reproducibility-fallback"
-_REPRO_AGGREGATOR = "go-container-reproducibility"
 _REPRO_RUN_STEP = "Verify reproducible Go images"
+
+_SELF_HOSTED_CONDITION = (
+    "vars.SELF_HOSTED_RUNNERS == 'enabled' && "
+    "(github.event_name != 'pull_request' || "
+    "github.event.pull_request.head.repo.full_name == github.repository)"
+)
+_HOSTED_CONDITION = (
+    "vars.SELF_HOSTED_RUNNERS != 'enabled' || "
+    "(github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name != github.repository)"
+)
 
 
 def _document() -> dict[str, object]:
@@ -89,9 +98,6 @@ def _needs(job: dict[str, object]) -> list[str]:
 
 
 def _dict_field(obj: dict[str, object], key: str) -> dict[str, object]:
-    """`obj[key]` narrowed to a dict, or `{}` if absent -- avoids repeating
-    an `isinstance` check at every `.get("strategy")`/`.get("env")` call
-    site (mypy cannot narrow `object` to `dict` through a bare `.get()`)."""
     value = obj.get(key)
     if value is None:
         return {}
@@ -113,65 +119,82 @@ def _step_by_name(job: dict[str, object], name: str) -> dict[str, object]:
 def _inner_timeout_minutes(run_text: str) -> int:
     match = re.search(r"\btimeout (\d+)m\b", run_text)
     assert match, (
-        "no inner `timeout <N>m` found in run text -- relying on the "
-        "job's own timeout-minutes alone reproduces acr's near-miss: a "
-        "job cancelled by its own outer timeout is indistinguishable "
-        "from a real failure through this poll contract"
+        "no inner `timeout <N>m` found in run text -- the contract's own "
+        "'inner test timeouts strictly shorter' clause needs one"
     )
     return int(match.group(1))
 
 
-def test_shard_self_hosted_depends_on_pick_runner_and_plan() -> None:
+def test_bundles_are_gated_on_complementary_conditions() -> None:
+    for hosted_name, self_hosted_name in (
+        (_SHARD_HOSTED, _SHARD_SELF_HOSTED),
+        (_REPRO_HOSTED, _REPRO_SELF_HOSTED),
+    ):
+        hosted_if = str(_job(hosted_name).get("if", ""))
+        self_hosted_if = str(_job(self_hosted_name).get("if", ""))
+        assert hosted_if == _HOSTED_CONDITION, (
+            f"{WORKFLOW_PATH.name}: {hosted_name!r}'s `if:` ({hosted_if!r}) "
+            f"does not match the expected hosted-fallback condition"
+        )
+        assert self_hosted_if == _SELF_HOSTED_CONDITION, (
+            f"{WORKFLOW_PATH.name}: {self_hosted_name!r}'s `if:` "
+            f"({self_hosted_if!r}) does not match the expected "
+            "self-hosted-eligible condition"
+        )
+
+
+def test_bundles_share_one_stable_check_name() -> None:
+    assert _job(_SHARD_HOSTED).get("name") == _job(_SHARD_SELF_HOSTED).get("name"), (
+        f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} and {_SHARD_SELF_HOSTED!r} "
+        "must share the same templated `name:` -- flipping "
+        "SELF_HOSTED_RUNNERS must never rename the required check"
+    )
+    assert _job(_REPRO_HOSTED).get("name") == _job(_REPRO_SELF_HOSTED).get("name"), (
+        f"{WORKFLOW_PATH.name}: {_REPRO_HOSTED!r} and {_REPRO_SELF_HOSTED!r} "
+        "must share the same `name:`"
+    )
+
+
+def test_self_hosted_jobs_depend_on_dind_smoke_test() -> None:
+    for job_name in (_SHARD_SELF_HOSTED, _REPRO_SELF_HOSTED):
+        needs = _needs(_job(job_name))
+        assert _DIND_JOB in needs, (
+            f"{WORKFLOW_PATH.name}: {job_name!r} does not `needs:` "
+            f"{_DIND_JOB!r} -- a real job dependency, not just an `if:`, "
+            "since this leg needs a working Docker daemon"
+        )
+
+
+def test_shard_self_hosted_also_depends_on_plan() -> None:
     needs = _needs(_job(_SHARD_SELF_HOSTED))
-    assert _PICK_RUNNER_JOB in needs and _PLAN_JOB in needs, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_SELF_HOSTED!r} must `needs:` both "
-        f"{_PICK_RUNNER_JOB!r} and {_PLAN_JOB!r}, got {needs!r}"
-    )
-    condition = str(_job(_SHARD_SELF_HOSTED).get("if", ""))
-    assert "needs.pick-runner.outputs.try_self_hosted == 'true'" in condition, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_SELF_HOSTED!r}'s `if:` ({condition!r}) "
-        "no longer gates on pick-runner's own decision"
-    )
-
-
-def test_repro_self_hosted_depends_on_pick_runner() -> None:
-    needs = _needs(_job(_REPRO_SELF_HOSTED))
-    assert _PICK_RUNNER_JOB in needs, (
-        f"{WORKFLOW_PATH.name}: {_REPRO_SELF_HOSTED!r} must `needs:` "
-        f"{_PICK_RUNNER_JOB!r}, got {needs!r}"
-    )
-    condition = str(_job(_REPRO_SELF_HOSTED).get("if", ""))
-    assert "needs.pick-runner.outputs.try_self_hosted == 'true'" in condition, (
-        f"{WORKFLOW_PATH.name}: {_REPRO_SELF_HOSTED!r}'s `if:` ({condition!r}) "
-        "no longer gates on pick-runner's own decision"
+    assert _PLAN_JOB in needs, (
+        f"{WORKFLOW_PATH.name}: {_SHARD_SELF_HOSTED!r} must `needs:` "
+        f"{_PLAN_JOB!r} too, got {needs!r}"
     )
 
 
 def test_shard_matrix_sources_are_identical_between_legs() -> None:
-    # codex round would find this the moment they diverge: the self-hosted
-    # attempt and its fallback MUST enumerate the same shard set, or one
-    # leg silently covers a different slice of the matrix than the other.
+    hosted_matrix = _dict_field(_job(_SHARD_HOSTED), "strategy").get("matrix")
     self_hosted_matrix = _dict_field(_job(_SHARD_SELF_HOSTED), "strategy").get("matrix")
-    fallback_matrix = _dict_field(_job(_SHARD_FALLBACK), "strategy").get("matrix")
-    assert self_hosted_matrix == fallback_matrix, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_SELF_HOSTED!r} and {_SHARD_FALLBACK!r} "
-        f"have diverged matrix sources -- self_hosted={self_hosted_matrix!r} "
-        f"fallback={fallback_matrix!r}"
+    assert hosted_matrix == self_hosted_matrix, (
+        f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} and {_SHARD_SELF_HOSTED!r} "
+        f"have diverged matrix sources -- hosted={hosted_matrix!r} "
+        f"self_hosted={self_hosted_matrix!r}"
     )
 
 
-def test_both_legs_of_both_bundles_have_a_shorter_inner_timeout() -> None:
+def test_self_hosted_real_work_has_a_shorter_inner_timeout() -> None:
     cases = [
-        (_SHARD_SELF_HOSTED, _SHARD_RUN_STEP),
-        (_SHARD_FALLBACK, _SHARD_RUN_STEP),
-        (_REPRO_SELF_HOSTED, _REPRO_RUN_STEP),
-        (_REPRO_FALLBACK, _REPRO_RUN_STEP),
+        (_SHARD_SELF_HOSTED, _SHARD_RUN_STEP, 30),
+        (_REPRO_SELF_HOSTED, _REPRO_RUN_STEP, 25),
     ]
-    for job_name, step_name in cases:
+    for job_name, step_name, expected_outer in cases:
         job = _job(job_name)
         job_timeout = job.get("timeout-minutes")
-        assert isinstance(job_timeout, int), (
-            f"{WORKFLOW_PATH.name}: job {job_name!r} has no integer timeout-minutes"
+        assert job_timeout == expected_outer, (
+            f"{WORKFLOW_PATH.name}: {job_name!r}'s timeout-minutes "
+            f"({job_timeout!r}) does not match the contract's sizing "
+            f"({expected_outer}m, from measured pool wall time)"
         )
         step = _step_by_name(job, step_name)
         run_text = step.get("run")
@@ -179,107 +202,58 @@ def test_both_legs_of_both_bundles_have_a_shorter_inner_timeout() -> None:
             f"{WORKFLOW_PATH.name}: {job_name!r}'s {step_name!r} step has no `run:`"
         )
         inner = _inner_timeout_minutes(run_text)
-        assert inner < job_timeout, (
-            f"{WORKFLOW_PATH.name}: job {job_name!r}'s inner timeout ({inner}m) "
+        assert isinstance(job_timeout, int) and inner < job_timeout, (
+            f"{WORKFLOW_PATH.name}: {job_name!r}'s inner timeout ({inner}m) "
             f"is not strictly shorter than its own timeout-minutes ({job_timeout}m)"
         )
 
 
-def test_shard_aggregator_needs_only_the_fallback() -> None:
+def test_shard_aggregator_needs_both_legs() -> None:
     needs = _needs(_job(_SHARD_AGGREGATOR))
-    assert _SHARD_FALLBACK in needs, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_AGGREGATOR!r} does not `needs:` "
-        f"{_SHARD_FALLBACK!r}"
+    assert _SHARD_HOSTED in needs and _SHARD_SELF_HOSTED in needs, (
+        f"{WORKFLOW_PATH.name}: {_SHARD_AGGREGATOR!r} must `needs:` both "
+        f"{_SHARD_HOSTED!r} and {_SHARD_SELF_HOSTED!r}, got {needs!r}"
     )
-    assert _SHARD_SELF_HOSTED not in needs, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_AGGREGATOR!r} `needs:` "
-        f"{_SHARD_SELF_HOSTED!r} directly -- a permanently `queued` "
-        "self-hosted attempt has no terminal state; this would block the "
-        "aggregator for up to GitHub's 24h self-hosted backstop"
-    )
-    plan_result_ref = str(
-        _dict_field(_job(_SHARD_AGGREGATOR), "env").get("SHARD_RESULT", "")
-    )
-    assert "go-storage-integration-shard-fallback" in plan_result_ref, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_AGGREGATOR!r}'s SHARD_RESULT env "
-        f"({plan_result_ref!r}) does not read the fallback matrix's own "
-        "aggregate `.result`"
-    )
-
-
-def test_repro_aggregator_needs_only_the_fallback() -> None:
-    needs = _needs(_job(_REPRO_AGGREGATOR))
-    assert _REPRO_FALLBACK in needs, (
-        f"{WORKFLOW_PATH.name}: {_REPRO_AGGREGATOR!r} does not `needs:` "
-        f"{_REPRO_FALLBACK!r}"
-    )
-    assert _REPRO_SELF_HOSTED not in needs, (
-        f"{WORKFLOW_PATH.name}: {_REPRO_AGGREGATOR!r} `needs:` "
-        f"{_REPRO_SELF_HOSTED!r} directly -- same hazard as the shard "
-        "bundle's aggregator"
-    )
-
-
-def test_fallback_poll_scripts_target_the_correct_job_name() -> None:
-    shard_wait = _step_by_name(
-        _job(_SHARD_FALLBACK),
-        "Determine this shard's self-hosted attempt outcome, or that it never left the queue",
-    )
-    shard_env = _dict_field(shard_wait, "env")
-    assert (
-        shard_env.get("TARGET_JOB_NAME")
-        == "go-storage-integration-shard-self-hosted-${{ matrix.target }}-${{ matrix.shard }}"
+    env = _dict_field(_job(_SHARD_AGGREGATOR), "env")
+    assert "go-storage-integration-shard-self-hosted" in str(
+        env.get("SHARD_SELF_HOSTED_RESULT", "")
     ), (
-        f"{WORKFLOW_PATH.name}: {_SHARD_FALLBACK!r}'s wait step targets "
-        f"{shard_env.get('TARGET_JOB_NAME')!r}, which does not match "
-        f"{_SHARD_SELF_HOSTED!r}'s own templated `name:` -- the poll would "
-        "look for the wrong job"
+        f"{WORKFLOW_PATH.name}: {_SHARD_AGGREGATOR!r}'s env does not read "
+        f"{_SHARD_SELF_HOSTED!r}'s own `.result`"
     )
-    self_hosted_name = _job(_SHARD_SELF_HOSTED).get("name")
-    assert self_hosted_name == shard_env.get("TARGET_JOB_NAME"), (
-        f"{WORKFLOW_PATH.name}: {_SHARD_SELF_HOSTED!r}'s own `name:` "
-        f"({self_hosted_name!r}) no longer matches what "
-        f"{_SHARD_FALLBACK!r}'s poll script searches for"
+    run_text = str(
+        _step_by_name(
+            _job(_SHARD_AGGREGATOR),
+            "Require the plan and whichever shard leg ran to have passed",
+        ).get("run", "")
     )
-
-    repro_wait = _step_by_name(
-        _job(_REPRO_FALLBACK),
-        "Determine the self-hosted attempt's outcome, or that it never left the queue",
-    )
-    repro_run = str(repro_wait.get("run", ""))
-    assert 'select(.name=="go-container-reproducibility-self-hosted")' in repro_run, (
-        f"{WORKFLOW_PATH.name}: {_REPRO_FALLBACK!r}'s poll script does not "
-        f"filter on {_REPRO_SELF_HOSTED!r}'s own job name"
+    assert "skipped" in run_text and "skipped" in run_text.split("skipped", 1)[1], (
+        f"{WORKFLOW_PATH.name}: {_SHARD_AGGREGATOR!r}'s check must "
+        "explicitly reject the both-legs-skipped case as a routing bug"
     )
 
 
-def test_fallback_poll_scripts_stay_same_run_shaped() -> None:
-    # Same F2-exemption reasoning as #2145's own guard
-    # (test_go_arm64_runner_fallback_same_run_lookup.py): these queries are
-    # scoped to actions/runs/${GITHUB_RUN_ID}/jobs (SAME run), never a
-    # cross-run search or a head_sha= discriminator.
-    for job_name, step_name in (
-        (
-            _SHARD_FALLBACK,
-            "Determine this shard's self-hosted attempt outcome, or that it never left the queue",
-        ),
-        (
-            _REPRO_FALLBACK,
-            "Determine the self-hosted attempt's outcome, or that it never left the queue",
-        ),
-    ):
-        run_text = str(_step_by_name(_job(job_name), step_name).get("run", ""))
-        assert "actions/runs/${GITHUB_RUN_ID}/jobs" in run_text, (
-            f"{WORKFLOW_PATH.name}: {job_name!r}'s poll script no longer "
-            "queries the same-run job list"
-        )
-        assert "actions/runs?" not in run_text, (
-            f"{WORKFLOW_PATH.name}: {job_name!r}'s poll script now contains "
-            "a cross-run search -- the F2 same-run exemption needs "
-            "re-examination"
-        )
-        assert "head_sha=" not in run_text, (
-            f"{WORKFLOW_PATH.name}: {job_name!r}'s poll script now "
-            "references head_sha= -- the discriminator a cross-run design "
-            "would need and this same-run design must not have"
-        )
+def test_neither_self_hosted_job_has_a_poll_step() -> None:
+    # Structural confirmation the v1.5.1 fallback-poller pattern (pick-
+    # runner, job_status()/gh api polling, steps.own.outputs.run_here) was
+    # actually retired here, not left dangling alongside the new gate.
+    for job_name in (_SHARD_SELF_HOSTED, _REPRO_SELF_HOSTED):
+        steps_raw = _job(job_name).get("steps") or []
+        assert isinstance(steps_raw, list)
+        for step in steps_raw:
+            assert isinstance(step, dict)
+            run_text = str(step.get("run", ""))
+            assert "job_status()" not in run_text, (
+                f"{WORKFLOW_PATH.name}: {job_name!r} still has a poll "
+                "script -- contract v1.6 retires the fallback poller"
+            )
+            assert "run_here" not in run_text, (
+                f"{WORKFLOW_PATH.name}: {job_name!r} still references "
+                "steps.own.outputs.run_here -- contract v1.6 retires the "
+                "fallback poller's ownership-decision step"
+            )
+    assert "pick-runner" not in _dict_field(_document(), "jobs"), (
+        f"{WORKFLOW_PATH.name}: a pick-runner job still exists -- contract "
+        "v1.6 gates directly on vars.SELF_HOSTED_RUNNERS, no kill-switch "
+        "intermediary job needed"
+    )

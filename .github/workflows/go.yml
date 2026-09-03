@@ -341,10 +341,35 @@ jobs:
           # indexing `null.status` would abort `jq` (and, under `pipefail`,
           # this whole script) on the very first poll. Reported as
           # "not_created", never a hard error.
+          #
+          # codex round 1 (CHAOS-4906, P1): the ORIGINAL version of this
+          # query took `[0]` unconditionally, so more than one job entry
+          # sharing this exact name -- this specific job has no matrix, so
+          # GitHub's own default `filter=latest` on this endpoint should make
+          # that unreachable in practice (a re-run bumps the run's attempt
+          # number and `filter=latest`, the default this call already uses,
+          # excludes prior attempts) -- would silently select whichever entry
+          # happened to sort first, which could be a stale terminal record
+          # while the real attempt is still queued: a false-green exactly
+          # like the "0 tests matched" trap this same file already guards
+          # against elsewhere. Reachable-or-not by the documented API
+          # contract today, an unguarded `[0]` is a latent fragility this
+          # job's own review culture does not accept on faith -- so the
+          # match count is asserted explicitly and more than one match FAILS
+          # LOUD ("ambiguous") instead of silently picking one.
           job_status() {
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate \
-              --jq '([.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")][0]) as $j
-                    | if $j == null then "not_created null" else "\($j.status) \($j.conclusion // "null")" end'
+              --jq '[.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
+                    | if ($matches | length) > 1 then "ambiguous null"
+                      elif ($matches | length) == 0 then "not_created null"
+                      else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
+                      end'
+          }
+          fail_if_ambiguous() {
+            if [ "${status}" = "ambiguous" ]; then
+              echo "FATAL: more than one job named go-arm64-numeric-parity-self-hosted in this run's job list -- refusing to guess which is the real attempt rather than silently picking one (see the comment above job_status)" >&2
+              exit 1
+            fi
           }
 
           deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
@@ -352,6 +377,7 @@ jobs:
           status="queued"
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
             # "not_created" counts as still-queued for phase 1's purposes --
             # the attempt has not left the queue if it does not exist yet.
             if [ "${status}" != "queued" ] && [ "${status}" != "not_created" ]; then
@@ -370,6 +396,7 @@ jobs:
           deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
             if [ "${status}" = "completed" ]; then
               echo "self-hosted attempt completed with conclusion: ${conclusion}"
               if [ "${conclusion}" = "success" ]; then

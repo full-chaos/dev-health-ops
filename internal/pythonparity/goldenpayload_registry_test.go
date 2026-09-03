@@ -331,8 +331,22 @@ var comparePayloadFieldsAllowed = map[string]bool{
 // one: it is unbounded, and each new indirection is another shape to enumerate,
 // which is the mistake this file has now made three times. This asks a bounded
 // question instead -- WHICH FILES may reach the unvalidated core at all -- and
-// answers it over the whole package rather than one glob. A helper anywhere else
-// is itself a call site in a file that is not allowed, wherever it hides.
+// answers it over the whole package rather than one glob.
+//
+// IT COUNTS REFERENCES, NOT CALLS, and that distinction was itself a finding.
+// The first version inspected CallExpr nodes whose Fun is an Ident named
+// comparePayloadFields, so taking a func VALUE walked straight out:
+//
+//	var compare = comparePayloadFields          // a reference, not a call
+//	func viaValue(a, b []byte) error { return compare(a, b, []string{"cases"}) }
+//
+// The call site's Fun is `compare`, and the reference is a bare Ident that no
+// CallExpr scan sees. Reproduced: not caught. So the question is not "who calls
+// it" but WHO CAN NAME IT -- any mention of the identifier in a file that is not
+// allowed, call or reference, is the offence. That is the fourth time on this
+// file that narrowing the question to a syntactic form let the next form
+// through, and naming the identifier is the smallest question that cannot be
+// re-narrowed.
 func TestTheUnvalidatedCoreIsCalledOnlyWhereItIsTested(t *testing.T) {
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
@@ -351,25 +365,35 @@ func TestTheUnvalidatedCoreIsCalledOnlyWhereItIsTested(t *testing.T) {
 		}
 		inspected++
 		ast.Inspect(parsed, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name, ok := call.Fun.(*ast.Ident)
-			if !ok || name.Name != "comparePayloadFields" {
+			// Any MENTION of the identifier, not just a call of it. A bare
+			// reference (`var compare = comparePayloadFields`) is not a CallExpr
+			// and slipped past the call-only version.
+			var position token.Pos
+			switch named := node.(type) {
+			case *ast.Ident:
+				if named.Name != "comparePayloadFields" {
+					return true
+				}
+				position = named.Pos()
+			case *ast.SelectorExpr:
+				if named.Sel == nil || named.Sel.Name != "comparePayloadFields" {
+					return true
+				}
+				position = named.Sel.Pos()
+			default:
 				return true
 			}
 			callSites++
 			if comparePayloadFieldsAllowed[filepath.Base(path)] {
 				return true
 			}
-			t.Errorf("%s:%d calls comparePayloadFields, which skips registry "+
-				"validation. Only %v may. A helper here lets a rot guard compare "+
-				"an arbitrary field set while every registry control still passes "+
-				"-- silent drift, reachable by an ordinary extract-a-helper "+
-				"refactor. Call comparePayload with a registry entry instead.",
-				path, fileSet.Position(call.Pos()).Line,
-				sortedAllowedFiles())
+			t.Errorf("%s:%d names comparePayloadFields, which skips registry "+
+				"validation. Only %v may. Naming it here -- by calling it OR by "+
+				"taking a reference to it -- lets a rot guard compare an arbitrary "+
+				"field set while every registry control still passes, which is "+
+				"silent drift reachable by an ordinary refactor. Call comparePayload "+
+				"with a registry entry instead.",
+				path, fileSet.Position(position).Line, sortedAllowedFiles())
 			return true
 		})
 	}
@@ -388,4 +412,67 @@ func sortedAllowedFiles() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// TestTheCoreScanCatchesReferencesNotJustCalls is ci-flakes' escape, kept as a
+// permanent control.
+//
+// The scan above first inspected CallExpr nodes only, so a func VALUE walked out
+// of it: `var compare = comparePayloadFields` is a reference, and the eventual
+// call's Fun is `compare`. Nothing in a call-only scan sees either half.
+//
+// This asserts the detector reacts to a REFERENCE with no call at all, which is
+// the weaker half and the one a call-only implementation fails. Without it, the
+// scan could quietly regress to CallExpr and every other test here would stay
+// green -- the same "control that cannot fail" shape this file keeps producing.
+func TestTheCoreScanCatchesReferencesNotJustCalls(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		source    string
+		wantNamed bool
+	}{
+		{
+			name:      "a bare reference, never called",
+			source:    "package p\nvar compare = comparePayloadFields\n",
+			wantNamed: true,
+		},
+		{
+			name:      "a direct call",
+			source:    "package p\nfunc g() { comparePayloadFields(nil, nil, nil) }\n",
+			wantNamed: true,
+		},
+		{
+			name:      "an unrelated identifier",
+			source:    "package p\nfunc g() { comparePayload(nil, nil, reprBandGuard) }\n",
+			wantNamed: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fileSet := token.NewFileSet()
+			parsed, err := parser.ParseFile(fileSet, "probe.go",
+				strings.NewReader(testCase.source), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			named := false
+			ast.Inspect(parsed, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.Ident:
+					if n.Name == "comparePayloadFields" {
+						named = true
+					}
+				case *ast.SelectorExpr:
+					if n.Sel != nil && n.Sel.Name == "comparePayloadFields" {
+						named = true
+					}
+				}
+				return true
+			})
+			if named != testCase.wantNamed {
+				t.Errorf("detector saw the core named=%v, want %v -- a scan that "+
+					"only recognises calls misses `var compare = comparePayloadFields`",
+					named, testCase.wantNamed)
+			}
+		})
+	}
 }

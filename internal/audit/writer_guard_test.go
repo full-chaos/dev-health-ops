@@ -421,3 +421,115 @@ func TestGuardPatternRejectsKnownBypasses(t *testing.T) {
 		}
 	}
 }
+
+// TestVerbAndTablePatternsStartAtTheSameOffset turns a stated assumption into a
+// measurement.
+//
+// The fail-closed branch exempts a write when coveredByTablePattern[loc[0]] is
+// set, where loc[0] is the VERB pattern's match offset and the map was filled
+// from the TABLE pattern's match offsets. That is only sound if the two
+// patterns start at the same byte for the same write. I believed they did --
+// every alternation of both begins at the verb keyword -- and said so as a
+// least-sure line rather than proving it. If it were ever false the failure
+// would be a SILENT EXEMPTION, which is precisely the defect round 1 found.
+func TestVerbAndTablePatternsStartAtTheSameOffset(t *testing.T) {
+	const tbl = "auth_outbox_events"
+	table := guardPattern(tbl)
+
+	cases := []struct{ name, sql string }{
+		{"insert unaliased", `INSERT INTO auth.auth_outbox_events (kid) VALUES (1)`},
+		{"insert comment between tokens", "INSERT /* c */ INTO auth.auth_outbox_events (kid) VALUES (1)"},
+		{"insert multi-line", "INSERT\n\tINTO\n\tauth.auth_outbox_events (kid)\n\tVALUES (1)"},
+		{"insert quoted table", `INSERT INTO "auth"."auth_outbox_events" (kid) VALUES (1)`},
+		{"delete unaliased", `DELETE FROM auth.auth_outbox_events WHERE id = 1`},
+		{"delete aliased", `DELETE FROM auth.auth_outbox_events AS e WHERE e.id = 1`},
+		{"delete multi-line", "DELETE\n\tFROM\n\tauth.auth_outbox_events\n\tWHERE id = 1"},
+		{"update unaliased", `UPDATE auth.auth_outbox_events SET published_at = now()`},
+		{"update aliased with AS", `UPDATE auth.auth_outbox_events AS e SET published_at = now()`},
+		{"update aliased bare", `UPDATE auth.auth_outbox_events e SET published_at = now()`},
+		{"update quoted table", `UPDATE "auth"."auth_outbox_events" AS e SET published_at = now()`},
+		{"update multi-line", "UPDATE\n\tauth.auth_outbox_events\n\tAS e\n\tSET published_at = now()"},
+	}
+
+	verbsSeen := map[string]int{}
+	var tableMisses []string
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := []byte(c.sql)
+			tl := table.FindIndex(body)
+			vl := writeVerbPattern.FindIndex(body)
+			if vl == nil {
+				t.Fatalf("the VERB pattern does not match %q at all", c.sql)
+			}
+			if tl == nil {
+				// NOT A PASS AND NOT A FAILURE: the table pattern does not
+				// resolve this shape, so there is no offset pair to compare and
+				// the write is caught by the FAIL-CLOSED branch instead. That is
+				// the design -- proximity no longer exempts, so a write the
+				// table pattern misses is still reported. Measured: a probe
+				// containing this exact statement is flagged as "a guarded table
+				// in a form this guard cannot resolve", and the same statement
+				// against a non-guarded table is not flagged.
+				//
+				// It is recorded rather than skipped because the SET of shapes
+				// relying on fail-closed is a fact about coverage, and it is
+				// asserted against a literal below.
+				tableMisses = append(tableMisses, c.name)
+				return
+			}
+			if tl[0] != vl[0] {
+				t.Errorf("OFFSETS DIVERGE: table pattern starts at %d, verb pattern at %d, for:\n  %s\n"+
+					"coveredByTablePattern is keyed on the verb offset and filled from the table "+
+					"offset, so a write like this would be exempted while never having been matched",
+					tl[0], vl[0], c.sql)
+			}
+			verbsSeen[strings.ToUpper(strings.Fields(c.sql)[0])]++
+		})
+	}
+
+	// EVERY ALTERNATION EXERCISED, or the agreement above is about a subset.
+	for _, verb := range []string{"INSERT", "DELETE", "UPDATE"} {
+		if verbsSeen[verb] == 0 {
+			t.Errorf("no case exercised the %s alternation; the offset agreement is unproven for it", verb)
+		}
+	}
+
+	// WHICH SHAPES RELY ON FAIL-CLOSED RATHER THAN ON THE TABLE PATTERN.
+	//
+	// A literal, because this is a coverage fact and deriving it from the run
+	// would make the assertion agree with whatever happened. If the table
+	// pattern is later widened to resolve a shape, this fails and the list is
+	// edited deliberately; if a NEW shape starts falling through, it fails too.
+	//
+	// update quoted table is here because the table arm requires whitespace
+	// after the table name and a quoted identifier puts a closing quote there.
+	// The write is still caught -- see the note above -- with a less specific
+	// message.
+	wantTableMisses := []string{"update quoted table"}
+	if strings.Join(tableMisses, ",") != strings.Join(wantTableMisses, ",") {
+		t.Errorf("shapes falling through to fail-closed are %v, expected exactly %v. "+
+			"If the table pattern changed on purpose, change this list on purpose",
+			tableMisses, wantTableMisses)
+	}
+
+	// NEGATIVE CONTROL, and it is also the reason the guard keys on OFFSET
+	// rather than on ordinal position. With a non-guarded write first, the verb
+	// pattern's FIRST match and the table pattern's FIRST match are different
+	// writes, so their offsets MUST differ. If this ever agreed, the check above
+	// would be satisfied by construction and would prove nothing.
+	decoy := []byte(`UPDATE other_table SET x = 1;
+	INSERT INTO auth.auth_outbox_events (kid) VALUES (1)`)
+	dt := table.FindIndex(decoy)
+	dv := writeVerbPattern.FindIndex(decoy)
+	if dt == nil || dv == nil {
+		t.Fatal("the decoy matched neither pattern; the negative control is not exercising anything")
+	}
+	if dt[0] == dv[0] {
+		t.Errorf("the negative control did NOT diverge (both at %d), so the offset check above "+
+			"cannot distinguish agreement from coincidence", dt[0])
+	} else {
+		t.Logf("negative control diverges as required: table pattern at %d, verb pattern at %d "+
+			"-- pairing by ordinal would be wrong here, which is why the guard pairs by offset",
+			dt[0], dv[0])
+	}
+}

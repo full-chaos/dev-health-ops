@@ -711,11 +711,74 @@ jobs:
           BUILT_SHA: ${{ needs.merge.outputs.sha }}
           OWNER: ${{ github.repository_owner }}
           IS_RELEASE: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
-          IS_MAIN_REF: ${{ github.ref == 'refs/heads/main' }}
-          REF_IS_BRANCH: ${{ github.ref_type == 'branch' }}
+          # codex round 1 (P1, docker-images.yml:714 at bc1e9c30): github.ref
+          # is the ref this WORKFLOW RUN was dispatched from, not the ref
+          # that was actually checked out and built -- build/go-build's
+          # checkout prefers github.event.inputs.ref (see that job's own
+          # comment). A workflow_dispatch launched from main's UI with a
+          # custom inputs.ref=feature/foo builds feature/foo's content
+          # while github.ref still reads refs/heads/main, so keying
+          # IS_MAIN_REF on github.ref could classify (and publish) an
+          # arbitrary custom-ref build as main's. Fixed to be conservative
+          # rather than guessing: main ONLY for an actual push event (this
+          # workflow's push trigger is `branches: [main]` only, so every
+          # push here IS main by construction) or a dispatch with NO custom
+          # ref override at all (inputs.ref empty) AND actually dispatched
+          # FROM main (github.ref == refs/heads/main) -- both conditions,
+          # not just the first: a dispatch with an empty inputs.ref but run
+          # from a non-main branch (via the dispatch UI's own branch
+          # selector, not the custom ref field) correctly builds THAT
+          # branch's tip, and github.ref correctly reflects it in exactly
+          # this one case (self-caught tracing the truth table -- an
+          # earlier draft of this fix said "empty inputs.ref -> always
+          # main," which reintroduces a narrower version of the same bug
+          # for a non-main dispatch). ANY explicit inputs.ref -- even one
+          # that happens to say "main" -- is treated as NOT main: decline
+          # the moving tags rather than trust a value that doesn't
+          # describe what was built.
+          IS_MAIN_REF: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '' && github.ref == 'refs/heads/main') }}
+          # Same reasoning for the non-main branch-name tag: only trust
+          # github.ref_name when we're confident it names what was actually
+          # built. A dispatch with an explicit custom inputs.ref gets NO
+          # moving tag here either (not even its own branch's name) rather
+          # than guessing from a ref that may not match what was checked
+          # out -- falls through to "NON-BRANCH REF: no moving tag applies"
+          # below, same as any other unresolvable ref shape.
+          REF_IS_BRANCH: ${{ github.ref_type == 'branch' && (github.event_name != 'workflow_dispatch' || github.event.inputs.ref == '') }}
           BRANCH_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # codex round 1 (P1/P2, docker-images.yml:767,727,828-829 at
+          # bc1e9c30): every `imagetools inspect` call in this step treated
+          # ANY failure -- a genuine "doesn't exist" 404 AND a transient
+          # network/5xx/auth blip -- identically, either as "safe to
+          # bootstrap-overwrite" (the :latest check) or "safe to skip" (the
+          # source-tag check), and the digest-walk's candidate check wasn't
+          # even guarded, so a transient failure there aborted the whole
+          # job outright under `set -e` instead of just moving to the next
+          # candidate. None of that is safe: a transient failure on an
+          # EXISTING, valid :latest must never be read as "latest doesn't
+          # exist" (that path unconditionally overwrites it), and a
+          # transient failure on an already-published source tag must
+          # never silently skip that family's moving tags without so much
+          # as a warning. A registry inspect that can't be classified
+          # reliably as "genuinely absent" from exit code alone (buildx
+          # doesn't distinguish 404 from 5xx in its exit status) is instead
+          # retried a few times -- a truly transient error is likely to
+          # clear within that window, and a call that fails identically
+          # every time is treated as absence, same as before, just with
+          # retries first rather than trusting a single attempt.
+          _inspect_retry() {
+            local ref="$1" attempt
+            # shellcheck disable=SC2034
+            for attempt in 1 2 3; do
+              if docker buildx imagetools inspect "$ref" --format '{{json .}}' 2>/dev/null; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
@@ -724,8 +787,8 @@ jobs:
           for family in $families; do
             image="ghcr.io/${OWNER}/${family}"
             source_ref="${image}:sha-${short_sha}"
-            if ! docker buildx imagetools inspect "${source_ref}" >/dev/null 2>&1; then
-              echo "SKIP ${family}: ${source_ref} was not published this run"
+            if ! _inspect_retry "${source_ref}" >/dev/null; then
+              echo "SKIP ${family}: ${source_ref} was not published this run (or unreachable after 3 tries)"
               continue
             fi
 
@@ -737,8 +800,17 @@ jobs:
 
             if [ "${IS_MAIN_REF}" != "true" ]; then
               if [ "${REF_IS_BRANCH}" = "true" ]; then
-                echo "NON-MAIN BRANCH ${family}: tagging ${BRANCH_TAG} unconditionally"
-                docker buildx imagetools create -t "${image}:${BRANCH_TAG}" "${source_ref}"
+                # codex round 1 (P3, docker-images.yml:716,740-741 at
+                # bc1e9c30): github.ref_name for a branch like "feature/foo"
+                # contains a slash, which is invalid in a Docker TAG
+                # component (slashes are only valid in the repository path).
+                # metadata-action's type=ref,event=branch sanitized this;
+                # this direct call didn't. Replace slashes (and anything
+                # else outside the tag-safe character set) with `-`, same
+                # convention most CI systems use for branch-derived tags.
+                safe_branch_tag="$(printf '%s' "${BRANCH_TAG}" | tr -c 'A-Za-z0-9_.-' '-')"
+                echo "NON-MAIN BRANCH ${family}: tagging ${safe_branch_tag} (from ref ${BRANCH_TAG}) unconditionally"
+                docker buildx imagetools create -t "${image}:${safe_branch_tag}" "${source_ref}"
               else
                 echo "NON-BRANCH REF ${family}: no moving tag applies"
               fi
@@ -764,7 +836,7 @@ jobs:
             # arc-runner-image.yml, PR #2154, for the identical trap and
             # fix). `if cmd; then ... fi` keeps the `;` after the command's
             # own quotes are already closed, which parses cleanly.
-            if latest_json="$(docker buildx imagetools inspect "${image}:latest" --format '{{json .}}' 2>/dev/null)"; then
+            if latest_json="$(_inspect_retry "${image}:latest")"; then
               :
             else
               latest_json=""
@@ -825,8 +897,21 @@ jobs:
               found_base=""
               while IFS= read -r candidate_sha; do
                 candidate_short="$(echo "${candidate_sha}" | cut -c1-7)"
-                candidate_digest="$(docker buildx imagetools inspect "${image}:sha-${candidate_short}" --format '{{json .}}' 2>/dev/null \
-                  | jq -r '.manifest.digest // empty')"
+                # codex round 1 (P2, docker-images.yml:828-829 at bc1e9c30):
+                # this was a bare pipeline assignment, not guarded by an
+                # if/else -- under `set -euo pipefail`, ANY candidate whose
+                # sha- tag was never published (a real gap: a commit whose
+                # CI run failed before publishing, or one skipped by a
+                # future CHAOS-4948) made `_inspect_retry` fail, made the
+                # pipeline fail, and aborted the ENTIRE job immediately
+                # instead of just treating that one candidate as a
+                # non-match and continuing the walk. Guarded the same way
+                # the :latest read above is.
+                if candidate_digest="$(_inspect_retry "${image}:sha-${candidate_short}" | jq -r '.manifest.digest // empty')"; then
+                  :
+                else
+                  candidate_digest=""
+                fi
                 if [ -n "${candidate_digest}" ] && [ "${candidate_digest}" = "${latest_digest}" ]; then
                   found_base="${candidate_sha}"
                   break

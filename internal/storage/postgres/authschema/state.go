@@ -34,9 +34,19 @@ func currentUser(ctx context.Context, pool *pgxpool.Pool) (string, error) {
 // is what keeps DDL out of the runtime role's reach without needing a REVOKE.
 func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Options) error {
 	schema := quoteIdentifier(options.Schema)
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli -- PostgreSQL cannot bind an
+	// IDENTIFIER, so a schema/table name must reach the statement as text. ValidateIdentifier
+	// (allowlist ^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection) runs at apply.go:165,
+	// before ensureSchemaAndVersionTable at apply.go:191; quoteIdentifier is belt-and-braces.
+	// Evidence: TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by team-lead.
 	if _, err := conn.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+schema); err != nil {
 		return fmt.Errorf("%w: creating schema", ErrMigrationFailed)
 	}
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli -- PostgreSQL cannot bind an
+	// IDENTIFIER, so a schema/table name must reach the statement as text. ValidateIdentifier
+	// (allowlist ^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection) runs at apply.go:165,
+	// before ensureSchemaAndVersionTable at apply.go:191; quoteIdentifier is belt-and-braces.
+	// Evidence: TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by team-lead.
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s.%s (
 			version    integer      PRIMARY KEY,
@@ -51,6 +61,11 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Op
 
 // appliedVersions reads the lineage positions this database already holds.
 func appliedVersions(ctx context.Context, conn *pgx.Conn, schema string) (map[int]struct{}, error) {
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli -- PostgreSQL cannot bind an
+	// IDENTIFIER, so a schema/table name must reach the statement as text. ValidateIdentifier
+	// (allowlist ^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection) runs at apply.go:165,
+	// before ensureSchemaAndVersionTable at apply.go:191; quoteIdentifier is belt-and-braces.
+	// Evidence: TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by team-lead.
 	rows, err := conn.Query(ctx, fmt.Sprintf(
 		`SELECT version FROM %s.%s`, quoteIdentifier(schema), quoteIdentifier(versionTable),
 	))

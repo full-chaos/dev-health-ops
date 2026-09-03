@@ -173,3 +173,60 @@ func TestRuntimeSequencesCoverEveryGeneratedColumn(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateIdentifierRejectsEveryInjectionShape is the evidence behind three
+// `nosemgrep` annotations in state.go.
+//
+// Semgrep's go.lang.security.audit.sqli.pgx-sqli fires on the identifier
+// interpolation in ensureSchemaAndVersionTable and appliedVersions. The finding
+// is a FALSE POSITIVE for a structural reason rather than a stylistic one:
+// PostgreSQL cannot bind an IDENTIFIER. `CREATE SCHEMA $1` is not valid SQL, so
+// a schema or table name has to reach the statement as text, and no amount of
+// parameterisation removes that. The safety therefore has to come from the
+// allowlist upstream, and this test is what makes that claim checkable instead
+// of asserted: it enumerates the shapes an injection would need and proves each
+// is refused BEFORE any statement is built.
+//
+// Ordering matters as much as the pattern: Options.Validate runs at
+// apply.go:165, ensureSchemaAndVersionTable at apply.go:191. If that order ever
+// inverts, this test keeps passing and the annotations become a lie -- which is
+// why the annotation comments name the line numbers rather than gesturing at
+// "validation elsewhere".
+func TestValidateIdentifierRejectsEveryInjectionShape(t *testing.T) {
+	for _, testCase := range []struct{ name, identifier string }{
+		{"double quote closes the quoted identifier", `auth"`},
+		{"embedded quote mid-token", `au"th`},
+		{"statement separator", "auth;DROP SCHEMA public"},
+		{"leading whitespace", " auth"},
+		{"trailing whitespace", "auth "},
+		{"internal whitespace", "auth schema"},
+		{"SQL line comment", "auth--comment"},
+		{"block comment open", "auth/*"},
+		{"leading digit", "1auth"},
+		{"uppercase", "Auth"},
+		{"reserved word", "select"},
+		{"64 characters, one past the limit", strings.Repeat("a", 64)},
+		{"empty", ""},
+		{"non-ASCII letter that looks ASCII", "authа"}, // Cyrillic a
+		{"newline", "auth\nschema"},
+		{"null byte", "auth\x00"},
+		{"backslash", `auth\`},
+		{"dollar quote", "auth$$"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if err := ValidateIdentifier(testCase.identifier); err == nil {
+				t.Errorf("ValidateIdentifier(%q) accepted it; it would then be "+
+					"interpolated into DDL by state.go", testCase.identifier)
+			}
+		})
+	}
+
+	// The accepting row. Without it a ValidateIdentifier that refused
+	// everything would pass every case above, and the package would fail to
+	// migrate anything at all.
+	for _, valid := range []string{"auth", "a", "auth_schema", "auth2", strings.Repeat("a", 63)} {
+		if err := ValidateIdentifier(valid); err != nil {
+			t.Errorf("ValidateIdentifier(%q) = %v, want acceptance", valid, err)
+		}
+	}
+}

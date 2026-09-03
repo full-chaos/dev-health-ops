@@ -181,6 +181,18 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 				subjects[id] = subject
 				affectedIDs[id] = struct{}{}
 			}
+			// Reload dependencies scoped to the WIDENED subjects: a
+			// reverse-hop closure item (e.g. B, found because B --relates_to-->
+			// A and A is affected) has its OWN outgoing edge (B->A), which the
+			// FIRST loadDependencyEdges call above never saw -- that call was
+			// scoped to the ORIGINAL affected set as source, before B was
+			// known. Without this reload, BuildLinkedIssueIndex below never
+			// sees B->A, so B resolves unassigned instead of inheriting A's
+			// team via linked_issue -- codex round 2's P1 finding.
+			dependencies, err = executor.loadDependencyEdges(ctx, orgID, subjects)
+			if err != nil {
+				return outcome, err
+			}
 			outcome.ItemsSeen = len(affectedIDs)
 		}
 	}
@@ -385,13 +397,34 @@ func (executor *WorkItemAttributionExecutor) detectScope(
 	if err != nil {
 		return workItemAttributionScopeDecision{}, err
 	}
-	membershipsChanged, err := executor.maxUpdatedAt(ctx,
-		"SELECT max(updated_at) FROM team_memberships FINAL WHERE org_id = ?", orgID)
+	// team_memberships and manual_attribution_fallbacks are ALSO bitemporal
+	// (valid_from/valid_to), the same as team_repo_ownership/
+	// team_project_ownership -- LoadProviderMembers/LoadManualFallbacks
+	// filter by validity the same way LoadRepos/LoadProjects do (see
+	// teamattribution/cascade.go). A plain max(updated_at) here would leave
+	// the SAME future-activation/expiry gap the repo/project queries below
+	// were widened to close -- codex round 2's P1 finding on this exact
+	// asymmetry. identities/teams do NOT get the same treatment: they are
+	// admin-authored catalogs with no valid_from/valid_to columns at all.
+	membershipsChanged, err := executor.maxEffectiveChangedAt(ctx, now, orgID, `
+SELECT max(greatest(
+    updated_at,
+    if(valid_from <= ?, valid_from, toDateTime64(0, 3)),
+    ifNull(if(valid_to <= ?, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))
+  ))
+FROM team_memberships FINAL
+WHERE org_id = ?`)
 	if err != nil {
 		return workItemAttributionScopeDecision{}, err
 	}
-	manualFallbacksChanged, err := executor.maxUpdatedAt(ctx,
-		"SELECT max(updated_at) FROM manual_attribution_fallbacks FINAL WHERE org_id = ?", orgID)
+	manualFallbacksChanged, err := executor.maxEffectiveChangedAt(ctx, now, orgID, `
+SELECT max(greatest(
+    updated_at,
+    if(valid_from <= ?, valid_from, toDateTime64(0, 3)),
+    ifNull(if(valid_to <= ?, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))
+  ))
+FROM manual_attribution_fallbacks FINAL
+WHERE org_id = ?`)
 	if err != nil {
 		return workItemAttributionScopeDecision{}, err
 	}
@@ -565,6 +598,39 @@ func (executor *WorkItemAttributionExecutor) maxUpdatedAt(
 	var value *time.Time
 	if err := rows.Scan(&value); err != nil {
 		return time.Time{}, fmt.Errorf("scan max updated_at: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return time.Time{}, err
+	}
+	if value == nil {
+		return time.Time{}, nil
+	}
+	return *value, nil
+}
+
+// maxEffectiveChangedAt is maxUpdatedAt's bitemporal sibling: query must be
+// a single-row `SELECT max(greatest(updated_at, if(valid_from <= ?, ...),
+// ifNull(if(valid_to <= ?, ...))))` expression (two `?` placeholders for
+// asOf, matching workItemAttributionEffectiveChangeSignal's logic, then the
+// org_id `?`) -- used for a table whose facts are ALSO filtered by validity
+// window downstream (team_memberships, manual_attribution_fallbacks), so a
+// row whose effect changes without a fresh updated_at write (activation,
+// expiry) still registers here, the same way scopeChanges' repo/project
+// queries do.
+func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
+	ctx context.Context, asOf time.Time, orgID string, query string,
+) (time.Time, error) {
+	rows, err := executor.conn.Query(ctx, query, asOf, asOf, orgID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("query max effective changed_at: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return time.Time{}, rows.Err()
+	}
+	var value *time.Time
+	if err := rows.Scan(&value); err != nil {
+		return time.Time{}, fmt.Errorf("scan max effective changed_at: %w", err)
 	}
 	if err := rows.Err(); err != nil {
 		return time.Time{}, err

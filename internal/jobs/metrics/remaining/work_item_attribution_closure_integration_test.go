@@ -210,6 +210,154 @@ func TestWorkItemAttributionBelowThresholdClosureIsWritten(t *testing.T) {
 	}
 }
 
+// TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge is codex
+// round r2's P1 fix: a reverse-hop closure item (B, found because
+// B --relates_to--> A and A is affected) has its OWN outgoing edge (B->A),
+// which the FIRST loadDependencyEdges call in ComputeOrg never sees (that
+// call is scoped to the ORIGINAL affected set as source, before B is
+// known). Without reloading dependencies after the closure merge, B
+// resolves unassigned instead of inheriting A's team via linked_issue --
+// the below-threshold closure test above never caught this because its
+// fixture only exercised the FORWARD direction (A->C), where A's own edge
+// was already loaded before the closure decision.
+func TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+
+	orgID := "org-reverseclosure-" + uuid.NewString()
+	repoX := uuid.New()
+	now := time.Now().UTC()
+
+	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
+	seedWorkItemAttributionItem(t, ctx, conn, orgID, "B", uuid.Nil, now)
+	for i := 0; i < 18; i++ {
+		seedWorkItemAttributionItem(t, ctx, conn, orgID, fmt.Sprintf("filler-%d", i), uuid.Nil, now)
+	}
+	seedWorkItemAttributionRepoOwnership(t, ctx, conn, orgID, repoX, "team-infra", now)
+	// B -> A: B's donor is A (the affected item), the REVERSE hop.
+	seedWorkItemAttributionDependency(t, ctx, conn, orgID, "B", "A", "relates_to", now)
+
+	waitForWorkItemAttributionRepoFactVisible(t, ctx, conn, orgID)
+
+	outcome, err := executor.ComputeOrg(ctx, orgID)
+	if err != nil {
+		t.Fatalf("ComputeOrg: %v", err)
+	}
+	if outcome.OrgWide {
+		t.Fatalf("outcome.OrgWide = true, want a SCOPED run: closure {A,B} is 2/20 = 10%%, "+
+			"well under the 25%% bound (outcome=%+v)", outcome)
+	}
+
+	rows := queryWorkItemAttributionRows(t, ctx, conn, orgID)
+	var bTeam *string
+	var sawB bool
+	for _, row := range rows {
+		if row.workItemID == "B" {
+			sawB = true
+			bTeam = row.teamID
+		}
+	}
+	if !sawB {
+		t.Fatal("no attribution row for B, the reverse-hop closure member")
+	}
+	if bTeam == nil || *bTeam != "team-infra" {
+		t.Fatalf("B's attribution team_id = %v, want \"team-infra\" via linked_issue inheritance "+
+			"from A -- this is codex round r2's P1 finding: B's own B->A edge was never "+
+			"reloaded after the closure merge, so B resolved unassigned instead", bTeam)
+	}
+}
+
+// TestDetectScopeCatchesFutureTeamMembershipActivation is codex round r2's
+// P1 fix: detectScope's org-wide trigger for team_memberships used to
+// compare only updated_at, the same future-activation gap the repo/project
+// ownership queries were widened to close in round r1 -- left unfixed for
+// this table (and manual_attribution_fallbacks, see the sibling test
+// below) even though both are bitemporal and their facts are validity-
+// filtered downstream the same way ownership facts are.
+func TestDetectScopeCatchesFutureTeamMembershipActivation(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+
+	orgID := "org-futuremembership-" + uuid.NewString()
+	insertedAt := time.Now().UTC()
+	activatesAt := insertedAt.Add(3 * time.Second)
+	floorTime := insertedAt.Add(1500 * time.Millisecond)
+
+	seedWorkItemAttributionTeamMembershipWithValidity(
+		t, ctx, conn, orgID, "team-eng", "user-alice", insertedAt, activatesAt, nil)
+	// Simulate a prior completed ORG-WIDE run (membership changes are
+	// always org-wide, never scoped) that covered the org AFTER the row was
+	// inserted but BEFORE the membership actually took effect.
+	if err := writer.WriteAttributionRun(ctx, WorkItemAttributionRunRecord{
+		OrgID: orgID, RunID: "seed-run-floor", CompletedAt: floorTime,
+	}); err != nil {
+		t.Fatalf("seed org-wide run marker: %v", err)
+	}
+
+	scope := waitForWorkItemAttributionScope(t, ctx, executor, orgID, activatesAt.Add(1500*time.Millisecond),
+		func(s workItemAttributionScopeDecision) bool { return s.orgWide })
+	if !scope.orgWide {
+		t.Fatalf("scope after team_memberships' valid_from passed = %+v, want org-wide -- "+
+			"a provider-membership row's own future valid_from crossing into effect never "+
+			"re-triggers a rederive on updated_at alone", scope)
+	}
+}
+
+// TestDetectScopeCatchesExpiringManualFallback mirrors the membership test
+// above for manual_attribution_fallbacks' valid_to (expiry) instead of
+// team_memberships' valid_from (activation) -- codex round r2 named both
+// directions on both tables as the same failure class.
+func TestDetectScopeCatchesExpiringManualFallback(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+
+	orgID := "org-expiringfallback-" + uuid.NewString()
+	insertedAt := time.Now().UTC()
+	expiresAt := insertedAt.Add(3 * time.Second)
+	floorTime := insertedAt.Add(1500 * time.Millisecond)
+
+	seedWorkItemAttributionManualFallbackWithValidity(
+		t, ctx, conn, orgID, "team-eng", insertedAt, insertedAt, &expiresAt)
+	if err := writer.WriteAttributionRun(ctx, WorkItemAttributionRunRecord{
+		OrgID: orgID, RunID: "seed-run-floor", CompletedAt: floorTime,
+	}); err != nil {
+		t.Fatalf("seed org-wide run marker: %v", err)
+	}
+
+	scope := waitForWorkItemAttributionScope(t, ctx, executor, orgID, expiresAt.Add(1500*time.Millisecond),
+		func(s workItemAttributionScopeDecision) bool { return s.orgWide })
+	if !scope.orgWide {
+		t.Fatalf("scope after manual_attribution_fallbacks' valid_to passed = %+v, want "+
+			"org-wide -- an expired manual fallback's own valid_to crossing into the past "+
+			"never re-triggers a rederive on updated_at alone", scope)
+	}
+}
+
 // TestDetectScopeCatchesProjectIDOnlyOwnership is codex round r1's P1 fix,
 // proven live: a team_project_ownership row with a project_id but no
 // project_key used to be entirely invisible to detectScope (it only
@@ -475,6 +623,14 @@ func seedWorkItemAttributionTeamMembership(
 	orgID, teamID, memberID string, now time.Time,
 ) {
 	t.Helper()
+	seedWorkItemAttributionTeamMembershipWithValidity(t, ctx, conn, orgID, teamID, memberID, now, now, nil)
+}
+
+func seedWorkItemAttributionTeamMembershipWithValidity(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID, teamID, memberID string, updatedAt, validFrom time.Time, validTo *time.Time,
+) {
+	t.Helper()
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO team_memberships (
 		org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, source,
 		is_primary, specificity, priority, valid_from, valid_to, updated_at
@@ -484,7 +640,7 @@ func seedWorkItemAttributionTeamMembership(
 	}
 	if err := batch.Append(
 		orgID, "github", teamID, memberID, memberID, nil, "native",
-		uint8(1), uint16(100), int32(0), now, nil, now,
+		uint8(1), uint16(100), int32(0), validFrom, validTo, updatedAt,
 	); err != nil {
 		t.Fatalf("append team_memberships row: %v", err)
 	}
@@ -498,6 +654,14 @@ func seedWorkItemAttributionManualFallback(
 	orgID, teamID string, now time.Time,
 ) {
 	t.Helper()
+	seedWorkItemAttributionManualFallbackWithValidity(t, ctx, conn, orgID, teamID, now, now, nil)
+}
+
+func seedWorkItemAttributionManualFallbackWithValidity(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID, teamID string, updatedAt, validFrom time.Time, validTo *time.Time,
+) {
+	t.Helper()
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO manual_attribution_fallbacks (
 		org_id, provider, scope_type, scope_id, team_id, team_name, reason,
 		priority, valid_from, valid_to, updated_at
@@ -507,7 +671,7 @@ func seedWorkItemAttributionManualFallback(
 	}
 	if err := batch.Append(
 		orgID, "github", "org", orgID, teamID, teamID, "test fallback",
-		int32(100), now, nil, now,
+		int32(100), validFrom, validTo, updatedAt,
 	); err != nil {
 		t.Fatalf("append manual_attribution_fallbacks row: %v", err)
 	}

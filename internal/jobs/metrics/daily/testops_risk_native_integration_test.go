@@ -180,6 +180,32 @@ INSERT INTO coverage_snapshots (repo_id, run_id, snapshot_id, lines_total, lines
 		t.Fatal(err)
 	}
 
+	// PRECONDITION: the contested pair must actually EXIST before the executor
+	// reads. Asserted, not inferred from "two inserts happened".
+	//
+	// Without this the fixture can degenerate into its own adjacent case and
+	// still pass, for the adjacent case's reasons: if the superseded row ever
+	// stops landing as a distinct row, "a duplicate proves dedup is load-bearing"
+	// silently becomes "one row proves nothing", the confidence assertion below
+	// goes on passing, and nothing in the output says which case ran. That is
+	// precisely the CHAOS-4943 defect this fixture exists to fix, reappearing
+	// inside the fix.
+	//
+	// Deliberately WITHOUT FINAL -- this counts physical rows, which is the thing
+	// in question. A count with FINAL would collapse them and always read 1.
+	var contested uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM test_suite_results
+WHERE org_id = ? AND repo_id = toUUID(?) AND run_id = 'run-1' AND suite_id = 'suite-1'`,
+		orgID, repoID,
+	).Scan(&contested); err != nil {
+		t.Fatalf("count the contested test_suite_results rows: %v", err)
+	}
+	if contested != 2 {
+		t.Fatalf("contested row count = %d, want 2: the superseded row did not land, so this "+
+			"fixture cannot tell a deduplicating read from a non-deduplicating one", contested)
+	}
+
 	executor, err := NewTestopsRiskExecutor(conn)
 	if err != nil {
 		t.Fatal(err)

@@ -378,8 +378,17 @@ func assertPartitionReachesPastTheClock(t *testing.T, run func() error) {
 		t.Fatalf("a CONSTRUCTED executor refused its own clock: %v", err)
 	}
 	if !errors.Is(err, errStubExhausted) {
-		t.Fatalf("expected the run to reach the stub's first unanswered query, "+
-			"got %v -- if this is nil the partition somehow completed, and the "+
-			"test is no longer proving the clock was reached", err)
+		// TWO CAUSES, AND THIS NAMES BOTH. The likelier one a year from now is
+		// NOT a broken clock guard: it is an unrelated edit making
+		// ComputePartition return before it reaches any query. Naming only the
+		// clock would send that reader hunting a problem that is not there,
+		// and as a Fatalf this is the last line they see. (3092's degeneration
+		// guard had the same shape and the same fix -- widen the message, keep
+		// the positive assertion.)
+		t.Fatalf("the run stopped before the stub's first unanswered query "+
+			"(got %v). EITHER an unrelated change made ComputePartition return "+
+			"early -- likelier, and not a clock problem -- OR the clock guard "+
+			"broke. If this is nil the partition somehow completed, and the "+
+			"test is no longer proving the clock was reached at all", err)
 	}
 }

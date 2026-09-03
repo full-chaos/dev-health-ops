@@ -650,6 +650,12 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 	// deterministic round-robin every spelling appears a similar number of
 	// times, so a spelling falling far below its peers means the enumeration
 	// stopped being exhaustive.
+	// THE DISCRIMINATING POPULATION IS EXACTLY {keyſ, uſe} AND CANNOT GROW.
+	// U+212A KELVIN SIGN never contributes one, because a spelling carrying it
+	// is not lowercase and is therefore matched by the ASCII-case predicate too.
+	// That is a permanent property of the fold relation, not a coverage gap, and
+	// the two are easy to confuse: a reader seeing "floor over the discriminating
+	// subset" will assume it ranges over the fold alphabet, and it cannot.
 	// THE EXPECTATION IS DERIVED INDEPENDENTLY OF THE GENERATOR'S HELPER.
 	//
 	// The first version built this list by calling lowercaseFoldVariantsOf --

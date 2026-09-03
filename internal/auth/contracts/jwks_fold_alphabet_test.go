@@ -141,6 +141,14 @@ func nonASCIIFoldsOf(name string) []rune {
 	return out
 }
 
+// THE DISCRIMINATING POPULATION IS EXACTLY {keyſ, uſe} AND CANNOT GROW.
+// U+212A KELVIN SIGN never contributes one -- a spelling carrying it is not
+// lowercase, so the ASCII-case predicate matches it too and it discriminates
+// nothing. That is why the two floors below range over DIFFERENT sets: the
+// code-point floor covers every non-ASCII fold, and the discriminating floor
+// covers only the subset that can exist. Collapsing them into one range would
+// demand of Kelvin something the fold relation makes impossible, and the
+// assertion would fail permanently for a reason that is not a defect.
 // discriminatingFoldsOf returns spellings of name that are ENTIRELY LOWERCASE
 // and still fold to it.
 //

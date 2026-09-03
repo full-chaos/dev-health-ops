@@ -210,8 +210,45 @@ permissions:
   packages: read
 
 jobs:
-  go-arm64-numeric-parity:
-    runs-on: ubuntu-26.04-arm
+  # Self-hosted-runner fallback, phase 1 (chris 09-02: "we need a fallback to
+  # the github runners when ours take too long, it can't be all or nothing").
+  # Scoped to go-arm64-numeric-parity only for this PR -- it is the one job in
+  # this file with zero image risk on the arm64 oci-arc-runners pool, since
+  # BOTH legs below already run on real arm64 (ubuntu-26.04-arm today, the
+  # self-hosted pool tomorrow); nothing about correctness changes with the
+  # runner, only wall-clock. go-storage-integration-shard is NOT included yet:
+  # its pinned PostgresImage (internal/testsupport/containers/harness.go) has
+  # no arm64 manifest in the ghcr.io/full-chaos mirror today (confirmed via
+  # `docker buildx imagetools inspect`, index digest), so routing it to
+  # oci-arc-runners would fail the pull outright, not just run slow -- that is
+  # a mirror-workflow gap to close separately, not a fallback-logic problem.
+  #
+  # `pick-runner` gates everything behind a repository-variable kill switch,
+  # defaulting OFF (`vars.SELF_HOSTED_RUNNERS` unset or anything other than
+  # 'enabled'): when off, this job is skipped entirely and downstream `needs`
+  # resolve to `success()` regardless (a skipped dependency does not fail
+  # `success()`), so the fallback-only leg below runs exactly as this job
+  # always has. Fork PRs are excluded even when the switch is on, matching
+  # PR #1432's precedent -- `secrets.*`/self-hosted access should not be
+  # reachable from an untrusted fork's workflow run.
+  pick-runner:
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      try_self_hosted: ${{ steps.decide.outputs.try_self_hosted }}
+    steps:
+      - id: decide
+        run: echo "try_self_hosted=true" >> "${GITHUB_OUTPUT}"
+
+  # Attempt leg: real work on the self-hosted arm64 pool. Only exists when
+  # pick-runner actually ran and said yes -- if the switch is off or this is
+  # a fork PR, this job is skipped (not failed), which is what lets the
+  # fallback leg below run unconditionally as the sole leg in that case.
+  go-arm64-numeric-parity-self-hosted:
+    needs: pick-runner
+    if: needs.pick-runner.outputs.try_self_hosted == 'true'
+    runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -223,6 +260,153 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+
+      - name: Run FMA bit-pattern goldens on real arm64
+        run: |
+          set -euo pipefail
+          go test -mod=readonly -count=1 -json ./internal/jobs/... \
+            -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
+            | tee go-test-output.json
+          ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
+          echo "tests actually run: ${ran}"
+          if [ "${ran}" -eq 0 ]; then
+            echo "0 tests matched the -run pattern -- this job would prove NOTHING and stay green even if every named test were renamed or deleted. Failing loud rather than reporting a silent pass." >&2
+            exit 1
+          fi
+
+  # Fallback leg: GitHub-hosted arm64, always defined, and the SOLE source of
+  # truth for the required check below (see that job's own comment for why).
+  # When the self-hosted attempt is not running at all (switch off, fork PR),
+  # this leg does the real work unconditionally -- byte-for-byte the job that
+  # lived here before this PR. When the attempt IS running, this leg polls
+  # the run's own job list (documented API, not a guess) in two phases:
+  #
+  #   Phase 1 (queue bound): wait up to QUEUE_TIMEOUT_MINUTES for the attempt
+  #   to leave `queued`. `timeout-minutes` on the self-hosted job cannot
+  #   protect against a hang here because GitHub only starts that clock once
+  #   a job is picked up, never while queued -- a self-hosted pool that never
+  #   schedules the job would otherwise queue for GitHub's own documented
+  #   self-hosted backstop of 24h ("A job can be in the queue for 24 hours
+  #   before it is automatically cancelled"), far too long to be a usable
+  #   fallback. This phase is the actual hang guard: a fixed, finite loop on
+  #   GitHub-hosted infrastructure that does not depend on the self-hosted
+  #   pool being healthy at all. If the attempt is still queued when this
+  #   phase times out, this leg claims the work itself.
+  #
+  #   Phase 2 (result bound, only entered if phase 1 saw the attempt leave
+  #   the queue): a start is not a pass -- reporting success as soon as the
+  #   attempt is merely `in_progress` would greenlight this check before its
+  #   test even ran. So this phase polls further, up to ATTEMPT_TIMEOUT_MINUTES
+  #   (kept in sync with the self-hosted job's own `timeout-minutes` above;
+  #   duplicated because workflow YAML has no cross-job expression for it)
+  #   plus a reporting-lag buffer, for the attempt to reach `completed`, then
+  #   propagates its actual conclusion as this leg's own result.
+  #
+  # Trade-off, documented rather than hidden: if both legs are near the
+  # phase-1 boundary at once, both may execute the real work (double
+  # compute, rare) -- accepted in exchange for a provable bound instead of
+  # relying on GitHub Actions' concurrency-group semantics to cancel a
+  # sibling job in the same run, which is not a documented guarantee for
+  # that case, and instead of a per-job cancel API, which does not exist
+  # (confirmed against the REST "workflow jobs" reference: get-job and
+  # list-jobs-for-a-run are read-only; only a whole-RUN cancel exists).
+  go-arm64-numeric-parity-fallback:
+    needs: pick-runner
+    if: always()
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Determine the self-hosted attempt's outcome, or that it never left the queue
+        id: wait
+        if: needs.pick-runner.outputs.try_self_hosted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_TIMEOUT_MINUTES: 5
+          ATTEMPT_TIMEOUT_MINUTES: 10
+        run: |
+          set -euo pipefail
+          job_status() {
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate \
+              --jq '[.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")][0] | "\(.status) \(.conclusion // "null")"'
+          }
+
+          deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
+          left_queue="false"
+          status="queued"
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            if [ "${status}" != "queued" ]; then
+              left_queue="true"
+              break
+            fi
+            sleep 15
+          done
+
+          if [ "${left_queue}" != "true" ]; then
+            echo "self-hosted attempt still queued after ${QUEUE_TIMEOUT_MINUTES}m -- claiming the work here"
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            if [ "${status}" = "completed" ]; then
+              echo "self-hosted attempt completed with conclusion: ${conclusion}"
+              if [ "${conclusion}" = "success" ]; then
+                echo "outcome=claimed-success" >> "${GITHUB_OUTPUT}"
+              else
+                echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+              fi
+              exit 0
+            fi
+            sleep 15
+          done
+
+          echo "self-hosted attempt left the queue but never reached a terminal state within $((ATTEMPT_TIMEOUT_MINUTES + 3))m -- its own timeout-minutes should have ended it by now; treating this as a failure rather than reporting a silent pass" >&2
+          echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+
+      - name: Determine whether this leg owns the real work
+        id: own
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.pick-runner.outputs.try_self_hosted }}" != "true" ] || [ "${{ steps.wait.outputs.outcome }}" = "unclaimed" ]; then
+            echo "run_here=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run_here=false" >> "${GITHUB_OUTPUT}"
+            echo "self-hosted attempt already reached a terminal state (${{ steps.wait.outputs.outcome }}); skipping the fallback's own real-work steps"
+          fi
+
+      - name: Fail this leg if the self-hosted attempt itself failed
+        # The attempt's failure/timeout must become THIS leg's failure too,
+        # since the required check below trusts only this job's result.
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "self-hosted attempt (go-arm64-numeric-parity-self-hosted) did not succeed; failing this leg so the required check reflects it" >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.own.outputs.run_here == 'true'
+
+      - name: Set up Go
+        if: steps.own.outputs.run_here == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Confirm this runner is actually arm64
+        if: steps.own.outputs.run_here == 'true'
         # A mislabeled or reassigned runner would make this job's absence of
         # findings mean nothing -- fail loud rather than silently validate
         # the wrong architecture (same principle as ci/check_go.sh's stage
@@ -236,6 +420,7 @@ jobs:
           fi
 
       - name: Run FMA bit-pattern goldens on real arm64
+        if: steps.own.outputs.run_here == 'true'
         # team-lead ruling (CHAOS-4818): `go test -run <pattern>` exits 0
         # when the pattern matches ZERO tests -- correct Go semantics, but
         # if a future rename ever empties this job's -run pattern (a test
@@ -261,6 +446,47 @@ jobs:
             echo "0 tests matched the -run pattern -- this job would prove NOTHING and stay green even if every named test were renamed or deleted. Failing loud rather than reporting a silent pass." >&2
             exit 1
           fi
+
+  # Preserves the original job NAME as a stable status-check target (in case
+  # anything -- branch protection, another workflow's `needs:` -- ever comes
+  # to depend on it by name), same aggregator shape as go-storage-integration
+  # below -- but with a deliberate difference from that pattern: this
+  # `needs:` ONLY the fallback leg, never the self-hosted attempt directly.
+  #
+  # Reason (team-lead review, 09-02): the self-hosted attempt can end up
+  # permanently `queued` (pool down, or already at its max(2) capacity with
+  # no autoscale headroom) with no terminal state of its own until GitHub's
+  # 24h self-hosted queue backstop eventually cancels it. A job that never
+  # reaches success/failure/skipped/cancelled never satisfies another job's
+  # `needs:` -- an aggregator that `needs` it directly would sit "in
+  # progress" for up to 24h instead of resolving in minutes, defeating the
+  # entire point of a fast fallback. The fallback leg above is built to be
+  # the sole source of truth instead: it either does the real work itself,
+  # or polls the attempt through to an actual terminal conclusion and
+  # propagates it as its own success/failure. Accepted trade-off: in the
+  # pool-down/at-capacity case, the self-hosted attempt job is left dangling
+  # in `queued` in the run's job list even after this required check has
+  # gone green -- harmless (bounded by the 24h backstop) but visually odd;
+  # documented here rather than papered over.
+  go-arm64-numeric-parity:
+    name: go-arm64-numeric-parity
+    if: always()
+    needs:
+      - go-arm64-numeric-parity-fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FALLBACK_RESULT: ${{ needs.go-arm64-numeric-parity-fallback.result }}
+    steps:
+      - name: Require the fallback leg to have succeeded
+        run: |
+          set -euo pipefail
+          if [ "${FALLBACK_RESULT}" = "success" ]; then
+            echo "arm64 numeric parity passed (fallback leg result: ${FALLBACK_RESULT})"
+            exit 0
+          fi
+          echo "fallback leg result: ${FALLBACK_RESULT}" >&2
+          exit 1
 
   go-storage-integration-plan:
     runs-on: ubuntu-latest

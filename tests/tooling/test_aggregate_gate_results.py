@@ -1300,6 +1300,29 @@ TYPECHECK_RELEVANCE_SCRIPT = ROOT / "ci" / "typecheck_relevance.py"
             True,
             id="newline-in-a-non-final-path-segment",
         ),
+        # Round 5's own least-sure line named these two boundary shapes as
+        # manually verified but not yet promoted to permanent coverage --
+        # promoted here per team-lead's instruction so the check survives a
+        # future refactor of the DOTALL fix, not just this round's memory of
+        # having tried it once. A newline sitting DIRECTLY against a `/`
+        # (nothing but the newline between the last directory separator and
+        # the next one) exercises `(?:.*/)?`'s own backtracking boundary
+        # under DOTALL, distinct from a newline with ordinary characters on
+        # both sides (the existing case above).
+        pytest.param(
+            ["src/\n/module.py"],
+            True,
+            id="newline-immediately-adjacent-to-a-slash-boundary",
+        ),
+        # Two newlines in two DIFFERENT non-final segments -- the existing
+        # case only proves DOTALL fixes ONE occurrence; `.*`'s greedy match
+        # under DOTALL still has to cross both without an off-by-one that
+        # only shows up once there is more than one crossing to get wrong.
+        pytest.param(
+            ["src/a\nb\nc/module.py"],
+            True,
+            id="two-embedded-newlines-in-non-final-segments",
+        ),
     ],
 )
 def test_typecheck_relevance_script_behaviour(

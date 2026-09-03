@@ -121,7 +121,21 @@ func interpreterOf(document []byte, label string) (string, error) {
 		parsed.Environment.PythonVersion, parsed.Environment.FloatReprStyle), nil
 }
 
-func comparePayload(frozen, rendered []byte, fields ...string) error {
+// comparePayload takes the registry ENTRY, not a name and a list of fields.
+//
+// It used to be `(frozen, rendered []byte, fields ...string)`. codex round 1 on
+// CHAOS-4914 showed why that was not enough: the AST guard below only rejected
+// a direct string LITERAL, so a call site could hold the same literal in a
+// variable and bypass it. The round proved it was not theoretical -- it mutated
+// a guard to compare an indirect "cases", DROPPING distinct_input_values, and
+// every check stayed green.
+//
+// Taking the entry removes the argument that could carry a name at all. A guard
+// cannot express "compare these fields" any more; it can only name which
+// registry entry it is. That is a constraint on the SHAPE of the call rather
+// than a search for one bad shape inside it.
+func comparePayload(frozen, rendered []byte, guard payloadGuard) error {
+	fields := guard.fields
 	var frozenDoc, renderedDoc map[string]json.RawMessage
 	if err := json.Unmarshal(frozen, &frozenDoc); err != nil {
 		return fmt.Errorf("parse frozen document: %w", err)

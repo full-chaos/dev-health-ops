@@ -163,10 +163,12 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
 # list had to be extended by hand for every new ignored directory, and it had
 # already fallen behind: `.uv-cache`, which ci/run_tests.sh creates at the repo
 # root, was NOT in it. That cache holds third-party `testdata/` and `fixtures/`
-# directories -- 11 non-Go files when measured (sqlalchemy fixtures, protobuf
-# testdata) -- every one of which the coverage oracle would have collected as a
-# REPO fixture demanding workflow path coverage, and then failed for not finding
-# it named in any workflow.
+# directories. On the machine where this was measured that was 11 non-Go files
+# (sqlalchemy fixtures, protobuf testdata), and the coverage oracle collected
+# every one as a REPO fixture and then failed for not finding it named in any
+# workflow. The COUNT is machine state, not a property of this repository -- a
+# fresh checkout has no cache and reproduces nothing -- so treat it as evidence
+# the mechanism fires, not as a number to re-verify.
 #
 # Tracking is also the correct domain rather than merely a convenient filter: CI
 # path filters match paths in a COMMIT, so an untracked file cannot be the reason
@@ -176,32 +178,73 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
 @lru_cache(maxsize=8)
 def _tracked_paths(anchor: Path) -> tuple[Path, ...]:
     """Absolute paths of every file git tracks under *anchor*."""
-    completed = subprocess.run(
-        ["git", "-C", str(anchor), "ls-files", "-z"],
+    # The fallback is keyed on "is this anchor inside a git repository", NOT on
+    # git having exited non-zero.
+    #
+    # lane-ci-flakes' caveat: if TMPDIR ever landed inside a git worktree -- some
+    # CI setups put it in the workspace -- a synthetic tmp_path tree would be
+    # INSIDE a repo, `ls-files` would succeed and return nothing for it, and the
+    # non-empty assertion below would fire. That failure would surface in
+    # whoever's PR happened to be running and look like a defect in their change.
+    # A guard that misfires into a stranger's diff is worse than one that misses.
+    #
+    # Asking the real question -- is there a repository here -- separates "not a
+    # repo, walk it" from "a repo that legitimately has no tracked files under
+    # this anchor" from "git is broken", which an exit code alone conflates.
+    inside_repo = subprocess.run(
+        ["git", "-C", str(anchor), "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
         check=False,
     )
-    if completed.returncode != 0:
+    if inside_repo.returncode != 0 or inside_repo.stdout.strip() != b"true":
         # Not a git repository. This file's own tests build synthetic trees
         # under pytest's tmp_path to exercise the resolver, and those are not
         # repos. Walking them is correct there -- a temp tree has no ignored
         # directories to exclude -- but this branch must NEVER apply to the real
         # tree, where the whole point is that git decides what is excluded.
-        assert anchor != REPO_ROOT, (
-            f"git ls-files failed inside the repo root ({anchor}): "
-            f"{completed.stderr.decode()[:200]}. Refusing to fall back to a "
-            "filesystem walk here, because that silently reinstates the "
+        # Resolved comparison, not a lexical one. codex round 1 showed the
+        # lexical version was defeatable: a same-tree alias containing `..`
+        # compares unequal to REPO_ROOT, and with a poisoned GIT_DIR the
+        # fallback then walked the real tree and collected an ignored
+        # .uv-cache fixture. Present callers all pass REPO_ROOT exactly, so
+        # that was not a live omission -- but the guard claimed more than it
+        # enforced, which is the failure this file exists to catch.
+        assert anchor.resolve() != REPO_ROOT.resolve(), (
+            f"no git work tree at the repo root ({anchor}): "
+            f"{inside_repo.stderr.decode()[:200]}. Refusing to fall back to a "
+            "filesystem walk for the real tree, because that reinstates the "
             "hardcoded-exclusion bug this helper exists to remove"
         )
         return tuple(path for path in anchor.rglob("*") if path.is_file())
-    names = [name for name in completed.stdout.decode().split("\0") if name]
-    # A walk that finds nothing reports exactly what a clean tree reports. If
-    # git ever returns an empty list here -- wrong directory, not a repo, a
-    # future flag change -- every oracle below would pass by examining nothing.
-    assert names, (
-        f"git ls-files found no tracked files under {anchor}; every check in "
-        "this file would pass vacuously, so this fails loudly instead"
+
+    completed = subprocess.run(
+        ["git", "-C", str(anchor), "ls-files", "-z"],
+        capture_output=True,
+        check=True,
     )
+    names = [name for name in completed.stdout.decode().split("\0") if name]
+
+    # EMPTY MEANS DIFFERENT THINGS DEPENDING ON THE ANCHOR, and conflating them
+    # is what lane-ci-flakes' caveat was really about.
+    #
+    # For REPO_ROOT, empty is impossible in a working checkout: a walk that finds
+    # nothing reports exactly what a clean tree reports, so every oracle below
+    # would pass by examining nothing. That must fail loudly.
+    #
+    # For any OTHER anchor, empty is ordinary -- a directory inside the repo with
+    # nothing tracked under it, which is exactly what this file's own synthetic
+    # tmp_path trees look like if TMPDIR happens to sit inside a worktree. My
+    # first attempt keyed the fallback on "is this inside a repo" and STILL
+    # asserted here, so that case kept firing; I only found it by building the
+    # scenario rather than reasoning about the fix. Walking is correct there.
+    if not names:
+        if anchor.resolve() == REPO_ROOT.resolve():
+            raise AssertionError(
+                f"git ls-files found no tracked files under the repo root "
+                f"({anchor}); every check in this file would pass vacuously, so "
+                "this fails loudly instead"
+            )
+        return tuple(path for path in anchor.rglob("*") if path.is_file())
     return tuple(anchor / name for name in names)
 
 
@@ -1157,4 +1200,41 @@ def test_a_gitignored_directory_is_not_collected_as_a_repo_fixture() -> None:
         probe_root.parent.rmdir()
         if not already_existed:
             created_marker.rmdir()
+        _tracked_paths.cache_clear()
+
+
+def test_an_empty_tracked_list_for_the_repo_root_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The vacuous-pass guard must still fire where it matters.
+
+    `_tracked_paths` returns a filesystem walk when an anchor inside the repo has
+    nothing tracked under it -- that is ordinary, and asserting there made this
+    file's own synthetic trees fail whenever TMPDIR sat inside a worktree.
+
+    But for REPO_ROOT an empty list is impossible in a working checkout, and
+    silently walking instead would restore exactly the bug this helper removed:
+    every oracle in this file would then examine an unfiltered tree, or nothing,
+    and pass either way.
+
+    Softening a guard is where guards die, so this asserts the surviving half
+    still bites rather than trusting that it does.
+    """
+
+    def no_tracked_files(
+        args: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        if "rev-parse" in args:
+            return subprocess.CompletedProcess(args, 0, b"true\n", b"")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    _tracked_paths.cache_clear()
+    monkeypatch.setattr(subprocess, "run", no_tracked_files)
+    try:
+        with pytest.raises(
+            AssertionError, match="no tracked files under the repo root"
+        ):
+            _tracked_paths(REPO_ROOT)
+    finally:
+        monkeypatch.undo()
         _tracked_paths.cache_clear()

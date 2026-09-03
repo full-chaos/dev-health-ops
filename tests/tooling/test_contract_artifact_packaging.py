@@ -190,8 +190,15 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
     probe_environment["PYTHONPATH"] = os.pathsep.join(
         [str(ROOT / "src"), os.environ.get("PYTHONPATH", "")]
     ).rstrip(os.pathsep)
+    # `-P` (CPython 3.11+) removes the script-directory/cwd entry from sys.path,
+    # so NOTHING precedes PYTHONPATH. Without it the probe runs with cwd=ROOT and
+    # Python's own cwd entry wins, which is how codex round 1 got a root-level
+    # shadow `dev_health_ops/` package to satisfy the origin assertion while
+    # ROOT/src was never exercised. The assertion below still checks the origin;
+    # this closes the same hole by SHAPE so the assertion is a second line rather
+    # than the only one.
     completed = subprocess.run(
-        [sys.executable, "-c", probe],
+        [sys.executable, "-P", "-c", probe],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -213,10 +220,23 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
     assert len(imported) == 1, (
         f"probe did not report which checkout it imported: {completed.stdout!r}"
     )
-    assert Path(imported[0]).is_relative_to(ROOT), (
-        f"the probe imported dev_health_ops from {imported[0]}, which is OUTSIDE "
-        f"this checkout ({ROOT}). An editable install pointed it at another tree, "
-        "so this test would have asserted against code the branch never changed."
+    # ROOT/src SPECIFICALLY, not merely somewhere under ROOT.
+    #
+    # codex round 1 on CHAOS-4914 broke the weaker version: the probe runs with
+    # cwd=ROOT, and Python puts the script's directory ('' for -c) AHEAD of
+    # PYTHONPATH, so a root-level `dev_health_ops/` package shadows src/ and
+    # wins the import. Its origin is under ROOT, so `is_relative_to(ROOT)`
+    # passed, both data-path assertions passed, and NONE of ROOT/src was
+    # exercised. PYTHONPATH beats an editable .pth, which is what this pin was
+    # for -- but the interpreter's own cwd entry beats PYTHONPATH, and I had
+    # only checked the half I was fixing.
+    expected_origin = ROOT / "src" / "dev_health_ops" / "__init__.py"
+    assert Path(imported[0]) == expected_origin, (
+        f"the probe imported dev_health_ops from {imported[0]}, not from "
+        f"{expected_origin}. Either an editable install pointed it at another "
+        "tree, or a package earlier on sys.path (the cwd entry shadows "
+        "PYTHONPATH) won the import -- either way this test would assert "
+        "against code the branch never changed."
     )
 
     printed = [line for line in completed.stdout.splitlines() if line.startswith("/")]

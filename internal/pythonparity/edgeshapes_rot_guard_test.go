@@ -67,7 +67,7 @@ func TestEdgeShapesGoldenMatchesLivePython(t *testing.T) {
 	// `environment` record an interpreter that drifts without anyone deciding
 	// anything, and freezing that inside the comparison already produced one
 	// false "has ROTTED" pointing at loader.py. See comparePayload.
-	if err := comparePayload(frozen, rendered, edgeShapesGuard.fields...); err == nil {
+	if err := comparePayload(frozen, rendered, edgeShapesGuard); err == nil {
 		if writeErr := os.WriteFile(
 			filepath.Join(proofDirectory, "evidence-json-edge-shapes-golden"),
 			[]byte("executed"), 0o644,

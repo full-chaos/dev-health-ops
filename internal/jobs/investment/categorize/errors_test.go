@@ -25,6 +25,9 @@ func TestSanitizeMessageRedactsCredentials(t *testing.T) {
 		// codex round 2 (#2178, bigboy) P1: no punctuation at all between the
 		// label and the value -- the round's own repro body.
 		{"api key with no punctuation", "http 403: api key review-secret-123", "review-secret-123"},
+		// codex round 3 (#2178, bigboy) P1: "client_secret" (an OAuth2
+		// parameter name) was not in the label word list at all.
+		{"client_secret field", "http 403: client_secret=third-shape-secret", "third-shape-secret"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

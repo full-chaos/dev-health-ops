@@ -58,6 +58,7 @@ func NewLocalProvider(cfg LocalProviderConfig) *LocalProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultLocalBaseURL
 	}
+	cfg.BaseURL = trimBaseURL(cfg.BaseURL)
 	if cfg.Model == "" {
 		cfg.Model = defaultLocalModel
 	}

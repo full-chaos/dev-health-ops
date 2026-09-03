@@ -1,6 +1,7 @@
 package categorize
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -69,7 +70,12 @@ var secretPatterns = []*regexp.Regexp{
 	// "api key <secret>" -- whitespace only, no punctuation -- still
 	// passed through. Widened the separator to "any run of
 	// whitespace/`:`/`=`" so a bare space alone is sufficient.
-	regexp.MustCompile(`(?i)((?:api[\s_-]*key|authorization|x-api-key|token)[\s:=]+)['"]?[^'"\s,;}]+`),
+	// codex round 3 (#2178, bigboy) P1: "client_secret" (an OAuth2
+	// parameter name, distinct from "api_key"/"token") was not in the
+	// label word list at all, so `client_secret=<secret>` reached the
+	// generic fallback unredacted regardless of separator width. Added as
+	// its own label alternative.
+	regexp.MustCompile(`(?i)((?:api[\s_-]*key|client[\s_-]*secret|authorization|x-api-key|token)[\s:=]+)['"]?[^'"\s,;}]+`),
 }
 
 // sanitizeMessage ports errors.py's _sanitize_message: strip newlines,
@@ -175,6 +181,22 @@ func classifyProviderError(err error, statusCode int, header http.Header, provid
 
 	base := func(kind llmErrorKind, message string) *llmError {
 		return &llmError{kind: kind, message: message, provider: provider, model: model, cause: err}
+	}
+
+	// codex round 3 (#2178, bigboy) P2: substring-matching a fixed word
+	// list ("connection refused", "dns error", ...) missed Go's own
+	// ordinary DNS failure text ("no such host"), so a transient DNS
+	// blip was classified generic (non-retryable) instead of transient.
+	// httpTransportError is ONLY ever constructed when the HTTP client's
+	// own Do() call failed outright -- no response was received at all --
+	// which structurally IS a transport failure regardless of the
+	// underlying OS/network error's exact wording. Checking the TYPE
+	// covers every such failure shape (DNS, TLS, connection refused,
+	// anything else net/http can return) in one place, instead of
+	// growing an ever-incomplete substring list.
+	var transportErr *httpTransportError
+	if errors.As(err, &transportErr) {
+		return base(llmErrorTransport, "LLM provider endpoint could not be reached.")
 	}
 
 	switch {

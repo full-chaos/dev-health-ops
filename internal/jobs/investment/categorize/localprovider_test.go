@@ -3,8 +3,10 @@ package categorize
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -167,5 +169,37 @@ func TestLocalProviderDoesNotRetryNonRetryableAfter400Exhausted(t *testing.T) {
 	}
 	if *calls != localMaxRetries+1 {
 		t.Fatalf("calls = %d, want %d", *calls, localMaxRetries+1)
+	}
+}
+
+type localPathCapturingRoundTripper struct{ path string }
+
+func (rt *localPathCapturingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	rt.path = request.URL.Path
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(
+			`{"choices":[{"message":{"role":"assistant","content":"{\"ok\":true}"}}]}`,
+		)),
+	}, nil
+}
+
+func TestLocalProviderTrimsTrailingSlashFromBaseURL(t *testing.T) {
+	// codex round 3 (#2178, bigboy) P2: the same trailing-slash defect as
+	// OpenAIProvider, for the Chat Completions route.
+	transport := &localPathCapturingRoundTripper{}
+	provider := NewLocalProvider(LocalProviderConfig{
+		BaseURL:    "http://127.0.0.1:1234/v1/",
+		Model:      "gemma3",
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	t.Cleanup(func() { provider.Close() })
+
+	if _, err := provider.Complete(context.Background(), "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if transport.path != "/v1/chat/completions" {
+		t.Errorf("request path = %q, want \"/v1/chat/completions\" (no double slash)", transport.path)
 	}
 }

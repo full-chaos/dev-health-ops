@@ -2,6 +2,7 @@ package categorize
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -25,4 +26,15 @@ func newHardenedHTTPClient() *http.Client {
 			Proxy: nil,
 		},
 	}
+}
+
+// trimBaseURL strips ANY number of trailing slashes from a configured base
+// URL, since every call site appends its own leading-slash path segment
+// ("/responses", "/chat/completions"). codex round 3 (#2178, bigboy) P2:
+// an unnormalized `BaseURL=https://gateway.example/v1/` produced
+// `/v1//responses` -- a double slash a strict router can reject -- because
+// nothing ever trimmed the operator-configured trailing slash before
+// concatenation.
+func trimBaseURL(baseURL string) string {
+	return strings.TrimRight(baseURL, "/")
 }

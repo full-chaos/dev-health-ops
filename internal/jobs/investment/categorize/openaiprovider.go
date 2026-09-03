@@ -55,6 +55,7 @@ func NewOpenAIProvider(cfg OpenAIProviderConfig) *OpenAIProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultOpenAIBaseURL
 	}
+	cfg.BaseURL = trimBaseURL(cfg.BaseURL)
 	if cfg.Model == "" {
 		cfg.Model = defaultOpenAIModel
 	}

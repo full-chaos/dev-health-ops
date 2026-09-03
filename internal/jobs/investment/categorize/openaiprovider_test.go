@@ -3,6 +3,8 @@ package categorize
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -194,3 +196,72 @@ func TestOpenAIProviderCompleteDoesNotRetryAuthError(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// dnsFailureRoundTripper simulates the ordinary Go DNS-resolution failure
+// shape ("dial tcp: lookup <host>: no such host") without touching a real
+// network -- codex round 3 (#2178, bigboy) P2's exact repro shape.
+type dnsFailureRoundTripper struct{ attempts int }
+
+func (rt *dnsFailureRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	rt.attempts++
+	return nil, errors.New("dial tcp: lookup provider.invalid: no such host")
+}
+
+func TestOpenAIProviderClassifiesDNSFailureAsRetryableTransport(t *testing.T) {
+	transport := &dnsFailureRoundTripper{}
+	provider := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey: "unused", BaseURL: "https://example.invalid/v1", Model: "gpt-5-nano",
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	t.Cleanup(func() { provider.Close() })
+
+	_, err := provider.Complete(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("expected an error for a DNS failure")
+	}
+	typed, ok := err.(*llmError)
+	if !ok {
+		t.Fatalf("error type = %T, want *llmError", err)
+	}
+	if typed.kind != llmErrorTransport {
+		t.Errorf("kind = %v, want llmErrorTransport", typed.kind)
+	}
+	if !isRetryable(typed) {
+		t.Error("a DNS failure must classify as retryable")
+	}
+	// Both attempts hit the transport (retry exhausted, still transport-level).
+	if transport.attempts != openAIMaxRetries+1 {
+		t.Errorf("attempts = %d, want %d (the retry loop must actually retry a transport failure)", transport.attempts, openAIMaxRetries+1)
+	}
+}
+
+// pathCapturingRoundTripper records the request path it received and
+// returns a minimal valid Responses payload.
+type pathCapturingRoundTripper struct{ path string }
+
+func (rt *pathCapturingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	rt.path = request.URL.Path
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"output_text":"{\"ok\":true}"}`)),
+	}, nil
+}
+
+func TestOpenAIProviderTrimsTrailingSlashFromBaseURL(t *testing.T) {
+	// codex round 3 (#2178, bigboy) P2: an unnormalized BaseURL with a
+	// trailing slash produced "/v1//responses".
+	transport := &pathCapturingRoundTripper{}
+	provider := NewOpenAIProvider(OpenAIProviderConfig{
+		APIKey: "unused", BaseURL: "https://example.invalid/v1/", Model: "gpt-5-nano",
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	t.Cleanup(func() { provider.Close() })
+
+	if _, err := provider.Complete(context.Background(), "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if transport.path != "/v1/responses" {
+		t.Errorf("request path = %q, want \"/v1/responses\" (no double slash)", transport.path)
+	}
+}

@@ -31,6 +31,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -86,12 +87,39 @@ type OutboxEvent struct {
 	IdempotencyKey string
 }
 
+// TxOps is what a mutation may do inside the transaction.
+//
+// Deliberately NOT pgx.Tx. The lifecycle methods are the ones that break "all
+// three or none": a callback given the real transaction can Commit it, at which
+// point the state is durable, the outbox insert fails on a closed transaction,
+// and the deferred rollback is a no-op -- Commit returns an error with the
+// mutation committed and no event and no audit row. Codex round 1 found that
+// path; lane-auth-contracts had named the shape an hour earlier. pgx.Tx
+// satisfies this interface, so the helper still passes the real transaction and
+// the caller simply cannot reach Commit, Rollback or Conn.
+//
+// WHAT THIS DOES NOT CLOSE, stated because a boundary left implicit is the
+// defect this package keeps finding in its own comments:
+//
+//   - Raw SQL. Exec is necessarily present, so `Exec(ctx, "COMMIT")` still
+//     reaches the server. No Go type can prevent that; it is a caller writing
+//     transaction control by hand, which is visible in review in a way that
+//     calling a method is not.
+//   - Retention. A callback can keep the value and use it after Commit
+//     returns. A type cannot express "only during this call". The subtest
+//     TestRetainedTxOpsIsUnusableAfterCommit pins what happens when it does.
+type TxOps interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // Mutation is the state change and the two records that must accompany it.
 //
 // Apply runs inside the transaction and receives it. Anything it writes commits
 // with the outbox event and the audit row, or none of them do.
 type Mutation struct {
-	Apply func(ctx context.Context, tx pgx.Tx) error
+	Apply func(ctx context.Context, tx TxOps) error
 	Audit AuditEvent
 	Event OutboxEvent
 }

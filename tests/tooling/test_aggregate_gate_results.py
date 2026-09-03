@@ -725,16 +725,23 @@ def test_typecheck_mypy_unconditional_arm_fails_on_a_literal_skip() -> None:
     assert proc.returncode == 1
     assert "was skipped, but its job condition selected it to run" in proc.stderr
 
-    # Negative control: same literal strings, policy flipped to bogus -- must
-    # fail for a DIFFERENT, generic reason, proving the assertion above is
-    # pinned to the unconditional arm and not to "typecheck always fails".
-    bad = dict(env, GATED_JOB_1="typecheck-mypy|totally-bogus|skipped")
-    proc2 = subprocess.run(
-        ["bash", str(SCRIPT)], capture_output=True, text=True, env=bad
+    # Negative control (team-lead: a bogus policy string only proves the
+    # parser rejects unknown names). The real pair is the SAME "skipped"
+    # result under a policy that DOES tolerate a skip -- path-filtered, with
+    # its own condition legitimately false -- which must PASS. That is what
+    # shows the arm discriminates on the skip itself, not just on any policy.
+    good = dict(
+        env,
+        GATE_HAS_SELECTOR="true",
+        CHANGES_RESULT="success",
+        CHANGES_CODE="false",
+        GATED_JOB_1="typecheck-mypy|path-filtered|skipped",
     )
-    assert proc2.returncode == 1
-    assert "is not recognized" in proc2.stderr
-    assert "was skipped, but its job condition selected it to run" not in proc2.stderr
+    proc2 = subprocess.run(
+        ["bash", str(SCRIPT)], capture_output=True, text=True, env=good
+    )
+    assert proc2.returncode == 0
+    assert "typecheck gate passed" in proc2.stdout
 
 
 def test_a_filter_policy_without_a_selector_is_refused() -> None:

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // githubWorkItemMetricTripletOracleInput is the ONE case shape all three metric
@@ -13,14 +15,14 @@ import (
 // input than Python saw. One decoded input, one Go compute call, three
 // projections -- mirroring the Python helper.
 type githubWorkItemMetricTripletOracleInput struct {
-	Day          string                        `json:"Day"`
-	ComputedAt   time.Time                     `json:"ComputedAt"`
-	OrgID        string                        `json:"OrgID"`
-	WorkItems    []githubWorkItemRow           `json:"WorkItems"`
-	Transitions  []githubWorkItemTransitionRow `json:"Transitions"`
-	Dependencies []githubWorkItemDependencyRow `json:"Dependencies"`
-	Donors       []githubWorkItemRow           `json:"Donors"`
-	Facts        githubWorkItemDerivationFacts `json:"Facts"`
+	Day          string                                        `json:"Day"`
+	ComputedAt   time.Time                                     `json:"ComputedAt"`
+	OrgID        string                                        `json:"OrgID"`
+	WorkItems    []githubWorkItemRow                           `json:"WorkItems"`
+	Transitions  []githubWorkItemTransitionRow                 `json:"Transitions"`
+	Dependencies []githubWorkItemDependencyRow                 `json:"Dependencies"`
+	Donors       []githubWorkItemRow                           `json:"Donors"`
+	Facts        teamattribution.GithubWorkItemDerivationFacts `json:"Facts"`
 }
 
 // The three column structs below transpose an ordered record list into one
@@ -204,8 +206,8 @@ func githubWorkItemMetricTripletOracleResult(
 	}
 	// Mirror loadGitHubWorkItemDerivationContext's own merge: persisted donors
 	// first, freshly collected rows overriding them.
-	derived := newGitHubWorkItemDerivationContext(decoded.Facts)
-	subjects := make(map[string]githubWorkItemDerivationSubject, len(decoded.Donors)+len(rows.WorkItems))
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(decoded.Facts)
+	subjects := make(map[string]teamattribution.GithubWorkItemDerivationSubject, len(decoded.Donors)+len(rows.WorkItems))
 	for _, donor := range decoded.Donors {
 		subject := githubWorkItemDerivationSubjectFromRow(donor)
 		subjects[subject.WorkItemID] = subject
@@ -214,8 +216,8 @@ func githubWorkItemMetricTripletOracleResult(
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
-		provider, subjects, rows.Dependencies, nil,
+	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
+		provider, subjects, toDerivationDependencyEdges(rows.Dependencies), nil,
 	)
 
 	triplet, err := buildWorkItemMetricTripletForProvider(

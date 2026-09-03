@@ -1,0 +1,190 @@
+{
+  "commit_cases": [
+    {
+      "expected": {
+        "hash": "abc123def456",
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7@abc123def456",
+      "label": "basic"
+    },
+    {
+      "expected": {
+        "hash": "abc123def456",
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7B9583EE-1234-4A12-8ABC-34F815BEBDD7@abc123def456",
+      "label": "uppercase_repo"
+    },
+    {
+      "expected": {
+        "hash": "abc123def456",
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "{7b9583ee-1234-4a12-8abc-34f815bebdd7}@abc123def456",
+      "label": "braced_repo"
+    },
+    {
+      "expected": {
+        "hash": null,
+        "repo_id": null
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7abc123def456",
+      "label": "no_separator"
+    },
+    {
+      "expected": {
+        "hash": null,
+        "repo_id": null
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7@abc@123",
+      "label": "separator_twice"
+    },
+    {
+      "expected": {
+        "hash": null,
+        "repo_id": null
+      },
+      "input": "",
+      "label": "empty_string"
+    },
+    {
+      "expected": {
+        "hash": null,
+        "repo_id": null
+      },
+      "input": "not-a-uuid@abc123def456",
+      "label": "invalid_repo"
+    },
+    {
+      "expected": {
+        "hash": "",
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7@",
+      "label": "empty_hash"
+    },
+    {
+      "expected": {
+        "hash": "a",
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7@a",
+      "label": "short_hash"
+    }
+  ],
+  "pr_cases": [
+    {
+      "expected": {
+        "number": 42,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr42",
+      "label": "basic"
+    },
+    {
+      "expected": {
+        "number": 42,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7B9583EE-1234-4A12-8ABC-34F815BEBDD7#pr42",
+      "label": "uppercase_repo"
+    },
+    {
+      "expected": {
+        "number": 42,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "{7b9583ee-1234-4a12-8abc-34f815bebdd7}#pr42",
+      "label": "braced_repo"
+    },
+    {
+      "expected": {
+        "number": null,
+        "repo_id": null
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7issue42",
+      "label": "no_separator"
+    },
+    {
+      "expected": {
+        "number": null,
+        "repo_id": null
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr4#pr2",
+      "label": "separator_twice"
+    },
+    {
+      "expected": {
+        "number": null,
+        "repo_id": null
+      },
+      "input": "",
+      "label": "empty_string"
+    },
+    {
+      "expected": {
+        "number": null,
+        "repo_id": null
+      },
+      "input": "not-a-uuid#pr42",
+      "label": "invalid_repo"
+    },
+    {
+      "expected": {
+        "number": 42,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr0042",
+      "label": "leading_zeros_number"
+    },
+    {
+      "expected": {
+        "number": 1000,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr1_000",
+      "label": "underscored_number"
+    },
+    {
+      "expected": {
+        "number": -5,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr-5",
+      "label": "negative_number"
+    },
+    {
+      "expected": {
+        "number": 5,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr+5",
+      "label": "plus_signed_number"
+    },
+    {
+      "expected": {
+        "number": null,
+        "repo_id": null
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#prabc",
+      "label": "non_numeric_number"
+    },
+    {
+      "expected": {
+        "number": null,
+        "repo_id": null
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr",
+      "label": "empty_number"
+    },
+    {
+      "expected": {
+        "number": 42,
+        "repo_id": "7b9583ee-1234-4a12-8abc-34f815bebdd7"
+      },
+      "input": "7b9583ee-1234-4a12-8abc-34f815bebdd7#pr 42 ",
+      "label": "whitespace_number"
+    }
+  ]
+}

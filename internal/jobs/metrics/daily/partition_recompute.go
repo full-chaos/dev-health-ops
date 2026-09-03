@@ -238,7 +238,7 @@ WHERE run.org_id = $1::uuid AND run.target_day BETWEEN $2 AND $3
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )
-ORDER BY run.target_day, run.created_at DESC, run.generation DESC`, orgID, from, to, scheduledFanoutGenerationPrefix+"%")
+ORDER BY run.target_day, run.created_at DESC, run.generation DESC`, orgID, from, to, ScheduledFanoutGenerationPrefix+"%")
 	if err != nil {
 		return outcome, ErrUnavailable
 	}

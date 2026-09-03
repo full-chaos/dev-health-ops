@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 var ErrGitLabWorkItemDerivedProducerUnavailable = errors.New(
@@ -117,9 +118,9 @@ type GitLabWorkItemDeriver struct {
 
 // StoredEdgeMergeObservation reports the stored-edge union this deriver has
 // observed so far on its unit (CHAOS-3978).
-func (deriver *GitLabWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+func (deriver *GitLabWorkItemDeriver) StoredEdgeMergeObservation() teamattribution.GithubWorkItemStoredEdgeMergeObservation {
 	if deriver == nil {
-		return githubWorkItemStoredEdgeMergeObservation{}
+		return teamattribution.GithubWorkItemStoredEdgeMergeObservation{}
 	}
 	return deriver.observations.storedEdgeMergeSnapshot()
 }
@@ -178,7 +179,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 	if err != nil {
 		return GitLabWorkItemDerivedRows{}, err
 	}
-	deriver.observations.recordStoredEdgeMerge(contextFacts.storedEdgeMerge)
+	deriver.observations.recordStoredEdgeMerge(contextFacts.StoredEdgeMerge)
 	var watermark *time.Time
 	if claim.BeforeAt != nil {
 		value := claim.BeforeAt.UTC()

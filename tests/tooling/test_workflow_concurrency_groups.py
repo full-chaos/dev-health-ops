@@ -348,3 +348,84 @@ def test_mirror_test_images_serialises_push_and_schedule_but_isolates_dispatch_a
         f"(both rendered {rendered['pull_request']!r}) -- an unrelated PR "
         "could then evict a dispatch's pending run, or vice versa."
     )
+
+
+# CHAOS-4906 fleet audit (09-03, hosted-concurrency queue investigation):
+# codeql-analysis.yml and integration.yml both had `cancel-in-progress:
+# false` while keying their group by PR number -- codeql-analysis.yml
+# actually triggers on `pull_request`, so a re-push there did NOT cancel
+# its own prior run (both share the same PR-numbered group; without
+# cancellation, the old one just sits queued/running behind the new one),
+# piling up stale runs for superseded commits and permanently occupying a
+# slice of hosted concurrency for work whose result nobody will ever read.
+# This guard checks every workflow with a PR-numbered group and an actual
+# `pull_request` trigger: `cancel-in-progress` must not be hardcoded
+# `false`, and if it is an expression, it must evaluate truthy for a
+# `pull_request` event.
+_BOOLEAN_EQ = re.compile(r"^(?P<ctx>[\w.]+)\s*(?P<op>==|!=)\s*'(?P<val>[^']*)'$")
+
+
+def _evaluate_boolean(expression: str, context: dict[str, str]) -> bool:
+    """Evaluate the single comparison shape every PR-numbered-group
+    workflow's `cancel-in-progress` expression actually uses today
+    (`github.event_name == 'pull_request'`). Deliberately narrow, like
+    `_evaluate` above: an unrecognised shape raises rather than being
+    assumed safe -- a workflow with a genuinely more complex
+    `cancel-in-progress` expression needs this model extended, not
+    silently skipped."""
+    match = _EXPRESSION.search(expression)
+    inner = match.group(1).strip() if match else expression.strip()
+    comparison = _BOOLEAN_EQ.match(inner)
+    if not comparison:
+        raise AssertionError(
+            f"cancel-in-progress expression {expression!r} uses a shape "
+            "this test cannot model; extend _evaluate_boolean rather than "
+            "assuming it is safe"
+        )
+    ctx, op, val = comparison.group("ctx", "op", "val")
+    if ctx not in context:
+        raise AssertionError(
+            f"cancel-in-progress expression {expression!r} references "
+            f"{ctx!r}, which this test's context does not model"
+        )
+    actual = context[ctx]
+    return (actual == val) if op == "==" else (actual != val)
+
+
+def test_pr_numbered_groups_cancel_on_pull_request() -> None:
+    """A workflow whose concurrency group is keyed by the PR number, and
+    which actually triggers on `pull_request`, must cancel a stale run on
+    that event. See the module comment above this test for the measured
+    consequence when it doesn't (codeql-analysis.yml, before its fix)."""
+    checked = 0
+    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        triggers = document.get(True) or document.get("on") or {}
+        if "pull_request" not in triggers:
+            continue
+        concurrency = document.get("concurrency") or {}
+        group = str(concurrency.get("group", ""))
+        if "github.event.pull_request.number" not in group:
+            continue  # a different group design; not this test's concern
+        checked += 1
+        cancel = concurrency.get("cancel-in-progress")
+        if cancel is True:
+            continue  # cancels unconditionally, pull_request included
+        if cancel is False:
+            pytest.fail(
+                f"{path.name}: cancel-in-progress is hardcoded false while "
+                "this workflow triggers on pull_request and keys its group "
+                "by PR number -- a re-push will not cancel its own stale "
+                "run, letting it pile up for a superseded commit and "
+                "permanently occupy hosted concurrency"
+            )
+        assert _evaluate_boolean(str(cancel), _PULL_REQUEST_CONTEXT), (
+            f"{path.name}: cancel-in-progress ({cancel!r}) does not "
+            "evaluate true for a pull_request event -- a re-push will not "
+            "cancel its own stale run"
+        )
+    assert checked, (
+        "no workflow has both a pull_request trigger and a PR-numbered "
+        "concurrency group -- this test would pass vacuously, which is "
+        "the failure mode it exists to prevent"
+    )

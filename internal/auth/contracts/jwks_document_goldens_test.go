@@ -42,6 +42,14 @@ type jwksFixtureManifest struct {
 		File string `json:"file"`
 		Why  string `json:"why"`
 	} `json:"reject_by_client"`
+	// NarrowerThanConsumer documents are ACCEPTED by the real consumer and
+	// REFUSED by this schema, on purpose. The category exists because round 1
+	// blocked a version that stated its narrowings in prose and got the list
+	// wrong -- two declared, five real.
+	NarrowerThanConsumer []struct {
+		File string `json:"file"`
+		Why  string `json:"why"`
+	} `json:"narrower_than_consumer"`
 }
 
 // goMessageForJWKSKeyword extends goMessageForKeyword with the one keyword
@@ -133,6 +141,9 @@ func TestTheJWKSManifestIsNotEmpty(t *testing.T) {
 	if len(manifest.RejectByClient) == 0 {
 		t.Error("manifest declares no client-enforced fixtures")
 	}
+	if len(manifest.NarrowerThanConsumer) == 0 {
+		t.Error("manifest declares no narrower-than-consumer fixtures")
+	}
 }
 
 func TestEveryJWKSFixtureOnDiskIsClaimedByTheManifest(t *testing.T) {
@@ -160,6 +171,9 @@ func TestEveryJWKSFixtureOnDiskIsClaimedByTheManifest(t *testing.T) {
 	}
 	for _, r := range manifest.RejectByClient {
 		claimed[r.File] = true
+	}
+	for _, n := range manifest.NarrowerThanConsumer {
+		claimed[n.File] = true
 	}
 	var unclaimed, missing []string
 	for name := range onDisk {
@@ -258,13 +272,17 @@ func TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer(t *testing.T) {
 	// happily read is not a safety margin, it is a false alarm that will be
 	// "fixed" by loosening the rule that was doing the work.
 	//
-	// The schema IS deliberately narrower than the consumer in three places,
-	// documented in the schema's own description -- `use: ""`, a short
-	// multi-byte `kid`, and nothing else. None of them appears in this corpus,
-	// so every reject fixture here must be refused by both. If a future
-	// fixture exercises one of those narrowings, this test is where it will
-	// surface, and the fix is to move it to a category of its own rather than
-	// to silence this.
+	// The schema IS deliberately narrower than the consumer in several places.
+	// Those live in the manifest's narrower_than_consumer category and are
+	// asserted by the test below, NOT here -- filing one as a reject fixture
+	// would force this test to be weakened, and this is the test that stops
+	// the schema drifting stricter than the code it describes.
+	//
+	// THIS TEST PASSED ON THE VERSION ROUND 1 BLOCKED. It passed because none
+	// of the reject fixtures happened to exercise any of the four undeclared
+	// narrowings that existed at the time. The instrument was right and the
+	// corpus could not trip it, which reports coverage that is not there. That
+	// is why the narrowings are now fixtures rather than a sentence.
 	for _, entry := range loadJWKSManifest(t).Reject {
 		t.Run(entry.File, func(t *testing.T) {
 			if err := consumerVerdict(t, entry.File); err == nil {
@@ -291,6 +309,33 @@ func TestClientEnforcedJWKSFixturesValidateButTheConsumerRefusesThem(t *testing.
 			}
 			if err := consumerVerdict(t, entry.File); err == nil {
 				t.Fatalf("the consumer accepted a document only it can refuse (%s)", entry.Why)
+			}
+		})
+	}
+}
+
+func TestNarrowerThanConsumerFixturesAreAcceptedByTheConsumerAndRefusedByTheSchema(t *testing.T) {
+	// Both halves, because either alone is satisfied by the wrong thing.
+	//
+	// Without the ACCEPT half, a fixture that the consumer also rejects would
+	// sit here labelled a deliberate narrowing while actually being an
+	// agreement -- overstating how far the schema departs from the code.
+	// Without the REFUSE half, a narrowing quietly closed by a later schema
+	// edit would keep its row and its explanation while testing nothing.
+	//
+	// A fixture that stops satisfying either half is not a broken test: it is
+	// news about the consumer, and it should be read before it is fixed.
+	root := testRoot(t)
+	for _, entry := range loadJWKSManifest(t).NarrowerThanConsumer {
+		t.Run(entry.File, func(t *testing.T) {
+			if err := consumerVerdict(t, entry.File); err != nil {
+				t.Fatalf("this fixture is filed as a NARROWING, meaning the consumer accepts it "+
+					"and only the schema refuses it -- but the consumer refused it too (%v). "+
+					"If that is correct it belongs in `reject`, not here (%s)", err, entry.Why)
+			}
+			if err := Validate(root, JWKSSurface, decodeJWKSFixture(t, entry.File)); err == nil {
+				t.Fatalf("the schema ACCEPTED a document filed as one it deliberately refuses; "+
+					"the narrowing is gone and this row now documents nothing (%s)", entry.Why)
 			}
 		})
 	}

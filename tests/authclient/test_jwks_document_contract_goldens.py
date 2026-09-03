@@ -52,6 +52,7 @@ MANIFEST = json.loads((FIXTURES / "manifest.json").read_text(encoding="utf-8"))
 ACCEPT = [e["file"] for e in MANIFEST["accept"]]
 REJECT = MANIFEST["reject"]
 REJECT_BY_CLIENT = MANIFEST["reject_by_client"]
+NARROWER = MANIFEST["narrower_than_consumer"]
 
 
 def test_the_manifest_is_not_empty() -> None:
@@ -63,6 +64,7 @@ def test_the_manifest_is_not_empty() -> None:
     assert ACCEPT, "manifest declares no accept fixtures"
     assert REJECT, "manifest declares no reject fixtures"
     assert REJECT_BY_CLIENT, "manifest declares no client-enforced fixtures"
+    assert NARROWER, "manifest declares no narrower-than-consumer fixtures"
 
 
 def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
@@ -74,6 +76,7 @@ def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
     listed = {e["file"] for e in MANIFEST["accept"]}
     listed |= {e["file"] for e in REJECT}
     listed |= {e["file"] for e in REJECT_BY_CLIENT}
+    listed |= {e["file"] for e in NARROWER}
     on_disk = {p.name for p in FIXTURES.glob("*.json") if p.name != "manifest.json"}
     assert on_disk == listed, (
         f"unclaimed on disk: {sorted(on_disk - listed)}; "
@@ -132,6 +135,47 @@ def test_client_enforced_fixtures_are_valid_against_the_schema(
     consumer is Go code and no Python reader of this surface exists.
     """
     validate(SURFACE, _load(entry["file"]))
+
+
+@pytest.mark.parametrize("entry", NARROWER, ids=lambda e: e["file"])
+def test_narrower_than_consumer_fixtures_are_refused_by_the_schema(
+    entry: dict[str, Any],
+) -> None:
+    """Half of the narrowing assertion; the Go runner owns the other half.
+
+    These documents are ACCEPTED by the real consumer, so the only thing that
+    makes them a narrowing rather than an agreement is that this schema
+    refuses them. That the CONSUMER accepts them is asserted in the Go runner,
+    because the consumer is Go code in another repository and no Python reader
+    of this surface exists.
+
+    The category exists because codex round 1 blocked a version of this
+    contract that listed its narrowings in PROSE and got the list wrong -- two
+    declared, five real -- while the test written to police exactly that
+    direction passed, because no reject fixture happened to exercise any of
+    the missing four.
+    """
+    with pytest.raises(ContractError):
+        validate(SURFACE, _load(entry["file"]))
+
+
+def test_the_kid_narrowings_carry_the_characters_they_are_named_for() -> None:
+    """The two kid narrowings must keep carrying what makes them narrowings.
+
+    A NUL silently normalised away, or the padding stripped by a helpful
+    editor, would leave a fixture that still fails the schema for an unrelated
+    reason and still passes its test, documenting a rule it no longer touches.
+    """
+    padded = _load("narrower-kid-with-surrounding-space.json")["keys"][0]["kid"]
+    assert padded != padded.strip(), "fixture no longer carries surrounding whitespace"
+    assert padded.strip(), (
+        "fixture must trim to something non-empty, as the consumer requires"
+    )
+
+    nul = _load("narrower-kid-containing-nul.json")["keys"][0]["kid"]
+    assert "\x00" in nul, "fixture no longer carries an embedded NUL"
+    # The consumer accepts it precisely because Go does not consider NUL space.
+    assert nul.strip(), "a NUL-bearing kid must still be non-empty after stripping"
 
 
 def test_the_duplicate_kid_fixture_really_does_repeat_a_kid() -> None:

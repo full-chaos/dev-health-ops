@@ -178,31 +178,66 @@ them is habitually tested:
   would have accepted. Nobody writes this test, because a rejection always
   looks like the schema working. It is the more dangerous direction: the false
   alarm eventually gets "fixed" by loosening whichever rule was load-bearing.
-  `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` closes it.
+  `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` closes it — **but
+  only against the cases the corpus actually contains**; see "State a narrowing
+  as a FIXTURE" below for how that test stayed green while four narrowings went
+  undeclared.
 
-Where the schema is deliberately narrower than the consumer, say so **in the
-schema** and keep no fixture for it in `reject` — otherwise the second test
-above is the one that has to be silenced, and silencing it removes the guard
-for every other row at the same time.
+Where the schema is deliberately narrower than the consumer, give it a fixture
+in `narrower_than_consumer` — never a `reject` entry, which would force the
+second test above to be weakened, and never prose alone, which cannot fail.
 
 **Pin the producer too.** `test_the_live_producer_emits_a_document_this_schema_accepts`
 calls the real `build_envelope_jwks()` and validates its output. Without it a
 schema can describe an idealised document, pass its own corpus forever, and
 never once touch what production actually writes.
 
-### A wrong length is not a style point when the consumer panics
+### A wrong length: what is true, and what was overstated
 
 `ed25519.Verify` **panics** on a 31- or 33-byte public key rather than returning
 an error, and *both* languages' base64 decoders accept those lengths without
-complaint — the decode never checks. So for Ed25519 key material the length has
-to be pinned in the schema or it is pinned nowhere.
+complaint — the decode never checks. Those two facts are real and were executed.
 
-`^[A-Za-z0-9_-]{43}$` does it, and does two other jobs at once: 43 characters of
-the URL-safe alphabet always decode to exactly 32 bytes (verified by sampling
-200000 random such strings — every one, no errors), the alphabet excludes `+`
-and `/`, and the fixed count excludes `=` padding. Python's
-`urlsafe_b64decode` accepts padding *and* the standard `+/` alphabet; Go's
-`RawURLEncoding` rejects both. One pattern, three classes, no `format` keyword.
+**The conclusion drawn from them was not.** An earlier version of this section
+said the length "has to be pinned in the schema or it is pinned nowhere". The
+consumer checks it itself: `Keys()` compares the decoded length against
+`ed25519.PublicKeySize` before returning a key, so the panic is unreachable
+through it. The schema pin is defence-in-depth and a statement of the wire form.
+
+Keeping the correction visible because of *how* it happened: the disproving
+line was in a function this lane had read and quoted in its own review context
+minutes earlier. Two verified facts were joined into a claim about a third
+thing, and the third thing was never executed. That is the house failure mode,
+committed inside the document that names it.
+
+`^[A-Za-z0-9_-]{43}$` is still the right pattern, for the reasons that survive:
+43 characters of the URL-safe alphabet always decode to exactly 32 bytes
+(verified across 200000 random such strings), the alphabet excludes `+` and `/`,
+and the fixed count excludes `=` padding. Python's `urlsafe_b64decode` accepts
+padding *and* the standard alphabet; Go's `RawURLEncoding` rejects both.
+
+### State a narrowing as a FIXTURE, never as a sentence
+
+The rule this surface paid for. Where a schema is deliberately stricter than the
+client it describes, that gap needs a fixture in a category of its own —
+`narrower_than_consumer` — with a test asserting **both** halves: the client
+accepts it, the schema refuses it.
+
+A prose list cannot be executed, and this one was wrong: it declared two
+narrowings and there were five. The three missing were case-variant member names
+(Go's `encoding/json` matches field names **case-insensitively**, and
+`DisallowUnknownFields` compares *after* that match), `use: null` decoding to the
+zero string, and a `kid` carrying NUL or surrounding spaces — `unicode.IsSpace`
+does not consider NUL a space, so `TrimSpace` leaves it.
+
+**And the test built to catch exactly this passed the whole time.**
+`TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` runs every reject
+fixture through the real client for precisely this purpose. It was green,
+because not one of the twenty reject fixtures happened to exercise any of the
+four. A correct instrument fed a corpus that cannot trip it reports coverage it
+does not have — which is worse than no test, because it is cited as evidence.
+Adding the category is what converts each sentence into an assertion that fails
+when it stops being true.
 
 ### The manifest is the single inventory
 

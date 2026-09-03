@@ -229,7 +229,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "gate": "schema check in `NewRecommendationsExecutor` (`internal/jobs/metrics/remaining/recommendations_native.go:160`) + the CHAOS-2373 daily-metrics readiness gate inside `ComputePartition` (`recommendations_native.go:377,428`)",
         "writer": "Go `internal/jobs/metrics/remaining/recommendations_native_clickhouse.go:134`",
         "tables": "`recommendations_daily`",
-        "evidence": "argued — wired `daily.go:389-436,474-483`",
+        "evidence": "argued — wired `daily.go:440-461,502-512`",
         "state": "native",
         "ticket": "n/a — the Go worker no longer routes this kind to the bridge (daily.go), but Python `_compute_recommendations_for_org` (`workers/recommendations_tasks.py:334`) is NOT dead code: it is still imported/called at `worker_metrics.py:1833/1863` and served live by `/remaining-metrics/v1/execute` (see this file's own WORKER_FILE_LEDGER['recommendations_tasks.py'], category a) — deleting it needs its own verification that nothing else reaches it, not assumed here",
     },

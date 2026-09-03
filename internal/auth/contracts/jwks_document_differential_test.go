@@ -62,9 +62,9 @@ var narrowingPredicates = []struct {
 	name  string
 	holds func(map[string]any) bool
 }{
-	{"member name is not lowercase (Go's json matches field names case-insensitively)",
+	{"member name folds to a declared name without being it (Go's json matches field names by UNICODE SIMPLE FOLDING)",
 		func(d map[string]any) bool {
-			return anyMemberName(d, func(k string) bool { return k != strings.ToLower(k) })
+			return anyMemberName(d, foldsToADeclaredName)
 		}},
 	{"a null value somewhere (decodes to Go's zero value)",
 		func(d map[string]any) bool { return anyNullValue(d) }},
@@ -130,6 +130,40 @@ var clientEnforcedPredicates = []struct {
 			}
 			return false
 		}},
+}
+
+// declaredMemberNames are every member this schema names. A wire member that
+// FOLDS to one of these binds to the same Go struct field.
+var declaredMemberNames = []string{"keys", "kty", "crv", "alg", "use", "kid", "x"}
+
+// foldsToADeclaredName reports whether a member name reaches a declared field
+// by Go's matching rules WITHOUT being that name byte-for-byte.
+//
+// THIS PREDICATE WAS WRONG UNTIL ROUND 3, and the way it was wrong is the point.
+// It asked `name != strings.ToLower(name)`, which describes ASCII case variance.
+// Go's decoder does not do ASCII case variance; it does UNICODE SIMPLE FOLDING.
+// `keyſ` -- with U+017F LATIN SMALL LETTER LONG S, which folds with `s` --
+// is ALREADY LOWERCASE, so the old predicate returned false while the consumer
+// happily bound it to Keys. The exemption did not fire on a document it was
+// meant to exempt.
+//
+// That did not surface for a second reason: the generator only emitted ASCII
+// upper and title variants, so the shape was never produced. A predicate that
+// was too narrow and a generator that was blind cancelled out, and either alone
+// would have failed loudly. Both are fixed.
+//
+// strings.EqualFold is used because it is what the decoder's matching amounts
+// to, and it was checked to be EXACTLY as wide rather than wider -- ASCII
+// upper, ASCII title, U+017F long s and U+212A Kelvin sign all agree between
+// EqualFold and the real consumer. A predicate broader than the narrowing it
+// names is round 2's finding, and this is the place it would recur.
+func foldsToADeclaredName(name string) bool {
+	for _, declared := range declaredMemberNames {
+		if name != declared && strings.EqualFold(name, declared) {
+			return true
+		}
+	}
+	return false
 }
 
 func anyMemberName(node any, pred func(string) bool) bool {
@@ -353,6 +387,26 @@ func generateJWKSDocuments(t *testing.T, count int) []jwksDifferentialCase {
 			return d
 		}},
 		{"upper-case-names", func(d map[string]any) map[string]any { return rename(d, strings.ToUpper) }},
+		{"unicode-folded-names-long-s-only", func(d map[string]any) map[string]any {
+			// LONG S ALONE, deliberately not combined with the Kelvin fold.
+			//
+			// This row exists because the first version applied BOTH
+			// substitutions, which produced names like `Key<long s>` carrying a
+			// Kelvin K -- and a Kelvin K is not lowercase, so the OLD, WRONG
+			// ToLower predicate still matched them. The generator could not
+			// produce the one shape that distinguishes the two predicates: a
+			// name that is ENTIRELY LOWERCASE and still folds to a declared
+			// name. That is precisely round 3's finding, and a mutation proof
+			// showed the fix was not load-bearing until this row was split out.
+			return rename(d, func(s string) string {
+				return strings.ReplaceAll(s, "s", string(rune(0x017F)))
+			})
+		}},
+		{"unicode-folded-names-kelvin-only", func(d map[string]any) map[string]any {
+			return rename(d, func(s string) string {
+				return strings.ReplaceAll(s, "k", string(rune(0x212A)))
+			})
+		}},
 		{"title-case-names", func(d map[string]any) map[string]any {
 			return rename(d, func(s string) string {
 				if s == "" {

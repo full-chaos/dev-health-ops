@@ -1091,6 +1091,15 @@ jobs:
             if [ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]; then
               if [ "${amd64_rev}" != "${arm64_rev}" ]; then
                 echo "DECLINE ${family}: platform labels disagree on :latest (amd64=${amd64_rev} arm64=${arm64_rev}) -- refusing to guess which is authoritative"
+                # codex round 6 (bigboy), P2: two DIFFERENT, both non-empty
+                # revision labels is a genuinely ambiguous read -- there is
+                # no way to know which platform is authoritative -- so it
+                # counts toward the no-op guard the same as a registry
+                # error. A corrupted/split :latest cannot self-heal: every
+                # future run re-reads the same disagreeing labels and
+                # declines again, so all-nine-families-disagree is exactly
+                # as permanent-and-silent as all-nine-UNKNOWN.
+                any_unknown_count=$((any_unknown_count + 1))
                 continue
               fi
               base_sha="${amd64_rev}"
@@ -1150,6 +1159,17 @@ jobs:
                 tags_moved_count=$((tags_moved_count + 1))
               else
                 echo "WARNING: ${family} has no revision label on :latest and no commit in the last 50 first-parent ancestors of ${BUILT_SHA} matches its digest -- declining rather than guessing. This should resolve itself once ${family} gets its next label-bearing build."
+                # codex round 6 (bigboy), P2: "should resolve itself" is
+                # true only once ${family} gets a NEW label-bearing build
+                # -- if the sha- tag the walk needs is outside the
+                # 50-commit window (or was never published), this decline
+                # repeats identically on every future run, not just this
+                # one. Counts toward the no-op guard: an org where every
+                # family is still in this unlabelled state (a real
+                # transitional state during this PR's own migration, per
+                # the comment above) would otherwise no-op silently on
+                # every run with no signal at all.
+                any_unknown_count=$((any_unknown_count + 1))
               fi
               continue
             fi
@@ -1185,20 +1205,25 @@ jobs:
           # NON-MAIN BRANCH, BOOTSTRAP, DESCENDANT, FALLBACK) -- the
           # single ground-truth signal for "did this run actually do
           # anything, anywhere, for any family". `any_unknown_count`
-          # increments at every branch that self-classifies as an
-          # ambiguous/unknown read, at ANY stage (source-tag rc==2,
-          # :latest rc==2, :latest empty-read). The condition below is
-          # ONE check covering every current site and, structurally, any
-          # future one that follows the same "increment any_unknown_count
-          # when you decline as ambiguous" convention -- a fourth site
-          # added later needs only that one line, not a new post-loop
-          # check. An all-CONFIRMED-ABSENT run (tags_moved_count=0,
+          # increments at every branch that declines a family for a reason
+          # that could recur identically on the NEXT run too -- not just
+          # registry-read ambiguity (source-tag rc==2, :latest rc==2,
+          # :latest empty-read), but also a corrupted/split :latest
+          # (conflicting, both non-empty platform labels: codex round 6)
+          # and a digest-walk that exhausted its 50-commit window without
+          # a match (codex round 6). None of these self-heal on their
+          # own; each is silent unless something fails the job. The
+          # condition below is ONE check covering every current site and,
+          # structurally, any future one that follows the same "increment
+          # any_unknown_count when the decline could repeat forever"
+          # convention -- a new site added later needs only that one
+          # line, not a new post-loop check. An all-CONFIRMED-ABSENT run (tags_moved_count=0,
           # any_unknown_count=0, e.g. a fresh org with nothing published
           # yet) is still a legitimate steady state and does not trip
           # this; any run where at least one family's tag actually moved
           # (tags_moved_count>=1) already did real work, even if others
           # declined, so it's excluded too.
           if [ "${tags_moved_count}" -eq 0 ] && [ "${any_unknown_count}" -gt 0 ]; then
-            echo "::error::0 of ${family_total} families had a moving tag applied this run, and ${any_unknown_count} ambiguous (unrecognized registry error) read(s) occurred somewhere in the loop -- likely a registry outage, not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
+            echo "::error::0 of ${family_total} families had a moving tag applied this run, and ${any_unknown_count} decline(s) somewhere in the loop were for reasons that could repeat identically on every future run (ambiguous registry reads, conflicting platform labels, or an exhausted digest walk) -- not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
             exit 1
           fi

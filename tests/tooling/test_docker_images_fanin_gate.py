@@ -516,6 +516,15 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
           echo '{"manifest":{"digest":"sha256:aaaa"},"image":{"linux/amd64":{"config":{"Labels":{"org.opencontainers.image.revision":"'"${LABELLED_REVISION}"'"}}},"linux/arm64":{"config":{"Labels":{"org.opencontainers.image.revision":"'"${LABELLED_REVISION}"'"}}}}}'
           exit 0
           ;;
+        disagree)
+          # codex round 6 (bigboy), P2: the two platforms carry DIFFERENT,
+          # both non-empty revision labels -- a genuinely ambiguous read
+          # (the workflow itself has no way to tell which platform is
+          # authoritative), distinct from `unlabelled` (both empty,
+          # legitimately falls through to the digest-walk fallback).
+          echo '{"manifest":{"digest":"sha256:aaaa"},"image":{"linux/amd64":{"config":{"Labels":{"org.opencontainers.image.revision":"'"${LABELLED_REVISION}"'"}}},"linux/arm64":{"config":{"Labels":{"org.opencontainers.image.revision":"deadfeed00000000000000000000000000000000"}}}}}'
+          exit 0
+          ;;
         *)
           echo "unrecognized SCENARIO: ${SCENARIO}" >&2
           exit 99
@@ -878,21 +887,42 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # Negative control: a genuinely present but UNLABELLED read (the
     # digest-walk fallback path -- ci-flakes review: this is what "present"
     # actually exercised before this rename, not the labelled/common case
-    # the old name implied) must emit no `::error::` at all -- if it did,
-    # the annotation would be noise on a routine fallback instead of a
-    # signal on the genuinely surprising empty-read case.
-    _found_record, found_log_called, found_mb_called, found_stdout, _found_rc = (
-        _run_latest_tag_step("unlabelled")
-    )
+    # the old name implied) emits no PER-FAMILY `::error::` of its own --
+    # the decline is a `WARNING:` line, not an inline error annotation.
+    #
+    # codex round 6 (bigboy), P2: every family here shares the SAME
+    # $SCENARIO, so when the digest walk finds no match (the default,
+    # empty git-log history -- no digest_walk_candidates passed), ALL
+    # NINE families decline this way. That is no longer a silent, rc=0
+    # no-op: the run-level `::error::` from the post-loop no-op guard
+    # DOES now appear, from the aggregate check, not this per-family
+    # line. See test_latest_check_all_families_digest_walk_exhausted_
+    # fails_the_job below for that job-level assertion; this test only
+    # checks the per-family WARNING text and control flow.
+    (
+        found_record,
+        found_log_called,
+        found_mb_called,
+        found_stdout,
+        found_rc,
+    ) = _run_latest_tag_step("unlabelled", assert_success=False)
     assert found_log_called and not found_mb_called, (
         "the unlabelled scenario should reach the digest-walk fallback "
         "(git log) but never the merge-base ancestry check -- got "
         f"log_called={found_log_called}, merge_base_called={found_mb_called}"
     )
-    assert "::error::" not in found_stdout, (
-        "a genuinely present (unlabelled) :latest read emitted a "
-        f"`::error::` annotation -- it should only fire on the empty-read "
-        f"case, got stdout: {found_stdout!r}"
+    assert found_rc == 1, (
+        "codex round 6 (bigboy), P2: every family sharing this scenario "
+        "with no digest-walk match means the run as a whole must now "
+        f"fail via the post-loop no-op guard, got rc={found_rc}, "
+        f"stdout:\n{found_stdout}"
+    )
+    assert (
+        "WARNING: " in found_stdout
+        and "has no revision label on :latest" in found_stdout
+    ), (
+        "expected the per-family decline to still emit its own WARNING "
+        f"line (not an inline ::error::), got stdout: {found_stdout!r}"
     )
 
 
@@ -1224,4 +1254,86 @@ def test_latest_check_all_unknown_fails_the_job() -> None:
     assert "0 of 9 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
+    )
+
+
+def test_latest_check_all_families_digest_walk_exhausted_fails_the_job() -> None:
+    """codex round 6 (bigboy), P2 (reproduced): an unlabelled `:latest`
+    whose digest never matches any of the last 50 first-parent ancestors
+    declined with only a WARNING claiming "this should resolve itself
+    once ${family} gets its next label-bearing build" -- but if the
+    sha- tag the walk needs is outside the 50-commit window (or was
+    never published), this decline repeats identically on every future
+    run, not just this one. Before this fix, an org where every family
+    was still in this state (a real transitional state during this
+    PR's own migration) no-op'd silently forever: zero `imagetools
+    create` calls, rc=0, no job-level signal at all.
+
+    Every family shares the same $SCENARIO ("unlabelled") and the
+    default empty git-log history (no digest_walk_candidates), so the
+    digest walk finds nothing for any of the nine. Verified this row
+    goes RED against the pre-fix code (the digest-walk `else` branch
+    with no any_unknown_count increment) before trusting it: rc=0
+    there, with an unchanged record/log/merge-base shape."""
+    record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
+        "unlabelled", assert_success=False
+    )
+    assert returncode == 1, (
+        f"expected the all-nine digest-walk-exhausted scenario to exit "
+        f"1, got returncode={returncode}, stdout:\n{stdout}"
+    )
+    assert record == "", (
+        f"the failing run still recorded an `imagetools create` call: {record!r}"
+    )
+    assert log_called and not mb_called, (
+        "expected every family to reach the digest-walk fallback (git "
+        f"log) but never the merge-base ancestry check -- got "
+        f"log_called={log_called}, merge_base_called={mb_called}"
+    )
+    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+        "expected the job-level failure annotation naming the "
+        f"moved/ambiguous counts, got stdout:\n{stdout}"
+    )
+
+
+def test_latest_check_all_families_disagree_fails_the_job() -> None:
+    """codex round 6 (bigboy), P2 (reproduced): a `:latest` whose two
+    platforms carry DIFFERENT, both non-empty revision labels declined
+    with `DECLINE ... platform labels disagree ...` but never
+    incremented any terminal-failure counter. A corrupted/split
+    `:latest` cannot self-heal: every future run re-reads the same
+    disagreeing labels and declines again, exactly as permanent and
+    silent as the all-UNKNOWN case round 5 already covers. Before this
+    fix, an org where every family hit this state no-op'd silently
+    forever: zero `imagetools create` calls, rc=0, no job-level signal.
+
+    Every family shares the same $SCENARIO ("disagree"), so all nine
+    decline on the platform-label mismatch and never reach the
+    digest-walk fallback or the merge-base check. Verified this row
+    goes RED against the pre-fix code (the `amd64_rev != arm64_rev`
+    DECLINE branch with no any_unknown_count increment) before trusting
+    it: rc=0 there, with an unchanged record/log/merge-base shape."""
+    record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
+        "disagree", assert_success=False
+    )
+    assert returncode == 1, (
+        f"expected the all-nine platform-label-disagree scenario to "
+        f"exit 1, got returncode={returncode}, stdout:\n{stdout}"
+    )
+    assert record == "", (
+        f"the failing run still recorded an `imagetools create` call: {record!r}"
+    )
+    assert not log_called and not mb_called, (
+        "the failing run reached the digest-walk fallback or the "
+        "merge-base ancestry check instead of declining immediately on "
+        f"the platform-label mismatch -- log_called={log_called}, "
+        f"merge_base_called={mb_called}"
+    )
+    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+        "expected the job-level failure annotation naming the "
+        f"moved/ambiguous counts, got stdout:\n{stdout}"
+    )
+    assert "platform labels disagree" in stdout, (
+        "expected the per-family DECLINE line to still be present, got "
+        f"stdout:\n{stdout}"
     )

@@ -380,7 +380,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=1)
     # 500 is the count the COMMITTED corpus was generated with -- it records
-    # "count": 500 in its own header. The default was 400, so a bare run did not
+    # "count": 500 in its own header.
+    #
+    # NOTE FOR THE NEXT READER: the corpus holds 507 CASES while the header says
+    # 500. That is not a discrepancy to "fix". `count` is the generation INPUT --
+    # how many documents the grammar is asked for -- and the shrink/derivation
+    # steps can emit more cases than that. 500 is correct precisely BECAUSE it is
+    # the input that reproduces those 507 cases byte-for-byte. Changing it to 507
+    # breaks byte-identity and reintroduces the defect this default was aligned
+    # to close (CHAOS-4952). The default was 400, so a bare run did not
     # reproduce the committed artifact, and the live-python corpus guard compares
     # exactly that: `<generator> --stdout` against the frozen bytes. A generator
     # whose defaults do not reproduce its own corpus cannot be used to detect rot

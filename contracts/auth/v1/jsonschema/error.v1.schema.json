@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/error.v1.schema.json",
+  "title": "Auth Control Plane error envelope (v1 wire format)",
+  "description": "The single error document every Auth Control Plane surface returns. Implements TRD section 18's failure semantics and TRD section 6's requirement for \"structured versioned safe error envelopes\".\n\nThis is a WIRE contract. The JSON Schema, the OpenAPI document that references it, and the golden fixtures under contracts/auth/v1/examples/error/ are the source of truth; the Go and Python types are implementations of it, never the other way round (TRD section 2 principle 12, TRD section 21).\n\nWHY THIS EXISTS BEFORE THE OTHER SURFACES: every one of the seven v1 surfaces returns errors. Without one envelope each would grow its own, and reconciling them afterwards is the drift this whole programme exists to remove. Surfaces 2 and 4-7 reference this file rather than defining an error shape.\n\nTHE CONTRACT IS MOSTLY SUBTRACTIVE. TRD section 18 says an error must not include dependency internals, secrets or token fragments beyond an approved display prefix, provider responses, policy source, repository candidates, or untrusted bodies. A schema cannot assert \"contains no secret\" about a free-form string, so it does not try: the fields that would carry those things are ABSENT, and `additionalProperties: false` is what makes the absence enforceable rather than advisory. Every omission below is a decision, not an oversight to repair:\n\n  * no `message`, `detail`, `title` or `description` -- user-facing text is CALLER-owned, exactly as TRD section 8 rules for decision reason codes. A server-authored human string is the single most common carrier of the disclosures section 18 forbids: it is where a database error, a provider body, or a resource name that answers an existence question ends up. Callers render text from `reason_code`.\n  * no `exception`, `cause`, `stack`, `trace` or `internal_error` -- \"dependency internals\" by name.\n  * no `provider_response`, `upstream_status` or `upstream_body` -- provider responses by name. An OAuth or SAML failure surfaces as a reason code; the provider's own words are logged server-side against `request_id`, never returned.\n  * no `policy`, `policy_source`, `rule_id` or `matched_rule` -- \"policy source\" by name. `policy_revision` on a DECISION is a version, not a disclosure; a policy body here would be one.\n  * no `resource`, `resource_key`, `repositories` or `candidates` -- \"repository candidates\" by name, and the mechanism behind section 18's 404 rule. Naming what was not found is how a cross-tenant existence probe succeeds.\n  * no `credential`, `token`, `token_fragment` or `authorization` -- no fragment of a presented credential is echoed. TRD section 12's approved display prefix belongs to credential METADATA (surface 6), never to an error.\n  * no `received`, `body` or `input` -- untrusted bodies by name. Echoing input is also a reflection primitive.\n\nWHAT IS NOT ENFORCEABLE HERE, stated so nobody assumes it is: this schema cannot prove a `reason_code` value is free of meaning a caller should not learn. It constrains the SHAPE (a bounded lowercase token, so prose and addresses cannot be smuggled through) and leaves the vocabulary to the surface that owns each code. A reason code that itself discloses -- `organization_org_123_not_found` -- validates. That is a review property, not a schema property, and pretending otherwise would be the false-enforcement pattern this programme keeps finding.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status",
+    "reason_code",
+    "request_id",
+    "occurred_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "error.v1",
+      "description": "Identifies this document's contract. A relying party MUST reject an unrecognised value rather than parse optimistically (ACP-ADR-05 decision 1 / G-26: unknown denies). TRD section 21: contract evolution is additive within v1; breaking semantics require v2."
+    },
+    "status": {
+      "type": "integer",
+      "enum": [401, 403, 404, 409, 429, 503],
+      "description": "The HTTP status this envelope accompanies, enumerated EXACTLY as TRD section 18 defines it:\n  401 -- accepted credential class missing, invalid, or expired.\n  403 -- authenticated principal lacks the action, entitlement, or grant.\n  404 -- hiding cross-tenant or resource existence where required.\n  409 -- state, lifecycle, or idempotency conflict.\n  429 -- rate limit, device polling, or abuse control.\n  503 -- mandatory current-state authority unavailable and no valid unexpired decision.\n\nThe enum is CLOSED. A 500 is deliberately absent: an unhandled server fault must not be describable in a contract that promises to disclose nothing, because the shape invites populating it from an exception. A fault surfaces as 503 with a reason code, or it is a defect.\n\nDuplicating the status in the body is not redundant -- it keeps the envelope self-describing once logged or queued, where the HTTP frame is gone. It does create one hazard the schema cannot police: this value MUST equal the HTTP status actually sent. A mismatch is a client-enforced rejection (see the reject_by_client fixtures), not a schema violation, because the schema never sees the response line."
+    },
+    "reason_code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,63}$",
+      "description": "Stable, safe-for-audit machine token naming WHY the request failed. TRD sections 8 and 14 establish the rule for decisions and section 19 requires stable reasons in metrics; this applies it to errors.\n\nTHE PATTERN IS THE POINT. Lowercase letters, digits and underscore only, starting with a letter, 3 to 64 characters. That makes a human sentence unrepresentable: no spaces, no capitals, no punctuation, no `@`, no `/`. So a server cannot drift from a code into prose -- `credential_expired` is expressible, `Bearer token expired for bob@example.com at /v1/orgs/org_123` is not, in four independent ways at once.\n\nThe pattern is the ONLY length authority here. It bounds the value to exactly 3-64 characters (one leading letter plus 2-63 more), so a separate `minLength`/`maxLength` pair would be redundant -- and redundancy is not free in a cross-language corpus. Both were present in the first draft, and a probe of the real validators showed why they had to go: for an over-long value, github.com/google/jsonschema-go stops at the FIRST violation and reports `maxLength`, while Python reports every violation and includes `pattern`. The same fixture then legitimately trips a different keyword in each language, so the manifest cannot name one. Removing the redundant keywords makes the answer unambiguous in all three.\n\nThe VOCABULARY is deliberately open at this layer -- each surface owns its own codes and closes them in its own contract, the way credential-classes.json closes the class vocabulary. Constraining shape here and membership there keeps one file from becoming the registry of every code in the system.\n\nRegex note: written in the cross-language dialect intersection. No shorthand class (`\\d`/`\\w`/`\\s` are Unicode in Python's `re` and ASCII in Go RE2 and ECMA-262), no inline flag group (`(?i)` is a SyntaxError in ECMA-262). The trailing `$` matches before a final newline in Python only, which is why the Python client rewrites it to `\\Z` via `strictly_anchored`; enforced by TestEveryWireSchemaStaysInTheCrossLanguageDialect."
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^req_[A-Za-z0-9_-]{1,60}$",
+      "description": "Correlates this response with the bounded structured log and audit row that hold what the envelope refuses to say (TRD section 19: request, decision and audit IDs are available in bounded structured logs and audit rows).\n\nThis field is what makes the subtractive design workable rather than merely opaque. An operator debugging a 403 is not left with nothing -- they are left with a key into a place where the detail legitimately lives, behind authorization, instead of in a response body that crosses a trust boundary.\n\nServer-generated. A caller-supplied request ID may be honoured for correlation but is never trusted for authority (TRD section 2 principle 3), and must be validated against this pattern before it is echoed -- an unvalidated echo is a log-injection and reflection primitive."
+    },
+    "occurred_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "When the failure occurred, RFC 3339, microsecond resolution at most.\n\nThe pattern is copied deliberately from principal.v1's timestamp rule rather than reinvented, and the reasoning transfers with it: `format: date-time` is NOT relied upon, because google/jsonschema-go treats `format` as an annotation and ignores it, so a `format`-only constraint is enforced in Python and ECMA and silently absent in Go. The pattern is the floor all three enforce; a `format` assertion may be layered on top where a validator supports it.\n\nSix fractional digits, not nine: Go's `time.Time` carries nanoseconds and Python's `datetime` carries microseconds, so nine digits is a value Python cannot round-trip. The Go client truncates to microseconds on marshal for this reason."
+    },
+    "retry_after_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400,
+      "description": "How long the caller should wait before retrying. Present only for 429 and 503 (see the `if`/`then` rule below), where TRD section 18 makes the failure explicitly transient.\n\nSeconds as an integer rather than an HTTP-date, so there is no timezone or clock-skew interpretation to disagree about across three languages.\n\nUpper bound 86400 (one day). An unbounded value is a denial-of-service against the caller's own scheduler, and a value larger than a day means the condition is not really transient -- that is a different status, not a bigger number."
+    }
+  },
+  "if": {
+    "properties": {
+      "status": {
+        "enum": [429, 503]
+      }
+    },
+    "required": ["status"]
+  },
+  "then": {
+    "required": ["retry_after_seconds"],
+    "properties": {
+      "retry_after_seconds": {
+        "$ref": "#/properties/retry_after_seconds"
+      }
+    },
+    "description": "A 429 or 503 MUST carry retry guidance. TRD section 18 defines both as transient -- rate limiting and an unavailable current-state authority -- and a transient failure with no stated recovery time invites either an immediate retry storm or an indefinite give-up. Making it required by status rather than always required is what keeps it from being a meaningless zero on a 403.\n\nThis is the one conditional in the contract. `if`/`then` is draft 2020-12 core and all three validators implement it, which the golden corpus proves rather than assumes: a 429 fixture without this field is in the reject set, and its rejection in Go, Python and ajv is what makes the conditional load-bearing rather than decorative."
+  },
+  "else": {
+    "not": {
+      "required": ["retry_after_seconds"]
+    },
+    "description": "Conversely, a non-transient status MUST NOT carry retry guidance. A `retry_after_seconds` on a 401 or 403 tells a caller to retry a request that will fail identically forever, and on a 404 it is a weak existence oracle -- a resource worth retrying for is a resource that might appear. Absence is the correct answer for every status the `if` does not name."
+  }
+}

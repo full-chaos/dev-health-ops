@@ -1,0 +1,304 @@
+{
+  "accept": [
+    {
+      "file": "valid-401-credential-missing.json",
+      "why": "TRD s18: accepted credential class missing. The minimal shape -- five required fields, nothing else."
+    },
+    {
+      "file": "valid-403-grant-absent.json",
+      "why": "Authenticated principal lacks the grant. Distinct from 401 by design: the caller IS authenticated."
+    },
+    {
+      "file": "valid-404-existence-hidden.json",
+      "why": "TRD s18's existence-hiding 404. The reason code is deliberately uninformative -- a more specific code here would answer the question the status exists to refuse."
+    },
+    {
+      "file": "valid-409-conflict.json",
+      "why": "State/lifecycle/idempotency conflict."
+    },
+    {
+      "file": "valid-429-with-retry.json",
+      "why": "Transient by TRD s18, so retry_after_seconds is REQUIRED by the if/then rule. Positive control for the conditional."
+    },
+    {
+      "file": "valid-503-authority-unavailable.json",
+      "why": "Mandatory current-state authority unavailable and no valid unexpired decision. The other half of the conditional's positive control."
+    },
+    {
+      "file": "valid-retry-after-zero.json",
+      "why": "Zero is a legitimate retry hint (retry immediately, the window just rolled). Boundary of `minimum: 0` from the accepting side -- without this an off-by-one to `exclusiveMinimum` would pass every rejection test."
+    },
+    {
+      "file": "valid-retry-after-max.json",
+      "why": "Upper boundary accepted. Pairs with the reject fixture at 86401 so the ceiling is pinned from both sides."
+    },
+    {
+      "file": "valid-occurred-at-microseconds.json",
+      "why": "Six fractional digits, the maximum both Go and Python round-trip. Pairs with the seven-digit rejection."
+    },
+    {
+      "file": "valid-occurred-at-offset.json",
+      "why": "A numeric UTC offset, not Z. Accepting only Z would break every non-UTC producer while passing all rejection tests."
+    },
+    {
+      "file": "valid-reason-code-min-length.json",
+      "why": "Three characters, the `minLength` boundary from the accepting side."
+    },
+    {
+      "file": "valid-reason-code-max-length.json",
+      "why": "Sixty-four characters, the `maxLength` boundary from the accepting side."
+    }
+  ],
+  "conditional_note": "This is the first v1 schema to use `if`/`then`/`else`. It is draft 2020-12 core and all three validators implement it, but the corpus PROVES that rather than assuming it: invalid-429-without-retry-after and invalid-503-without-retry-after fail only if `then` is honoured, and invalid-403-with-retry-after and invalid-404-with-retry-after fail only if `else` is. Deleting either clause turns exactly two fixtures green, which is the mutation that keeps the conditional load-bearing.",
+  "description": "The single fixture inventory for contracts/auth/v1/jsonschema/error.v1.schema.json, read by the Go and Python golden runners and by the ajv-2020 check. ONE manifest, ONE fixture directory, every runner -- three copies of one corpus is the drift G-70 exists to catch, so a runner that maintains its own list is a review defect.\n\n`accept` is a positive control corpus carrying equal weight to `reject`: a validator that is too strict passes every rejection test while breaking every real caller, and that failure is invisible to a suite asserting only rejections. Ten of the twelve accept fixtures exist because a plausible over-tightening would break them -- boundary values at both ends of every bound, a non-UTC offset, and both halves of the transient/non-transient split.\n\nEvery identifier is unmistakably synthetic per G-73 (fixed EXAMPLE bodies, zero-padded counters, no plausible entropy) and the corpus is swept by the shared secret scanner rather than trusted to care -- G-16 forbids a credential value in any golden fixture, and these repos are public.",
+  "format_assertion_note": "Two different things, do not conflate them. (1) CROSS-LANGUAGE FLOOR: every constraint a reject fixture asserts uses a keyword all three validators enforce -- `pattern`, `enum`, `type`, `const`, `required`, `minimum`/`maximum`, `additionalProperties`, and the `if`/`then`/`else` conditional; never `format`, because github.com/google/jsonschema-go records `format` and ignores it during validation. (2) DEFENCE IN DEPTH where available: the Python runner MUST still enable format assertion and MUST FAIL rather than skip if it cannot -- a format check that silently checks nothing while exiting 0 is the defect this contract exists to prevent.",
+  "regex_dialect_note": "Every `pattern` here stays inside the common subset of Go RE2, ECMA-262 and Python `re`. No shorthand class (`\\d`/`\\w`/`\\s` are Unicode in Python and ASCII in the other two), no inline flag group (`(?i)` is a SyntaxError in ECMA-262), no back-reference or lookaround (absent from RE2). The trailing `$` matches before a final newline in Python only, which is why the Python client rewrites it to `\\Z`. Guarded by TestEveryWireSchemaStaysInTheCrossLanguageDialect with positive and negative controls, not by review.",
+  "reject": [
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-message.json",
+      "why": "User-facing text is CALLER-owned. A server-authored human string is the single most common carrier of the disclosures TRD s18 forbids. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-detail.json",
+      "why": "Same class as `message` under a different name -- the omission is of the CONCEPT, not one spelling of it. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-exception.json",
+      "why": "TRD s18 forbids dependency internals by name. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-stack.json",
+      "why": "Dependency internals; also discloses code paths and library versions. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-provider-response.json",
+      "why": "TRD s18 forbids provider responses by name. An OAuth/SAML failure surfaces as a reason code; the provider's words stay server-side. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-policy-source.json",
+      "why": "TRD s18 forbids policy source by name. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-resource-key.json",
+      "why": "TRD s18 forbids repository candidates, and naming the resource defeats the 404 existence rule. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-candidates.json",
+      "why": "Repository candidates by name -- the plural form is the more dangerous one. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-token.json",
+      "why": "No fragment of a presented credential is echoed. TRD s12's display prefix belongs to credential metadata, never to an error. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-received.json",
+      "why": "Untrusted bodies by name; echoing input is also a reflection primitive. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "file": "invalid-status-500.json",
+      "why": "500 is deliberately absent from the enum. A shape for an unhandled fault invites populating it from an exception, in a contract that promises to disclose nothing. A fault is a 503 with a reason code, or it is a defect."
+    },
+    {
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "file": "invalid-status-200.json",
+      "why": "A success status in an error envelope. Trivial-looking, but it is the shape a naive error-wrapper produces when it stamps the envelope before the status is decided."
+    },
+    {
+      "expect_instance_location": "/status",
+      "expect_keyword": "type",
+      "file": "invalid-status-as-string.json",
+      "why": "The string \"403\" is not the integer 403. JSON has one number type and three languages disagree about coercion; the type keyword is what stops a stringly-typed producer."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "An unrecognised contract version must be REFUSED, not parsed optimistically (G-26: unknown denies)."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-with-spaces.json",
+      "why": "A space is the first character of prose. The pattern forbids it so a code cannot drift into a sentence."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-with-email.json",
+      "why": "The exact smuggling case the pattern exists to stop: PII riding inside a field documented as safe for audit and metrics, where it would land in logs and dashboards."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-with-path.json",
+      "why": "A resource path inside the code re-introduces the existence disclosure the 404 rule removes."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-uppercase.json",
+      "why": "Case variance makes two spellings of one code, which breaks metric aggregation silently -- the code is stable only if there is one of it."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-too-short.json",
+      "why": "Below minLength. Two characters cannot name a failure. Trips `pattern` and only `pattern`: the redundant minLength/maxLength pair was removed from the schema precisely so this fixture names the same keyword in all three languages."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-too-long.json",
+      "why": "Sixty-five characters, one past the ceiling. Pairs with the accepting 64 fixture. Trips `pattern` and only `pattern`: the redundant minLength/maxLength pair was removed from the schema precisely so this fixture names the same keyword in all three languages."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-leading-digit.json",
+      "why": "Must start with a letter. A leading digit invites encoding the status into the code, duplicating `status` with a second source of truth."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-empty.json",
+      "why": "Empty string. A producer that failed to set a code must fail validation, not emit a blank one. Trips `pattern` and only `pattern`: the redundant minLength/maxLength pair was removed from the schema precisely so this fixture names the same keyword in all three languages."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-wrong-prefix.json",
+      "why": "The `req_` prefix is what lets a log search distinguish this identifier class from the dozen others in this system."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-with-newline.json",
+      "why": "A newline in an echoed identifier is a log-injection primitive: it forges a second log line. This is why a caller-supplied request ID must be validated before it is echoed."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-not-rfc3339.json",
+      "why": "A space instead of T. Accepted by several permissive parsers, which is exactly why the pattern and not `format` is the floor -- google/jsonschema-go ignores `format` entirely."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-nanoseconds.json",
+      "why": "Nine fractional digits. Go's time.Time carries nanoseconds and Python's datetime does not, so this is a value one client can emit and the other cannot round-trip. The Go client truncates to microseconds on marshal to make this unreachable from its own producer."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-no-timezone.json",
+      "why": "No zone designator. A naive timestamp is interpreted in the reader's local zone, which makes an audit trail unorderable across hosts."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-429-without-retry-after.json",
+      "why": "A 429 with no retry guidance. This fixture is what makes the if/then conditional load-bearing rather than decorative -- delete the `then` clause and only this and its 503 twin go green."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-503-without-retry-after.json",
+      "why": "The 503 half of the same conditional."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-403-with-retry-after.json",
+      "why": "Retry guidance on a non-transient status, caught by the `else` branch. Telling a caller to retry a 403 sends it into a loop that will fail identically forever."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-404-with-retry-after.json",
+      "why": "Retry guidance on a 404 is a weak existence oracle: a resource worth retrying for is a resource that might appear."
+    },
+    {
+      "expect_instance_location": "/retry_after_seconds",
+      "expect_keyword": "minimum",
+      "file": "invalid-retry-after-negative.json",
+      "why": "A negative wait is meaningless and, cast to an unsigned type by a consumer, becomes an enormous one."
+    },
+    {
+      "expect_instance_location": "/retry_after_seconds",
+      "expect_keyword": "maximum",
+      "file": "invalid-retry-after-past-max.json",
+      "why": "One second past a day. Longer than a day is not transient, and an unbounded value is a denial-of-service against the caller's own scheduler."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-schema-version.json",
+      "why": "`schema_version` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-status.json",
+      "why": "`status` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-reason-code.json",
+      "why": "`reason_code` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-request-id.json",
+      "why": "`request_id` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-occurred-at.json",
+      "why": "`occurred_at` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-status-disagrees-with-http.json",
+      "http_status": 401,
+      "why": "The envelope says 403 and the response line said 401. The SCHEMA cannot see this -- it never sees the HTTP frame -- so the client must, and it must refuse rather than pick a winner. Picking the body would let a server downgrade a 401 to a 403 in the eyes of a client that logs the body; picking the frame would make the duplicated field decorative. Refusing is the only answer that keeps both meaningful."
+    },
+    {
+      "file": "client-rejected-status-disagrees-404-vs-403.json",
+      "http_status": 404,
+      "why": "The sharper form of the same split: the frame says 404 (existence hidden) and the body says 403 (authenticated, lacks grant). A client that trusts the body has just learned the resource EXISTS, which is precisely what TRD s18's 404 rule withholds. This one is a disclosure, not a bookkeeping error."
+    },
+    {
+      "file": "client-rejected-occurred-at-far-future.json",
+      "http_status": 403,
+      "why": "Stamped a year ahead. Schema-valid -- the pattern constrains SHAPE, not plausibility -- and no reasonable clock skew explains it. A future timestamp in an audit trail reorders events silently, so the client refuses beyond a bounded tolerance rather than storing it."
+    }
+  ],
+  "reject_by_client_note": "These documents are VALID against the schema and a client MUST still refuse them. That distinction is the category's whole reason to exist, and it was corrected once already during CHAOS-4884: filing them as `reject` would assert the schema catches something it provably does not, and would fail that category's own must-not-validate half.\n\nEach entry carries `http_status`, the status of the response line the document arrived on. The schema never sees it -- validators are handed a document, not an exchange -- which is exactly why these checks live in the client. Two of the three below are status disagreements, and the 404-versus-403 case is a genuine disclosure rather than bookkeeping: trusting the body would tell the caller a hidden resource exists."
+}

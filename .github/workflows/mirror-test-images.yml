@@ -265,6 +265,66 @@ jobs:
                 printf 'NOTE %-34s tag-pinned upstream, mirrored digest %s\n' "${repo}" "${mirrored}"
                 ;;
             esac
+
+            # EVERY mirrored image must be a multi-arch INDEX carrying both
+            # linux/amd64 and linux/arm64.
+            #
+            # Not because the copy step drops platforms -- `imagetools create`
+            # copies the index verbatim, which is why the mirrored digest above
+            # equals upstream's byte for byte. This asserts the property a reader
+            # actually needs, so that "is the mirror arm64-capable?" is answered
+            # by a CI run instead of by a lane inspecting digests by hand.
+            #
+            # A digest-pinned image has TWO digests a person will meet, and they
+            # inspect very differently:
+            #
+            #   the INDEX             MediaType application/vnd.oci.image.index.v1+json
+            #                         -> lists every platform
+            #   a PLATFORM MANIFEST   MediaType application/vnd.oci.image.manifest.v1+json
+            #                         -> ONE architecture, no platform list, and it
+            #                            inspects cleanly, so it reads as
+            #                            "this image is amd64-only"
+            #
+            # That misreading has now happened twice on this repo -- once on
+            # valkey (the amd64 manifest sha256:95726b32 quoted as the image's
+            # identity when the index was b21fd94099dc) and once on postgres,
+            # reported as amd64-only when its mirror carries eight platforms.
+            # The tell is MediaType, so this checks MediaType explicitly rather
+            # than only counting platforms.
+            media=$(docker buildx imagetools inspect --format '{{ .Manifest.MediaType }}' "${dest}")
+            # ONE LINE, no `\` continuation. The registry-allowlist guard added
+            # in #2120 parses every `run:` step to find image references and
+            # REFUSES a command it cannot parse rather than assuming it is safe.
+            # A continuation split this substitution across lines, the parse
+            # failed, and the guard failed closed -- correctly. Keeping it on one
+            # line keeps the command parseable instead of weakening the guard.
+            raw=$(docker buildx imagetools inspect --raw "${dest}" 2>/dev/null || echo '{}')
+            platforms=$(printf '%s' "${raw}" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(sorted({(m.get("platform") or {}).get("os","?")+"/"+((m.get("platform") or {}).get("architecture","?")) for m in d.get("manifests",[])})))' 2>/dev/null || echo "")
+            case "${media}" in
+              *index*|*manifest.list*) ;;
+              *)
+                printf 'FAIL %-34s MediaType=%s is a PLATFORM MANIFEST, not an index.\n' \
+                  "${repo}" "${media}" >&2
+                printf '     A platform manifest describes ONE architecture. If you pinned\n' >&2
+                printf '     this by digest, you almost certainly took the linux/amd64\n' >&2
+                printf '     digest instead of the index digest -- inspect the TAG to get\n' >&2
+                printf '     the index, and pin that.\n' >&2
+                failed=1
+                continue
+                ;;
+            esac
+            missing=""
+            case "${platforms}" in *linux/amd64*) ;; *) missing="linux/amd64" ;; esac
+            case "${platforms}" in *linux/arm64*) ;; *) missing="${missing} linux/arm64" ;; esac
+            if [ -n "${missing}" ]; then
+              printf 'FAIL %-34s index is missing:%s (has: %s)\n' \
+                "${repo}" "${missing}" "${platforms}" >&2
+              printf '     The harness runs on both architectures; an image missing one\n' >&2
+              printf '     cannot be scheduled there. Mirror the full upstream index.\n' >&2
+              failed=1
+            else
+              printf 'ARCH %-34s %s\n' "${repo}" "${platforms}"
+            fi
           done < images.txt
           exit "${failed}"
 

@@ -23,6 +23,11 @@ import yaml
 
 _CHART = Path(__file__).parents[1] / "deploy/helm/dev-health"
 
+_DEFAULT_ENVFROM = [
+    {"configMapRef": {"name": "extra-envfrom-test-dev-health-config"}},
+    {"secretRef": {"name": "extra-envfrom-test-dev-health-secrets"}},
+]
+
 
 def _render(show_only: str, extra_set: list[str]) -> dict:
     """First Deployment document from one rendered template file.
@@ -147,3 +152,153 @@ def test_go_worker_extra_envfrom_is_shared_across_every_group() -> None:
         assert refs[0] == ("secretRef", "local-dotenv"), (
             f"{deployment['metadata']['name']} did not get the shared extraEnvFrom entry first"
         )
+
+
+def test_go_worker_envfrom_is_unchanged_when_extra_envfrom_is_unset_for_every_group() -> (
+    None
+):
+    """Semantic equality on the parsed envFrom object, for every group's Deployment.
+
+    Not just the two chart-owned (kind, name) pairs (that's the name-tuple
+    check the other tests use) -- the full rendered envFrom list, as parsed
+    YAML objects, must equal the expected list exactly. Block vs flow
+    mapping style in the rendered YAML is fine either way (both parse to the
+    same dict); an extra/missing key on either source, or an extra list
+    entry, is not.
+    """
+    rendered = run(
+        [
+            "helm",
+            "template",
+            "extra-envfrom-test",
+            str(_CHART),
+            "--set",
+            "goWorkers.enabled=true",
+            "--set",
+            "goWorkers.pgbouncer.postgres.host=postgres.example.com",
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    documents = [d for d in yaml.safe_load_all(rendered.stdout) if d]
+    deployments = [d for d in documents if d.get("kind") == "Deployment"]
+    assert len(deployments) >= 2, (
+        "expected more than one worker-group Deployment rendered"
+    )
+
+    for deployment in deployments:
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        assert container.get("envFrom") == _DEFAULT_ENVFROM, (
+            f"{deployment['metadata']['name']}: default envFrom (extraEnvFrom "
+            f"unset) must be exactly the chart's own config + secret, in "
+            f"that order, as objects -- got {container.get('envFrom')!r}"
+        )
+
+
+def test_api_extra_envfrom_rejects_unknown_field_on_a_ref() -> None:
+    """values.schema.json pins each entry's shape to what the templates build.
+
+    An extraEnvFrom entry the chart's own dict-builder wouldn't recognize
+    (a typo'd field, e.g.) must fail schema validation at `helm template`
+    time -- not render silently with the typo'd field dropped by toYaml, or
+    worse, passed through into a Kubernetes envFrom source where the API
+    server rejects or ignores it far from where the operator set it.
+    """
+    result = run(
+        [
+            "helm",
+            "template",
+            "extra-envfrom-test",
+            str(_CHART),
+            "--set",
+            "api.extraEnvFrom[0].secretRef.name=local-dotenv",
+            "--set",
+            "api.extraEnvFrom[0].secretRef.badfield=oops",
+            "--show-only",
+            "templates/api-deployment.yaml",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        "an extraEnvFrom entry with an unknown field must fail schema "
+        f"validation, not render; stdout={result.stdout!r}"
+    )
+    assert "badfield" in result.stderr
+
+
+def test_api_extra_envfrom_rejects_a_non_map_entry() -> None:
+    result = run(
+        [
+            "helm",
+            "template",
+            "extra-envfrom-test",
+            str(_CHART),
+            "--set",
+            "api.extraEnvFrom[0]=notamap",
+            "--show-only",
+            "templates/api-deployment.yaml",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        "a non-map extraEnvFrom entry must fail schema validation, not "
+        f"render; stdout={result.stdout!r}"
+    )
+
+
+def test_go_worker_extra_envfrom_rejects_unknown_field_on_a_ref() -> None:
+    result = run(
+        [
+            "helm",
+            "template",
+            "extra-envfrom-test",
+            str(_CHART),
+            "--set",
+            "goWorkers.enabled=true",
+            "--set",
+            "goWorkers.pgbouncer.postgres.host=postgres.example.com",
+            "--set",
+            "goWorkers.extraEnvFrom[0].secretRef.name=local-dotenv",
+            "--set",
+            "goWorkers.extraEnvFrom[0].secretRef.badfield=oops",
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        "goWorkers.extraEnvFrom must be schema-constrained the same way "
+        f"api.extraEnvFrom is; stdout={result.stdout!r}"
+    )
+    assert "badfield" in result.stderr
+
+
+def test_go_worker_extra_envfrom_rejects_a_non_map_entry() -> None:
+    result = run(
+        [
+            "helm",
+            "template",
+            "extra-envfrom-test",
+            str(_CHART),
+            "--set",
+            "goWorkers.enabled=true",
+            "--set",
+            "goWorkers.pgbouncer.postgres.host=postgres.example.com",
+            "--set",
+            "goWorkers.extraEnvFrom[0]=notamap",
+            "--show-only",
+            "templates/go-workers.yaml",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        "a non-map goWorkers.extraEnvFrom entry must fail schema "
+        f"validation, not render; stdout={result.stdout!r}"
+    )

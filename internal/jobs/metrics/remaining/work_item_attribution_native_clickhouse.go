@@ -59,7 +59,10 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if strings.TrimSpace(orgID) == "" {
 		return WorkItemAttributionOutcome{}, ErrWorkItemAttributionWriteInvalidState
 	}
-	now := executor.wallClock()()
+	now, err := executor.nowOrRefuse()
+	if err != nil {
+		return WorkItemAttributionOutcome{}, err
+	}
 
 	scope, err := executor.detectScope(ctx, orgID, now)
 	if err != nil {

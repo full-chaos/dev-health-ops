@@ -182,12 +182,16 @@ func verifyWorkItemAttributionSchema(ctx context.Context, conn driver.Conn) erro
 	return nil
 }
 
-// wallClock never returns nil, matching membership_backfill's method.
-func (executor *WorkItemAttributionExecutor) wallClock() func() time.Time {
-	if executor.nowUTC != nil {
-		return executor.nowUTC
-	}
-	return func() time.Time { return time.Now().UTC() }
+// nowOrRefuse yields this executor's instant, refusing an uninjected clock.
+//
+// NOT a nil-safe fallback to time.Now(): NewWorkItemAttributionExecutor sets
+// nowUTC unconditionally on the only path that returns a non-nil executor
+// (same shape as DORAExecutor/CapacityExecutor), so a fallback here would be
+// dead in production and would only ever fire in a test that forgot to
+// inject a clock -- converting that into a silent real-wall-clock dependency
+// instead of a loud failure. See executor_clock.go's doc comment.
+func (executor *WorkItemAttributionExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("WorkItemAttributionExecutor", executor.nowUTC)
 }
 
 // WorkItemAttributionObserver wires optional run-stats telemetry. Nil is

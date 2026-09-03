@@ -147,11 +147,20 @@ func verifyRecommendationsSchema(ctx context.Context, conn driver.Conn) error {
 //
 // # AND WHY MIDNIGHT, NOT WALL CLOCK
 //
-// `time.min` in the reference is 00:00:00, and `now` becomes the record's
-// computed_at, which is persisted and is the argMax key the readers order by.
-// Using a wall-clock instant on the as_of path would still produce the right
-// window while writing a different computed_at, so the rows would look correct
-// and order differently.
+// `time.min` in the reference is 00:00:00.
+//
+// CORRECTION (CHAOS-2398, found while porting the sink): an earlier version of
+// this comment said `now` becomes the record's persisted computed_at. It does
+// not. The engine stamps ComputedAt from `now`, and writeRecommendations then
+// OVERWRITES every row with one wall-clock instant taken at write time --
+// precisely BECAUSE `now` is constant across re-runs of a finalized day, which
+// would leave argMax(fired, computed_at) and ReplacingMergeTree(computed_at)
+// unable to pick a winner between two runs.
+//
+// So midnight matters for the WINDOW, not for the persisted ordering key. Using
+// a wall-clock instant here would still produce the right window on the as_of
+// path, but it would stop being a pure function of as_of -- and the ordering
+// key it once determined is no longer this value's job at all.
 func EvaluationInstant(asOf *time.Time, wallClock func() time.Time) (now, asOfDay time.Time) {
 	if asOf != nil {
 		day := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)

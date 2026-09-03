@@ -82,16 +82,20 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 // reports success and neither monitoring nor retries see anything wrong
 // (CHAOS-2373 round 2). The reference raises for exactly this reason and so
 // does this port.
+// The failed team IDs are carried because they are what makes the error
+// ACTIONABLE -- an operator needs to know which teams hold stale guidance. The
+// COUNTS deliberately do not live here: they belong on OrgOutcome, which the
+// caller receives alongside this error, so there is one place a ledger reads
+// them from rather than two that can disagree.
 type TeamEvaluationFailure struct {
 	OrgID       string
 	FailedTeams []string
-	TotalTeams  int
 }
 
 func (failure *TeamEvaluationFailure) Error() string {
 	return fmt.Sprintf(
-		"recommendations: %d of %d teams failed to evaluate for org %s: %s",
-		len(failure.FailedTeams), failure.TotalTeams, failure.OrgID,
+		"recommendations: %d team(s) failed to evaluate for org %s: %s",
+		len(failure.FailedTeams), failure.OrgID,
 		strings.Join(failure.FailedTeams, ", "))
 }
 
@@ -173,7 +177,6 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		return outcome, &TeamEvaluationFailure{
 			OrgID:       orgID,
 			FailedTeams: failedTeams,
-			TotalTeams:  len(teamIDs),
 		}
 	}
 	return outcome, nil

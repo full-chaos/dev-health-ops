@@ -634,7 +634,8 @@ def _run_latest_tag_step(
     digest_walk_candidates: list[str] | None = None,
     digest_walk_match_short: str = "",
     source_tag_scenario: str = "",
-) -> tuple[str, bool, bool, str]:
+    assert_success: bool = True,
+) -> tuple[str, bool, bool, str, int]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
     `git` shimmed to record `log` and `merge-base --is-ancestor`
@@ -653,10 +654,17 @@ def _run_latest_tag_step(
     nine identically and none of them reach the :latest check at all
     (the loop `continue`s before it). Returns (recorded `imagetools
     create` invocations, whether `git log` was called, whether `git
-    merge-base --is-ancestor` was called, captured stdout).
-    `IS_MAIN_REF=true` and, when `source_tag_scenario` is left empty
-    (the default), a source-tag probe that always "finds" its ref, so
-    every family reaches the :latest check under test."""
+    merge-base --is-ancestor` was called, captured stdout, the script's
+    exit code). `assert_success=False` (default True) skips this
+    helper's own zero-exit assertion, for a scenario -- like every family
+    hitting UNKNOWN on the source tag -- that is EXPECTED to exit
+    non-zero (docker-images.yml's own post-loop `source_unknown_count`
+    check); the returncode is still returned either way so the caller
+    can assert on it explicitly instead of this helper silently
+    accepting whatever it got. `IS_MAIN_REF=true` and, when
+    `source_tag_scenario` is left empty (the default), a source-tag
+    probe that always "finds" its ref, so every family reaches the
+    :latest check under test."""
     script = _latest_tag_step_script()
     with tempfile.TemporaryDirectory() as tmp:
         bin_dir = Path(tmp) / "bin"
@@ -705,15 +713,25 @@ def _run_latest_tag_step(
             timeout=60,
             check=False,
         )
-        assert result.returncode == 0, (
-            f"fan-in script exited {result.returncode} under scenario "
-            f"{scenario!r} -- stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        # codex round 3, P2: an ALL-families UNKNOWN source-tag scenario
+        # is now a deliberate non-zero exit (docker-images.yml's
+        # post-loop source_unknown_count/family_total check) -- the old
+        # unconditional `assert returncode == 0` would itself fail any
+        # test exercising that path. `assert_success=False` opts out;
+        # the returncode is returned (5th element) so the caller can
+        # assert on it explicitly instead of this helper silently
+        # accepting any exit code.
+        if assert_success:
+            assert result.returncode == 0, (
+                f"fan-in script exited {result.returncode} under scenario "
+                f"{scenario!r} -- stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
         return (
             record_file.read_text(encoding="utf-8"),
             git_log_called_file.exists(),
             git_merge_base_called_file.exists(),
             result.stdout,
+            result.returncode,
         )
 
 
@@ -736,7 +754,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     the assertion can't pass by shadowing a neighbouring branch. Also
     asserts the negative control: a genuinely present (found) read
     emits no `::error::`)."""
-    absent_record, absent_log_called, absent_mb_called, _absent_stdout = _run_latest_tag_step(
+    absent_record, absent_log_called, absent_mb_called, _absent_stdout, _absent_rc = _run_latest_tag_step(
         "absent"
     )
     assert "imagetools create" in absent_record and ":latest" in absent_record, (
@@ -750,7 +768,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         "short-circuiting straight to bootstrap"
     )
 
-    unknown_record, unknown_log_called, unknown_mb_called, _unknown_stdout = (
+    unknown_record, unknown_log_called, unknown_mb_called, _unknown_stdout, _unknown_rc = (
         _run_latest_tag_step("unknown")
     )
     assert unknown_record == "", (
@@ -775,7 +793,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # "wandered into the fallback and got lucky" -- verified by removing
     # the guard and confirming this specific assertion goes red while
     # the create-count assertion alone stays green.
-    empty_record, empty_log_called, empty_mb_called, empty_stdout = _run_latest_tag_step(
+    empty_record, empty_log_called, empty_mb_called, empty_stdout, _empty_rc = _run_latest_tag_step(
         "empty_success"
     )
     assert empty_record == "", (
@@ -812,7 +830,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # the old name implied) must emit no `::error::` at all -- if it did,
     # the annotation would be noise on a routine fallback instead of a
     # signal on the genuinely surprising empty-read case.
-    _found_record, found_log_called, found_mb_called, found_stdout = _run_latest_tag_step(
+    _found_record, found_log_called, found_mb_called, found_stdout, _found_rc = _run_latest_tag_step(
         "unlabelled"
     )
     assert found_log_called and not found_mb_called, (
@@ -846,7 +864,7 @@ def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
     must decline. Verified this test goes red against a mutation that
     inverts the `git merge-base --is-ancestor` exit-code check (flipped
     the if/else bodies) before trusting it."""
-    descendant_record, descendant_log_called, descendant_mb_called, _stdout = (
+    descendant_record, descendant_log_called, descendant_mb_called, _stdout, _rc = (
         _run_latest_tag_step("labelled", merge_base_is_ancestor=True)
     )
     assert descendant_mb_called and not descendant_log_called, (
@@ -861,7 +879,7 @@ def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
         f"call -- a true descendant must be tagged, got: {descendant_record!r}"
     )
 
-    non_descendant_record, non_desc_log_called, non_desc_mb_called, _stdout2 = (
+    non_descendant_record, non_desc_log_called, non_desc_mb_called, _stdout2, _rc2 = (
         _run_latest_tag_step("labelled", merge_base_is_ancestor=False)
     )
     assert non_desc_mb_called and not non_desc_log_called, (
@@ -898,7 +916,7 @@ def test_digest_walk_finds_a_match_partway_through_history() -> None:
         "2222222222222222222222222222222222222b",  # THE MATCH (checked second)
         "3333333333333333333333333333333333333c",  # never reached (walk breaks at #2)
     ]
-    record, log_called, mb_called, stdout = _run_latest_tag_step(
+    record, log_called, mb_called, stdout, _rc = _run_latest_tag_step(
         "unlabelled",
         digest_walk_candidates=candidates,
         digest_walk_match_short="2222222",
@@ -944,7 +962,7 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
     outputs differ. Verified this test goes red against the mutation
     lane-runner-fallback described (rc==2's branch replaced with the same
     silent-SKIP text as rc==1) before trusting it."""
-    absent_record, absent_log, absent_mb, absent_stdout = _run_latest_tag_step(
+    absent_record, absent_log, absent_mb, absent_stdout, _absent_rc = _run_latest_tag_step(
         # The :latest scenario value is irrelevant here -- source_rc==1
         # `continue`s the loop long before the :latest probe is ever
         # reached for any family.
@@ -969,9 +987,23 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
         f"`::error::` annotation, got stdout: {absent_stdout!r}"
     )
 
-    unknown_record, unknown_log, unknown_mb, unknown_stdout = _run_latest_tag_step(
+    # codex round 3, P2: every family shares one short_sha, so this
+    # scenario hits ALL NINE with source_rc==2 -- which is now the exact
+    # trigger for docker-images.yml's post-loop source_unknown_count ==
+    # family_total check, a deliberate non-zero exit (see
+    # test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop
+    # below for the dedicated row on that mechanism). assert_success=False
+    # here because this row's own point is the PER-FAMILY message shape
+    # (SKIP vs `::error::`), not the job-level exit code.
+    unknown_record, unknown_log, unknown_mb, unknown_stdout, unknown_rc = _run_latest_tag_step(
         "labelled",
         source_tag_scenario="unknown",
+        assert_success=False,
+    )
+    assert unknown_rc != 0, (
+        "all nine families hitting source_rc==2 should now fail the step "
+        f"(post-loop source_unknown_count==family_total check), got "
+        f"returncode={unknown_rc}"
     )
     assert unknown_record == "", (
         "UNKNOWN registry failure on the source tag still recorded an "
@@ -997,4 +1029,45 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
         "the confirmed-absent and unknown source-tag outcomes must be "
         "distinguishable on the wire (silent skip vs a visible `::error::` "
         f"decline) -- got absent={absent_stdout!r}, unknown={unknown_stdout!r}"
+    )
+
+
+def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None:
+    """codex round 3, P2 (reproduced live): every family shares ONE
+    `short_sha`, so an UNKNOWN source-tag registry error is never a
+    per-family gap -- it hits all nine simultaneously. Before this row's
+    fix, that produced nine `::error::` annotations, an EMPTY create
+    record (no tags moved for anyone), and a ZERO-EXIT step: a full
+    publish no-op that reads as a green job unless someone actually reads
+    the log for the annotations. docker-images.yml now counts
+    `source_unknown_count` against `family_total` after the loop and
+    fails the step when they're equal.
+
+    Negative control: `test_source_tag_check_distinguishes_confirmed_absent_from_unknown`'s
+    own "absent" call (all nine hit source_rc==1, not 2) uses the
+    DEFAULT `assert_success=True` and passes -- proving this check is
+    keyed on the UNKNOWN class specifically, not "every family declined
+    for any reason" (an all-CONFIRMED-ABSENT run, e.g. a fresh org with
+    nothing published yet, is a legitimate steady state and must not
+    fail the job)."""
+    record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
+        "labelled",
+        source_tag_scenario="unknown",
+        assert_success=False,
+    )
+    assert returncode == 1, (
+        f"expected the all-UNKNOWN source-tag scenario to exit 1, got "
+        f"returncode={returncode}, stdout:\n{stdout}"
+    )
+    assert record == "", (
+        f"the failing run still recorded an `imagetools create` call: {record!r}"
+    )
+    assert not log_called and not mb_called, (
+        "the failing run reached the digest-walk fallback or the "
+        "merge-base ancestry check instead of failing immediately after "
+        "the per-family loop"
+    )
+    assert "all 9 families failed the source-tag registry read" in stdout, (
+        "expected the job-level failure annotation naming all 9 families, "
+        f"got stdout:\n{stdout}"
     )

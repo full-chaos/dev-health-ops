@@ -884,6 +884,21 @@ jobs:
           # second copy is how the next target goes untagged.
           families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-scheduler dev-health-go-reconciler dev-health-go-stream-runner dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
+          # codex round 3, P2: every family shares this ONE short_sha, so an
+          # UNKNOWN source-tag registry error (rc==2) on it is not a
+          # per-family gap -- it hits all nine simultaneously. Before this
+          # counter, that scenario produced nine `::error::` annotations,
+          # zero moving tags applied, and a ZERO-EXIT job: a full publish
+          # no-op that reads as success unless someone reads the log.
+          # Reproduced: `_run_latest_tag_step("labelled",
+          # source_tag_scenario="unknown")` returns an empty create record
+          # with 9 annotations and rc 0. `family_total` is a word count, not
+          # a loop-scoped counter, so it is correct even though the loop
+          # `continue`s past most families before reaching anything that
+          # would otherwise count them.
+          family_total=0
+          for _ in $families; do family_total=$((family_total + 1)); done
+          source_unknown_count=0
           for family in $families; do
             image="ghcr.io/${OWNER}/${family}"
             source_ref="${image}:sha-${short_sha}"
@@ -913,6 +928,7 @@ jobs:
               continue
             elif [ "${source_rc}" -eq 2 ]; then
               echo "::error::${family}: could not confirm whether ${source_ref} exists (registry error of an unrecognized shape) -- declining rather than silently leaving this family stale while others move latest/main"
+              source_unknown_count=$((source_unknown_count + 1))
               continue
             fi
 
@@ -1118,3 +1134,17 @@ jobs:
               echo "DECLINE ${family}: ${BUILT_SHA} is not a descendant of currently-latest ${base_sha}"
             fi
           done
+
+          # codex round 3, P2: if EVERY family's source-tag read came back
+          # UNKNOWN, nothing in this run reached any of the decisions
+          # above -- no tags moved, nine `::error::` annotations were
+          # printed, and the step would otherwise still exit 0. That
+          # specific shape (every family, the shared registry-error class,
+          # not the routine "this one family has no label yet") means the
+          # registry read itself is broken for this run, not that nine
+          # families independently have nothing to do -- fail loudly so CI
+          # goes red instead of a silent no-op green.
+          if [ "${source_unknown_count}" -eq "${family_total}" ]; then
+            echo "::error::all ${family_total} families failed the source-tag registry read with an unrecognized error this run -- likely a registry outage, not nine unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
+            exit 1
+          fi

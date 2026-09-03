@@ -184,6 +184,16 @@ jobs:
           echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
           echo "sha=${SHA}" >> $GITHUB_OUTPUT
 
+      # CHAOS-4921: dead configuration, flagged by ci-flakes' review of this
+      # PR -- `steps.meta.outputs.*` is not referenced anywhere else in this
+      # job. The actual push below (`Build and push by digest`) uses a
+      # hardcoded `tags:` with `push-by-digest=true` and applies no tags
+      # from this step. Left in place rather than deleted because deleting
+      # it invites someone to re-add an equivalent step without noticing
+      # this comment; if `meta.outputs.tags` is ever wired into the push
+      # below, its `latest` line must gain the same main-head gate the
+      # `merge`/`go-merge` jobs' `Docker meta` steps use (round 3, this PR)
+      # -- copying this ungated line instead reintroduces this PR's bug.
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0

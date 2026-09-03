@@ -19,10 +19,14 @@ break without any test noticing:
    could be edited to skip it).
 2. The (worker, linux/arm64) combination is excluded from go-build's own
    matrix, so it is never built twice.
-3. The build step's own `timeout-minutes` is set and strictly shorter than
-   its job's `timeout-minutes` -- the double-bound lesson from go.yml's own
-   pilot (CF, 09-03, acr's near-miss: a job cancelled by its own outer
-   timeout reads as claimed-failure through the shared poll contract).
+3. BOTH legs' build step (the self-hosted attempt AND the fallback's own
+   copy -- either can be the one that actually does the real work) has its
+   own `timeout-minutes` set and strictly shorter than its job's own
+   `timeout-minutes` -- the double-bound lesson from go.yml's own pilot
+   (CF, 09-03, acr's near-miss: a job cancelled by its own outer timeout
+   reads as claimed-failure through the shared poll contract). The
+   fallback's copy was missing this in the first cut of this PR -- caught
+   and fixed before any round ran, not by one.
 4. go-merge's `needs:` includes the fallback leg (not just go-build), same
    "needs ONLY the fallback, never the attempt directly" shape as go.yml's
    own aggregator -- a self-hosted attempt stuck permanently `queued` never
@@ -106,8 +110,12 @@ def test_worker_arm64_is_excluded_from_the_go_build_matrix() -> None:
     )
 
 
-def test_self_hosted_build_step_has_an_inner_timeout_shorter_than_the_job_cap() -> None:
-    for job_name in (_SELF_HOSTED_JOB,):
+def test_both_legs_build_step_has_an_inner_timeout_shorter_than_the_job_cap() -> None:
+    # Both legs: the self-hosted attempt's step and the fallback's own copy
+    # of the same step both need the inner bound -- either one can be the
+    # leg that actually does the real work (see FALLBACK_JOB's own comment
+    # on `steps.own.outputs.run_here`).
+    for job_name in (_SELF_HOSTED_JOB, _FALLBACK_JOB):
         job = _job(job_name)
         job_timeout = job.get("timeout-minutes")
         assert isinstance(job_timeout, int), (

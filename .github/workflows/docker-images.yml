@@ -930,6 +930,17 @@ jobs:
       - name: Build and push by digest
         id: build
         if: steps.own.outputs.run_here == 'true'
+        # timeout-minutes: 8, same double-bound as the self-hosted attempt's
+        # own copy of this step (see that step's comment for the full
+        # rationale). This leg's OWN job cap is 20 minutes, not the
+        # attempt's 10 -- but the same reasoning applies whenever this leg
+        # actually does the real work (switch off, or the attempt was
+        # unclaimed): a stuck build should fail on its own terms, not wait
+        # out a 20-minute cap. #2145's own fallback applies its inner
+        # `go test -timeout` symmetrically to both legs for the identical
+        # reason; this was missed here in the first cut of this PR and
+        # caught before any round ran, not by one.
+        timeout-minutes: 8
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .

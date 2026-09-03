@@ -156,7 +156,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	var cancelled error
 
 	for _, currentTeam := range teamIDs {
-		teamRecords, err := executor.ComputeTeam(
+		teamRecords, err := executor.computeTeam(
 			ctx, currentTeam, orgID, now, windowDays, ruleVersion)
 		if err != nil {
 			// A context cancellation is the run being torn down, not this
@@ -195,6 +195,23 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		}
 	}
 	outcome.FailedTeams = len(failedTeams)
+
+	// CANCELLATION IS RE-CHECKED HERE, NOT ONLY ON A FAILING TEAM.
+	//
+	// The loop above learns of cancellation only through a team that ERRORS.
+	// If the last team SUCCEEDS and the context is cancelled immediately after,
+	// the loop exits normally, `cancelled` stays nil, and the write below runs
+	// on the cancelled context -- failing, and losing exactly the rows this
+	// path exists to keep. The final-team boundary has no next iteration to
+	// notice anything.
+	//
+	// Found in review (round 4 P1). The container test cancels after the first
+	// of two teams, so the second observes the cancellation through its own
+	// error and the boundary is never reached: the fixture was one team short
+	// of the case, which is why the earlier proof passed.
+	if cancelled == nil {
+		cancelled = ctx.Err()
+	}
 
 	// The write context is DETACHED from cancellation, and bounded. A cancelled
 	// context cannot execute the insert at all, so without this the rows are
@@ -241,6 +258,19 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		}
 	}
 	return outcome, nil
+}
+
+// computeTeam dispatches to the test double when one is installed.
+//
+// Nil in production, so this is ComputeTeam by another name there.
+func (executor *RecommendationsExecutor) computeTeam(
+	ctx context.Context, teamID, orgID string, now time.Time,
+	windowDays int, ruleVersion string,
+) ([]RecommendationRecord, error) {
+	if executor.computeTeamForTest != nil {
+		return executor.computeTeamForTest(teamID)
+	}
+	return executor.ComputeTeam(ctx, teamID, orgID, now, windowDays, ruleVersion)
 }
 
 // writeRecommendations stamps and inserts the batch.

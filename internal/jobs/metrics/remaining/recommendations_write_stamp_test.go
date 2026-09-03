@@ -49,8 +49,18 @@ func (conn *batchingConn) Query(
 }
 
 func (conn *batchingConn) PrepareBatch(
-	_ context.Context, query string, _ ...chdriver.PrepareBatchOption,
+	ctx context.Context, query string, _ ...chdriver.PrepareBatchOption,
 ) (chdriver.Batch, error) {
+	// HONOURS CANCELLATION, because the real driver does.
+	//
+	// This stub used to ignore ctx entirely, which made every assertion about
+	// rows surviving a cancellation VACUOUS: the write "succeeded" whether or
+	// not the detached context was in place, so removing the detach failed
+	// only the error-reporting assertion and never the persisted-rows one.
+	// A stub that cannot refuse cannot prove that something got past a refusal.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	conn.query = query
 	return conn.batch, nil
 }
@@ -506,5 +516,54 @@ func TestCancellationReportsTheInterruptionRatherThanATeamFailure(t *testing.T) 
 	// what the interrupted run did reach.
 	if outcome.Teams != 1 {
 		t.Errorf("outcome reports %d teams, want 1", outcome.Teams)
+	}
+}
+
+// TestCancellationAfterTheFinalTeamStillPersists covers the boundary the
+// container test is structurally one team short of reaching.
+//
+// The loop learns of cancellation only through a team that ERRORS. When the
+// LAST team succeeds and the context is cancelled immediately after, the loop
+// exits normally with `cancelled` nil, and the write runs on a cancelled
+// context -- failing, and losing precisely the rows the detached write exists
+// to keep.
+//
+// The container test cancels after the first of TWO teams, so the second team
+// observes the cancellation through its own error. That fixture cannot reach
+// this case at all: catching it requires cancellation after the FINAL team,
+// where there is no next iteration to notice anything. Found in review, not by
+// the proof I had already run and believed.
+func TestCancellationAfterTheFinalTeamStillPersists(t *testing.T) {
+	batch := &recordingBatch{}
+	conn := &batchingConn{batch: batch}
+	executor := &RecommendationsExecutor{conn: conn}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// One team, which SUCCEEDS, with the cancellation landing after it. The
+	// hook fires after each team, so here it fires after the only one --
+	// exactly the final-team boundary.
+	teamRecords := []RecommendationRecord{{TeamID: "team-a", RuleID: "one"}}
+	executor.computeTeamForTest = func(string) ([]RecommendationRecord, error) {
+		return teamRecords, nil
+	}
+	executor.afterTeamHook = cancel
+
+	outcome, err := executor.ComputeOrg(ctx, "org-1", time.Now().UTC(), 30, "1.0.0", "team-a")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("returned %v, want context.Canceled — a run cancelled after its "+
+			"last team is still an interrupted run", err)
+	}
+	// THE POINT: the rows were still written. Without the post-loop re-check
+	// the write runs on the cancelled context, fails, and these are lost.
+	if !batch.sent {
+		t.Error("PERSISTED ROWS: the batch was never sent — a cancellation " +
+			"arriving after the final team must not discard what that team " +
+			"produced")
+	}
+	if outcome.RowsWritten != len(teamRecords) {
+		t.Errorf("PERSISTED ROWS: outcome reports %d rows written, want %d",
+			outcome.RowsWritten, len(teamRecords))
 	}
 }

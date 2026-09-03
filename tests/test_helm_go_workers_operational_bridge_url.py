@@ -1,20 +1,23 @@
 """`--operational-bridge-url` must render for every group whose HTTPDispatcher
-needs it, not just the metrics-queue group (CHAOS-4984).
+or HTTP bridge client needs it, not just the metrics-queue group (CHAOS-4984).
 
 CHAOS-4351 originally scoped `--operational-bridge-url` to whichever group's
 queue set includes `metrics` -- that group calls the metrics compatibility
-bridge and needs the flag to reach it. kiac-workers traced a crash-loop in
-the shipped `ops` group (queues: coverage, heartbeat, retention, webhooks)
-to `buildOperationalWorker` in cmd/dev-health-worker: its own HTTPDispatcher
-needs `--operational-bridge-url` too, and the flag was never emitted for it
-because `ops`'s queue set has no `metrics` member.
+bridge and needs the flag to reach it. kiac-workers traced two more builders
+back to the same missing flag: `buildOperationalWorker` in
+cmd/dev-health-worker crash-loops the shipped `ops` group (queues: coverage,
+heartbeat, retention, webhooks), and `buildSyncCoordinatorWorker` fails
+`NewHTTPBridge` with `ErrInvalidBridge` on an empty host for the shipped
+`sync` group (queues: sync) -- neither carries `metrics`, so the flag was
+never emitted for either.
 
 The emission condition is now broadened to any of
-{metrics, coverage, heartbeat, retention, webhooks} -- but the
+{metrics, coverage, heartbeat, retention, webhooks, sync} -- but the
 metricsApi-vs-api DEFAULT-URL SELECTION stays gated on `metrics`
-specifically, unchanged: an ops-shaped group with no `metrics` queue always
-gets the `api` default (metricsApi exists to isolate metrics-bridge load,
-not ops traffic), regardless of whether metricsApi is enabled.
+specifically, unchanged: an ops- or sync-shaped group with no `metrics`
+queue always gets the `api` default (metricsApi exists to isolate
+metrics-bridge load, not ops/sync traffic), regardless of whether
+metricsApi is enabled.
 """
 
 from __future__ import annotations
@@ -108,11 +111,29 @@ def test_ops_shaped_group_renders_the_flag() -> None:
     )
 
 
+def test_sync_shaped_group_renders_the_flag() -> None:
+    """The second traced incident: buildSyncCoordinatorWorker's own
+    NewHTTPBridge call fails ErrInvalidBridge on an empty host, so the
+    `sync` group (queues: sync) needs --operational-bridge-url exactly
+    like `ops` does, despite carrying none of ops's queue names."""
+    args = _container_args(_group_values(name="sync", queues=["sync"]))
+    bridge = _bridge_url_arg(args)
+    assert bridge is not None, (
+        f"expected --operational-bridge-url on a sync-shaped group, got args={args}"
+    )
+    assert "-api:" in bridge and "-metrics-api:" not in bridge, (
+        f"expected the api default (not metrics-api) for a sync-shaped group, got {bridge!r}"
+    )
+
+
 def test_workgraph_only_group_does_not_render_the_flag() -> None:
     """The negative control CHAOS-4351 originally relied on: a group whose
     queues touch none of the bridge-needing set must not get the flag at
-    all -- broadening emission must not become "always emit"."""
-    args = _container_args(_group_values(name="sync", queues=["workgraph"]))
+    all -- broadening emission must not become "always emit". Named after
+    a hypothetical group shape, not any real goWorkers.groups entry, so it
+    can't collide with a future incident the way the old `sync`-named
+    fixture did here."""
+    args = _container_args(_group_values(name="workgraph-only", queues=["workgraph"]))
     assert _bridge_url_arg(args) is None, (
         f"expected no --operational-bridge-url on a workgraph-only group, got args={args}"
     )

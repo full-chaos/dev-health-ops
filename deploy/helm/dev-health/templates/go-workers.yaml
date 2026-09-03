@@ -122,18 +122,22 @@ spec:
               cmd/dev-health-worker): the flag is not metrics-only -- the
               `ops` group's own HTTPDispatcher (queues: coverage, heartbeat,
               retention, webhooks) needs --operational-bridge-url too and
-              crash-loops without it. Broadened the EMISSION condition to
-              any of those five queue names (checked one at a time -- this
-              Helm's Sprig build has no `intersect` function). The
-              metricsApi-vs-api DEFAULT-URL SELECTION stays gated on
-              `metrics` specifically, unchanged -- an ops-shaped group with
-              no `metrics` queue gets the `api` default, same as today,
-              since metricsApi exists only to isolate the metrics bridge
-              load, not ops traffic.
+              crash-loops without it. Same trace also caught
+              buildSyncCoordinatorWorker: the `sync` group's own
+              NewHTTPBridge call fails ErrInvalidBridge on an empty host,
+              since `sync` carries none of the other bridge-needing queues
+              either. Broadened the EMISSION condition to any of these six
+              queue names (checked one at a time -- this Helm's Sprig build
+              has no `intersect` function). The metricsApi-vs-api
+              DEFAULT-URL SELECTION stays gated on `metrics` specifically,
+              unchanged -- an ops- or sync-shaped group with no `metrics`
+              queue gets the `api` default, same as today, since metricsApi
+              exists only to isolate the metrics bridge load, not
+              ops/sync traffic.
             */}}
             {{- $groupQueues := $group.queues | default (list) }}
             {{- $needsBridge := false }}
-            {{- range $bridgeQueue := list "metrics" "coverage" "heartbeat" "retention" "webhooks" }}
+            {{- range $bridgeQueue := list "metrics" "coverage" "heartbeat" "retention" "webhooks" "sync" }}
             {{- if has $bridgeQueue $groupQueues }}
             {{- $needsBridge = true }}
             {{- end }}

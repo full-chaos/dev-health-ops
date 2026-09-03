@@ -206,33 +206,23 @@ func diffAgainstGoldenPartitioned(
 	// invariant along with the shifting one. Component order is load-bearing:
 	// partitioned materialization dispatches numeric component_indexes
 	// (chquery.go:24) and each chunk worker re-derives the list, so index N
-	// must name the same component on both planes. What survives the fix,
-	// provably: BuildComponents's final sort is a single GLOBAL sort by node
-	// key over the combined (survivors + new singletons) list -- a stable
-	// total order, so two survivors whose relative order was A-before-B in
-	// golden cannot come out B-before-A in live merely because singletons were
-	// interleaved between them; only an ACTUAL reordering bug could do that.
-	// So: filter live down to just the components matching a golden
-	// work_unit_id, preserve live's own order, and assert that sequence
-	// equals golden.Components exactly -- singletons are correctly excluded
-	// here (they have no golden counterpart) and checked separately below.
-	// ORDER, among the golden-matching subset of live (codex round 1 on #2172,
-	// P2): the earlier version of this comparator dropped position-checking
-	// entirely, reasoning that the new singleton fragments can sort anywhere
-	// and shift every following index -- true, but it threw out a real
-	// invariant along with the shifting one. Component order is load-bearing:
-	// partitioned materialization dispatches numeric component_indexes
-	// (chquery.go:24) and each chunk worker re-derives the list, so index N
-	// must name the same component on both planes. What survives the fix,
-	// provably: BuildComponents's final sort is a single GLOBAL sort by node
-	// key over the combined (survivors + new singletons) list -- a stable
-	// total order, so two survivors whose relative order was A-before-B in
-	// golden cannot come out B-before-A in live merely because singletons were
-	// interleaved between them; only an ACTUAL reordering bug could do that.
-	// So: filter live down to just the components matching a golden
-	// work_unit_id, preserve live's own order, and assert that sequence
-	// equals golden.Components exactly -- singletons are correctly excluded
-	// here (they have no golden counterpart) and checked separately below.
+	// must name the same component on both planes. What survives the fix:
+	// survivors' relative order to EACH OTHER cannot flip without an actual
+	// reordering bug, since golden's own order is the independent oracle.
+	// CORRECTED again (codex round 2 on #2172, P2): the "global sort" claim
+	// above was wrong -- BuildComponents's sort (components.go:619-635) is
+	// LOCAL to one splitOversizedComponent call, not global over all of
+	// BuildComponents's output; unsplit components keep raw discovery order.
+	// More importantly, filtering live down to just golden-matching components
+	// BEFORE checking order makes this check blind to a singleton swapped into
+	// a survivor's raw position: codex constructed exactly that input (swap
+	// any extra singleton with an adjacent survivor, changing neither's
+	// content) and this check alone did not notice, since singletons carry no
+	// weight in the filtered sequence at all. See the SPLIT-SPAN check below,
+	// which closes that gap; this check stays because it is the ONLY one
+	// backed by golden as an independent oracle (the span check below only
+	// proves internal self-consistency, not that the order golden expects is
+	// the order live has).
 	matchingLiveInOrder := make([]goldenComponent, 0, len(golden.Components))
 	for _, component := range live {
 		if _, inGolden := goldenByID[component.WorkUnitID]; inGolden {
@@ -256,6 +246,59 @@ func diffAgainstGoldenPartitioned(
 	}
 	if reordered > 8 {
 		failures = append(failures, fmt.Sprintf("... and %d further order mismatches", reordered-8))
+	}
+
+	// SPLIT-SPAN order (codex round 2 on #2172, P2): closes the gap in the
+	// check above -- a singleton swapped into a survivor's raw position
+	// changes neither's content and doesn't touch survivors' relative order
+	// to each other, so the golden-matching-subset check can't see it. Every
+	// extra singleton this fixture produces comes from removeHubs inside the
+	// ONE call to splitOversizedComponent (golden.Stats.OversizedComponents
+	// == 1, asserted below), whose own final sort (components.go:633-635) is
+	// a single stable sort over that call's ENTIRE fragment output --
+	// survivors and singletons together -- so that whole output is one
+	// contiguous run in live, self-consistently ordered by each fragment's
+	// own sorted node-key tuple. toGoldenComponent already sorts
+	// goldenComponent.Nodes into exactly that key (see its doc), so comparing
+	// live[i].Nodes against live[i-1].Nodes directly checks the same
+	// invariant components.go:633-635 guarantees, without re-deriving
+	// BuildComponents's grouping (the CHAOS-3033 differential-oracle lesson:
+	// this only proves live is INTERNALLY self-consistent with its own
+	// documented order, not that the order is the one golden expects -- the
+	// check above is what proves that, against golden as an independent
+	// oracle). Scoped to the single-oversized-component case this fixture
+	// guarantees: with more than one, disjoint split spans could have an
+	// untouched component sitting between them, and treating the full
+	// min-to-max singleton range as one span would false-positive on that
+	// component's unrelated position -- skip and note rather than risk that.
+	if golden.Stats.OversizedComponents == 1 {
+		firstSplit, lastSplit := -1, -1
+		for position, component := range live {
+			if _, inGolden := goldenByID[component.WorkUnitID]; inGolden {
+				continue
+			}
+			if len(component.Nodes) == 1 && len(component.EdgeIDs) == 0 {
+				if firstSplit < 0 {
+					firstSplit = position
+				}
+				lastSplit = position
+			}
+		}
+		spanOutOfOrder := 0
+		for position := firstSplit + 1; position <= lastSplit; position++ {
+			if nodeTupleListLess(live[position].Nodes, live[position-1].Nodes) {
+				spanOutOfOrder++
+				if spanOutOfOrder <= 8 {
+					failures = append(failures, fmt.Sprintf(
+						"split-span order: live position %d (%s) sorts before position %d (%s), violating the node-key order splitOversizedComponent guarantees",
+						position, live[position].WorkUnitID, position-1, live[position-1].WorkUnitID,
+					))
+				}
+			}
+		}
+		if spanOutOfOrder > 8 {
+			failures = append(failures, fmt.Sprintf("... and %d further split-span order violations", spanOutOfOrder-8))
+		}
 	}
 
 	// live's only permitted addition over golden: one singleton fragment
@@ -503,6 +546,44 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 					return components
 				}
 				t.Fatal("fewer than two golden-matching components; this mutation is vacuous")
+				return components
+			},
+		},
+		{
+			// codex round 2 on #2172, P2: the exact counterexample the round
+			// constructed against round 1's fix -- the golden-matching-subset
+			// order check filters singletons out BEFORE comparing, so swapping a
+			// singleton and a survivor's raw positions (content of neither
+			// changes) doesn't touch survivors' relative order to each other and
+			// passed silently. Targets the split-span self-consistency check.
+			name: "a singleton swapped into a survivor's raw position",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				goldenIDs := make(map[string]struct{}, len(golden.Components))
+				for _, component := range golden.Components {
+					goldenIDs[component.WorkUnitID] = struct{}{}
+				}
+				isSingleton := func(component goldenComponent) bool {
+					return len(component.Nodes) == 1 && len(component.EdgeIDs) == 0
+				}
+				for position, component := range components {
+					if !isSingleton(component) {
+						continue
+					}
+					if _, inGolden := goldenIDs[component.WorkUnitID]; inGolden {
+						continue
+					}
+					for _, neighbor := range []int{position - 1, position + 1} {
+						if neighbor < 0 || neighbor >= len(components) {
+							continue
+						}
+						if _, inGolden := goldenIDs[components[neighbor].WorkUnitID]; !inGolden {
+							continue
+						}
+						components[position], components[neighbor] = components[neighbor], components[position]
+						return components
+					}
+				}
+				t.Fatal("no singleton adjacent to a golden-matching component; this mutation is vacuous")
 				return components
 			},
 		},
@@ -1193,6 +1274,24 @@ func hashJoinedTokens(nodes []NodeKey) string {
 	}
 	sum := sha256.Sum256([]byte(strings.Join(tokens, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+// nodeTupleListLess mirrors nodeListLess (components.go) over the JSON-shaped
+// [][]string{Type, ID} node representation: Python list comparison,
+// element-wise then shorter-first. toGoldenComponent sorts a component's
+// Nodes into exactly this key, so comparing two goldenComponents' Nodes
+// fields directly compares the same order splitOversizedComponent's final
+// sort (components.go:633-635) produces.
+func nodeTupleListLess(left, right [][]string) bool {
+	for position := 0; position < len(left) && position < len(right); position++ {
+		if left[position][0] != right[position][0] {
+			return left[position][0] < right[position][0]
+		}
+		if left[position][1] != right[position][1] {
+			return left[position][1] < right[position][1]
+		}
+	}
+	return len(left) < len(right)
 }
 
 func toGoldenComponent(component Component) goldenComponent {

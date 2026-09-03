@@ -71,31 +71,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push by DIGEST ONLY, no tags yet. codex round 1 (P1,
-      # confirmed): the original version ran the main-head check BEFORE
-      # this (slow) build step and used its result to decide the `latest`
-      # tag at build time. Per-SHA concurrency groups let distinct main
-      # commits build concurrently, so that check's result could go stale
-      # during the build: commit A's check passes, a faster commit B lands
-      # and publishes `latest` for B, then A's slower build finishes and
-      # pushes `latest` anyway, clobbering B's newer image with A's older
-      # one -- the exact bug #2149 exists to prevent. #2149 avoids this by
-      # checking in a job that runs AFTER the build (right before its own
-      # tag/push step), not before it. Reproduced here the same way: build
-      # first (no tags, no moving-target decision), check second, tag the
-      # already-built digest last -- the gap between check and push is now
-      # just the tag step itself, not the whole build.
-      - name: Build and push by digest
+      # Build once, LOADED into the local daemon (not pushed) so it can
+      # actually be run for the CGO check below, on every event type
+      # including PRs. Cached via GHA cache so the second build further
+      # down (the one that publishes) is a near-instant cache hit, not a
+      # second real build.
+      - name: Build (local, for check)
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/arc-runner/Dockerfile
           platforms: linux/arm64
-          tags: ghcr.io/full-chaos/arc-runner
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true') }}
+          tags: arc-runner:check
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # In-image CGO check (team-lead, after CF's second pickup failed with
+      # `-race requires cgo; CGO_ENABLED=1`). Go itself is not part of this
+      # image -- a real job gets it from actions/setup-go, same as here --
+      # so this step borrows THIS job's own setup-go binary and runs it
+      # inside the just-built image, over its GOROOT mounted read-only.
+      # That isolates what's actually being checked to what the image
+      # itself provides (gcc, libc6-dev, i.e. CGO_ENABLED/CC detection),
+      # not anything about the Go toolchain.
+      - name: Set up Go (for the in-image CGO check only)
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check CGO toolchain inside the built image
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 \
+            -v "$(go env GOROOT)":/usr/local/go:ro \
+            -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            arc-runner:check \
+            sh -c 'echo "gcc: $(command -v gcc)"; go env CGO_ENABLED CC'
 
       - name: Determine whether this build is main's current head
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
@@ -122,12 +135,25 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true' }}
 
-      - name: Tag and push
+      # A SECOND build, not a reuse of the first: it needs real tags (only
+      # known now, after the head check) and push=true, and build-push-
+      # action's tags/push are set at build time, not patchable after the
+      # fact. cache-from reuses the first build's GHA cache, so this is a
+      # cache hit -- not a real rebuild -- keeping the gap between the head
+      # check and the actual push to just this near-instant step, which is
+      # the whole point of checking here rather than before the first build.
+      - name: Build and push
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
-        run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            "ghcr.io/full-chaos/arc-runner@${{ steps.build.outputs.digest }}"
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/arc-runner/Dockerfile
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
 
       # Job-level summary line. Note: I found no existing "ensure"-named job
       # or script anywhere in this repo's .github/ or ci/ to match a
@@ -138,8 +164,10 @@ jobs:
         if: always()
         run: |
           {
-            if [ "${{ steps.build.outcome }}" = "success" ]; then
-              echo "✅ arc-runner image build: \`${{ steps.build.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags || 'none (PR/dry-run build, not pushed)' }}\`"
+            if [ "${{ steps.push.outcome }}" = "success" ]; then
+              echo "✅ arc-runner image published: \`${{ steps.push.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags }}\`"
+            elif [ "${{ steps.build.outcome }}" = "success" ]; then
+              echo "✅ arc-runner image build (not published, PR/dry-run): \`${{ steps.build.outputs.digest }}\`"
             else
               echo "❌ arc-runner image build failed (outcome: ${{ steps.build.outcome }})"
             fi

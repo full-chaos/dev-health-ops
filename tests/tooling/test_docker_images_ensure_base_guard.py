@@ -700,6 +700,24 @@ def test_ensure_base_run_block_parses_under_the_tooling_shell_splitter() -> None
     passing after CHAOS-4963 fixes the real one, and would then be asserting a
     rule that no longer exists -- a test outliving the behaviour it describes.
     Importing means this row relaxes automatically when the parser is fixed.
+
+    WHAT THIS ROW MEANS AFTER CHAOS-4963 LANDS (084-prod, team-lead ruling).
+    Once the splitter respects quotes, a `;` inside a quoted message parses
+    correctly, so re-inserting one will NO LONGER turn this row red. The
+    red-proof below establishes that this row works TODAY, against TODAY's
+    defect; it cannot establish that the row still means anything afterwards.
+
+    That is deliberate and the row still earns its place: it degrades from a
+    semicolon-specific guard into a general one -- "the ensure-base run block
+    parses under the tooling parser" -- which is worth asserting on its own,
+    because the block is only scanned at all thanks to the word `docker`
+    appearing in its prose, and an unbalanced quote anywhere in it would still
+    break a suite this file never runs.
+
+    Whoever closes CHAOS-4963: re-read this row then. If the fixed parser has
+    an invariant worth pinning, re-point it; if not, delete it. Do not leave it
+    green and unexamined -- a row with no remaining purpose is indistinguishable
+    from a row that is working.
     """
     from tests.tooling.test_go_integration_sharding import (  # noqa: PLC0415
         _run_pulled_images,

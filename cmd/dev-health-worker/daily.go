@@ -22,6 +22,33 @@ import (
 
 const metricsQueue = "metrics"
 
+// metricsCollectorFromObserver resolves the concrete *jobruntime.MetricsCollector
+// out of an observer, whether it IS one directly (a test double, typically) or
+// wraps one (production's claimLivenessObserver, which embeds the collector but
+// does not satisfy an exact-type assertion against it directly -- embedding
+// promotes methods, not concrete type identity; see
+// claim_liveness_test.go's TestClaimLivenessObserverUnwrapReturnsTheEmbeddedCollector
+// for the proof). Mirrors provider_sync.go's identical fallback.
+//
+// Round-2 codex finding, #2177 (CHAOS-4282): the membership wiring below used
+// to do the bare assertion inline with no fallback, so it silently never
+// matched in production -- every membership run/prune-failure counter was
+// dead despite passing every unit test (those construct
+// *jobruntime.MetricsCollector directly, never wrapped). Extracted here so
+// the resolution logic itself is unit-testable without constructing the rest
+// of buildDailyWorker's dependencies.
+func metricsCollectorFromObserver(observer jobruntime.Observer) *jobruntime.MetricsCollector {
+	if collector, ok := observer.(*jobruntime.MetricsCollector); ok {
+		return collector
+	}
+	if unwrapper, ok := observer.(interface {
+		Unwrap() *jobruntime.MetricsCollector
+	}); ok {
+		return unwrapper.Unwrap()
+	}
+	return nil
+}
+
 func buildDailyWorker(
 	cfg config.Config,
 	database workerDatabase,
@@ -426,7 +453,7 @@ func buildDailyWorker(
 					_ = refusalObserver.ObserveMembershipRefused(membershipRefusalReason(executorErr))
 				}
 			} else {
-				if collector, ok := observer.(*jobruntime.MetricsCollector); ok {
+				if collector := metricsCollectorFromObserver(observer); collector != nil {
 					executor.SetObserver(remaining.CollectorMembershipObserver{Collector: collector})
 				}
 				executor.SetLogger(logger)

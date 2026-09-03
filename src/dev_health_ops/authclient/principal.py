@@ -95,6 +95,21 @@ def _parse_revision(raw: object, field: str) -> int:
         _require_int64_range(raw, field)
         return raw
     if isinstance(raw, float):
+        # FAIL CLOSED past float64's exact-integer range. A float here means
+        # the token arrived in decimal form, and above 2^53 json.load has
+        # ALREADY rounded it to the nearest representable double -- in either
+        # direction. Measured: 9007199254740993.0 became ...992 and
+        # 9007199254740995.0 became ...996, identically in Go, so two distinct
+        # revisions collapse and a revision can come back larger than it was
+        # sent. Refused rather than rounded, because a revision is a G-31
+        # cache key. Integer-form tokens are unaffected and stay exact.
+        if abs(raw) >= _MAX_EXACT_FLOAT_INTEGER:
+            raise ContractError(
+                f"{SURFACE}: /{field} = {raw!r} arrived in decimal form with a magnitude "
+                "past 2**53, where float64 cannot represent every integer; refused rather "
+                "than silently rounded, because a rounded revision breaks the G-31 cache "
+                "key. Send it as an integer token instead, which stays exact"
+            )
         if raw != int(raw):
             raise ContractError(
                 f"{SURFACE}: /{field} = {raw!r} has a fractional part; "
@@ -108,6 +123,18 @@ def _parse_revision(raw: object, field: str) -> int:
 
 #: The widest revision both clients can represent. Python's ints are
 #: arbitrary-precision and Go's are not, so the CONTRACT's range is Go's.
+#: float64 represents every integer up to 2**53 exactly and only every second
+#: one above it. Past that a decimal-form revision has already been rounded
+#: before any validator sees it, so the boundary is a property of the wire
+#: encoding rather than of this client.
+#:
+#: The comparison against it is ``>=``, not ``>``. 2**53 itself is exactly
+#: representable, but 2**53 + 1 ROUNDS DOWN to it, and a float64 cannot say
+#: which of the two arrived. A first version of this guard used ``>`` and did
+#: not fire on the value it was written for. Refusing at the boundary is the
+#: only honest position; an integer token expresses the same number exactly.
+_MAX_EXACT_FLOAT_INTEGER = 2**53
+
 INT64_MAX = 2**63 - 1
 INT64_MIN = -(2**63)
 

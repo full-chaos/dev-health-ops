@@ -144,6 +144,12 @@
       "why": "Scopes are colon-separated and actions are dotted, deliberately different shapes so the two vocabularies cannot be confused at a call site (G-5: authentication is not authorization)."
     },
     {
+      "file": "invalid-sub-microsecond-timestamp.json",
+      "expect_instance_location": "/actor_chain/0/expires_at",
+      "expect_keyword": "pattern",
+      "why": "A delegation of exactly 15 minutes plus 500ns, expressed with ten fractional digits. Before the cap, Python TRUNCATED it to 15 minutes and ACCEPTED it against the ACP-ADR-03 bound while Go saw 15m0.0000005s and refused the identical document -- a bound bypass in one client and a split between both. Python's datetime holds microseconds and Go's time.Time holds nanoseconds, so any timestamp past six fractional digits means different instants in the two runtimes. The schema now caps the fraction at six digits, which all three validators enforce identically, and this fixture is what stops the cap being widened back: it is a REJECT rather than a client-enforced case precisely because the cap removed the surface instead of teaching each client to compare at a precision one of them cannot represent."
+    },
+    {
       "expect_instance_location": "/authentication/methods/0",
       "expect_keyword": "enum",
       "file": "invalid-unknown-amr-method.json",

@@ -77,6 +77,47 @@ func (r *Revision) UnmarshalJSON(data []byte) error {
 	//
 	// 2^63 and -2^63 are both exactly representable as float64, so these
 	// comparisons are exact.
+	// FAIL CLOSED past float64's exact-integer range.
+	//
+	// Reaching this branch means the token did NOT parse as an integer, i.e.
+	// it arrived in decimal form. float64 represents every integer up to 2^53
+	// exactly and only every SECOND one above it, so beyond that the value has
+	// already been rounded to the nearest representable double before this
+	// code sees it -- in either direction. Measured on both clients:
+	// 9007199254740993.0 decoded to ...992, and 9007199254740995.0 decoded to
+	// ...996, so a revision can come back LARGER than it was sent and two
+	// distinct revisions can collapse to one. A revision is a G-31 cache key;
+	// a collision there is the failure the key exists to prevent, and a value
+	// that never existed is worse than a rejection.
+	//
+	// This is the THIRD defect found in this function, after representation
+	// (round 1) and magnitude (round 2), and the Float64 fallback added for
+	// the first is what produced the third. The full repair is to parse the
+	// raw JSON token as a decimal string and never touch float64 -- tracked
+	// as a follow-up, because Python cannot implement it at its current
+	// dict-taking entry point (json.load has already destroyed the precision
+	// before the client runs). Until then this refuses what it cannot
+	// represent faithfully. Integer-form tokens are unaffected: they take the
+	// Int64 path above and stay exact to 2^63.
+	// The bound is >=, not >, and the reason is the finding itself.
+	//
+	// 2^53 IS exactly representable, so a decimal token of exactly
+	// "9007199254740992.0" is faithful -- but "9007199254740993.0" ROUNDS DOWN
+	// to the same double, and by the time this code holds a float64 the two
+	// are indistinguishable. Verified while writing this guard: a first
+	// version used > and did not fire, because the very value it was meant to
+	// catch had already become 2^53. Refusing AT the boundary is the only
+	// honest position, since the question "was this faithful?" cannot be
+	// answered from the value that survived. It costs the exact-2^53 decimal,
+	// which an integer token expresses without loss.
+	const maxExactFloatInteger = 9007199254740992.0 // 2^53
+	if asFloat >= maxExactFloatInteger || asFloat <= -maxExactFloatInteger {
+		return fmt.Errorf(
+			"revision %s arrived in decimal form with a magnitude past 2^53, where float64 "+
+				"cannot represent every integer; refused rather than silently rounded, "+
+				"because a rounded revision breaks the G-31 cache key. Send it as an "+
+				"integer token instead, which stays exact", number)
+	}
 	const maxInt64AsFloat = 9223372036854775808.0  // 2^63, one past MaxInt64
 	const minInt64AsFloat = -9223372036854775808.0 // -2^63, exactly MinInt64
 	if asFloat >= maxInt64AsFloat || asFloat < minInt64AsFloat {

@@ -64,6 +64,49 @@ var dialectSafeEscapes = map[byte]bool{
 // unsafeEscapesIn returns every backslash escape in a pattern that is not on
 // dialectSafeEscapes, walking the string so an escaped backslash cannot be
 // misread as introducing an escape.
+// unsafeGroupsIn reports every `(?…` group opener that is not the plain
+// non-capturing `(?:`.
+//
+// The escape safe-list closed one family and left another open: `(?i)` and
+// `(?i:…)` are INLINE FLAG groups, which are neither a backslash escape nor
+// something RE2 refuses to compile, so the guard accepted them. Measured on
+// two engines: Go RE2 compiles `(?i)^a$` and Python matches "A" with it, while
+// ECMA-262 rejects the pattern outright —
+// `SyntaxError: Invalid regular expression: /(?i)^a$/: Invalid group`. A
+// schema carrying one would validate in two runtimes and fail to compile at
+// all in the third (codex round 3).
+//
+// `(?:` is the only opener all three agree on and is therefore the whole
+// allow-list. Lookarounds (`(?=`, `(?!`, `(?<=`, `(?<!`) are also reported
+// here, and separately fail RE2 compilation — two independent detections of
+// the same construct is deliberate, since the compile check is the one that
+// would silently stop applying if the pattern were ever validated by
+// something other than RE2.
+func unsafeGroupsIn(pattern string) []string {
+	var found []string
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(pattern); i++ {
+		if pattern[i] != '(' || pattern[i+1] != '?' {
+			continue
+		}
+		if i > 0 && pattern[i-1] == '\\' {
+			continue // an escaped literal parenthesis, not a group opener
+		}
+		end := i + 2
+		for end < len(pattern) && pattern[end] != ':' && pattern[end] != ')' {
+			end++
+		}
+		opener := pattern[i:min(end+1, len(pattern))]
+		if opener == "(?:" || seen[opener] {
+			continue
+		}
+		seen[opener] = true
+		found = append(found, opener)
+	}
+	sort.Strings(found)
+	return found
+}
+
 func unsafeEscapesIn(pattern string) []string {
 	var found []string
 	seen := map[byte]bool{}
@@ -129,6 +172,19 @@ func inspectSchemaNode(file, pointer string, node any, findings *[]schemaFinding
 							"class such as [0-9], or add the escape to dialectSafeEscapes once "+
 							"you have checked all three dialects agree.",
 						raw, escape),
+				})
+			}
+			for _, group := range unsafeGroupsIn(raw) {
+				*findings = append(*findings, schemaFinding{
+					file:    file,
+					pointer: pointer,
+					problem: fmt.Sprintf(
+						"pattern %q opens a group with %s. The only group opener all three "+
+							"validators accept is `(?:`. Inline flag groups compile in Go RE2 "+
+							"and Python and are a SyntaxError in ECMA-262, so the schema would "+
+							"fail to compile in one validator while passing in two; lookarounds "+
+							"are unsupported by RE2 entirely.",
+						raw, group),
 				})
 			}
 			if _, err := regexp.Compile(raw); err != nil {
@@ -243,6 +299,18 @@ func TestTheDialectGuardDetectsTheViolationsItExistsToCatch(t *testing.T) {
 			want:   "not on the list of escapes",
 		},
 		{
+			// The escape safe-list had no answer for this: not an escape, and
+			// RE2 compiles it happily. Two engines accept, one rejects.
+			name:   "inline flag group",
+			schema: `{"properties":{"x":{"pattern":"(?i)^a$"}}}`,
+			want:   "The only group opener all three validators accept",
+		},
+		{
+			name:   "inline flag group with a body",
+			schema: `{"properties":{"x":{"pattern":"^(?i:abc)$"}}}`,
+			want:   "The only group opener all three validators accept",
+		},
+		{
 			name:   "pattern RE2 cannot compile",
 			schema: `{"properties":{"x":{"pattern":"^(?=foo)bar$"}}}`,
 			want:   "does not compile under Go RE2",
@@ -290,7 +358,10 @@ func TestTheDialectGuardDoesNotFireOnACleanSchema(t *testing.T) {
 	clean := `{"properties":{"when":{"type":"string","format":"date-time",` +
 		`"pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},` +
 		`"name":{"type":"string","pattern":"^[a-z][a-z0-9_]*$"},` +
-		`"literal_backslash":{"type":"string","pattern":"^a\\\\d$"}}}`
+		`"literal_backslash":{"type":"string","pattern":"^a\\\\d$"},` +
+		// (?: is the one group opener all three accept; the guard must not
+		// flag it, or every grouped pattern in every future surface breaks.
+		`"non_capturing_group":{"type":"string","pattern":"^(?:ab)+$"}}}`
 	var document any
 	if err := json.Unmarshal([]byte(clean), &document); err != nil {
 		t.Fatalf("control schema is not valid JSON: %v", err)

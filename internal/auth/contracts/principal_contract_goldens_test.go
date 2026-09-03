@@ -528,8 +528,21 @@ func TestRevisionRangeAgreesWithPython(t *testing.T) {
 		{raw: "9223372036854775807", want: 9223372036854775807}, // MaxInt64, accepted
 		{raw: "9223372036854775808", wantErr: true},             // 2^63, silently clamped before the fix
 		{raw: "1e19", wantErr: true},                            // integral but far past the range
-		{raw: "1e18", want: 1000000000000000000},                // integral and inside it
-		{raw: "-1", want: -1},                                   // the SCHEMA forbids this; the type need not
+		// 1e18 is inside int64 and OUTSIDE float64's exact-integer range, and
+		// it arrives in decimal form, so it is refused by the 2^53 guard. That
+		// expectation changed when the guard landed: this row previously
+		// asserted acceptance, and updating it is the point rather than an
+		// inconvenience -- an in-range value the parser has already rounded is
+		// exactly what the guard exists to stop. The same number sent as an
+		// integer token is accepted and exact; see the row below.
+		{raw: "1e18", wantErr: true},
+		{raw: "1000000000000000000", want: 1000000000000000000}, // integer token, exact
+		{raw: "9007199254740991", want: 9007199254740991},       // 2^53-1, integer token
+		{raw: "9007199254740991.0", want: 9007199254740991},     // decimal, just under the bound
+		{raw: "9007199254740992.0", wantErr: true},              // decimal AT 2^53: cannot be
+		//                                                          distinguished from 2^53+1
+		{raw: "9007199254740993.0", wantErr: true}, // decimal that ROUNDS to 2^53
+		{raw: "-1", want: -1},                      // the SCHEMA forbids this; the type need not
 	} {
 		t.Run(testCase.raw, func(t *testing.T) {
 			var got Revision

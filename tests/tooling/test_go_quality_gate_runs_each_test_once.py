@@ -291,6 +291,22 @@ ORACLE_ENV_LITERAL = '"DEV_HEALTH_LIVE_PYTHON_ORACLES"'
 DECLARATION_WINDOW = 1500
 
 
+# Go prints a TOP-LEVEL result at column 0 and indents subtests beneath it:
+#
+#     --- PASS: TestOracle (0.00s)
+#         --- SKIP: TestOracle/unrelated (0.00s)
+#
+# So `"--- SKIP: TestOracle" in output` is satisfied by a skipped SUBTEST while
+# the PARENT passed -- that is, while the parent really executes under the
+# `./...` sweeps, which is the exact thing this file exists to prevent. Round 3
+# constructed it. Anchoring to column 0 and requiring a space after the name
+# rejects the subtest while keeping the genuine top-level skip.
+def _top_level_result(output: str, name: str, verdict: str) -> bool:
+    """Did `name` ITSELF report `verdict`, ignoring any subtest of it?"""
+    pattern = rf"^--- {verdict}: {re.escape(name)} "
+    return re.search(pattern, output, re.M) is not None
+
+
 def test_every_oracle_named_test_skips_without_the_env_var() -> None:
     """RUN them. Do not pattern-match the source for something skip-shaped.
 
@@ -352,11 +368,10 @@ def test_every_oracle_named_test_skips_without_the_env_var() -> None:
             # `--- SKIP: Name` is the only proof the gate fired. A test that did
             # not run at all (build failure, wrong package) is reported too --
             # absence of a PASS is not evidence of a SKIP.
-            if f"--- SKIP: {name}" not in completed.stdout:
-                ran = (
-                    f"--- PASS: {name}" in completed.stdout
-                    or f"--- FAIL: {name}" in completed.stdout
-                )
+            if not _top_level_result(completed.stdout, name, "SKIP"):
+                ran = _top_level_result(
+                    completed.stdout, name, "PASS"
+                ) or _top_level_result(completed.stdout, name, "FAIL")
                 not_skipped.append(
                     f"{name} ({package}): {'EXECUTED' if ran else 'no SKIP and no result'}"
                 )
@@ -495,3 +510,43 @@ def test_the_build_tag_boundary_is_asserted_not_described() -> None:
             f"{path.relative_to(REPO_ROOT)} declares {marker} but carries no "
             "integration build tag, so a plain `./...` sweep compiles and runs it"
         )
+
+
+def test_a_skipped_subtest_does_not_prove_the_parent_is_gated() -> None:
+    """Round 3's construction, pinned as a permanent test.
+
+    `--- SKIP: TestOracle/unrelated` contains `--- SKIP: TestOracle`, so an
+    unanchored search reported the PARENT as gated while it had actually
+    PASSED -- meaning it executes for real under the `./...` sweeps.
+
+    The output below is copied from a real `go test -v` run rather than written
+    from memory: a hand-made approximation would test my belief about Go's
+    format instead of Go's format, which is the failure one level up from the
+    one being fixed.
+    """
+    output = (
+        "=== RUN   TestOracle\n"
+        "=== RUN   TestOracle/unrelated\n"
+        "    oracle_test.go:7: fixture condition\n"
+        "--- PASS: TestOracle (0.00s)\n"
+        "    --- SKIP: TestOracle/unrelated (0.00s)\n"
+        "--- SKIP: TestGated (0.00s)\n"
+        "PASS\n"
+    )
+
+    assert not _top_level_result(output, "TestOracle", "SKIP"), (
+        "a skipped SUBTEST must not prove the parent is gated; the parent PASSED, "
+        "so it executes under the ./... sweeps"
+    )
+    assert _top_level_result(output, "TestOracle", "PASS"), (
+        "the parent's own PASS must still be seen, or it would be misreported as "
+        "'no result at all' rather than as executed"
+    )
+    assert _top_level_result(output, "TestGated", "SKIP"), (
+        "a genuine top-level skip must still be recognised -- anchoring must not "
+        "reject the case the check exists to accept"
+    )
+    assert "--- SKIP: TestOracle" in output, (
+        "the naive predicate must still match here, or this test no longer "
+        "demonstrates why the anchoring is needed and someone will remove it"
+    )

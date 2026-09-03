@@ -13,13 +13,12 @@ func clearProviderEnv(t *testing.T) {
 	t.Helper()
 	names := []string{
 		"LLM_PROVIDER", "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL",
-		"LLM_MODEL_OPENAI", "LLM_MODEL_LOCAL",
+		"LLM_MODEL_OPENAI", "LLM_MODEL_LOCAL", "LLM_MODEL_OLLAMA",
 		"OPENAI_API_KEY", "OPENAI_BASE_URL",
 		"ANTHROPIC_API_KEY", "GEMINI_API_KEY",
 		"QWEN_API_KEY", "DASHSCOPE_API_KEY",
 		"LOCAL_LLM_BASE_URL", "LOCAL_LLM_MODEL", "LOCAL_LLM_API_KEY",
-		"OLLAMA_MODEL", "OLLAMA_BASE_URL",
-		"LMSTUDIO_MODEL", "LMSTUDIO_BASE_URL",
+		"OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_API_KEY",
 	}
 	for _, name := range names {
 		t.Setenv(name, "")
@@ -79,7 +78,6 @@ func TestResolveProviderKindAutoDetectionPriorityOrder(t *testing.T) {
 		{"local via base url", map[string]string{"LOCAL_LLM_BASE_URL": "http://x"}, ProviderKindLocal},
 		{"qwen via dashscope", map[string]string{"DASHSCOPE_API_KEY": "x"}, ProviderKindQwen},
 		{"ollama via model", map[string]string{"OLLAMA_MODEL": "gemma3"}, ProviderKindOllama},
-		{"lmstudio via base url", map[string]string{"LMSTUDIO_BASE_URL": "http://x"}, ProviderKindLMStudio},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,39 +250,92 @@ func TestNewProviderFromEnvOllamaFallsBackToDefaultWithNoEnv(t *testing.T) {
 	}
 }
 
-func TestNewProviderFromEnvLMStudioReadsEnv(t *testing.T) {
-	clearProviderEnv(t)
-	t.Setenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234")
-	t.Setenv("LMSTUDIO_MODEL", "gemma-3-4b")
+// TestNewProviderFromEnvGenericModelOverridesAnyProvider proves chris's
+// ruling (CHAOS-4978, 2026-09-03 13:14): the generic LLM_MODEL env must win
+// over EVERY provider-specific model var, for every Go-implemented
+// provider -- so an operator can force one model choice (e.g. swapping a
+// frontier provider's model, or repointing everything at one
+// OpenAI-compatible endpoint) without touching each provider's own var.
+func TestNewProviderFromEnvGenericModelOverridesAnyProvider(t *testing.T) {
+	cases := []struct {
+		name          string
+		kind          ProviderKind
+		specificEnv   string
+		specificValue string
+		wantModel     func(Provider) string
+	}{
+		{
+			"openai", ProviderKindOpenAI, "LLM_MODEL_OPENAI", "gpt-5-nano-preview",
+			func(p Provider) string { return p.(*OpenAIProvider).cfg.Model },
+		},
+		{
+			"local", ProviderKindLocal, "LOCAL_LLM_MODEL", "gemma-3-4b",
+			func(p Provider) string { return p.(*LocalProvider).cfg.Model },
+		},
+		{
+			"ollama", ProviderKindOllama, "OLLAMA_MODEL", "gemma3:4b",
+			func(p Provider) string { return p.(*OllamaProvider).cfg.Model },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearProviderEnv(t)
+			if tc.kind == ProviderKindOpenAI {
+				t.Setenv("OPENAI_API_KEY", "sk-test-key")
+			}
+			t.Setenv(tc.specificEnv, tc.specificValue)
+			t.Setenv("LLM_MODEL", "generic-override-model")
 
-	provider, err := NewProviderFromEnv(ProviderKindLMStudio)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	lmStudioProvider, ok := provider.(*LMStudioProvider)
-	if !ok {
-		t.Fatalf("provider = %T, want *LMStudioProvider", provider)
-	}
-	if lmStudioProvider.cfg.BaseURL != "http://127.0.0.1:1234" {
-		t.Errorf("BaseURL = %q, want value from LMSTUDIO_BASE_URL", lmStudioProvider.cfg.BaseURL)
-	}
-	if lmStudioProvider.cfg.Model != "gemma-3-4b" {
-		t.Errorf("Model = %q, want value from LMSTUDIO_MODEL", lmStudioProvider.cfg.Model)
+			provider, err := NewProviderFromEnv(tc.kind)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := tc.wantModel(provider); got != "generic-override-model" {
+				t.Fatalf("Model = %q, want generic LLM_MODEL (%q) to win over %s=%q",
+					got, "generic-override-model", tc.specificEnv, tc.specificValue)
+			}
+		})
 	}
 }
 
-func TestNewProviderFromEnvLMStudioFallsBackToDefaultWithNoEnv(t *testing.T) {
+// TestNewProviderFromEnvGenericBaseURLAndAPIKeyOverrideAnyProvider covers
+// the other two generic vars from the same ruling: LLM_BASE_URL and
+// LLM_API_KEY must also win over every provider-specific equivalent.
+func TestNewProviderFromEnvGenericBaseURLAndAPIKeyOverrideAnyProvider(t *testing.T) {
 	clearProviderEnv(t)
-	provider, err := NewProviderFromEnv(ProviderKindLMStudio)
+	t.Setenv("OPENAI_API_KEY", "sk-should-not-be-used")
+	t.Setenv("OPENAI_BASE_URL", "https://should-not-be-used.invalid/v1")
+	t.Setenv("LLM_API_KEY", "sk-generic-override")
+	t.Setenv("LLM_BASE_URL", "https://generic-override.invalid/v1")
+
+	provider, err := NewProviderFromEnv(ProviderKindOpenAI)
 	if err != nil {
-		t.Fatalf("unexpected error: lmstudio must fall back to defaults, not require env: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	lmStudioProvider := provider.(*LMStudioProvider)
-	if lmStudioProvider.cfg.BaseURL != defaultLMStudioBaseURL {
-		t.Errorf("BaseURL = %q, want the package default %q", lmStudioProvider.cfg.BaseURL, defaultLMStudioBaseURL)
+	openAIProvider := provider.(*OpenAIProvider)
+	if openAIProvider.cfg.APIKey != "sk-generic-override" {
+		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OPENAI_API_KEY", openAIProvider.cfg.APIKey)
 	}
-	if lmStudioProvider.cfg.Model != defaultLMStudioModel {
-		t.Errorf("Model = %q, want DEFAULT_MODEL_BY_PROVIDER[\"lmstudio\"] %q", lmStudioProvider.cfg.Model, defaultLMStudioModel)
+	if openAIProvider.cfg.BaseURL != "https://generic-override.invalid/v1" {
+		t.Errorf("BaseURL = %q, want generic LLM_BASE_URL to win over OPENAI_BASE_URL", openAIProvider.cfg.BaseURL)
+	}
+
+	clearProviderEnv(t)
+	t.Setenv("OLLAMA_BASE_URL", "http://should-not-be-used.invalid")
+	t.Setenv("OLLAMA_API_KEY", "should-not-be-used")
+	t.Setenv("LLM_BASE_URL", "http://generic-override.invalid")
+	t.Setenv("LLM_API_KEY", "generic-override-key")
+
+	ollamaProviderResult, err := NewProviderFromEnv(ProviderKindOllama)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ollamaProvider := ollamaProviderResult.(*OllamaProvider)
+	if ollamaProvider.cfg.BaseURL != "http://generic-override.invalid" {
+		t.Errorf("BaseURL = %q, want generic LLM_BASE_URL to win over OLLAMA_BASE_URL", ollamaProvider.cfg.BaseURL)
+	}
+	if ollamaProvider.cfg.APIKey != "generic-override-key" {
+		t.Errorf("APIKey = %q, want generic LLM_API_KEY to win over OLLAMA_API_KEY", ollamaProvider.cfg.APIKey)
 	}
 }
 

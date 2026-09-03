@@ -8,9 +8,10 @@ import (
 )
 
 // ProviderKind is llm/providers/__init__.py's provider name string, typed.
-// It names all six BYO LLM backends Python supports (plus the "none"
-// kill-switch and the "mock" test double) even though only three have a Go
-// implementation today -- see NewProviderFromEnv.
+// It names the BYO LLM backends Python supports (plus the "none" kill-switch
+// and the "mock" test double) even though only four have a Go implementation
+// today -- see NewProviderFromEnv. There is no ProviderKindLMStudio: see the
+// comment on the const block below.
 type ProviderKind string
 
 const (
@@ -20,9 +21,18 @@ const (
 	ProviderKindQwen      ProviderKind = "qwen"
 	ProviderKindLocal     ProviderKind = "local"
 	ProviderKindOllama    ProviderKind = "ollama"
-	ProviderKindLMStudio  ProviderKind = "lmstudio"
 	ProviderKindMock      ProviderKind = "mock"
 	ProviderKindNone      ProviderKind = "none"
+
+	// There is deliberately no ProviderKindLMStudio: chris's ruling
+	// (CHAOS-4978, 2026-09-03 13:14) dropped the native LM Studio provider
+	// kind and its LMSTUDIO_* env family -- LM Studio is reached as an
+	// OpenAI-compatible endpoint via ProviderKindLocal, using the generic
+	// LLM_BASE_URL/LLM_MODEL/LLM_API_KEY overrides below (or LOCAL_LLM_*).
+	// Python's llm/providers/local.py still has a distinct LMStudioProvider
+	// with its own LMSTUDIO_* env names -- this is a deliberate, RULED
+	// divergence from the Python oracle for this one provider, not an
+	// oversight; a follow-up ticket tracks reconciling it.
 
 	providerKindAuto ProviderKind = "auto"
 )
@@ -76,8 +86,6 @@ func detectConfiguredProviderKind() (ProviderKind, bool) {
 		return ProviderKindQwen, true
 	case os.Getenv("OLLAMA_MODEL") != "" || os.Getenv("OLLAMA_BASE_URL") != "":
 		return ProviderKindOllama, true
-	case os.Getenv("LMSTUDIO_MODEL") != "" || os.Getenv("LMSTUDIO_BASE_URL") != "":
-		return ProviderKindLMStudio, true
 	}
 	return "", false
 }
@@ -117,16 +125,15 @@ func ResolveProviderKind(requested string) (ProviderKind, error) {
 // goImplementedProviderKinds are the kinds NewProviderFromEnv can actually
 // construct a working client for, as opposed to an explicit-refusal stub.
 var goImplementedProviderKinds = map[ProviderKind]struct{}{
-	ProviderKindOpenAI:   {},
-	ProviderKindLocal:    {},
-	ProviderKindOllama:   {},
-	ProviderKindLMStudio: {},
-	ProviderKindMock:     {},
-	ProviderKindNone:     {},
+	ProviderKindOpenAI: {},
+	ProviderKindLocal:  {},
+	ProviderKindOllama: {},
+	ProviderKindMock:   {},
+	ProviderKindNone:   {},
 }
 
 // IsProviderKindImplemented reports whether kind has a real Go client
-// (openai, local, ollama, lmstudio, mock, none) as opposed to a BYO stub.
+// (openai, local, ollama, mock, none) as opposed to a BYO stub.
 func IsProviderKindImplemented(kind ProviderKind) bool {
 	_, ok := goImplementedProviderKinds[kind]
 	return ok
@@ -145,7 +152,7 @@ type unimplementedProvider struct {
 
 func (p unimplementedProvider) Complete(_ context.Context, _ CompletionRequest) (CompletionResult, error) {
 	return CompletionResult{}, fmt.Errorf(
-		"LLM provider kind %q is not yet implemented in Go -- implemented kinds: openai, local, ollama, lmstudio, mock, none",
+		"LLM provider kind %q is not yet implemented in Go -- implemented kinds: openai, local, ollama, mock, none",
 		p.kind,
 	)
 }
@@ -176,7 +183,13 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		return NewOpenAIProvider(OpenAIProviderConfig{
 			APIKey:  apiKey,
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OPENAI_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL_OPENAI", "LLM_MODEL"),
+			// Generic LLM_MODEL checked BEFORE the provider-specific
+			// LLM_MODEL_OPENAI (chris's ruling, CHAOS-4978, 2026-09-03
+			// 13:14): the generic override must be able to force a model
+			// on ANY provider -- e.g. pointing everything at one
+			// OpenAI-compatible endpoint/model without touching each
+			// provider-specific var individually.
+			Model: firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OPENAI"),
 		}), nil
 
 	case ProviderKindLocal:
@@ -187,8 +200,9 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		// NewLocalProvider below applies that same fallback.
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL", "LLM_MODEL"),
-			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+			// Generic-first, same ruling as openai above.
+			Model:  firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"),
+			APIKey: firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
 	case ProviderKindOllama:
@@ -197,26 +211,12 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		// endpoint instead. Env names mirror credentials.py's
 		// _API_KEY_ENV_BY_PROVIDER/_BASE_URL_ENV_BY_PROVIDER["ollama"]
 		// tables; OLLAMA_MODEL is local.py's OllamaProvider's own model env.
+		// Generic LLM_MODEL/LLM_API_KEY checked first, same ruling as above
+		// -- OLLAMA_* stays as the native provider's own override tier.
 		return NewOllamaProvider(OllamaProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL_OLLAMA", "OLLAMA_MODEL", "LLM_MODEL"),
-			APIKey:  firstNonEmptyEnv("OLLAMA_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY"),
-		}), nil
-
-	case ProviderKindLMStudio:
-		// Native /api/v0/chat/completions client (lmstudioprovider.go) --
-		// distinct from ProviderKindLocal, which speaks LM Studio's
-		// OpenAI-compatible /v1 endpoint instead. Env names mirror
-		// credentials.py's _API_KEY_ENV_BY_PROVIDER/
-		// _BASE_URL_ENV_BY_PROVIDER["lmstudio"] tables; LMSTUDIO_MODEL is
-		// local.py's LMStudioProvider's own model env, defaulting to
-		// DEFAULT_MODEL_BY_PROVIDER["lmstudio"] ("local-model") -- chris's
-		// actual gemma tag is an open question logged on CHAOS-4978, not
-		// guessed here.
-		return NewLMStudioProvider(LMStudioProviderConfig{
-			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LMSTUDIO_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL_LMSTUDIO", "LMSTUDIO_MODEL", "LLM_MODEL"),
-			APIKey:  firstNonEmptyEnv("LMSTUDIO_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+			Model:   firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OLLAMA", "OLLAMA_MODEL"),
+			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
 	// BYO LLM stubs: Python has a real client for each of these; this port

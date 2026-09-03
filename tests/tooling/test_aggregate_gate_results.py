@@ -28,6 +28,7 @@ drift apart while every row here keeps passing.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import subprocess
 from pathlib import Path
@@ -757,10 +758,13 @@ def test_the_default_selector_declaration_is_unchanged_for_existing_gates() -> N
 # condition; these assert the workflows still hold up their end.
 # --------------------------------------------------------------------------
 
-#: (workflow path, gate job name, step name, ((gated job, policy), ...)).
+#: (workflow path, gate job name, step name, ((gated job, policy), ...), has_selector).
 #: The policies here are the ones the workflows actually pass to the script --
-#: asserted against the step's env below, not just described.
-_GATES: tuple[tuple[Path, str, str, tuple[tuple[str, str], ...]], ...] = (
+#: asserted against the step's env below, not just described. `has_selector`
+#: is False only for typecheck (CHAOS-4843): it has no `changes` job at all --
+#: `typecheck-mypy` always runs and decides relevance inside itself, the same
+#: shape go-quality.yml uses for the identical reason (CHAOS-4834).
+_GATES: tuple[tuple[Path, str, str, tuple[tuple[str, str], ...], bool], ...] = (
     (
         WORKFLOW_PATH,
         "test",
@@ -773,17 +777,29 @@ _GATES: tuple[tuple[Path, str, str, tuple[tuple[str, str], ...]], ...] = (
             # why the two gated alternatives were rejected.
             ("docs-tests", "unconditional"),
         ),
+        True,
     ),
-    (LINT_PATH, "lint", "Aggregate lint result", (("lint-job", "path-filtered"),)),
+    (
+        LINT_PATH,
+        "lint",
+        "Aggregate lint result",
+        (("lint-job", "path-filtered"),),
+        True,
+    ),
     (
         TYPECHECK_PATH,
         "typecheck",
         "Aggregate typecheck result",
-        (("typecheck-mypy", "path-filtered"),),
+        (("typecheck-mypy", "unconditional"),),
+        False,
     ),
 )
 
-_GATE_IDS = [gate for _, gate, _, _ in _GATES]
+_GATE_IDS = [gate for _, gate, _, _, _ in _GATES]
+#: Subset with a `changes` job -- most of the workflow-contract tests below
+#: only make sense for a gate that has one. typecheck (CHAOS-4843) does not.
+_SELECTOR_GATES = [row for row in _GATES if row[4]]
+_SELECTOR_GATE_IDS = [gate for _, gate, _, _, _ in _SELECTOR_GATES]
 
 #: Every `path-filtered` job must carry exactly this condition, and the script's
 #: model of that policy mirrors it. Drift here means the model is stale: fix
@@ -833,7 +849,24 @@ def _filter_step(path: Path) -> dict[str, object]:
     return step
 
 
+def _typecheck_relevance_patterns() -> list[str]:
+    """CHAOS-4843: typecheck.yml has no `changes`/`dorny/paths-filter` job to
+    read a pattern list from -- `ci/typecheck_relevance.py` carries it
+    instead, loaded directly by path (it is not a package; same technique
+    tests/fixtures/generate_build_scope_parity_table.py already uses for the
+    identical "load one module without importing a whole package" problem).
+    """
+    module_path = ROOT / "ci" / "typecheck_relevance.py"
+    spec = importlib.util.spec_from_file_location("typecheck_relevance", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return [str(pattern) for pattern in module.RELEVANT_PATTERNS]
+
+
 def _patterns_of(path: Path) -> list[str]:
+    if path == TYPECHECK_PATH:
+        return _typecheck_relevance_patterns()
     with_block = _filter_step(path)["with"]
     assert isinstance(with_block, dict)
     filters = yaml.safe_load(with_block["filters"])
@@ -865,16 +898,27 @@ def _code_filter_patterns() -> list[str]:
     return _patterns_of(WORKFLOW_PATH)
 
 
-@pytest.mark.parametrize(("path", "gate", "step_name", "gated"), _GATES, ids=_GATE_IDS)
+@pytest.mark.parametrize(
+    ("path", "gate", "step_name", "gated", "has_selector"), _GATES, ids=_GATE_IDS
+)
 def test_gate_job_consumes_changes_and_calls_the_shared_script(
-    path: Path, gate: str, step_name: str, gated: tuple[tuple[str, str], ...]
+    path: Path,
+    gate: str,
+    step_name: str,
+    gated: tuple[tuple[str, str], ...],
+    has_selector: bool,
 ) -> None:
     job = _job_of(path, gate)
 
-    # The gate depends on `changes` -- without it every `needs.changes.*`
-    # expression resolves to empty and the verdict silently degrades to the
-    # pre-CHAOS-3482 rule.
-    assert job["needs"] == ["changes", *[name for name, _ in gated]]
+    if has_selector:
+        # The gate depends on `changes` -- without it every `needs.changes.*`
+        # expression resolves to empty and the verdict silently degrades to
+        # the pre-CHAOS-3482 rule.
+        assert job["needs"] == ["changes", *[name for name, _ in gated]]
+    else:
+        # CHAOS-4843: typecheck has no `changes` job at all -- its one gated
+        # job always runs and decides relevance inside itself.
+        assert job["needs"] == [name for name, _ in gated]
 
     # It runs unconditionally: under `!cancelled()` a cancelled run leaves the
     # REQUIRED check skipped, which branch protection counts as satisfied.
@@ -886,12 +930,15 @@ def test_gate_job_consumes_changes_and_calls_the_shared_script(
         if isinstance(candidate, dict) and candidate.get("name") == step_name
     )
 
-    expected_env = {
-        "GATE_NAME": gate,
-        "EVENT_NAME": "${{ github.event_name }}",
-        "CHANGES_RESULT": "${{ needs.changes.result }}",
-        "CHANGES_CODE": "${{ needs.changes.outputs.code }}",
-    }
+    expected_env = {"GATE_NAME": gate, "EVENT_NAME": "${{ github.event_name }}"}
+    if has_selector:
+        expected_env["CHANGES_RESULT"] = "${{ needs.changes.result }}"
+        expected_env["CHANGES_CODE"] = "${{ needs.changes.outputs.code }}"
+    else:
+        # Explicit `"false"`, not merely absent: ci/aggregate_gate_results.sh
+        # refuses to guess (an unset GATE_HAS_SELECTOR defaults to "true" and
+        # then demands CHANGES_RESULT/CHANGES_CODE it was never given).
+        expected_env["GATE_HAS_SELECTOR"] = "false"
     for index, (job_name, policy) in enumerate(gated, start=1):
         expected_env[f"GATED_JOB_{index}"] = (
             f"{job_name}|{policy}|${{{{ needs.{job_name}.result }}}}"
@@ -910,9 +957,15 @@ def test_gate_job_consumes_changes_and_calls_the_shared_script(
     )
 
 
-@pytest.mark.parametrize(("path", "gate", "step_name", "gated"), _GATES, ids=_GATE_IDS)
+@pytest.mark.parametrize(
+    ("path", "gate", "step_name", "gated", "has_selector"), _GATES, ids=_GATE_IDS
+)
 def test_gated_jobs_carry_the_condition_their_policy_models(
-    path: Path, gate: str, step_name: str, gated: tuple[tuple[str, str], ...]
+    path: Path,
+    gate: str,
+    step_name: str,
+    gated: tuple[tuple[str, str], ...],
+    has_selector: bool,
 ) -> None:
     # Given the script decides whether a skip was legitimate from a policy name
     # When each gated job's own `if:` is read
@@ -948,7 +1001,15 @@ def test_gated_jobs_carry_the_condition_their_policy_models(
         )
 
 
-@pytest.mark.parametrize(("path", "gate", "step_name", "gated"), _GATES, ids=_GATE_IDS)
+# CHAOS-4843: these two apply only to a gate that HAS a `changes` job.
+# typecheck does not (see _SELECTOR_GATES's docstring on _GATES above); its
+# equivalent of "not run on manual dispatch" is
+# test_typecheck_relevance_treats_workflow_dispatch_as_always_relevant below.
+@pytest.mark.parametrize(
+    ("path", "gate", "step_name", "gated"),
+    [row[:4] for row in _SELECTOR_GATES],
+    ids=_SELECTOR_GATE_IDS,
+)
 def test_path_filter_is_not_run_on_manual_dispatch(
     path: Path, gate: str, step_name: str, gated: tuple[tuple[str, str], ...]
 ) -> None:
@@ -962,7 +1023,11 @@ def test_path_filter_is_not_run_on_manual_dispatch(
     )
 
 
-@pytest.mark.parametrize(("path", "gate", "step_name", "gated"), _GATES, ids=_GATE_IDS)
+@pytest.mark.parametrize(
+    ("path", "gate", "step_name", "gated"),
+    [row[:4] for row in _SELECTOR_GATES],
+    ids=_SELECTOR_GATE_IDS,
+)
 def test_changes_job_publishes_the_code_output(
     path: Path, gate: str, step_name: str, gated: tuple[tuple[str, str], ...]
 ) -> None:
@@ -971,9 +1036,15 @@ def test_changes_job_publishes_the_code_output(
     assert outputs["code"] == "${{ steps.filter.outputs.code }}"
 
 
-@pytest.mark.parametrize(("path", "gate", "step_name", "gated"), _GATES, ids=_GATE_IDS)
+@pytest.mark.parametrize(
+    ("path", "gate", "step_name", "gated", "has_selector"), _GATES, ids=_GATE_IDS
+)
 def test_a_workflow_gates_on_changes_to_itself(
-    path: Path, gate: str, step_name: str, gated: tuple[tuple[str, str], ...]
+    path: Path,
+    gate: str,
+    step_name: str,
+    gated: tuple[tuple[str, str], ...],
+    has_selector: bool,
 ) -> None:
     # CHAOS-3513, the lead defect. A workflow whose own filter does not select
     # on the workflow file can be edited -- weakened, or disabled outright -- by
@@ -994,9 +1065,15 @@ def test_a_workflow_gates_on_changes_to_itself(
     )
 
 
-@pytest.mark.parametrize(("path", "gate", "step_name", "gated"), _GATES, ids=_GATE_IDS)
+@pytest.mark.parametrize(
+    ("path", "gate", "step_name", "gated", "has_selector"), _GATES, ids=_GATE_IDS
+)
 def test_paths_filter_covers_every_file_the_gated_jobs_install(
-    path: Path, gate: str, step_name: str, gated: tuple[tuple[str, str], ...]
+    path: Path,
+    gate: str,
+    step_name: str,
+    gated: tuple[tuple[str, str], ...],
+    has_selector: bool,
 ) -> None:
     # A file a gated job installs is part of that job's environment, so a change
     # to it can turn the job red -- and must therefore select the job.
@@ -1048,6 +1125,119 @@ def test_typecheck_uses_the_frozen_uv_environment() -> None:
     patterns = _patterns_of(TYPECHECK_PATH)
     assert _is_covered("uv.lock", patterns), (
         "a lock-only dependency change must select the typecheck job"
+    )
+
+
+# --------------------------------------------------------------------------
+# CHAOS-4843: mypy's checked set, trigger set and local set were three
+# different sets. typecheck-mypy's CI-vs-trigger half is fixed by moving its
+# relevance decision inside the job (asserted below); the CI-vs-local half is
+# fixed by lefthook running the same `mypy .` invocation as CI, not a bare
+# `mypy` that falls back to a narrower `[tool.mypy] files` list.
+#
+# Both assertions below are designed to fail in EITHER direction of
+# regression: back to a job-level filter gate (the original defect), or a
+# local hook that narrows below what CI checks (a different route to the
+# same three-sets problem).
+# --------------------------------------------------------------------------
+
+
+def test_typecheck_mypy_has_no_job_level_gate() -> None:
+    # The defect this fix closes: a `changes` job + a job-level `if:` lets
+    # GitHub report typecheck-mypy SKIPPED, which satisfies a required check
+    # exactly as well as a real pass. Both are checked explicitly rather than
+    # inferred from the `needs` assertion in test_gate_job_consumes_changes_
+    # and_calls_the_shared_script, so a future refactor that reintroduces
+    # either one on its own still trips a test that names it.
+    job = _job_of(TYPECHECK_PATH, "typecheck-mypy")
+    assert "if" not in job, (
+        "typecheck-mypy carries a job-level `if:` again -- this is exactly "
+        "CHAOS-4843's defect: GitHub can report the job SKIPPED, which "
+        "satisfies the required check as well as a real pass. Decide "
+        "relevance INSIDE the job (see 'Decide whether this change set is "
+        "typecheck-relevant') instead of gating the job itself."
+    )
+    jobs = _load(TYPECHECK_PATH)["jobs"]
+    assert isinstance(jobs, dict)
+    assert "changes" not in jobs, (
+        "a `changes` job reappeared in typecheck.yml -- if typecheck-mypy "
+        "now `needs:` it with a job-level `if:` on its output, CHAOS-4843's "
+        "defect is back (see test_typecheck_mypy_has_no_job_level_gate)"
+    )
+
+
+def test_typecheck_relevance_treats_workflow_dispatch_as_always_relevant() -> None:
+    # Mirrors test_path_filter_is_not_run_on_manual_dispatch's property for
+    # the gates that still have a `changes` job: a manual dispatch has no
+    # base/head diff worth filtering, so it must not go through the relevance
+    # script at all -- it is unconditionally relevant, same as the OLD
+    # job-level `if:` this replaces (`github.event_name == 'workflow_dispatch'
+    # || ...`).
+    run = _normalize(
+        next(
+            str(step.get("run", ""))
+            for step in _steps_of(TYPECHECK_PATH, "typecheck-mypy")
+            if isinstance(step, dict)
+            and step.get("name")
+            == "Decide whether this change set is typecheck-relevant"
+        )
+    )
+    assert "workflow_dispatch" in run and "relevant=true" in run, (
+        "the relevance step no longer special-cases workflow_dispatch as "
+        "always relevant -- a manual dispatch has no base/head diff, so "
+        "running the relevance script against a wrong or empty range could "
+        "wrongly report relevant=false and skip mypy on a deliberate manual run"
+    )
+
+
+def test_typecheck_relevance_script_matches_the_registered_patterns() -> None:
+    # ci/typecheck_relevance.py's RELEVANT_PATTERNS is a COPY of the old
+    # `changes` job's filter list (see that module's own docstring for why it
+    # is copied, not derived). This is the guard against the copy silently
+    # diverging from what _patterns_of/_GATES' typecheck row believes it is --
+    # if this ever fails, either the module or this test's expectation
+    # changed without the other, which is exactly the drift CHAOS-4843 exists
+    # to close, one level up.
+    patterns = _typecheck_relevance_patterns()
+    assert "**/*.py" in patterns, (
+        "ci/typecheck_relevance.py no longer selects on every Python file "
+        "anywhere -- this is the CHAOS-4281 fix the old filter needed; "
+        "losing it reopens that regression for the new relevance script"
+    )
+    assert ".github/workflows/**" in patterns, (
+        "ci/typecheck_relevance.py no longer selects on workflow files -- a "
+        "PR editing only typecheck.yml would report itself irrelevant and "
+        "skip the very gate it changed (CHAOS-3513's defect, one level up)"
+    )
+
+
+LEFTHOOK_PATH = ROOT / "lefthook.yml"
+
+
+@pytest.mark.parametrize("hook", ["pre-commit", "pre-push"])
+def test_lefthook_mypy_checks_the_same_tree_as_ci(hook: str) -> None:
+    # CHAOS-4843's local half: bare `mypy` (no args) falls back to
+    # `[tool.mypy] files = ["src", "tests", "scripts"]`, silently excluding
+    # internal/, ci/ and .github/ from every local run while CI's
+    # `.venv/bin/mypy .` always checks the whole tree. Fails in either
+    # direction: a narrower explicit path (regression back to the original
+    # defect) or dropping the explicit `.` entirely (falls back to the
+    # narrower config again).
+    lefthook = _load(LEFTHOOK_PATH)
+    hook_block = lefthook[hook]
+    assert isinstance(hook_block, dict)
+    commands = hook_block["commands"]
+    assert isinstance(commands, dict)
+    assert "mypy" in commands, f"lefthook.yml's {hook} hooks no longer run mypy at all"
+    mypy_command = commands["mypy"]
+    assert isinstance(mypy_command, dict)
+    run = _normalize(mypy_command["run"])
+    assert run == "scripts/run_py_tool.sh mypy .", (
+        f"lefthook.yml's {hook} mypy command is {run!r}, not "
+        "'scripts/run_py_tool.sh mypy .' -- without the explicit '.', mypy "
+        "falls back to [tool.mypy] files in pyproject.toml, which excludes "
+        "internal/, ci/ and .github/ from every local run while CI's "
+        "typecheck-mypy job always checks the whole tree with `mypy .`"
     )
 
 

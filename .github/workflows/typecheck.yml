@@ -48,78 +48,15 @@ permissions:
   contents: read
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: filter
-        if: github.event_name != 'workflow_dispatch'
-        with:
-          filters: |
-            code:
-              # CHAOS-3513: omitting this put an unlinted, untypechecked
-              # change into main. In merge_group runs 30597898813 and
-              # 30597912205 the only file in the queue's diff was
-              # .github/workflows/governance.yml, so the filter reported
-              # code=false, the gated job skipped, and the required check
-              # reported SUCCESS. The gates could be edited -- weakened --
-              # by a PR they then declined to run on.
-              - '.github/workflows/**'
-              - 'src/**'
-              # Inputs that decide what these tools LOOK AT, not just how
-              # they behave. ruff honours .gitignore/.ignore for file
-              # discovery: appending `src/` to .gitignore drops its file set
-              # from 1045 source files to 0, and `ruff check` still exits 0 --
-              # a green required check that inspected nothing. ruff.toml /
-              # .ruff.toml and mypy.ini / .mypy.ini / setup.cfg are config
-              # files these tools discover by default; none exists today, and
-              # a PR ADDING one would not have matched this filter, so the
-              # gate would have skipped on the very change that redefined it
-              # (CHAOS-3513 Codex round 1, same shape as the workflow-file
-              # omission above).
-              - '.gitignore'
-              - '.ignore'
-              - 'ruff.toml'
-              - '.ruff.toml'
-              - 'mypy.ini'
-              - '.mypy.ini'
-              - 'setup.cfg'
-              - 'tests/**'
-              - 'ci/**'
-              - 'migrations/**'
-              - 'requirements.txt'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - 'scripts/**'
-              # CHAOS-4281/#2142: the patterns above enumerate the three
-              # directories Python was assumed to live in -- the same three as
-              # [tool.mypy] files in pyproject.toml. But the job below runs
-              # `mypy .`, which IGNORES that setting and checks the whole repo
-              # (2636 files vs the 2434 a bare `mypy` sees). Corpus generators
-              # added under internal/**/testdata matched no pattern here, so
-              # typecheck-mypy SKIPPED on the PR and the required check
-              # reported SUCCESS (run 33711653474) -- then failed on main days
-              # later inside an unrelated PR's run (33716898386), which had
-              # merely touched a path this filter does select. Match what the
-              # job actually checks: any Python file, anywhere. Third instance
-              # of the class recorded above it (CHAOS-3513, CHAOS-3948).
-              - '**/*.py'
-
   typecheck-mypy:
-    needs: [changes]
-    # dorny/paths-filter has no PR base/head diff to compute in the merge
-    # queue and can report code=false there, which would skip this job and
-    # let the aggregator see a skip it cannot attribute. Always run in the
-    # queue, as test.yml's test-matrix already does.
-    if: >-
-      github.event_name == 'merge_group' ||
-      github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.code == 'true'
+    # CHAOS-4843: no `needs:`, no job-level `if:`. A separate `changes` job
+    # with a job-level `if:` on its output let GitHub report this job
+    # SKIPPED, which satisfies a required check exactly as well as a real
+    # pass and is indistinguishable from one in the merge UI (the same
+    # defect CHAOS-4834 closed for go-quality, by the same fix: this job now
+    # ALWAYS runs and decides relevance INSIDE itself -- see "Decide whether
+    # this change set is typecheck-relevant" below -- so a skip can only ever
+    # be an honest, reported one, never an Actions-level job skip).
     runs-on: ubuntu-latest
     # Typecheck job needs package read access for dependency installs.
     permissions:
@@ -128,20 +65,62 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the base commit to diff against; the default depth-1
+          # checkout cannot see it. This is a git fetch, not a Docker Hub pull.
+          fetch-depth: 0
+
+      - name: Decide whether this change set is typecheck-relevant
+        id: relevance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "workflow_dispatch: always relevant (explicit manual trigger)"
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ -n "${BASE_SHA:-}" ]; then
+            range="${BASE_SHA}...HEAD"
+          else
+            # push to main: compare against the previous commit.
+            range="HEAD^...HEAD"
+          fi
+          echo "diff range: ${range}"
+          git diff --name-only "${range}" > changed.txt || {
+            echo "could not resolve the diff range; failing closed"
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+          python3 ci/typecheck_relevance.py < changed.txt | tee relevance.out
+          grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
+
+      - name: Report that the gate was skipped, and why
+        if: steps.relevance.outputs.relevant != 'true'
+        run: |
+          echo "skipped: no typecheck-relevant paths in this change set."
+          echo "Relevance is decided by ci/typecheck_relevance.py, which"
+          echo "carries a copy of this job's former path-filter list. This"
+          echo "job still REPORTS, so the required check is satisfied"
+          echo "honestly rather than by a job GitHub shows as skipped."
 
       - name: Set up Python
+        if: steps.relevance.outputs.relevant == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
           cache: "pip"
 
       - name: Install dependencies
+        if: steps.relevance.outputs.relevant == 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install uv
           uv sync --frozen --all-extras --dev
 
       - name: Run mypy (type checking)
+        if: steps.relevance.outputs.relevant == 'true'
         run: |
           .venv/bin/mypy .
 
@@ -152,7 +131,7 @@ jobs:
     # and branch protection counts a skipped required check as satisfied --
     # which moves the silent pass one level up instead of closing it.
     if: always()
-    needs: [changes, typecheck-mypy]
+    needs: [typecheck-mypy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,9 +140,12 @@ jobs:
         env:
           GATE_NAME: typecheck
           EVENT_NAME: ${{ github.event_name }}
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          CHANGES_CODE: ${{ needs.changes.outputs.code }}
-          GATED_JOB_1: typecheck-mypy|path-filtered|${{ needs.typecheck-mypy.result }}
+          # CHAOS-4843: typecheck-mypy no longer has a `changes` job gating
+          # it -- it always runs and decides relevance inside itself, so a
+          # skip is never legitimate here (the `unconditional` policy,
+          # matching go-quality's own job for the identical reason).
+          GATE_HAS_SELECTOR: "false"
+          GATED_JOB_1: typecheck-mypy|unconditional|${{ needs.typecheck-mypy.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

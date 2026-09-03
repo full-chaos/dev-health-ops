@@ -540,6 +540,31 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
       # iterate past real misses to find the real match, not just accept
       # the first candidate it's handed.
       candidate_short="${ref##*:sha-}"
+      # 4752-go's peer read of #2167 (r3 order, team-lead): the source-tag
+      # probe (this SAME ref shape, `<image>:sha-deadbee` for the fixed
+      # $BUILT_SHA every test here uses) had no scenario control at all --
+      # it always "found" the ref, so the source_rc==1/rc==2 branches at
+      # the call site (SKIP vs `::error::` decline) were never exercised.
+      # $SOURCE_TAG_SCENARIO, when set, answers ONLY for that exact
+      # short-sha (never a digest-walk candidate's, which uses a
+      # different, unrelated sha) -- everything else keeps the prior
+      # unconditional-success behaviour.
+      if [ -n "${SOURCE_TAG_SCENARIO:-}" ] && [ "${candidate_short}" = "deadbee" ]; then
+        case "${SOURCE_TAG_SCENARIO}" in
+          absent)
+            echo "ERROR: ${ref}: not found" >&2
+            exit 1
+            ;;
+          unknown)
+            echo "ERROR: failed to do request: connection reset by peer" >&2
+            exit 1
+            ;;
+          *)
+            echo "unrecognized SOURCE_TAG_SCENARIO: ${SOURCE_TAG_SCENARIO}" >&2
+            exit 99
+            ;;
+        esac
+      fi
       if [ -n "${DIGEST_WALK_MATCH_SHORT:-}" ] && [ "${candidate_short}" = "${DIGEST_WALK_MATCH_SHORT}" ]; then
         echo '{"manifest":{"digest":"sha256:aaaa"}}'
       else
@@ -608,6 +633,7 @@ def _run_latest_tag_step(
     merge_base_is_ancestor: bool = True,
     digest_walk_candidates: list[str] | None = None,
     digest_walk_match_short: str = "",
+    source_tag_scenario: str = "",
 ) -> tuple[str, bool, bool, str]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
@@ -620,12 +646,17 @@ def _run_latest_tag_step(
     default empty one; `digest_walk_match_short` names which candidate's
     short-sha should report the SAME digest as :latest's (everything else
     gets a deliberate miss) -- both together let a test exercise the
-    found-a-match path, not just "walked, found nothing". Returns
-    (recorded `imagetools create` invocations, whether `git log` was
-    called, whether `git merge-base --is-ancestor` was called, captured
-    stdout). `IS_MAIN_REF=true` and a source-tag probe that always
-    "finds" its ref, so every family reaches the :latest check under
-    test."""
+    found-a-match path, not just "walked, found nothing". Passing
+    `source_tag_scenario` (`"absent"` or `"unknown"`) scripts the
+    source-tag probe itself to FAIL that way instead of always finding
+    its ref -- every family shares one `short_sha`, so this affects all
+    nine identically and none of them reach the :latest check at all
+    (the loop `continue`s before it). Returns (recorded `imagetools
+    create` invocations, whether `git log` was called, whether `git
+    merge-base --is-ancestor` was called, captured stdout).
+    `IS_MAIN_REF=true` and, when `source_tag_scenario` is left empty
+    (the default), a source-tag probe that always "finds" its ref, so
+    every family reaches the :latest check under test."""
     script = _latest_tag_step_script()
     with tempfile.TemporaryDirectory() as tmp:
         bin_dir = Path(tmp) / "bin"
@@ -663,6 +694,7 @@ def _run_latest_tag_step(
                 "MERGE_BASE_IS_ANCESTOR": "true" if merge_base_is_ancestor else "false",
                 "DIGEST_WALK_CANDIDATES": "\n".join(digest_walk_candidates or []),
                 "DIGEST_WALK_MATCH_SHORT": digest_walk_match_short,
+                "SOURCE_TAG_SCENARIO": source_tag_scenario,
             }
         )
         result = subprocess.run(
@@ -884,4 +916,85 @@ def test_digest_walk_finds_a_match_partway_through_history() -> None:
     assert "2222222222222222222222222222222222222b" in stdout, (
         "the FALLBACK log line should name the matched candidate sha -- "
         f"got stdout: {stdout!r}"
+    )
+
+
+def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
+    """4752-go's peer read of #2167, round 3 order (team-lead): runner-
+    fallback's peer read of bf11cdc5 found the SOURCE-TAG classify call
+    site (source_rc==1 -> silent SKIP, source_rc==2 -> `::error::`
+    decline -- see the ranked-dimensions comment above the source-tag
+    probe in docker-images.yml) had NO behavioural coverage at all.
+    Collapsing BOTH outcomes into the same silent-SKIP branch (deleting
+    the `::error::` decline entirely -- the exact P1 the :latest site's
+    own rc==1/rc==2 split already exists to close, just moved one probe
+    earlier) left every existing row in this file green, because none of
+    them ever script the source-tag probe's own outcome -- the docker
+    shim's non-:latest branch always "found" it unconditionally.
+
+    Runs the real script with $SOURCE_TAG_SCENARIO scripting the
+    source-tag probe itself (not :latest, which these two cases never
+    even reach). Both must decline before the :latest check -- no
+    `imagetools create` for any of the nine families, which all share one
+    `short_sha` and so all hit the same scripted outcome -- and neither
+    reaches the digest-walk or merge-base checks (git untouched). The
+    OBSERVABLE that actually distinguishes them is stdout: rc==1 is a
+    silent SKIP (no `::error::`), rc==2 MUST emit `::error::` -- proven by
+    running both, asserting on each's own text, and asserting the two
+    outputs differ. Verified this test goes red against the mutation
+    lane-runner-fallback described (rc==2's branch replaced with the same
+    silent-SKIP text as rc==1) before trusting it."""
+    absent_record, absent_log, absent_mb, absent_stdout = _run_latest_tag_step(
+        # The :latest scenario value is irrelevant here -- source_rc==1
+        # `continue`s the loop long before the :latest probe is ever
+        # reached for any family.
+        "labelled",
+        source_tag_scenario="absent",
+    )
+    assert absent_record == "", (
+        "CONFIRMED ABSENT on the source tag still recorded an "
+        f"`imagetools create` call -- got: {absent_record!r}"
+    )
+    assert not absent_log and not absent_mb, (
+        "CONFIRMED ABSENT on the source tag reached the digest-walk "
+        "fallback or the merge-base ancestry check (git was invoked) "
+        "instead of skipping immediately"
+    )
+    assert "SKIP" in absent_stdout and "confirmed absent" in absent_stdout, (
+        "expected a SKIP message naming confirmed absence, got stdout: "
+        f"{absent_stdout!r}"
+    )
+    assert "::error::" not in absent_stdout, (
+        "CONFIRMED ABSENT on the source tag must be a SILENT skip -- no "
+        f"`::error::` annotation, got stdout: {absent_stdout!r}"
+    )
+
+    unknown_record, unknown_log, unknown_mb, unknown_stdout = _run_latest_tag_step(
+        "labelled",
+        source_tag_scenario="unknown",
+    )
+    assert unknown_record == "", (
+        "UNKNOWN registry failure on the source tag still recorded an "
+        f"`imagetools create` call -- got: {unknown_record!r}"
+    )
+    assert not unknown_log and not unknown_mb, (
+        "UNKNOWN registry failure on the source tag reached the "
+        "digest-walk fallback or the merge-base ancestry check (git was "
+        "invoked) instead of declining immediately"
+    )
+    assert "::error::" in unknown_stdout and "could not confirm whether" in unknown_stdout, (
+        "UNKNOWN registry failure on the source tag must emit a "
+        f"`::error::` annotation, got stdout: {unknown_stdout!r}"
+    )
+
+    # The pair, not either row alone, is what closes the P1 lane-runner-
+    # fallback found: a mutation that routes rc==2 through rc==1's own
+    # silent-SKIP text passes both rows in isolation (each still declines,
+    # still touches no git, still records no create) but produces
+    # IDENTICAL output shape on both -- this is the assertion that mutant
+    # cannot survive.
+    assert "::error::" not in absent_stdout and "::error::" in unknown_stdout, (
+        "the confirmed-absent and unknown source-tag outcomes must be "
+        "distinguishable on the wire (silent skip vs a visible `::error::` "
+        f"decline) -- got absent={absent_stdout!r}, unknown={unknown_stdout!r}"
     )

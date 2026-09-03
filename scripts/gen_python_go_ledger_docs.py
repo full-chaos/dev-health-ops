@@ -231,7 +231,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "tables": "`recommendations_daily`",
         "evidence": "argued — wired `daily.go:389-436,474-483`",
         "state": "native",
-        "ticket": "n/a — Python `_compute_recommendations_for_org` (`workers/recommendations_tasks.py:334`) retired to the cutover, see worker-file dead-code child ticket",
+        "ticket": "n/a — the Go worker no longer routes this kind to the bridge (daily.go), but Python `_compute_recommendations_for_org` (`workers/recommendations_tasks.py:334`) is NOT dead code: it is still imported/called at `worker_metrics.py:1833/1863` and served live by `/remaining-metrics/v1/execute` (see this file's own WORKER_FILE_LEDGER['recommendations_tasks.py'], category a) — deleting it needs its own verification that nothing else reaches it, not assumed here",
     },
     "metrics.remaining.release_impact": {
         "producer": "`internal/scheduler/fixed/inventory.go:75` (release_impact_daily_fanout)",

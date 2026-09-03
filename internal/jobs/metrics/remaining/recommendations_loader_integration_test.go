@@ -5,6 +5,7 @@ package remaining
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os/exec"
 	"path/filepath"
@@ -54,11 +55,22 @@ const (
 	// Loading an EMPTY org makes it observable: correct behaviour finds no
 	// hotspots and leaves churn_overlap ABSENT, while a dropped predicate picks
 	// up the other orgs' rows and turns it PRESENT.
-	loaderEmptyOrgID  = "org-loader-empty"
-	loaderTeamA       = "team-alpha"
-	loaderTeamB       = "team-beta"
-	loaderWindowStart = "2026-08-01"
-	loaderWindowEnd   = "2026-09-01"
+	loaderEmptyOrgID = "org-loader-empty"
+	// The POSITIVE half of the same boundary: exactly ONE hotspot row.
+	//
+	// The empty-org assertion alone is vacuous, and lane-4441 named the shape:
+	// two implementations agreeing on NOTHING is not evidence. It passes if the
+	// predicate works, and equally if the org id is misspelled, if the fixture
+	// stopped seeding, or if the loader bails early -- each of which makes both
+	// sides empty for a reason unrelated to what is being tested.
+	//
+	// One point is not a slope. Pinning absent-at-zero AND present-at-one turns
+	// "absent" into a measurement rather than a default.
+	loaderOneHotspotOrgID = "org-loader-one-hotspot"
+	loaderTeamA           = "team-alpha"
+	loaderTeamB           = "team-beta"
+	loaderWindowStart     = "2026-08-01"
+	loaderWindowEnd       = "2026-09-01"
 )
 
 type pythonSnapshot struct {
@@ -116,7 +128,8 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	}
 
 	assertCHAOS4897DefectIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
-	assertEmptyOrgSeesNothing(t, ctx, conn, dsn)
+	assertHotspotBoundaryIsMeasured(t, ctx, conn, dsn)
+	assertArgMaxKeysAreUnique(t, ctx, conn)
 }
 
 // assertCHAOS4897DefectIsPresent executes the defect rather than describing it.
@@ -387,8 +400,14 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 		wip, completed int
 		computedAt     string
 	}{
-		{"2026-08-02", "github", "scope-1", 400, 700, "2026-08-03 00:00:00"},
-		{"2026-08-05", "github", "scope-1", 500, 800, "2026-08-06 00:00:00"},
+		// computed_at LATER than the primary org's row for the same
+		// (day, provider, work_scope_id, team_id). The uniqueness invariant
+		// caught these two sharing a timestamp with it -- and since the group
+		// key deliberately excludes org_id, a dropped org predicate would have
+		// merged them into one group and let argMax tie-break. Found by the
+		// invariant itself, on rows added while fixing a different tie.
+		{"2026-08-02", "github", "scope-1", 400, 700, "2026-08-04 00:00:00"},
+		{"2026-08-05", "github", "scope-1", 500, 800, "2026-08-07 00:00:00"},
 	} {
 		exec(`INSERT INTO work_item_metrics_daily
 			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
@@ -474,6 +493,15 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 		VALUES (?, ?, 'team', ?, ?, 'high', 0, 0, 0, 0, ?)`,
 		loaderOtherOrgID, mustDate(t, "2026-08-22"), loaderTeamA, 0.99,
 		mustTimestamp(t, "2026-08-23 00:00:00"))
+
+	// Exactly one hotspot row, in the window's second half, and nothing else
+	// for this org. See loaderOneHotspotOrgID.
+	exec(`INSERT INTO file_hotspot_daily
+		(repo_id, day, file_path, risk_score, computed_at, org_id)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"44444444-4444-4444-4444-444444444444", mustDate(t, "2026-08-25"),
+		"one-hotspot/only.py", 0.5, mustTimestamp(t, "2026-08-26 00:00:00"),
+		loaderOneHotspotOrgID)
 
 	// repo_metrics_daily: latency and rework. NO team column -- this is the
 	// CHAOS-4897 surface. Two repos so the org-wide avg is over both.
@@ -610,31 +638,114 @@ func mustTimestamp(t *testing.T, text string) time.Time {
 //
 // Compared against the Python reference on the same empty org rather than
 // against a hard-coded expectation, so it stays a parity assertion.
-func assertEmptyOrgSeesNothing(t *testing.T, ctx context.Context, conn driver.Conn, dsn string) {
+func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn driver.Conn, dsn string) {
 	t.Helper()
 
-	loader, err := NewRecommendationsLoader(conn, loaderEmptyOrgID)
-	if err != nil {
-		t.Fatalf("new loader (empty org): %v", err)
+	// PRECONDITION: the instrument must be live before a null reading is
+	// believed. If the PRIMARY org sees nothing either, "the empty org sees
+	// nothing" is true of everything and proves nothing -- the same reason
+	// lane-4441's comparison of two empty hashes reported IDENTICAL.
+	control := loadForOrg(t, ctx, conn, loaderOrgID)
+	if len(control.WIPByDay) == 0 || !control.HotspotChurnOverlapKnown {
+		t.Fatalf("precondition failed: the PRIMARY org sees nothing either "+
+			"(wip rows %d, churn_overlap known %v). Every assertion below would "+
+			"pass vacuously; the fixture has stopped seeding.",
+			len(control.WIPByDay), control.HotspotChurnOverlapKnown)
 	}
-	got, err := loader.LoadTeamMetricsWindow(ctx, loaderTeamA, loaderEmptyOrgID,
+
+	// ZERO side.
+	empty := loadForOrg(t, ctx, conn, loaderEmptyOrgID)
+	if empty.HotspotChurnOverlapKnown {
+		t.Errorf("empty org: hotspot_churn_overlap is PRESENT (%v); an org with no "+
+			"rows must see none. The org predicate has probably been dropped from "+
+			"the file_hotspot_daily query -- that count is consumed only as `== 0`, "+
+			"so this boundary is the only place it is observable.",
+			empty.HotspotChurnOverlap)
+	}
+	if len(empty.WIPByDay) != 0 {
+		t.Errorf("empty org: %d wip rows, want 0 -- a foreign tenant's rows are "+
+			"reaching an org that has none", len(empty.WIPByDay))
+	}
+
+	// ONE side. Without this the zero side cannot distinguish "correctly zero"
+	// from "trivially nothing".
+	one := loadForOrg(t, ctx, conn, loaderOneHotspotOrgID)
+	if !one.HotspotChurnOverlapKnown {
+		t.Errorf("one-hotspot org: hotspot_churn_overlap is ABSENT; an org with " +
+			"exactly one hotspot row must see it. If this fails while the empty " +
+			"case passes, the empty case is passing trivially -- a misspelled org " +
+			"id or an unseeded fixture, not a working predicate.")
+	}
+
+	// Both halves against the Python reference on the same orgs, so this stays
+	// parity rather than a hard-coded expectation.
+	compareSnapshotAgainstPython(t, "empty-org", empty,
+		runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID))
+	compareSnapshotAgainstPython(t, "one-hotspot-org", one,
+		runPythonLoader(t, dsn, loaderTeamA, loaderOneHotspotOrgID))
+}
+
+func loadForOrg(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) MetricsSnapshot {
+	t.Helper()
+	loader, err := NewRecommendationsLoader(conn, orgID)
+	if err != nil {
+		t.Fatalf("new loader (%s): %v", orgID, err)
+	}
+	got, err := loader.LoadTeamMetricsWindow(ctx, loaderTeamA, orgID,
 		mustDate(t, loaderWindowStart), mustDate(t, loaderWindowEnd))
 	if err != nil {
-		t.Fatalf("go loader (empty org): %v", err)
+		t.Fatalf("go loader (%s): %v", orgID, err)
 	}
+	return got
+}
 
-	if got.HotspotChurnOverlapKnown {
-		t.Errorf("empty org: hotspot_churn_overlap is PRESENT (%v); an org with no "+
-			"rows must see no hotspots. The org predicate has probably been dropped "+
-			"from the file_hotspot_daily query -- that count is used only as `== 0`, "+
-			"so this boundary is the only place the predicate is observable.",
-			got.HotspotChurnOverlap)
-	}
-	if len(got.WIPByDay) != 0 {
-		t.Errorf("empty org: %d wip rows, want 0 -- a foreign tenant's rows are "+
-			"reaching an org that has none", len(got.WIPByDay))
-	}
+// assertArgMaxKeysAreUnique makes a tie impossible to introduce silently.
+//
+// Every read in this loader picks a row with argMax(..., computed_at). If two
+// rows share a group key AND a computed_at, argMax picks arbitrarily -- so a
+// mutation that merges rows into one group can SURVIVE because the tie happened
+// to favour the original row. That is not a detected mutation; it is a coin
+// flip that landed right, and it reads exactly like a pass.
+//
+// It has already happened twice in this fixture, in two different tables within
+// an hour: the grouping fixture and the team_metrics_daily tenant row. Two
+// instances is not carelessness, it is a missing invariant -- so rather than
+// fixing each timestamp and hoping, this asserts uniqueness once and no future
+// row can reintroduce the problem.
+//
+// The group keys deliberately EXCLUDE org_id. The mutations this fixture exists
+// to catch are exactly the ones that drop the org predicate and merge tenants,
+// and uniqueness has to hold in the MERGED population for the foreign row to
+// win or lose deterministically rather than by tie-break.
+func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Conn) {
+	t.Helper()
 
-	want := runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID)
-	compareSnapshotAgainstPython(t, "empty-org", got, want)
+	for _, group := range []struct {
+		table   string
+		keyCols string
+	}{
+		{"work_item_metrics_daily", "day, provider, work_scope_id, team_id"},
+		{"team_metrics_daily", "day, repo_id, team_id"},
+		{"user_metrics_daily", "repo_id, author_email, day, team_id"},
+		{"repo_metrics_daily", "repo_id, day"},
+		{"repo_complexity_daily", "repo_id, day"},
+		{"file_hotspot_daily", "file_path, day"},
+		{"compounding_risk_daily", "scope, scope_id, day"},
+	} {
+		query := fmt.Sprintf(
+			"SELECT count() FROM (SELECT %s, computed_at, count() AS n FROM %s "+
+				"GROUP BY %s, computed_at HAVING n > 1)",
+			group.keyCols, group.table, group.keyCols)
+		var duplicates uint64
+		if err := conn.QueryRow(ctx, query).Scan(&duplicates); err != nil {
+			t.Fatalf("uniqueness check on %s: %v", group.table, err)
+		}
+		if duplicates != 0 {
+			t.Errorf("%s: %d (%s, computed_at) group(s) hold more than one row. "+
+				"argMax would tie-break arbitrarily there, so any mutation merging "+
+				"rows into that group could survive on luck. Give the rows distinct "+
+				"computed_at values.",
+				group.table, duplicates, group.keyCols)
+		}
+	}
 }

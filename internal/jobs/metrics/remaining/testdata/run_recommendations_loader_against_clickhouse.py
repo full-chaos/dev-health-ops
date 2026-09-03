@@ -55,6 +55,14 @@ def main() -> int:
 
     json.dump(
         {
+            # Identity and window fields are emitted so the Go comparator can
+            # check them. They are echoes of the loader's own arguments on both
+            # sides, which is precisely why a port that echoed the WRONG one
+            # went undetected: nothing compared them.
+            "team_id": snapshot.team_id,
+            "org_id": snapshot.org_id,
+            "window_start": snapshot.window_start.isoformat(),
+            "window_end": snapshot.window_end.isoformat(),
             "wip_by_day": [bits(v) for v in snapshot.wip_by_day],
             "throughput_by_cycle": [bits(v) for v in snapshot.throughput_by_cycle],
             "review_latency_p75_hours": bits(snapshot.review_latency_p75_hours),

@@ -45,6 +45,10 @@ const (
 )
 
 type pythonSnapshot struct {
+	TeamID                 string   `json:"team_id"`
+	OrgID                  string   `json:"org_id"`
+	WindowStart            string   `json:"window_start"`
+	WindowEnd              string   `json:"window_end"`
 	WIPByDay               []string `json:"wip_by_day"`
 	ThroughputByCycle      []string `json:"throughput_by_cycle"`
 	ReviewLatencyP75Hours  *string  `json:"review_latency_p75_hours"`
@@ -165,6 +169,24 @@ func sameFloats(a, b []float64) bool {
 
 func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapshot, want pythonSnapshot) {
 	t.Helper()
+	// Identity and window first. These are echoes of the loader's arguments on
+	// both sides, so they look untestable -- which is why they were uncompared,
+	// and why a codex round could mutate WindowEnd to windowStart and watch
+	// every suite stay green. recommendations_daily is keyed on window_end, so
+	// the wrong bound writes to a different partition entirely.
+	if got.TeamID != want.TeamID || got.OrgID != want.OrgID {
+		t.Errorf("%s identity: (%q,%q), want (%q,%q)",
+			teamID, got.TeamID, got.OrgID, want.TeamID, want.OrgID)
+	}
+	if got.WindowStart.Format("2006-01-02") != want.WindowStart {
+		t.Errorf("%s window_start: %s, want %s",
+			teamID, got.WindowStart.Format("2006-01-02"), want.WindowStart)
+	}
+	if got.WindowEnd.Format("2006-01-02") != want.WindowEnd {
+		t.Errorf("%s window_end: %s, want %s -- recommendations_daily is keyed on "+
+			"window_end, so this decides which row is written",
+			teamID, got.WindowEnd.Format("2006-01-02"), want.WindowEnd)
+	}
 	compareList(t, teamID, "wip_by_day", got.WIPByDay, want.WIPByDay)
 	compareList(t, teamID, "throughput_by_cycle", got.ThroughputByCycle, want.ThroughputByCycle)
 	compareList(t, teamID, "cycle_time_by_day", got.CycleTimeByDay, want.CycleTimeByDay)
@@ -280,27 +302,42 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	// work_item_metrics_daily: wip/throughput and cycle time, per team.
 	// The (day, provider, work_scope_id) triple is the argMax key; the
 	// superseded row carries an absurd value on an earlier computed_at.
+	// TWO scopes on one day, deliberately.
+	//
+	// The inner query dedups per (day, provider, work_scope_id) and the outer
+	// sums across scopes. A fixture that pins both dimensions to one value
+	// cannot tell that apart from a bare `GROUP BY day`, which would take one
+	// scope's latest values and drop the other -- and every assertion would
+	// still pass. Day 2026-08-02 for team-alpha therefore carries scope-1 and
+	// scope-2, on two different providers, with different values AND its own
+	// superseded row, so the per-scope argMax and the cross-scope sum are both
+	// load-bearing.
 	for _, seed := range []struct {
 		team           string
 		day            string
+		provider       string
+		scope          string
 		wip, completed int
 		cycle          float64
 		computedAt     string
 	}{
-		{loaderTeamA, "2026-08-02", 3, 5, 10.5, "2026-08-03 00:00:00"},
-		{loaderTeamA, "2026-08-02", 999, 999, 999.0, "2026-08-02 00:00:00"}, // superseded
-		{loaderTeamA, "2026-08-05", 7, 2, 14.25, "2026-08-06 00:00:00"},
-		{loaderTeamA, "2026-08-09", 9, 1, 20.0, "2026-08-10 00:00:00"},
-		{loaderTeamB, "2026-08-02", 1, 8, 4.0, "2026-08-03 00:00:00"},
-		{loaderTeamB, "2026-08-06", 2, 9, 5.5, "2026-08-07 00:00:00"},
+		{loaderTeamA, "2026-08-02", "github", "scope-1", 3, 5, 10.5, "2026-08-03 00:00:00"},
+		{loaderTeamA, "2026-08-02", "github", "scope-1", 999, 999, 999.0, "2026-08-02 00:00:00"}, // superseded
+		{loaderTeamA, "2026-08-02", "jira", "scope-2", 7, 2, 6.5, "2026-08-03 00:00:00"},
+		{loaderTeamA, "2026-08-02", "jira", "scope-2", 555, 555, 555.0, "2026-08-02 00:00:00"}, // superseded
+		{loaderTeamA, "2026-08-05", "github", "scope-1", 7, 2, 14.25, "2026-08-06 00:00:00"},
+		{loaderTeamA, "2026-08-09", "github", "scope-1", 9, 1, 20.0, "2026-08-10 00:00:00"},
+		{loaderTeamB, "2026-08-02", "github", "scope-1", 1, 8, 4.0, "2026-08-03 00:00:00"},
+		{loaderTeamB, "2026-08-06", "github", "scope-1", 2, 9, 5.5, "2026-08-07 00:00:00"},
 	} {
 		exec(`INSERT INTO work_item_metrics_daily
 			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
 			 items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
 			 wip_unassigned_end_of_day, cycle_time_p50_hours, bug_completed_ratio,
 			 story_points_completed, computed_at, org_id)
-			VALUES (?, 'github', 'scope-1', ?, '', 0, ?, 0, 0, ?, 0, ?, 0, 0, ?, ?)`,
-			mustDate(t, seed.day), seed.team, uint32(seed.completed), uint32(seed.wip),
+			VALUES (?, ?, ?, ?, '', 0, ?, 0, 0, ?, 0, ?, 0, 0, ?, ?)`,
+			mustDate(t, seed.day), seed.provider, seed.scope, seed.team,
+			uint32(seed.completed), uint32(seed.wip),
 			seed.cycle, mustTimestamp(t, seed.computedAt), loaderOrgID)
 	}
 

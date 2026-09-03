@@ -337,6 +337,16 @@ def encode_result(result) -> dict | None:
         "rule_id": payload["rule_id"],
         "team_id": payload["team_id"],
         "org_id": payload["org_id"],
+        # The window and timestamp fields are RECORDED and COMPARED because they
+        # reach the stored row's key. recommendations_daily is keyed on
+        # window_end, so a port that emitted the wrong bound would write to a
+        # different partition and fail to replace the correct window's state --
+        # and every other assertion in this corpus would still pass, which is
+        # exactly what a codex round demonstrated by mutating WindowEnd to
+        # windowStart and watching three suites stay green.
+        "computed_at": payload["computed_at"].isoformat(),
+        "window_start": payload["window_start"].isoformat(),
+        "window_end": payload["window_end"].isoformat(),
         "severity": payload["severity"],
         "title": payload["title"],
         "rationale": payload["rationale"],

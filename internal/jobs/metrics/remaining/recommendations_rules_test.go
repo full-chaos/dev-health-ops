@@ -39,6 +39,9 @@ type goldenResult struct {
 	RuleID           string           `json:"rule_id"`
 	TeamID           string           `json:"team_id"`
 	OrgID            string           `json:"org_id"`
+	ComputedAt       string           `json:"computed_at"`
+	WindowStart      string           `json:"window_start"`
+	WindowEnd        string           `json:"window_end"`
 	Severity         string           `json:"severity"`
 	Title            string           `json:"title"`
 	Rationale        string           `json:"rationale"`
@@ -315,6 +318,35 @@ func TestRuleEvaluatorsMatchTheReference(t *testing.T) {
 				t.Errorf("case %q rule %q: ids (%q,%q), want (%q,%q)",
 					testCase.Name, evaluator.id, got.TeamID, got.OrgID, want.TeamID, want.OrgID)
 			}
+			// The window and timestamp fields decide WHICH STORED ROW this is:
+			// recommendations_daily is keyed on window_end, so a wrong bound
+			// writes to a different partition and never replaces the correct
+			// window's state. They were absent from this comparison until a
+			// codex round mutated WindowEnd to windowStart and watched every
+			// suite stay green.
+			// Compared as an INSTANT, not as a string. Go's RFC3339 renders UTC
+			// as "Z" and Python's isoformat renders it as "+00:00"; both name
+			// the same moment, and the spelling is not the contract -- only the
+			// instant reaches ClickHouse.
+			wantComputedAt, parseErr := time.Parse(time.RFC3339, want.ComputedAt)
+			if parseErr != nil {
+				t.Fatalf("case %q rule %q: corpus computed_at %q is unparseable: %v",
+					testCase.Name, evaluator.id, want.ComputedAt, parseErr)
+			}
+			if !got.ComputedAt.Equal(wantComputedAt) {
+				t.Errorf("case %q rule %q: computed_at %s, want %s",
+					testCase.Name, evaluator.id,
+					got.ComputedAt.Format(time.RFC3339Nano), wantComputedAt.Format(time.RFC3339Nano))
+			}
+			if got.WindowStart.Format("2006-01-02") != want.WindowStart {
+				t.Errorf("case %q rule %q: window_start %q, want %q",
+					testCase.Name, evaluator.id, got.WindowStart.Format("2006-01-02"), want.WindowStart)
+			}
+			if got.WindowEnd.Format("2006-01-02") != want.WindowEnd {
+				t.Errorf("case %q rule %q: window_end %q, want %q -- recommendations_daily "+
+					"is keyed on window_end, so this decides which row is written",
+					testCase.Name, evaluator.id, got.WindowEnd.Format("2006-01-02"), want.WindowEnd)
+			}
 			if got.Severity != want.Severity {
 				t.Errorf("case %q rule %q: severity %q, want %q", testCase.Name, evaluator.id, got.Severity, want.Severity)
 			}
@@ -345,6 +377,15 @@ func TestRuleEvaluatorsMatchTheReference(t *testing.T) {
 				if gotRef.TeamID != wantRef.TeamID {
 					t.Errorf("case %q rule %q evidence[%d]: team_id %q, want %q",
 						testCase.Name, evaluator.id, index, gotRef.TeamID, wantRef.TeamID)
+				}
+				// The evidence rows carry their own window bounds into
+				// evidence_json; they were also uncompared.
+				if gotRef.WindowStart.Format("2006-01-02") != wantRef.WindowStart ||
+					gotRef.WindowEnd.Format("2006-01-02") != wantRef.WindowEnd {
+					t.Errorf("case %q rule %q evidence[%d]: window (%s, %s), want (%s, %s)",
+						testCase.Name, evaluator.id, index,
+						gotRef.WindowStart.Format("2006-01-02"), gotRef.WindowEnd.Format("2006-01-02"),
+						wantRef.WindowStart, wantRef.WindowEnd)
 				}
 				wantValue := parseGoldenBits(t, wantRef.ValueBits)
 				// Cross-check the corpus's two encodings against each other on

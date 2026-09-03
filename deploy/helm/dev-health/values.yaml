@@ -213,6 +213,17 @@ goWorkers:
   # out-of-scope concern. Omitted defaults to contract 1 (rollout-safe); see
   # deploy/go-workers/README.md's rollout note before changing this value.
   operationalOrderingContract: "1"
+  # -- Pull policy for every worker group's image (all `ghcr.io/full-chaos/
+  #    dev-health-go-*` -- REGISTRY images). This must NOT inherit the
+  #    top-level image.pullPolicy: that value exists for the commit-tagged
+  #    APPLICATION image a local kind/kiac profile side-loads into the
+  #    cluster and therefore sets to Never (docs/contribute/development/
+  #    lane-isolation-kiac.md) -- applying Never here fails a fresh
+  #    goWorkers.enabled=true install with ErrImageNeverPull on every
+  #    worker pod, since none of the published go-worker images were ever
+  #    side-loaded. Same pattern, same reasoning, as postgresql.image.
+  #    pullPolicy below (a registry image with its own dedicated policy).
+  imagePullPolicy: IfNotPresent
   # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
   #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
   #    and Secret in go-workers.yaml's envFrom list, same rule and same

@@ -71,7 +71,9 @@ spec:
       containers:
         - name: {{ $group.name }}
           image: {{ $group.image }}
-          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          # CHAOS-4984: goWorkers.imagePullPolicy, NEVER image.pullPolicy --
+          # see values.yaml's goWorkers.imagePullPolicy comment for why.
+          imagePullPolicy: {{ $.Values.goWorkers.imagePullPolicy }}
           # CHAOS-4020: worker configuration is flags. Every setting a Go
           # binary reads that is not a credential is rendered here, so
           # `helm template` and `kubectl describe` show the deployed

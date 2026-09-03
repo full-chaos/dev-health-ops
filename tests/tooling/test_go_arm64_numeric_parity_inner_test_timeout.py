@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +53,34 @@ _TARGET_JOBS = [
 ]
 _STEP_NAME = "Run FMA bit-pattern goldens on real arm64"
 _GO_TEST_TIMEOUT = re.compile(r"go test\b[^\n]*?-timeout[ =](\S+)")
+
+
+def _the_go_test_line(script: str, job_name: str) -> str:
+    """The one physical line that actually INVOKES `go test`.
+
+    codex round 1 (#2145, CHAOS-4906): the ORIGINAL version of this test
+    searched the WHOLE step script for `-timeout` after any `go test`
+    substring -- which a COMMENT mentioning the required form (e.g. `#
+    required form: go test -timeout 8m`) satisfies just as well as the real
+    invocation. Reproduced: a script whose only ACTUAL `go test` command has
+    no `-timeout` at all, preceded by a comment line quoting the required
+    form, made the old regex match the comment and report a value that was
+    never really there. Restricting the search to the line that is itself
+    an executable `go test` invocation (starts with `go test`, once leading
+    whitespace is stripped -- not `#...`, not `echo "...go test..."`)
+    closes this: a comment can say anything, it is never mistaken for code.
+    """
+    matches = [
+        line for line in script.splitlines() if line.strip().startswith("go test")
+    ]
+    assert len(matches) == 1, (
+        f"{WORKFLOW_PATH.name}: job {job_name!r} step {_STEP_NAME!r} has "
+        f"{len(matches)} lines that are themselves a `go test` invocation "
+        "(stripped-leading-whitespace start), expected exactly 1 -- this "
+        "guard scopes its checks to THE line that actually runs the test; "
+        "update it (and this test) if the step now runs more than one"
+    )
+    return matches[0]
 
 
 def _job(name: str) -> dict[str, object]:
@@ -96,29 +125,56 @@ def _timeout_minutes(job_name: str) -> int:
     return value
 
 
+def _assert_inner_timeout_shorter_than_cap(
+    script: str, job_name: str, outer_minutes: int
+) -> None:
+    """The guard's actual logic, factored out so a regression test can feed
+    it a CONSTRUCTED script (the codex round 1 comment-decoy evasion)
+    without needing a second copy of go.yml to point it at."""
+    go_test_line = _the_go_test_line(script, job_name)
+    match = _GO_TEST_TIMEOUT.search(go_test_line)
+    assert match, (
+        f"job {job_name!r}'s `go test` invocation has no `-timeout` flag -- "
+        "relying on `timeout-minutes` alone reproduces acr's near-miss "
+        "(CF, 09-03): a job cancelled by its own outer timeout reads as "
+        "claimed-failure through this contract's poll logic, "
+        "indistinguishable from a real defect"
+    )
+    raw = match.group(1)
+    assert raw.endswith("m") and raw[:-1].isdigit(), (
+        f"job {job_name!r}'s go test -timeout value {raw!r} is not a plain "
+        "'<N>m' minutes form this test knows how to compare against "
+        "timeout-minutes"
+    )
+    inner_minutes = int(raw[:-1])
+    assert inner_minutes < outer_minutes, (
+        f"job {job_name!r}'s inner go test -timeout ({inner_minutes}m) is "
+        f"not strictly shorter than its own job timeout-minutes "
+        f"({outer_minutes}m) -- the whole point of the inner bound is "
+        "firing BEFORE the outer one; equal or longer means the outer cap "
+        "can still win the race"
+    )
+
+
 def test_go_test_carries_an_inner_timeout_shorter_than_the_job_cap() -> None:
     for job_name in _TARGET_JOBS:
         script = _go_test_step_script(job_name)
-        match = _GO_TEST_TIMEOUT.search(script)
-        assert match, (
-            f"{WORKFLOW_PATH.name}: job {job_name!r}'s `go test` invocation "
-            "has no `-timeout` flag -- relying on `timeout-minutes` alone "
-            "reproduces acr's near-miss (CF, 09-03): a job cancelled by its "
-            "own outer timeout reads as claimed-failure through this "
-            "contract's poll logic, indistinguishable from a real defect"
+        _assert_inner_timeout_shorter_than_cap(
+            script, job_name, _timeout_minutes(job_name)
         )
-        raw = match.group(1)
-        assert raw.endswith("m") and raw[:-1].isdigit(), (
-            f"{WORKFLOW_PATH.name}: job {job_name!r}'s go test -timeout "
-            f"value {raw!r} is not a plain '<N>m' minutes form this test "
-            "knows how to compare against timeout-minutes"
-        )
-        inner_minutes = int(raw[:-1])
-        outer_minutes = _timeout_minutes(job_name)
-        assert inner_minutes < outer_minutes, (
-            f"{WORKFLOW_PATH.name}: job {job_name!r}'s inner go test "
-            f"-timeout ({inner_minutes}m) is not strictly shorter than its "
-            f"own job timeout-minutes ({outer_minutes}m) -- the whole point "
-            "of the inner bound is firing BEFORE the outer one; equal or "
-            "longer means the outer cap can still win the race"
-        )
+
+
+def test_guard_rejects_a_timeout_mentioned_only_in_a_comment() -> None:
+    """codex round 1 (#2145, CHAOS-4906), reproduced as a permanent
+    regression: a COMMENT quoting the required `-timeout` form, sitting
+    above the real `go test` invocation which has none, satisfied the OLD
+    whole-script regex search -- a comment can say anything without making
+    it true of the code below it. This must now raise, because
+    `_the_go_test_line` only ever looks at a line that IS itself an
+    executable `go test` invocation."""
+    decoy_script = (
+        "# required form: go test -timeout 8m\n"
+        "go test -mod=readonly -count=1 -json ./internal/jobs/... -run pattern\n"
+    )
+    with pytest.raises(AssertionError, match="has no `-timeout` flag"):
+        _assert_inner_timeout_shorter_than_cap(decoy_script, "fake-job", 10)

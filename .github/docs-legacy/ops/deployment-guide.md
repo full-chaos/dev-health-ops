@@ -242,6 +242,35 @@ cp .env.example .env
 docker compose -f compose.production.yml up -d
 ```
 
+### Go/River Worker Overlay (`profiles: [go-workers]`)
+
+`compose.go-workers.yml` (and `compose.production.yml`'s own `metrics-api`)
+gate every Go/River worker service behind `profiles: [go-workers]`. **The
+plain `docker compose ... up -d` above never starts, pulls, or restarts
+any of them** -- not on first start, and not on a redeploy, even when
+those containers are already running. CHAOS-4976: a deploy that skips
+this pass reports success while quietly leaving the entire Go/River
+worker family on a stale image, with no error anywhere.
+
+Use `deploy/docker-compose/deploy-prod.sh` for a real deploy instead of
+running `docker compose` by hand -- it does BOTH passes (the base stack,
+then `--profile go-workers` with every profiled service named
+explicitly, derived fresh from `docker compose config` each run, never a
+hand-maintained list or a bare `--profile go-workers up -d`):
+
+```bash
+cd deploy/docker-compose
+
+./deploy-prod.sh --dry-run   # print the plan (both passes) without acting
+./deploy-prod.sh             # pull + up -d, both passes
+```
+
+`tests/tooling/test_deploy_prod_go_workers_profile_coverage.py` guards
+this: it independently re-derives the go-workers-only service set from
+the real compose config and fails if the script's plan ever stops naming
+one of them, or if the script's own `--profile go-workers` invocations
+ever go bare (no service names) again.
+
 ### Customization
 
 Override specific services:

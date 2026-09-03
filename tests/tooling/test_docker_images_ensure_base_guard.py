@@ -425,6 +425,78 @@ def test_cherry_picked_mirror_dockerfile_without_script_fails_loudly(
     assert not calls, f"a refusal must not invoke docker: {calls!r}"
 
 
+def test_shallow_with_present_non_ancestor_target_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Shallow, target PRESENT, and genuinely not an ancestor: refuse anyway.
+
+    DOCSTRING CORRECTED (084-prod). An earlier version of this row claimed it
+    built the "wrong answer" state. It does not: the target here is a side
+    branch, so it really is not an ancestor, and `--is-ancestor` returning 1 is
+    CORRECT -- a full clone agrees. Believing otherwise is the trap 084-prod hit
+    first time and caught only by pinning the truth from the source repo.
+
+    What this row does assert, and it is worth asserting: the refusal fires on a
+    shallow repository REGARDLESS of what ancestry would have said. It is a
+    working detector -- narrow the refusal to `is-shallow && ! cat-file -e` and
+    the object's presence stops it firing, the guard skips, and this goes red.
+
+    The genuinely-wrong-answer case is the row below, where the target IS an
+    ancestor and 1 is provably false. Both are needed: this one covers the
+    refusal's breadth, that one covers the reason it exists.
+    """
+    source = _scratch_repo(tmp_path, script=False)
+    _git(source, "checkout", "-q", "-b", "sidebranch")
+    (source / "side").write_text("side\n", encoding="utf-8")
+    _git(source, "add", "side")
+    _git(source, "commit", "-qm", "side commit")
+    side = _git(source, "rev-parse", "HEAD")
+    _git(source, "checkout", "-q", "main")
+    # THE PREMISE, STATED AS AN ASSERTION: this target is NOT an ancestor, so 1
+    # is the honest answer and this row is about breadth, not wrongness.
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", side, "main"], cwd=source
+        ).returncode
+        == 1
+    ), "this row's premise is a target that genuinely is not an ancestor"
+
+    shallow = tmp_path / "shallow-present-nonancestor"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", f"file://{source}", str(shallow)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "fetch", "--depth", "1", "origin", "sidebranch"],
+        cwd=shallow,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true", (
+        "the fixture must be shallow"
+    )
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{side}^{{commit}}"], cwd=shallow
+        ).returncode
+        == 0
+    ), "the target object must be PRESENT, or the narrowing mutation survives"
+
+    (shallow / "ci").mkdir(exist_ok=True)
+    code, out, calls = _run_guard(shallow, tmp_path, mirror_sha=side)
+    assert code == 1, f"a shallow repository must be refused, got {code}\n{out}"
+    assert "this is a shallow repository" in out, (
+        f"the pre-flight refusal must fire even though ancestry could have "
+        f"answered honestly here -- shallowness alone is the refusal's "
+        f"trigger.\n{out}"
+    )
+    assert SKIP_MARKER not in out, f"must not treat this as pre-mirror\n{out}"
+    assert not calls, f"a refusal must not invoke docker: {calls!r}"
+
+
 def test_shallow_with_target_present_but_unreachable_is_refused(
     tmp_path: Path,
 ) -> None:

@@ -176,6 +176,13 @@ var excludedGenerators = map[string]struct {
 		missingModule: "httpx2",
 		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
 	},
+	"generate_work_unit_label_golden.py": {
+		reason: "same import as generate_effort_golden.py above -- drives " +
+			"_resolve_work_unit_label from work_graph.investment.materialize, " +
+			"same missing httpx2 transitive",
+		missingModule: "httpx2",
+		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
+	},
 	// generate_scope_grammar_corpus.py's exclusion (limits missing from the
 	// closure) was removed here CHAOS-4945, once `limits` (and its own
 	// transitives, deprecated and wrapt) were added to

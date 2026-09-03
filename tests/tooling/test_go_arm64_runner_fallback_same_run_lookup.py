@@ -43,6 +43,7 @@ The `run:` block of the `go-arm64-numeric-parity-fallback` job's `wait` step:
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 
 import pytest
@@ -77,15 +78,89 @@ def _wait_step_script() -> str:
     return script
 
 
-# Anchors that mean "a new shell command starts right here": the physical
-# start of the line (optionally indented), or right after one of the real
-# command separators `;`, `&`, `|`, a backtick opening old-style command
-# substitution, or -- checked as its own two-character token, not a bare
-# `(` -- `$(` opening a MODERN command substitution. A bare `(` is
-# deliberately EXCLUDED: this script's own prose uses it for plain English
-# parentheticals (`"...(gh api kept failing)..."` inside an echo string),
-# which a bare-`(` anchor would wrongly count as a subshell open.
-_GH_API_INVOCATION = re.compile(r"(?:\A\s*|[;&|`]\s*|\$\(\s*)gh\s+api\b")
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _strip_line_continuation(line: str) -> str:
+    """Drop a trailing shell line-continuation backslash (an ODD number of
+    trailing backslashes means the last one escapes the newline; an EVEN
+    number means they escape each other and the line ends "clean") so
+    `shlex.split` doesn't raise on a real multi-line invocation wrapped
+    with a trailing `\\`. Shared with the inner-timeout guard's identical
+    helper -- see test_go_arm64_numeric_parity_inner_test_timeout.py."""
+    stripped = line.rstrip()
+    trailing_backslashes = len(stripped) - len(stripped.rstrip("\\"))
+    if trailing_backslashes % 2 == 1:
+        return stripped[:-1]
+    return stripped
+
+
+_LEADING_KEYWORDS = {"if", "elif", "while", "until", "!"}
+
+
+def _strip_leading_keywords_and_env(tokens: list[str]) -> list[str]:
+    """Strip leading shell CONTROL-FLOW keywords (`if`, `elif`, `while`,
+    `until`, `!`) and `KEY=value` env-var assignment PREFIXES from the front
+    of a token list, repeatedly, until neither applies. `if gh api ...;
+    then` is a real, common shape (codex round 3's own finding) -- the
+    condition of an `if` is itself a real command position, not a decoy
+    position, so the keyword must be skippable, not just env assignments.
+    """
+    while tokens:
+        head = tokens[0]
+        if head in _LEADING_KEYWORDS or _ENV_ASSIGNMENT.match(head):
+            tokens = tokens[1:]
+        else:
+            break
+    return tokens
+
+
+def _dollar_paren_regions(line: str) -> list[str]:
+    """Every top-level `$(...)` command-substitution BODY in `line`, with
+    correct paren-depth tracking (any `(` inside increases depth, not just
+    another `$(`) so a nested case like `$(( $(date -u +%s) + N ))` doesn't
+    close early on the first inner `)`. Does NOT understand quoting inside
+    the region -- a literal `)` inside a quoted string there would close
+    early -- but no script this test targets has ever needed that; see
+    `_the_gh_api_line` for why a full shell parse is out of reach here.
+    """
+    regions = []
+    i, n = 0, len(line)
+    while i < n:
+        if line[i : i + 2] == "$(":
+            depth = 1
+            start = i + 2
+            j = start
+            while j < n and depth > 0:
+                if line[j] == "(":
+                    depth += 1
+                elif line[j] == ")":
+                    depth -= 1
+                j += 1
+            if depth == 0:
+                regions.append(line[start : j - 1])
+                i = j
+                continue
+        i += 1
+    return regions
+
+
+def _line_is_a_real_gh_api_invocation(line: str) -> bool:
+    """Whether `line` contains a real (command-position) `gh api` call,
+    checked both at the line's own top level AND inside every `$(...)`
+    command-substitution body it contains -- `raw="$(gh api ...)"` puts
+    the real invocation INSIDE the substitution, not at the line's own
+    command position.
+    """
+    for region in (line, *_dollar_paren_regions(line)):
+        try:
+            tokens = shlex.split(_strip_line_continuation(region), comments=True)
+        except ValueError:
+            continue
+        tokens = _strip_leading_keywords_and_env(tokens)
+        if tokens[:2] == ["gh", "api"]:
+            return True
+    return False
 
 
 def _the_gh_api_line(script: str) -> str:
@@ -96,55 +171,61 @@ def _the_gh_api_line(script: str) -> str:
     of the two cross-run markers -- which a same-run-shaped string sitting
     in an UNUSED variable elsewhere in the script satisfies trivially, while
     the REAL request (built from a different variable, on a different line)
-    can be a genuine cross-run lookup. Reproduced: a constructed script with
-    `same_run_probe="actions/runs/${GITHUB_RUN_ID}/jobs"` (dead, never
-    passed to `gh api`) alongside a real `gh api ... actions/workflows/
-    go.yml/runs -f "${field_name}=${GITHUB_SHA}"` call (a genuine cross-run
-    search, `field_name` holding the literal text `head_sha` only through a
-    variable, so it never appears as the substring `head_sha=`) satisfied
-    all three of the old whole-script checks. Round 1's OWN fix (a regex
-    requiring `gh api` followed by `"` or `--`) was ITSELF found wrong in
-    round 2: it matched an `echo 'gh api "..."'` DECOY (the quoted text
-    happens to match the regex as a bare substring) while missing the real
-    `gh api -X GET ...` call entirely (`-X` matches neither `"` nor `--`) --
-    the exact same class of bug one level in.
+    can be a genuine cross-run lookup.
 
-    Tried `shlex`-based command-position tokenization next (the same fix
-    that works for the inner-timeout guard's `go test` line) -- it FAILS on
-    THIS script's actual production line, `if raw="$(gh api "repos/..."
-    2>/dev/null)"; then`: the nested double-quotes around the command
-    substitution's own argument are not valid POSIX quoting `shlex`
-    understands (bash reopens quoting context inside `$(...)`; `shlex` has
-    no such concept), so it merges `gh`, `api`, and everything after into
-    ONE token attached to `raw=$(...`, and word-position 0/1 are never
-    `["gh", "api"]` at all. A real script's own idiom broke the
-    "more correct" fix, so tokenization was abandoned for an ANCHORED
-    regex instead: `gh api` counts only when the two words are immediately
-    preceded (module leading whitespace) by a genuine command-starting
-    context (line start, `;`, `&`, `|`, backtick, or `$(`) -- never a bare
-    `(` (this script's own prose uses plain parentheses,
-    `"...(gh api kept failing)..."`, which must NOT count) and never a
-    quote character (the `echo` decoy's opening `'`). Comment lines
-    (`#...`) are excluded outright first, since this script's own
-    documentation-style backtick-quoting (`` `gh api` ``) would otherwise
-    satisfy the backtick anchor on prose, not code.
+    codex round 2: round 1's OWN fix (a regex requiring `gh api` followed
+    by `"` or `--`) matched an `echo 'gh api "..."'` DECOY (the quoted text
+    happens to match the regex as a bare substring) while missing a real
+    `gh api -X GET ...` call entirely (`-X` matches neither `"` nor `--`).
+    Fixed with an anchored regex requiring a genuine command-start context
+    (line start, `;`, `&`, `|`, backtick, or `$(`) immediately before
+    `gh api` -- but round 2's fix used bare CHARACTER anchors, which cannot
+    tell a `;` inside a quoted string from a real statement separator.
 
-    Does NOT handle a `gh api` invocation split across a line continuation
-    (`\\` at end of line) -- the production script has exactly one `gh api`
-    call, on one physical line, today; a future multi-line form would need
-    this widened, not silently miscounted.
+    codex round 3: round 2's anchored regex matched an
+    `echo "documentation; gh api ..."` DECOY (the `;` inside the double-
+    quoted echo argument satisfied the `;` anchor) while missing a real
+    `if gh api -X GET ...; then :; fi` call (no anchor existed for the
+    conditional-command position after `if`). This is a raw-text-anchor
+    approach hitting the exact wall round 2's own docstring predicted for
+    plain `shlex` tokenization: neither approach understands shell
+    STRUCTURE (quoting, control-flow keywords), only surface shapes.
+
+    Fixed properly this time by tokenizing with `shlex` -- which DOES
+    understand quoting, so `echo`'s single- or double-quoted argument is
+    one opaque token no matter what punctuation it contains, closing both
+    round 2's and round 3's echo-decoy shapes at once -- while separately
+    handling the two things plain tokenization got wrong before:
+    (1) `if`/`elif`/`while`/`until`/`!` are stripped as leading keywords
+    before checking command position (`_strip_leading_keywords_and_env`),
+    so `if gh api ...` is recognized as a real invocation; (2) the real
+    production line's nested double-quotes inside `$(...)` (invalid POSIX
+    quoting by `shlex`'s own rules -- bash reopens quoting context inside
+    command substitution, `shlex` has no such concept, and tokenizing the
+    WHOLE line merges `gh`/`api` into one opaque token attached to
+    `raw=$(...`) are worked around by extracting each top-level `$(...)`
+    BODY as its own self-contained string first (`_dollar_paren_regions`)
+    and tokenizing THAT in isolation -- removing the enclosing
+    `if raw="..."` context is what lets `shlex` parse the inner
+    `gh api "repos/..." 2>/dev/null` correctly, verified directly against
+    this exact production line.
+
+    Comment lines (`#...`) are excluded outright first, since this script's
+    own backtick-quoted documentation (`` `gh api` ``) would otherwise
+    still need separate handling.
     """
     matches = [
         line
         for line in script.splitlines()
-        if not line.strip().startswith("#") and _GH_API_INVOCATION.search(line)
+        if not line.strip().startswith("#") and _line_is_a_real_gh_api_invocation(line)
     ]
     assert len(matches) == 1, (
         f"{WORKFLOW_PATH.name}: job {JOB_NAME!r} step {STEP_ID!r} has "
-        f"{len(matches)} lines containing 'gh api', expected exactly 1 -- "
-        "this guard scopes its checks to THE line that performs the "
-        "request; update it (and this test) if the step now makes more "
-        "than one API call, rather than silently checking only the first"
+        f"{len(matches)} lines containing a real 'gh api' invocation, "
+        "expected exactly 1 -- this guard scopes its checks to THE line "
+        "that performs the request; update it (and this test) if the step "
+        "now makes more than one API call, rather than silently checking "
+        "only the first"
     )
     return matches[0]
 
@@ -240,6 +321,33 @@ def test_guard_rejects_an_echo_decoy_beside_a_real_dash_x_invocation() -> None:
         "echo 'gh api \"actions/runs/${GITHUB_RUN_ID}/jobs\" is what we call'\n"
         'raw=$(gh api -X GET "repos/${GITHUB_REPOSITORY}'
         '/actions/runs?head_sha=${GITHUB_SHA}")\n'
+    )
+    with pytest.raises(AssertionError, match="not a same-run"):
+        _assert_same_run_shaped(decoy_script)
+
+
+def test_guard_rejects_a_semicolon_in_a_quoted_echo_beside_a_real_if_invocation() -> (
+    None
+):
+    """codex round 3 (#2145, CHAOS-4906), reproduced as a permanent
+    regression: round 2's own fix (an anchored regex requiring `gh api` be
+    immediately preceded by a real command-start context, including a bare
+    `;`) was fooled by a `;` sitting INSIDE a double-quoted `echo` argument
+    (`echo "documentation; gh api ..."`) -- the anchor regex has no concept
+    of quoting, so a `;` character is a `;` character to it regardless of
+    what encloses it. The REAL call, `if gh api -X GET ...; then :; fi`,
+    went undetected entirely: round 2's anchor set had no entry for the
+    conditional-command position after `if`.
+
+    The `shlex`-based fix closes both: `shlex` understands quoting, so the
+    decoy's whole quoted argument (semicolon included) is one opaque token,
+    never satisfying `tokens[:2] == ["gh", "api"]`; and `if` is stripped as
+    a leading keyword before the command-position check, so the real
+    conditional invocation is correctly recognized."""
+    decoy_script = (
+        'echo "documentation; gh api actions/runs/${GITHUB_RUN_ID}/jobs"\n'
+        'if gh api -X GET "repos/${GITHUB_REPOSITORY}'
+        '/actions/runs?head_sha=${GITHUB_SHA}"; then :; fi\n'
     )
     with pytest.raises(AssertionError, match="not a same-run"):
         _assert_same_run_shaped(decoy_script)

@@ -79,20 +79,44 @@ def _strip_line_continuation(line: str) -> str:
     return stripped
 
 
+_LEADING_KEYWORDS = {"if", "elif", "while", "until", "!"}
+
+
 def _leading_command_words(line: str, count: int) -> list[str] | None:
     """The first `count` REAL command words on `line` (skipping leading
-    `KEY=value` env-var assignments), or None if the line does not
-    tokenize as shell (a comment, or something the shim doesn't need to
-    understand) or has fewer than `count` real words. Shared reasoning
-    with the F2 same-run guard's identical helper -- see
-    test_go_arm64_runner_fallback_same_run_lookup.py.
+    `KEY=value` env-var assignment PREFIXES and shell control-flow
+    KEYWORDS), or None if the line does not tokenize as shell (a comment,
+    or something the shim doesn't need to understand) or has fewer than
+    `count` real words.
+
+    codex round 3 (#2145, CHAOS-4906) found two gaps in this helper's
+    round-2 shape: (1) it tokenized with `shlex.split(..., posix=True)`
+    (the default), which STRIPS quote characters from tokens -- a quoted
+    string that merely LOOKS like `KEY=value` after quote-stripping (e.g.
+    `'CI_STAGE=arm64' go test ...`, where `'CI_STAGE=arm64'` is actually a
+    literal COMMAND NAME being invoked, not an env assignment prefixing a
+    real one) was wrongly stripped and treated as an assignment, letting a
+    dead branch's decoy line masquerade as the one real `go test`
+    invocation. Fixed by tokenizing with `posix=False` instead, which
+    PRESERVES quote characters on tokens -- `'CI_STAGE=arm64'` stays
+    quoted and no longer matches `_ENV_ASSIGNMENT` (which requires a bare
+    leading letter/underscore, not a quote mark), while a genuine unquoted
+    `CI_STAGE=arm64` is unaffected. (2) a real `if go test ...; then :; fi`
+    line was missed entirely, because `if` was never stripped from the
+    front before checking command position -- fixed by also stripping
+    `_LEADING_KEYWORDS` (shared with the F2 same-run guard's identical
+    reasoning -- see test_go_arm64_runner_fallback_same_run_lookup.py).
     """
     try:
-        tokens = shlex.split(_strip_line_continuation(line), comments=True)
+        tokens = shlex.split(_strip_line_continuation(line), comments=True, posix=False)
     except ValueError:
         return None
-    while tokens and _ENV_ASSIGNMENT.match(tokens[0]):
-        tokens = tokens[1:]
+    while tokens:
+        head = tokens[0]
+        if head in _LEADING_KEYWORDS or _ENV_ASSIGNMENT.match(head):
+            tokens = tokens[1:]
+        else:
+            break
     if len(tokens) < count:
         return None
     return tokens[:count]
@@ -260,3 +284,43 @@ def test_guard_rejects_a_timeout_decoy_inside_a_dead_branch() -> None:
     )
     with pytest.raises(AssertionError, match="expected exactly 1"):
         _assert_inner_timeout_shorter_than_cap(decoy_script, "fake-job", 10)
+
+
+def test_guard_rejects_a_quoted_assignment_lookalike_beside_a_real_if_invocation() -> (
+    None
+):
+    """codex round 3 (#2145, CHAOS-4906), reproduced as a permanent
+    regression: round 2's own fix tokenized with `shlex.split(...,
+    posix=True)` (the default), which STRIPS quote characters -- a dead
+    branch's line `'CI_STAGE=arm64' go test -timeout 8m ...` has
+    `'CI_STAGE=arm64'` as a QUOTED literal (a command name being invoked,
+    not an env assignment), but quote-stripping made it indistinguishable
+    from a real unquoted `CI_STAGE=arm64 go test ...` prefix, so it was
+    wrongly stripped and the dead branch's line was accepted as "the" one
+    real invocation. Meanwhile a real `if go test ./internal/jobs/...;
+    then :; fi` line was missed entirely (its first token, `if`, was never
+    stripped, so `tokens[:2]` was `["if", "go"]`, never `["go", "test"]`).
+
+    Fixed by tokenizing with `posix=False` (preserves quote characters, so
+    `'CI_STAGE=arm64'` no longer matches the env-assignment pattern) and by
+    stripping leading control-flow keywords (`if`, `elif`, `while`,
+    `until`, `!`) before the command-position check. With both fixed, the
+    decoy line stops looking like a `go test` invocation at all (its first
+    real token is the quoted string itself, not `go`) and the real `if go
+    test ...; then` line is the ONLY match -- unlike the round 2 regression
+    above (which asserts an honest ambiguity), the correct outcome HERE is
+    that the guard runs clean, having picked the one genuine invocation
+    without needing to fall back to "ambiguous, fail loud"."""
+    decoy_script = (
+        "if false; then\n"
+        "  'CI_STAGE=arm64' go test -timeout 8m ./internal/jobs/... -run pattern\n"
+        "fi\n"
+        "if go test -timeout 8m ./internal/jobs/... -run pattern; then :; fi\n"
+    )
+    _assert_inner_timeout_shorter_than_cap(decoy_script, "fake-job", 10)
+    assert (
+        _the_go_test_line(decoy_script, "fake-job").strip().startswith("if go test")
+    ), (
+        "expected the real conditional `go test` invocation to be selected, "
+        "not the dead branch's quoted-lookalike decoy"
+    )

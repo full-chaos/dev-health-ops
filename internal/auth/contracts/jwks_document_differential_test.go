@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -943,6 +944,86 @@ func TestEveryNarrowingPredicateHasAFixtureAndViceVersa(t *testing.T) {
 				"narrower_than_consumer fixture demonstrates it. A predicate without a fixture "+
 				"EXCUSES an asymmetry that nothing asserts -- this is exactly what round 2 "+
 				"blocked, for `use: \"\"`", p.name)
+		}
+	}
+}
+
+func TestTheKidPatternIsWhatThisMirrors(t *testing.T) {
+	// THE TEST THIS FILE'S COMMENT PROMISED AND DID NOT HAVE.
+	//
+	// schemaAcceptsKid restates the schema's kid pattern in Go, deliberately:
+	// it decides which kids count as NARROWINGS, and reading the pattern from
+	// the artefact it polices would make the narrowing set move with the
+	// schema. The cost of that choice is a second copy of a rule, and this
+	// contract exists because two copies of a rule drift.
+	//
+	// The comment above schemaAcceptsKid claimed a test named exactly this
+	// caught such a drift. THERE WAS NO SUCH TEST -- the name appeared only in
+	// the comment. Executed at the time: changing `r > 0x7e` to `r > 0x7f` left
+	// the Go suite and the Python suite both green. A mitigation named in prose
+	// and absent from the tree is worse than an acknowledged gap, because it
+	// reads as handled.
+	//
+	// lane-auth-wave1's #2166 round found the same shape in their code the same
+	// hour -- an index test that recreated a hand-copied definition, so a broken
+	// migration with the same name would still pass. A test that measures its
+	// own copy rather than the artefact.
+	//
+	// This compares the two by BEHAVIOUR over probe strings, not by comparing
+	// pattern text, because text equality would pass for two patterns that
+	// differ only in something the text does not capture.
+	root := testRoot(t)
+	schema, err := Validator(root, JWKSSurface)
+	if err != nil {
+		t.Fatalf("loading the schema: %v", err)
+	}
+	_ = schema
+
+	raw, err := os.ReadFile(filepath.Join(root,
+		"contracts/auth/v1/jsonschema/jwks.v1.schema.json"))
+	if err != nil {
+		t.Fatalf("reading the schema file: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("parsing the schema: %v", err)
+	}
+	pattern, ok := document["properties"].(map[string]any)["keys"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["kid"].(map[string]any)["pattern"].(string)
+	if !ok || pattern == "" {
+		t.Fatal("no kid pattern in the schema; this test cannot compare against nothing")
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("the schema's kid pattern does not compile in RE2: %v", err)
+	}
+
+	probes := []string{
+		"example-signing-key",
+		"!",                // 0x21, the low boundary
+		"~",                // 0x7e, the high boundary
+		" ",                // 0x20, one below
+		string(rune(0x7f)), // DEL, one above -- the mutation that went undetected
+		string(rune(0)),    // NUL
+		"\t", "\n",
+		string(rune(0x00E9)),       // é
+		string(rune(0x4E2D)),       // CJK
+		string(rune(0x3000)),       // ideographic space
+		"a" + string(rune(0x0301)), // combining mark
+		"",                         // empty
+		strings.Repeat("k", 256),   // at the bound
+		strings.Repeat("k", 257),   // over it
+	}
+	if len(probes) == 0 {
+		t.Fatal("no probes; this test would pass vacuously")
+	}
+	for _, probe := range probes {
+		want := compiled.MatchString(probe)
+		got := schemaAcceptsKid(probe)
+		if want != got {
+			t.Errorf("schemaAcceptsKid(%q) = %v but the SCHEMA's own pattern %q says %v. The Go "+
+				"mirror has drifted from the artefact it mirrors, and the narrowing set is "+
+				"decided by the mirror",
+				probe, got, pattern, want)
 		}
 	}
 }

@@ -190,7 +190,17 @@ func isWellFormedGithubIssueTarget(target string) bool {
 		return false
 	}
 	parsed, err := strconv.ParseUint(number, 10, 64)
-	return err == nil && parsed > 0
+	if err != nil || parsed == 0 {
+		return false
+	}
+	// CANONICAL form only (codex round 2 on #2174, P2): the writer
+	// (github_work_items_rows.go:784) always formats via strconv.Itoa, which
+	// never emits a leading zero -- "01", "007" etc. are strings ParseUint
+	// happily accepts but the writer can never produce. Reconstructing the
+	// canonical form and comparing catches every non-canonical numeral in one
+	// check, not just leading zeros specifically (e.g. it would also catch a
+	// hypothetical "+1" if ParseUint ever accepted one).
+	return strconv.FormatUint(parsed, 10) == number
 }
 
 // DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer

@@ -62,6 +62,48 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 	foreignClaim := claim
 	foreignClaim.OrgID = "org-other"
 
+	// Freeze background merges on the three contested tables BEFORE anything is
+	// written, and restart them after.
+	//
+	// Every subtest below replays a write to put TWO physical rows on one dedup
+	// key, and both the contested-pair precondition and the replay assertion
+	// depend on those rows still being two when they read. A merge collapses
+	// them, and a read that has lost its FINAL then still returns the version
+	// winner -- the assertion would pass on the ENGINE's dedup rather than the
+	// QUERY's. Before this the fixture depended on winning that race silently.
+	//
+	// PER-TABLE, not the bare server-wide form: a scoped stop cannot leak to
+	// other tests even on a shared instance (CHAOS-4953).
+	//
+	// t.Cleanup, NOT defer, because THIS file tears down with t.Cleanup --
+	// `t.Cleanup(func() { _ = conn.Close() })`. Cleanups run LIFO and after all
+	// defers, so a Cleanup registered here runs BEFORE the connection closes.
+	// A `defer` restart would also run before conn.Close, but matching the
+	// file's own teardown is what keeps the ordering obvious to the next reader.
+	// The form is not portable: in a file that tears down with defers, a
+	// t.Cleanup restart fires against an ALREADY-CLOSED connection.
+	//
+	// Its own bounded context, because `defer cancel()` above runs BEFORE any
+	// t.Cleanup -- so ctx is already cancelled by the time the restart runs, and
+	// an Exec on it would be a silent no-op. The error is checked per table, or
+	// a failed restart looks exactly like a successful one.
+	for _, table := range []string{
+		githubWorkItemMetricsDailyDestination,
+		githubWorkItemUserMetricsDailyDestination,
+		githubWorkItemCycleTimesDestination,
+	} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges %s: %v", table, err)
+		}
+		t.Cleanup(func() {
+			resumeCtx, cancelResume := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelResume()
+			if err := conn.Exec(resumeCtx, "SYSTEM START MERGES "+table); err != nil {
+				t.Errorf("resume merges %s: %v", table, err)
+			}
+		})
+	}
+
 	t.Run(githubWorkItemMetricsDailyDestination, func(t *testing.T) {
 		sink := GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}
 		row := githubWorkItemMetricTestGroupRow()

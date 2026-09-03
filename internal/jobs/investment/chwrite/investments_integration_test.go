@@ -244,6 +244,63 @@ func TestWriteRefusesEmptyOrganizationID(t *testing.T) {
 	if _, err := writer.WriteQuotes(ctx, "", []QuoteRecord{{WorkUnitID: "x"}}); err == nil {
 		t.Fatal("WriteQuotes with empty orgID: want error, got nil")
 	}
+	if _, err := writer.WriteSupersessions(ctx, "", []SupersessionRecord{{SupersededWorkUnitID: "x"}}); err == nil {
+		t.Fatal("WriteSupersessions with empty orgID: want error, got nil")
+	}
+}
+
+// TestWriteSupersessionsRoundTrips proves the lineage sidecar
+// (CHAOS-4441 plan.md section 5a) writes and scopes by org_id the same
+// way as the other three tables, and that a re-supersession of the same
+// work_unit_id collapses to the latest row -- the ReplacingMergeTree
+// property the reader-side exclusion depends on.
+func TestWriteSupersessionsRoundTrips(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+
+	firstAt := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	written, err := writer.WriteSupersessions(ctx, testOrgID, []SupersessionRecord{{
+		SupersededWorkUnitID: "wu-old",
+		SupersededByRunID:    "run-1",
+		SupersededAt:         firstAt,
+	}})
+	if err != nil {
+		t.Fatalf("WriteSupersessions: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("written = %d, want 1", written)
+	}
+
+	count := scanUint64(t, ctx, conn,
+		`SELECT count() FROM work_unit_supersessions WHERE org_id = ? AND superseded_work_unit_id = ?`,
+		testOrgID, "wu-old")
+	if count != 1 {
+		t.Fatalf("work_unit_supersessions count = %d, want 1", count)
+	}
+
+	// Re-supersession: a later run regroups the SAME id again. The version
+	// column (superseded_at) is later, so FINAL must resolve to run-2, not
+	// silently accumulate two live rows for the same key.
+	secondAt := firstAt.Add(time.Hour)
+	if _, err := writer.WriteSupersessions(ctx, testOrgID, []SupersessionRecord{{
+		SupersededWorkUnitID: "wu-old",
+		SupersededByRunID:    "run-2",
+		SupersededAt:         secondAt,
+	}}); err != nil {
+		t.Fatalf("WriteSupersessions (re-supersession): %v", err)
+	}
+
+	winningRunID := scanString(t, ctx, conn,
+		`SELECT superseded_by_run_id FROM work_unit_supersessions FINAL
+		 WHERE org_id = ? AND superseded_work_unit_id = ?`, testOrgID, "wu-old")
+	if winningRunID != "run-2" {
+		t.Fatalf("winning superseded_by_run_id = %q, want %q", winningRunID, "run-2")
+	}
+
+	// Empty slice is a no-op, matching the other three writers.
+	noopWritten, err := writer.WriteSupersessions(ctx, testOrgID, nil)
+	if err != nil || noopWritten != 0 {
+		t.Fatalf("WriteSupersessions(nil) = (%d, %v), want (0, nil)", noopWritten, err)
+	}
 }
 
 func strPtr(value string) *string { return &value }

@@ -5,6 +5,11 @@
 // same three tables, same column order per table. computed_at is the
 // ReplacingMergeTree version column on all three
 // (017_investment_materialize_tables.sql, 064_work_unit_repo_effort.sql).
+//
+// It also writes work_unit_supersessions (plan.md section 5a, option A) --
+// this port's own addition, with no Python counterpart -- the dedup
+// obligation's explicit lineage record. See
+// 085_work_unit_supersessions.sql for the full rationale.
 package chwrite
 
 import (
@@ -171,6 +176,51 @@ func (w *Writer) WriteRepoEffort(ctx context.Context, orgID string, records []Re
 	}
 	if err := batch.Send(); err != nil {
 		return 0, fmt.Errorf("send work_unit_repo_effort batch: %w", err)
+	}
+	return len(records), nil
+}
+
+// SupersessionRecord is one work_unit_supersessions row (CHAOS-4441
+// plan.md section 5a, option A) -- an explicit, additive record that a
+// work_unit_id was retired by a later run that regrouped its nodes under a
+// different id. Written in the SAME run that mints the replacement id, by
+// whichever plane mints it (the materializer, for the investment tables).
+// See 085_work_unit_supersessions.sql for the full rationale and the
+// binding condition every reader owes: honour this table INDEPENDENTLY of
+// investment_membership_scope.py's scope_enabled gate.
+type SupersessionRecord struct {
+	SupersededWorkUnitID string
+	SupersededByRunID    string
+	SupersededAt         time.Time
+}
+
+// WriteSupersessions inserts work_unit_supersessions rows, stamping every
+// row with orgID.
+func (w *Writer) WriteSupersessions(ctx context.Context, orgID string, records []SupersessionRecord) (int, error) {
+	if w == nil || w.conn == nil {
+		return 0, fmt.Errorf("chwrite: writer unavailable")
+	}
+	if strings.TrimSpace(orgID) == "" {
+		return 0, fmt.Errorf("%w: organization id is required to write work_unit_supersessions", ErrInvalidState)
+	}
+	if len(records) == 0 {
+		return 0, nil
+	}
+	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_supersessions (
+		org_id, superseded_work_unit_id, superseded_by_run_id, superseded_at
+	)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare work_unit_supersessions batch: %w", err)
+	}
+	for _, record := range records {
+		if err := batch.Append(
+			orgID, record.SupersededWorkUnitID, record.SupersededByRunID, record.SupersededAt.UTC(),
+		); err != nil {
+			return 0, fmt.Errorf("append work_unit_supersessions row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, fmt.Errorf("send work_unit_supersessions batch: %w", err)
 	}
 	return len(records), nil
 }

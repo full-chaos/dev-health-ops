@@ -118,6 +118,24 @@ jobs:
               - '.dockerignore'
               - 'deploy/**'
               - 'Makefile'
+              # codex round 5 (#2162), P1: the `build` job's own base-guard
+              # step invokes this script directly (`bash
+              # ci/python_base_ref.sh ...`) -- a PR touching ONLY this file
+              # set changes.code=false and skipped `build` (and the guard)
+              # entirely. A single exact path, not a broader `ci/**`: the
+              # build job invokes exactly this one ci/ script today (grep-
+              # verified), and `ci/**` would make every OTHER, unrelated
+              # ci/ script change (there are many, none touching this
+              # workflow) trigger a real image rebuild+republish for no
+              # reason. tests/tooling/test_go_image_publishing.py's
+              # test_build_job_ci_script_references_are_covered_by_the_changes_filter
+              # is the actual recurrence guard -- it fails the moment the
+              # build job invokes a ci/ script this filter doesn't name,
+              # regardless of how broad or narrow the filter is, so a
+              # second script added here later is caught structurally
+              # rather than depending on this filter having been made
+              # broad enough by guess.
+              - 'ci/python_base_ref.sh'
               # A change to this workflow IS a change to how images are built.
               # Without this line the publish pipeline cannot republish itself:
               # the CHAOS-3923 Go publish jobs merged to main and every build

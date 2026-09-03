@@ -1,0 +1,130 @@
+{
+  "categorization_status": "completed",
+  "edges": [
+    {
+      "confidence": 0.9,
+      "edge_id": "e1",
+      "edge_type": "relates_to",
+      "evidence": "",
+      "provenance": "native",
+      "provider": "github",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "1",
+      "source_type": "pull_request",
+      "target_id": "1",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.9,
+      "edge_id": "e2",
+      "edge_type": "relates_to",
+      "evidence": "",
+      "provenance": "native",
+      "provider": "github",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "2",
+      "source_type": "pull_request",
+      "target_id": "2",
+      "target_type": "issue"
+    }
+  ],
+  "generator": "tests/fixtures/generate_membership_backfill_golden.py",
+  "membership_rows": [
+    {
+      "categorization_status": "completed",
+      "category": "feature_delivery",
+      "category_kind": "theme",
+      "is_dominant": 1,
+      "node_id": "2",
+      "node_type": "pull_request",
+      "org_id": "org-membership-golden",
+      "weight": 0.65,
+      "work_unit_id": "307be8ade2851fbc014334a1082ecc63fedd40687dca508845abe05f2c11379d"
+    },
+    {
+      "categorization_status": "completed",
+      "category": "maintenance",
+      "category_kind": "theme",
+      "is_dominant": 0,
+      "node_id": "2",
+      "node_type": "pull_request",
+      "org_id": "org-membership-golden",
+      "weight": 0.35,
+      "work_unit_id": "307be8ade2851fbc014334a1082ecc63fedd40687dca508845abe05f2c11379d"
+    },
+    {
+      "categorization_status": "completed",
+      "category": "backend",
+      "category_kind": "subcategory",
+      "is_dominant": 1,
+      "node_id": "2",
+      "node_type": "pull_request",
+      "org_id": "org-membership-golden",
+      "weight": 1.0,
+      "work_unit_id": "307be8ade2851fbc014334a1082ecc63fedd40687dca508845abe05f2c11379d"
+    },
+    {
+      "categorization_status": "completed",
+      "category": "feature_delivery",
+      "category_kind": "theme",
+      "is_dominant": 1,
+      "node_id": "2",
+      "node_type": "issue",
+      "org_id": "org-membership-golden",
+      "weight": 0.65,
+      "work_unit_id": "307be8ade2851fbc014334a1082ecc63fedd40687dca508845abe05f2c11379d"
+    },
+    {
+      "categorization_status": "completed",
+      "category": "maintenance",
+      "category_kind": "theme",
+      "is_dominant": 0,
+      "node_id": "2",
+      "node_type": "issue",
+      "org_id": "org-membership-golden",
+      "weight": 0.35,
+      "work_unit_id": "307be8ade2851fbc014334a1082ecc63fedd40687dca508845abe05f2c11379d"
+    },
+    {
+      "categorization_status": "completed",
+      "category": "backend",
+      "category_kind": "subcategory",
+      "is_dominant": 1,
+      "node_id": "2",
+      "node_type": "issue",
+      "org_id": "org-membership-golden",
+      "weight": 1.0,
+      "work_unit_id": "307be8ade2851fbc014334a1082ecc63fedd40687dca508845abe05f2c11379d"
+    }
+  ],
+  "org_id": "org-membership-golden",
+  "python_version": "3.14.7",
+  "run_record": {
+    "org_id": "org-membership-golden"
+  },
+  "stats": {
+    "components": 2,
+    "dropped_edges": 0,
+    "dropped_nodes": 0,
+    "matched": 1,
+    "memberships": 6,
+    "oversized_components": 0,
+    "skipped": 1
+  },
+  "subcategory_distribution_pairs": [
+    [
+      "backend",
+      1.0
+    ]
+  ],
+  "theme_distribution_pairs": [
+    [
+      "feature_delivery",
+      0.65
+    ],
+    [
+      "maintenance",
+      0.35
+    ]
+  ]
+}

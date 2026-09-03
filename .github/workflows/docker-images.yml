@@ -978,6 +978,20 @@ jobs:
               echo "WARNING: ${family}: could not read :latest and could not confirm it's absent (registry error of an unrecognized shape) -- declining rather than risk overwriting an existing image on an ambiguous read"
               continue
             fi
+            # ci-flakes review (delta on fa119b2d): rc==0 means the inspect
+            # call itself succeeded, but doesn't by construction guarantee
+            # non-empty stdout -- practically unreachable (a successful
+            # `imagetools inspect --format` should always print something),
+            # but "practically unreachable" is exactly the kind of claim
+            # this PR's own review history has already burned once. Make
+            # it explicit rather than rely on downstream jq/digest-walk
+            # code to coincidentally decline on empty input: treat an
+            # empty read on a reported-success exit as UNKNOWN too, same
+            # as any other unclassifiable outcome, and fail closed.
+            if [ -z "${latest_json}" ]; then
+              echo "WARNING: ${family}: :latest inspect reported success but returned no data -- treating as unknown, declining rather than risk overwriting"
+              continue
+            fi
 
             # `imagetools inspect` on a multi-platform tag returns a
             # manifest LIST; the revision label lives in each platform's

@@ -19,6 +19,10 @@ asserting nothing until the next incident.
 
 from __future__ import annotations
 
+import os
+import stat
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -344,13 +348,35 @@ def test_digest_walk_candidates_use_single_attempt_no_retry() -> None:
         "if it now calls a retrying helper instead, the walk pays for "
         "retries on an outcome (absence) that is expected, not anomalous"
     )
-    assert "_inspect_retry(" not in walk_loop_body and (
-        "_inspect_retry_classify" not in walk_loop_body
-    ), (
-        "the digest-walk candidate loop calls a multi-attempt inspect "
-        "helper -- absence is the expected, common outcome for most "
-        "candidates in a 50-commit walk, and retrying every miss would "
-        "turn a fast walk into a slow one for no benefit"
+    # ci-flakes review (delta on fa119b2d): shell calls have NO trailing
+    # parenthesis (`_inspect_retry "${ref}"`, not `_inspect_retry(...)`)
+    # -- checking for the literal substring "_inspect_retry(" only ever
+    # matches the *definition* line (`_inspect_retry() {`), which lives
+    # outside this loop's body regardless of which helper the loop
+    # actually calls. That made the assertion vacuously true and unable
+    # to catch a reversion to the retrying helper.
+    #
+    # A first fix attempt (`\b_inspect_retry\b` word-boundary regex) is
+    # ALSO wrong, self-caught by actually running it: a comment a few
+    # lines up says "...not `_inspect_retry`:" in prose, and `\b` sits
+    # between the backtick and the word just fine, so the regex matched
+    # the comment, not a call. Match the CALL SHAPE instead -- a real
+    # shell invocation is always `_inspect_retry "<something>"`, name
+    # then a space then an opening quote; the definition has no space
+    # before its `(`, and this file's prose mentions wrap the name in
+    # backticks with no following space+quote. Verified this distinguishes
+    # the two by running it against the actual file before trusting it.
+    assert '_inspect_retry "' not in walk_loop_body, (
+        "the digest-walk candidate loop calls the multi-attempt "
+        "_inspect_retry helper -- absence is the expected, common outcome "
+        "for most candidates in a 50-commit walk, and retrying every miss "
+        "would turn a fast walk into a slow one for no benefit"
+    )
+    assert '_inspect_retry_classify "' not in walk_loop_body, (
+        "the digest-walk candidate loop calls the multi-attempt "
+        "_inspect_retry_classify helper -- same problem as _inspect_retry: "
+        "absence is expected here, not anomalous, so retrying wastes time "
+        "for no behavioural benefit"
     )
 
 
@@ -406,4 +432,192 @@ def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
         "no branch on rc==2 (UNKNOWN) found near the :latest call site -- "
         "an unrecognized registry failure must fail closed (decline), "
         "never fall through to the bootstrap/overwrite path"
+    )
+
+
+def _latest_tag_step_script() -> str:
+    """The exact `run:` text of the fan-in job's tag-application step, as
+    PyYAML parses it (block-scalar indentation already stripped) -- this
+    is what actually executes under bash, not the raw indented file text."""
+    for name, job in _jobs().items():
+        if "fan-in" not in name and "fan_in" not in name:
+            continue
+        for step in _steps(job):
+            run = step.get("run", "")
+            if "_inspect_classify" in run:
+                return run
+    raise AssertionError(
+        "could not find the fan-in job's tag-application step (looked for "
+        "a step whose run: text contains _inspect_classify)"
+    )
+
+
+# Records every `imagetools create` invocation to $RECORD_FILE and answers
+# `imagetools inspect` deterministically per $SCENARIO, so a test can
+# observe what the fan-in step actually DOES, not just what its source
+# text mentions (ci-flakes review, delta on fa119b2d: a swapped rc==1/
+# rc==2 mapping -- the exact P1 this item exists to close -- left every
+# purely-source-text assertion in this file green).
+_DOCKER_SHIM = r"""#!/usr/bin/env bash
+if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
+  ref="$4"
+  case "$ref" in
+    *:latest)
+      case "$SCENARIO" in
+        absent)
+          echo "ERROR: ${ref}: not found" >&2
+          exit 1
+          ;;
+        unknown)
+          echo "ERROR: failed to do request: connection reset by peer" >&2
+          exit 1
+          ;;
+        empty_success)
+          # exit 0 but print nothing: the rc==0-yet-empty-stdout case.
+          exit 0
+          ;;
+        *)
+          echo '{"manifest":{"digest":"sha256:aaaa"},"image":{"linux/amd64":{"config":{"Labels":{}}},"linux/arm64":{"config":{"Labels":{}}}}}'
+          exit 0
+          ;;
+      esac
+      ;;
+    *)
+      # the just-published sha- source-tag probe: always "found".
+      echo '{"manifest":{"digest":"sha256:bbbb"}}'
+      exit 0
+      ;;
+  esac
+elif [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "create" ]; then
+  echo "CREATE: $*" >> "${RECORD_FILE}"
+  exit 0
+fi
+exit 0
+"""
+
+# A `git` shim that records whether it was ever invoked, and returns
+# NOTHING for `git log` (empty history) if it is -- reaching the
+# digest-walk fallback at all is itself the observable this test checks
+# for the rc==0-yet-empty-stdout case, independent of what the (real,
+# unrelated) checkout this test runs inside happens to contain for a
+# nonsense BUILT_SHA.
+_GIT_SHIM = r"""#!/usr/bin/env bash
+touch "${GIT_CALLED_FILE}"
+exit 0
+"""
+
+
+def _run_latest_tag_step(scenario: str) -> tuple[str, bool]:
+    """Run the fan-in job's ACTUAL tag-application script under bash, with
+    `docker` shimmed to answer deterministically per `scenario` and
+    `git` shimmed to just record whether it was invoked (the digest-walk
+    fallback is the only thing in this step that calls git). Returns
+    (recorded `imagetools create` invocations, whether git was called).
+    `IS_MAIN_REF=true` and a source-tag probe that always "finds" its
+    ref, so every family reaches the :latest check under test."""
+    script = _latest_tag_step_script()
+    with tempfile.TemporaryDirectory() as tmp:
+        bin_dir = Path(tmp) / "bin"
+        bin_dir.mkdir()
+        docker_shim = bin_dir / "docker"
+        docker_shim.write_text(_DOCKER_SHIM, encoding="utf-8")
+        docker_shim.chmod(docker_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        git_shim = bin_dir / "git"
+        git_shim.write_text(_GIT_SHIM, encoding="utf-8")
+        git_shim.chmod(git_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+        script_path = Path(tmp) / "fanin.sh"
+        script_path.write_text(script, encoding="utf-8")
+
+        record_file = Path(tmp) / "record.txt"
+        record_file.write_text("", encoding="utf-8")
+        git_called_file = Path(tmp) / "git_called.txt"
+
+        env = dict(os.environ)
+        env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+        env.update(
+            {
+                "BUILT_SHA": "deadbeef1234567890deadbeef1234567890dead0",
+                "OWNER": "full-chaos",
+                "IS_RELEASE": "false",
+                "IS_MAIN_REF": "true",
+                "REF_IS_BRANCH": "false",
+                "BRANCH_TAG": "",
+                "SCENARIO": scenario,
+                "RECORD_FILE": str(record_file),
+                "GIT_CALLED_FILE": str(git_called_file),
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(script_path)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"fan-in script exited {result.returncode} under scenario "
+            f"{scenario!r} -- stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        return record_file.read_text(encoding="utf-8"), git_called_file.exists()
+
+
+def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> None:
+    """Source-text assertions cannot tell a CORRECT rc==1/rc==2 mapping
+    from a SWAPPED one -- demonstrated directly (not argued): swapping
+    which branch bootstraps and which declines, the exact P1 this item
+    exists to close, left every purely-source-text assertion in this
+    file green (verified before writing this test). Run the ACTUAL
+    script under bash with a recording `docker` shim standing in for the
+    registry, and observe what it DOES: CONFIRMED ABSENT must record an
+    `imagetools create ... :latest` call; UNKNOWN must record none; a
+    reported-success-but-empty read must also record none (ci-flakes'
+    third finding -- rc==0 doesn't guarantee non-empty stdout, and that
+    case must fail closed too, not fall through to whatever jq/digest-
+    walk happens to do with empty input)."""
+    absent_record, absent_git_called = _run_latest_tag_step("absent")
+    assert "imagetools create" in absent_record and ":latest" in absent_record, (
+        "CONFIRMED ABSENT did not record a bootstrap `imagetools create "
+        "...:latest` call -- the classifier's rc==1 branch must "
+        f"unconditionally tag latest+main, got: {absent_record!r}"
+    )
+    assert not absent_git_called, (
+        "CONFIRMED ABSENT reached the digest-walk fallback (git was "
+        "invoked) instead of short-circuiting straight to bootstrap"
+    )
+
+    unknown_record, unknown_git_called = _run_latest_tag_step("unknown")
+    assert unknown_record == "", (
+        "UNKNOWN registry failure recorded an `imagetools create` call -- "
+        f"it must decline and tag nothing, got: {unknown_record!r}"
+    )
+    assert not unknown_git_called, (
+        "UNKNOWN registry failure reached the digest-walk fallback (git "
+        "was invoked) instead of declining immediately"
+    )
+
+    # ci-flakes review (delta on fa119b2d), P3: rc==0 only means the
+    # inspect call itself succeeded, it doesn't guarantee non-empty
+    # stdout. Before the explicit `[ -z "${latest_json}" ]` guard this
+    # scenario fell through into the label-reading code and then the
+    # digest-walk fallback -- which happens to decline anyway for an
+    # empty label/digest, so checking only the recorded creates (as
+    # above) would pass whether or not the guard exists and wouldn't be
+    # a real regression test. Asserting git was never invoked is the
+    # part that actually distinguishes "declined immediately" from
+    # "wandered into the fallback and got lucky" -- verified by removing
+    # the guard and confirming this specific assertion goes red while
+    # the create-count assertion alone stays green.
+    empty_record, empty_git_called = _run_latest_tag_step("empty_success")
+    assert empty_record == "", (
+        "a reported-success (exit 0) but empty :latest read recorded an "
+        "`imagetools create` call -- an empty read must fail closed the "
+        f"same as UNKNOWN, got: {empty_record!r}"
+    )
+    assert not empty_git_called, (
+        "a reported-success (exit 0) but empty :latest read reached the "
+        "digest-walk fallback instead of declining immediately -- this "
+        "must be handled as an explicit UNKNOWN case, not left to whatever "
+        "the downstream label/digest logic happens to do with empty input"
     )

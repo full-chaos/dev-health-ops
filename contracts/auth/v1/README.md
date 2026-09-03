@@ -114,13 +114,20 @@ Python and ECMA and fails in Go, which is divergence #2 reproduced inside a fix
 for divergence #1.
 
 **Leap seconds are REJECTED.** `23:59:60` is legal RFC 3339 and this contract
-refuses it, deliberately: the wire format is the intersection of what all three
-validators accept, and Python's `fromisoformat` refuses `:60`. Permitting it in
-the pattern would manufacture a third cross-language split rather than close
-one, and the server mints these timestamps and never emits `:60`. Ruled by
-team-lead and listed for chris as an open question carrying this default — if it
-is ever reversed, the fixture moves to `reject_by_client` and Python needs a
-`:60`-aware parse.
+refuses it. **Both clients reject `:60`** — Go's `time.Parse` says *second out of
+range*, Python's `fromisoformat` says *second must be in 0..59* — so the pattern
+matches them and all three stay aligned. The server mints these timestamps and
+never emits `:60`. Ruled by team-lead and listed for chris with this default;
+accepting a leap second would mean changing both clients, not just the pattern.
+
+*An earlier version of this section justified the same decision wrongly*, and the
+correction is kept rather than edited away because the error is the instructive
+part: it claimed permitting `:60` "would manufacture a third cross-language
+split", reasoning from Python's refusal without checking Go's. Go refuses it too,
+so no such split existed. **The decision was right and the stated reason was
+false** — which is the harder defect to catch, because a wrong justification
+sitting beside a correct rule reads as settled, and whoever revisits the rule
+inherits the wrong model of why it is there.
 
 **A regex cannot know February has 28 days.** `2026-02-30` satisfies the
 pattern; both clients refuse it at parse. That is a genuine client-enforced

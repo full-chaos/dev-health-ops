@@ -376,16 +376,41 @@ jobs:
           # treat `api_error` as "learned nothing this poll, try again",
           # never as "left the queue" or "completed": a poll that observes
           # nothing is not evidence of anything.
+          # ci-flakes-measured latent defect: `gh api ... --paginate --jq
+          # '<program>'` runs the jq program ONCE PER PAGE and emits one
+          # output line PER PAGE, not one line for the whole paginated
+          # result. `read -r status conclusion <<<"$(job_status)"` only
+          # consumes the FIRST line of whatever job_status prints -- with
+          # more than one page of jobs (>30, GitHub's default page size),
+          # a target job on page 2+ meant job_status's first line (from
+          # page 1 alone) reported "not_created", so phase 1 silently
+          # waited out its whole budget and handed the work to the hosted
+          # leg -- not a crash, not a red check, just a fallback that
+          # quietly stopped claiming self-hosted attempts the moment this
+          # workflow grew past 30 jobs. Not firing today (~20-21 jobs),
+          # one matrix entry away from firing with zero visible symptom.
+          # Fixed: request `per_page=100` directly (no `--paginate`), fetch
+          # the RAW response once, and run exactly one jq program against
+          # it locally -- guaranteeing a single JSON document processed by
+          # a single jq invocation, never gh's per-page --jq behavior.
+          # Also asserts the job count is under the page size and fails
+          # loud rather than silently repeating this exact defect if this
+          # workflow ever grows to (or past) 100 jobs.
           job_status() {
-            local raw attempt
+            local raw attempt job_count
             for attempt in 1 2 3; do
-              if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate \
-                  --jq '[.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
-                        | if ($matches | length) > 1 then "ambiguous null"
-                          elif ($matches | length) == 0 then "not_created null"
-                          else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
-                          end' 2>/dev/null)"; then
-                printf '%s\n' "${raw}"
+              if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" 2>/dev/null)"; then
+                job_count="$(printf '%s' "${raw}" | jq '.jobs | length')"
+                if [ "${job_count}" -ge 100 ]; then
+                  echo "FATAL: this run reports ${job_count} jobs on a single per_page=100 page -- job_status can no longer see every job without real pagination; fix the script, do not silently trust page 1 the way the --paginate/--jq combination used to" >&2
+                  exit 1
+                fi
+                printf '%s' "${raw}" | jq -r '
+                  [.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
+                  | if ($matches | length) > 1 then "ambiguous null"
+                    elif ($matches | length) == 0 then "not_created null"
+                    else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
+                    end'
                 return 0
               fi
               sleep 5

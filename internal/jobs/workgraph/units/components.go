@@ -41,10 +41,22 @@ type Component struct {
 // deleted from org 70d529e0's graph -- went unnoticed. The Go side additionally
 // emits them as counters (see the executor's observer), so a recurrence trips a
 // metric rather than needing someone to read worker logs.
+//
+// DroppedNodes is CHAOS-4771's regression guard, not a live counter: removeHubs
+// no longer deletes nodes, so this field is expected to read 0 permanently
+// (worker_workgraph_component_split_nodes_dropped_total, once wired, should
+// never move again). It stays in the struct -- rather than being deleted --
+// because the frozen pre-fix golden JSON still deserializes into it, and a
+// nonzero live value now means the fix regressed, not that it fired correctly.
+// PartitionedHubs is the CHAOS-4771 replacement signal: it counts hub nodes
+// that were extracted into their own singleton fragment instead of being
+// deleted. Every node stays in the output, so this is observability, not a
+// data-loss counter.
 type BuildStats struct {
 	OversizedComponents int
 	DroppedEdges        int
 	DroppedNodes        int
+	PartitionedHubs     int
 }
 
 // ConfidenceFromValue ports components.py:72-83 _edge_confidence, the coercion
@@ -332,27 +344,37 @@ func degrees(edges []Edge, within *nodeIndex) map[NodeKey]int {
 	return degree
 }
 
-// removeHubs ports components.py:180-220 _remove_hubs: drop the highest-degree
-// hub nodes until every fragment fits maxNodes.
+// removeHubs is CHAOS-4771's fix to components.py:180-220 _remove_hubs: instead
+// of deleting the highest-degree hub node, it CUTS the hub out of the oversized
+// fragment and keeps it as its own singleton fragment. Every node in the input
+// still appears in exactly one output fragment -- the invariant the original
+// deletion violated (CHAOS-4758: 242 real nodes, ~10% of org 70d529e0's graph,
+// vanished from every work unit; a PR whose linked issue was one of them was
+// orphaned into a one-node unit with no team bridge, surfacing on the
+// Investment page as "Unassigned team").
 //
-// THIS FUNCTION DESTROYS DATA, AND THAT IS THE PORTED BEHAVIOUR. A removed node
-// is dropped ENTIRELY -- excluded from all output fragments, its incident edges
-// gone with it. On org 70d529e0 today it deletes 242 nodes (240 issues, 2 PRs),
-// roughly 10% of the graph, which then appear in no work unit at all; a PR whose
-// issue was deleted is orphaned into a one-node PR-only unit with no team
-// bridge, which is what surfaces on the Investment page as "Unassigned team".
-// That defect is CHAOS-4758 and is deliberately NOT fixed here (see the package
-// doc). This port must reproduce it exactly so the fix can be measured against
-// a proven-equivalent baseline.
+// This is the variant CHAOS-4758's own suggested direction names explicitly:
+// "cut the hub's incident edges while keeping the hub as its own fragment."
+// Chosen over a min-cut/bisection because it is a one-line change to the
+// existing deterministic loop -- same hub selection, same tie-break, same
+// termination argument -- rather than a new algorithm with its own determinism
+// proof to write.
 //
 // Deterministic: among the nodes of every still-oversized fragment, the node
-// with the highest degree is removed, ties broken by the SMALLEST node id.
-// Terminates because every iteration shrinks the active node set.
+// with the highest degree is selected, ties broken by the SMALLEST node id --
+// unchanged from the pre-fix selection. Terminates because every iteration
+// shrinks the active node set by exactly one node.
 func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats) [][]NodeKey {
 	active := newNodeIndex()
 	for _, node := range nodes.order {
 		active.intern(node)
 	}
+
+	// Hubs cut out of the active set, each kept as its own singleton fragment.
+	// Appended to the final fragment list once no oversized fragment remains --
+	// this is the entire behavioural delta from the pre-fix version, which
+	// dropped the hub instead of remembering it here.
+	hubFragments := make([][]NodeKey, 0)
 
 	for {
 		// Python rebuilds active_edges from the CURRENT active set each round
@@ -380,7 +402,7 @@ func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats)
 			}
 		}
 		if len(oversized.order) == 0 {
-			return fragments
+			return append(fragments, hubFragments...)
 		}
 
 		degree := degrees(activeEdges, oversized)
@@ -390,10 +412,13 @@ func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats)
 				maxDegree = degree[node]
 			}
 		}
-		// Python: min(node for node in oversized_nodes if degree == max_degree).
-		// The minimum is over the (type, id) TUPLE, so type is compared first
-		// and id only breaks a type tie -- not over the rendered "type:id" token
-		// the hash sorts by. The two orders can differ; this is the ported one.
+		// Inherited from the pre-fix selection (components.py):
+		// min(node for node in oversized_nodes if degree == max_degree). The
+		// minimum is over the (type, id) TUPLE, so type is compared first and id
+		// only breaks a type tie -- not over the rendered "type:id" token the
+		// hash sorts by. The two orders can differ; this is the ported one, and
+		// CHAOS-4771 does not change WHICH node is chosen, only what happens to
+		// it once chosen.
 		var hub NodeKey
 		haveHub := false
 		for _, node := range oversized.order {
@@ -406,8 +431,9 @@ func removeHubs(nodes *nodeIndex, edges []Edge, maxNodes int, stats *BuildStats)
 		}
 
 		active = withoutNode(active, hub)
+		hubFragments = append(hubFragments, []NodeKey{hub})
 		if stats != nil {
-			stats.DroppedNodes++
+			stats.PartitionedHubs++
 		}
 	}
 }

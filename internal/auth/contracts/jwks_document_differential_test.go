@@ -387,24 +387,43 @@ func generateJWKSDocuments(t *testing.T, count int) []jwksDifferentialCase {
 			return d
 		}},
 		{"upper-case-names", func(d map[string]any) map[string]any { return rename(d, strings.ToUpper) }},
-		{"unicode-folded-names-long-s-only", func(d map[string]any) map[string]any {
-			// LONG S ALONE, deliberately not combined with the Kelvin fold.
+		{"unicode-folded-names-single-substitution", func(d map[string]any) map[string]any {
+			// ONE letter replaced by a fold-equivalent, chosen from the set
+			// unicode.SimpleFold actually defines rather than from code points
+			// anyone named. See jwks_fold_alphabet_test.go: the hand-picked
+			// U+017F/U+212A pair happened to be complete for these letters, and
+			// being right by luck is not a property that survives a Unicode
+			// table update.
 			//
-			// This row exists because the first version applied BOTH
-			// substitutions, which produced names like `Key<long s>` carrying a
-			// Kelvin K -- and a Kelvin K is not lowercase, so the OLD, WRONG
-			// ToLower predicate still matched them. The generator could not
-			// produce the one shape that distinguishes the two predicates: a
-			// name that is ENTIRELY LOWERCASE and still folds to a declared
-			// name. That is precisely round 3's finding, and a mutation proof
-			// showed the fix was not load-bearing until this row was split out.
-			return rename(d, func(s string) string {
-				return strings.ReplaceAll(s, "s", string(rune(0x017F)))
+			// SINGLE substitution is its own row because a MIXED one hides the
+			// case that matters. Round 3's first fix folded every letter at
+			// once, producing names carrying a Kelvin K -- which is not
+			// lowercase, so the wrong ASCII-case predicate still matched them
+			// and the mutation stayed green. The distinguishing shape is a name
+			// left otherwise lowercase.
+			return rename(d, func(name string) string {
+				variants := foldVariantsOf(name)
+				lowercaseOnly := variants[:0]
+				for _, v := range variants {
+					if v == strings.ToLower(v) && v != name {
+						lowercaseOnly = append(lowercaseOnly, v)
+					}
+				}
+				if len(lowercaseOnly) > 0 {
+					return lowercaseOnly[rng.Intn(len(lowercaseOnly))]
+				}
+				if len(variants) > 0 {
+					return variants[rng.Intn(len(variants))]
+				}
+				return name
 			})
 		}},
-		{"unicode-folded-names-kelvin-only", func(d map[string]any) map[string]any {
-			return rename(d, func(s string) string {
-				return strings.ReplaceAll(s, "k", string(rune(0x212A)))
+		{"unicode-folded-names-any-variant", func(d map[string]any) map[string]any {
+			return rename(d, func(name string) string {
+				if v := foldVariantsOf(name); len(v) > 0 {
+					return v[rng.Intn(len(v))]
+				}
+				return name
 			})
 		}},
 		{"title-case-names", func(d map[string]any) map[string]any {

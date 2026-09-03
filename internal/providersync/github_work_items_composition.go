@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // ErrGitHubWorkItemSinkIncomplete reports a composite sink built while one or
@@ -205,7 +206,7 @@ type githubWorkItemEngineDeriver interface {
 		githubWorkItemRows,
 		time.Time,
 		time.Time,
-		githubWorkItemDerivationContext,
+		teamattribution.GithubWorkItemDerivationContext,
 	) (map[string][]json.RawMessage, error)
 }
 
@@ -232,9 +233,9 @@ type GitHubWorkItemDeriver struct {
 
 // StoredEdgeMergeObservation reports the stored-edge union this deriver has
 // observed so far on its unit.
-func (deriver *GitHubWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+func (deriver *GitHubWorkItemDeriver) StoredEdgeMergeObservation() teamattribution.GithubWorkItemStoredEdgeMergeObservation {
 	if deriver == nil {
-		return githubWorkItemStoredEdgeMergeObservation{}
+		return teamattribution.GithubWorkItemStoredEdgeMergeObservation{}
 	}
 	return deriver.observations.storedEdgeMergeSnapshot()
 }
@@ -418,7 +419,7 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 	if err != nil {
 		return nil, err
 	}
-	deriver.observations.recordStoredEdgeMerge(derivationContext.storedEdgeMerge)
+	deriver.observations.recordStoredEdgeMerge(derivationContext.StoredEdgeMerge)
 	// Every owned destination is present from the start, so a destination that
 	// legitimately produces no rows on any day is still reported as evaluated.
 	derived := make(map[string][]json.RawMessage, len(githubWorkItemDerivedDestinations))

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
@@ -296,9 +297,9 @@ type jiraDerivedFailingContextSource struct{ err error }
 func (source jiraDerivedFailingContextSource) Load(
 	context.Context,
 	Claim,
-	githubWorkItemDerivationLoadRequest,
-) (githubWorkItemDerivationFacts, error) {
-	return githubWorkItemDerivationFacts{}, source.err
+	teamattribution.GithubWorkItemDerivationLoadRequest,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
+	return teamattribution.GithubWorkItemDerivationFacts{}, source.err
 }
 
 // Succeeds on purpose: this double exists to pin Load's fail-closed path, so
@@ -344,7 +345,7 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 	}
 	_, err := source.Load(
 		context.Background(), claim,
-		githubWorkItemDerivationLoadRequest{
+		teamattribution.GithubWorkItemDerivationLoadRequest{
 			AsOf:             time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC),
 			DonorWorkItemIDs: []string{"jira:OPS-2"},
 		},
@@ -379,7 +380,7 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 	}
 	if _, err := lost.Load(
 		context.Background(), claim,
-		githubWorkItemDerivationLoadRequest{AsOf: time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC)},
+		teamattribution.GithubWorkItemDerivationLoadRequest{AsOf: time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC)},
 	); !errors.Is(err, providerfoundation.ErrLeaseLost) {
 		t.Fatalf("lost lease error=%v", err)
 	}
@@ -403,7 +404,7 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 	}
 	if _, err := lostAfter.Load(
 		context.Background(), claim,
-		githubWorkItemDerivationLoadRequest{
+		teamattribution.GithubWorkItemDerivationLoadRequest{
 			AsOf:             time.Date(2026, 8, 11, 16, 0, 0, 0, time.UTC),
 			DonorWorkItemIDs: []string{"jira:OPS-2"},
 		},

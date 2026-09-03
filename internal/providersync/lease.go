@@ -11,7 +11,11 @@ import (
 )
 
 var (
-	ErrInvalidConfiguration             = errors.New("provider sync configuration is invalid")
+	// ErrInvalidConfiguration is aliased to providerfoundation's copy (not
+	// redefined locally) so internal/teamattribution -- which cannot import
+	// providersync back -- can return the SAME sentinel identity; see
+	// providerfoundation/types.go's doc comment on ErrInvalidConfiguration.
+	ErrInvalidConfiguration             = providerfoundation.ErrInvalidConfiguration
 	ErrUnitNotClaimable                 = errors.New("provider sync unit is not claimable")
 	ErrLeaseLost                        = errors.New("provider sync unit lease is lost")
 	ErrCompatibilityRequired            = errors.New("provider sync dataset requires Python compatibility execution")
@@ -25,7 +29,10 @@ var (
 		"provider sync prepared route snapshot belongs to a run that already finished",
 	)
 	ErrEffectRecoveryAmbiguous = errors.New("provider sync effect recovery requires exact reconciliation")
-	ErrEffectRecoveryUnsafe    = errors.New("provider sync effect recovery is outside the bounded contract")
+	// ErrEffectRecoveryUnsafe is aliased to providerfoundation.ErrRecoveryUnsafe
+	// for the same cross-package identity reason as ErrInvalidConfiguration
+	// above.
+	ErrEffectRecoveryUnsafe = providerfoundation.ErrRecoveryUnsafe
 	// ErrPreparedSnapshotManifestMismatch is a persisted snapshot that is
 	// authentically this claim's but describes a destination set the route no
 	// longer emits -- a document written before a manifest change. It is

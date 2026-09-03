@@ -5,13 +5,15 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 type githubWorkItemDerivationOracleInput struct {
-	Subject      githubWorkItemDerivationSubject
-	WorkItems    []githubWorkItemDerivationSubject
+	Subject      teamattribution.GithubWorkItemDerivationSubject
+	WorkItems    []teamattribution.GithubWorkItemDerivationSubject
 	Dependencies []githubWorkItemDependencyRow
-	Facts        githubWorkItemDerivationFacts
+	Facts        teamattribution.GithubWorkItemDerivationFacts
 }
 
 // githubWorkItemDerivationOracleCandidates transposes the complete ordered
@@ -54,15 +56,15 @@ func buildGitHubWorkItemDerivationOracleCandidates(
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	derived := newGitHubWorkItemDerivationContext(decoded.Facts)
-	subjects := make(map[string]githubWorkItemDerivationSubject, len(decoded.WorkItems))
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(decoded.Facts)
+	subjects := make(map[string]teamattribution.GithubWorkItemDerivationSubject, len(decoded.WorkItems))
 	for _, subject := range decoded.WorkItems {
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
-		"github", subjects, decoded.Dependencies, nil,
+	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
+		"github", subjects, toDerivationDependencyEdges(decoded.Dependencies), nil,
 	)
-	_, _, candidates := derived.resolve(decoded.Subject)
+	_, _, candidates := derived.Resolve(decoded.Subject)
 	result := githubWorkItemDerivationOracleCandidates{
 		Source: make([]string, 0, len(candidates)), TeamID: make([]*string, 0, len(candidates)),
 		TeamName: make([]*string, 0, len(candidates)), Confidence: make([]string, 0, len(candidates)),

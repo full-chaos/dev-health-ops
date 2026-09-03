@@ -308,13 +308,51 @@ jobs:
           # commit, so the script's presence IS the mirror -- no text needed.
           MIRROR_LANDED=6fbd7dc8d4651b82f78b823a2b6f55cd53f0ff1f   # the #2152 merge
 
+          # "SCRIPT PRESENT" IS CHECKED FIRST, AND THAT ORDER IS A CORRECTNESS
+          # REQUIREMENT, NOT A CONVENIENCE (084-prod). The authoring branch of
+          # #2152 (0c1d9ff66) HAS the script while NOT containing 6fbd7dc8d --
+          # it *is* the change, so it precedes its own merge commit. Reversing
+          # these two checks would fail every #2152-descended feature branch
+          # that has not merged main.
+          #
+          # KNOWN RESIDUAL, recorded rather than chased: a branch that
+          # cherry-picks #2152's Dockerfile change WITHOUT ci/python_base_ref.sh
+          # and never merges #2152 has 6fbd7dc8d as a non-ancestor, so it skips
+          # while consuming a mirrored base. It only bites when the referenced
+          # base is not ALREADY mirrored -- a first landing or a base bump --
+          # because otherwise there is nothing for this step to ensure. That
+          # narrowness is why the rule is still right; the previous textual
+          # guard closed this case and lost nine others to Dockerfile grammar.
           if [ ! -f ci/python_base_ref.sh ]; then
-            # `--is-ancestor` is three-valued and the third value matters: 0 =
-            # ancestor, 1 = not an ancestor, ANYTHING ELSE (128 on a missing
-            # object, e.g. a shallow clone) = could not answer. Collapsing >=2
-            # into "not an ancestor" is exactly the grep-status-1-vs-2 mistake
-            # this guard already made once, so it is handled separately and
-            # fails closed.
+            # A SHALLOW CLONE CANNOT ANSWER THE ANCESTRY QUESTION. Refuse before
+            # asking it, so the failure names the cause rather than surfacing as
+            # a mysterious 128 below.
+            if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+              echo "::error::this is a shallow repository, so ancestry against" \
+                   "${MIRROR_LANDED} cannot be determined. The build checkouts set" \
+                   "fetch-depth: 0; if this fires, that changed. Refusing to guess." >&2
+              exit 1
+            fi
+            # `--is-ancestor` is three-valued and the third value matters.
+            # Measured by 084-prod against this repository:
+            #
+            #   6fbd7dc8d ancestor of 32831d63e   -> 0
+            #   32831d63e ancestor of 6fbd7dc8d   -> 1
+            #   a sha that exists nowhere         -> 128
+            #
+            # Collapsing >=2 into "not an ancestor" is exactly the
+            # grep-status-1-vs-2 mistake this guard already made once, so it is
+            # handled separately and fails closed.
+            #
+            # WHY THE SHALLOW REFUSAL AND fetch-depth: 0 ARE LOAD-BEARING RATHER
+            # THAN BELT-AND-BRACES: a depth-1 clone yields 128 because the OBJECT
+            # IS ABSENT, not because git detects truncation. So anything that
+            # made the object present-but-unreachable would return 1, which is
+            # indistinguishable from a legitimate "not an ancestor" -- a wrong
+            # answer rather than an error. 084-prod tried to construct that case
+            # and could not (`fetch --depth 1 origin <sha>` is refused
+            # server-side), but no counterexample found is not proof there is
+            # none, so both defences stay.
             if git merge-base --is-ancestor "$MIRROR_LANDED" HEAD 2>/dev/null; then
               ancestry=yes
             else

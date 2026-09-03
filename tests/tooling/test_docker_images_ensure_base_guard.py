@@ -215,6 +215,34 @@ def test_absent_but_ancestor_fails_loudly(tmp_path: Path) -> None:
     assert SKIP_MARKER not in out, f"must not skip an inconsistent tree\n{out}"
 
 
+def test_authoring_branch_shape_runs(tmp_path: Path) -> None:
+    """Script present, #2152's merge ABSENT -- the authoring branch's own shape.
+
+    `0c1d9ff66`, the branch that introduced #2152, has ci/python_base_ref.sh
+    while NOT containing 6fbd7dc8d: it *is* the change, so it precedes its own
+    merge commit. This is why "script present" must be checked BEFORE ancestry
+    -- a correctness requirement, not a convenience. Reversing them would fail
+    every #2152-descended feature branch that has not merged main.
+    """
+    repo = _scratch_repo(tmp_path, script=True)
+    # A resolvable sha that is NOT an ancestor: the authoring-branch situation.
+    _git(repo, "checkout", "-q", "-b", "sidebranch")
+    (repo / "side").write_text("side\n", encoding="utf-8")
+    _git(repo, "add", "side")
+    _git(repo, "commit", "-qm", "not an ancestor of main")
+    side = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    code, out, calls = _run_guard(repo, tmp_path, mirror_sha=side)
+    assert SKIP_MARKER not in out, (
+        f"the authoring branch must NOT be treated as pre-mirror -- it has the "
+        f"script\n{out}"
+    )
+    assert "::error::" not in out, f"and must not be treated as inconsistent\n{out}"
+    assert any("imagetools" in c for c in calls), (
+        f"the ensure work must run for the authoring branch. Recorded: {calls!r}\n{out}"
+    )
+
+
 def test_unresolvable_mirror_sha_fails_loudly(tmp_path: Path) -> None:
     """The THIRD value of `--is-ancestor`, which nothing else here constrains.
 
@@ -241,6 +269,53 @@ def test_unresolvable_mirror_sha_fails_loudly(tmp_path: Path) -> None:
     assert not calls, f"must not invoke docker: {calls!r}"
 
 
+def test_shallow_repository_refuses(tmp_path: Path) -> None:
+    """A shallow clone cannot answer the ancestry question, so the guard refuses.
+
+    Added because a mutation exposed it: replacing the `--is-shallow-repository`
+    check with `if false` left every other test passing. That is the third time
+    on this guard that a deliberately-written branch had nothing observing it --
+    the >=2 exit path, the ensure work itself, and now this. A guard clause with
+    no row is a decision nobody can see.
+
+    Note the refusal is not redundant with the 128 handling below. 084-prod
+    measured that a depth-1 clone reaches 128 because the OBJECT IS ABSENT, not
+    because git reports truncation -- so a shallow repo that somehow had the
+    object present-but-unreachable would return 1, a wrong answer rather than an
+    error. Refusing on shallowness catches the class; the 128 path catches the
+    instance.
+    """
+    source = _scratch_repo(tmp_path, script=False)
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", f"file://{source}", str(shallow)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true", (
+        "the fixture must actually be shallow, or this row proves nothing"
+    )
+    (shallow / "ci").mkdir(exist_ok=True)
+    code, out, calls = _run_guard(shallow, tmp_path)
+    assert code == 1, f"a shallow repository must be refused, got {code}\n{out}"
+    assert "::error::" in out, f"the refusal must say why\n{out}"
+    # DISCRIMINATING ASSERTION. Both paths error and both mention "shallow", so
+    # a substring check on that word passes whichever fires -- verified by
+    # mutation: removing the refusal left this row green, because the repo then
+    # fell through to the 128 handler, which also exits 1 with an ::error::
+    # naming shallow clones. The row proved the OUTCOME and not the PATH.
+    #
+    # `this is a shallow repository` appears only in the pre-flight refusal, so
+    # it identifies which branch ran.
+    assert "this is a shallow repository" in out, (
+        f"the pre-flight shallow refusal must be what fires. If this fails while "
+        f"the exit code is still 1, the 128 handler caught it instead -- correct "
+        f"outcome, wrong path, and the refusal is doing nothing.\n{out}"
+    )
+    assert SKIP_MARKER not in out, f"must not treat a shallow repo as pre-mirror\n{out}"
+
+
 def test_build_checkouts_keep_full_history() -> None:
     """`--is-ancestor` cannot answer on a shallow clone.
 
@@ -250,15 +325,24 @@ def test_build_checkouts_keep_full_history() -> None:
     """
     document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8")) or {}
     checkouts = [
-        step
+        (job_name, step)
         for job_name in ("build", "go-build")
         for step in (document["jobs"][job_name].get("steps") or [])
         if "actions/checkout" in str(step.get("uses", ""))
     ]
     assert checkouts, "no actions/checkout step found in build/go-build"
-    for step in checkouts:
+    # The guard fires on pull_request, so the checkout that matters is the one
+    # those runs use -- both build jobs check out via the same step, and both
+    # are asserted rather than just the first found.
+    assert len(checkouts) >= 2, (
+        f"expected a checkout in each of build and go-build, found {len(checkouts)}"
+    )
+    for job_name, step in checkouts:
         depth = (step.get("with") or {}).get("fetch-depth")
         assert str(depth) == "0", (
             "the ensure-base guard resolves #2152 by ancestry, which needs full "
-            f"history; this checkout has fetch-depth={depth!r}"
+            f"history; {job_name}'s checkout has fetch-depth={depth!r}. A shallow "
+            "checkout does not make the guard error -- it makes `--is-ancestor` "
+            "return 1 (object absent reads as 'not an ancestor' only if the object "
+            "is reachable-but-absent), i.e. a WRONG ANSWER rather than a failure."
         )

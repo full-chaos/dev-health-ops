@@ -64,6 +64,19 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - 'scripts/**'
+              # CHAOS-4281/#2142: the patterns above enumerate the three
+              # directories Python was assumed to live in -- the same three as
+              # [tool.mypy] files in pyproject.toml. But the job below runs
+              # `mypy .`, which IGNORES that setting and checks the whole repo
+              # (2636 files vs the 2434 a bare `mypy` sees). Corpus generators
+              # added under internal/**/testdata matched no pattern here, so
+              # typecheck-mypy SKIPPED on the PR and the required check
+              # reported SUCCESS (run 33711653474) -- then failed on main days
+              # later inside an unrelated PR's run (33716898386), which had
+              # merely touched a path this filter does select. Match what the
+              # job actually checks: any Python file, anywhere. Third instance
+              # of the class recorded above it (CHAOS-3513, CHAOS-3948).
+              - '**/*.py'
 
   typecheck-mypy:
     needs: [changes]

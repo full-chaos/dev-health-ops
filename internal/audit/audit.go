@@ -106,25 +106,47 @@ type OutboxEvent struct {
 // transaction is unexported and reachable only through the three delegating
 // methods below.
 //
-// STILL NOT CLOSED, and now checked rather than documented: Exec must exist, so
-// Exec(ctx, "COMMIT") or Exec(ctx, "ROLLBACK") still reaches the server. Commit
-// verifies the transaction status after Apply returns and refuses if the
-// callback ended it -- see the TxStatus check there. Retention past the
-// callback is still possible and still only characterised, by
-// TestRetainedTxOpsIsUnusableAfterCommit.
+// TRANSACTION CONTROL IS REFUSED BEFORE IT IS SENT. Exec must exist for a
+// mutation to write anything, so round 2 reached the server with
+// Exec(ctx, "COMMIT"). The three methods now reject a statement whose first
+// token is transaction control, so the state is never committed and
+// "all three or none" stays true rather than becoming a boundary to explain.
+//
+// THE RESIDUE, one sentence, and it is about the BACKSTOP rather than this
+// check: if a statement ends the transaction without saying so in its first
+// token, Commit's TxStatus check detects it and refuses, but the state that
+// mutation already committed is durable and cannot be undone.
+//
+// Retention past the callback remains possible and remains characterised
+// rather than prevented, by TestRetainedTxOpsIsUnusableAfterCommit.
 type TxOps struct{ tx pgx.Tx }
 
 func (t TxOps) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if err := refuseTransactionControl(sql); err != nil {
+		return pgconn.CommandTag{}, err
+	}
 	return t.tx.Exec(ctx, sql, args...)
 }
 
 func (t TxOps) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if err := refuseTransactionControl(sql); err != nil {
+		return nil, err
+	}
 	return t.tx.Query(ctx, sql, args...)
 }
 
+// QueryRow cannot return an error, so a refused statement is carried as a Row
+// whose Scan fails. That is pgx's own convention for a query that never ran.
 func (t TxOps) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if err := refuseTransactionControl(sql); err != nil {
+		return errRow{err}
+	}
 	return t.tx.QueryRow(ctx, sql, args...)
 }
+
+type errRow struct{ err error }
+
+func (e errRow) Scan(...any) error { return e.err }
 
 // Mutation is the state change and the two records that must accompany it.
 //

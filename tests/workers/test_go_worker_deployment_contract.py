@@ -898,7 +898,13 @@ def test_python_image_packages_and_validates_job_contracts() -> None:
     assert packaged == expected
 
     dockerfile = _APP_DOCKERFILE.read_text(encoding="utf-8")
-    runtime = dockerfile.split("FROM python:3.14-slim AS runtime", maxsplit=1)[1]
+    # The stage header is matched by its STAGE NAME, not by the base image.
+    # CHAOS-4922 moved the base to an ARG (`FROM ${PYTHON_BASE_IMAGE} AS
+    # runtime`) and this split silently produced an IndexError -- the test was
+    # coupled to a detail it does not assert anything about. Anchoring on
+    # `AS runtime` keeps it working across base-image changes, which is the only
+    # thing that ever moves here.
+    runtime = re.split(r"^FROM .* AS runtime$", dockerfile, maxsplit=1, flags=re.M)[1]
     runtime = runtime.split("FROM runtime AS api", maxsplit=1)[0]
     assert "load_registry(); load_migration_jobs()" in runtime
 

@@ -25,8 +25,67 @@ on:
         type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # CHAOS-4921: `github.ref` as the non-PR fallback meant every `push`/
+  # `workflow_dispatch` targeting `main` shared ONE group (both resolve
+  # `github.ref` to the literal `refs/heads/main`) -- so a fast-follow
+  # event in that group could cancel whatever main build was already in
+  # flight, twice observed live: run 33706407469 (2d4abbbbb, the commit
+  # carrying CH migration 084) was cancelled by the fe5f540a9 push, whose
+  # own run then skipped the image build on its path filter, so no image
+  # containing 084 was ever built; separately, workflow_dispatch run
+  # 33709320991 was cancelled by the c3b3ff2ae push landing the same
+  # second. (`merge_group` and `release` were never actually part of this
+  # collision -- `github.ref` for those resolves to a distinct synthetic
+  # queue ref and a tag ref respectively, neither of which is
+  # `refs/heads/main`.)
+  #
+  # `cancel-in-progress` scoped to `pull_request` (below) closes the
+  # IN-FLIGHT half of this, but GitHub's own documented concurrency
+  # behavior holds at most one PENDING run per group even with
+  # cancel-in-progress false: a third event arriving in a group with one
+  # running and one already pending cancels that PENDING one. With the
+  # group key still falling back to `github.ref`, two merges landing
+  # close together (well within reach on a busy night with a ~20 min
+  # hosted queue) could still cancel a pending main build outright. Fixed
+  # by falling back to `github.sha` instead of `github.ref`: every
+  # distinct commit now gets its OWN group for a non-PR event, so no two
+  # different commits' builds can ever collide, cancel, or displace each
+  # other, running or pending. PR events keep grouping by
+  # `pull_request.number` (unchanged) so a stale PR build still gets
+  # superseded by a new push to the same PR, which is the cancellation
+  # this mechanism exists to provide.
+  #
+  # codex round 2 found two more defects in this design, both ruled by
+  # team-lead as "keep per-SHA groups, fix ordering at the publish step
+  # instead of the scheduler":
+  #
+  # (a) `github.sha` alone doesn't separate `workflow_dispatch` runs that
+  # build DIFFERENT `inputs.ref` values from the same dispatch tip -- two
+  # dispatches from main@S selecting different refs to build still shared
+  # one group, since `github.sha` is S regardless of what `inputs.ref`
+  # says. Fixed by adding `github.event.inputs.ref` ahead of `github.sha`
+  # in the fallback chain, so a dispatch that names an explicit ref gets
+  # its own group keyed on that ref, not on the dispatch tip.
+  #
+  # (b) removing scheduler-level serialization for non-PR events means
+  # concurrent main builds are no longer guaranteed to COMPLETE in the
+  # order they started -- if a later-pushed commit's build finishes before
+  # an earlier one's (real build-time variance), both could publish the
+  # mutable `latest`/`main` tags, and the earlier commit's later
+  # completion would overwrite the later commit's tags with OLDER content.
+  # NOT fixed here in the scheduler (that would mean re-serializing builds
+  # and reintroducing (a)/(b)'s own precondition) -- fixed at the actual
+  # publish step instead, in both "Merge Digests" jobs: the moving tags
+  # (`latest`, and the `main` branch tag) are only applied if the commit
+  # being published is STILL the current head of `main` at publish time,
+  # checked immediately before tagging. An older build finishing late
+  # then publishes only its immutable sha-tag and cannot overwrite
+  # `latest`/`main`; whichever build is actually head-of-main when IT
+  # reaches the publish step gets the moving tags, regardless of start
+  # order. See the "Determine whether this build is main's current head"
+  # step in each merge job.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -75,6 +134,13 @@ jobs:
       github.event_name == 'release' ||
       needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.runner }}
+    # Every matrix leg checks out the SAME ref (it doesn't vary by
+    # target/platform), so they all resolve the same commit SHA -- reading
+    # this output from a matrix job is safe here even though GitHub only
+    # guarantees the LAST matrix leg to finish "wins" for job outputs in
+    # general, because every leg computes an identical value.
+    outputs:
+      sha: ${{ steps.versioning.outputs.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +157,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.ref }}
+          # CHAOS-4921 (round 3 fix): github.sha, not github.ref -- the
+          # matrix job's outputs (read by the mainhead check below) are only
+          # trustworthy as "the commit this job built" if every leg checks
+          # out the exact same immutable commit. github.ref is a mutable
+          # branch ref: if main advances while a slow matrix leg is still
+          # running, that leg would check out the NEWER tip, so the last
+          # matrix-output writer could report a SHA that doesn't match what
+          # earlier legs actually built (a mixed-commit manifest tagged as
+          # if it were one commit). github.sha is pinned to the exact commit
+          # that triggered this run and never moves.
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -106,7 +182,18 @@ jobs:
             PYTHON_VERSION="${{ github.event.release.tag_name }}"
           fi
           echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
 
+      # CHAOS-4921: dead configuration, flagged by ci-flakes' review of this
+      # PR -- `steps.meta.outputs.*` is not referenced anywhere else in this
+      # job. The actual push below (`Build and push by digest`) uses a
+      # hardcoded `tags:` with `push-by-digest=true` and applies no tags
+      # from this step. Left in place rather than deleted because deleting
+      # it invites someone to re-add an equivalent step without noticing
+      # this comment; if `meta.outputs.tags` is ever wired into the push
+      # below, its `latest` line must gain the same main-head gate the
+      # `merge`/`go-merge` jobs' `Docker meta` steps use (round 3, this PR)
+      # -- copying this ungated line instead reintroduces this PR's bug.
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -176,17 +263,44 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # CHAOS-4921 (round 2 follow-up): per-SHA concurrency groups mean
+      # this main build no longer runs serialized against other main
+      # builds, so it can finish AFTER a build for a newer main commit
+      # already published the moving `latest`/`main` tags. Ordering is
+      # enforced HERE, at the publish step, rather than by re-serializing
+      # builds (which would reintroduce the pending-cancellation defect
+      # this group-key change exists to fix): only tag `latest`/`main` if
+      # the commit this job built is STILL main's current head right now.
+      # An older build that finishes late publishes only its immutable
+      # sha-tag; whichever build is actually head-of-main when it reaches
+      # THIS step gets the moving tags, regardless of which one started
+      # first.
+      - name: Determine whether this build is main's current head
+        id: mainhead
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          built_sha="${{ needs.build.outputs.sha }}"
+          current_main_sha="$(gh api "repos/${{ github.repository }}/branches/main" --jq .commit.sha)"
+          echo "built_sha=${built_sha} current_main_sha=${current_main_sha}"
+          if [ "${built_sha}" = "${current_main_sha}" ]; then
+            echo "is_main_head=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "is_main_head=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
           tags: |
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' || steps.mainhead.outputs.is_main_head == 'true' }}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (github.event_name == 'release' && !github.event.release.prerelease) }}
+            type=raw,value=latest,enable=${{ (github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true') || (github.event_name == 'release' && !github.event.release.prerelease) }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -227,6 +341,11 @@ jobs:
       github.event_name == 'release' ||
       needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.runner }}
+    # Every matrix leg checks out the SAME ref, so they all resolve the
+    # same commit -- reusing the existing `commit` output is safe here
+    # despite GitHub's per-matrix-leg output ambiguity in general.
+    outputs:
+      sha: ${{ steps.versioning.outputs.commit }}
     strategy:
       fail-fast: false
       matrix:
@@ -250,7 +369,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.ref }}
+          # CHAOS-4921 (round 3 fix): github.sha, not github.ref -- the
+          # matrix job's outputs (read by the mainhead check below) are only
+          # trustworthy as "the commit this job built" if every leg checks
+          # out the exact same immutable commit. github.ref is a mutable
+          # branch ref: if main advances while a slow matrix leg is still
+          # running, that leg would check out the NEWER tip, so the last
+          # matrix-output writer could report a SHA that doesn't match what
+          # earlier legs actually built (a mixed-commit manifest tagged as
+          # if it were one commit). github.sha is pinned to the exact commit
+          # that triggered this run and never moves.
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -341,17 +470,36 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # CHAOS-4921 (round 2 follow-up): see the identical step in the
+      # `merge` job above for the full rationale -- per-SHA concurrency
+      # groups mean this build isn't serialized against other main
+      # builds, so ordering for the moving tags is enforced here instead.
+      - name: Determine whether this build is main's current head
+        id: mainhead
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          built_sha="${{ needs.go-build.outputs.sha }}"
+          current_main_sha="$(gh api "repos/${{ github.repository }}/branches/main" --jq .commit.sha)"
+          echo "built_sha=${built_sha} current_main_sha=${current_main_sha}"
+          if [ "${built_sha}" = "${current_main_sha}" ]; then
+            echo "is_main_head=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "is_main_head=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}
           tags: |
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' || steps.mainhead.outputs.is_main_head == 'true' }}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || (github.event_name == 'release' && !github.event.release.prerelease) }}
+            type=raw,value=latest,enable=${{ (github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true') || (github.event_name == 'release' && !github.event.release.prerelease) }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 from dev_health_ops.storage import ClickHouseStore, SQLAlchemyStore
+from tests.conftest import answer_catalogue_probes
 
 
 @pytest.mark.asyncio
@@ -81,6 +82,8 @@ async def test_clickhouse_store_teams():
     """Test Team storage in ClickHouse (mocked)."""
     with patch("clickhouse_connect.get_client") as mock_get_client:
         mock_client = MagicMock()
+
+        answer_catalogue_probes(mock_client)
         mock_get_client.return_value = mock_client
 
         store = ClickHouseStore("clickhouse://localhost")

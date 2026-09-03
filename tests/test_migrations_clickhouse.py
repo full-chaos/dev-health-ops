@@ -24,7 +24,21 @@ async def test_clickhouse_migrations_dry_run_non_default_db():
 
     def mock_query(query, parameters=None):
         result = MagicMock()
-        result.result_rows = [["Atomic"]] if "FROM system.databases" in query else []
+        if "FROM system.databases" in query:
+            result.result_rows = [["Atomic"]]
+        elif query.strip().upper().startswith("EXISTS TABLE"):
+            # Migration 084 asks the catalogue whether its table exists before
+            # planning anything, and refuses to guess from a non-answer -- a real
+            # server always says 0 or 1. This dry run has no tables, so 0 is the
+            # truthful answer as well as the one that lets 084 skip.
+            #
+            # Answered here rather than via conftest's answer_catalogue_probes
+            # because this test already dispatches on query content (migration
+            # 075 needed the same treatment for system.databases); a second
+            # side_effect would replace this one rather than compose with it.
+            result.result_rows = [(0,)]
+        else:
+            result.result_rows = []
         return result
 
     mock_client.query.side_effect = mock_query

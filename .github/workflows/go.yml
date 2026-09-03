@@ -29,6 +29,11 @@ on:
       - 'src/dev_health_ops/metrics/**'
       - 'src/dev_health_ops/metrics/testops*.py'
       - 'src/dev_health_ops/migrations/clickhouse/**'
+      # The auth lineage's SQL is //go:embed-ed into
+      # internal/storage/postgres/authschema, so a change to it changes the
+      # compiled binary and is covered by that package's tests -- but it is
+      # a .sql file, which no other pattern here matches (CHAOS-4882).
+      - 'internal/storage/postgres/authschema/migrations/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -54,6 +59,24 @@ on:
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_river_compat_static.sh'
+      # CHAOS-4915: the pinned linter, its self-test and its negative-control
+      # fixture must trigger the job that validates them. A file that cannot
+      # trigger its own check can be broken by a commit that never runs it.
+      - 'ci/shellcheck_pinned.sh'
+      - 'ci/check_shellcheck_pin.sh'
+      - 'ci/fixtures/shellcheck_unclean_fixture.sh'
+      # go-quality.yml HOSTS those steps, and codex round 1 found it was not
+      # itself Go-relevant: `ci/go_relevance.py` returned relevant=false for it,
+      # so a commit editing ONLY that workflow -- including one that removes the
+      # pin's install or check step -- would green-skip the very enforcement it
+      # was editing. Verified before and after this line was added.
+      - '.github/workflows/go-quality.yml'
+      # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
+      # a lefthook-only change is relevant=false, so removing the pre-push hook
+      # would land with the pin's own CI job never running. The hook's presence
+      # is additionally asserted by ci/check_shellcheck_pin.sh, so deleting it
+      # now fails a check rather than silently un-wiring local enforcement.
+      - 'lefthook.yml'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'
@@ -80,6 +103,11 @@ on:
       - 'src/dev_health_ops/metrics/**'
       - 'src/dev_health_ops/metrics/testops*.py'
       - 'src/dev_health_ops/migrations/clickhouse/**'
+      # The auth lineage's SQL is //go:embed-ed into
+      # internal/storage/postgres/authschema, so a change to it changes the
+      # compiled binary and is covered by that package's tests -- but it is
+      # a .sql file, which no other pattern here matches (CHAOS-4882).
+      - 'internal/storage/postgres/authschema/migrations/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -105,6 +133,24 @@ on:
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_river_compat_static.sh'
+      # CHAOS-4915: the pinned linter, its self-test and its negative-control
+      # fixture must trigger the job that validates them. A file that cannot
+      # trigger its own check can be broken by a commit that never runs it.
+      - 'ci/shellcheck_pinned.sh'
+      - 'ci/check_shellcheck_pin.sh'
+      - 'ci/fixtures/shellcheck_unclean_fixture.sh'
+      # go-quality.yml HOSTS those steps, and codex round 1 found it was not
+      # itself Go-relevant: `ci/go_relevance.py` returned relevant=false for it,
+      # so a commit editing ONLY that workflow -- including one that removes the
+      # pin's install or check step -- would green-skip the very enforcement it
+      # was editing. Verified before and after this line was added.
+      - '.github/workflows/go-quality.yml'
+      # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
+      # a lefthook-only change is relevant=false, so removing the pre-push hook
+      # would land with the pin's own CI job never running. The hook's presence
+      # is additionally asserted by ci/check_shellcheck_pin.sh, so deleting it
+      # now fails a check rather than silently un-wiring local enforcement.
+      - 'lefthook.yml'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'

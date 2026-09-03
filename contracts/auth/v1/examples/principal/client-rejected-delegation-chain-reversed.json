@@ -1,0 +1,51 @@
+{
+  "actor_chain": [
+    {
+      "actor_principal_id": "prn_EXAMPLE0000000000000003",
+      "delegation_id": "dlg_EXAMPLE0000000000000002",
+      "expires_at": "2026-09-02T23:26:00Z",
+      "permitted_actions": [
+        "acr.context.read"
+      ],
+      "reason": "escalation EXAMPLE-2",
+      "started_at": "2026-09-02T23:16:00Z"
+    },
+    {
+      "actor_principal_id": "prn_EXAMPLE0000000000000002",
+      "delegation_id": "dlg_EXAMPLE0000000000000001",
+      "expires_at": "2026-09-02T23:30:00Z",
+      "permitted_actions": [
+        "members.invite"
+      ],
+      "reason": "support ticket EXAMPLE-1",
+      "started_at": "2026-09-02T23:15:00Z"
+    }
+  ],
+  "authentication": {
+    "assurance": "aal1",
+    "authenticated_at": "2026-09-02T23:10:00Z",
+    "methods": [
+      "pwd"
+    ]
+  },
+  "credential": {
+    "audience": "dev-health-api",
+    "class": "user_access_token",
+    "credential_id": "ses_EXAMPLE0000000000000001",
+    "issuer": "https://auth.fullchaos.dev/",
+    "scopes": [
+      "api:access"
+    ]
+  },
+  "entitlement_revision": 3,
+  "expires_at": "2026-09-02T23:25:00Z",
+  "grant_revision": 12,
+  "issued_at": "2026-09-02T23:15:00Z",
+  "membership_revision": 17,
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "policy_revision": 42,
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "principal_type": "human",
+  "schema_version": "principal.v1",
+  "subject_id": "usr_EXAMPLE0000000000000001"
+}

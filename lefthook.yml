@@ -65,3 +65,16 @@ pre-push:
       glob: "*.py"
       run: scripts/run_py_tool.sh mypy
       fail_text: "mypy found type errors. Run `mypy` locally, fix them, commit, push again. Or `git push --no-verify` to bypass."
+    shellcheck-pin:
+      # CHAOS-4915. Same pinned version and same file set as CI, from one
+      # source of truth (ci/shellcheck_pinned.sh), so local and CI cannot
+      # disagree. Before this, CI linted shell and nothing local did, so the
+      # only way to discover an unclean script was to fail the build.
+      #
+      # Runs the SELF-TEST rather than the linter directly: the self-test also
+      # asserts the unclean fixture is still rejected, which is what catches a
+      # linter that has silently stopped linting. A lint step that checks
+      # nothing reports exactly what a clean tree reports.
+      glob: "*.sh"
+      run: bash ci/check_shellcheck_pin.sh
+      fail_text: "shellcheck (pinned 0.11.0) failed, or the pin itself is misconfigured. Run `bash ci/check_shellcheck_pin.sh` for the detail. Do NOT use --no-verify: a version mismatch here means your local ruleset differs from CI's, so a local pass would not mean what CI means by a pass."

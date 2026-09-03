@@ -7,6 +7,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/full-chaos/dev-health-go v0.6.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/riverqueue/river v0.44.0

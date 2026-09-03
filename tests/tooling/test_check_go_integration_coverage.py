@@ -94,7 +94,16 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
+    # TWO packages arrived independently, each written as 37 -> 38 on its own
+    # branch: CHAOS-4882 added internal/storage/postgres/authschema (the
+    # auth-owned lineage's live-PostgreSQL posture suite, which connects AS
+    # the runtime role to prove DDL and cross-schema access are refused), and
+    # CHAOS-4769 added internal/jobs/workgraph/issueprlinks (a container-backed
+    # provenance-collision acceptance test, the package's first -tags
+    # integration file). Neither branch was wrong; the merged total is 39.
+    # This is why the literal is followed by SET MEMBERSHIP assertions below --
+    # a count alone cannot tell you WHICH package a merge dropped.
+    assert "39 package(s) discovered, 0 denylisted, 39 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

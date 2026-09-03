@@ -73,13 +73,65 @@ permissions:
   packages: write
 
 concurrency:
-  group: mirror-test-images
-  cancel-in-progress: false
+  # CHAOS-4928: the bare literal below used to be the WHOLE group -- every
+  # push, schedule, pull_request and workflow_dispatch run on this file
+  # shared one slot, repo-wide. Measured live: a dispatch on a feature
+  # branch (introducing CHAOS-4922's Python mirror image, meant to finish
+  # BEFORE that branch's own Tests run pulls it -- see the header above) sat
+  # pending for 2m23s and was evicted by an unrelated pull_request run one
+  # second after a third event landed. `cancel-in-progress: false` only
+  # protects a RUNNING job; GitHub still allows only one PENDING run per
+  # group, so a third event bumps a second, still-pending one -- the same
+  # mechanism CHAOS-4921 round 1 hit on docker-images.yml.
+  #
+  # push (to main) and schedule keep sharing ONE group deliberately: this
+  # job is idempotent and cumulative (it re-derives and mirrors everything
+  # CI currently needs from the tree at run time), so losing an UNRELATED
+  # pending run there is cheap -- the next one re-covers it. pull_request
+  # and workflow_dispatch are the opposite: each carries branch-specific
+  # intent that a later, unrelated event must not evict, so each gets its
+  # own group, isolated from the shared slot and from every other PR/dispatch.
+  #
+  # Two different refs CAN now enter this job at the same time -- fixed
+  # below by a SEPARATE, job-level concurrency group (CHAOS-4928 codex round
+  # 1, P1) that keeps the actual registry writes serialised regardless of
+  # how many workflow-level groups are running. Not every mirrored image is
+  # equally protected from a race, which the group split above is corrected
+  # to no longer claim in general:
+  #   - `postgres:18-alpine` is digest-pinned (`@sha256:...`) everywhere it
+  #     is consumed -- a concurrent write there is provably harmless no
+  #     matter what races it.
+  #   - `clickhouse/clickhouse-server:26.7` and `valkey/valkey:8-alpine` are
+  #     consumed by bare tag, no digest (test.yml, live-e2e.yml) -- a
+  #     deliberate choice (minor pinned, patch drift accepted; nobody has
+  #     pinned valkey yet either), NOT an oversight to fix in this PR. Two
+  #     racing writers publishing different upstream content to that tag
+  #     would be a real, silent inconsistency for exactly these two images.
+  # The job-level lock below closes that gap structurally instead of
+  # depending on every image happening to be digest-pinned.
+  group: mirror-test-images-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.sha) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Registry writes stay serialised across EVERY event via this separate,
+    # job-level group -- independent of the workflow-level group above,
+    # which only controls which runs can queue without evicting each other.
+    # Two runs from different workflow-level groups can both be "active" at
+    # once (no displacement), but their `mirror` jobs still queue behind one
+    # another here, so `imagetools create` never races itself to the same
+    # destination tag. `cancel-in-progress: false`: if a third run's job
+    # arrives while a second is already queued here, GitHub's documented
+    # one-pending-per-group behavior can still replace that second one --
+    # but a CANCELLED JOB is a visible red check on that run, not a run that
+    # never created a job at all (CHAOS-4928's original, silent failure
+    # mode). A contended mirror job failing loud here is an acceptable,
+    # narrower residual, not the bug this ticket exists to fix.
+    concurrency:
+      group: mirror-publish
+      cancel-in-progress: false
     # Forks get neither the Docker Hub secrets nor packages:write, so the job
     # would fail at login rather than do anything useful.
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
@@ -265,6 +317,66 @@ jobs:
                 printf 'NOTE %-34s tag-pinned upstream, mirrored digest %s\n' "${repo}" "${mirrored}"
                 ;;
             esac
+
+            # EVERY mirrored image must be a multi-arch INDEX carrying both
+            # linux/amd64 and linux/arm64.
+            #
+            # Not because the copy step drops platforms -- `imagetools create`
+            # copies the index verbatim, which is why the mirrored digest above
+            # equals upstream's byte for byte. This asserts the property a reader
+            # actually needs, so that "is the mirror arm64-capable?" is answered
+            # by a CI run instead of by a lane inspecting digests by hand.
+            #
+            # A digest-pinned image has TWO digests a person will meet, and they
+            # inspect very differently:
+            #
+            #   the INDEX             MediaType application/vnd.oci.image.index.v1+json
+            #                         -> lists every platform
+            #   a PLATFORM MANIFEST   MediaType application/vnd.oci.image.manifest.v1+json
+            #                         -> ONE architecture, no platform list, and it
+            #                            inspects cleanly, so it reads as
+            #                            "this image is amd64-only"
+            #
+            # That misreading has now happened twice on this repo -- once on
+            # valkey (the amd64 manifest sha256:95726b32 quoted as the image's
+            # identity when the index was b21fd94099dc) and once on postgres,
+            # reported as amd64-only when its mirror carries eight platforms.
+            # The tell is MediaType, so this checks MediaType explicitly rather
+            # than only counting platforms.
+            media=$(docker buildx imagetools inspect --format '{{ .Manifest.MediaType }}' "${dest}")
+            # ONE LINE, no `\` continuation. The registry-allowlist guard added
+            # in #2120 parses every `run:` step to find image references and
+            # REFUSES a command it cannot parse rather than assuming it is safe.
+            # A continuation split this substitution across lines, the parse
+            # failed, and the guard failed closed -- correctly. Keeping it on one
+            # line keeps the command parseable instead of weakening the guard.
+            raw=$(docker buildx imagetools inspect --raw "${dest}" 2>/dev/null || echo '{}')
+            platforms=$(printf '%s' "${raw}" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(sorted({(m.get("platform") or {}).get("os","?")+"/"+((m.get("platform") or {}).get("architecture","?")) for m in d.get("manifests",[])})))' 2>/dev/null || echo "")
+            case "${media}" in
+              *index*|*manifest.list*) ;;
+              *)
+                printf 'FAIL %-34s MediaType=%s is a PLATFORM MANIFEST, not an index.\n' \
+                  "${repo}" "${media}" >&2
+                printf '     A platform manifest describes ONE architecture. If you pinned\n' >&2
+                printf '     this by digest, you almost certainly took the linux/amd64\n' >&2
+                printf '     digest instead of the index digest -- inspect the TAG to get\n' >&2
+                printf '     the index, and pin that.\n' >&2
+                failed=1
+                continue
+                ;;
+            esac
+            missing=""
+            case "${platforms}" in *linux/amd64*) ;; *) missing="linux/amd64" ;; esac
+            case "${platforms}" in *linux/arm64*) ;; *) missing="${missing} linux/arm64" ;; esac
+            if [ -n "${missing}" ]; then
+              printf 'FAIL %-34s index is missing:%s (has: %s)\n' \
+                "${repo}" "${missing}" "${platforms}" >&2
+              printf '     The harness runs on both architectures; an image missing one\n' >&2
+              printf '     cannot be scheduled there. Mirror the full upstream index.\n' >&2
+              failed=1
+            else
+              printf 'ARCH %-34s %s\n' "${repo}" "${platforms}"
+            fi
           done < images.txt
           exit "${failed}"
 

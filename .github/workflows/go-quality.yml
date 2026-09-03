@@ -129,6 +129,34 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true'
         run: bash ci/check_go.sh ci
 
+      - name: Install pinned shellcheck
+        if: steps.relevance.outputs.relevant == 'true'
+        # CHAOS-4915. Installed, not assumed: the runner image ships its own
+        # shellcheck and can change it without a commit here, which is exactly
+        # the nondeterminism this pins away. Checksum-verified, because an
+        # unverified download is a pin on a name rather than on bytes.
+        # Installed under RUNNER_TEMP and put on PATH via GITHUB_PATH so no
+        # step needs sudo.
+        run: |
+          set -euo pipefail
+          version=0.11.0
+          sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          tarball="shellcheck-v${version}.linux.x86_64.tar.xz"
+          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
+          echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xJf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          install -m 0755 "${RUNNER_TEMP}/shellcheck-v${version}/shellcheck" "${RUNNER_TEMP}/bin/shellcheck"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Check the shellcheck pin
+        if: steps.relevance.outputs.relevant == 'true'
+        # Runs BEFORE the harness validation that depends on it. Asserts both
+        # that the canonical set is clean and that the unclean fixture is still
+        # rejected -- the second is what catches a linter that has silently
+        # stopped linting, which otherwise reports exactly what a clean tree does.
+        run: bash ci/check_shellcheck_pin.sh
+
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true'
         run: bash ci/check_river_compat_static.sh

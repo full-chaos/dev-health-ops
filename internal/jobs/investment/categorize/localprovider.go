@@ -25,8 +25,13 @@ type LocalProviderConfig struct {
 	// APIKey is sent as a bearer token; most local servers ignore it.
 	APIKey          string
 	MaxOutputTokens int
-	Temperature     float64
-	HTTPClient      *http.Client
+	// Temperature is a pointer so an explicitly requested 0.0 (deterministic
+	// sampling -- a valid Chat Completions value) is distinguishable from
+	// "unset". codex round 1 (#2178) P2: a plain float64 defaulted on Go's
+	// own zero value, silently overwriting a caller's explicit 0.0 with
+	// defaultLocalTemperature.
+	Temperature *float64
+	HTTPClient  *http.Client
 }
 
 const (
@@ -62,8 +67,9 @@ func NewLocalProvider(cfg LocalProviderConfig) *LocalProvider {
 	if cfg.MaxOutputTokens <= 0 {
 		cfg.MaxOutputTokens = defaultLocalMaxTokens
 	}
-	if cfg.Temperature == 0 {
-		cfg.Temperature = defaultLocalTemperature
+	if cfg.Temperature == nil {
+		defaultTemperature := defaultLocalTemperature
+		cfg.Temperature = &defaultTemperature
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -131,7 +137,7 @@ func (p *LocalProvider) Complete(ctx context.Context, prompt string) (Completion
 				{Role: "user", Content: prompt},
 			},
 			MaxCompletionTokens: p.cfg.MaxOutputTokens,
-			Temperature:         p.cfg.Temperature,
+			Temperature:         *p.cfg.Temperature,
 			ResponseFormat:      responseFormat,
 		}
 

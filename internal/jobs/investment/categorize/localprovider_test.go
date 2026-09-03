@@ -84,6 +84,42 @@ func TestLocalProviderCompleteSuccess(t *testing.T) {
 	}
 }
 
+func TestLocalProviderExplicitZeroTemperatureIsSentVerbatim(t *testing.T) {
+	// codex round 1 (#2178) P2: Temperature was a plain float64, so
+	// LocalProviderConfig{Temperature: 0} was indistinguishable from an
+	// unset field and got silently overwritten with the 0.3 default. 0.0
+	// is a valid, meaningfully different (fully deterministic) Chat
+	// Completions temperature.
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		req := decodeLocalRequest(t, r)
+		if req.Temperature != 0 {
+			t.Errorf("Temperature = %v, want 0 (explicit zero must not be overwritten)", req.Temperature)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(localChatResponse{
+			Choices: []localChatChoice{{Message: localChatMessage{Content: `{"ok": true}`}}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	zero := 0.0
+	provider := NewLocalProvider(LocalProviderConfig{
+		BaseURL:     server.URL,
+		Model:       "gemma3",
+		Temperature: &zero,
+	})
+	t.Cleanup(func() { provider.Close() })
+
+	if _, err := provider.Complete(context.Background(), "prompt"); err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
 func TestLocalProviderRetriesWithPlainTextOn400(t *testing.T) {
 	var formats []string
 	provider, calls := newTestLocalProvider(t, func(w http.ResponseWriter, r *http.Request) {

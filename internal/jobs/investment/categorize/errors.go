@@ -56,8 +56,15 @@ func (e *llmError) Unwrap() error { return e.cause }
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}`),
-	regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)((?:api[_-]?key|authorization|x-api-key|token)\s*[:=]\s*)['"]?[^'"\s,;}]+`),
+	// codex round 1 (#2178) P1: "bearer\s+" alone missed a colon/equals
+	// separator ("Bearer: <token>", "Bearer=<token>") -- widened to any run
+	// of whitespace/`:`/`=` between the word and the token.
+	regexp.MustCompile(`(?i)(bearer[\s:=]+)[A-Za-z0-9._~+/=-]{8,}`),
+	// codex round 1 (#2178) P1: "api[_-]?key" only allowed a SINGLE
+	// underscore/hyphen between "api" and "key", so "api key: <secret>"
+	// (a literal space, as a real 403 body used) reached this pattern
+	// unredacted. Widened to any run of whitespace/underscore/hyphen.
+	regexp.MustCompile(`(?i)((?:api[\s_-]*key|authorization|x-api-key|token)\s*[:=]\s*)['"]?[^'"\s,;}]+`),
 }
 
 // sanitizeMessage ports errors.py's _sanitize_message: strip newlines,

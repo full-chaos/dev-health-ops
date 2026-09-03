@@ -17,6 +17,11 @@ func TestSanitizeMessageRedactsCredentials(t *testing.T) {
 		{"openai style key", "auth failed for key sk-abcdefgh12345678", "sk-abcdefgh12345678"},
 		{"bearer token", "request failed: Bearer aVeryLongToken1234567890", "aVeryLongToken1234567890"},
 		{"api_key field", `api_key: "supersecretvalue123"`, "supersecretvalue123"},
+		// codex round 1 (#2178) P1: a real 403 body used "api key" with a
+		// literal space, not "api_key" -- the old pattern's [_-]? only
+		// allowed a single underscore/hyphen, missing this shape entirely.
+		{"api key with space", "http 403: api key: supersecretvalue123", "supersecretvalue123"},
+		{"bearer with colon separator", "request failed: Bearer: aVeryLongToken1234567890", "aVeryLongToken1234567890"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

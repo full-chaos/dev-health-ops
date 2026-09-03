@@ -100,10 +100,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # the runtime role to prove DDL and cross-schema access are refused), and
     # CHAOS-4769 added internal/jobs/workgraph/issueprlinks (a container-backed
     # provenance-collision acceptance test, the package's first -tags
-    # integration file). Neither branch was wrong; the merged total is 39.
+    # integration file). Neither branch was wrong; the merged total was 39.
+    # CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
-    assert "39 package(s) discovered, 0 denylisted, 39 will run" in result.stdout
+    assert "40 package(s) discovered, 0 denylisted, 40 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

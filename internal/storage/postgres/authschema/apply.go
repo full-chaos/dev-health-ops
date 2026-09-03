@@ -110,15 +110,6 @@ func ValidateIdentifier(name string) error {
 	return nil
 }
 
-// quoteIdentifier renders a validated identifier for interpolation.
-//
-// ValidateIdentifier has already excluded everything that would need escaping,
-// so the quoting is belt-and-braces -- and, unlike the comment this pattern
-// replaces in CHAOS-4881, that is an accurate description of what it is: the
-// double quotes are what make the emitted SQL correct if the pattern is ever
-// widened, not what makes the current input safe.
-func quoteIdentifier(name string) string { return `"` + name + `"` }
-
 // Validate checks the options without touching the database.
 func (o Options) Validate(migrationRole string) error {
 	if err := ValidateIdentifier(o.Schema); err != nil {
@@ -165,6 +156,13 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 	if err := options.Validate(migrationRole); err != nil {
 		return Result{}, err
 	}
+	// One construction, carried onward. Everything downstream that interpolates
+	// the schema name takes ValidatedIdentifier, so this is the only place the
+	// raw string can become an identifier.
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
+		return Result{}, err
+	}
 
 	logger := options.Logger
 	if logger == nil {
@@ -191,7 +189,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 	if err := ensureSchemaAndVersionTable(ctx, conn.Conn(), options); err != nil {
 		return Result{}, err
 	}
-	applied, err := appliedVersions(ctx, conn.Conn(), options.Schema)
+	applied, err := appliedVersions(ctx, conn.Conn(), schemaID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -267,6 +265,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 
 // applyOne runs a single migration and records it, atomically.
 func applyOne(ctx context.Context, conn *pgx.Conn, options Options, migration Migration) error {
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
+		return err
+	}
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: beginning version %d", ErrMigrationFailed, migration.Version)
@@ -293,7 +295,7 @@ func applyOne(ctx context.Context, conn *pgx.Conn, options Options, migration Mi
 		ctx,
 		fmt.Sprintf(
 			`INSERT INTO %s.%s (version, name, applied_at) VALUES ($1, $2, now())`,
-			quoteIdentifier(options.Schema), quoteIdentifier(versionTable),
+			quoteIdentifier(schemaID), quoteIdentifier(versionTableIdentifier),
 		),
 		migration.Version, migration.Name,
 	); err != nil {

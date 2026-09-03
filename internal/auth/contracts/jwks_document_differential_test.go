@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-go/authverify"
@@ -68,19 +69,11 @@ var narrowingPredicates = []struct {
 		}},
 	{"a null value somewhere (decodes to Go's zero value)",
 		func(d map[string]any) bool { return anyNullValue(d) }},
-	{"kid carries a character outside printable non-space ASCII",
+	{"kid is one DOCUMENTED by a narrower_than_consumer fixture",
 		func(d map[string]any) bool {
 			return anyKeyField(d, "kid", func(v any) bool {
 				s, ok := v.(string)
-				if !ok {
-					return false
-				}
-				for _, r := range s {
-					if r < 0x21 || r > 0x7e {
-						return true
-					}
-				}
-				return false
+				return ok && documentedNarrowingKids()[s]
 			})
 		}},
 	{"use is the empty string (the consumer tolerates it alongside sig)",
@@ -164,6 +157,103 @@ func foldsToADeclaredName(name string) bool {
 		}
 	}
 	return false
+}
+
+// documentedNarrowingKids is the set of `kid` values that a
+// narrower_than_consumer FIXTURE demonstrates, read from the fixtures
+// themselves.
+//
+// THE KID EXEMPTION IS ORACLE-DERIVED AND HAS NO ALPHABET IN IT. Ruled after
+// round 4. It used to be a character class -- any character outside printable
+// non-space ASCII -- and that excused a whole family on the strength of three
+// fixtures: tabs, newlines, interior U+3000, CJK and combining marks were all
+// waved through, every one of them a narrowing the consumer accepts and nothing
+// documented. It also covered cases where BOTH sides refuse, where an exemption
+// can never fire and so proves nothing about the ones that can.
+//
+// The rule is now the oracle's, stated once:
+//
+//	schema refuses AND consumer refuses  -> agreement, needs nothing
+//	schema refuses AND consumer ACCEPTS  -> must be a documented kid, else FAIL
+//
+// Keyed to the fixtures rather than to a class, so a kid the consumer accepts
+// and no fixture shows fails NAMING THE INPUT instead of being absorbed by a
+// character range. A class predicate exempts what nobody has looked at; a
+// fixture-keyed one exempts only what somebody wrote down.
+func documentedNarrowingKids() map[string]bool {
+	narrowingKidsOnce.Do(func() {
+		narrowingKids = map[string]bool{}
+		root, err := RepoRoot(mustGetwd())
+		if err != nil {
+			return // the caller's own manifest load will fail loudly first
+		}
+		dir := filepath.Join(root, jwksFixtureDir)
+		raw, err := os.ReadFile(filepath.Join(root, jwksFixtureManifestPath))
+		if err != nil {
+			return
+		}
+		var manifest jwksFixtureManifest
+		if json.Unmarshal(raw, &manifest) != nil {
+			return
+		}
+		for _, entry := range manifest.NarrowerThanConsumer {
+			body, err := os.ReadFile(filepath.Join(dir, entry.File))
+			if err != nil {
+				continue
+			}
+			var document map[string]any
+			if json.Unmarshal(body, &document) != nil {
+				continue
+			}
+			// ONLY KIDS THE SCHEMA REFUSES. A narrowing fixture about `use` or
+			// about member-name folding still carries an ordinary kid, and the
+			// first version collected those too -- so `example-signing-key`
+			// became "documented" and this predicate matched almost every
+			// document, shadowing the later predicates and exempting far more
+			// than the class predicate it replaced. Worse than what it fixed,
+			// and caught because the correspondence test went red.
+			anyKeyField(document, "kid", func(v any) bool {
+				s, ok := v.(string)
+				if !ok || schemaAcceptsKid(s) {
+					return false
+				}
+				narrowingKids[s] = true
+				return false
+			})
+		}
+	})
+	return narrowingKids
+}
+
+var (
+	narrowingKidsOnce sync.Once
+	narrowingKids     map[string]bool
+)
+
+// schemaAcceptsKid mirrors the schema's kid pattern, ^[!-~]{1,256}$.
+//
+// Deliberately a re-statement rather than a read of the schema file: this
+// decides which kids are NARROWINGS, and reading the pattern from the artefact
+// it is meant to police would make the set move with the schema. If the pattern
+// changes, TestTheKidPatternIsWhatThisMirrors fails and a human reconciles them.
+func schemaAcceptsKid(kid string) bool {
+	if len(kid) < 1 || len([]rune(kid)) > 256 {
+		return false
+	}
+	for _, r := range kid {
+		if r < 0x21 || r > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func mustGetwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	return wd
 }
 
 func anyMemberName(node any, pred func(string) bool) bool {
@@ -336,10 +426,42 @@ func generateJWKSDocuments(t *testing.T, count int) []jwksDifferentialCase {
 		return out
 	}
 
+	// KID VALUES ARE LITERALS HERE, AND THAT IS THE WHOLE POINT.
+	//
+	// The narrowing kids below are written out rather than read from
+	// documentedNarrowingKids(). Drawing them from the fixtures was the first
+	// attempt and it was VACUOUS: the generator and the exemption then share
+	// one source, so deleting a fixture deletes the case AND its exemption
+	// together and the red-proof stays green. Caught by running that proof.
+	//
+	// With literals, deleting a fixture leaves the generator still emitting
+	// that kid, the consumer still accepting it, the schema still refusing it,
+	// and no documented match -- so the differential FAILS NAMING THE INPUT,
+	// which is the behaviour the rule exists for.
+	//
+	// AGREEMENTS need no fixture: both sides refuse them, so no exemption can
+	// fire. NARROWINGS must each have one.
+	//
+	// The trade, stated: this list is enumerated, not explored, so it verifies
+	// the documented classes and polices the boundary without discovering new
+	// ones. Discovery is CHAOS-4958's property sweep over Unicode categories.
 	kids := []any{
-		"", " ", "  ", " a ", "a\t", "\na", "k" + string(rune(0)) + "k",
-		strings.Repeat("k", 256), strings.Repeat("k", 257), strings.Repeat("é", 8),
-		"sig key", "UPPER-KID", nil,
+		// agreements -- both sides refuse
+		"", " ", "  ",
+		string(rune(0x3000)),                      // ideographic space alone: trims to empty
+		strings.Repeat("k", 257),                  // over the 256-byte bound
+		strings.Repeat(string(rune(0x00E9)), 300), // 600 bytes: over the BYTE bound
+		nil,
+		// narrowings -- each has a narrower_than_consumer fixture, and these
+		// literals must equal the kid in that fixture
+		" example-signing-key ",             // surrounding whitespace
+		"example" + string(rune(0)) + "key", // embedded NUL
+		string(rune(0x00E9)),                // short non-ASCII
+		"a\tb",                              // embedded tab
+		"a\nb",                              // embedded newline
+		"a" + string(rune(0x3000)) + "b",    // interior ideographic space
+		string(rune(0x4E2D)),                // CJK
+		"a" + string(rune(0x0301)),          // combining mark
 	}
 	xs := []any{goodX[:42], goodX + "A", goodX[:42] + "=", "+/" + goodX[2:], "", nil}
 	mutations := []struct {

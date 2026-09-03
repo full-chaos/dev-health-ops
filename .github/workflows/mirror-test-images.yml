@@ -215,15 +215,40 @@ jobs:
           #
           # The ref carries its digest, so this mirrors a specific image rather
           # than whatever the tag points at today.
-          sed -nE 's/^ARG PYTHON_BASE_IMAGE="ghcr\.io\/[^\/]+\/([^"]+)".*$/\1/p' \
-            docker/Dockerfile >> images.raw
-          # A silent miss here would mirror nothing and leave the Dockerfile
-          # pointing at a ref that does not exist -- a build failure at pull
-          # time, on whatever PR happens to run next. Fail at the parser instead.
-          if ! grep -qE '^ARG PYTHON_BASE_IMAGE="ghcr\.io/' docker/Dockerfile; then
-            echo "::error::docker/Dockerfile has no ghcr-hosted PYTHON_BASE_IMAGE ARG to derive from"
+          python_ref=$(sed -nE 's/^ARG PYTHON_BASE_IMAGE="ghcr\.io\/[^\/]+\/([^"]+)".*$/\1/p' \
+            docker/Dockerfile)
+          # ASSERT THE OUTCOME, NOT THE INPUT (lane-4441).
+          #
+          # This guard used to be `grep -qE '^ARG PYTHON_BASE_IMAGE="ghcr\.io/'`
+          # -- a check on the SHAPE OF THE LINE. But the sed additionally requires
+          # an OWNER segment (`[^/]+/`), so every line satisfying the guard but not
+          # that passed silently while deriving NOTHING. Measured:
+          #
+          #   ghcr.io/full-chaos/python:3.14-slim@sha256:X   guard ok  -> correct
+          #   ghcr.io/python:3.14-slim@sha256:X              guard ok  -> EMPTY
+          #   ghcr.io/full-chaos/lib/python:3.14-slim@X      guard ok  -> wrong ref
+          #
+          # The second is the exact failure this guard exists to prevent: drop the
+          # owner segment while bumping the base, mirror nothing, and leave the
+          # Dockerfile naming a ghcr ref that exists nowhere.
+          #
+          # So the question is not "does the line look right" but "did the
+          # derivation produce exactly one usable ref". That is bounded and
+          # positive: one ref, well-formed, or fail.
+          python_n=$(printf '%s' "${python_ref}" | grep -c . || true)
+          if [ "${python_n:-0}" -ne 1 ]; then
+            echo "::error::derived ${python_n:-0} Python base refs from docker/Dockerfile, expected exactly 1."
+            echo "::error::PYTHON_BASE_IMAGE must be ghcr.io/<owner>/<repo>:<tag>@<digest>."
             exit 1
           fi
+          # A ref containing whitespace or an extra path segment is malformed here:
+          # the mirror maps <repo>:<tag> onto ghcr.io/<owner>/, so a nested path
+          # would mirror to a location the Dockerfile does not name.
+          if printf '%s' "${python_ref}" | grep -qE '[[:space:]/]'; then
+            echo "::error::derived a malformed Python base ref: ${python_ref}"
+            exit 1
+          fi
+          printf '%s\n' "${python_ref}" >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }

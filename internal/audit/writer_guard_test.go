@@ -52,6 +52,15 @@ var permittedWriters = map[string]string{
 	// write, so the permission is one function wide rather than one file wide,
 	// and a new write elsewhere in that test file is still caught.
 	"internal/audit/reaper_integration_test.go:seedOutboxEvent": "seeds already-published rows the reaper is meant to reclaim; Commit cannot create a published row",
+
+	// The index measurement needs a backlog big enough for the planner to have
+	// a real choice, which Commit cannot produce at any reasonable speed.
+	"internal/audit/reaper_index_integration_test.go:seedManyOutboxEvents": "bulk-loads the published backlog 0006's index is measured against",
+	// explainReap does NOT write: its DELETE runs under EXPLAIN inside a
+	// transaction that is rolled back. It is listed anyway because the guard
+	// cannot see that and must not assume it -- a permit with a stated reason
+	// is the right outcome for a write the scanner cannot prove is inert.
+	"internal/audit/reaper_index_integration_test.go:explainReap": "plans the reaper's own DELETE under EXPLAIN in a rolled-back transaction; nothing is written",
 }
 
 // guardPattern is the ONE definition of what counts as a write, shared by the

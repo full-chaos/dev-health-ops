@@ -715,6 +715,13 @@ def test_fanout_generation_prefix_matches_the_go_writer() -> None:
     )
 
     store = (_REPO_ROOT / "internal/jobs/metrics/daily/postgres.go").read_text()
+    # CHAOS-4935 round 5: this constant was deliberately exported
+    # (scheduledFanoutGenerationPrefix -> ScheduledFanoutGenerationPrefix,
+    # postgres.go:78) so partition_recompute.go could reference it across
+    # the same package boundary this test already pins across a language
+    # boundary. Pin the CURRENT declared name, not either spelling -- a
+    # future accidental un-export is exactly the kind of drift this test
+    # exists to catch, the same way a value change would be.
     assert (
         f'ScheduledFanoutGenerationPrefix = "{_SCHEDULED_FANOUT_GENERATION_PREFIX}"'
         in store

@@ -134,8 +134,67 @@ func interpreterOf(document []byte, label string) (string, error) {
 // cannot express "compare these fields" any more; it can only name which
 // registry entry it is. That is a constraint on the SHAPE of the call rather
 // than a search for one bad shape inside it.
+// isRegisteredGuard reports whether *guard* IS one of the registry entries.
+//
+// codex round 2 defeated the previous defence, which was an AST rule requiring a
+// bare identifier at the call site. payloadGuard is mutable inside this package,
+// so a guard could write
+//
+//	g := reprBandGuard
+//	g.fields = []string{"cases"}
+//	comparePayload(frozen, rendered, g)
+//
+// -- a bare identifier, passing the syntactic check, silently dropping
+// distinct_input_values. The round did exactly that and every test stayed green.
+//
+// That was my third syntactic proxy in a row: "not a string literal", then "is a
+// bare identifier", each called a property check and each defeated by the next
+// shape. This asks the actual question instead, at runtime, where syntax cannot
+// help: is this value one of the registered entries. A copy with edited fields
+// is not, however it was spelled at the call site.
+func isRegisteredGuard(guard payloadGuard) bool {
+	for _, registered := range allPayloadGuards {
+		if registered.fixture != guard.fixture ||
+			len(registered.fields) != len(guard.fields) {
+			continue
+		}
+		same := true
+		for index, field := range registered.fields {
+			if guard.fields[index] != field {
+				same = false
+				break
+			}
+		}
+		if same {
+			return true
+		}
+	}
+	return false
+}
+
+// comparePayload compares the payload of a SHIPPED fixture, and refuses any
+// guard value that is not in the registry.
+//
+// The synthetic cases in goldenpayload_behaviour_test.go exercise the comparison
+// logic itself against hand-written documents, so they call comparePayloadFields
+// directly. A rot guard may not: TestEveryRotGuardUsesTheRegistry fails a
+// *_rot_guard_test.go that mentions comparePayloadFields at all, which keeps the
+// unvalidated door open for the tests that need it and shut for the ones that
+// must not have it.
 func comparePayload(frozen, rendered []byte, guard payloadGuard) error {
-	fields := guard.fields
+	if !isRegisteredGuard(guard) {
+		return fmt.Errorf(
+			"comparePayload was given a guard for %q that is NOT in allPayloadGuards "+
+				"(fields %v). A guard must compare exactly what the registry says, or "+
+				"it and TestShippedFixturesExposeThePayloadFieldsTheGuardsCompare can "+
+				"disagree -- which is the drift the registry exists to make impossible. "+
+				"A copy with edited fields is not a registry entry, however it is spelled",
+			guard.fixture, guard.fields)
+	}
+	return comparePayloadFields(frozen, rendered, guard.fields)
+}
+
+func comparePayloadFields(frozen, rendered []byte, fields []string) error {
 	var frozenDoc, renderedDoc map[string]json.RawMessage
 	if err := json.Unmarshal(frozen, &frozenDoc); err != nil {
 		return fmt.Errorf("parse frozen document: %w", err)

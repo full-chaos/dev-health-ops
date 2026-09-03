@@ -162,6 +162,14 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
         from dev_health_ops.sync import dispatch_routes
         from dev_health_ops.workers import provider_unit_route
 
+        # The LEAF modules' own origins. codex round 2: a sitecustomize reachable
+        # through the inherited PYTHONPATH tail can import the genuine
+        # ROOT/src/dev_health_ops and then PREPEND a foreign directory to its
+        # __path__, so the top-level origin is honest while both leaf loaders
+        # come from elsewhere. Asserting only the package origin passed that.
+        print("LEAF_FROM", pathlib.Path(provider_unit_route.__file__).resolve())
+        print("LEAF_FROM", pathlib.Path(dispatch_routes.__file__).resolve())
+
         print(provider_unit_route._DEFAULT_MATRIX_CONTRACT_PATH)
         print(dispatch_routes.default_transport_routes_path())
         """
@@ -238,6 +246,24 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
         "PYTHONPATH) won the import -- either way this test would assert "
         "against code the branch never changed."
     )
+
+    # Every leaf loader must also come from ROOT/src. The top-level origin alone
+    # is satisfiable while __path__ has been redirected underneath it.
+    leaves = [
+        line.split(" ", 1)[1]
+        for line in completed.stdout.splitlines()
+        if line.startswith("LEAF_FROM ")
+    ]
+    assert len(leaves) == 2, (
+        f"probe reported {len(leaves)} leaf origin(s), expected 2: {completed.stdout!r}"
+    )
+    for leaf in leaves:
+        assert Path(leaf).is_relative_to(ROOT / "src"), (
+            f"a loader was imported from {leaf}, outside {ROOT / 'src'}. The "
+            "top-level package origin can be genuine while dev_health_ops.__path__ "
+            "points elsewhere, so the leaf modules are the ones that decide whether "
+            "this test exercised the checkout under review."
+        )
 
     printed = [line for line in completed.stdout.splitlines() if line.startswith("/")]
     assert len(printed) == 2, f"probe printed {printed!r}, expected two paths"

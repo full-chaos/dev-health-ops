@@ -60,6 +60,7 @@ WHAT THIS TEST ASSERTS
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from functools import lru_cache
@@ -191,10 +192,24 @@ def _tracked_paths(anchor: Path) -> tuple[Path, ...]:
     # Asking the real question -- is there a repository here -- separates "not a
     # repo, walk it" from "a repo that legitimately has no tracked files under
     # this anchor" from "git is broken", which an exit code alone conflates.
+    # GIT_* IS STRIPPED. codex round 2: both git calls inherited the ambient
+    # environment, so a valid sibling-worktree GIT_DIR made `rev-parse` return
+    # true and `ls-files` return THAT worktree's index -- 4,875 paths instead of
+    # this checkout's 5,570. The fixture oracle fell from 401 files to 309 and
+    # the coverage test passed for both events, because a foreign index is not
+    # empty and the root-empty guard never fires.
+    #
+    # I had keyed the fallback on "is this a repo". The question that matters is
+    # "is this THIS repo", and an inherited GIT_DIR answers the first while
+    # silently changing the second.
+    git_environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
     inside_repo = subprocess.run(
         ["git", "-C", str(anchor), "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
         check=False,
+        env=git_environment,
     )
     if inside_repo.returncode != 0 or inside_repo.stdout.strip() != b"true":
         # Not a git repository. This file's own tests build synthetic trees
@@ -221,6 +236,7 @@ def _tracked_paths(anchor: Path) -> tuple[Path, ...]:
         ["git", "-C", str(anchor), "ls-files", "-z"],
         capture_output=True,
         check=True,
+        env=git_environment,
     )
     names = [name for name in completed.stdout.decode().split("\0") if name]
 
@@ -245,7 +261,19 @@ def _tracked_paths(anchor: Path) -> tuple[Path, ...]:
                 "this fails loudly instead"
             )
         return tuple(path for path in anchor.rglob("*") if path.is_file())
-    return tuple(anchor / name for name in names)
+    paths = tuple(anchor / name for name in names)
+    # A foreign index names files that are not here. Checking existence turns
+    # "git answered about another checkout" into a loud failure rather than a
+    # quietly smaller file set -- the shape that let 401 fixtures become 309
+    # with every test still green.
+    missing = [path for path in paths[:200] if not path.exists()]
+    assert not missing, (
+        f"git listed {len(missing)} tracked path(s) under {anchor} that do not "
+        f"exist there, e.g. {missing[0]}. The index being read is not this "
+        "checkout's -- an inherited GIT_DIR or a misdirected -C, either of which "
+        "silently shrinks every oracle in this file"
+    )
+    return paths
 
 
 def _fixture_like_files_on_disk() -> set[str]:

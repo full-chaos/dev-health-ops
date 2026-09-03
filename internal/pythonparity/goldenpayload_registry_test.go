@@ -54,7 +54,19 @@ func comparePayloadOffences(fileSet *token.FileSet, parsed *ast.File) []string {
 			return true
 		}
 		name, ok := call.Fun.(*ast.Ident)
-		if !ok || name.Name != "comparePayload" {
+		if !ok {
+			return true
+		}
+		// The unvalidated core is for the synthetic cases in
+		// goldenpayload_behaviour_test.go only. A rot guard calling it would
+		// bypass isRegisteredGuard entirely, which is the runtime check that
+		// makes the syntactic rule below redundant rather than load-bearing.
+		if name.Name == "comparePayloadFields" {
+			offences = append(offences, describeOffence(fileSet, call,
+				"calls comparePayloadFields, which skips registry validation"))
+			return true
+		}
+		if name.Name != "comparePayload" {
 			return true
 		}
 		// comparePayload(frozen, rendered, <registry entry>)
@@ -229,5 +241,60 @@ func TestRegistryFixturesExistOnDisk(t *testing.T) {
 			t.Errorf("registry entry %q names no fields; comparePayload would compare "+
 				"nothing and the guard would pass unconditionally", guard.fixture)
 		}
+	}
+}
+
+// TestTheDetectorInspectsRealGuardFiles closes the half of round 1's P1b that
+// round 2 showed was still open.
+//
+// TestTheRegistryDetectorActuallyDetects couples the control to the production
+// function, but only ever feeds it SYNTHETIC source. codex round 2 forked the
+// detector to return no offences except for `synthetic_rot_guard_test.go`,
+// planted an inline narrowed guard in a REAL file, and all four focused tests
+// stayed green. A detector keyed on filename passes a control that only shows it
+// synthetic filenames.
+//
+// So this runs the detector over a real *_rot_guard_test.go -- unmodified, then
+// with an offending line spliced in -- and requires it to distinguish them. A
+// fork that special-cases file names cannot satisfy both halves.
+func TestTheDetectorInspectsRealGuardFiles(t *testing.T) {
+	guards, err := filepath.Glob("*_rot_guard_test.go")
+	if err != nil || len(guards) == 0 {
+		t.Fatalf("no real guard files to inspect (err=%v)", err)
+	}
+	real := guards[0]
+
+	clean, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, real, clean, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offences := comparePayloadOffences(fileSet, parsed); len(offences) != 0 {
+		t.Fatalf("the real guard %s is already offending: %v", real, offences)
+	}
+
+	// Splice an offending call into the REAL file's source, keeping its real
+	// name so a filename-keyed detector cannot tell the two apart.
+	// Appended, not prepended: a declaration inserted above the import block
+	// fails to parse, which would fail this test for the wrong reason.
+	offending := string(clean) +
+		"\nfunc splicedOffender() { comparePayload(nil, nil, payloadGuard{fixture: \"x\"}) }\n"
+	if offending == string(clean) {
+		t.Fatal("splice did not apply; this test would pass vacuously")
+	}
+	parsedOffending, err := parser.ParseFile(fileSet, real, offending, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offences := comparePayloadOffences(fileSet, parsedOffending); len(offences) == 0 {
+		t.Errorf("the detector found no offence in %s after an offending call was "+
+			"spliced in. It responds to synthetic source but not to real guard "+
+			"files, so TestEveryRotGuardUsesTheRegistry proves nothing about them.",
+			real)
 	}
 }

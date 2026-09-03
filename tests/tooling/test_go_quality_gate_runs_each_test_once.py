@@ -550,3 +550,23 @@ def test_a_skipped_subtest_does_not_prove_the_parent_is_gated() -> None:
         "the naive predicate must still match here, or this test no longer "
         "demonstrates why the anchoring is needed and someone will remove it"
     )
+
+    # The trailing space does a SECOND job the anchoring alone does not: it
+    # blocks PREFIX matches. Without it, a probe for `TestGate` is satisfied by
+    # `--- SKIP: TestGated`, so an ungated test would be reported as gated
+    # whenever some OTHER test's name extends its own. That is the `26` vs `260`
+    # trap in a different alphabet (lane-ci-flakes).
+    #
+    # Asserted rather than described. Every property this file lost today was
+    # one that had been written down and not checked -- the build-tag boundary,
+    # the `re.S` claim, the gate itself. A comment here would be removed by
+    # whoever next tidies the regex, and nothing would fail.
+    assert not _top_level_result(output, "TestGate", "SKIP"), (
+        "a probe for `TestGate` must not be satisfied by `--- SKIP: TestGated`; "
+        "the trailing space in the pattern is what separates them, and dropping "
+        "it silently restores prefix matching"
+    )
+    assert not _top_level_result(output, "TestOrac", "PASS"), (
+        "prefix matching must be blocked for PASS as well, or a parent's result "
+        "could be attributed to a shorter-named test"
+    )

@@ -129,9 +129,25 @@ jobs:
   build:
     name: Build Image
     needs: [changes]
+    # CHAOS-4921 M2: a push to MAIN always builds, whatever the paths filter says.
+    #
+    # The filter decides whether a change is RELEVANT. On a PR that is the right
+    # question. On main it is the wrong one, because the artefact -- an image for
+    # this commit -- must exist regardless of which files moved, and a skipped
+    # build leaves a commit with no image at all.
+    #
+    # Measured (CHAOS-4921): run 33706407469 for 2d4abbbbb -- the commit carrying
+    # ClickHouse migration 084 -- was cancelled by the fe5f540a9 push, and
+    # fe5f540a9's own run then SKIPPED the image build on this filter. So no image
+    # containing 084 was ever built, and nothing reported an error: one run was
+    # cancelled, the other succeeded having built nothing. The cancellation half is
+    # fixed by the per-SHA concurrency groups (#2149); this is the skip half.
+    #
+    # PRs keep the filter. Nothing here changes what a PR builds.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.runner }}
     # Every matrix leg checks out the SAME ref (it doesn't vary by
@@ -376,9 +392,25 @@ jobs:
   go-build:
     name: Build Go Image
     needs: [changes]
+    # CHAOS-4921 M2: a push to MAIN always builds, whatever the paths filter says.
+    #
+    # The filter decides whether a change is RELEVANT. On a PR that is the right
+    # question. On main it is the wrong one, because the artefact -- an image for
+    # this commit -- must exist regardless of which files moved, and a skipped
+    # build leaves a commit with no image at all.
+    #
+    # Measured (CHAOS-4921): run 33706407469 for 2d4abbbbb -- the commit carrying
+    # ClickHouse migration 084 -- was cancelled by the fe5f540a9 push, and
+    # fe5f540a9's own run then SKIPPED the image build on this filter. So no image
+    # containing 084 was ever built, and nothing reported an error: one run was
+    # cancelled, the other succeeded having built nothing. The cancellation half is
+    # fixed by the per-SHA concurrency groups (#2149); this is the skip half.
+    #
+    # PRs keep the filter. Nothing here changes what a PR builds.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.runner }}
     # Every matrix leg checks out the SAME ref, so they all resolve the

@@ -1,4 +1,9 @@
-# Exact Python 3.13 live-oracle closure from uv.lock.
+# Exact Python 3.14 live-oracle closure from uv.lock. CHAOS-4945: corrected
+# from a stale "3.13" -- go-quality.yml's actions/setup-python pins '3.14',
+# and the frozen corpora's own headers record python_version 3.14.7. Verified
+# directly: installing this file into a 3.13.14 venv made every discoverable
+# corpus fail on stdlib version drift (python_version, unicodedata_version),
+# not just one -- the interpreter mismatch, not a real content divergence.
 # Keep direct imports and their transitives explicit: CI installs this file
 # with --no-deps so an undeclared dependency fails instead of drifting latest.
 amqp==5.3.1

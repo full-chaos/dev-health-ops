@@ -73,8 +73,34 @@ permissions:
   packages: write
 
 concurrency:
-  group: mirror-test-images
-  cancel-in-progress: false
+  # CHAOS-4928: the bare literal below used to be the WHOLE group -- every
+  # push, schedule, pull_request and workflow_dispatch run on this file
+  # shared one slot, repo-wide. Measured live: a dispatch on a feature
+  # branch (introducing CHAOS-4922's Python mirror image, meant to finish
+  # BEFORE that branch's own Tests run pulls it -- see the header above) sat
+  # pending for 2m23s and was evicted by an unrelated pull_request run one
+  # second after a third event landed. `cancel-in-progress: false` only
+  # protects a RUNNING job; GitHub still allows only one PENDING run per
+  # group, so a third event bumps a second, still-pending one -- the same
+  # mechanism CHAOS-4921 round 1 hit on docker-images.yml.
+  #
+  # push (to main) and schedule keep sharing ONE group deliberately: this
+  # job is idempotent and cumulative (it re-derives and mirrors everything
+  # CI currently needs from the tree at run time), so losing an UNRELATED
+  # pending run there is cheap -- the next one re-covers it. pull_request
+  # and workflow_dispatch are the opposite: each carries branch-specific
+  # intent that a later, unrelated event must not evict, so each gets its
+  # own group, isolated from the shared slot and from every other PR/dispatch.
+  #
+  # Two different refs CAN now publish `imagetools create` to the same
+  # destination tag concurrently. That is benign, not reintroduced risk:
+  # every copy is digest-preserving (see "DIGESTS ARE PRESERVED" above) and
+  # every consumer in this repo pins by `tag@digest`, never by tag alone --
+  # both manifests exist by digest regardless of which write wins the
+  # mutable tag pointer. A consumer that ever resolved a mirrored image by
+  # tag alone would be the defect, not this concurrency change.
+  group: mirror-test-images-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.sha) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   mirror:

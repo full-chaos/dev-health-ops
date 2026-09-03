@@ -36,7 +36,15 @@ import (
 // knows it is a deliberate flip rather than a regression.
 
 const (
-	loaderOrgID       = "org-loader-parity"
+	loaderOrgID = "org-loader-parity"
+	// A SECOND tenant, carrying the SAME team_id on the SAME days.
+	//
+	// Without it, `orgClause()` can be deleted outright and every oracle still
+	// passes: the corpus's fake client ignores query parameters, and a
+	// single-org fixture cannot tell a filtered read from an unfiltered one.
+	// That is a cross-tenant data-read regression, so the fixture has to make
+	// the org predicate load-bearing.
+	loaderOtherOrgID  = "org-loader-other-tenant"
 	loaderTeamA       = "team-alpha"
 	loaderTeamB       = "team-beta"
 	loaderWindowStart = "2026-08-01"
@@ -301,16 +309,27 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	// work_item_metrics_daily: wip/throughput and cycle time, per team.
 	// The (day, provider, work_scope_id) triple is the argMax key; the
 	// superseded row carries an absurd value on an earlier computed_at.
-	// TWO scopes on one day, deliberately.
+	// A GRID on one day, not a diagonal.
 	//
 	// The inner query dedups per (day, provider, work_scope_id) and the outer
 	// sums across scopes. A fixture that pins both dimensions to one value
 	// cannot tell that apart from a bare `GROUP BY day`, which would take one
 	// scope's latest values and drop the other -- and every assertion would
 	// still pass. Day 2026-08-02 for team-alpha therefore carries scope-1 and
-	// scope-2, on two different providers, with different values AND its own
-	// superseded row, so the per-scope argMax and the cross-scope sum are both
-	// load-bearing.
+	// three cells of the (provider, work_scope_id) grid: (github, scope-1),
+	// (github, scope-2) and (jira, scope-1).
+	//
+	// A DIAGONAL is not enough, and the first version of this fixture was one:
+	// with only (github, scope-1) and (jira, scope-2), both coordinates vary
+	// TOGETHER, so `GROUP BY day, provider` and `GROUP BY day, work_scope_id`
+	// each still form two groups and give the same answer as the correct
+	// composite key. Dropping either coordinate was undetectable.
+	//
+	// The grid separates them: github now spans two scopes, so dropping
+	// work_scope_id collapses them; scope-1 now spans two providers, so
+	// dropping provider collapses those. Each cell also keeps its own
+	// superseded row where it has one, so the per-cell argMax stays
+	// load-bearing too.
 	for _, seed := range []struct {
 		team           string
 		day            string
@@ -322,8 +341,9 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	}{
 		{loaderTeamA, "2026-08-02", "github", "scope-1", 3, 5, 10.5, "2026-08-03 00:00:00"},
 		{loaderTeamA, "2026-08-02", "github", "scope-1", 999, 999, 999.0, "2026-08-02 00:00:00"}, // superseded
-		{loaderTeamA, "2026-08-02", "jira", "scope-2", 7, 2, 6.5, "2026-08-03 00:00:00"},
-		{loaderTeamA, "2026-08-02", "jira", "scope-2", 555, 555, 555.0, "2026-08-02 00:00:00"}, // superseded
+		{loaderTeamA, "2026-08-02", "github", "scope-2", 7, 2, 6.5, "2026-08-03 00:00:00"},
+		{loaderTeamA, "2026-08-02", "github", "scope-2", 555, 555, 555.0, "2026-08-02 00:00:00"}, // superseded
+		{loaderTeamA, "2026-08-02", "jira", "scope-1", 4, 1, 8.25, "2026-08-04 00:00:00"},        // distinct computed_at: no argMax tie under a collapsing mutant
 		{loaderTeamA, "2026-08-05", "github", "scope-1", 7, 2, 14.25, "2026-08-06 00:00:00"},
 		{loaderTeamA, "2026-08-09", "github", "scope-1", 9, 1, 20.0, "2026-08-10 00:00:00"},
 		{loaderTeamB, "2026-08-02", "github", "scope-1", 1, 8, 4.0, "2026-08-03 00:00:00"},
@@ -338,6 +358,53 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 			mustDate(t, seed.day), seed.provider, seed.scope, seed.team,
 			uint32(seed.completed), uint32(seed.wip),
 			seed.cycle, mustTimestamp(t, seed.computedAt), loaderOrgID)
+	}
+
+	// The SAME team_id and days under a DIFFERENT org, with values chosen to be
+	// impossible to confuse with this tenant's.
+	//
+	// This is what makes `orgClause()` load-bearing. Delete the org predicate
+	// and Go aggregates both tenants while Python keeps only the requested one
+	// -- a cross-tenant read. Seeded into work_item_metrics_daily (team-scoped,
+	// so the leak needs the org predicate to be the only thing separating them)
+	// AND repo_metrics_daily, where org is the ONLY scope the query has at all,
+	// which makes it the more exposed of the two.
+	for _, seed := range []struct {
+		day            string
+		provider       string
+		scope          string
+		wip, completed int
+		computedAt     string
+	}{
+		{"2026-08-02", "github", "scope-1", 400, 700, "2026-08-03 00:00:00"},
+		{"2026-08-05", "github", "scope-1", 500, 800, "2026-08-06 00:00:00"},
+	} {
+		exec(`INSERT INTO work_item_metrics_daily
+			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
+			 items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
+			 wip_unassigned_end_of_day, cycle_time_p50_hours, bug_completed_ratio,
+			 story_points_completed, computed_at, org_id)
+			VALUES (?, ?, ?, ?, '', 0, ?, 0, 0, ?, 0, 77.5, 0, 0, ?, ?)`,
+			mustDate(t, seed.day), seed.provider, seed.scope, loaderTeamA,
+			uint32(seed.completed), uint32(seed.wip),
+			mustTimestamp(t, seed.computedAt), loaderOtherOrgID)
+	}
+	for _, seed := range []struct {
+		repo        string
+		day         string
+		p75, rework float64
+		computedAt  string
+	}{
+		{"33333333-3333-3333-3333-333333333333", "2026-08-03", 900.0, 0.99, "2026-08-04 00:00:00"},
+	} {
+		exec(`INSERT INTO repo_metrics_daily
+			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
+			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
+			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
+			 change_failure_rate, computed_at, org_id)
+			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
+			mustTimestamp(t, seed.computedAt), loaderOtherOrgID)
 	}
 
 	// repo_metrics_daily: latency and rework. NO team column -- this is the

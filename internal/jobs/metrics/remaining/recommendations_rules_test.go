@@ -74,6 +74,7 @@ type goldenSnapshot struct {
 
 type goldenCase struct {
 	Name     string                   `json:"name"`
+	Now      string                   `json:"now"`
 	Snapshot goldenSnapshot           `json:"snapshot"`
 	Results  map[string]*goldenResult `json:"results"`
 }
@@ -274,7 +275,6 @@ func TestSuccessCriteriaMatchTheReference(t *testing.T) {
 // +0.0 with -0.0, which round() deliberately keeps apart.
 func TestRuleEvaluatorsMatchTheReference(t *testing.T) {
 	document := loadRulesGolden(t)
-	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 
 	var compared, fired int
 	firedPerRule := map[string]int{}
@@ -282,6 +282,18 @@ func TestRuleEvaluatorsMatchTheReference(t *testing.T) {
 
 	for _, testCase := range document.Cases {
 		snapshot := decodeSnapshot(t, testCase.Snapshot)
+		// Each case is evaluated at ITS OWN instant, read from the corpus.
+		//
+		// A single shared `now` would pin computed_at's VALUE without pinning
+		// that the port PROPAGATES its argument: with one instant everywhere,
+		// hard-coding `ComputedAt: <that instant>` in the evaluators passes all
+		// 2185 comparisons. Verified -- that mutation survived before this
+		// change and is killed by it.
+		now, nowErr := time.Parse(time.RFC3339, testCase.Now)
+		if nowErr != nil {
+			t.Fatalf("case %q: corpus `now` %q is unparseable: %v",
+				testCase.Name, testCase.Now, nowErr)
+		}
 
 		for _, evaluator := range orderedRuleEvaluators {
 			want, ok := testCase.Results[evaluator.id]

@@ -30,7 +30,7 @@ import struct
 import sys
 import unicodedata
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -45,7 +45,25 @@ TEAM_ID = "team-70d529e0"
 ORG_ID = "org-70d529e0"
 WINDOW_START = date(2026, 8, 1)
 WINDOW_END = date(2026, 9, 1)
-NOW = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
+# The BASE instant. Each case gets its OWN `now`, derived below.
+#
+# A single frozen instant shared by every case pins the field's VALUE but not
+# the port's PROPAGATION of its argument: with one instant everywhere,
+# hard-coding `ComputedAt: <that instant>` in the Go evaluators passes all 2185
+# comparisons -- demonstrated by a codex round, reproduced here. Varying `now`
+# per case is what makes the assertion test the wiring rather than the constant.
+NOW_BASE = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def now_for(index: int) -> datetime:
+    """A distinct evaluation instant per case, spread across days and times.
+
+    Deliberately not a fixed offset: an hour-and-minute stride keeps the date
+    component moving too, so a mutant propagating only the date, or only the
+    time, diverges as well.
+    """
+    return NOW_BASE + timedelta(days=index * 3, hours=index * 7, minutes=index * 11)
+
 
 NAN = float("nan")
 INF = float("inf")
@@ -423,12 +441,20 @@ def build_document() -> dict:
     cases = build_cases()
 
     entries = []
-    for name, snap in cases:
+    for index, (name, snap) in enumerate(cases):
+        case_now = now_for(index)
         results = {}
         for rule_id, evaluator in RULE_EVALUATORS.items():
-            results[rule_id] = encode_result(evaluator(snap, NOW))
+            results[rule_id] = encode_result(evaluator(snap, case_now))
         entries.append(
-            {"name": name, "snapshot": encode_snapshot(snap), "results": results}
+            {
+                "name": name,
+                # The instant this case was evaluated AT, so the Go side feeds
+                # the identical argument rather than a shared constant.
+                "now": case_now.isoformat(),
+                "snapshot": encode_snapshot(snap),
+                "results": results,
+            }
         )
 
     # Success criteria are module-level constants built at import time from the

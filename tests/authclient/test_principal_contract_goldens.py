@@ -343,6 +343,17 @@ def test_strict_pattern_anchoring_fails_closed_on_a_shape_it_cannot_rewrite() ->
     mistake, and the unrecognised shape here is precisely the one whose
     semantics are in question.
     """
+    # CodeQL py/regex/unmatchable-dollar (alert 2224) fires on the literal
+    # below and is CORRECT about the string: the `$` at offset 2 can never
+    # match. That is the entire point -- it is the malformed input this
+    # refusal test feeds, and `strictly_anchored` raises before anything is
+    # compiled as a matcher. Dismissed at the GitHub code-scanning API level
+    # with that justification, NOT with an inline comment: inline
+    # `# lgtm[...]` / `# codeql[...]` markers do not suppress GitHub CodeQL
+    # (legacy LGTM.com-only syntax; same established pattern as
+    # src/dev_health_ops/api/internal/worker_metrics.py:2436). If this fixture
+    # is ever reworded, the alert returns and must be dismissed afresh --
+    # a dismissal is bound to the alert, not to the file.
     with pytest.raises(ContractError):
         strictly_anchored(r"^a$b$")
 

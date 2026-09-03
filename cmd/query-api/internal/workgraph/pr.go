@@ -17,6 +17,34 @@ import (
 // 36-character UUID-shaped repo id, one of four separators, then a decimal
 // PR number, anchored on both ends the same way Python's `.match` plus a
 // `$`-terminated pattern is.
+//
+// KNOWN DIVERGENCE (codex round 1 on #2190, P2, ARGUED and verified via a
+// real `python3` run): Python's bare (str-pattern) `\d` matches every
+// Unicode decimal-digit codepoint (category Nd), not just ASCII 0-9, and
+// Python's `int()` accepts the same codepoints -- so Python's parse_pr_id
+// resolves an id ending in e.g. `#pr١٢` (Arabic-Indic digits) to number
+// 12. Go's RE2 `\d` is ASCII-only with no Unicode-digit mode, so this
+// pattern rejects that id outright and ParsePRDetailID returns ok=false --
+// the Pr resolver then returns nil without ever querying the existing PR,
+// where Python would have found and returned it.
+//
+// NOT fixed here, deliberately, same "capability gap, not a vulnerability"
+// convention schema.resolvers.go's Analytics resolver doc comment already
+// establishes for a different divergence: this canonical id is ALWAYS
+// server-constructed with `fmt.Sprintf("%s#pr%d", repoID, number)`
+// (schema.resolvers.go) or Python's equivalent f-string -- both use
+// ASCII digits exclusively, so no real PR id ever contains a non-ASCII
+// digit. The divergence is reachable only via a hand-crafted, adversarial
+// client request, and Go's direction (reject something Python would
+// accept) is the safe one for a parser deciding what identifies a
+// resource: nothing leaks, it just doesn't resolve. Replicating Python's
+// behavior exactly would need a hand-rolled Unicode decimal-digit-value
+// table (Go's standard library has no such lookup, and RE2 cannot express
+// a `\d`-equivalent Unicode class match-and-convert in one step) for a
+// case with no legitimate traffic. TestParsePRDetailID's
+// "unicode-digit id is rejected (KNOWN DIVERGENCE from Python)" case pins
+// this current, safe behavior so a future change to this pattern doesn't
+// silently regress it into an unnoticed acceptance either way.
 var prDetailIDPattern = regexp.MustCompile(`^([0-9a-fA-F-]{36})(?:#pr|#|:|/pr/)(\d+)$`)
 
 // ParsePRDetailID parses the query-api `Query.pr` `id` argument into a
@@ -25,6 +53,8 @@ var prDetailIDPattern = regexp.MustCompile(`^([0-9a-fA-F-]{36})(?:#pr|#|:|/pr/)(
 // Returns ok=false for anything that doesn't match -- same as Python's
 // `None` return, which the Pr resolver treats as "no such PR" (a nil
 // result, no GraphQL error), never a parse error surfaced to the client.
+// See prDetailIDPattern's own doc comment for a known, deliberate,
+// safe-direction divergence on non-ASCII decimal digits.
 func ParsePRDetailID(id string) (repoID string, number int, ok bool) {
 	m := prDetailIDPattern.FindStringSubmatch(strings.TrimSpace(id))
 	if m == nil {

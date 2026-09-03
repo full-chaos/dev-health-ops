@@ -26,6 +26,14 @@ func TestParsePRDetailID(t *testing.T) {
 		{"non-hex repo id", strings.Repeat("g", 36) + "#pr1", "", 0, false},
 		{"empty string", "", "", 0, false},
 		{"trailing garbage after number", repo + "#pr42x", "", 0, false},
+		// KNOWN DIVERGENCE from Python (codex round 1 on #2190, P2): Python's
+		// bare `\d` matches Unicode decimal digits too, and `int()` accepts
+		// them, so `#pr١٢` (Arabic-Indic for "12") resolves to 12 there.
+		// Go's RE2 `\d` is ASCII-only -- this case pins the current, safe
+		// (reject rather than silently diverge) Go behavior so a future
+		// pattern change doesn't regress it unnoticed either way. See
+		// prDetailIDPattern's own doc comment for the full rationale.
+		{"unicode-digit id is rejected (KNOWN DIVERGENCE from Python)", repo + "#pr١٢", "", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gotRepo, gotNumber, gotOK := ParsePRDetailID(tc.id)

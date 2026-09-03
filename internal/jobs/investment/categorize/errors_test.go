@@ -28,6 +28,22 @@ func TestSanitizeMessageRedactsCredentials(t *testing.T) {
 		// codex round 3 (#2178, bigboy) P1: "client_secret" (an OAuth2
 		// parameter name) was not in the label word list at all.
 		{"client_secret field", "http 403: client_secret=third-shape-secret", "third-shape-secret"},
+
+		// lane-4441 peer read (#2178, 2026-09-03): the enumerated-label
+		// design's own failure class, closed by the structural rewrite.
+		// (1) an Authorization header's SCHEME word alone was redacted
+		// ("Basic"), leaving the credential itself in the message.
+		{"authorization basic scheme", "http 401: Authorization: Basic YWxhZGRpbjpvcGVuc2VzYW1l==", "YWxhZGRpbjpvcGVuc2VzYW1l"},
+		{"authorization bearer scheme", "http 401: Authorization: Bearer sk-realtoken1234567890abcdef", "sk-realtoken1234567890abcdef"},
+		// (2) any label OUTSIDE the fixed compound-word list leaked
+		// entirely -- "webhook_secret" contains "secret" as a substring,
+		// which the structural (a) pattern now matches directly.
+		{"webhook_secret outside old fixed list", "http 403: webhook_secret=sk_live_4242424242424242424242", "sk_live_4242424242424242424242"},
+		// A label with NO recognized keyword at all -- must still be
+		// caught by the label-INDEPENDENT token-shape patterns (c)/(d).
+		{"unlabeled token-shaped value", "http 403: rotated_value=AbCdEfGhIjKlMnOpQrStUvWxYz012345", "AbCdEfGhIjKlMnOpQrStUvWxYz012345"},
+		// A known provider key-prefix shape with NO label at all.
+		{"github PAT with no label", "clone failed with github_pat_11ABCDEFG0123456789abcdefghijklmnop", "github_pat_11ABCDEFG0123456789abcdefghijklmnop"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

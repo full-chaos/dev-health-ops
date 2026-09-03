@@ -55,27 +55,51 @@ func (e *llmError) Error() string {
 
 func (e *llmError) Unwrap() error { return e.cause }
 
+// secretPatterns replaces an ENUMERATED-LABEL approach (round 1-3's own
+// history: "api_key" widened to "api key", then to no-punctuation, then
+// "client_secret" added as its own alternative -- each fix closing one
+// specific shape while the underlying design, a fixed list of exact
+// compound labels, kept producing new gaps) with a STRUCTURAL one, per
+// lane-4441's peer read of #2178 (2026-09-03): (b) an Authorization-header
+// value is redacted as ONE unit (scheme word + credential, base64 padding
+// included), not just its first space-separated token; (a) the label
+// match is a case-insensitive SUBSTRING on a short list of credential
+// words, not a whole compound label, so "webhook_secret" (containing
+// "secret") is covered without needing its own alternative; (c)/(d) catch
+// a credential by its own SHAPE -- a known provider key prefix, or any
+// long opaque base64/hex-looking run -- independent of any label at all,
+// since a raw provider error body is not guaranteed to label its own
+// secret.
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}`),
-	// codex round 1 (#2178) P1: "bearer\s+" alone missed a colon/equals
-	// separator ("Bearer: <token>", "Bearer=<token>") -- widened to any run
-	// of whitespace/`:`/`=` between the word and the token.
-	regexp.MustCompile(`(?i)(bearer[\s:=]+)[A-Za-z0-9._~+/=-]{8,}`),
-	// codex round 1 (#2178) P1: "api[_-]?key" only allowed a SINGLE
-	// underscore/hyphen between "api" and "key", so "api key: <secret>"
-	// (a literal space, as a real 403 body used) reached this pattern
-	// unredacted. Widened to any run of whitespace/underscore/hyphen.
-	// codex round 2 (#2178, bigboy) P1: the label/value separator itself
-	// still REQUIRED a literal `:`/`=` ("\s*[:=]\s*"), so a body reading
-	// "api key <secret>" -- whitespace only, no punctuation -- still
-	// passed through. Widened the separator to "any run of
-	// whitespace/`:`/`=`" so a bare space alone is sufficient.
-	// codex round 3 (#2178, bigboy) P1: "client_secret" (an OAuth2
-	// parameter name, distinct from "api_key"/"token") was not in the
-	// label word list at all, so `client_secret=<secret>` reached the
-	// generic fallback unredacted regardless of separator width. Added as
-	// its own label alternative.
-	regexp.MustCompile(`(?i)((?:api[\s_-]*key|client[\s_-]*secret|authorization|x-api-key|token)[\s:=]+)['"]?[^'"\s,;}]+`),
+	// (b) Authorization schemes. Applied FIRST: redacting the whole
+	// scheme+credential here means pattern (a) below, which also matches
+	// the bare word "authorization", only ever sees the already-redacted
+	// text on its second pass (harmless -- re-matching "authorization:
+	// <redacted>" just redacts it again, a no-op).
+	regexp.MustCompile(`(?i)(authorization[\s:=]+)['"]?[A-Za-z0-9+/_.~-]+=*(?:\s+[A-Za-z0-9+/_.~-]+=*)?`),
+
+	// (a) Generic credential-label SUBSTRING match -- deliberately not a
+	// whole-word/whole-label match, so "api_key", "x-api-key",
+	// "webhook_secret", "client_secret" all match via the bare keyword
+	// they contain, without an enumerated compound-label list. Any run
+	// of whitespace/`:`/`=` as the separator (round 1/2's own fixes,
+	// preserved).
+	regexp.MustCompile(`(?i)((?:secret|token|key|password|passwd|credential|authorization|signature)[\s:=]+)['"]?[^'"\s,;}]+`),
+
+	// (c) Known provider key-prefix shapes, independent of any label --
+	// covers a raw key appearing in an error body with nothing labeling
+	// it at all.
+	regexp.MustCompile(`\b(?:sk-|sk_live_|sk_test_|ghp_|gho_|github_pat_|xox[a-zA-Z0-9]+-|AKIA|AIza)[A-Za-z0-9_-]{6,}`),
+
+	// (d) Any long, opaque base64/hex-shaped run -- the broadest net,
+	// deliberately: a credential shape this list has never seen before
+	// still gets caught if it is long and opaque enough to plausibly BE
+	// one. Accepted tradeoff, stated once here rather than at each
+	// finding: this can also redact a long hash or a dash-free UUID;
+	// over-redaction is the safe failure mode for a sanitizer whose job
+	// is preventing a leak, under-redaction is the one that already
+	// shipped three P1s.
+	regexp.MustCompile(`\b[A-Za-z0-9+/_-]{24,}={0,2}\b`),
 }
 
 // sanitizeMessage ports errors.py's _sanitize_message: strip newlines,

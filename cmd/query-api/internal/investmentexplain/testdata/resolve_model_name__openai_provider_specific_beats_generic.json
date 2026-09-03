@@ -1,0 +1,12 @@
+{
+  "case": "openai_provider_specific_beats_generic",
+  "input": {
+    "env": {
+      "LLM_MODEL": "generic",
+      "LLM_MODEL_OPENAI": "specific"
+    },
+    "model": null,
+    "provider": "openai"
+  },
+  "result": "specific"
+}

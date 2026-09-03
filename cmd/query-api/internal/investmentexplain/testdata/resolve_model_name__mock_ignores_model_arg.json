@@ -1,0 +1,9 @@
+{
+  "case": "mock_ignores_model_arg",
+  "input": {
+    "env": {},
+    "model": "whatever",
+    "provider": "mock"
+  },
+  "result": "mock"
+}

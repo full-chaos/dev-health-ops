@@ -1,0 +1,9 @@
+{
+  "case": "explicit_model_wins_openai",
+  "input": {
+    "env": {},
+    "model": "gpt-5-custom",
+    "provider": "openai"
+  },
+  "result": "gpt-5-custom"
+}

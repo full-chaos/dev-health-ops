@@ -1,0 +1,9 @@
+{
+  "case": "openai_no_env_falls_to_default",
+  "input": {
+    "env": {},
+    "model": null,
+    "provider": "openai"
+  },
+  "result": "gpt-5-mini"
+}

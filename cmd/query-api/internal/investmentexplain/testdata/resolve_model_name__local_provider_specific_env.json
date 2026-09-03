@@ -1,0 +1,11 @@
+{
+  "case": "local_provider_specific_env",
+  "input": {
+    "env": {
+      "LLM_MODEL_LOCAL": "llama-from-env"
+    },
+    "model": null,
+    "provider": "local"
+  },
+  "result": "llama-from-env"
+}

@@ -1,0 +1,9 @@
+{
+  "case": "local_no_env_falls_to_default",
+  "input": {
+    "env": {},
+    "model": null,
+    "provider": "local"
+  },
+  "result": "llama3.2"
+}

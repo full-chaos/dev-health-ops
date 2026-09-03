@@ -75,20 +75,7 @@ func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
-	var command *exec.Cmd
-	switch filepath.Base(python) {
-	case "python":
-		command = exec.CommandContext(ctx, "python", "-c", applyScript, dsn)
-	case "python3":
-		command = exec.CommandContext(ctx, "python3", "-c", applyScript, dsn)
-	default:
-		t.Fatalf("chschema: unsupported Python executable %q", python)
-	}
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PATH="+filepath.Dir(python)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"),
-	)
+	command := pythonCommand(ctx, python, dsn, root)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("chschema: applying the real migration chain failed: %v\n%s", err, output)
@@ -120,6 +107,78 @@ func repoRoot() (string, error) {
 		}
 		directory = parent
 	}
+}
+
+// pythonCommand builds the migration-runner command from an ALREADY-RESOLVED
+// interpreter path.
+//
+// It passes `python` itself rather than a bare "python"/"python3" literal, and
+// that distinction is the whole point. exec.CommandContext resolves a bare name
+// with LookPath against the PARENT process's PATH, at construction time.
+// Setting command.Env afterwards changes the CHILD's environment and cannot
+// affect how the executable is found -- so the PATH entry below was never able
+// to make a bare name resolvable, and the previous code worked only on hosts
+// where `python` already happened to be on PATH.
+//
+// It is not on PATH on Ubuntu, which ships `python3` only. Every chschema-based
+// integration test there died with
+//
+//	chschema: applying the real migration chain failed:
+//	exec: "python": executable file not found in $PATH
+//
+// while pythonBinary had already resolved a perfectly good absolute path one
+// line earlier and the switch discarded it.
+//
+// The basename switch is gone with it. It only ever validated the NAME, and it
+// rejected every interpreter not called exactly `python` or `python3` -- so
+// DEV_HEALTH_PYTHON, which pythonBinary honours, was accepted there and then
+// refused here for anything like `python3.12`, a uv-managed interpreter, or a
+// wrapper script. An override the code accepts and then rejects is worse than
+// one it does not offer.
+//
+// The PATH entry is KEPT because it is still correct for the child process
+// itself (anything the migration runner shells out to), and is now guarded so a
+// bare-name override cannot prepend "." to the child's PATH.
+func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
+	// The interpreter path is non-static BY DESIGN, and making it static is
+	// exactly the bug this function exists to fix: a hard-coded "python" is
+	// unresolvable on any host that ships only python3.
+	//
+	// Why it is not a code-injection path here. `python` comes from
+	// pythonBinary(): the DEV_HEALTH_PYTHON environment variable, else
+	// <root>/.venv/bin/python, else exec.LookPath("python3"). The env var is a
+	// deliberate developer-facing knob for choosing an interpreter, set by
+	// whoever is already running the test binary -- it is not request data, not
+	// file content, and not attacker-reachable. Anyone able to set it can
+	// already run arbitrary code as that user by running `go test` at all.
+	//
+	// There is no shell: exec.CommandContext execs directly, so word splitting
+	// and metacharacter interpretation do not apply. The remaining argv is
+	// fully static apart from the DSN.
+	//
+	// Reachability: this package is test support. Its only non-test importer is
+	// internal/testsupport/oraclecompare, which is also test support; no
+	// production binary links it. (Note this is a WEAKER claim than
+	// internal/testsupport/computeparity makes for the same rule -- that one is
+	// importable only from _test.go files, and its argv comes from checked-in
+	// test code rather than an environment variable. Stating the difference
+	// rather than reusing its wording.)
+	//
+	// The suppression must sit on the line DIRECTLY above the finding --
+	// Semgrep does not scan back through an intervening comment block, which is
+	// why this rationale is above and the pragma is flush against the call.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
+	command := exec.CommandContext(ctx, python, "-c", applyScript, dsn)
+	command.Dir = root
+	environment := os.Environ()
+	if filepath.IsAbs(python) {
+		environment = append(environment,
+			"PATH="+filepath.Dir(python)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+	environment = append(environment,
+		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"))
+	command.Env = environment
+	return command
 }
 
 // pythonBinary prefers the checked-out virtualenv, which is what the live

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -20,7 +21,7 @@ func (linearDerivedEngineStub) Derive(
 	githubWorkItemRows,
 	time.Time,
 	time.Time,
-	githubWorkItemDerivationContext,
+	teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	return map[string][]json.RawMessage{
 		"issue_type_metrics_daily":         {},

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -52,21 +53,29 @@ type goldenStats struct {
 }
 
 // TestBuildComponentsMatchesFrozenPythonGoldenExhaustively is the parity proof
-// for CHAOS-4441's shared grouping core.
+// for CHAOS-4441's shared grouping core, adapted by CHAOS-4771, run with
+// partitionHubs=true -- the FIXED behaviour, not what is live in production
+// until the WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED flip (see
+// BuildComponents's doc). See
+// TestBuildComponentsMatchesFrozenPythonGoldenExhaustivelyLegacyDeletePath
+// below for the partitionHubs=false counterpart -- what actually runs today.
 //
-// It compares EVERY component and EVERY field -- id, node set, edge bundle,
-// component order, and the split's three counters -- not a hand-picked subset.
-// A subset assertion here would be a test that cannot fail in the way that
-// matters: the whole hazard is that one component out of 1,601 groups
-// differently and silently re-addresses rows in another table
-// (backfill.py:113-127). See TestGoldenComparisonCatchesPlantedDefects for the
-// falsification of this comparator itself.
+// It compares EVERY golden component -- id, node set, edge bundle -- against
+// live Go output, plus the split's counters and the cap. A subset assertion
+// here would be a test that cannot fail in the way that matters: the whole
+// hazard is that one component out of 1,601 groups differently and silently
+// re-addresses rows in another table (backfill.py:113-127). See
+// TestGoldenComparisonCatchesPlantedDefects for the falsification of this
+// comparator itself.
+//
+// CHAOS-4771 changed what "matches" means: see diffAgainstGoldenPartitioned's
+// doc for why the comparison is now keyed by work_unit_id instead of position.
 func TestBuildComponentsMatchesFrozenPythonGoldenExhaustively(t *testing.T) {
 	edges, golden := loadGoldenPair(t)
 
 	stats := &BuildStats{}
 	maxComponentNodes := golden.MaxComponentNodes
-	live := BuildComponents(edges, &maxComponentNodes, stats)
+	live := BuildComponents(edges, &maxComponentNodes, true, stats)
 
 	if golden.SourceEdges != goldenEdgesFixture {
 		t.Fatalf(
@@ -74,8 +83,34 @@ func TestBuildComponentsMatchesFrozenPythonGoldenExhaustively(t *testing.T) {
 			golden.SourceEdges, goldenEdgesFixture,
 		)
 	}
-	if len(live) != len(golden.Components) {
-		t.Fatalf("component count: python %d, go %d", len(golden.Components), len(live))
+
+	liveComponents := make([]goldenComponent, len(live))
+	for position, component := range live {
+		liveComponents[position] = toGoldenComponent(component)
+	}
+
+	for _, failure := range diffAgainstGoldenPartitioned(golden, liveComponents, *stats, maxComponentNodes) {
+		t.Error(failure)
+	}
+}
+
+// TestBuildComponentsMatchesFrozenPythonGoldenExhaustivelyLegacyDeletePath is
+// the partitionHubs=false counterpart above: this is the exact pre-CHAOS-4771
+// comparator (restored, not weakened), proving the flag's DEFAULT still
+// bit-matches the LIVE Python materializer -- the property the flag-gate
+// exists to protect until CHAOS-4924 cutover flips it.
+func TestBuildComponentsMatchesFrozenPythonGoldenExhaustivelyLegacyDeletePath(t *testing.T) {
+	edges, golden := loadGoldenPair(t)
+
+	stats := &BuildStats{}
+	maxComponentNodes := golden.MaxComponentNodes
+	live := BuildComponents(edges, &maxComponentNodes, false, stats)
+
+	if golden.SourceEdges != goldenEdgesFixture {
+		t.Fatalf(
+			"golden was generated from %q but this test feeds it %q -- the pair is mismatched",
+			golden.SourceEdges, goldenEdgesFixture,
+		)
 	}
 
 	liveComponents := make([]goldenComponent, len(live))
@@ -83,7 +118,7 @@ func TestBuildComponentsMatchesFrozenPythonGoldenExhaustively(t *testing.T) {
 		liveComponents[position] = toGoldenComponent(component)
 	}
 
-	for _, failure := range diffAgainstGolden(golden, liveComponents, *stats, maxComponentNodes) {
+	for _, failure := range diffAgainstGoldenLegacyDelete(golden, liveComponents, *stats, maxComponentNodes) {
 		t.Error(failure)
 	}
 }
@@ -93,8 +128,256 @@ func TestBuildComponentsMatchesFrozenPythonGoldenExhaustively(t *testing.T) {
 // comparator only asserted against a passing input is itself untested -- the
 // differential-oracle lesson this repo already paid for (CHAOS-3033).
 //
+// CHAOS-4771 KEYS THE EXISTENCE/CONTENT CHECK BY work_unit_id, NOT RAW
+// POSITION -- a deliberate change from the pre-fix comparator, not a loosening
+// of it. Before this fix, live and golden were produced by the IDENTICAL
+// algorithm, so positional equality and content equality were the same claim.
+// Now that removeHubs partitions instead of deletes, live carries extra
+// singleton components that the golden's own sorted-node-tuple ordering
+// (components.py:301-303) can insert ANYWHERE in the list -- a single extra
+// element near the front shifts every following RAW index, so comparing raw
+// positions would report thousands of "mismatches" that are really just index
+// drift, hiding any real defect in the noise.
+//
+// CORRECTED (codex round 1 on #2172, P2): an earlier version of this comment
+// went further and dropped order-checking ENTIRELY, which was an
+// overcorrection -- component order IS still load-bearing (partitioned
+// materialization dispatches numeric component_indexes, chquery.go:24), and
+// throwing the whole invariant away to dodge the singleton-shift problem let a
+// real reordering bug (e.g. two components swapped) pass silently. What
+// actually survives the fix, provably: BuildComponents's final sort is ONE
+// stable total order over the combined (survivors + new singletons) list, so
+// two survivors' RELATIVE order to each other cannot flip just because
+// singletons were interleaved between them -- only an actual reordering bug
+// can do that. So this comparator checks order too, on the golden-matching
+// SUBSET of live (singletons excluded, since they have no golden position to
+// compare against) -- see the ORDER check below, keyed by filtering live to
+// golden's ids while preserving live's own sequence, not by raw index.
+//
+// The invariant that survives the fix, unconditionally: removeHubs's
+// hub-selection loop and the reduced active graph it recomputes each round are
+// BYTE-FOR-BYTE the pre-fix algorithm (see components.go) -- only what happens
+// to a chosen hub changed. So every golden component must still appear,
+// IDENTICALLY and in golden's relative ORDER, somewhere in live, and live's
+// only permitted extra output is one singleton fragment per node the golden's
+// own dropped_nodes counted.
+//
 // Returns one message per divergence; empty means parity.
-func diffAgainstGolden(
+func diffAgainstGoldenPartitioned(
+	golden goldenDocument, live []goldenComponent, stats BuildStats, maxComponentNodes int,
+) []string {
+	failures := make([]string, 0)
+
+	liveByID := make(map[string]goldenComponent, len(live))
+	for _, component := range live {
+		liveByID[component.WorkUnitID] = component
+	}
+	goldenByID := make(map[string]struct{}, len(golden.Components))
+	for _, component := range golden.Components {
+		goldenByID[component.WorkUnitID] = struct{}{}
+	}
+
+	missing := 0
+	for _, expected := range golden.Components {
+		got, ok := liveByID[expected.WorkUnitID]
+		if ok && reflect.DeepEqual(expected, got) {
+			continue
+		}
+		missing++
+		if missing <= 8 {
+			renderedGot := "<absent from live>"
+			if ok {
+				renderedGot = renderForDiff(got)
+			}
+			failures = append(failures, fmt.Sprintf(
+				"golden component %s missing or changed:\npython: %s\ngo:     %s",
+				expected.WorkUnitID, renderForDiff(expected), renderedGot,
+			))
+		}
+	}
+	if missing > 8 {
+		failures = append(failures, fmt.Sprintf("... and %d further missing/changed golden components", missing-8))
+	}
+
+	// ORDER, among the golden-matching subset of live (codex round 1 on #2172,
+	// P2): the earlier version of this comparator dropped position-checking
+	// entirely, reasoning that the new singleton fragments can sort anywhere
+	// and shift every following index -- true, but it threw out a real
+	// invariant along with the shifting one. Component order is load-bearing:
+	// partitioned materialization dispatches numeric component_indexes
+	// (chquery.go:24) and each chunk worker re-derives the list, so index N
+	// must name the same component on both planes. What survives the fix:
+	// survivors' relative order to EACH OTHER cannot flip without an actual
+	// reordering bug, since golden's own order is the independent oracle.
+	// CORRECTED again (codex round 2 on #2172, P2): the "global sort" claim
+	// above was wrong -- BuildComponents's sort (components.go:619-635) is
+	// LOCAL to one splitOversizedComponent call, not global over all of
+	// BuildComponents's output; unsplit components keep raw discovery order.
+	// More importantly, filtering live down to just golden-matching components
+	// BEFORE checking order makes this check blind to a singleton swapped into
+	// a survivor's raw position: codex constructed exactly that input (swap
+	// any extra singleton with an adjacent survivor, changing neither's
+	// content) and this check alone did not notice, since singletons carry no
+	// weight in the filtered sequence at all. See the SPLIT-SPAN check below,
+	// which closes that gap; this check stays because it is the ONLY one
+	// backed by golden as an independent oracle (the span check below only
+	// proves internal self-consistency, not that the order golden expects is
+	// the order live has).
+	matchingLiveInOrder := make([]goldenComponent, 0, len(golden.Components))
+	for _, component := range live {
+		if _, inGolden := goldenByID[component.WorkUnitID]; inGolden {
+			matchingLiveInOrder = append(matchingLiveInOrder, component)
+		}
+	}
+	reordered := 0
+	for position := range golden.Components {
+		if position >= len(matchingLiveInOrder) {
+			break // component-count mismatch is reported separately below.
+		}
+		if golden.Components[position].WorkUnitID != matchingLiveInOrder[position].WorkUnitID {
+			reordered++
+			if reordered <= 8 {
+				failures = append(failures, fmt.Sprintf(
+					"component order: golden position %d is %s, go's matching-subset position %d is %s",
+					position, golden.Components[position].WorkUnitID, position, matchingLiveInOrder[position].WorkUnitID,
+				))
+			}
+		}
+	}
+	if reordered > 8 {
+		failures = append(failures, fmt.Sprintf("... and %d further order mismatches", reordered-8))
+	}
+
+	// SPLIT-SPAN order (codex round 2 on #2172, P2): closes the gap in the
+	// check above -- a singleton swapped into a survivor's raw position
+	// changes neither's content and doesn't touch survivors' relative order
+	// to each other, so the golden-matching-subset check can't see it. Every
+	// extra singleton this fixture produces comes from removeHubs inside the
+	// ONE call to splitOversizedComponent (golden.Stats.OversizedComponents
+	// == 1, asserted below), whose own final sort (components.go:633-635) is
+	// a single stable sort over that call's ENTIRE fragment output --
+	// survivors and singletons together -- so that whole output is one
+	// contiguous run in live, self-consistently ordered by each fragment's
+	// own sorted node-key tuple. toGoldenComponent already sorts
+	// goldenComponent.Nodes into exactly that key (see its doc), so comparing
+	// live[i].Nodes against live[i-1].Nodes directly checks the same
+	// invariant components.go:633-635 guarantees, without re-deriving
+	// BuildComponents's grouping (the CHAOS-3033 differential-oracle lesson:
+	// this only proves live is INTERNALLY self-consistent with its own
+	// documented order, not that the order is the one golden expects -- the
+	// check above is what proves that, against golden as an independent
+	// oracle). Scoped to the single-oversized-component case this fixture
+	// guarantees: with more than one, disjoint split spans could have an
+	// untouched component sitting between them, and treating the full
+	// min-to-max singleton range as one span would false-positive on that
+	// component's unrelated position -- skip and note rather than risk that.
+	if golden.Stats.OversizedComponents == 1 {
+		firstSplit, lastSplit := -1, -1
+		for position, component := range live {
+			if _, inGolden := goldenByID[component.WorkUnitID]; inGolden {
+				continue
+			}
+			if len(component.Nodes) == 1 && len(component.EdgeIDs) == 0 {
+				if firstSplit < 0 {
+					firstSplit = position
+				}
+				lastSplit = position
+			}
+		}
+		spanOutOfOrder := 0
+		for position := firstSplit + 1; position <= lastSplit; position++ {
+			if nodeTupleListLess(live[position].Nodes, live[position-1].Nodes) {
+				spanOutOfOrder++
+				if spanOutOfOrder <= 8 {
+					failures = append(failures, fmt.Sprintf(
+						"split-span order: live position %d (%s) sorts before position %d (%s), violating the node-key order splitOversizedComponent guarantees",
+						position, live[position].WorkUnitID, position-1, live[position-1].WorkUnitID,
+					))
+				}
+			}
+		}
+		if spanOutOfOrder > 8 {
+			failures = append(failures, fmt.Sprintf("... and %d further split-span order violations", spanOutOfOrder-8))
+		}
+	}
+
+	// live's only permitted addition over golden: one singleton fragment
+	// (exactly one node, zero edges) per node golden.Stats.DroppedNodes counted.
+	// Anything else extra -- a multi-node component, or an edge on a
+	// "singleton" -- is a real divergence, not the partition fix, and a count
+	// that doesn't match dropped_nodes means a hub was invented or lost.
+	extraSingletons := 0
+	unexpectedExtras := 0
+	for _, component := range live {
+		if _, inGolden := goldenByID[component.WorkUnitID]; inGolden {
+			continue
+		}
+		if len(component.Nodes) == 1 && len(component.EdgeIDs) == 0 {
+			extraSingletons++
+			continue
+		}
+		unexpectedExtras++
+		if unexpectedExtras <= 8 {
+			failures = append(failures, fmt.Sprintf(
+				"unexpected non-singleton component absent from golden: %s", renderForDiff(component),
+			))
+		}
+	}
+	if unexpectedExtras > 8 {
+		failures = append(failures, fmt.Sprintf("... and %d further unexpected extra components", unexpectedExtras-8))
+	}
+	if extraSingletons != golden.Stats.DroppedNodes {
+		failures = append(failures, fmt.Sprintf(
+			"extra singleton components: golden dropped_nodes %d, go produced %d",
+			golden.Stats.DroppedNodes, extraSingletons,
+		))
+	}
+	if len(live) != len(golden.Components)+golden.Stats.DroppedNodes {
+		failures = append(failures, fmt.Sprintf(
+			"component count: expected %d (golden %d + dropped_nodes %d), go %d",
+			len(golden.Components)+golden.Stats.DroppedNodes, len(golden.Components), golden.Stats.DroppedNodes, len(live),
+		))
+	}
+
+	// DroppedNodes is CHAOS-4771's regression guard: nodes are partitioned, not
+	// deleted, post-fix, so this must read 0 regardless of what golden recorded
+	// (see BuildStats's doc). PartitionedHubs is the new signal and must equal
+	// exactly what golden called dropped_nodes -- same hubs, different fate.
+	expectedStats := BuildStats{
+		OversizedComponents: golden.Stats.OversizedComponents,
+		DroppedEdges:        golden.Stats.DroppedEdges,
+		DroppedNodes:        0,
+		PartitionedHubs:     golden.Stats.DroppedNodes,
+	}
+	if stats != expectedStats {
+		failures = append(failures, fmt.Sprintf("stats: expected %+v, go %+v", expectedStats, stats))
+	}
+
+	// The cap must be ENFORCED, not merely configured: the split exists because
+	// one unbounded component dominated the whole Investment allocation chart
+	// (CHAOS-2775). A port that produced the right ids while leaving an
+	// oversized component would pass every assertion above.
+	for position, component := range live {
+		if len(component.Nodes) > maxComponentNodes {
+			failures = append(failures, fmt.Sprintf(
+				"component %d has %d nodes, exceeding the cap of %d",
+				position, len(component.Nodes), maxComponentNodes,
+			))
+		}
+	}
+	return failures
+}
+
+// diffAgainstGoldenLegacyDelete is the comparator for partitionHubs=false --
+// the flag's default, and what actually runs in production until
+// WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED flips (see BuildComponents's
+// doc). This IS the pre-CHAOS-4771 comparator, restored rather than weakened:
+// on this branch live and golden are STILL produced by the identical
+// algorithm, so positional equality and content equality are still the same
+// claim, and a work_unit_id-keyed comparison (diffAgainstGoldenPartitioned)
+// would be a strictly weaker check here for no reason -- it stays positional
+// on purpose.
+func diffAgainstGoldenLegacyDelete(
 	golden goldenDocument, live []goldenComponent, stats BuildStats, maxComponentNodes int,
 ) []string {
 	failures := make([]string, 0)
@@ -131,15 +414,12 @@ func diffAgainstGolden(
 		OversizedComponents: golden.Stats.OversizedComponents,
 		DroppedEdges:        golden.Stats.DroppedEdges,
 		DroppedNodes:        golden.Stats.DroppedNodes,
+		PartitionedHubs:     0,
 	}
 	if stats != expectedStats {
 		failures = append(failures, fmt.Sprintf("stats: python %+v, go %+v", expectedStats, stats))
 	}
 
-	// The cap must be ENFORCED, not merely configured: the split exists because
-	// one unbounded component dominated the whole Investment allocation chart
-	// (CHAOS-2775). A port that produced the right ids while leaving an
-	// oversized component would pass every assertion above.
 	for position, component := range live {
 		if len(component.Nodes) > maxComponentNodes {
 			failures = append(failures, fmt.Sprintf(
@@ -151,7 +431,10 @@ func diffAgainstGolden(
 	return failures
 }
 
-// TestGoldenComparisonCatchesPlantedDefects falsifies the comparator.
+// TestGoldenComparisonCatchesPlantedDefects falsifies the PARTITIONED
+// (partitionHubs=true) comparator. See
+// TestLegacyDeleteComparisonCatchesPlantedDefects below for the legacy
+// (partitionHubs=false) counterpart.
 //
 // Every mutation below is a real way this port could be wrong, applied to a
 // KNOWN-GOOD live result. If any of them slips through, the exhaustive test
@@ -160,13 +443,13 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 	edges, golden := loadGoldenPair(t)
 	stats := &BuildStats{}
 	maxComponentNodes := golden.MaxComponentNodes
-	live := BuildComponents(edges, &maxComponentNodes, stats)
+	live := BuildComponents(edges, &maxComponentNodes, true, stats)
 
 	baseline := make([]goldenComponent, len(live))
 	for position, component := range live {
 		baseline[position] = toGoldenComponent(component)
 	}
-	if failures := diffAgainstGolden(golden, baseline, *stats, maxComponentNodes); len(failures) != 0 {
+	if failures := diffAgainstGoldenPartitioned(golden, baseline, *stats, maxComponentNodes); len(failures) != 0 {
 		t.Fatalf("baseline is not clean, cannot falsify from it: %v", failures)
 	}
 
@@ -175,8 +458,19 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 		for position, component := range baseline {
 			copied[position] = goldenComponent{
 				WorkUnitID: component.WorkUnitID,
-				Nodes:      append([][]string(nil), component.Nodes...),
-				EdgeIDs:    append([]string(nil), component.EdgeIDs...),
+				// slices.Clone, not append(T(nil), s...): the latter silently
+				// downgrades a non-nil EMPTY slice to nil (append with zero
+				// elements to add returns its nil-vs-not input verbatim through
+				// no realloc), which made every planted-defect mutation below
+				// pass for the WRONG reason -- reflect.DeepEqual sees
+				// "edge_ids": null diverge from golden's "edge_ids": [] on
+				// whichever zero-edge component this clone happened to
+				// disturb, regardless of what the mutation under test actually
+				// changed (found while adding the reordered-components case:
+				// it "passed" even with the order check deleted). slices.Clone
+				// preserves nil vs non-nil-empty exactly.
+				Nodes:   slices.Clone(component.Nodes),
+				EdgeIDs: slices.Clone(component.EdgeIDs),
 			}
 		}
 		return copied
@@ -225,6 +519,238 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 			},
 		},
 		{
+			// codex round 1 on #2172, P2: the ORDER check this mutation targets
+			// did not exist before this round -- swapping two golden-matching
+			// (non-singleton) components passed silently, while
+			// component_indexes is numeric and load-bearing downstream
+			// (chquery.go:24). Swaps the FIRST TWO golden-matching components it
+			// finds, deliberately not touching any singleton (a singleton swap
+			// would be a no-op for the order check, since singletons have no
+			// golden position to compare against).
+			name: "reordered two golden-matching components",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				goldenIDs := make(map[string]struct{}, len(golden.Components))
+				for _, component := range golden.Components {
+					goldenIDs[component.WorkUnitID] = struct{}{}
+				}
+				first := -1
+				for position, component := range components {
+					if _, inGolden := goldenIDs[component.WorkUnitID]; !inGolden {
+						continue
+					}
+					if first < 0 {
+						first = position
+						continue
+					}
+					components[first], components[position] = components[position], components[first]
+					return components
+				}
+				t.Fatal("fewer than two golden-matching components; this mutation is vacuous")
+				return components
+			},
+		},
+		{
+			// codex round 2 on #2172, P2: the exact counterexample the round
+			// constructed against round 1's fix -- the golden-matching-subset
+			// order check filters singletons out BEFORE comparing, so swapping a
+			// singleton and a survivor's raw positions (content of neither
+			// changes) doesn't touch survivors' relative order to each other and
+			// passed silently. Targets the split-span self-consistency check.
+			name: "a singleton swapped into a survivor's raw position",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				goldenIDs := make(map[string]struct{}, len(golden.Components))
+				for _, component := range golden.Components {
+					goldenIDs[component.WorkUnitID] = struct{}{}
+				}
+				isSingleton := func(component goldenComponent) bool {
+					return len(component.Nodes) == 1 && len(component.EdgeIDs) == 0
+				}
+				for position, component := range components {
+					if !isSingleton(component) {
+						continue
+					}
+					if _, inGolden := goldenIDs[component.WorkUnitID]; inGolden {
+						continue
+					}
+					for _, neighbor := range []int{position - 1, position + 1} {
+						if neighbor < 0 || neighbor >= len(components) {
+							continue
+						}
+						if _, inGolden := goldenIDs[components[neighbor].WorkUnitID]; !inGolden {
+							continue
+						}
+						components[position], components[neighbor] = components[neighbor], components[position]
+						return components
+					}
+				}
+				t.Fatal("no singleton adjacent to a golden-matching component; this mutation is vacuous")
+				return components
+			},
+		},
+		{
+			// CHAOS-4771's own regression: a partitioned hub silently reverted to
+			// the pre-fix deletion. If this slips through, the comparator cannot
+			// tell the fix from the bug it replaced.
+			name: "a partitioned hub reverted to deletion",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				goldenIDs := make(map[string]struct{}, len(golden.Components))
+				for _, component := range golden.Components {
+					goldenIDs[component.WorkUnitID] = struct{}{}
+				}
+				for position, component := range components {
+					if _, inGolden := goldenIDs[component.WorkUnitID]; inGolden {
+						continue
+					}
+					return append(components[:position], components[position+1:]...)
+				}
+				t.Fatal("no extra (hub) component to delete; this mutation is vacuous")
+				return components
+			},
+		},
+		{
+			// A spurious component neither the golden nor a legitimate partitioned
+			// hub explains -- e.g. a hub duplicated into two fragments instead of
+			// one.
+			name: "an unexplained extra component invented",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				return append(components, goldenComponent{
+					WorkUnitID: "invented-not-a-real-work-unit-id",
+					Nodes:      [][]string{{"issue", "invented-node-a"}, {"issue", "invented-node-b"}},
+				})
+			},
+		},
+		{
+			name: "dropped one edge from a bundle",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				for position, component := range components {
+					if len(component.EdgeIDs) > 1 {
+						components[position].EdgeIDs = component.EdgeIDs[1:]
+						return components
+					}
+				}
+				t.Fatal("no component with more than one edge; this mutation is vacuous")
+				return components
+			},
+		},
+		{
+			name:   "off-by-one in the split edge-drop prefix",
+			mutate: func(components []goldenComponent) []goldenComponent { return components },
+			stats: func(stats BuildStats) BuildStats {
+				stats.DroppedEdges++
+				return stats
+			},
+		},
+		{
+			// Post-fix, DroppedNodes is expected to be 0 unconditionally (see
+			// BuildStats's doc) -- so a REAPPEARING nonzero value, or a
+			// PartitionedHubs count that stops matching golden's dropped_nodes,
+			// is the defect to catch now.
+			name:   "PartitionedHubs count drifts from golden's dropped_nodes",
+			mutate: func(components []goldenComponent) []goldenComponent { return components },
+			stats: func(stats BuildStats) BuildStats {
+				stats.PartitionedHubs++
+				return stats
+			},
+		},
+	} {
+		t.Run(plant.name, func(t *testing.T) {
+			mutated := plant.mutate(clone())
+			mutatedStats := *stats
+			if plant.stats != nil {
+				mutatedStats = plant.stats(mutatedStats)
+			}
+			failures := diffAgainstGoldenPartitioned(golden, mutated, mutatedStats, maxComponentNodes)
+			if len(failures) == 0 {
+				t.Fatal("the comparator accepted a planted defect: it does not prove parity")
+			}
+		})
+	}
+}
+
+// TestLegacyDeleteComparisonCatchesPlantedDefects falsifies
+// diffAgainstGoldenLegacyDelete (partitionHubs=false), mirroring
+// TestGoldenComparisonCatchesPlantedDefects above. Reuses the mutation shapes
+// that apply unchanged to a positional comparator; skips the two
+// partition-specific ones (a hub reverted to deletion, or a spurious extra
+// component) that only make sense once removeHubs can add fragments -- this
+// comparator's live path never does, so those two would be vacuous here. Adds
+// one legacy-specific case instead: dropped_nodes silently forced to 0, the
+// exact CHAOS-4758 regression this comparator exists to still catch on the
+// path that is actually live in production today.
+func TestLegacyDeleteComparisonCatchesPlantedDefects(t *testing.T) {
+	edges, golden := loadGoldenPair(t)
+	stats := &BuildStats{}
+	maxComponentNodes := golden.MaxComponentNodes
+	live := BuildComponents(edges, &maxComponentNodes, false, stats)
+
+	baseline := make([]goldenComponent, len(live))
+	for position, component := range live {
+		baseline[position] = toGoldenComponent(component)
+	}
+	if failures := diffAgainstGoldenLegacyDelete(golden, baseline, *stats, maxComponentNodes); len(failures) != 0 {
+		t.Fatalf("baseline is not clean, cannot falsify from it: %v", failures)
+	}
+
+	clone := func() []goldenComponent {
+		copied := make([]goldenComponent, len(baseline))
+		for position, component := range baseline {
+			copied[position] = goldenComponent{
+				WorkUnitID: component.WorkUnitID,
+				// slices.Clone, not append(T(nil), s...): the latter silently
+				// downgrades a non-nil EMPTY slice to nil (append with zero
+				// elements to add returns its nil-vs-not input verbatim through
+				// no realloc), which made every planted-defect mutation below
+				// pass for the WRONG reason -- reflect.DeepEqual sees
+				// "edge_ids": null diverge from golden's "edge_ids": [] on
+				// whichever zero-edge component this clone happened to
+				// disturb, regardless of what the mutation under test actually
+				// changed (found while adding the reordered-components case:
+				// it "passed" even with the order check deleted). slices.Clone
+				// preserves nil vs non-nil-empty exactly.
+				Nodes:   slices.Clone(component.Nodes),
+				EdgeIDs: slices.Clone(component.EdgeIDs),
+			}
+		}
+		return copied
+	}
+	multiNode := -1
+	for position, component := range baseline {
+		if len(component.Nodes) > 1 {
+			multiNode = position
+			break
+		}
+	}
+	if multiNode < 0 {
+		t.Fatal("fixture has no multi-node component; the node mutations below would be vacuous")
+	}
+
+	for _, plant := range []struct {
+		name   string
+		mutate func([]goldenComponent) []goldenComponent
+		stats  func(BuildStats) BuildStats
+	}{
+		{
+			name: "flipped hash separator",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				nodes := live[multiNode].Nodes
+				tokens := make([]string, 0, len(nodes))
+				for _, node := range nodes {
+					tokens = append(tokens, node.Type+":"+node.ID)
+				}
+				sort.Strings(tokens)
+				sum := sha256.Sum256([]byte(strings.Join(tokens, ":")))
+				components[multiNode].WorkUnitID = hex.EncodeToString(sum[:])
+				return components
+			},
+		},
+		{
+			name: "dropped a node type from the hashed set",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				components[multiNode].Nodes = components[multiNode].Nodes[1:]
+				return components
+			},
+		},
+		{
 			name: "reordered two components",
 			mutate: func(components []goldenComponent) []goldenComponent {
 				components[0], components[1] = components[1], components[0]
@@ -253,7 +779,11 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 			},
 		},
 		{
-			name:   "hub removal silently skipped",
+			// The CHAOS-4758 regression itself: hub deletion silently stops
+			// happening (or stops being counted) on the path that is actually
+			// live in production. This is the one case that most needs this
+			// comparator, since it is the only one still watching this branch.
+			name:   "hub deletion silently skipped or uncounted",
 			mutate: func(components []goldenComponent) []goldenComponent { return components },
 			stats: func(stats BuildStats) BuildStats {
 				stats.DroppedNodes = 0
@@ -267,7 +797,7 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 			if plant.stats != nil {
 				mutatedStats = plant.stats(mutatedStats)
 			}
-			failures := diffAgainstGolden(golden, mutated, mutatedStats, maxComponentNodes)
+			failures := diffAgainstGoldenLegacyDelete(golden, mutated, mutatedStats, maxComponentNodes)
 			if len(failures) == 0 {
 				t.Fatal("the comparator accepted a planted defect: it does not prove parity")
 			}
@@ -292,13 +822,35 @@ func TestSplitCapIsLoadBearing(t *testing.T) {
 
 	widened := 155
 	stats := &BuildStats{}
-	live := BuildComponents(edges, &widened, stats)
+	live := BuildComponents(edges, &widened, true, stats)
 
 	components := make([]goldenComponent, len(live))
 	for position, component := range live {
 		components[position] = toGoldenComponent(component)
 	}
-	if len(diffAgainstGolden(golden, components, *stats, golden.MaxComponentNodes)) == 0 {
+	if len(diffAgainstGoldenPartitioned(golden, components, *stats, golden.MaxComponentNodes)) == 0 {
+		t.Fatal(
+			"raising the cap to 155 changed nothing the golden can see; " +
+				"the fixture does not actually constrain the split",
+		)
+	}
+}
+
+// TestSplitCapIsLoadBearingLegacyDeletePath mirrors the above for
+// partitionHubs=false -- the cap must still be load-bearing on the branch
+// that is actually live in production.
+func TestSplitCapIsLoadBearingLegacyDeletePath(t *testing.T) {
+	edges, golden := loadGoldenPair(t)
+
+	widened := 155
+	stats := &BuildStats{}
+	live := BuildComponents(edges, &widened, false, stats)
+
+	components := make([]goldenComponent, len(live))
+	for position, component := range live {
+		components[position] = toGoldenComponent(component)
+	}
+	if len(diffAgainstGoldenLegacyDelete(golden, components, *stats, golden.MaxComponentNodes)) == 0 {
 		t.Fatal(
 			"raising the cap to 155 changed nothing the golden can see; " +
 				"the fixture does not actually constrain the split",
@@ -309,39 +861,61 @@ func TestSplitCapIsLoadBearing(t *testing.T) {
 // TestBuildComponentsMatchesPythonAcrossCaps is a second cross-language check
 // that costs no fixture bytes.
 //
-// The expected values were measured by running the DEPLOYED Python
-// build_components over this same frozen input at each cap (2026-09-01). It
-// covers what the single-cap golden cannot: that the split responds to the cap
-// the same way on both planes, including the 140/150/151 plateau and the
-// monotonic-in-the-right-direction behaviour of dropped_nodes as the cap moves.
+// pythonDroppedNodes and pythonComponents were measured by running the
+// DEPLOYED (pre-fix) Python build_components over this same frozen input at
+// each cap (2026-09-01) -- kept as the reference for what phase (a) and the
+// oversized-component discovery do, which CHAOS-4771 does not touch. It covers
+// what the single-cap golden cannot: that the split responds to the cap the
+// same way on both planes, including the 140/150/151 plateau.
+//
+// CHAOS-4771: post-fix Go no longer matches pythonComponents directly -- it
+// additionally emits one singleton fragment per node Python would have
+// dropped, so the expected Go count is pythonComponents+pythonDroppedNodes,
+// stats.DroppedNodes must read 0, and stats.PartitionedHubs must equal
+// pythonDroppedNodes exactly (same hubs found, different fate). See
+// diffAgainstGolden's doc for why this is the correct post-fix contract.
 func TestBuildComponentsMatchesPythonAcrossCaps(t *testing.T) {
 	edges, _ := loadGoldenPair(t)
 
 	for _, expected := range []struct {
 		cap                 int
-		components          int
-		droppedNodes        int
+		pythonComponents    int
+		pythonDroppedNodes  int
 		droppedEdges        int
 		oversizedComponents int
 		largestComponent    int
 	}{
-		{cap: 120, components: 1607, droppedNodes: 244, droppedEdges: 4, oversizedComponents: 1, largestComponent: 115},
-		{cap: 140, components: 1601, droppedNodes: 242, droppedEdges: 4, oversizedComponents: 1, largestComponent: 134},
-		{cap: 150, components: 1601, droppedNodes: 242, droppedEdges: 4, oversizedComponents: 1, largestComponent: 134},
-		{cap: 151, components: 1601, droppedNodes: 242, droppedEdges: 4, oversizedComponents: 1, largestComponent: 134},
-		{cap: 155, components: 1598, droppedNodes: 241, droppedEdges: 4, oversizedComponents: 1, largestComponent: 155},
-		{cap: 160, components: 1595, droppedNodes: 240, droppedEdges: 4, oversizedComponents: 1, largestComponent: 159},
+		{cap: 120, pythonComponents: 1607, pythonDroppedNodes: 244, droppedEdges: 4, oversizedComponents: 1, largestComponent: 115},
+		{cap: 140, pythonComponents: 1601, pythonDroppedNodes: 242, droppedEdges: 4, oversizedComponents: 1, largestComponent: 134},
+		{cap: 150, pythonComponents: 1601, pythonDroppedNodes: 242, droppedEdges: 4, oversizedComponents: 1, largestComponent: 134},
+		{cap: 151, pythonComponents: 1601, pythonDroppedNodes: 242, droppedEdges: 4, oversizedComponents: 1, largestComponent: 134},
+		{cap: 155, pythonComponents: 1598, pythonDroppedNodes: 241, droppedEdges: 4, oversizedComponents: 1, largestComponent: 155},
+		{cap: 160, pythonComponents: 1595, pythonDroppedNodes: 240, droppedEdges: 4, oversizedComponents: 1, largestComponent: 159},
 	} {
-		t.Run(fmt.Sprintf("cap_%d", expected.cap), func(t *testing.T) {
+		// Distinct input-node universe, computed once per cap iteration (the
+		// input `edges` is the same fixture throughout, so this is invariant
+		// across both branches below -- computed here rather than twice).
+		inputNodes := make(map[NodeKey]struct{})
+		for _, edge := range edges {
+			inputNodes[edge.source()] = struct{}{}
+			inputNodes[edge.target()] = struct{}{}
+		}
+
+		t.Run(fmt.Sprintf("cap_%d/partitioned", expected.cap), func(t *testing.T) {
 			maxNodes := expected.cap
 			stats := &BuildStats{}
-			live := BuildComponents(edges, &maxNodes, stats)
+			live := BuildComponents(edges, &maxNodes, true, stats)
 
-			if len(live) != expected.components {
-				t.Errorf("components: python %d, go %d", expected.components, len(live))
+			expectedGoComponents := expected.pythonComponents + expected.pythonDroppedNodes
+			if len(live) != expectedGoComponents {
+				t.Errorf("components: expected %d (python %d + dropped %d), go %d",
+					expectedGoComponents, expected.pythonComponents, expected.pythonDroppedNodes, len(live))
 			}
-			if stats.DroppedNodes != expected.droppedNodes {
-				t.Errorf("dropped_nodes: python %d, go %d", expected.droppedNodes, stats.DroppedNodes)
+			if stats.DroppedNodes != 0 {
+				t.Errorf("dropped_nodes: expected 0 (partitionHubs=true partitions, never deletes), go %d", stats.DroppedNodes)
+			}
+			if stats.PartitionedHubs != expected.pythonDroppedNodes {
+				t.Errorf("partitioned_hubs: expected %d (= python dropped_nodes), go %d", expected.pythonDroppedNodes, stats.PartitionedHubs)
 			}
 			if stats.DroppedEdges != expected.droppedEdges {
 				t.Errorf("dropped_edges: python %d, go %d", expected.droppedEdges, stats.DroppedEdges)
@@ -360,6 +934,75 @@ func TestBuildComponentsMatchesPythonAcrossCaps(t *testing.T) {
 			}
 			if largest > expected.cap {
 				t.Errorf("cap %d not enforced: largest component has %d nodes", expected.cap, largest)
+			}
+
+			// Node conservation (CHAOS-4771 acceptance #2): every node the split
+			// saw lands in exactly one output fragment. Cheapest place to check
+			// it per-cap is a sum, since every fragment here is disjoint by
+			// construction (connectedComponents partitions its input node set).
+			totalNodes := 0
+			for _, component := range live {
+				totalNodes += len(component.Nodes)
+			}
+			if totalNodes != len(inputNodes) {
+				t.Errorf("node conservation: %d distinct input nodes, %d nodes across all output fragments", len(inputNodes), totalNodes)
+			}
+		})
+
+		// The gate's counterpart: prove the LEGACY (default, live-in-production)
+		// branch still matches the deployed Python numbers exactly, at every cap
+		// this fixture is measured at -- not just the single cap the exhaustive
+		// golden test covers.
+		t.Run(fmt.Sprintf("cap_%d/legacy_delete", expected.cap), func(t *testing.T) {
+			maxNodes := expected.cap
+			stats := &BuildStats{}
+			live := BuildComponents(edges, &maxNodes, false, stats)
+
+			if len(live) != expected.pythonComponents {
+				t.Errorf("components: python %d, go %d", expected.pythonComponents, len(live))
+			}
+			if stats.DroppedNodes != expected.pythonDroppedNodes {
+				t.Errorf("dropped_nodes: python %d, go %d", expected.pythonDroppedNodes, stats.DroppedNodes)
+			}
+			if stats.PartitionedHubs != 0 {
+				t.Errorf("partitioned_hubs: expected 0 (partitionHubs=false never partitions), go %d", stats.PartitionedHubs)
+			}
+			if stats.DroppedEdges != expected.droppedEdges {
+				t.Errorf("dropped_edges: python %d, go %d", expected.droppedEdges, stats.DroppedEdges)
+			}
+			if stats.OversizedComponents != expected.oversizedComponents {
+				t.Errorf("oversized_components: python %d, go %d", expected.oversizedComponents, stats.OversizedComponents)
+			}
+			largest := 0
+			for _, component := range live {
+				if len(component.Nodes) > largest {
+					largest = len(component.Nodes)
+				}
+			}
+			if largest != expected.largestComponent {
+				t.Errorf("largest component: python %d, go %d", expected.largestComponent, largest)
+			}
+			if largest > expected.cap {
+				t.Errorf("cap %d not enforced: largest component has %d nodes", expected.cap, largest)
+			}
+
+			// Contrast with the partitioned branch above: on THIS branch, node
+			// conservation is expected to FAIL, by exactly pythonDroppedNodes --
+			// that shortfall IS the CHAOS-4758 defect, still live on this path
+			// until the flag flips. Asserting the shortfall (not just noting it)
+			// keeps this test from silently passing if the legacy path ever stops
+			// dropping nodes for the wrong reason (e.g. a bug that also breaks
+			// node conservation in a DIFFERENT way that happens to sum to zero).
+			totalNodes := 0
+			for _, component := range live {
+				totalNodes += len(component.Nodes)
+			}
+			shortfall := len(inputNodes) - totalNodes
+			if shortfall != expected.pythonDroppedNodes {
+				t.Errorf(
+					"legacy path's node shortfall: expected %d (= python dropped_nodes), got %d (%d input nodes, %d output nodes)",
+					expected.pythonDroppedNodes, shortfall, len(inputNodes), totalNodes,
+				)
 			}
 		})
 	}
@@ -395,6 +1038,140 @@ func TestFrozenGoldenExercisesTheHubRemovalPath(t *testing.T) {
 		t.Fatalf(
 			"fixture %s no longer reaches the edge-drop phase (a) of the split", goldenEdgesFixture,
 		)
+	}
+}
+
+// TestPartitionFixLeavesNoNodeBehind is CHAOS-4771 acceptance #1 and #2 on the
+// SAME fixture TestFrozenGoldenExercisesTheHubRemovalPath just proved reaches
+// removeHubs: node conservation is asserted as the INVARIANT (every distinct
+// input node appears in EXACTLY ONE output fragment), not as a counter reading
+// zero -- a counter that reads zero is not the same claim as a counter that
+// cannot be wrong, because a bug that both drops one node and double-counts
+// another can leave a naive counter at zero.
+func TestPartitionFixLeavesNoNodeBehind(t *testing.T) {
+	edges, golden := loadGoldenPair(t)
+	if golden.Stats.DroppedNodes < 1 {
+		t.Fatalf("fixture no longer reaches removeHubs; this test needs a run that does (see TestFrozenGoldenExercisesTheHubRemovalPath)")
+	}
+
+	stats := &BuildStats{}
+	maxComponentNodes := golden.MaxComponentNodes
+	live := BuildComponents(edges, &maxComponentNodes, true, stats)
+
+	if stats.DroppedNodes != 0 {
+		t.Errorf("dropped_nodes: expected 0 post-fix, got %d", stats.DroppedNodes)
+	}
+	if stats.PartitionedHubs != golden.Stats.DroppedNodes {
+		t.Errorf("partitioned_hubs: expected %d (= golden's pre-fix dropped_nodes), got %d", golden.Stats.DroppedNodes, stats.PartitionedHubs)
+	}
+
+	inputNodes := make(map[NodeKey]struct{})
+	for _, edge := range edges {
+		inputNodes[edge.source()] = struct{}{}
+		inputNodes[edge.target()] = struct{}{}
+	}
+
+	seenIn := make(map[NodeKey]int)
+	totalOutputNodes := 0
+	for _, component := range live {
+		if len(component.Nodes) > maxComponentNodes {
+			t.Errorf("cap %d not enforced: a component has %d nodes", maxComponentNodes, len(component.Nodes))
+		}
+		for _, node := range component.Nodes {
+			seenIn[node]++
+			totalOutputNodes++
+		}
+	}
+
+	if totalOutputNodes != len(inputNodes) {
+		t.Errorf("node conservation: %d distinct input nodes, %d nodes across all output fragments", len(inputNodes), totalOutputNodes)
+	}
+	for node := range inputNodes {
+		if count := seenIn[node]; count != 1 {
+			t.Errorf("node %+v appears in %d output fragments, want exactly 1", node, count)
+		}
+	}
+	for node := range seenIn {
+		if _, wasInput := inputNodes[node]; !wasInput {
+			t.Errorf("node %+v appears in output but was never in the input", node)
+		}
+	}
+}
+
+// TestLegacyDeletePathStillDropsNodes is the CONTRAST to
+// TestPartitionFixLeavesNoNodeBehind above, on the SAME fixture: this is
+// "node-conservation test on the gated branch" the other direction -- proving
+// the flag's DEFAULT (partitionHubs=false, what is actually live today) still
+// reproduces the CHAOS-4758 data loss exactly, not accidentally fixed by some
+// other change. A gate whose "off" position quietly stopped dropping nodes
+// would defeat the whole reason it exists: two consumers could then disagree
+// about whether hubs are dropped for a reason unrelated to the flag they both
+// read.
+func TestLegacyDeletePathStillDropsNodes(t *testing.T) {
+	edges, golden := loadGoldenPair(t)
+	if golden.Stats.DroppedNodes < 1 {
+		t.Fatalf("fixture no longer reaches removeHubs; this test needs a run that does (see TestFrozenGoldenExercisesTheHubRemovalPath)")
+	}
+
+	stats := &BuildStats{}
+	maxComponentNodes := golden.MaxComponentNodes
+	live := BuildComponents(edges, &maxComponentNodes, false, stats)
+
+	if stats.DroppedNodes != golden.Stats.DroppedNodes {
+		t.Errorf("dropped_nodes: expected %d (matching golden, unchanged), got %d", golden.Stats.DroppedNodes, stats.DroppedNodes)
+	}
+	if stats.PartitionedHubs != 0 {
+		t.Errorf("partitioned_hubs: expected 0 (partitionHubs=false never partitions), got %d", stats.PartitionedHubs)
+	}
+
+	inputNodes := make(map[NodeKey]struct{})
+	for _, edge := range edges {
+		inputNodes[edge.source()] = struct{}{}
+		inputNodes[edge.target()] = struct{}{}
+	}
+	totalOutputNodes := 0
+	for _, component := range live {
+		totalOutputNodes += len(component.Nodes)
+	}
+	shortfall := len(inputNodes) - totalOutputNodes
+	if shortfall != golden.Stats.DroppedNodes {
+		t.Errorf(
+			"node shortfall: expected %d (= golden's dropped_nodes), got %d (%d input nodes, %d output nodes)",
+			golden.Stats.DroppedNodes, shortfall, len(inputNodes), totalOutputNodes,
+		)
+	}
+}
+
+// TestBuildComponentsIsDeterministic guards the component-ORDER contract
+// CHAOS-4771 could not preserve against the pre-fix Python golden's position
+// (see diffAgainstGolden's doc) by proving it a different way: run-to-run
+// stability. Partitioned materialization dispatches numeric component_indexes
+// and each chunk worker re-derives the list (queries.py:46-51), so index N
+// must name the same component every time BuildComponents runs on the same
+// input -- a property this checks directly rather than by comparison to a
+// reference that no longer has an opinion about where the new singleton
+// fragments belong.
+func TestBuildComponentsIsDeterministic(t *testing.T) {
+	edges, golden := loadGoldenPair(t)
+	maxComponentNodes := golden.MaxComponentNodes
+
+	for _, partitionHubs := range []bool{true, false} {
+		t.Run(fmt.Sprintf("partitionHubs=%v", partitionHubs), func(t *testing.T) {
+			first := BuildComponents(edges, &maxComponentNodes, partitionHubs, &BuildStats{})
+			second := BuildComponents(edges, &maxComponentNodes, partitionHubs, &BuildStats{})
+
+			if len(first) != len(second) {
+				t.Fatalf("component count is not stable across runs: %d then %d", len(first), len(second))
+			}
+			for position := range first {
+				firstRendered := toGoldenComponent(first[position])
+				secondRendered := toGoldenComponent(second[position])
+				if !reflect.DeepEqual(firstRendered, secondRendered) {
+					t.Fatalf("component %d is not stable across runs:\nfirst:  %s\nsecond: %s",
+						position, renderForDiff(firstRendered), renderForDiff(secondRendered))
+				}
+			}
+		})
 	}
 }
 
@@ -497,6 +1274,24 @@ func hashJoinedTokens(nodes []NodeKey) string {
 	}
 	sum := sha256.Sum256([]byte(strings.Join(tokens, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+// nodeTupleListLess mirrors nodeListLess (components.go) over the JSON-shaped
+// [][]string{Type, ID} node representation: Python list comparison,
+// element-wise then shorter-first. toGoldenComponent sorts a component's
+// Nodes into exactly this key, so comparing two goldenComponents' Nodes
+// fields directly compares the same order splitOversizedComponent's final
+// sort (components.go:633-635) produces.
+func nodeTupleListLess(left, right [][]string) bool {
+	for position := 0; position < len(left) && position < len(right); position++ {
+		if left[position][0] != right[position][0] {
+			return left[position][0] < right[position][0]
+		}
+		if left[position][1] != right[position][1] {
+			return left[position][1] < right[position][1]
+		}
+	}
+	return len(left) < len(right)
 }
 
 func toGoldenComponent(component Component) goldenComponent {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 var linearFamilyDestinations = []string{
@@ -39,9 +40,9 @@ type linearFamilyDerivationSource struct {
 func (source linearFamilyDerivationSource) Load(
 	context.Context,
 	Claim,
-	githubWorkItemDerivationLoadRequest,
-) (githubWorkItemDerivationFacts, error) {
-	return githubWorkItemDerivationFacts{}, source.err
+	teamattribution.GithubWorkItemDerivationLoadRequest,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
+	return teamattribution.GithubWorkItemDerivationFacts{}, source.err
 }
 
 // Succeeds on purpose: the fail-closed case this double serves is about Load,
@@ -61,7 +62,7 @@ func (linearFamilyEngine) Derive(
 	githubWorkItemRows,
 	time.Time,
 	time.Time,
-	githubWorkItemDerivationContext,
+	teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	return map[string][]json.RawMessage{
 		"investment_classifications_daily": {},

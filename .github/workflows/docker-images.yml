@@ -197,8 +197,17 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
             PYTHON_VERSION="${{ github.event.release.tag_name }}"
           fi
-          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
-          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          # The commit timestamp, not "now" -- matches go-build's identical
+          # comment/derivation below; CHAOS-4947 needs this to actually set
+          # org.opencontainers.image.created via the Dockerfile LABEL, which
+          # go-worker.Dockerfile's runtime stage already does and this one
+          # now mirrors.
+          EPOCH=$(git log -1 --pretty=%ct)
+          {
+            echo "python_version=${PYTHON_VERSION}"
+            echo "sha=${SHA}"
+            echo "build_time=$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
 
       # CHAOS-4921: dead configuration, flagged by ci-flakes' review of this
       # PR -- `steps.meta.outputs.*` is not referenced anywhere else in this
@@ -277,8 +286,22 @@ jobs:
           file: docker/Dockerfile
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
+          # CHAOS-4947: VERSION/COMMIT/BUILD_TIME feed docker/Dockerfile's
+          # runtime-stage LABEL block (added for this ticket, mirroring
+          # go-worker.Dockerfile's identical mechanism) -- NOT this action's
+          # own `labels:` input, which would be a second, parallel path
+          # setting the same org.opencontainers.image.revision key. The
+          # fan-in job's ancestry check reads that label off whatever is
+          # CURRENTLY tagged `latest`; it has to be baked in at build time,
+          # on every build regardless of event type, since a later fan-in
+          # run has no other way to know which commit an earlier build came
+          # from without parsing the sha-<7> tag string (explicitly
+          # rejected: a 7-char prefix isn't guaranteed unique).
           build-args: |
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.versioning.outputs.python_version }}
+            VERSION=${{ steps.versioning.outputs.python_version }}
+            COMMIT=${{ steps.versioning.outputs.sha }}
+            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
@@ -305,6 +328,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    # CHAOS-4947: passthrough so the fan-in job (needs: [merge, go-merge])
+    # can read the built commit without re-deriving it. Every leg checks
+    # out the same commit as `build` (see that job's own comment on this),
+    # so which leg's output "wins" doesn't matter.
+    outputs:
+      sha: ${{ needs.build.outputs.sha }}
     strategy:
       matrix:
         target: [runner, api]
@@ -319,44 +348,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      # CHAOS-4921 (round 2 follow-up): per-SHA concurrency groups mean
-      # this main build no longer runs serialized against other main
-      # builds, so it can finish AFTER a build for a newer main commit
-      # already published the moving `latest`/`main` tags. Ordering is
-      # enforced HERE, at the publish step, rather than by re-serializing
-      # builds (which would reintroduce the pending-cancellation defect
-      # this group-key change exists to fix): only tag `latest`/`main` if
-      # the commit this job built is STILL main's current head right now.
-      # An older build that finishes late publishes only its immutable
-      # sha-tag; whichever build is actually head-of-main when it reaches
-      # THIS step gets the moving tags, regardless of which one started
-      # first.
-      - name: Determine whether this build is main's current head
-        id: mainhead
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          built_sha="${{ needs.build.outputs.sha }}"
-          current_main_sha="$(gh api "repos/${{ github.repository }}/branches/main" --jq .commit.sha)"
-          echo "built_sha=${built_sha} current_main_sha=${current_main_sha}"
-          if [ "${built_sha}" = "${current_main_sha}" ]; then
-            echo "is_main_head=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "is_main_head=false" >> "${GITHUB_OUTPUT}"
-          fi
-
+      # CHAOS-4947: this leg publishes ONLY immutable tags (sha-/semver/PR
+      # ref) -- no `latest`, no branch-name tag. Those two are MOVING tags,
+      # and CHAOS-4921's per-leg mainhead check (kept here through several
+      # rounds) turned out to still be wrong in a way per-leg evaluation
+      # can't fix: eight legs (this matrix plus go-merge's) each check
+      # "is my commit still main's head" independently, at whatever moment
+      # they individually reach this step -- measured up to 34 minutes
+      # apart in one run. A commit landing mid-window lets EARLY legs tag
+      # `latest` and LATE legs decline, splitting `latest` across a fresh
+      # combination of families that never existed as a real commit. The
+      # `fan-in-latest` job below makes that one decision, once, for every
+      # family at the same moment -- see its own comment for why the check
+      # there is "descendant of what's currently `latest`", not
+      # "equals main's live head".
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
           tags: |
-            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' || steps.mainhead.outputs.is_main_head == 'true' }}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ (github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true') || (github.event_name == 'release' && !github.event.release.prerelease) }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -496,6 +510,14 @@ jobs:
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}
+          # No `labels:` input here -- go-worker.Dockerfile's runtime stage
+          # already sets org.opencontainers.image.revision (and friends)
+          # from the COMMIT build-arg above. CHAOS-4947's fan-in job reads
+          # that label off whatever is CURRENTLY tagged `latest`; adding a
+          # `labels:` field here too would be a second, parallel mechanism
+          # setting the same key (team-lead review) -- docker/Dockerfile
+          # (the Python image) was the one actually missing this mechanism,
+          # now fixed to match this file's own pattern instead.
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -521,6 +543,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: go-build
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    # CHAOS-4947: see the identical output on `merge` above.
+    outputs:
+      sha: ${{ needs.go-build.outputs.sha }}
     strategy:
       matrix:
         target:
@@ -542,36 +567,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      # CHAOS-4921 (round 2 follow-up): see the identical step in the
-      # `merge` job above for the full rationale -- per-SHA concurrency
-      # groups mean this build isn't serialized against other main
-      # builds, so ordering for the moving tags is enforced here instead.
-      - name: Determine whether this build is main's current head
-        id: mainhead
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          built_sha="${{ needs.go-build.outputs.sha }}"
-          current_main_sha="$(gh api "repos/${{ github.repository }}/branches/main" --jq .commit.sha)"
-          echo "built_sha=${built_sha} current_main_sha=${current_main_sha}"
-          if [ "${built_sha}" = "${current_main_sha}" ]; then
-            echo "is_main_head=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "is_main_head=false" >> "${GITHUB_OUTPUT}"
-          fi
-
+      # CHAOS-4947: see the identical step in the `merge` job above for the
+      # full rationale -- this leg publishes only immutable tags; the
+      # `fan-in-latest` job applies `latest`/branch-name tags once, for
+      # every family, at the same moment.
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}
           tags: |
-            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' || steps.mainhead.outputs.is_main_head == 'true' }}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ (github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true') || (github.event_name == 'release' && !github.event.release.prerelease) }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -589,3 +597,633 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}:${{ steps.meta.outputs.version }}
+
+  # ---------------------------------------------------------------------------
+  # CHAOS-4947: one moving-tag decision, made ONCE, for every family.
+  #
+  # `merge`/`go-merge` above publish only immutable tags now (sha-/semver/PR
+  # ref). This job is the only place `latest` (and the branch-name tag, e.g.
+  # `main`) ever get applied, and it makes that call after ALL nine families'
+  # immutable tags have landed -- not once per matrix leg, spread over
+  # whatever wall-clock those legs happen to finish at (measured 34 minutes
+  # apart in one run, CHAOS-4947).
+  #
+  # The check is "is the built commit a DESCENDANT of (or equal to) the
+  # commit currently tagged `latest`", NOT "does it equal main's live head"
+  # -- team-lead's ruling, restated by lane-084-prod filing this ticket.
+  # Fan-in alone only fixes the WITHIN-one-run race (early legs tag, late
+  # legs decline, splitting `latest` across a combination that never
+  # existed). Equals-head still fails the case prod actually hit: an
+  # overtaken-but-still-ahead-of-latest build declines ALL its moving tags,
+  # stranding `latest` behind a complete, newer image set that only ever
+  # got its sha- tag. Descendant tags in that case (no stranding) while
+  # still declining a genuinely older build finishing late (ordering stays
+  # protected) -- and it is the only version safe ACROSS runs too, since a
+  # fan-in job only serializes the decision WITHIN its own run: two runs at
+  # different main commits can each reach their own fan-in and both
+  # attempt to tag, ordered only by wall-clock, unless each independently
+  # re-checks ancestry against whatever is live at that instant.
+  fan-in-latest:
+    name: Apply moving tags (fan-in)
+    runs-on: ubuntu-latest
+    needs: [merge, go-merge]
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    # team-lead (CHAOS-4947 review): the re-read-immediately-before-tagging
+    # inside the step below NARROWS the cross-run race, it doesn't close
+    # it -- two fan-in runs at different commits can both pass their own
+    # ancestor check (each reading a `latest` that predates the other's
+    # write) and then tag in the wrong order regardless. A dedicated
+    # concurrency group serializes every fan-in run against every other
+    # one, so the re-read step is always looking at the PREVIOUS fan-in's
+    # actual result, not a stale value racing against it.
+    #
+    # 084-prod (second review): `cancel-in-progress: false` does NOT mean
+    # every fan-in run actually executes -- this file's own comment at the
+    # top (CHAOS-4921) documents GitHub's rule that a group holds at most
+    # ONE pending run even with cancel-in-progress false: a third event
+    # arriving with one running and one already pending EVICTS that
+    # pending one outright. On a burst of merges, a middle commit's
+    # fan-in run can be silently evicted before it ever runs.
+    #
+    # This is BOUNDED, not open-ended, and self-heals except at the tail:
+    # an evicted commit's fan-in never runs, but the NEXT commit's fan-in
+    # (whenever it runs) re-reads whatever is currently tagged `latest`
+    # fresh and, being a later descendant, still passes its own ancestor
+    # check and tags correctly -- so "latest only ever advances to a
+    # descendant" holds regardless of which fan-in runs got evicted along
+    # the way. The one case this does NOT heal: if the LAST fan-in in a
+    # burst is the one evicted and no further merge follows it, `latest`
+    # is permanently stranded one (or more) commits behind head, with
+    # nothing left to trigger a self-heal -- exactly the state prod is in
+    # right now. That tail case is a KNOWN, ACCEPTED GAP for this PR (see
+    # CHAOS-4955 for the reconcile-path follow-up: a scheduled or
+    # workflow_dispatch fan-in-only run that re-derives and re-applies
+    # moving tags with no merge required to trigger it). Per-SHA
+    # concurrency keys were considered and rejected here: they would lose
+    # the serialization this read-modify-write decision actually needs
+    # (see the comment above this job's Apply step, at the re-read site,
+    # for the self-heal argument restated where the read happens).
+    concurrency:
+      group: latest-tagging
+      cancel-in-progress: false
+    steps:
+      # fetch-depth: 0 for `git merge-base --is-ancestor` below; checked out
+      # at the exact commit this run built (needs.merge.outputs.sha), not
+      # whatever main happens to be *now* -- the ancestry check reasons
+      # about the BUILT commit's relationship to `latest`'s label, and that
+      # relationship doesn't depend on where main has moved to since.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.merge.outputs.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Mirrors the exact per-family enable logic the old per-leg `Docker
+      # meta` step used (`type=ref,event=branch,enable=...` / `type=raw,
+      # value=latest,enable=...`), just evaluated once instead of once per
+      # leg, and with the main-ref half of that logic swapped from
+      # equals-head to descendant-of-latest (CHAOS-4947):
+      #   - release (non-prerelease): tag `latest` unconditionally, no
+      #     branch tag (matches metadata-action's own `type=ref,event=
+      #     branch`, which never fires for a tag ref regardless of enable).
+      #   - on `refs/heads/main`: tag BOTH `latest` and `main` together,
+      #     gated on the SAME descendant check -- they moved together
+      #     before (one `enable:` each, evaluated from the same
+      #     `is_main_head`) and still should.
+      #   - on any other branch (e.g. workflow_dispatch off a feature
+      #     branch): tag that branch's own name unconditionally, no
+      #     `latest` -- there's no main-push race to protect against here.
+      #   - anything else (a tag ref, a bare SHA dispatch): no tag, same as
+      #     today.
+      - name: Apply latest/branch tags to every family whose ancestry allows it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILT_SHA: ${{ needs.merge.outputs.sha }}
+          OWNER: ${{ github.repository_owner }}
+          IS_RELEASE: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+          # codex round 1 (P1, docker-images.yml:714 at bc1e9c30): github.ref
+          # is the ref this WORKFLOW RUN was dispatched from, not the ref
+          # that was actually checked out and built -- build/go-build's
+          # checkout prefers github.event.inputs.ref (see that job's own
+          # comment). A workflow_dispatch launched from main's UI with a
+          # custom inputs.ref=feature/foo builds feature/foo's content
+          # while github.ref still reads refs/heads/main, so keying
+          # IS_MAIN_REF on github.ref could classify (and publish) an
+          # arbitrary custom-ref build as main's. Fixed to be conservative
+          # rather than guessing: main ONLY for an actual push event (this
+          # workflow's push trigger is `branches: [main]` only, so every
+          # push here IS main by construction) or a dispatch with NO custom
+          # ref override at all (inputs.ref empty) AND actually dispatched
+          # FROM main (github.ref == refs/heads/main) -- both conditions,
+          # not just the first: a dispatch with an empty inputs.ref but run
+          # from a non-main branch (via the dispatch UI's own branch
+          # selector, not the custom ref field) correctly builds THAT
+          # branch's tip, and github.ref correctly reflects it in exactly
+          # this one case (self-caught tracing the truth table -- an
+          # earlier draft of this fix said "empty inputs.ref -> always
+          # main," which reintroduces a narrower version of the same bug
+          # for a non-main dispatch). ANY explicit inputs.ref -- even one
+          # that happens to say "main" -- is treated as NOT main: decline
+          # the moving tags rather than trust a value that doesn't
+          # describe what was built.
+          IS_MAIN_REF: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '' && github.ref == 'refs/heads/main') }}
+          # Same reasoning for the non-main branch-name tag: only trust
+          # github.ref_name when we're confident it names what was actually
+          # built. A dispatch with an explicit custom inputs.ref gets NO
+          # moving tag here either (not even its own branch's name) rather
+          # than guessing from a ref that may not match what was checked
+          # out -- falls through to "NON-BRANCH REF: no moving tag applies"
+          # below, same as any other unresolvable ref shape.
+          REF_IS_BRANCH: ${{ github.ref_type == 'branch' && (github.event_name != 'workflow_dispatch' || github.event.inputs.ref == '') }}
+          BRANCH_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # codex round 1 (P1/P2, docker-images.yml:767,727,828-829 at
+          # bc1e9c30): every `imagetools inspect` call in this step treated
+          # ANY failure -- a genuine "doesn't exist" 404 AND a transient
+          # network/5xx/auth blip -- identically, either as "safe to
+          # bootstrap-overwrite" (the :latest check) or "safe to skip" (the
+          # source-tag check), and the digest-walk's candidate check wasn't
+          # even guarded, so a transient failure there aborted the whole
+          # job outright under `set -e` instead of just moving to the next
+          # candidate. None of that is safe: a transient failure on an
+          # EXISTING, valid :latest must never be read as "latest doesn't
+          # exist" (that path unconditionally overwrites it), and a
+          # transient failure on an already-published source tag must
+          # never silently skip that family's moving tags without so much
+          # as a warning. A registry inspect that can't be classified
+          # reliably as "genuinely absent" from exit code alone (buildx
+          # doesn't distinguish 404 from 5xx in its exit status) is instead
+          # retried a few times -- a truly transient error is likely to
+          # clear within that window, and a call that fails identically
+          # every time is treated as absence, same as before, just with
+          # retries first rather than trusting a single attempt.
+          #
+          # STRUCTURAL FIX (team-lead ruling: a documented-but-unimplemented
+          # gap was rejected here; this was verified live, not guessed).
+          # Live probe on bigboy, docker/buildx v0.37.0 (Docker Engine
+          # 29.7.2) against ghcr.io, 2026-09-03: `imagetools inspect` on a
+          # genuinely absent tag
+          # exits 1 with stderr exactly `ERROR: <ref>: not found`; a
+          # present tag exits 0 with empty stderr and valid JSON on
+          # stdout. `_inspect_classify` below matches ONLY that verified
+          # substring as CONFIRMED ABSENT -- anything else (a different
+          # error, a network timeout, an auth failure, empty stderr with a
+          # nonzero exit) is UNKNOWN and fails closed. This is the SAME
+          # discipline as the retry helper below: don't guess at error
+          # shapes that were never actually observed, because a wrong
+          # guess would silently misclassify a genuine absence as an
+          # error, or a genuine transient error as absence -- either one
+          # is worse than today. The :latest call site below uses this to
+          # tell "doesn't exist" (bootstrap) from "couldn't tell"
+          # (decline, never bootstrap on an ambiguous read).
+          #
+          # ci-flakes review (delta on b172ebf0): an earlier retry helper
+          # slept after the FINAL attempt too, paying for a retry it would
+          # never make -- fixed below in `_inspect_retry_classify`, which
+          # is now used for BOTH checks where absence is an anomaly worth
+          # a few retries to rule out a transient blip: `:latest`, and
+          # (codex round 2 -- see the source-tag call site below) the
+          # just-published source tag, which had its own, separate P2:
+          # a plain retry-then-skip conflated CONFIRMED ABSENT (a
+          # legitimate skip) with UNKNOWN (an unrecognized registry
+          # failure on a tag that WAS actually published), leaving that
+          # family stranded stale while every sibling family moved
+          # latest/main -- the exact cross-family coherence bug this whole
+          # job exists to prevent, just relocated from the :latest read to
+          # here. Neither of these is for the digest-walk's per-candidate
+          # checks below, where absence is the EXPECTED, common outcome
+          # for most candidates (a commit whose CI failed before
+          # publishing, or a future CHAOS-4948 skip) and retrying every
+          # miss would turn a fast walk into a slow one for no benefit;
+          # that loop uses the single-shot `_inspect_once` instead. (A
+          # separate, PLAIN multi-attempt `_inspect_retry` helper -- retry
+          # without classification -- existed here through round 1 but is
+          # gone: once both anomaly-sensitive checks needed the 3-way
+          # classification, nothing called the unclassified version any
+          # more, and an unused helper is exactly the kind of drift a
+          # later reviewer has to waste time re-deriving is dead.)
+          # `_inspect_once` is single-attempt, no retry -- and that is
+          # justified by FAIL-CLOSEDNESS, not by speed (team-lead review):
+          # every call site below feeds this into `[ -n "${candidate_digest}" ]`,
+          # so a failed inspect yields an empty digest, which can only ever
+          # produce a MISS (the candidate is skipped, the walk moves on) --
+          # it can never produce a false MATCH. Retrying here would only
+          # spend time; it changes no outcome a caller could get wrong.
+          # The `:latest` site below is the OPPOSITE shape and must never
+          # be migrated to this helper: there, an empty/failed read means
+          # "doesn't exist", which drives an unconditional overwrite
+          # (BOOTSTRAP) -- an ambiguous read there is not a safe miss, it's
+          # a wrong answer with a destructive side effect. That inversion
+          # is exactly why `:latest` needs `_inspect_retry_classify`
+          # (3-way: found / CONFIRMED ABSENT / UNKNOWN-fail-closed) instead
+          # of this helper. The two are not interchangeable and must not
+          # be merged for "code cleanliness".
+          _inspect_once() {
+            docker buildx imagetools inspect "$1" --format '{{json .}}' 2>/dev/null
+          }
+          # _inspect_classify: single attempt, but distinguishes WHY it
+          # failed instead of collapsing every failure into one outcome.
+          # See the STRUCTURAL FIX comment above for the live-verified
+          # stderr text this matches on. Returns JSON on stdout with exit
+          # 0 when found; on failure, exit 1 means CONFIRMED ABSENT
+          # (verified "not found" stderr), exit 2 means UNKNOWN (anything
+          # else) -- callers must treat 2 as fail-closed, never as
+          # equivalent to 1.
+          _inspect_classify() {
+            local ref="$1" out err_file rc
+            err_file="$(mktemp)"
+            if out="$(docker buildx imagetools inspect "${ref}" --format '{{json .}}' 2>"${err_file}")"; then
+              rm -f "${err_file}"
+              printf '%s' "${out}"
+              return 0
+            fi
+            if grep -qF "${ref}: not found" "${err_file}"; then
+              rc=1
+            else
+              rc=2
+            fi
+            rm -f "${err_file}"
+            return "${rc}"
+          }
+          # _inspect_retry_classify: retries ONLY the UNKNOWN outcome (a
+          # genuine ambiguity worth a few seconds to rule out as
+          # transient, same reasoning as the plain retry above) --
+          # CONFIRMED ABSENT short-circuits immediately, there is nothing
+          # to retry away, the ref does not exist. Note the `$?` capture:
+          # it happens on the line immediately inside the `else` branch,
+          # never via a bodyless `if` with no `else` -- that shape was
+          # proven (real bash) to reset `$?` to 0 on the false path,
+          # which would silently turn every UNKNOWN into a false ABSENT.
+          _inspect_retry_classify() {
+            local ref="$1" attempt out rc
+            for attempt in 1 2 3; do
+              if out="$(_inspect_classify "${ref}")"; then
+                printf '%s' "${out}"
+                return 0
+              else
+                rc=$?
+              fi
+              [ "${rc}" -eq 1 ] && return 1
+              [ "${attempt}" -lt 3 ] && sleep 2
+            done
+            return 2
+          }
+          # The full family list, both naming schemes -- keep this whole,
+          # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
+          # second copy is how the next target goes untagged.
+          families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-scheduler dev-health-go-reconciler dev-health-go-stream-runner dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate"
+          short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
+          # codex round 3, P2: every family shares this ONE short_sha, so an
+          # UNKNOWN source-tag registry error (rc==2) on it is not a
+          # per-family gap -- it hits all nine simultaneously. Before this
+          # counter, that scenario produced nine `::error::` annotations,
+          # zero moving tags applied, and a ZERO-EXIT job: a full publish
+          # no-op that reads as success unless someone reads the log.
+          # Reproduced: `_run_latest_tag_step("labelled",
+          # source_tag_scenario="unknown")` returns an empty create record
+          # with 9 annotations and rc 0. `family_total` is a word count, not
+          # a loop-scoped counter, so it is correct even though the loop
+          # `continue`s past most families before reaching anything that
+          # would otherwise count them.
+          family_total=0
+          for _ in $families; do family_total=$((family_total + 1)); done
+          source_unknown_count=0
+          # codex round 5, P2: the round-3/round-4 no-op guard only counted
+          # source-tag ambiguity -- an all-nine-present-source run that then
+          # hits an ambiguous `:latest` read on every family (latest_rc==2,
+          # or the rc==0-yet-empty-stdout case just below, both self-
+          # labelled "unknown" in their own comments) reaches the identical
+          # silent no-op shape one stage later, and the source-tag-only
+          # check never fires. Tracked structurally instead of adding a
+          # THIRD site-specific counter: `tags_moved_count` is incremented
+          # at every one of this loop's five `imagetools create` call
+          # sites (the single ground-truth signal for "did this run
+          # actually do anything"), `any_unknown_count` at every branch
+          # that self-classifies as an ambiguous/unknown read anywhere in
+          # the loop (source-tag AND :latest AND the empty-read case) --
+          # the post-loop check below is ONE condition covering all three
+          # sites, not three separate equality tests that each need their
+          # own future round to find the next gap.
+          tags_moved_count=0
+          any_unknown_count=0
+          for family in $families; do
+            image="ghcr.io/${OWNER}/${family}"
+            source_ref="${image}:sha-${short_sha}"
+            # codex round 2: this collapsed CONFIRMED ABSENT (the source
+            # tag genuinely wasn't published this run -- a legitimate,
+            # silent skip) and UNKNOWN (a transient/unrecognized registry
+            # failure on a source tag that WAS actually published) into
+            # one SKIP outcome. A single unlucky read on an otherwise-fine
+            # family left it stale while every other family moved
+            # latest/main -- the exact cross-family coherence failure
+            # this job exists to prevent, just moved from the :latest
+            # read (fixed earlier) to the source-tag read (missed).
+            # Verified: forcing a connection-reset on one family's
+            # source-tag probe while the other eight succeed tagged all
+            # eight and silently skipped the ninth, with a zero-exit job.
+            # Same 3-way classification as the :latest site: absent is a
+            # real skip; unknown fails closed with a visible annotation,
+            # never a plain, easy-to-miss SKIP line.
+            source_rc=0
+            if _inspect_retry_classify "${source_ref}" >/dev/null; then
+              :
+            else
+              source_rc=$?
+            fi
+            if [ "${source_rc}" -eq 1 ]; then
+              echo "SKIP ${family}: ${source_ref} was not published this run (confirmed absent)"
+              continue
+            elif [ "${source_rc}" -eq 2 ]; then
+              echo "::error::${family}: could not confirm whether ${source_ref} exists (registry error of an unrecognized shape) -- declining rather than silently leaving this family stale while others move latest/main"
+              source_unknown_count=$((source_unknown_count + 1))
+              any_unknown_count=$((any_unknown_count + 1))
+              continue
+            fi
+            # Reached only when source_rc==0 (the source tag was actually
+            # found).
+
+            if [ "${IS_RELEASE}" = "true" ]; then
+              echo "RELEASE ${family}: tagging latest unconditionally"
+              docker buildx imagetools create -t "${image}:latest" "${source_ref}"
+              tags_moved_count=$((tags_moved_count + 1))
+              continue
+            fi
+
+            if [ "${IS_MAIN_REF}" != "true" ]; then
+              if [ "${REF_IS_BRANCH}" = "true" ]; then
+                # codex round 1 (P3, docker-images.yml:716,740-741 at
+                # bc1e9c30): github.ref_name for a branch like "feature/foo"
+                # contains a slash, which is invalid in a Docker TAG
+                # component (slashes are only valid in the repository path).
+                # metadata-action's type=ref,event=branch sanitized this;
+                # this direct call didn't. Replace slashes (and anything
+                # else outside the tag-safe character set) with `-`, same
+                # convention most CI systems use for branch-derived tags.
+                #
+                # ci-flakes review (delta on b172ebf0): Docker's tag grammar
+                # is `[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}` -- the FIRST
+                # character may not be `.`/`-`. `tr` alone only fixes
+                # interior characters, so a real, valid git branch starting
+                # with a character outside A-Za-z0-9_ (e.g. `+foo`, `@work`,
+                # or any non-ASCII first character) sanitizes to a leading
+                # `-`, which is itself an invalid tag -- verified: `+foo` ->
+                # `-foo`. An empty BRANCH_TAG (an edge case, not raised by
+                # ci-flakes but caught applying their fix) also sanitizes to
+                # an empty string, `image:` -- also invalid. Guard the
+                # leading character explicitly; verified against real bash
+                # for +foo/@work/empty/a valid case before trusting it.
+                safe_branch_tag="$(printf '%s' "${BRANCH_TAG}" | tr -c 'A-Za-z0-9_.-' '-')"
+                case "${safe_branch_tag}" in
+                  [A-Za-z0-9_]*) ;;
+                  *) safe_branch_tag="x${safe_branch_tag}" ;;
+                esac
+                # team-lead follow-up: Docker's tag grammar also caps the
+                # total length at 128 characters -- a long branch name
+                # (or one that grew by one char from the leading-char
+                # guard just above) can still exceed it. Truncate last,
+                # after any prefix has already been added.
+                safe_branch_tag="${safe_branch_tag:0:128}"
+                echo "NON-MAIN BRANCH ${family}: tagging ${safe_branch_tag} (from ref ${BRANCH_TAG}) unconditionally"
+                docker buildx imagetools create -t "${image}:${safe_branch_tag}" "${source_ref}"
+                tags_moved_count=$((tags_moved_count + 1))
+              else
+                echo "NON-BRANCH REF ${family}: no moving tag applies"
+              fi
+              continue
+            fi
+
+            # THIS read is also where the concurrency group's self-heal
+            # actually happens (084-prod review, see the job-level
+            # concurrency comment above for the full argument): if this
+            # run's own fan-in got evicted from the group's pending slot
+            # last time around, that's invisible from here -- this step
+            # simply reads whatever :latest is RIGHT NOW, which already
+            # reflects every fan-in that DID execute, evicted or not. A
+            # later descendant commit's fan-in always sees a correct,
+            # up-to-date base here; only the tail case (no later commit
+            # ever runs this step again) has no read left to self-heal it
+            # (CHAOS-4955).
+            #
+            # No `|| true` here: that puts `||` on the same line as a
+            # `docker` invocation, which is exactly the shape that trips
+            # tests/tooling/test_go_integration_sharding.py's naive
+            # (quote-unaware) registry scanner (see the CGO-check step in
+            # arc-runner-image.yml, PR #2154, for the identical trap and
+            # fix). `if cmd; then ... fi` keeps the `;` after the command's
+            # own quotes are already closed, which parses cleanly.
+            #
+            # Three-way outcome (see _inspect_retry_classify above): 0 =
+            # found, proceed with the label logic below. 1 = CONFIRMED
+            # ABSENT -- bootstrap unconditionally, same as before. 2 =
+            # UNKNOWN -- fail closed: decline and move on, NEVER
+            # bootstrap. Bootstrapping on an ambiguous read would still be
+            # the exact P1 this item exists to close (a transient failure
+            # on an EXISTING :latest silently overwriting it).
+            latest_rc=0
+            if latest_json="$(_inspect_retry_classify "${image}:latest")"; then
+              :
+            else
+              latest_rc=$?
+            fi
+            if [ "${latest_rc}" -eq 1 ]; then
+              echo "BOOTSTRAP ${family}: no existing latest tag (confirmed absent), tagging unconditionally"
+              docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+              tags_moved_count=$((tags_moved_count + 1))
+              continue
+            elif [ "${latest_rc}" -eq 2 ]; then
+              echo "WARNING: ${family}: could not read :latest and could not confirm it's absent (registry error of an unrecognized shape) -- declining rather than risk overwriting an existing image on an ambiguous read"
+              any_unknown_count=$((any_unknown_count + 1))
+              continue
+            fi
+            # ci-flakes review (delta on fa119b2d): rc==0 means the inspect
+            # call itself succeeded, but doesn't by construction guarantee
+            # non-empty stdout -- practically unreachable (a successful
+            # `imagetools inspect --format` should always print something),
+            # but "practically unreachable" is exactly the kind of claim
+            # this PR's own review history has already burned once. Make
+            # it explicit rather than rely on downstream jq/digest-walk
+            # code to coincidentally decline on empty input: treat an
+            # empty read on a reported-success exit as UNKNOWN too, same
+            # as any other unclassifiable outcome, and fail closed.
+            if [ -z "${latest_json}" ]; then
+              # team-lead ruling: this is a genuinely surprising outcome
+              # (a reported success with no data), not a routine decline
+              # -- ::error:: surfaces it as a GitHub Actions annotation
+              # instead of a plain log line, so it doesn't silently blend
+              # into a wall of ordinary per-family output.
+              echo "::error::${family}: :latest inspect reported success but returned no data -- treating as unknown, declining rather than risk overwriting"
+              any_unknown_count=$((any_unknown_count + 1))
+              continue
+            fi
+
+            # `imagetools inspect` on a multi-platform tag returns a
+            # manifest LIST; the revision label lives in each platform's
+            # own image config, not on the list itself (team-lead review).
+            # Read both and require BOTH present and equal before trusting
+            # either -- 084-prod review caught that `${amd64_rev:-
+            # ${arm64_rev}}` silently takes whichever exists when only ONE
+            # platform is labeled, which is exactly the "guessing which
+            # platform is authoritative" the disagree-case comment already
+            # refuses, and it's reachable NOW: every family currently has a
+            # labelless :latest during this PR's own migration, and a mixed
+            # amd64-old/arm64-new index from an interrupted publish is not
+            # hypothetical this week. Two present and equal -> use it. Two
+            # present and different -> genuine disagreement, decline
+            # outright (broken/partial publish, guessing is worse than
+            # declining). Anything else (zero or exactly one present) ->
+            # NOT enough to trust, but also not evidence of disagreement --
+            # treat as unlabeled and fall through to the digest-walk
+            # fallback below, same as the two-Python-families case.
+            amd64_rev="$(jq -r '.image["linux/amd64"].config.Labels["org.opencontainers.image.revision"] // empty' <<<"${latest_json}")"
+            arm64_rev="$(jq -r '.image["linux/arm64"].config.Labels["org.opencontainers.image.revision"] // empty' <<<"${latest_json}")"
+            base_sha=""
+            if [ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]; then
+              if [ "${amd64_rev}" != "${arm64_rev}" ]; then
+                echo "DECLINE ${family}: platform labels disagree on :latest (amd64=${amd64_rev} arm64=${arm64_rev}) -- refusing to guess which is authoritative"
+                # codex round 6 (bigboy), P2: two DIFFERENT, both non-empty
+                # revision labels is a genuinely ambiguous read -- there is
+                # no way to know which platform is authoritative -- so it
+                # counts toward the no-op guard the same as a registry
+                # error. A corrupted/split :latest cannot self-heal: every
+                # future run re-reads the same disagreeing labels and
+                # declines again, so all-nine-families-disagree is exactly
+                # as permanent-and-silent as all-nine-UNKNOWN.
+                any_unknown_count=$((any_unknown_count + 1))
+                continue
+              fi
+              base_sha="${amd64_rev}"
+            fi
+
+            if [ -z "${base_sha}" ]; then
+              # Reached with zero OR exactly one platform label present.
+              # dev-hops-runner/dev-hops-api predate this PR's label and
+              # carry NO Labels map at all today (measured, 084-prod) --
+              # that's the zero case. A labelless :latest is NOT the same
+              # as a MISSING :latest
+              # (that's BOOTSTRAP, above), and it isn't the two-platforms-
+              # disagree case either. Best-effort, bounded, fail-closed
+              # fallback: walk the BUILT commit's own first-parent history
+              # (so anything this finds is an ancestor of BUILT_SHA by
+              # construction, no separate merge-base check needed) looking
+              # for the commit whose sha- tag has the SAME manifest digest
+              # as the current :latest -- digest equality answers "is
+              # :latest at commit X" for a KNOWN X, so this only works
+              # because the walk supplies successive candidate X's
+              # (ci-flakes review). Once this family's next build lands the
+              # label, this branch never runs for it again.
+              latest_digest="$(jq -r '.manifest.digest // empty' <<<"${latest_json}")"
+              found_base=""
+              while IFS= read -r candidate_sha; do
+                candidate_short="$(echo "${candidate_sha}" | cut -c1-7)"
+                # codex round 1 (P2, docker-images.yml:828-829 at bc1e9c30):
+                # this was a bare pipeline assignment, not guarded by an
+                # if/else -- under `set -euo pipefail`, ANY candidate whose
+                # sha- tag was never published (a real gap: a commit whose
+                # CI run failed before publishing, or one skipped by a
+                # future CHAOS-4948) made the inspect call fail, made the
+                # pipeline fail, and aborted the ENTIRE job immediately
+                # instead of just treating that one candidate as a
+                # non-match and continuing the walk. Guarded the same way
+                # the :latest read above is -- but using `_inspect_once`
+                # (single attempt, no retry), not `_inspect_retry_classify`:
+                # ci-flakes review (delta on b172ebf0) correctly separated
+                # these -- absence here is the EXPECTED, common outcome for
+                # most candidates in a 50-commit walk, and retrying every
+                # miss 3x with sleeps between would turn a fast walk into a
+                # slow one paying for retries that were never going to
+                # succeed.
+                if candidate_digest="$(_inspect_once "${image}:sha-${candidate_short}" | jq -r '.manifest.digest // empty')"; then
+                  :
+                else
+                  candidate_digest=""
+                fi
+                if [ -n "${candidate_digest}" ] && [ "${candidate_digest}" = "${latest_digest}" ]; then
+                  found_base="${candidate_sha}"
+                  break
+                fi
+              done < <(git log --first-parent -n 50 --format=%H "${BUILT_SHA}")
+              if [ -n "${found_base}" ]; then
+                echo "FALLBACK ${family}: unlabeled latest resolved to ${found_base} by digest walk (an ancestor of ${BUILT_SHA} by construction), tagging latest+main"
+                docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+                tags_moved_count=$((tags_moved_count + 1))
+              else
+                echo "WARNING: ${family} has no revision label on :latest and no commit in the last 50 first-parent ancestors of ${BUILT_SHA} matches its digest -- declining rather than guessing. This should resolve itself once ${family} gets its next label-bearing build."
+                # codex round 6 (bigboy), P2: "should resolve itself" is
+                # true only once ${family} gets a NEW label-bearing build
+                # -- if the sha- tag the walk needs is outside the
+                # 50-commit window (or was never published), this decline
+                # repeats identically on every future run, not just this
+                # one. Counts toward the no-op guard: an org where every
+                # family is still in this unlabelled state (a real
+                # transitional state during this PR's own migration, per
+                # the comment above) would otherwise no-op silently on
+                # every run with no signal at all.
+                any_unknown_count=$((any_unknown_count + 1))
+              fi
+              continue
+            fi
+
+            if git merge-base --is-ancestor "${base_sha}" "${BUILT_SHA}"; then
+              echo "DESCENDANT ${family}: ${base_sha} -> ${BUILT_SHA}, tagging latest+main"
+              docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+              tags_moved_count=$((tags_moved_count + 1))
+            else
+              echo "DECLINE ${family}: ${BUILT_SHA} is not a descendant of currently-latest ${base_sha}"
+            fi
+          done
+
+          # codex round 3, P2, WIDENED by round 4's P2, WIDENED AGAIN
+          # structurally by round 5's P2. History, briefly: round 3's
+          # check only fired on ALL-NINE source-tag UNKNOWN
+          # (source_unknown_count == family_total); round 4 found a MIXED
+          # UNKNOWN/ABSENT run (some declined "absent", not "unknown")
+          # slipped past that equality test, so the check was widened to
+          # source_present_count==0 && source_unknown_count>0 (source-tag
+          # stage only). Round 5 found the SAME silent-no-op shape one
+          # stage later: an all-nine-source-PRESENT run where every
+          # `:latest` read is then ambiguous (latest_rc==2, or the
+          # rc==0-yet-empty-stdout case, both self-labelled "unknown" in
+          # their own comments a few lines up) reached zero
+          # `imagetools create` calls and rc=0 exactly the same way,
+          # because the source-tag-only check never even looks at the
+          # :latest stage.
+          #
+          # Fixed structurally this time, not with a third site-specific
+          # counter: `tags_moved_count` increments at every one of this
+          # loop's five `imagetools create` call sites (RELEASE,
+          # NON-MAIN BRANCH, BOOTSTRAP, DESCENDANT, FALLBACK) -- the
+          # single ground-truth signal for "did this run actually do
+          # anything, anywhere, for any family". `any_unknown_count`
+          # increments at every branch that declines a family for a reason
+          # that could recur identically on the NEXT run too -- not just
+          # registry-read ambiguity (source-tag rc==2, :latest rc==2,
+          # :latest empty-read), but also a corrupted/split :latest
+          # (conflicting, both non-empty platform labels: codex round 6)
+          # and a digest-walk that exhausted its 50-commit window without
+          # a match (codex round 6). None of these self-heal on their
+          # own; each is silent unless something fails the job. The
+          # condition below is ONE check covering every current site and,
+          # structurally, any future one that follows the same "increment
+          # any_unknown_count when the decline could repeat forever"
+          # convention -- a new site added later needs only that one
+          # line, not a new post-loop check. An all-CONFIRMED-ABSENT run (tags_moved_count=0,
+          # any_unknown_count=0, e.g. a fresh org with nothing published
+          # yet) is still a legitimate steady state and does not trip
+          # this; any run where at least one family's tag actually moved
+          # (tags_moved_count>=1) already did real work, even if others
+          # declined, so it's excluded too.
+          if [ "${tags_moved_count}" -eq 0 ] && [ "${any_unknown_count}" -gt 0 ]; then
+            echo "::error::0 of ${family_total} families had a moving tag applied this run, and ${any_unknown_count} decline(s) somewhere in the loop were for reasons that could repeat identically on every future run (ambiguous registry reads, conflicting platform labels, or an exhausted digest walk) -- not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
+            exit 1
+          fi

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // The multi-day differential pair for CHAOS-3494 (#1541 review M8).
@@ -45,14 +47,14 @@ func githubDerivedMultiDayOracleCases() []oracleCase {
 // facts the Python pair reads, so neither side sees a fact set the other did
 // not.
 type githubMultiDayOracleSource struct {
-	facts           githubWorkItemDerivationFacts
+	facts           teamattribution.GithubWorkItemDerivationFacts
 	loads           int
 	storedEdgeLoads int
 }
 
 func (source *githubMultiDayOracleSource) Load(
-	context.Context, Claim, githubWorkItemDerivationLoadRequest,
-) (githubWorkItemDerivationFacts, error) {
+	context.Context, Claim, teamattribution.GithubWorkItemDerivationLoadRequest,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
 	source.loads++
 	return source.facts, nil
 }
@@ -136,7 +138,7 @@ func githubMultiDayOracleAttributions(
 	if err != nil {
 		t.Fatal(err)
 	}
-	var facts githubWorkItemDerivationFacts
+	var facts teamattribution.GithubWorkItemDerivationFacts
 	if err := json.Unmarshal(encodedFacts, &facts); err != nil {
 		t.Fatal(err)
 	}

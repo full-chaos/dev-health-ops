@@ -98,7 +98,7 @@ func TestSplitMatchesPythonOnNonFiniteConfidence(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			maxNodes := testCase.cap
 			stats := &BuildStats{}
-			live := BuildComponents(testCase.edges, &maxNodes, stats)
+			live := BuildComponents(testCase.edges, &maxNodes, true, stats)
 
 			rendered := make([]string, 0, len(live))
 			for _, component := range live {

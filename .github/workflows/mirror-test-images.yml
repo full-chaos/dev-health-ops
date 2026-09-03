@@ -48,6 +48,12 @@ on:
       # only the pgbouncer digest runs river CI against a ghcr ref that was
       # never copied.
       - tests/compatibility/river/compose.compatibility.yml
+      # docker/Dockerfile is an INPUT too (CHAOS-4922): PYTHON_BASE_IMAGE is
+      # derived from it, so bumping the Python base without re-running this
+      # workflow leaves the Dockerfile naming a ghcr ref that was never copied
+      # -- a pull-time failure on whatever PR runs next. Same reason the river
+      # compose and the service workflows are listed.
+      - docker/Dockerfile
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -62,6 +68,12 @@ on:
       # only the pgbouncer digest runs river CI against a ghcr ref that was
       # never copied.
       - tests/compatibility/river/compose.compatibility.yml
+      # docker/Dockerfile is an INPUT too (CHAOS-4922): PYTHON_BASE_IMAGE is
+      # derived from it, so bumping the Python base without re-running this
+      # workflow leaves the Dockerfile naming a ghcr ref that was never copied
+      # -- a pull-time failure on whatever PR runs next. Same reason the river
+      # compose and the service workflows are listed.
+      - docker/Dockerfile
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -161,6 +173,8 @@ jobs:
       # parser, so the mirror and the pre-pull cannot drift apart.
       - name: Resolve every image CI pulls from Docker Hub
         id: images
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           # Two sources, both DERIVED so neither can drift from what CI runs:
@@ -240,6 +254,29 @@ jobs:
             sed -nE 's/^[[:space:]]*image:[[:space:]]*(\$\{[^}]*\})?([^[:space:]#]+).*$/\2/p' \
               "${compose}" >> images.raw
           done
+          #   4. docker/Dockerfile's PYTHON_BASE_IMAGE (CHAOS-4922). The
+          #      application image's Python base was pulled straight from Docker
+          #      Hub, unauthenticated, so it shared a per-IP rate limit with
+          #      every other runner on that address.
+          #
+          # DERIVED, not restated, for the same reason as sources 2 and 3: the
+          # Dockerfile names the MIRRORED ref, so the mirror prefix is stripped
+          # to recover the upstream ref to mirror FROM -- the inverse of what the
+          # river compose needs, and identical in spirit. If someone bumps the
+          # Python base in the Dockerfile, this follows it with no second edit;
+          # a hand-maintained entry here would rot exactly as the hardcoded
+          # ClickHouse line did.
+          #
+          # The ref carries its digest, so this mirrors a specific image rather
+          # than whatever the tag points at today.
+          # ONE derivation, shared with docker-images.yml's ensure-base step
+          # (CHAOS-4922). These were two separate validators and they disagreed
+          # on the same Dockerfile in both directions -- most dangerously, this
+          # one accepted a ref with NO DIGEST and would have published a
+          # floating tag before the build noticed. See ci/python_base_ref.sh.
+          bash ci/python_base_ref.sh "${OWNER}" \
+            | awk '$1 == "upstream" { print $2 }' >> images.raw
+
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
           # Refuse to mirror anything still carrying an unexpanded shell variable

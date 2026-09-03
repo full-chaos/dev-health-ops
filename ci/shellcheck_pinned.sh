@@ -118,6 +118,8 @@ FILES=(
   # which is the guard-file-is-not-guarded shape one level up.
   "${ROOT}/ci/shellcheck_pinned.sh"
   "${ROOT}/ci/check_shellcheck_pin.sh"
+  # CHAOS-4922: the single source of truth for PYTHON_BASE_IMAGE.
+  "${ROOT}/ci/python_base_ref.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"

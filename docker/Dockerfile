@@ -1,4 +1,20 @@
 ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc"
+# CHAOS-4922: the Python base comes from our ghcr mirror, not Docker Hub.
+#
+# CI never authenticates to Docker Hub, so an unauthenticated Hub pull is rate
+# limited per IP and shared with every other runner on that address -- a
+# failure that arrives as a build error on an unrelated PR and cannot be
+# reproduced locally.
+#
+# DIGEST-PINNED, and the digest is the UPSTREAM one on purpose:
+# `docker buildx imagetools create` copies the manifest without rewriting it,
+# so the mirrored ref carries the SAME digest as the Hub original. Pinning the
+# upstream digest therefore names exactly one image whichever registry serves
+# it, and the pin can be verified against Hub without trusting the mirror.
+#
+# Resolved 2026-09-03 from registry-1.docker.io for python:3.14-slim:
+#   application/vnd.oci.image.index.v1+json, linux/amd64 + linux/arm64 present
+ARG PYTHON_BASE_IMAGE="ghcr.io/full-chaos/python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6"
 
 # ── Stage 0: one-shot Go tooling builder ───────────────────────────────────────
 # The Python migration command invokes this static binary only when the
@@ -35,7 +51,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 # Install build dependencies and compile wheels. This stage is NOT shipped.
-FROM python:3.14-slim AS builder
+FROM ${PYTHON_BASE_IMAGE} AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1
@@ -72,7 +88,7 @@ RUN pip install --upgrade pip && \
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 # Minimal image — no build tools, only the installed package and its runtime deps.
-FROM python:3.14-slim AS runtime
+FROM ${PYTHON_BASE_IMAGE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1

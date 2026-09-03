@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -77,14 +76,79 @@ func TestNoRawClockCallSitesOutsideTheAccessor(t *testing.T) {
 	files := 0
 
 	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			files++
-			// filepath.Base, because ParseDir keys files by the name it was
-			// given -- here bare "executor_clock.go", which matched neither of
-			// this check's first two forms. The positive control below caught
-			// that on the first run, which is the whole reason it exists.
-			inAccessor := filepath.Base(path) == "executor_clock.go"
-			ast.Inspect(file, func(node ast.Node) bool {
+		files += len(pkg.Files)
+		fileViolations, fileLegitimate := findNowUTCReferences(fset, pkg.Files)
+		violations = append(violations, fileViolations...)
+		legitimate += fileLegitimate
+	}
+
+	// POSITIVE CONTROL, asserted BEFORE the verdict below is allowed to mean
+	// anything: the two nowOrRefuse methods each pass executor.nowUTC to
+	// clockOrRefuse, so the walker must see exactly those.
+	if files == 0 {
+		t.Fatal("walked no files -- the guard would vacuously pass")
+	}
+	if legitimate < 2 {
+		t.Fatalf("the walker found %d nowUTC reference(s) inside "+
+			"the two nowOrRefuse() accessor declarations, want at least 2 (one "+
+			"per nowOrRefuse method). The walker is broken or the file was not "+
+			"parsed, so the zero-violations result below proves nothing", legitimate)
+	}
+
+	if len(violations) > 0 {
+		t.Errorf("nowUTC is referenced outside a nowOrRefuse() accessor at %s "+
+			"-- use the kind's nowOrRefuse() accessor. Reading the field "+
+			"directly is the defect CHAOS-4954 fixed at three sites; the field "+
+			"is still there, so nothing but this test stops a fourth",
+			strings.Join(violations, ", "))
+	}
+}
+
+// isNowOrRefuseAccessor reports whether decl IS one of the two nowOrRefuse
+// methods this guard exists to exempt.
+//
+// DECLARATION-scoped, not FILE-scoped -- codex round 2's P2 on this guard:
+// the original check exempted every selector in executor_clock.go by
+// filename alone (`filepath.Base(path) == "executor_clock.go"`), so a THIRD
+// function added to that same file, reading executor.nowUTC() directly,
+// would bypass nowOrRefuse() while the guard stayed green. Narrowing to the
+// two specific method declarations closes that hole, and it also closes the
+// round's second finding for free: there is no longer a file-level boolean
+// to flip into "classify every file as the accessor" -- that mutation has
+// nothing left to mutate.
+//
+// TestClockGuardCatchesAHelperAddedToTheAccessorFile is the negative fixture
+// proving this.
+func isNowOrRefuseAccessor(decl ast.Decl) bool {
+	funcDecl, ok := decl.(*ast.FuncDecl)
+	if !ok || funcDecl.Name.Name != "nowOrRefuse" {
+		return false
+	}
+	if funcDecl.Recv == nil || len(funcDecl.Recv.List) != 1 {
+		return false
+	}
+	star, ok := funcDecl.Recv.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := star.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == "DORAExecutor" || ident.Name == "CapacityExecutor"
+}
+
+// findNowUTCReferences walks every top-level declaration in every file,
+// classifying each `nowUTC` selector reference by DECLARATION
+// (isNowOrRefuseAccessor), not by file. Shared by the live package guard
+// above and the isolated fixture test below, so both exercise the identical
+// classification logic rather than two implementations that could drift
+// apart.
+func findNowUTCReferences(fset *token.FileSet, files map[string]*ast.File) (violations []string, legitimate int) {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			inAccessor := isNowOrRefuseAccessor(decl)
+			ast.Inspect(decl, func(node ast.Node) bool {
 				selector, ok := node.(*ast.SelectorExpr)
 				if !ok || selector.Sel.Name != "nowUTC" {
 					return true
@@ -99,25 +163,55 @@ func TestNoRawClockCallSitesOutsideTheAccessor(t *testing.T) {
 			})
 		}
 	}
+	return violations, legitimate
+}
 
-	// POSITIVE CONTROL, asserted BEFORE the verdict below is allowed to mean
-	// anything: the two nowOrRefuse methods each pass executor.nowUTC to
-	// clockOrRefuse, so the walker must see exactly those.
-	if files == 0 {
-		t.Fatal("walked no files -- the guard would vacuously pass")
-	}
-	if legitimate < 2 {
-		t.Fatalf("the walker found %d nowUTC reference(s) inside "+
-			"executor_clock.go, want at least 2 (one per nowOrRefuse method). "+
-			"The walker is broken or the file was not parsed, so the "+
-			"zero-violations result below proves nothing", legitimate)
+// TestClockGuardCatchesAHelperAddedToTheAccessorFile is codex round 2's P2 on
+// this guard, closed: reproduces the EXACT shape the finding warned about --
+// a new helper function landing in executor_clock.go (same file as the two
+// legitimate accessors) that reads executor.nowUTC() directly -- and proves
+// the declaration-scoped classification (isNowOrRefuseAccessor) still catches
+// it, where the pre-fix file-scoped check would not have.
+//
+// Parses an ISOLATED synthetic source (not the real package directory) on
+// purpose: this test's job is to prove the WALKER's classification logic is
+// declaration-scoped, independent of whatever the real file currently
+// contains. Using the real file would only prove today's file has no rogue
+// helper in it -- exactly what the round-2 finding says is NOT the guarantee
+// this guard makes.
+func TestClockGuardCatchesAHelperAddedToTheAccessorFile(t *testing.T) {
+	const source = `package remaining
+
+import "time"
+
+func (executor *DORAExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("DORAExecutor", executor.nowUTC)
+}
+
+func (executor *CapacityExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("CapacityExecutor", executor.nowUTC)
+}
+
+// rogueHelper is the shape round 2's P2 warned about: a NEW function in this
+// same file, reading nowUTC directly instead of going through nowOrRefuse().
+func rogueHelper(executor *DORAExecutor) time.Time {
+	return executor.nowUTC()
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "executor_clock.go", source, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
 	}
 
-	if len(violations) > 0 {
-		t.Errorf("nowUTC is referenced outside executor_clock.go at %s -- use "+
-			"the kind's nowOrRefuse() accessor. Reading the field directly is "+
-			"the defect CHAOS-4954 fixed at three sites; the field is still "+
-			"there, so nothing but this test stops a fourth",
-			strings.Join(violations, ", "))
+	violations, legitimate := findNowUTCReferences(fset, map[string]*ast.File{"executor_clock.go": file})
+
+	if legitimate != 2 {
+		t.Fatalf("legitimate = %d, want 2 (the two real nowOrRefuse accessors) -- "+
+			"the fixture no longer matches the production shape it is modelling", legitimate)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("violations = %v, want exactly 1 (rogueHelper) -- a new helper "+
+			"added to the accessor's own file was not caught", violations)
 	}
 }

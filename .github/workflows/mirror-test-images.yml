@@ -48,6 +48,12 @@ on:
       # only the pgbouncer digest runs river CI against a ghcr ref that was
       # never copied.
       - tests/compatibility/river/compose.compatibility.yml
+      # docker/Dockerfile is an INPUT too (CHAOS-4922): PYTHON_BASE_IMAGE is
+      # derived from it, so bumping the Python base without re-running this
+      # workflow leaves the Dockerfile naming a ghcr ref that was never copied
+      # -- a pull-time failure on whatever PR runs next. Same reason the river
+      # compose and the service workflows are listed.
+      - docker/Dockerfile
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -62,6 +68,12 @@ on:
       # only the pgbouncer digest runs river CI against a ghcr ref that was
       # never copied.
       - tests/compatibility/river/compose.compatibility.yml
+      # docker/Dockerfile is an INPUT too (CHAOS-4922): PYTHON_BASE_IMAGE is
+      # derived from it, so bumping the Python base without re-running this
+      # workflow leaves the Dockerfile naming a ghcr ref that was never copied
+      # -- a pull-time failure on whatever PR runs next. Same reason the river
+      # compose and the service workflows are listed.
+      - docker/Dockerfile
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -73,13 +85,65 @@ permissions:
   packages: write
 
 concurrency:
-  group: mirror-test-images
-  cancel-in-progress: false
+  # CHAOS-4928: the bare literal below used to be the WHOLE group -- every
+  # push, schedule, pull_request and workflow_dispatch run on this file
+  # shared one slot, repo-wide. Measured live: a dispatch on a feature
+  # branch (introducing CHAOS-4922's Python mirror image, meant to finish
+  # BEFORE that branch's own Tests run pulls it -- see the header above) sat
+  # pending for 2m23s and was evicted by an unrelated pull_request run one
+  # second after a third event landed. `cancel-in-progress: false` only
+  # protects a RUNNING job; GitHub still allows only one PENDING run per
+  # group, so a third event bumps a second, still-pending one -- the same
+  # mechanism CHAOS-4921 round 1 hit on docker-images.yml.
+  #
+  # push (to main) and schedule keep sharing ONE group deliberately: this
+  # job is idempotent and cumulative (it re-derives and mirrors everything
+  # CI currently needs from the tree at run time), so losing an UNRELATED
+  # pending run there is cheap -- the next one re-covers it. pull_request
+  # and workflow_dispatch are the opposite: each carries branch-specific
+  # intent that a later, unrelated event must not evict, so each gets its
+  # own group, isolated from the shared slot and from every other PR/dispatch.
+  #
+  # Two different refs CAN now enter this job at the same time -- fixed
+  # below by a SEPARATE, job-level concurrency group (CHAOS-4928 codex round
+  # 1, P1) that keeps the actual registry writes serialised regardless of
+  # how many workflow-level groups are running. Not every mirrored image is
+  # equally protected from a race, which the group split above is corrected
+  # to no longer claim in general:
+  #   - `postgres:18-alpine` is digest-pinned (`@sha256:...`) everywhere it
+  #     is consumed -- a concurrent write there is provably harmless no
+  #     matter what races it.
+  #   - `clickhouse/clickhouse-server:26.7` and `valkey/valkey:8-alpine` are
+  #     consumed by bare tag, no digest (test.yml, live-e2e.yml) -- a
+  #     deliberate choice (minor pinned, patch drift accepted; nobody has
+  #     pinned valkey yet either), NOT an oversight to fix in this PR. Two
+  #     racing writers publishing different upstream content to that tag
+  #     would be a real, silent inconsistency for exactly these two images.
+  # The job-level lock below closes that gap structurally instead of
+  # depending on every image happening to be digest-pinned.
+  group: mirror-test-images-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.sha) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Registry writes stay serialised across EVERY event via this separate,
+    # job-level group -- independent of the workflow-level group above,
+    # which only controls which runs can queue without evicting each other.
+    # Two runs from different workflow-level groups can both be "active" at
+    # once (no displacement), but their `mirror` jobs still queue behind one
+    # another here, so `imagetools create` never races itself to the same
+    # destination tag. `cancel-in-progress: false`: if a third run's job
+    # arrives while a second is already queued here, GitHub's documented
+    # one-pending-per-group behavior can still replace that second one --
+    # but a CANCELLED JOB is a visible red check on that run, not a run that
+    # never created a job at all (CHAOS-4928's original, silent failure
+    # mode). A contended mirror job failing loud here is an acceptable,
+    # narrower residual, not the bug this ticket exists to fix.
+    concurrency:
+      group: mirror-publish
+      cancel-in-progress: false
     # Forks get neither the Docker Hub secrets nor packages:write, so the job
     # would fail at login rather than do anything useful.
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
@@ -109,6 +173,8 @@ jobs:
       # parser, so the mirror and the pre-pull cannot drift apart.
       - name: Resolve every image CI pulls from Docker Hub
         id: images
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           # Two sources, both DERIVED so neither can drift from what CI runs:
@@ -188,6 +254,29 @@ jobs:
             sed -nE 's/^[[:space:]]*image:[[:space:]]*(\$\{[^}]*\})?([^[:space:]#]+).*$/\2/p' \
               "${compose}" >> images.raw
           done
+          #   4. docker/Dockerfile's PYTHON_BASE_IMAGE (CHAOS-4922). The
+          #      application image's Python base was pulled straight from Docker
+          #      Hub, unauthenticated, so it shared a per-IP rate limit with
+          #      every other runner on that address.
+          #
+          # DERIVED, not restated, for the same reason as sources 2 and 3: the
+          # Dockerfile names the MIRRORED ref, so the mirror prefix is stripped
+          # to recover the upstream ref to mirror FROM -- the inverse of what the
+          # river compose needs, and identical in spirit. If someone bumps the
+          # Python base in the Dockerfile, this follows it with no second edit;
+          # a hand-maintained entry here would rot exactly as the hardcoded
+          # ClickHouse line did.
+          #
+          # The ref carries its digest, so this mirrors a specific image rather
+          # than whatever the tag points at today.
+          # ONE derivation, shared with docker-images.yml's ensure-base step
+          # (CHAOS-4922). These were two separate validators and they disagreed
+          # on the same Dockerfile in both directions -- most dangerously, this
+          # one accepted a ref with NO DIGEST and would have published a
+          # floating tag before the build noticed. See ci/python_base_ref.sh.
+          bash ci/python_base_ref.sh "${OWNER}" \
+            | awk '$1 == "upstream" { print $2 }' >> images.raw
+
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
           # Refuse to mirror anything still carrying an unexpanded shell variable

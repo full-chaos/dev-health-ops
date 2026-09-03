@@ -44,11 +44,11 @@ func TestLoadDailyRepositoryPartitionSizeFallsBackOnUnsetOrInvalid(t *testing.T)
 func TestScheduledFanoutPrefixIsThePythonGatePrefix(t *testing.T) {
 	const pythonGatePrefix = "fixed-schedule:daily_metrics_fanout:"
 
-	if scheduledFanoutGenerationPrefix != pythonGatePrefix {
+	if ScheduledFanoutGenerationPrefix != pythonGatePrefix {
 		t.Fatalf(
-			"scheduledFanoutGenerationPrefix = %q, but the Python readiness gate "+
+			"ScheduledFanoutGenerationPrefix = %q, but the Python readiness gate "+
 				"matches %q; the gate would match no fan-out run (CHAOS-4066)",
-			scheduledFanoutGenerationPrefix, pythonGatePrefix,
+			ScheduledFanoutGenerationPrefix, pythonGatePrefix,
 		)
 	}
 	if !isScheduledFanoutGeneration(pythonGatePrefix + "2026-07-24T01:00:00Z") {
@@ -63,7 +63,7 @@ func TestScheduledFanoutPrefixIsThePythonGatePrefix(t *testing.T) {
 // runs the Python readiness gate was never told about.
 func TestPostSyncAndScheduledFanoutGenerationPrefixesAreDisjoint(t *testing.T) {
 	postSync := postSyncGenerationPrefix + "00000000-0000-4000-8000-000000000001"
-	scheduled := scheduledFanoutGenerationPrefix + "2026-08-25T01:00:00Z"
+	scheduled := ScheduledFanoutGenerationPrefix + "2026-08-25T01:00:00Z"
 
 	if !isPostSyncGeneration(postSync) || isScheduledFanoutGeneration(postSync) {
 		t.Fatalf("post-sync generation %q: isPostSyncGeneration=%t isScheduledFanoutGeneration=%t, want true/false",

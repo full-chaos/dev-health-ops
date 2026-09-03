@@ -93,6 +93,87 @@ def test_self_hosted_attempt_depends_on_the_dind_smoke_test() -> None:
     )
 
 
+def test_fallback_leg_also_depends_on_the_dind_smoke_test() -> None:
+    # codex round 1 (#2180, CHAOS-4906), P1: `needs: pick-runner` alone let
+    # this job's own 5-minute queue-wait timer start in PARALLEL with
+    # dind-smoke-test's own run (up to 5 minutes), instead of after it. If
+    # dind takes close to its full budget, the fallback's timer can expire
+    # ("unclaimed", start a hosted build) at nearly the moment the attempt
+    # (which correctly needs both pick-runner AND dind-smoke-test) first
+    # becomes eligible to start -- both legs then build+push the SAME real
+    # arm64 digest, a registry write, not just wasted CPU. Fixed by adding
+    # dind-smoke-test to this job's own `needs:` too, so its queue timer
+    # starts only once the precondition has actually resolved.
+    needs = _needs(_job(_FALLBACK_JOB))
+    assert _DIND_JOB in needs, (
+        f"{WORKFLOW_PATH.name}: job {_FALLBACK_JOB!r} does not `needs:` "
+        f"{_DIND_JOB!r} -- its own queue-wait timer can then start BEFORE "
+        "the dind precondition has resolved, racing the self-hosted "
+        "attempt (which correctly waits for both) to build+push the same "
+        "digest"
+    )
+
+
+def test_fallback_leg_is_gated_by_go_builds_own_eligibility_condition() -> None:
+    # codex round 1 (#2180, CHAOS-4906), P2: `if: always()` alone made this
+    # job run on every event pick-runner's own gate allows (kill switch +
+    # non-fork only), with no regard for go-build's own eligibility
+    # condition -- a merge_group event or a docs-only PR would reach this
+    # job and build+push a real digest go-merge never even consumes,
+    # changing this workflow's behavior on those events relative to before
+    # this PR. Fixed by ANDing go-build's own condition into this job's
+    # `if:`, while keeping `always()` so a skipped/failed pick-runner or
+    # dind-smoke-test still doesn't block this job from running when it IS
+    # eligible.
+    condition = str(_job(_FALLBACK_JOB).get("if", ""))
+    go_build_condition = str(_job("go-build").get("if", ""))
+    assert "always(" in condition, (
+        f"{WORKFLOW_PATH.name}: job {_FALLBACK_JOB!r}'s `if:` no longer "
+        "contains always() -- without it, a skipped or failed pick-runner/"
+        "dind-smoke-test would block this job entirely, defeating its own "
+        "purpose as the sole source of truth for the required check"
+    )
+    # Compare on the underlying boolean structure, not exact text -- both
+    # are written as `expr1 || expr2 || ...`, so every OR-branch of
+    # go-build's own condition must appear verbatim in the fallback's.
+    go_build_branches = [b.strip() for b in go_build_condition.split("||")]
+    for branch in go_build_branches:
+        assert branch in condition, (
+            f"{WORKFLOW_PATH.name}: job {_FALLBACK_JOB!r}'s `if:` is "
+            f"missing go-build's own eligibility branch {branch!r} -- "
+            f"fallback={condition!r} go-build={go_build_condition!r}. "
+            "Without every branch, this job can run on an event go-build "
+            "itself would have skipped."
+        )
+
+
+# codex round 1 (#2180, CHAOS-4906), P2: a `needs:` dependency alone is not a
+# hard block if the DEPENDENT job's own `if:` is (or becomes) a status
+# override -- `always()`, `failure()`, `cancelled()` -- since those bypass
+# the implicit `success()` check GitHub Actions applies to a plain `if:`
+# expression. The PRECEDING test proves the dependency EXISTS; this one
+# proves the attempt's own `if:` cannot be edited into ignoring it.
+_STATUS_OVERRIDE_FUNCTIONS = ("always(", "failure(", "cancelled(")
+
+
+def test_self_hosted_attempt_if_is_not_a_status_override() -> None:
+    condition = str(_job(_SELF_HOSTED_JOB).get("if", ""))
+    assert condition, (
+        f"{WORKFLOW_PATH.name}: job {_SELF_HOSTED_JOB!r} has no `if:` at "
+        "all -- it would run unconditionally, the same defect this test "
+        "guards against, just with no expression to inspect"
+    )
+    for override in _STATUS_OVERRIDE_FUNCTIONS:
+        assert override not in condition, (
+            f"{WORKFLOW_PATH.name}: job {_SELF_HOSTED_JOB!r}'s `if:` "
+            f"({condition!r}) contains {override!r} -- a status-override "
+            "function bypasses the implicit success() check GitHub "
+            "Actions applies to needs:, so the dind-smoke-test precondition "
+            "the preceding test proves exists could be silently skipped, "
+            "cancelled, or failed and this job would run anyway"
+        )
+
+
 def test_worker_arm64_is_excluded_from_the_go_build_matrix() -> None:
     strategy = _job("go-build").get("strategy")
     assert isinstance(strategy, dict), f"{WORKFLOW_PATH.name}: go-build has no strategy"
@@ -166,6 +247,60 @@ def test_go_merge_needs_the_fallback_leg_not_the_attempt() -> None:
         "go-merge for up to GitHub's 24h self-hosted backstop instead of "
         "the fallback leg's own bounded poll. go-merge must depend ONLY "
         "on the fallback, which is built to be the sole source of truth."
+    )
+    # codex round 1 (#2180, CHAOS-4906), P2 guard false-negative: the two
+    # assertions above only check the PILOT legs -- neither would notice
+    # `go-build` itself silently dropping out of go-merge's `needs:`. Without
+    # it, go-merge could start once the fallback's single (worker, arm64)
+    # digest exists, before the other 13 matrix artifacts from go-build do,
+    # producing an incomplete manifest or a failed digest merge.
+    assert "go-build" in needs, (
+        f"{WORKFLOW_PATH.name}: go-merge no longer `needs:` 'go-build' -- "
+        "without it, go-merge could start as soon as this pilot's single "
+        "digest exists, before go-build's other matrix artifacts do"
+    )
+
+
+def _build_step(job_name: str) -> dict[str, object]:
+    steps_raw = _job(job_name).get("steps") or []
+    assert isinstance(steps_raw, list)
+    matches = [
+        s
+        for s in steps_raw
+        if isinstance(s, dict) and s.get("name") == _BUILD_STEP_NAME
+    ]
+    assert len(matches) == 1, (
+        f"{WORKFLOW_PATH.name}: job {job_name!r} must have exactly one "
+        f"step named {_BUILD_STEP_NAME!r} (found {len(matches)})"
+    )
+    return matches[0]
+
+
+def test_both_legs_build_step_with_maps_are_identical() -> None:
+    # codex round 1 (#2180, CHAOS-4906), P2 guard false-negative, the
+    # author's OWN least-sure line: the two legs are hand-duplicated step
+    # sequences with no shared job template -- nothing before this test
+    # pinned that their ACTUAL BUILD INPUTS (`with:`: context, file, target,
+    # platforms, build-args, tags, outputs/push condition, cache-from,
+    # cache-to) stay byte-for-byte equal. A future edit to one copy alone
+    # (e.g. a build-arg, a cache setting) would silently make "which leg
+    # actually ran" change what image gets built and pushed, with nothing
+    # to catch it. `timeout-minutes` (covered by the test above) and the
+    # fallback's own `if: steps.own.outputs.run_here == 'true'` ownership
+    # guard are the two INTENTIONAL, known differences and are excluded
+    # from this comparison on purpose, not by oversight.
+    attempt_with = _build_step(_SELF_HOSTED_JOB).get("with")
+    fallback_with = _build_step(_FALLBACK_JOB).get("with")
+    assert isinstance(attempt_with, dict) and isinstance(fallback_with, dict), (
+        f"{WORKFLOW_PATH.name}: one of the two legs' {_BUILD_STEP_NAME!r} "
+        "steps has no `with:` block to compare"
+    )
+    assert attempt_with == fallback_with, (
+        f"{WORKFLOW_PATH.name}: the two legs' {_BUILD_STEP_NAME!r} `with:` "
+        f"blocks have diverged -- attempt={attempt_with!r} "
+        f"fallback={fallback_with!r}. Either leg can be the one that "
+        "actually does the real work; a divergence here means WHICH leg "
+        "ran silently changes what gets built and pushed"
     )
 
 

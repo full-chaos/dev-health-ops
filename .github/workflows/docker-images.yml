@@ -710,8 +710,36 @@ jobs:
   # go-build's own build-and-push steps for this one (target, platform)
   # pair instead of running `go test`.
   go-build-worker-arm64-fallback:
-    needs: pick-runner
-    if: always()
+    # codex round 1 (#2180, CHAOS-4906), P1: `needs: pick-runner` alone let
+    # this job's own 5-minute queue-wait timer start in PARALLEL with
+    # dind-smoke-test's own up-to-5-minute run, instead of after it -- if
+    # dind took close to its full budget, this job's timer could expire
+    # ("unclaimed", start a hosted build) at nearly the same moment the
+    # attempt (which correctly needs BOTH pick-runner and dind-smoke-test)
+    # first became eligible to start, racing both legs to build+push the
+    # SAME real-consequence registry write. Adding dind-smoke-test here
+    # delays this job's own start (and therefore its queue timer) until the
+    # precondition has resolved, one way or the other -- `if: always()`
+    # below is what keeps this job running even when dind-smoke-test is
+    # skipped (self-hosted disabled) or itself fails, exactly as before.
+    #
+    # codex round 1, P2: `if: always()` alone made this job run on EVERY
+    # event `pick-runner`'s own gate allows (the kill switch + non-fork
+    # check only) with no regard for go-build's own eligibility condition
+    # (below) -- a merge_group event or a docs-only PR would reach this job
+    # and build+push a real arm64 digest that go-merge never even consumes
+    # (go-merge still needs the skipped go-build too), a behavior change
+    # from before this PR existed. `needs.changes.outputs.code` requires
+    # `changes` as a direct dependency to read its output, hence its
+    # addition to `needs:` below -- it is a fast paths-filter job, not a
+    # meaningful delay to this job's own start.
+    needs: [pick-runner, dind-smoke-test, changes]
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'release' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       needs.changes.outputs.code == 'true')
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 20
     permissions:

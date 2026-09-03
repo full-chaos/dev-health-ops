@@ -49,12 +49,15 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	rng := rand.New(rand.NewSource(seed))
 	t.Logf("seed %d — rerun with the same seed to reproduce any disagreement", seed)
 
-	var checked, skipped, multi, boundary int
+	var checked, skipped, multi, boundary, dollarIdents int
 	skipReasons := map[string]int{}
 	var firstDisagreement string
 
 	for i := 0; i < 3000; i++ {
-		stmt := generateStatement(rng)
+		stmt, dollarIdent := generateStatement(rng)
+		if dollarIdent {
+			dollarIdents++
+		}
 
 		lexerRefuses := refuseMultipleStatements(stmt) != nil
 
@@ -97,6 +100,7 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 
 	t.Logf("checked %d, skipped %d (invalid SQL, by SQLSTATE: %v), server called %d multi-statement, %d single-with-semicolon",
 		checked, skipped, skipReasons, multi, boundary)
+	t.Logf("of those, %d carried a $-bearing identifier", dollarIdents)
 	if firstDisagreement != "" {
 		t.Fatalf("lexer and PostgreSQL disagree:\n%s", firstDisagreement)
 	}
@@ -112,6 +116,11 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	if boundary < 100 {
 		t.Errorf("only %d single statements contained a semicolon; the corpus is not exercising the boundary, whatever its size", boundary)
 	}
+	// The class contracts asked for must actually be present, or a green run
+	// says nothing about it.
+	if dollarIdents < 100 {
+		t.Errorf("only %d statements carried a $-bearing identifier; that axis is not being exercised", dollarIdents)
+	}
 	if checked < 500 {
 		t.Errorf("only %d cases reached the oracle; too many were skipped to conclude anything", checked)
 	}
@@ -124,7 +133,7 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 // when the query actually carries a bind argument -- the parameterless path
 // never builds a prepared statement, which is the measurement that moved this
 // rule out of the protocol and into the lexer.
-func generateStatement(rng *rand.Rand) string {
+func generateStatement(rng *rand.Rand) (string, bool) {
 	payloads := []string{
 		`'a'`,
 		`'it''s'`,
@@ -167,6 +176,16 @@ func generateStatement(rng *rand.Rand) string {
 		` AS "ünïcode;id"`,
 		` AS "$$;$$"`,
 		` AS "/* ; */"`,
+
+		// $ IS A LEGAL IDENTIFIER CONTINUATION CHARACTER. a$$ is the identifier
+		// a-dollar-dollar, not an alias followed by a dollar-quote opener.
+		// lane-auth-contracts found this axis missing entirely: every alias
+		// above is either bare or double-quoted, so a $ never appeared where it
+		// could be mistaken for a container opener.
+		` AS a$$`,
+		` AS ab$$`,
+		` AS a$1`,
+		` AS a$b`,
 		` AS plain`,
 	}
 	tails := []string{
@@ -178,9 +197,17 @@ func generateStatement(rng *rand.Rand) string {
 		`; -- c
 		COMMIT`,
 		`  ;   `,
+
+		// Tails ending in $$ can close a body that should never have been
+		// opened. Harmless after a normal alias; the whole point after a
+		// $-bearing one.
+		`; COMMIT; --$$`,
+		`; COMMIT; /*$$*/`,
+		`; COMMIT;$$`,
 	}
+	alias := aliases[rng.Intn(len(aliases))]
 	return fmt.Sprintf("SELECT %s, $1::int%s%s",
 		payloads[rng.Intn(len(payloads))],
-		aliases[rng.Intn(len(aliases))],
-		tails[rng.Intn(len(tails))])
+		alias,
+		tails[rng.Intn(len(tails))]), strings.Contains(alias, "$")
 }

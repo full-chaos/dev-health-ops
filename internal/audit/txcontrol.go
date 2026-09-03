@@ -188,6 +188,23 @@ func refuseMultipleStatements(sql string) error {
 			}
 			i = j
 		case sql[i] == '$':
+			// $ IS A LEGAL IDENTIFIER CONTINUATION CHARACTER in PostgreSQL, so
+			// a$$ is the single identifier a-dollar-dollar and its $$ opens
+			// nothing. Treating every $$ as an opener let
+			//     SELECT $1::int AS a$$; COMMIT; --$$
+			// through: the scanner opened a body at the alias, swallowed the
+			// separator and the second statement, and closed on the trailing
+			// $$, so no semicolon was ever seen outside a container.
+			//
+			// This is the SAME predicate as the E-string rule above -- is this
+			// character starting a token, or continuing one -- and that is
+			// probably the general statement of both bugs rather than a
+			// coincidence. A container opener is only an opener at a token
+			// boundary.
+			if continuesIdentifier(sql, i) {
+				i++
+				continue
+			}
 			if tag := dollarTag(sql[i:]); tag != "" {
 				end := strings.Index(sql[i+len(tag):], tag)
 				if end < 0 {
@@ -212,6 +229,27 @@ func refuseMultipleStatements(sql string) error {
 		}
 	}
 	return nil
+}
+
+// continuesIdentifier reports whether the $ at index i is continuing an
+// identifier rather than starting a new token.
+//
+// The distinction is not "is the previous character an identifier character".
+// PostgreSQL allows $ and digits INSIDE an identifier but an identifier cannot
+// BEGIN with a digit, so 1$$ is the number 1 followed by a genuine dollar-quote
+// opener while a$$ is one identifier. Walking back to the first character of
+// the run is what separates those two.
+func continuesIdentifier(sql string, i int) bool {
+	j := i - 1
+	for j >= 0 && (identChar(sql[j]) || sql[j] == '$') {
+		j--
+	}
+	if j+1 >= i {
+		return false // no identifier run precedes this $
+	}
+	first := sql[j+1]
+	return first == '_' || first >= 0x80 ||
+		(first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
 }
 
 // dollarTag returns the opening dollar-quote tag at the start of s ($$ or

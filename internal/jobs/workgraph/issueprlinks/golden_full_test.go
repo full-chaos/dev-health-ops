@@ -428,6 +428,46 @@ func TestGithubClosingReferenceIsAdmittedAndWrittenAsNative(t *testing.T) {
 	}
 }
 
+// TestGithubClosingReferenceRejectsMalformedIssueNumber is codex round 1's P2
+// on #2174, closed: a prefix-only check admitted "gh:owner/repo#0" and any
+// other string merely starting with "gh:", including shapes the real writer
+// (github_work_items_rows.go:779-780, node.Number < 1 skipped) can never
+// produce. Each case here is a target the OLD prefix-only admission wrongly
+// wrote as a native link -- confirmed by reverting isWellFormedGithubIssueTarget
+// locally and observing Written()==1 for every row below, before this test
+// existed to pin the fix.
+func TestGithubClosingReferenceRejectsMalformedIssueNumber(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		target string
+	}{
+		{"zero is not a positive issue number", "gh:owner/repo#0"},
+		{"negative", "gh:owner/repo#-1"},
+		{"non-numeric", "gh:owner/repo#abc"},
+		{"empty issue number", "gh:owner/repo#"},
+		{"no separator at all", "gh:owner/repo"},
+		{"empty repo slug", "gh:#5"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			inputs := baseInputs()
+			inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+			inputs.Dependencies[0].TargetWorkItemID = testCase.target
+			inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: testCase.target}}
+
+			result := Derive(inputs)
+			if result.Written() != 0 {
+				t.Fatalf("wrote %d links for malformed target %q, want 0", result.Written(), testCase.target)
+			}
+			if got := result.Rejected[ReasonNotAdmissible]; got != 1 {
+				t.Errorf("rejected[not_admissible] = %d, want 1", got)
+			}
+			if !result.Balanced() {
+				t.Fatalf("accounting does not balance: %+v", result)
+			}
+		})
+	}
+}
+
 func repositoryRootPath(t *testing.T) string {
 	t.Helper()
 	working, err := os.Getwd()

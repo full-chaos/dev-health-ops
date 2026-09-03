@@ -168,9 +168,20 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: COORDINATOR_DATABASE_URI}}
             {{- end }}
             {{- end }}
+          {{- /*
+          CHAOS-4984: same extraEnvFrom-first, chart-config/secret-last
+          ordering as api-deployment.yaml, and for the same reason --
+          Kubernetes resolves a duplicate envFrom key in favour of the LAST
+          source, so an operator-supplied source (e.g. a local dotenv
+          Secret) belongs before these two chart-owned sources, not after.
+          Shared across every group in this range; there is no per-group
+          extraEnvFrom.
+          */}}
+          {{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}
+          {{- $groupEnvFrom = append $groupEnvFrom (dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))) }}
+          {{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}
           envFrom:
-            - configMapRef: {name: {{ include "dev-health.configMapName" $ }}}
-            - secretRef: {name: {{ include "dev-health.secretName" $ }}}
+            {{- toYaml $groupEnvFrom | nindent 12 }}
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources:

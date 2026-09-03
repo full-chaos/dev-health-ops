@@ -401,17 +401,18 @@ func (executor *RecommendationsExecutor) ComputePartition(
 		}
 		asOf = &parsed
 	}
-	// as_of_day is what the gate keys on -- the day whose daily_metrics_runs row
-	// must be finalized -- while `now` is as_of_day + 1 so the window actually
-	// READS that day. They are deliberately different values; see
-	// EvaluationInstant.
-	now, asOfDay := EvaluationInstant(asOf, executor.wallClock())
-
 	// The pool is checked HERE, adjacent to its only use, and AFTER the payload
 	// has been validated. Checking it at the top made a malformed scope report
 	// as "postgres unavailable" -- sending an operator to the database for a
 	// fault that is in the partition's own payload and will never fix itself.
-	// An error should name the thing that is actually wrong.
+	// An error should name the thing that is actually wrong. Checked BEFORE
+	// the clock resolution below too: a nil pool is a reachable production
+	// wiring bug, while an unset clock is reachable only through a bare
+	// zero-valued struct literal in a test -- NewRecommendationsExecutor sets
+	// nowUTC unconditionally on its only non-nil-returning path, same as
+	// DORA/Capacity (executor_clock.go) -- so the pool refusal is the one
+	// that must fire first when both are unset, naming the fault that can
+	// actually happen in production (TestAZeroValuedExecutorRefusesRatherThanPanicking).
 	//
 	// Unreachable through the constructor, which refuses a nil pool. Kept
 	// because a zero-valued struct is constructible in-package, and the
@@ -419,6 +420,20 @@ func (executor *RecommendationsExecutor) ComputePartition(
 	if executor.pool == nil {
 		return CompatibilityOutcome{}, ErrRecommendationsPostgresUnavailable
 	}
+
+	// as_of_day is what the gate keys on -- the day whose daily_metrics_runs row
+	// must be finalized -- while `now` is as_of_day + 1 so the window actually
+	// READS that day. They are deliberately different values; see
+	// EvaluationInstant. wallClockNow is resolved via nowOrRefuse
+	// (executor_clock.go) rather than a nil-safe wallClock() accessor --
+	// CHAOS-4954/CHAOS-4935 merge conflict with #2188, same refuse-loud shape
+	// as DORA/Capacity and this executor's own write path (ComputeOrg's
+	// writeInstant).
+	wallClockNow, err := executor.nowOrRefuse()
+	if err != nil {
+		return CompatibilityOutcome{}, err
+	}
+	now, asOfDay := EvaluationInstant(asOf, func() time.Time { return wallClockNow })
 
 	if !DailyMetricsReady(
 		ctx, executor.pool, run.OrganizationID, asOfDay,

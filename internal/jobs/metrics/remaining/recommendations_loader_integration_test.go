@@ -5,7 +5,6 @@ package remaining
 import (
 	"context"
 	"encoding/json"
-	"math"
 	"net/url"
 	"os/exec"
 	"path/filepath"
@@ -141,7 +140,7 @@ func assertCHAOS4897DefectIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
 			alpha.HotspotChurnOverlapKnown, beta.HotspotChurnOverlapKnown},
 	} {
 		if signal.aKnown != signal.bKnown ||
-			math.Float64bits(signal.a) != math.Float64bits(signal.b) {
+			!sameFloat64(signal.a, signal.b) {
 			t.Errorf("CHAOS-4897 fixture: %s differs between the teams "+
 				"(alpha=%v/%v, beta=%v/%v). Either the owned-repo join has landed -- "+
 				"in which case INVERT this assertion, it is the after-evidence -- or "+
@@ -160,7 +159,7 @@ func sameFloats(a, b []float64) bool {
 		return false
 	}
 	for index := range a {
-		if math.Float64bits(a[index]) != math.Float64bits(b[index]) {
+		if !sameFloat64(a[index], b[index]) {
 			return false
 		}
 	}

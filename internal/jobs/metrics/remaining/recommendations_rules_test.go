@@ -401,7 +401,7 @@ func TestRuleEvaluatorsMatchTheReference(t *testing.T) {
 							math.Float64bits(viaHex), wantRef.ValueBits)
 					}
 				}
-				if math.Float64bits(gotRef.Value) != math.Float64bits(wantValue) {
+				if !sameFloat64(gotRef.Value, wantValue) {
 					t.Errorf("case %q rule %q evidence[%d] %s: value %v (%#016x), want %v (%#016x)",
 						testCase.Name, evaluator.id, index, gotRef.Field,
 						gotRef.Value, math.Float64bits(gotRef.Value),

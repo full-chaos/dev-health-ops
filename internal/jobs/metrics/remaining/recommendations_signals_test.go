@@ -108,7 +108,7 @@ func TestGiniMatchesLivePython(t *testing.T) {
 			}
 			continue
 		}
-		if math.Float64bits(got) != math.Float64bits(want) {
+		if !sameFloat64(got, want) {
 			t.Errorf("Gini(%v) = %v (bits %#016x); python = %v (bits %#016x)",
 				testCase.ValuesHex, got, math.Float64bits(got), want, math.Float64bits(want))
 		}
@@ -140,7 +140,7 @@ func TestLinearSlopeMatchesLivePython(t *testing.T) {
 			}
 			continue
 		}
-		if math.Float64bits(got) != math.Float64bits(want) {
+		if !sameFloat64(got, want) {
 			t.Errorf("LinearSlope(%v) = %v (bits %#016x); python = %v (bits %#016x)",
 				testCase.ValuesHex, got, math.Float64bits(got), want, math.Float64bits(want))
 		}

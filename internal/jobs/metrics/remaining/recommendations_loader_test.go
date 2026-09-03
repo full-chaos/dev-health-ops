@@ -84,6 +84,39 @@ func cellFloat(t *testing.T, cell any) *float64 {
 	return &value
 }
 
+// sameFloat64 is the parity comparison for every float in this package's
+// corpora: bit-identical, EXCEPT that any two NaNs compare equal.
+//
+// # WHY NaN IS EXEMPTED, AND WHY ONLY NaN
+//
+// The NaN SIGN BIT is architecture-dependent. `inf - inf`, `inf / inf` and
+// `0.0 / 0.0` all produce the hardware's default quiet NaN, and that default
+// differs:
+//
+//	arm64  (this lane's machine)  0x7ff8000000000000   sign clear
+//	x86-64 (the CI runner)        0xfff8000000000000   sign set
+//
+// CPython does not paper over this -- it uses the same hardware default -- so
+// the reference produces the x86 spelling on x86 and the arm spelling on arm,
+// exactly as Go does. Parity therefore HOLDS per architecture; what does not
+// travel is a corpus that froze one machine's NaN and compared it bitwise
+// somewhere else. That is what turned #2142's Go quality run red on seven cases
+// whose only defect was having been generated on the wrong CPU.
+//
+// The sign is also not part of the stored contract: `json.dumps` writes the
+// bare token `NaN`, which carries neither sign nor payload, so no downstream
+// consumer can observe the difference this comparison is ignoring.
+//
+// Only NaN is exempted. Everything else stays strictly bit-identical, which
+// keeps +0.0 and -0.0 distinct -- they ARE observable (`repr` renders `-0.0`)
+// and round() deliberately preserves the sign of zero.
+func sameFloat64(got, want float64) bool {
+	if math.IsNaN(got) && math.IsNaN(want) {
+		return true
+	}
+	return math.Float64bits(got) == math.Float64bits(want)
+}
+
 func wantFloat(t *testing.T, encoded *string) (float64, bool) {
 	t.Helper()
 	if encoded == nil {
@@ -107,7 +140,7 @@ func compareOptional(t *testing.T, caseName, field string, got float64, gotKnown
 	if !wantKnown {
 		return
 	}
-	if math.Float64bits(got) != math.Float64bits(want) {
+	if !sameFloat64(got, want) {
 		t.Errorf("case %q %s: %v (%#016x), want %v (%#016x)",
 			caseName, field, got, math.Float64bits(got), want, math.Float64bits(want))
 	}
@@ -127,7 +160,7 @@ func compareList(t *testing.T, caseName, field string, got []float64, encoded []
 			t.Fatalf("parse %q: %v", text, err)
 		}
 		want := math.Float64frombits(raw)
-		if math.Float64bits(got[index]) != math.Float64bits(want) {
+		if !sameFloat64(got[index], want) {
 			t.Errorf("case %q %s[%d]: %v (%#016x), want %v (%#016x)",
 				caseName, field, index, got[index], math.Float64bits(got[index]),
 				want, math.Float64bits(want))

@@ -24,8 +24,36 @@ import (
 //
 // A grep for `.nowUTC()` matches comments, strings and doc examples, and
 // misses a call reached through a differently-named receiver. This walks the
-// parsed package and looks for a CALL whose function is a selector `.nowUTC`,
-// which is exactly the construct being banned and nothing else.
+// parsed package instead.
+//
+// IT BANS ANY SELECTOR REFERENCE TO nowUTC, NOT ONLY A CALL. An earlier
+// version of this comment said "a CALL ... and nothing else", which described
+// something NARROWER than the code does -- a bare `f := executor.nowUTC`,
+// never invoked here, is caught too (peer review, 3092). The broader behaviour
+// is the correct one: a reference stored now and called later bypasses the
+// accessor exactly as a direct call does, so there is no reason to exempt it.
+//
+// A composite-literal key -- `&DORAExecutor{nowUTC: f}` -- is a KeyValueExpr,
+// not a selector, and is deliberately NOT caught. That is not an oversight in
+// the walk: construction is the constructor's business, and the tests in this
+// package build literals on purpose to reach the refusal path. The line this
+// guard draws is reaching through a RECEIVER to read the field, which is the
+// thing the accessor exists to replace.
+//
+// # A RENAME CANNOT SILENCE THIS
+//
+// The obvious hole in matching by name rather than by type is that renaming
+// the field would leave the walk looking for something that no longer exists,
+// silent while the defect is fully reintroduced. It does not, and the reason
+// is the positive control below rather than anything deliberate here: the
+// control asserts the walk still finds nowUTC INSIDE executor_clock.go, and a
+// rename removes those occurrences too. Guard and control fail together, and
+// the control's message names the real cause. A control that proves the
+// instrument works also proves it is still pointed at the right thing.
+//
+// What remains is false POSITIVES -- another type in this package gaining a
+// nowUTC field. Those are loud, arrive with the change that causes them, and
+// fail closed, which is the acceptable direction.
 //
 // # THE POSITIVE CONTROL IS NOT OPTIONAL
 //

@@ -105,9 +105,9 @@ spec:
               stops overriding the right group the moment an operator's
               values.yaml reassigns the `metrics` queue away from `heavy`
               (or onto a second group too), leaving that group's bridge
-              calls quietly still sharing api's cgroup. `has` needs a real
-              list even for groups (reconciler/scheduler) that declare no
-              `queues` key at all, hence the `default (list)`.
+              calls quietly still sharing api's cgroup. `has`/`intersect`
+              need a real list even for groups (reconciler/scheduler) that
+              declare no `queues` key at all, hence the `default (list)`.
               Falls back to `api` if metricsApi isn't enabled (e.g. a
               fresh install with goWorkers scaled to 0 everywhere), so this
               never renders a reference to a Service that doesn't exist.
@@ -117,10 +117,30 @@ spec:
               an operator overrides api.port/metricsApi.port, since the
               Service's actual listening port would no longer match what
               this flag tells the Go binary to dial.
+
+              CHAOS-4984 (kiac-workers trace, buildOperationalWorker in
+              cmd/dev-health-worker): the flag is not metrics-only -- the
+              `ops` group's own HTTPDispatcher (queues: coverage, heartbeat,
+              retention, webhooks) needs --operational-bridge-url too and
+              crash-loops without it. Broadened the EMISSION condition to
+              any of those five queue names (checked one at a time -- this
+              Helm's Sprig build has no `intersect` function). The
+              metricsApi-vs-api DEFAULT-URL SELECTION stays gated on
+              `metrics` specifically, unchanged -- an ops-shaped group with
+              no `metrics` queue gets the `api` default, same as today,
+              since metricsApi exists only to isolate the metrics bridge
+              load, not ops traffic.
             */}}
-            {{- if has "metrics" ($group.queues | default (list)) }}
+            {{- $groupQueues := $group.queues | default (list) }}
+            {{- $needsBridge := false }}
+            {{- range $bridgeQueue := list "metrics" "coverage" "heartbeat" "retention" "webhooks" }}
+            {{- if has $bridgeQueue $groupQueues }}
+            {{- $needsBridge = true }}
+            {{- end }}
+            {{- end }}
+            {{- if $needsBridge }}
             {{- $defaultBridgeUrl := printf "http://%s-api:%v" (include "dev-health.fullname" $) $.Values.api.port }}
-            {{- if $.Values.metricsApi.enabled }}
+            {{- if and (has "metrics" $groupQueues) $.Values.metricsApi.enabled }}
             {{- $defaultBridgeUrl = printf "http://%s-metrics-api:%v" (include "dev-health.fullname" $) $.Values.metricsApi.port }}
             {{- end }}
             - {{ printf "--operational-bridge-url=%s" (default $defaultBridgeUrl $group.bridgeUrl) | quote }}

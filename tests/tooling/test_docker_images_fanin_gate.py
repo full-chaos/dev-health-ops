@@ -447,18 +447,30 @@ def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
 def _latest_tag_step_script() -> str:
     """The exact `run:` text of the fan-in job's tag-application step, as
     PyYAML parses it (block-scalar indentation already stripped) -- this
-    is what actually executes under bash, not the raw indented file text."""
-    for name, job in _jobs().items():
-        if "fan-in" not in name and "fan_in" not in name:
-            continue
-        for step in _steps(job):
-            run = step.get("run", "")
-            if "_inspect_classify" in run:
-                return run
-    raise AssertionError(
-        "could not find the fan-in job's tag-application step (looked for "
-        "a step whose run: text contains _inspect_classify)"
+    is what actually executes under bash, not the raw indented file text.
+
+    ci-flakes review: the original version returned on the FIRST match
+    with no exactly-one assertion -- fine today (there is exactly one),
+    but if a second fan-in-shaped job ever grew a similar step, one of
+    them would silently go untested while this helper kept returning
+    the other and the suite reported success. Collect every match and
+    assert there is exactly one, same discipline as ci-flakes' own
+    `_guard_script()`."""
+    matches = [
+        run
+        for name, job in _jobs().items()
+        if "fan-in" in name or "fan_in" in name
+        for step in _steps(job)
+        for run in [step.get("run", "")]
+        if "_inspect_classify" in run
+    ]
+    assert len(matches) == 1, (
+        "expected exactly one fan-in step whose run: text contains "
+        f"_inspect_classify, found {len(matches)} -- if this grew to more "
+        "than one, every match after the first would silently go untested "
+        "by this behavioural harness"
     )
+    return matches[0]
 
 
 # Records every `imagetools create` invocation to $RECORD_FILE and answers
@@ -467,6 +479,7 @@ def _latest_tag_step_script() -> str:
 # text mentions (ci-flakes review, delta on fa119b2d: a swapped rc==1/
 # rc==2 mapping -- the exact P1 this item exists to close -- left every
 # purely-source-text assertion in this file green).
+_LABELLED_REVISION = "baseshabaseshabaseshabaseshabaseshabase"
 _DOCKER_SHIM = r"""#!/usr/bin/env bash
 if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
   ref="$4"
@@ -485,9 +498,25 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
           # exit 0 but print nothing: the rc==0-yet-empty-stdout case.
           exit 0
           ;;
-        *)
+        unlabelled)
+          # exit 0, valid JSON, but no revision label on either platform
+          # -- falls through to the digest-walk fallback, same as
+          # dev-hops-runner/dev-hops-api during this PR's own migration.
           echo '{"manifest":{"digest":"sha256:aaaa"},"image":{"linux/amd64":{"config":{"Labels":{}}},"linux/arm64":{"config":{"Labels":{}}}}}'
           exit 0
+          ;;
+        labelled)
+          # BOTH platforms carry the SAME revision label -- this is the
+          # only scenario that reaches the actual descendant-vs-decline
+          # `git merge-base --is-ancestor` check, the thing CHAOS-4947
+          # exists to make. Whether it's a descendant is controlled by
+          # the `git` shim below via $MERGE_BASE_IS_ANCESTOR, not here.
+          echo '{"manifest":{"digest":"sha256:aaaa"},"image":{"linux/amd64":{"config":{"Labels":{"org.opencontainers.image.revision":"'"${LABELLED_REVISION}"'"}}},"linux/arm64":{"config":{"Labels":{"org.opencontainers.image.revision":"'"${LABELLED_REVISION}"'"}}}}}'
+          exit 0
+          ;;
+        *)
+          echo "unrecognized SCENARIO: ${SCENARIO}" >&2
+          exit 99
           ;;
       esac
       ;;
@@ -504,27 +533,39 @@ fi
 exit 0
 """
 
-# A `git` shim that records whether it was ever invoked, and returns
-# NOTHING for `git log` (empty history) if it is -- reaching the
-# digest-walk fallback at all is itself the observable this test checks
-# for the rc==0-yet-empty-stdout case, independent of what the (real,
-# unrelated) checkout this test runs inside happens to contain for a
-# nonsense BUILT_SHA.
+# A `git` shim that records whether it was ever invoked. For `git log`
+# (the digest-walk fallback) it returns NOTHING (empty history) --
+# reaching the fallback at all is itself the observable the empty/unknown/
+# absent scenarios check, independent of what the (real, unrelated)
+# checkout this test runs inside happens to contain for a nonsense
+# BUILT_SHA. For `git merge-base --is-ancestor` (the labelled scenario's
+# actual ancestry decision) it answers per $MERGE_BASE_IS_ANCESTOR: exit 0
+# (is an ancestor / descendant) or exit 1 (is not) -- this is the real
+# decision CHAOS-4947 exists to make, and no other scenario reaches it.
 _GIT_SHIM = r"""#!/usr/bin/env bash
 touch "${GIT_CALLED_FILE}"
+if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
+  if [ "${MERGE_BASE_IS_ANCESTOR}" = "true" ]; then
+    exit 0
+  else
+    exit 1
+  fi
+fi
 exit 0
 """
 
 
-def _run_latest_tag_step(scenario: str) -> tuple[str, bool, str]:
+def _run_latest_tag_step(
+    scenario: str, merge_base_is_ancestor: bool = True
+) -> tuple[str, bool, str]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
-    `git` shimmed to just record whether it was invoked (the digest-walk
-    fallback is the only thing in this step that calls git). Returns
-    (recorded `imagetools create` invocations, whether git was called,
-    captured stdout). `IS_MAIN_REF=true` and a source-tag probe that
-    always "finds" its ref, so every family reaches the :latest check
-    under test."""
+    `git` shimmed to record whether it was invoked and (for the
+    `labelled` scenario only) answer `merge-base --is-ancestor` per
+    `merge_base_is_ancestor`. Returns (recorded `imagetools create`
+    invocations, whether git was called, captured stdout). `IS_MAIN_REF=
+    true` and a source-tag probe that always "finds" its ref, so every
+    family reaches the :latest check under test."""
     script = _latest_tag_step_script()
     with tempfile.TemporaryDirectory() as tmp:
         bin_dir = Path(tmp) / "bin"
@@ -556,6 +597,8 @@ def _run_latest_tag_step(scenario: str) -> tuple[str, bool, str]:
                 "SCENARIO": scenario,
                 "RECORD_FILE": str(record_file),
                 "GIT_CALLED_FILE": str(git_called_file),
+                "LABELLED_REVISION": _LABELLED_REVISION,
+                "MERGE_BASE_IS_ANCESTOR": "true" if merge_base_is_ancestor else "false",
             }
         )
         result = subprocess.run(
@@ -657,12 +700,54 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         f"{empty_stdout!r}"
     )
 
-    # Negative control: a genuinely present (found) read must emit no
-    # `::error::` at all -- if it did, the annotation would be noise on
-    # the common case instead of a signal on the surprising one.
-    _found_record, _found_git_called, found_stdout = _run_latest_tag_step("present")
+    # Negative control: a genuinely present but UNLABELLED read (the
+    # digest-walk fallback path -- ci-flakes review: this is what "present"
+    # actually exercised before this rename, not the labelled/common case
+    # the old name implied) must emit no `::error::` at all -- if it did,
+    # the annotation would be noise on a routine fallback instead of a
+    # signal on the genuinely surprising empty-read case.
+    _found_record, _found_git_called, found_stdout = _run_latest_tag_step("unlabelled")
     assert "::error::" not in found_stdout, (
-        "a genuinely present :latest read emitted a `::error::` "
-        f"annotation -- it should only fire on the empty-read case, got "
-        f"stdout: {found_stdout!r}"
+        "a genuinely present (unlabelled) :latest read emitted a "
+        f"`::error::` annotation -- it should only fire on the empty-read "
+        f"case, got stdout: {found_stdout!r}"
+    )
+
+
+def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
+    """ci-flakes review: none of the other scenarios in this file reach a
+    genuinely LABELLED `:latest` -- absent/unknown/empty-success all
+    short-circuit before the label logic, and the unlabelled scenario
+    falls straight through to the digest-walk fallback. That means the
+    actual descendant-vs-decline decision this whole ticket exists to
+    make (`git merge-base --is-ancestor`) was never behaviourally
+    exercised: a mutation flipping that check (e.g. inverting the exit
+    code test, or swapping which branch creates vs declines) would have
+    survived every row in this file.
+
+    Uses the `labelled` scenario (both platforms carry the SAME revision
+    label, so `base_sha` resolves and the merge-base check is reached)
+    with the `git` shim answering `merge-base --is-ancestor` both ways
+    via `merge_base_is_ancestor`: True -> the built commit IS a
+    descendant of currently-latest -> must create; False -> it is NOT ->
+    must decline. Verified this test goes red against a mutation that
+    inverts the `git merge-base --is-ancestor` exit-code check (flipped
+    the if/else bodies) before trusting it."""
+    descendant_record, _git_called, _stdout = _run_latest_tag_step(
+        "labelled", merge_base_is_ancestor=True
+    )
+    assert "imagetools create" in descendant_record and ":latest" in descendant_record, (
+        "a labelled :latest whose recorded revision IS an ancestor of the "
+        "built commit did not record an `imagetools create ...:latest` "
+        f"call -- a true descendant must be tagged, got: {descendant_record!r}"
+    )
+
+    non_descendant_record, _git_called2, _stdout2 = _run_latest_tag_step(
+        "labelled", merge_base_is_ancestor=False
+    )
+    assert non_descendant_record == "", (
+        "a labelled :latest whose recorded revision is NOT an ancestor of "
+        "the built commit still recorded an `imagetools create` call -- "
+        "a non-descendant build must decline, never overwrite a newer "
+        f"currently-latest, got: {non_descendant_record!r}"
     )

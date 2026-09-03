@@ -134,7 +134,12 @@ func guardPattern(table string) *regexp.Regexp {
 	return regexp.MustCompile(`(?is)` +
 		`(?:INSERT` + sep + `INTO` + sep + `[^;]{0,120}` + t +
 		`|DELETE` + sep + `FROM` + sep + `[^;]{0,120}` + t +
-		`|UPDATE` + sep + `[^;]{0,120}` + t + sep + `SET)`)
+		// UPDATE accepts an OPTIONAL ALIAS between the table and SET. Round 1
+		// found that `UPDATE auth.auth_outbox_events AS e SET published_at = now()`
+		// slipped through, because this arm required SET immediately after the
+		// table name. Both `AS e` and a bare `e` are legal there.
+		`|UPDATE` + sep + `[^;]{0,120}` + t + sep +
+		`(?:(?:AS` + sep + `)?[A-Za-z_][A-Za-z0-9_$]*` + sep + `)?SET)`)
 }
 
 // TestNothingOutsideThisPackageWritesTheGuardedTables scans RAW SOURCE rather
@@ -249,6 +254,7 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 			return err
 		}
 		var parsed *ast.File
+		coveredByTablePattern := map[int]bool{}
 		for table, pattern := range patterns {
 			for _, loc := range pattern.FindAllIndex(body, -1) {
 				if parsed == nil {
@@ -257,6 +263,7 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 						return err
 					}
 				}
+				coveredByTablePattern[loc[0]] = true
 				key := rel + ":" + enclosingFunc(fset, parsed, loc[0])
 				if _, permitted := permittedWriters[key]; permitted {
 					matched[key] = true
@@ -295,8 +302,25 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 				if isForUpdate(body, loc[0]) {
 					continue
 				}
+				// THE EXEMPTION IS NOW COVERAGE, NOT PROXIMITY.
+				//
+				// This used to skip any window that NAMED a guarded table, on the
+				// assumption that the table-specific pattern had therefore caught
+				// it. Round 1 found the hole: an aliased UPDATE is not matched by
+				// that pattern, yet its window names the table, so the pattern
+				// missed it AND this branch exempted it. Two mechanisms each
+				// assuming the other covered the case, with nothing checking that
+				// either did.
+				//
+				// Now the only thing that exempts a write is a table pattern
+				// having ACTUALLY matched at this offset. Everything else that
+				// looks like a write near a guarded table, or whose target is
+				// built from a variable, is reported.
+				if coveredByTablePattern[loc[0]] {
+					continue
+				}
 				window := body[loc[1]:min(loc[1]+targetWindow, len(body))]
-				if mentionsGuardedTable(window) || !bytes.Contains(window, []byte("`+")) {
+				if !mentionsGuardedTable(window) && !bytes.Contains(window, []byte("`+")) {
 					continue
 				}
 				if parsed == nil {
@@ -315,7 +339,8 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 				}
 				seen[key] = true
 				offenders = append(offenders,
-					key+" writes a table this guard cannot resolve (the name is built from a variable)")
+					key+" writes a guarded table in a form this guard cannot resolve "+
+						"(an unrecognised statement shape, or a table name built from a variable)")
 			}
 		}
 		return nil

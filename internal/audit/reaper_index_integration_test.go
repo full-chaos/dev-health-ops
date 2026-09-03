@@ -96,53 +96,79 @@ func TestTheReapPredicateIsServedByAnIndex(t *testing.T) {
 
 	seedManyOutboxEvents(ctx, t, env, 5000, 500)
 	cutoff := time.Now().Add(-1 * time.Hour)
-	index := authschema.Quote(env.schema) + ".auth_outbox_events_reapable_idx"
 
-	if _, err := env.pool.Exec(ctx, "DROP INDEX "+index); err != nil {
+	// FIRST, ASSERT THE INDEX AS MIGRATION 0006 ACTUALLY APPLIED IT.
+	//
+	// The previous version dropped the migration's index and then created a
+	// hand-copied definition to measure. Round 1 found that a BROKEN 0006 with
+	// the same index name would still have passed, because the test measured
+	// its own copy rather than the artefact. That is the defect this package
+	// keeps re-learning, committed inside the test written to measure a
+	// migration.
+	//
+	// pg_get_indexdef reads the catalog, so what is asserted here is what the
+	// migration produced -- not what this file believes it produced.
+	var indexDef string
+	err := env.pool.QueryRow(ctx, `
+		SELECT pg_get_indexdef(c.oid)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relname = 'auth_outbox_events_reapable_idx' AND n.nspname = $1`,
+		"auth").Scan(&indexDef)
+	if err != nil {
+		t.Fatalf("migration 0006's index is not in the catalog at all: %v", err)
+	}
+	t.Logf("0006 applied: %s", indexDef)
+	for _, want := range []string{
+		"(published_at, id)",
+		"WHERE (published_at IS NOT NULL)",
+	} {
+		if !strings.Contains(indexDef, want) {
+			t.Errorf("0006's index as applied does not contain %q.\nCatalog says: %s\n"+
+				"The reap predicate is published_at IS NOT NULL AND published_at < $1 ORDER BY "+
+				"published_at, id; an index missing either part cannot serve it", want, indexDef)
+		}
+	}
+
+	// The AFTER plan is measured with the MIGRATION'S index in place -- nothing
+	// is created by this test. The BEFORE plan is then taken by dropping it,
+	// which is safe because the container is thrown away and nothing is
+	// recreated afterwards.
+	after := explainReap(ctx, t, env, cutoff)
+	t.Logf("WITH 0006's index (as applied by the migration):\n%s", after)
+
+	if _, err := env.pool.Exec(ctx, "DROP INDEX "+authschema.Quote(env.schema)+".auth_outbox_events_reapable_idx"); err != nil {
 		t.Fatalf("dropping the index to measure the before state: %v", err)
 	}
 	before := explainReap(ctx, t, env, cutoff)
-	t.Logf("BEFORE (0006's index dropped):\n%s", before)
+	t.Logf("WITHOUT it:\n%s", before)
 
-	if _, err := env.pool.Exec(ctx, "CREATE INDEX auth_outbox_events_reapable_idx ON "+
-		authschema.Quote(env.schema)+".auth_outbox_events (published_at, id) WHERE published_at IS NOT NULL"); err != nil {
-		t.Fatalf("recreating the index: %v", err)
-	}
-	after := explainReap(ctx, t, env, cutoff)
-	t.Logf("AFTER (0006's index present):\n%s", after)
-
-	// The claim is specifically that the index CHANGES the plan. Asserting only
-	// "the after plan uses an index" would also pass if both plans did, which
-	// would mean 0006 is unnecessary rather than working.
 	// WHAT 0006 ACTUALLY CHANGES, stated narrowly enough to be true.
 	//
-	// The cost that grows with the backlog is the SELECTION: finding the oldest
-	// reapable rows. Without the index that is a sequential scan of every row
-	// followed by a SORT of everything that matched, to take the first 1000.
-	// With it, the scan walks the index in order and stops at 1000 -- the sort
-	// disappears entirely, which is the structural difference and not a timing
-	// one.
+	// The cost that grows with the backlog is the SELECTION. Without the index
+	// that is a sequential scan of every row plus a SORT of everything matching,
+	// to take the oldest N. With it, the scan walks the index in order and
+	// stops; the sort disappears, which is structural rather than a timing
+	// artefact.
 	//
-	// The DELETE's join BACK to the table still sequential-scans here, and that
-	// is not what this migration is about: it joins the LIMIT-ed 1000 ids, and
-	// at 5500 rows the planner reasonably prefers one scan to 1000 primary-key
-	// lookups. That choice is scale-dependent and will change on its own. An
-	// assertion of "no sequential scan anywhere in the plan" would therefore be
-	// claiming something 0006 does not do, and it failed here for exactly that
-	// reason before being narrowed.
+	// The DELETE's join BACK to the table still sequential-scans at this size,
+	// and this test does not assert otherwise: it joins the LIMIT-ed ids, and at
+	// 5500 rows the planner reasonably prefers one scan to 1000 key lookups.
+	// That choice is scale-dependent -- measured at 400k rows the join stops
+	// scanning and the sort is STILL absent, so the property asserted here
+	// survives the transition and the one deliberately not asserted is the one
+	// that legitimately changes.
 	if !strings.Contains(before, "Seq Scan on auth_outbox_events e_1") {
-		t.Errorf("expected the SELECTION to sequential-scan without the index; if it is already "+
-			"indexed then 0006 is not what makes the difference:\n%s", before)
+		t.Errorf("expected the SELECTION to sequential-scan without the index:\n%s", before)
 	}
 	if !strings.Contains(before, "Sort Key: e_1.published_at") {
 		t.Errorf("expected a sort of the whole matching set without the index; that sort is the "+
 			"cost that grows with the backlog:\n%s", before)
 	}
 	if !strings.Contains(after, "Index Scan using auth_outbox_events_reapable_idx") {
-		t.Errorf("the selection does not use 0006's index, so something else changed the plan:\n%s", after)
+		t.Errorf("the selection does not use 0006's index:\n%s", after)
 	}
 	if strings.Contains(after, "Sort Key: e_1.published_at") {
-		t.Errorf("the sort survived the index, so the ordering is still being computed "+
-			"over the whole matching set:\n%s", after)
+		t.Errorf("the sort survived the index:\n%s", after)
 	}
 }

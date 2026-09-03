@@ -204,6 +204,13 @@ func buildUnitTeamSubquery(opts unitTeamSubqueryOptions) string {
 // snapshot stops holding, so the day the two planes start silently
 // disagreeing is observed via telemetry rather than rediscovered by a
 // future adversarial review with nothing to point at.
+//
+// CHAOS-4441 plan.md section 5a: also excludes any work_unit_id present in
+// work_unit_supersessions (supersededWorkUnitIDsFilter(),
+// investmentsupersessions.go), UNCONDITIONALLY -- independent of
+// investmentMembershipScopeFilter()'s own scope_enabled gate, per that
+// section's binding condition. See investmentsupersessions.go for why
+// folding the two together would defeat the sidecar's purpose.
 func latestWorkUnitInvestmentsSource() string {
 	return fmt.Sprintf(`(
         SELECT
@@ -227,9 +234,9 @@ func latestWorkUnitInvestmentsSource() string {
             org_id,
             max(computed_at) AS latest_computed_at
         FROM work_unit_investments
-        WHERE org_id = {org_id:String}%s
+        WHERE org_id = {org_id:String}%s%s
         GROUP BY org_id, work_unit_id
-    )`, investmentMembershipScopeFilter())
+    )`, supersededWorkUnitIDsFilter(), investmentMembershipScopeFilter())
 }
 
 // --- investment.py:90-127: LATEST_WORK_UNIT_REPO_EFFORT_CTE ------------

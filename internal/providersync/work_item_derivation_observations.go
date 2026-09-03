@@ -1,6 +1,10 @@
 package providersync
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
+)
 
 // workItemDerivationObservations carries what the team-inheritance donor load
 // did on one provider unit, from the derivation context out to the route's
@@ -22,7 +26,7 @@ import "sync"
 // keeps it correct if that changes.
 type workItemDerivationObservations struct {
 	mu              sync.Mutex
-	storedEdgeMerge githubWorkItemStoredEdgeMergeObservation
+	storedEdgeMerge teamattribution.GithubWorkItemStoredEdgeMergeObservation
 	// teamAttributionBySource tallies PRIMARY team_attribution rows this
 	// DERIVATION RUN produced, keyed by winning source (CHAOS-4244). This is
 	// PRE-WRITE DERIVATION VOLUME, not deduplicated persisted-row count
@@ -51,7 +55,7 @@ func newWorkItemDerivationObservations() *workItemDerivationObservations {
 // Nil-safe: a deriver built directly in a test carries no accumulator, and
 // that must not change what the derivation itself does.
 func (observations *workItemDerivationObservations) recordStoredEdgeMerge(
-	observed githubWorkItemStoredEdgeMergeObservation,
+	observed teamattribution.GithubWorkItemStoredEdgeMergeObservation,
 ) {
 	if observations == nil {
 		return
@@ -63,9 +67,9 @@ func (observations *workItemDerivationObservations) recordStoredEdgeMerge(
 	observations.storedEdgeMerge.CrossProviderRescues += observed.CrossProviderRescues
 }
 
-func (observations *workItemDerivationObservations) storedEdgeMergeSnapshot() githubWorkItemStoredEdgeMergeObservation {
+func (observations *workItemDerivationObservations) storedEdgeMergeSnapshot() teamattribution.GithubWorkItemStoredEdgeMergeObservation {
 	if observations == nil {
-		return githubWorkItemStoredEdgeMergeObservation{}
+		return teamattribution.GithubWorkItemStoredEdgeMergeObservation{}
 	}
 	observations.mu.Lock()
 	defer observations.mu.Unlock()
@@ -114,7 +118,7 @@ func (observations *workItemDerivationObservations) teamAttributionBySourceSnaps
 // through the assertion so a deriver double in a test simply reports zeroes
 // instead of forcing every fake to grow a method it has nothing to say about.
 type workItemDerivationObserver interface {
-	StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation
+	StoredEdgeMergeObservation() teamattribution.GithubWorkItemStoredEdgeMergeObservation
 }
 
 // workItemTeamInheritanceResultKey is the route-result key the stored-edge
@@ -146,10 +150,10 @@ func attachWorkItemTeamInheritanceObservation(
 	return result
 }
 
-func workItemDerivationObservationOf(deriver any) githubWorkItemStoredEdgeMergeObservation {
+func workItemDerivationObservationOf(deriver any) teamattribution.GithubWorkItemStoredEdgeMergeObservation {
 	observer, ok := deriver.(workItemDerivationObserver)
 	if !ok {
-		return githubWorkItemStoredEdgeMergeObservation{}
+		return teamattribution.GithubWorkItemStoredEdgeMergeObservation{}
 	}
 	return observer.StoredEdgeMergeObservation()
 }

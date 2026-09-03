@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -58,7 +59,7 @@ func gitlabWorkItemOracleClaim(input map[string]any) Claim {
 func gitlabWorkItemOracleRows(
 	t *testing.T,
 	input map[string]any,
-) (Claim, githubWorkItemRows, githubWorkItemDerivationContext) {
+) (Claim, githubWorkItemRows, teamattribution.GithubWorkItemDerivationContext) {
 	t.Helper()
 	claim := gitlabWorkItemOracleClaim(input)
 	rows := githubWorkItemRows{}
@@ -75,12 +76,12 @@ func gitlabWorkItemOracleRows(
 	if err != nil {
 		t.Fatal(err)
 	}
-	var facts githubWorkItemDerivationFacts
+	var facts teamattribution.GithubWorkItemDerivationFacts
 	if err := json.Unmarshal(encodedFacts, &facts); err != nil {
 		t.Fatal(err)
 	}
-	derived := newGitHubWorkItemDerivationContext(facts)
-	subjects := make(map[string]githubWorkItemDerivationSubject)
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
+	subjects := make(map[string]teamattribution.GithubWorkItemDerivationSubject)
 	for _, raw := range githubDerivedOracleList(input, "Donors") {
 		donor := githubWorkItemDerivationSubjectFromRow(gitlabWorkItemOracleGoItem(t, raw.(map[string]any)))
 		subjects[donor.WorkItemID] = donor
@@ -89,8 +90,8 @@ func gitlabWorkItemOracleRows(
 		subject := githubWorkItemDerivationSubjectFromRow(row)
 		subjects[subject.WorkItemID] = subject
 	}
-	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
-		"gitlab", subjects, rows.Dependencies, nil,
+	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
+		"gitlab", subjects, toDerivationDependencyEdges(rows.Dependencies), nil,
 	)
 	return claim, rows, derived
 }
@@ -444,7 +445,7 @@ func gitlabEngineOracleResult(t *testing.T, input map[string]any) GitLabWorkItem
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts := githubWorkItemDerivationFacts{}
+	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	encoded, err := json.Marshal(input["Facts"])
 	if err != nil {
 		t.Fatal(err)

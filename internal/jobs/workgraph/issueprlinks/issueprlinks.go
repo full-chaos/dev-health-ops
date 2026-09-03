@@ -189,18 +189,44 @@ func isWellFormedGithubIssueTarget(target string) bool {
 	if repoSlug == "" || number == "" {
 		return false
 	}
-	parsed, err := strconv.ParseUint(number, 10, 64)
-	if err != nil || parsed == 0 {
-		return false
+	n, ok := parseGithubIssueNumber(number)
+	return ok && n >= 1
+}
+
+// parseGithubIssueNumber is the SINGLE definition of what a well-formed
+// GitHub issue/PR number string looks like -- the exact domain the writer
+// (github_work_items_rows.go:784: `strconv.Itoa(node.Number)`, guarded by
+// `node.Number < 1` at :781) can produce, never a broader one. Any test
+// that needs to build or validate a "gh:owner/repo#N" target should call
+// this rather than reimplementing the check, so there is one place that
+// answers "can the producer actually emit this."
+//
+// STRUCTURAL fix (codex round 3 on #2174, P2 -- the third distinct class
+// found in this hand-rolled validator, hence structural rather than
+// another incremental patch): `node.Number` is Go's platform `int` --
+// SIGNED, 64-bit on every platform this ships to -- but the validator
+// used to parse with `ParseUint(number, 10, 64)`, an UNSIGNED 64-bit
+// domain. That domain is strictly wider than what strconv.Itoa(int(...))
+// can ever produce: `ParseUint` accepts "9223372036854775808" (2^63),
+// which overflows int64 and can never be the output of
+// `strconv.Itoa` on a real `node.Number` value. `ParseInt(number, 10,
+// strconv.IntSize)` matches the producer's actual signed domain exactly,
+// closing the class rather than the one value that happened to be found.
+//
+// The canonical round-trip (`strconv.Itoa(int(n)) == number`) catches
+// every OTHER non-canonical numeral in the same single check: a leading
+// zero ("01"), a leading '+' sign (ParseInt accepts one, Itoa never
+// emits one), and anything else that parses but isn't the exact string
+// the writer's own formatter would produce for that value.
+func parseGithubIssueNumber(number string) (int, bool) {
+	n, err := strconv.ParseInt(number, 10, strconv.IntSize)
+	if err != nil {
+		return 0, false
 	}
-	// CANONICAL form only (codex round 2 on #2174, P2): the writer
-	// (github_work_items_rows.go:784) always formats via strconv.Itoa, which
-	// never emits a leading zero -- "01", "007" etc. are strings ParseUint
-	// happily accepts but the writer can never produce. Reconstructing the
-	// canonical form and comparing catches every non-canonical numeral in one
-	// check, not just leading zeros specifically (e.g. it would also catch a
-	// hypothetical "+1" if ParseUint ever accepted one).
-	return strconv.FormatUint(parsed, 10) == number
+	if strconv.Itoa(int(n)) != number {
+		return 0, false
+	}
+	return int(n), true
 }
 
 // DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer

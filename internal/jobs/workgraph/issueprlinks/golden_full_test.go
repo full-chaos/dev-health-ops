@@ -503,6 +503,11 @@ func TestGithubClosingReferenceRejectsMalformedIssueNumber(t *testing.T) {
 		// never produce.
 		{"leading zero", "gh:owner/repo#01"},
 		{"multiple leading zeros", "gh:owner/repo#007"},
+		// codex round 3 on #2174, P2: the domain fix's own end-to-end proof --
+		// see parseGithubIssueNumber's doc comment and
+		// TestParseGithubIssueNumber for the direct, exhaustive coverage.
+		{"overflows int64 (one past MaxInt64, 2^63)", "gh:owner/repo#9223372036854775808"},
+		{"leading plus sign", "gh:owner/repo#+1"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			inputs := baseInputs()

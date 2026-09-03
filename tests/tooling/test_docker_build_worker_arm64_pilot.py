@@ -377,6 +377,77 @@ def test_both_legs_versioning_step_scripts_are_identical() -> None:
     )
 
 
+def test_self_hosted_attempt_has_no_explicit_job_name() -> None:
+    # codex round 3 (#2180, CHAOS-4906), P2: the fallback's poll script
+    # (.github/workflows/docker-images.yml:809) matches the attempt job by
+    # its DISPLAY NAME as reported by the GitHub Jobs API --
+    # `select(.name=="go-build-worker-arm64-self-hosted")` -- which today
+    # equals the job's own ID only because the job has no explicit `name:`
+    # key (GitHub's default display name for an unnamed job IS its id). A
+    # future edit adding a friendly `name:` (the established convention
+    # elsewhere in this very file -- go-build's own `name: Build Go
+    # Image`) would change what the API reports while leaving the job id,
+    # needs, eligibility, versioning, build inputs, and every other guard
+    # in this file untouched -- the poll would then see `not_created`
+    # forever, mark the attempt unclaimed after its 5-minute queue
+    # timeout, and start the hosted fallback while the renamed attempt
+    # may already be building and pushing the same digest. Pinning "no
+    # explicit name" here is the cheap side of the fix; the poll script
+    # itself matching by name (a display string) rather than something
+    # stable is the underlying fragility, out of scope for a guard test
+    # alone.
+    job = _job(_SELF_HOSTED_JOB)
+    assert job.get("name") is None, (
+        f"{WORKFLOW_PATH.name}: job {_SELF_HOSTED_JOB!r} now has an "
+        f"explicit `name:` ({job.get('name')!r}) -- the fallback's poll "
+        "script matches this job by its API-reported display name, which "
+        "for an unnamed job equals its id; adding a name changes what the "
+        "poll sees without changing anything else, silently breaking the "
+        "same-run job lookup. Update "
+        "`.github/workflows/docker-images.yml`'s "
+        "`select(.name==...)` filter to match the new name too if this "
+        "job is ever given one, and widen this test rather than deleting it"
+    )
+
+
+def _checkout_step(job_name: str) -> dict[str, object]:
+    steps_raw = _job(job_name).get("steps") or []
+    assert isinstance(steps_raw, list)
+    matches = [
+        s for s in steps_raw if isinstance(s, dict) and s.get("name") == "Checkout code"
+    ]
+    assert len(matches) == 1, (
+        f"{WORKFLOW_PATH.name}: job {job_name!r} must have exactly one "
+        f"'Checkout code' step (found {len(matches)})"
+    )
+    return matches[0]
+
+
+def test_both_legs_checkout_the_same_ref_expression() -> None:
+    # codex round 3 (#2180, CHAOS-4906), P2: neither the with:-map guard
+    # (build step inputs) nor the versioning-script guard covers the
+    # CHECKOUT step that determines what commit those identical steps
+    # actually operate on. A fallback-only edit to its own checkout
+    # `ref:` (e.g. hardcoding `refs/heads/main` instead of reading
+    # `inputs.ref`) would pass every current guard while, on a
+    # `workflow_dispatch` naming a non-main ref, making the fallback
+    # publish a DIFFERENT commit's arm64 digest than the rest of the
+    # matrix -- go-merge would then create a mixed-commit manifest.
+    attempt_with = _checkout_step(_SELF_HOSTED_JOB).get("with")
+    fallback_with = _checkout_step(_FALLBACK_JOB).get("with")
+    assert isinstance(attempt_with, dict) and isinstance(fallback_with, dict), (
+        f"{WORKFLOW_PATH.name}: one of the two legs' checkout step has no "
+        "`with:` block to compare"
+    )
+    assert attempt_with == fallback_with, (
+        f"{WORKFLOW_PATH.name}: the two legs' checkout steps have diverged "
+        f"-- attempt={attempt_with!r} fallback={fallback_with!r}. Both "
+        "must resolve the exact same commit, or the two legs can build "
+        "and push DIFFERENT source trees under the same digest artifact "
+        "name"
+    )
+
+
 def test_digest_artifact_names_match_the_wildcard_go_merge_downloads() -> None:
     # go-merge downloads `digests-go-${{ matrix.target }}-*` (a wildcard on
     # the suffix) -- both new jobs must upload under a name that glob

@@ -226,7 +226,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.recommendations": {
         "producer": "`internal/scheduler/fixed/inventory.go:127` (recommendations_daily_fanout)",
         "trigger": "schedule (DailyAt 02:00 UTC, safety net behind a finalize-gated primary trigger)",
-        "gate": "schema check in `NewRecommendationsExecutor` (`internal/jobs/metrics/remaining/recommendations_native.go:147`) + the CHAOS-2373 daily-metrics readiness gate inside `ComputePartition` (`recommendations_native.go:364,415`)",
+        "gate": "schema check in `NewRecommendationsExecutor` (`internal/jobs/metrics/remaining/recommendations_native.go:160`) + the CHAOS-2373 daily-metrics readiness gate inside `ComputePartition` (`recommendations_native.go:377,428`)",
         "writer": "Go `internal/jobs/metrics/remaining/recommendations_native_clickhouse.go:134`",
         "tables": "`recommendations_daily`",
         "evidence": "argued — wired `daily.go:389-436,474-483`",

@@ -9,6 +9,47 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 )
 
+// TestMetricsCollectorFromObserverUnwrapsTheProductionObserver pins the
+// round-2 codex finding (#2173, same class fixed on #2177/CHAOS-4282): the
+// observer buildDailyWorker actually receives in production is
+// claimLivenessObserver, not *jobruntime.MetricsCollector directly -- an
+// exact-type assertion alone silently fails on it (embedding promotes
+// methods, not concrete type identity), so any wiring that skips the Unwrap
+// fallback never fires in production despite passing every unit test built
+// against a bare collector.
+func TestMetricsCollectorFromObserverUnwrapsTheProductionObserver(t *testing.T) {
+	t.Parallel()
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The bare collector case (what every existing unit test constructs).
+	if got := metricsCollectorFromObserver(collector); got != collector {
+		t.Fatalf("bare collector: got %v, want the same collector", got)
+	}
+
+	// The production shape: claimLivenessObserver wraps the collector.
+	wrapped := claimLivenessObserver{MetricsCollector: collector, liveness: &claimLiveness{}}
+	if got := metricsCollectorFromObserver(wrapped); got != collector {
+		t.Fatalf("wrapped observer: got %v, want the exact embedded collector %v -- "+
+			"the Unwrap fallback did not fire", got, collector)
+	}
+
+	// An observer with neither shape resolves to nil, not a panic.
+	if got := metricsCollectorFromObserver(fakeObserverWithNoCollector{}); got != nil {
+		t.Fatalf("unrelated observer: got %v, want nil", got)
+	}
+}
+
+// fakeObserverWithNoCollector satisfies jobruntime.Observer by embedding the
+// (nil) interface -- never invoked here, only type-asserted against -- and
+// has neither the concrete *MetricsCollector type nor an Unwrap method: the
+// "neither shape" case above.
+type fakeObserverWithNoCollector struct {
+	jobruntime.Observer
+}
+
 func TestRemainingFamilyDescriptorsMatchIndependentRoutesAndBudgets(t *testing.T) {
 	t.Chdir("../..")
 	registry, err := jobruntime.Load(defaultContractRoot)

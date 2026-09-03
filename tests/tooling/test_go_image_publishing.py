@@ -25,14 +25,22 @@ _ALL_TARGETS = re.compile(r"^readonly ALL_TARGETS=\((?P<targets>[^)]*)\)", re.MU
 _GHCR_IMAGE = re.compile(
     r"ghcr\.io/[^/\s]+/" + IMAGE_PREFIX + r"(?P<target>[a-z0-9-]+)"
 )
-_CI_SCRIPT_REF = re.compile(r"\bci/[A-Za-z0-9_.-]+\.(?:sh|py)\b")
+_CI_SCRIPT_REF = re.compile(r"\bci/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:sh|py)\b")
 
 
 def _build_job_ci_script_references() -> set[str]:
-    """Every `ci/*.sh`/`ci/*.py` path the `build` job's own `run:` steps
+    """Every `ci/*.sh`/`ci/*.py` path (including nested subdirectories,
+    e.g. `ci/helpers/preflight.sh`) the `build` job's own `run:` steps
     invoke -- read from the parsed YAML `run:` text (what actually
     executes), not a raw grep over the file, same discipline as
-    `_latest_tag_step_script()` in test_docker_images_fanin_gate.py."""
+    `_latest_tag_step_script()` in test_docker_images_fanin_gate.py.
+
+    CHAOS-4949 (#2162), codex round 6 P1: the original pattern
+    (`ci/[A-Za-z0-9_.-]+\\.(sh|py)`) matched only a single path segment
+    after `ci/` -- a reference to `ci/helpers/preflight.sh` was invisible
+    to it, so this exact recurrence guard would itself pass silently on
+    the one shape it exists to catch. See
+    test_ci_script_ref_matches_nested_paths below."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     refs: set[str] = set()
     for step in workflow["jobs"]["build"]["steps"]:
@@ -137,4 +145,39 @@ def test_build_job_ci_script_references_are_covered_by_the_changes_filter() -> N
         "list does not name them verbatim -- a PR touching only these "
         "scripts sets changes.code=false and skips the build job (and "
         "whatever guard the script belongs to) entirely"
+    )
+
+
+def test_ci_script_ref_matches_nested_paths() -> None:
+    """CHAOS-4949 (#2162), codex round 6 P1: the extractor originally
+    matched only ONE path segment after `ci/` -- a build-job reference to
+    a NESTED script (e.g. `ci/helpers/preflight.sh`) was invisible to it,
+    so test_build_job_ci_script_references_are_covered_by_the_changes_filter
+    would pass silently on exactly the shape it exists to catch (a script
+    the build job invokes but the filter never names).
+
+    Appends a synthetic nested reference to the REAL build job's scanned
+    run: text (not the file on disk) and proves the full pipeline --
+    extract, then check against the real filter -- reports it as
+    uncovered. Verified this row goes RED against the OLD pattern
+    (`ci/[A-Za-z0-9_.-]+\\.(sh|py)`, no nested-segment group): it
+    extracted zero references from the appended text, so the first
+    assertion below failed before ever reaching the uncovered check."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    filters = yaml.safe_load(workflow["jobs"]["changes"]["steps"][1]["with"]["filters"])
+    code_patterns = set(filters["code"])
+
+    real_run_text = "\n".join(
+        step.get("run", "") for step in workflow["jobs"]["build"]["steps"]
+    )
+    scanned_text = real_run_text + '\nbash ci/helpers/preflight.sh "$OWNER"\n'
+    referenced = set(_CI_SCRIPT_REF.findall(scanned_text))
+    assert "ci/helpers/preflight.sh" in referenced, (
+        "the nested-path regex failed to extract the appended reference, "
+        f"got: {sorted(referenced)}"
+    )
+    uncovered = {ref for ref in referenced if ref not in code_patterns}
+    assert "ci/helpers/preflight.sh" in uncovered, (
+        "a nested ci/ script reference not in the changes filter must be "
+        f"reported uncovered -- got uncovered={sorted(uncovered)}"
     )

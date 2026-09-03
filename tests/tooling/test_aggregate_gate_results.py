@@ -707,6 +707,36 @@ def test_the_unconditional_policy_arm_is_load_bearing() -> None:
     assert "is not recognized" not in proc.stderr
 
 
+def test_typecheck_mypy_unconditional_arm_fails_on_a_literal_skip() -> None:
+    # CHAOS-4843, 4752-go's peer read: the test above proves the arm using a
+    # SYNTHETIC gate name; this proves it with typecheck-mypy's own literal
+    # GATE_NAME/GATED_JOB_1 strings, not just the assumption that they share
+    # the same code path.
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "GATE_NAME": "typecheck",
+        "EVENT_NAME": "push",
+        "GATE_HAS_SELECTOR": "false",
+        "GATED_JOB_1": "typecheck-mypy|unconditional|skipped",
+    }
+    proc = subprocess.run(
+        ["bash", str(SCRIPT)], capture_output=True, text=True, env=env
+    )
+    assert proc.returncode == 1
+    assert "was skipped, but its job condition selected it to run" in proc.stderr
+
+    # Negative control: same literal strings, policy flipped to bogus -- must
+    # fail for a DIFFERENT, generic reason, proving the assertion above is
+    # pinned to the unconditional arm and not to "typecheck always fails".
+    bad = dict(env, GATED_JOB_1="typecheck-mypy|totally-bogus|skipped")
+    proc2 = subprocess.run(
+        ["bash", str(SCRIPT)], capture_output=True, text=True, env=bad
+    )
+    assert proc2.returncode == 1
+    assert "is not recognized" in proc2.stderr
+    assert "was skipped, but its job condition selected it to run" not in proc2.stderr
+
+
 def test_a_filter_policy_without_a_selector_is_refused() -> None:
     # Given a job judged by the path filter, with no filter result to judge by.
     # `path-filtered` reads CHANGES_CODE; unset, it would read as "undecided"

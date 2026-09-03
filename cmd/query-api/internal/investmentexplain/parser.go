@@ -15,15 +15,16 @@ import (
 // json.Number rather than float64 -- see isPythonInt's doc comment for
 // why that distinction matters to valid_confidence's band_mix check.
 //
-// KNOWN DIVERGENCE, deliberately not closed: CPython's json.loads accepts
-// bare NaN/Infinity/-Infinity tokens by default (parse_constant), so
-// {"share_pct": NaN} parses successfully in Python and is THEN rejected by
-// finite_number's math.isfinite check -- reaching invalid_llm_output.
-// encoding/json rejects those tokens as a syntax error outright, reaching
-// invalid_json instead. Both paths reject the response; only the specific
-// ParseStatus differs, in a case that requires an LLM to emit an
-// non-JSON-standard bare token. Not worth a hand-rolled permissive
-// tokenizer to preserve one enum value in an already-rejected response.
+// CPython's json.loads accepts bare NaN/Infinity/-Infinity tokens by
+// default (parse_constant), so {"share_pct": NaN} parses successfully in
+// Python and is THEN rejected downstream by finite_number's
+// math.isfinite check -- reaching invalid_llm_output, not invalid_json.
+// encoding/json has no such mode; it rejects those tokens as a syntax
+// error outright. Team-lead ruling (2026-09-03): the differential test
+// compares ParseStatus values, so "same outcome, different label" is a
+// real parity break, not a cosmetic one -- fixed via
+// sanitizeNonFiniteJSONTokens/replaceNonFiniteSentinels rather than left
+// as a documented gap.
 func extractJSONObject(text string) (map[string]any, bool) {
 	if pythonparity.Strip(text) == "" {
 		return nil, false
@@ -34,7 +35,7 @@ func extractJSONObject(text string) (map[string]any, bool) {
 	if start == -1 || end == -1 || end < start {
 		return nil, false
 	}
-	jsonStr := candidate[start : end+1]
+	jsonStr := sanitizeNonFiniteJSONTokens(candidate[start : end+1])
 
 	decoder := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
 	decoder.UseNumber()
@@ -42,8 +43,154 @@ func extractJSONObject(text string) (map[string]any, bool) {
 	if err := decoder.Decode(&parsed); err != nil {
 		return nil, false
 	}
+	parsed = replaceNonFiniteSentinels(parsed)
 	obj, ok := parsed.(map[string]any)
 	return obj, ok
+}
+
+// nonFiniteValue is what a substituted NaN/Infinity/-Infinity token
+// becomes after decoding, via replaceNonFiniteSentinels. Its own distinct
+// Go type is the point: it must fail EVERY type assertion this file's
+// validators make (string, json.Number, bool, []any, map[string]any) --
+// those five, plus nil, are the ONLY shapes json.Unmarshal ever produces,
+// so no combination of them can represent "present but not any real JSON
+// type" the way Python's float('nan')/float('inf') is a real value that
+// still fails isinstance(x, str) while passing isinstance(x, (int,
+// float)).
+//
+// A first version of this fix substituted a literal JSON array (`[...]`)
+// textually and decoded normally -- wrong, because top_findings/
+// anti_claims/what_to_check_next legitimately expect []any, so a NaN
+// standing in for one of those fields would have PASSED the "is this a
+// list" check instead of failing it. Substituting JSON null (decoding to
+// Go nil) is wrong the other way: several fields treat None as "field
+// omitted, use the fallback" (the `present && x != nil` guards in
+// ParseInvestmentMixResponse/parseFinding/validConfidence), so a NaN
+// masquerading as null would be silently ACCEPTED as absent instead of
+// rejected as invalid -- the opposite of Python's real
+// `delta is not None and not finite_number(delta)` rejection. A distinct
+// struct type is the only shape that is simultaneously "not nil" and
+// "not any JSON primitive", which is what's actually needed.
+type nonFiniteValue struct{}
+
+// nonFiniteSentinelString is the decoded form of the placeholder
+// sanitizeNonFiniteJSONTokens writes in place of a bare token. The NUL
+// bytes make an accidental collision with real LLM-authored text
+// effectively impossible: a raw NUL byte cannot appear in a legally
+// authored JSON string without an explicit escape sequence, which this
+// substitution never writes (see nonFiniteJSONLiteral), so no
+// legitimately decoded string can ever equal this exact value.
+const nonFiniteSentinelString = "\x00pythonparity_nonfinite\x00"
+
+// nonFiniteJSONLiteral is nonFiniteSentinelString encoded as JSON text --
+// built via json.Marshal rather than hand-escaped, so there is no risk of
+// a typo in a manually written escape sequence producing a string that
+// doesn't decode back to nonFiniteSentinelString exactly.
+var nonFiniteJSONLiteral = mustMarshalJSONString(nonFiniteSentinelString)
+
+func mustMarshalJSONString(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		panic("investmentexplain: failed to encode nonFiniteSentinelString: " + err.Error())
+	}
+	return string(encoded)
+}
+
+// replaceNonFiniteSentinels walks a decoded json.Unmarshal tree and
+// replaces every string equal to nonFiniteSentinelString with a
+// nonFiniteValue{}, recursively through []any and map[string]any.
+func replaceNonFiniteSentinels(value any) any {
+	switch typed := value.(type) {
+	case string:
+		if typed == nonFiniteSentinelString {
+			return nonFiniteValue{}
+		}
+		return typed
+	case []any:
+		for i, element := range typed {
+			typed[i] = replaceNonFiniteSentinels(element)
+		}
+		return typed
+	case map[string]any:
+		for key, element := range typed {
+			typed[key] = replaceNonFiniteSentinels(element)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+// nonFiniteJSONTokens are the exact literal spellings CPython's json
+// scanner recognizes in VALUE position -- case-sensitive, no "nan", no
+// "+Infinity" (confirmed against real json.loads: both raise
+// "Expecting value"). Longest-prefix-safe: "-Infinity" and "Infinity"
+// share no common start byte with each other or with "NaN", so checking
+// order doesn't matter here.
+var nonFiniteJSONTokens = []string{"-Infinity", "Infinity", "NaN"}
+
+// sanitizeNonFiniteJSONTokens walks raw JSON text and replaces every bare
+// NaN/Infinity/-Infinity token OUTSIDE a string literal with
+// nonFiniteJSONLiteral, leaving string contents (including one that
+// happens to contain the substring "NaN") untouched -- confirmed against
+// CPython that `{"x": "This has NaN inside a string"}` parses as an
+// ordinary string, not a constant.
+func sanitizeNonFiniteJSONTokens(raw string) string {
+	var out strings.Builder
+	out.Grow(len(raw))
+	inString := false
+	escaped := false
+	for i := 0; i < len(raw); {
+		c := raw[i]
+		if inString {
+			out.WriteByte(c)
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			i++
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if token, ok := matchNonFiniteToken(raw[i:]); ok {
+			out.WriteString(nonFiniteJSONLiteral)
+			i += len(token)
+			continue
+		}
+		out.WriteByte(c)
+		i++
+	}
+	return out.String()
+}
+
+func matchNonFiniteToken(s string) (string, bool) {
+	for _, token := range nonFiniteJSONTokens {
+		if !strings.HasPrefix(s, token) {
+			continue
+		}
+		rest := s[len(token):]
+		if len(rest) > 0 && isJSONIdentByte(rest[0]) {
+			// part of a longer bare identifier (not valid JSON either
+			// way, but not this token) -- leave it for the decoder to
+			// reject on its own terms.
+			continue
+		}
+		return token, true
+	}
+	return "", false
+}
+
+func isJSONIdentByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // ParseInvestmentMixResponse ports parse_investment_mix_response

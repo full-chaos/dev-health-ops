@@ -349,6 +349,91 @@ for item in too_many_findings:
     item["finding"] = "Finding placeholder text without any digits present at all here"
 add("too_many_findings", text=case_text(body(top_findings=too_many_findings)))
 
+# CHAOS-4977, team-lead ruling 2026-09-03: CPython's json.loads (and
+# json.dumps under the default allow_nan=True) accept the bare tokens
+# NaN/Infinity/-Infinity, so a share_pct of float("nan") round-trips
+# through json.dumps as the literal text `NaN`, not a decode error. These
+# cases prove ParseInvestmentMixResponse reaches the SAME ParseStatus
+# Python does for each field shape a non-finite value could stand in for
+# -- a required number, a required list, and a required string -- plus a
+# case where the literal substring "NaN" appears inside a real string and
+# must NOT be touched.
+add(
+    "share_pct_nan_rejected_as_invalid_llm_output_not_invalid_json",
+    text=case_text(
+        body(
+            top_findings=[
+                {
+                    "finding": "Share percentage is not a finite number",
+                    "evidence": {
+                        "theme": "velocity",
+                        "subcategory": None,
+                        "share_pct": float("nan"),
+                        "delta_pct_points": None,
+                        "evidence_quality_mean": None,
+                        "evidence_quality_band": None,
+                    },
+                }
+            ]
+        )
+    ),
+)
+add(
+    "delta_pct_points_infinity_rejected",
+    text=case_text(
+        body(
+            top_findings=[
+                {
+                    "finding": "Delta points is not a finite number",
+                    "evidence": {
+                        "theme": "velocity",
+                        "subcategory": None,
+                        "share_pct": 40.0,
+                        "delta_pct_points": float("inf"),
+                        "evidence_quality_mean": None,
+                        "evidence_quality_band": None,
+                    },
+                }
+            ]
+        )
+    ),
+)
+add(
+    "top_findings_whole_field_is_nan",
+    text=case_text(body(top_findings=float("nan"))),
+)
+add(
+    "anti_claims_whole_field_is_negative_infinity",
+    text=case_text(body(anti_claims=float("-inf"))),
+)
+add(
+    "summary_whole_field_is_nan",
+    text=case_text(body(summary=float("nan"))),
+)
+add(
+    "band_mix_value_is_nan",
+    text=case_text(
+        body(
+            confidence={
+                **VALID_CONFIDENCE,
+                "band_mix": {
+                    "high": float("nan"),
+                    "moderate": 3,
+                    "low": 1,
+                    "very_low": 0,
+                    "unknown": 0,
+                },
+            }
+        )
+    ),
+)
+add(
+    "literal_nan_substring_inside_real_string_not_touched",
+    text=case_text(
+        body(summary="This mix shows a stable non-NaN pattern across periods overall.")
+    ),
+)
+
 
 def main() -> None:
     for case_name, case in CASES.items():

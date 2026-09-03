@@ -89,9 +89,22 @@ func hasUnicodeDigit(s string) bool {
 // hand-rolled scan rather than a regexp.MustCompile call: for each
 // forbidden word, find every case-insensitive occurrence and confirm
 // isPythonWordChar is false (or the string boundary) on both sides, the
-// exact definition of \b. The forbidden words themselves are plain ASCII,
-// so a simple strings.ToLower comparison matches CPython's re.IGNORECASE
-// here (no non-ASCII casefolding needed for these literals).
+// exact definition of \b.
+//
+// CASE-FOLDING NOTE (kept visible per team-lead ruling, 2026-09-03): the
+// case-insensitive match below is a plain strings.ToLower, not a full
+// Unicode case-fold (unicode.ToLower per-rune would be closer to
+// Python's re.IGNORECASE, which case-folds the whole pattern, not just
+// ASCII). This is EXACT today because forbiddenWords is entirely ASCII --
+// plain ToLower and Python's IGNORECASE agree on every ASCII letter. It
+// stops being exact the moment a non-ASCII word is ever added to
+// forbiddenWords (a German or French forbidden term, say): strings.ToLower
+// still handles many non-ASCII letters correctly (Go's ToLower is
+// Unicode-aware per rune), so the real risk is narrower than "ASCII only"
+// suggests, but it has not been verified for the SPECIFIC casefolding
+// edge cases Python's re module handles (e.g. Turkish dotless I, German
+// ß) -- unverified is not the same as safe. Re-check this note before
+// adding any non-ASCII entry to forbiddenWords.
 func containsForbiddenLanguage(text string) bool {
 	lower := strings.ToLower(text)
 	for _, word := range forbiddenWords {

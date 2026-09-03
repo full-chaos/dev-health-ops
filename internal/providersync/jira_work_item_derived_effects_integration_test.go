@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -33,7 +34,7 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	contextSource := jiraWorkItemClickHouseDerivationContextSource{
 		delegate: githubWorkItemClickHouseDerivationContextSource{Conn: conn, Lease: lease},
 	}
-	facts, err := contextSource.Load(ctx, claim, githubWorkItemDerivationLoadRequest{
+	facts, err := contextSource.Load(ctx, claim, teamattribution.GithubWorkItemDerivationLoadRequest{
 		AsOf: now, DonorWorkItemIDs: []string{"jira:OPS-missing"},
 	})
 	if err != nil {

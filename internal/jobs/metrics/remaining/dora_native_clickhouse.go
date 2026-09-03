@@ -306,6 +306,10 @@ func (executor *DORAExecutor) loadIncidents(
 	ctx context.Context, organizationID string, day time.Time, scope doraScope,
 ) ([]numerical.Incident, int, error) {
 	start, end := utcDayWindow(day)
+	asOf, err := executor.nowOrRefuse()
+	if err != nil {
+		return nil, 0, err
+	}
 	arguments := map[string]any{
 		"org_id": organizationID,
 		"start":  dateTime64Argument(start, millisecondPrecision),
@@ -314,7 +318,7 @@ func (executor *DORAExecutor) loadIncidents(
 		// NULL match nothing, because NULL <= as_of is NULL -- a producer gap,
 		// not something this reader may paper over. Reproduced exactly so the
 		// two runtimes agree on which mappings are live.
-		"as_of": dateTime64Argument(executor.nowUTC(), microsecondPrecision),
+		"as_of": dateTime64Argument(asOf, microsecondPrecision),
 	}
 	filter := repoFilterClause(scope, arguments)
 	query := resolvedIncidentsQuery(filter, executor.contract)

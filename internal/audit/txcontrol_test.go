@@ -49,3 +49,52 @@ func TestTransactionControlIsRefusedBeforeItIsSent(t *testing.T) {
 		})
 	}
 }
+
+// TestMultipleStatementsAreRefused covers the semicolon rule at the layer where
+// it lives.
+//
+// The ACCEPTING rows are the ones that matter here. A semicolon inside a
+// literal or a dollar-quoted body is data, not a separator, and a rule that
+// cannot tell the difference would refuse ordinary INSERTs whose values happen
+// to contain "; COMMIT" -- which is exactly the kind of over-correction this
+// package has shipped four times.
+func TestMultipleStatementsAreRefused(t *testing.T) {
+	for _, c := range []struct {
+		name, sql string
+		refuse    bool
+	}{
+		{"the measured attack: no bind args", `INSERT INTO auth.organizations (id) VALUES (gen_random_uuid()); COMMIT;`, true},
+		{"block comment between", `INSERT INTO t (a) VALUES (1);/*x*/COMMIT`, true},
+		{"line comment between", "INSERT INTO t (a) VALUES (1); -- c\nCOMMIT", true},
+		{"three statements", `SELECT 1; SELECT 2; SELECT 3`, true},
+		{"second statement is not control", `INSERT INTO t (a) VALUES (1); DROP TABLE t`, true},
+
+		{"trailing semicolon is legal", `INSERT INTO t (a) VALUES (1);`, false},
+		{"trailing semicolon with whitespace", "INSERT INTO t (a) VALUES (1);  \n ", false},
+		{"trailing semicolon then a comment", `INSERT INTO t (a) VALUES (1); -- done`, false},
+		{"semicolon inside a literal", `INSERT INTO t (a) VALUES ('; COMMIT;')`, false},
+		{"escaped quote then semicolon in a literal", `INSERT INTO t (a) VALUES ('it''s; COMMIT')`, false},
+		// E'a\\' is an escaped BACKSLASH, so the literal ends at that quote and
+		// "; COMMIT;" really is a second statement. This row was written the
+		// other way round first -- the test was wrong about SQL, not the code.
+		{"E-string ending on an escaped backslash: the rest IS a second statement",
+			`INSERT INTO t (a) VALUES (E'a\\'); COMMIT;`, true},
+		// E'a\' is an escaped QUOTE, so the literal continues and swallows the
+		// semicolon.
+		{"E-string with an escaped quote keeps the semicolon inside",
+			`INSERT INTO t (a) VALUES (E'a\'; COMMIT;')`, false},
+		{"dollar-quoted body", `INSERT INTO t (a) VALUES ($$; COMMIT;$$)`, false},
+		{"tagged dollar-quoted body", `INSERT INTO t (a) VALUES ($tag$; COMMIT;$tag$)`, false},
+		{"no semicolon at all", `INSERT INTO t (a) VALUES (1)`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := refuseMultipleStatements(c.sql)
+			if c.refuse && err == nil {
+				t.Errorf("%q carried a second statement and was sent", c.sql)
+			}
+			if !c.refuse && err != nil {
+				t.Errorf("%q is one statement and was refused: %v", c.sql, err)
+			}
+		})
+	}
+}

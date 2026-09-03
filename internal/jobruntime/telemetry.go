@@ -1051,6 +1051,13 @@ type MetricsCollector struct {
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
 
+	// recommendationsRefusals counts native recommendations construction
+	// refusals BY REASON, for the same reason doraRefusals exists: absence is
+	// not a signal. A recommendations kind that never registered writes no
+	// rows, and no rows is indistinguishable from a period in which no team
+	// tripped a rule -- which is a perfectly ordinary outcome for this family.
+	recommendationsRefusals map[string]uint64
+
 	// Report-domain dedup guard (CHAOS-4140). The weekly-report engine
 	// (internal/jobs/report) reads several append-only daily rollup tables
 	// through a latest-generation subquery (dedupFromSource) because a
@@ -2284,6 +2291,50 @@ var doraRefusalReasons = []string{
 	DORARefusedInspectFailed,
 }
 
+// Recommendations refusal reasons. A CLOSED set, checked at record time, for
+// the reason the dora set is closed: a typo'd reason would create a new series
+// that no dashboard or alert selects, so the refusal would be recorded and
+// still invisible.
+const (
+	// RecommendationsRefusedUnavailable is a nil ClickHouse connection.
+	RecommendationsRefusedUnavailable = "clickhouse_unavailable"
+	// RecommendationsRefusedSchemaIncompatible is a missing table or column
+	// among the six the loader reads or the one it writes.
+	RecommendationsRefusedSchemaIncompatible = "schema_incompatible"
+	// RecommendationsRefusedInspectFailed is a failure to READ the schema --
+	// distinct from finding it wrong, because the remedies differ: an
+	// unreachable database is transient, an incompatible one is a migration.
+	RecommendationsRefusedInspectFailed = "inspect_failed"
+)
+
+var recommendationsRefusalReasons = []string{
+	RecommendationsRefusedUnavailable,
+	RecommendationsRefusedSchemaIncompatible,
+	RecommendationsRefusedInspectFailed,
+}
+
+// ObserveRecommendationsRefused records that the native recommendations
+// executor refused to build.
+//
+// The kind is then not registered while its siblings are -- the per-KIND
+// refusal the DORA precedent established, so one family's fault cannot take
+// down five healthy ones. The cost of that scoping is that the only outward
+// sign would otherwise be a metric that never moves, and for recommendations
+// that is especially quiet: a family whose job is to say "nothing is wrong"
+// looks identical, when refused, to one saying nothing is wrong.
+func (collector *MetricsCollector) ObserveRecommendationsRefused(reason string) error {
+	if !slices.Contains(recommendationsRefusalReasons, reason) {
+		return fmt.Errorf("unknown recommendations refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.recommendationsRefusals == nil {
+		collector.recommendationsRefusals = map[string]uint64{}
+	}
+	collector.recommendationsRefusals[reason]++
+	return nil
+}
+
 // ObserveDORARefused records that the native DORA executor refused to build.
 //
 // The dora kind is then not registered, while the other remaining kinds are.
@@ -3195,6 +3246,14 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, reason := range doraRefusalReasons {
 		writeUintSample(output, "worker_dora_native_refused_total",
 			[]metricLabel{{"reason", reason}}, collector.doraRefusals[reason])
+	}
+
+	// Emitted for EVERY reason, including zeros -- same reasoning as the dora
+	// counter above.
+	writeMetadata(output, "worker_recommendations_native_refused_total", "Native recommendations executor construction refusals, by reason.", "counter")
+	for _, reason := range recommendationsRefusalReasons {
+		writeUintSample(output, "worker_recommendations_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.recommendationsRefusals[reason])
 	}
 
 	writeMetadata(output, "worker_capacity_native_partitions_total", "Partitions computed by the native Go capacity executor.", "counter")

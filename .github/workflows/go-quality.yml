@@ -1,0 +1,162 @@
+# The required `go-quality` check, in ONE always-run workflow.
+#
+# WHY (CHAOS-4834). `go-quality` used to be declared in two workflows: go.yml
+# (path-filtered, does the real work) and go-quality-noop.yml (paths-ignore,
+# reports a vacuous success so non-Go pull requests could satisfy the required
+# check). A change set touching both a path-listed and an unlisted file triggers
+# BOTH. Two runs then report the same required context, and which one branch
+# protection honours is unspecified -- the no-op's green can land first and
+# satisfy a required check that never ran the gate. That is not a theoretical
+# ordering concern; it is a required check that can pass without running.
+#
+# Deciding relevance in the TRIGGER is what created the duplicate. This decides
+# it INSIDE the job instead: one workflow declares `go-quality`, it always
+# reports, and it reports honestly -- either the gate ran, or the job says in
+# plain text that it skipped and why.
+#
+# The pattern list is NOT restated here. ci/go_relevance.py reads go.yml's own
+# `on.pull_request.paths`, so there is one list and it cannot drift -- which also
+# guarantees the invariant that matters: anything Go-relevant enough to run the
+# storage shards is Go-relevant enough to run go-quality.
+name: Go quality
+
+on:
+  pull_request:
+    branches: ['**']
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+  # Pull the mirrored test-dependency images from ghcr.io (CHAOS-4778).
+  packages: read
+
+concurrency:
+  group: go-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the base commit to diff against; the default depth-1 checkout
+          # cannot see it. This is a git fetch, not a Docker Hub pull.
+          fetch-depth: 0
+
+      - name: Set up Python 3.14 for the relevance decision
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Install the relevance decider's only dependency
+        run: python -m pip install --no-deps 'PyYAML==6.0.2'
+
+      - name: Decide whether this change set is Go-relevant
+        id: relevance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            range="${BASE_SHA}...HEAD"
+          else
+            # push to main: compare against the previous commit.
+            range="HEAD^...HEAD"
+          fi
+          echo "diff range: ${range}"
+          git diff --name-only "${range}" > changed.txt || {
+            echo "could not resolve the diff range; failing closed"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+          python ci/go_relevance.py < changed.txt | tee relevance.out
+          grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
+
+      - name: Report that the gate was skipped, and why
+        if: steps.relevance.outputs.relevant != 'true'
+        run: |
+          echo "skipped: no Go-relevant paths in this change set."
+          echo "Relevance is decided by ci/go_relevance.py against go.yml's own"
+          echo "on.pull_request.paths list. This job still REPORTS, so the required"
+          echo "check is satisfied honestly rather than by a second workflow."
+
+      - name: Set up Go
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Install locked live provider oracle dependencies
+        if: steps.relevance.outputs.relevant == 'true'
+        run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt
+
+      - name: Prepare base job contracts
+        if: steps.relevance.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          if ! git cat-file -e "${BASE_SHA}:contracts/jobs/v1" 2>/dev/null; then
+            echo "No v1 job contracts exist on the merge base; validating the additive tree only."
+            exit 0
+          fi
+          base_dir="${RUNNER_TEMP}/job-contract-base"
+          mkdir -p "${base_dir}"
+          git archive "${BASE_SHA}" contracts/jobs/v1 | tar -x -C "${base_dir}"
+          echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
+
+      - name: Log in to GitHub Container Registry
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        if: steps.relevance.outputs.relevant == 'true'
+        run: bash ci/check_go.sh integration-prepull
+
+      - name: Run Go quality gate
+        if: steps.relevance.outputs.relevant == 'true'
+        run: bash ci/check_go.sh ci
+
+      - name: Install pinned shellcheck
+        if: steps.relevance.outputs.relevant == 'true'
+        # CHAOS-4915. Installed, not assumed: the runner image ships its own
+        # shellcheck and can change it without a commit here, which is exactly
+        # the nondeterminism this pins away. Checksum-verified, because an
+        # unverified download is a pin on a name rather than on bytes.
+        # Installed under RUNNER_TEMP and put on PATH via GITHUB_PATH so no
+        # step needs sudo.
+        run: |
+          set -euo pipefail
+          version=0.11.0
+          sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          tarball="shellcheck-v${version}.linux.x86_64.tar.xz"
+          curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
+          echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xJf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          install -m 0755 "${RUNNER_TEMP}/shellcheck-v${version}/shellcheck" "${RUNNER_TEMP}/bin/shellcheck"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Check the shellcheck pin
+        if: steps.relevance.outputs.relevant == 'true'
+        # Runs BEFORE the harness validation that depends on it. Asserts both
+        # that the canonical set is clean and that the unclean fixture is still
+        # rejected -- the second is what catches a linter that has silently
+        # stopped linting, which otherwise reports exactly what a clean tree does.
+        run: bash ci/check_shellcheck_pin.sh
+
+      - name: Validate River compatibility harness
+        if: steps.relevance.outputs.relevant == 'true'
+        run: bash ci/check_river_compat_static.sh

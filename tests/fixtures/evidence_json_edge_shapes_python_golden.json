@@ -1,0 +1,206 @@
+{
+  "cases": [
+    {
+      "evidence_json": "[{\"team_id\": \"t\", \"metric_table\": \"work_item_metrics_daily\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"wip_count_end_of_day\", \"value\": -Infinity}]",
+      "name": "neg-inf-single",
+      "rows": [
+        {
+          "field": "wip_count_end_of_day",
+          "metric_table": "work_item_metrics_daily",
+          "team_id": "t",
+          "value_bits": "fff0000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "-Infinity is the one allow_nan token the real corpus never emitted"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"t\", \"metric_table\": \"work_item_metrics_daily\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"wip_count_end_of_day\", \"value\": -Infinity}, {\"team_id\": \"t\", \"metric_table\": \"work_item_metrics_daily\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"items_completed_delta\", \"value\": -Infinity}]",
+      "name": "neg-inf-pair",
+      "rows": [
+        {
+          "field": "wip_count_end_of_day",
+          "metric_table": "work_item_metrics_daily",
+          "team_id": "t",
+          "value_bits": "fff0000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        },
+        {
+          "field": "items_completed_delta",
+          "metric_table": "work_item_metrics_daily",
+          "team_id": "t",
+          "value_bits": "fff0000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "two -Infinity rows: proves the ', ' separator is not swallowed next to a bare token"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"t\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f1\", \"value\": NaN}, {\"team_id\": \"t\", \"metric_table\": \"b\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f2\", \"value\": Infinity}, {\"team_id\": \"t\", \"metric_table\": \"c\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f3\", \"value\": -Infinity}]",
+      "name": "all-three-tokens",
+      "rows": [
+        {
+          "field": "f1",
+          "metric_table": "a",
+          "team_id": "t",
+          "value_bits": "7ff8000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        },
+        {
+          "field": "f2",
+          "metric_table": "b",
+          "team_id": "t",
+          "value_bits": "7ff0000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        },
+        {
+          "field": "f3",
+          "metric_table": "c",
+          "team_id": "t",
+          "value_bits": "fff0000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "NaN, +Infinity and -Infinity in one list, in that order"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"t\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f1\", \"value\": -Infinity}, {\"team_id\": \"t\", \"metric_table\": \"b\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f2\", \"value\": NaN}]",
+      "name": "neg-inf-with-nan",
+      "rows": [
+        {
+          "field": "f1",
+          "metric_table": "a",
+          "team_id": "t",
+          "value_bits": "fff0000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        },
+        {
+          "field": "f2",
+          "metric_table": "b",
+          "team_id": "t",
+          "value_bits": "7ff8000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "a bare token adjacent to another bare token, no finite value between them"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"t\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f1\", \"value\": 0.0}, {\"team_id\": \"t\", \"metric_table\": \"b\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f2\", \"value\": -0.0}]",
+      "name": "signed-zero",
+      "rows": [
+        {
+          "field": "f1",
+          "metric_table": "a",
+          "team_id": "t",
+          "value_bits": "0000000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        },
+        {
+          "field": "f2",
+          "metric_table": "b",
+          "team_id": "t",
+          "value_bits": "8000000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "-0.0 must keep its sign; Go's constant -0.0 is exactly +0.0, so this is easy to lose"
+    },
+    {
+      "evidence_json": "[]",
+      "name": "empty-evidence",
+      "rows": [],
+      "why": "the empty list; engine.py:223 writes a literal '[]' for non-fired rows"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"\\u00e9quipe-caf\\u00e9\", \"metric_table\": \"work_item_metrics_daily\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"wip_count_end_of_day\", \"value\": 1.5}]",
+      "name": "non-ascii-team",
+      "rows": [
+        {
+          "field": "wip_count_end_of_day",
+          "metric_table": "work_item_metrics_daily",
+          "team_id": "\u00e9quipe-caf\u00e9",
+          "value_bits": "3ff8000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "ensure_ascii=True escapes accented Latin; Go's encoder emits it literally"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"\\u30c1\\u30fc\\u30e0\\ud83d\\ude80\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f1\", \"value\": 2.5}]",
+      "name": "emoji-and-cjk",
+      "rows": [
+        {
+          "field": "f1",
+          "metric_table": "a",
+          "team_id": "\u30c1\u30fc\u30e0\ud83d\ude80",
+          "value_bits": "4004000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "CJK plus an astral emoji: the emoji becomes a surrogate PAIR under ensure_ascii"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"he said \\\"hi\\\"\\\\ and\\n\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f\\tb\", \"value\": 3.5}]",
+      "name": "quote-backslash-newline",
+      "rows": [
+        {
+          "field": "f\tb",
+          "metric_table": "a",
+          "team_id": "he said \"hi\"\\ and\n",
+          "value_bits": "400c000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "the short escapes, including a tab inside a FIELD name rather than a value"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"\\u0000\\u0001\\u001f\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f\", \"value\": 4.5}]",
+      "name": "control-chars",
+      "rows": [
+        {
+          "field": "f",
+          "metric_table": "a",
+          "team_id": "\u0000\u0001\u001f",
+          "value_bits": "4012000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "C0 controls including NUL, which has no short escape and must go to \\u0000"
+    },
+    {
+      "evidence_json": "[{\"team_id\": \"\\ud83d\\ude00\\ud834\\udd1e\", \"metric_table\": \"a\", \"window_start\": \"2026-08-01\", \"window_end\": \"2026-09-01\", \"field\": \"f\", \"value\": 5.5}]",
+      "name": "surrogate-pair-astral",
+      "rows": [
+        {
+          "field": "f",
+          "metric_table": "a",
+          "team_id": "\ud83d\ude00\ud834\udd1e",
+          "value_bits": "4016000000000000",
+          "window_end": "2026-09-01",
+          "window_start": "2026-08-01"
+        }
+      ],
+      "why": "two astral code points back to back: four \\u escapes, no literal bytes"
+    }
+  ],
+  "environment": {
+    "float_repr_style": "short",
+    "python_version": "3.14.7"
+  },
+  "provenance": "shapes identified by lane-3092 while peer-reviewing #2140; its 302-shape real-row comparison carried zero -Infinity and no non-ASCII, so these were added synthetically to cover the gap",
+  "purpose": "edge-shape evidence_json cases the real rule corpus cannot reach: -Infinity, non-ASCII/CJK/astral text, short escapes, C0 controls, signed zero and the empty list"
+}

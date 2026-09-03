@@ -41,7 +41,13 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # call in this script, not only the one confirmed offender: none of these gate
 # stages need either var, and CI never sets them, so scrubbing everywhere keeps
 # this script's signal CI-equivalent by construction instead of by memory.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV)
+#
+# GOFLAGS and GOEXPERIMENT are scrubbed for a sharper reason (CHAOS-4778): GOFLAGS
+# is inherited by every `go` invocation, so an ambient `GOFLAGS=-tags=integration`
+# turned `check_go.sh test` -- a verb CI declares container-free -- into a full
+# integration run that starts Testcontainers. A caller's environment must not be
+# able to change which suite a verb runs.
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT)
 
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
@@ -90,10 +96,19 @@ usage() {
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
+  integration-images
+         Print "<key>\t<image>" for every image declared by the Go test
+         container harness. The single source of truth for the dependency set:
+         the pre-pull and the ghcr.io mirror workflow both read it, so neither
+         re-parses harness.go on its own. No Docker required.
   integration-prepull
-         Pre-pull the exact pinned ClickHouse image declared by the Go test
-         container harness, retrying transient registry failures at most three
-         times before failing loudly. CI runs this before each real shard.
+         Pre-pull every image declared by the Go test container harness --
+         postgres, clickhouse, valkey, and the testcontainers-go reaper,
+         which starts before the first container of any test binary whether or
+         not a test asks for it. Retries registry failures at most three
+         times per image before failing loudly. Takes no arguments on purpose:
+         a per-job subset is a list nothing can check against what the job
+         actually starts. CI runs this before every job that starts a container.
   integration-shard TARGET SHARD [--dry-run]
          Run exactly one validated integration shard. TARGET is `packages` for
          a package-level shard or `providersync` for a top-level test shard of
@@ -387,7 +402,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestTestopsRiskComputeMatchesLivePythonProduction$' \
+        -run '^(TestTestopsRiskComputeMatchesLivePythonProduction|TestPipelineStabilityFMAGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily
   ); then
     rm -rf -- "${proof_dir}"
@@ -396,6 +411,16 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/testops-risk-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: testops_risk live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY from testops-risk-golden above (same reasoning as the
+  # numerical package's sibling goldens): a single proof marker would be
+  # satisfied by whichever guard happened to run, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed.
+  proof_file="${proof_dir}/pipeline-stability-fma-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pipeline-stability FMA golden (CHAOS-4818 site 10) rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -435,7 +460,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestTeamWellbeingGoldenMatchesLivePython)$' \
+        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestTeamWellbeingGoldenMatchesLivePython|TestFMAGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/numerical
   ); then
     rm -rf -- "${proof_dir}"
@@ -464,6 +489,70 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/daily-wellbeing-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: team_wellbeing golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Same reasoning again: the CHAOS-4818 FMA golden (release_impact
+  # ._compute_confidence, compute._percentile, compute_capacity._percentile,
+  # hotspots.compute_file_hotspots) is a fourth distinct golden/producer in
+  # this same package and gets its own proof marker.
+  proof_file="${proof_dir}/fma-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: FMA golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/daily/filehotspots (frozen file-hotspots goldens vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython|TestRiskHotspotsOrderGoldenMatchesLivePython)$' \
+        ./internal/jobs/metrics/daily/filehotspots
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # TestFileHotspotsGoldenMatchesLivePython (CHAOS-4277) had NO registration
+  # anywhere in this function before this block -- found while adding the
+  # AST-lint follow-up's own guard to this same package and checking for a
+  # sibling block to extend, per lane-4441's CHAOS-4849 finding that a guard
+  # missing from this -run filter does not fail, it silently never runs. Its
+  # own marker for the reason spelled out above every other entry here: a
+  # shared marker is satisfied by whichever guard happened to run.
+  proof_file="${proof_dir}/file-hotspots-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: file_hotspots golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4818 AST-lint follow-up: sampleZScores' compound-assignment FMA
+  # site (hotspot_risk_score family). Used to also cover CodeOwnershipGini's
+  # own compound-assignment FMA site (ownership_gini family) -- dropped once
+  # this branch rebased onto PR #2123 (CHAOS-4824), which rewrote
+  # CodeOwnershipGini to use math/big.Int exclusively and made that site's
+  # FMA-fusion risk structurally impossible, not merely guarded.
+  proof_file="${proof_dir}/fma-followup-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # CHAOS-4863: ComputeFileRiskHotspots' risk_score must not depend on
+  # iteration order. This generator does more than the others above -- it
+  # re-verifies at generation time that live Python's own output is still
+  # order-invariant across several separate python3 invocations per case,
+  # so a failure here can mean either Go drift OR that Python itself has
+  # become order-dependent (the generator's own stderr distinguishes them).
+  proof_file="${proof_dir}/risk-hotspots-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: risk-hotspots order-invariance golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -508,7 +597,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestRepoUserCommitGoldenMatchesLivePython$' \
+        -run '^(TestRepoUserCommitGoldenMatchesLivePython|TestPysumGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily/repouser
   ); then
     rm -rf -- "${proof_dir}"
@@ -517,6 +606,14 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/repo-user-commit-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: repo_user_commit golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY (same reasoning throughout this function): a single
+  # proof marker would be satisfied by whichever guard happened to run.
+  proof_file="${proof_dir}/pysum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pysum golden (CHAOS-4824) rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -569,7 +666,14 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/workgraph/units (frozen work-unit component golden vs live Python)\n'
+  # NOTE: this -run list is itself an enumeration, and it is the SECOND place a
+  # rot guard has to be remembered -- once when the test is written, again here
+  # before it can ever execute. A guard missing from this list does not fail; it
+  # silently never runs. TestEveryDiscoverableCorpusStillMatchesLivePython is
+  # listed first because it DISCOVERS its subjects from tests/fixtures/ and so
+  # covers every conforming corpus without anyone editing this line again. See
+  # CHAOS-4849.
+  printf 'go test -count=1: internal/jobs/workgraph/units (frozen goldens vs live Python; the first test discovers its own subjects)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -579,7 +683,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython)$' \
+        -run '^(TestEveryDiscoverableCorpusStillMatchesLivePython|TestWorkgraphComponentsGoldenMatchesLivePython|TestConfidenceCoercionGoldenMatchesLivePython|TestInvestmentQualityGoldenMatchesLivePython|TestMaxComponentNodesGoldenMatchesLivePython|TestDecimalDigitsGoldenMatchesLivePython|TestTimeBoundsGoldenMatchesLivePython)$' \
         ./internal/jobs/workgraph/units
   ); then
     rm -rf -- "${proof_dir}"
@@ -591,6 +695,18 @@ check_live_python_oracles() {
   # work_unit_id addresses work_unit_investments (Go, once CHAOS-4441 lands) and
   # work_unit_membership (still Python until CHAOS-4282). A shared marker could
   # be satisfied by another guard while this one was filtered out of -run.
+  # The DISCOVERY guard's own marker. It walks tests/fixtures for generators and
+  # enforces the undiscoverable-corpus ratchet, and it SKIPS without
+  # DEV_HEALTH_LIVE_PYTHON_ORACLES=1 -- at which point Go's package-level `ok`
+  # counts the skip as a pass. Asserting the marker is what makes a skipped
+  # discovery guard fail the gate instead of passing it silently.
+  proof_file="${proof_dir}/workgraph-units-corpus-discovery"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: corpus discovery guard did not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   proof_file="${proof_dir}/workgraph-components-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: work-unit component golden rot guard did not compare against live Python\n' >&2
@@ -607,6 +723,156 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+  # Its own marker again: this fixture spans FOUR producers across TWO modules
+  # (utils/normalization's clamp and evidence_quality_band, plus evidence's
+  # _graph_density, _float_value and compute_evidence_quality), and it records
+  # whether evidence._float_value still agrees with components._edge_confidence
+  # -- two Python copies of one coercion that the Go port collapses into a
+  # single function. clamp() in particular lives outside work_graph/investment
+  # entirely, so nothing else would tell a reviewer editing it that this port
+  # depends on its NaN behaviour.
+  proof_file="${proof_dir}/investment-quality-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: investment evidence-quality golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding a value that appears in NO source file on either
+  # side: sys.get_int_max_str_digits(). It is an interpreter runtime setting,
+  # so it can move with no diff in this repository and no change of CPython
+  # version. Every value between the old and new limits would then be parsed by
+  # one plane and refused by the other -- which, for
+  # INVESTMENT_MAX_COMPONENT_NODES, means one plane splits oversized components
+  # and the other does not.
+  proof_file="${proof_dir}/max-component-nodes-magnitude"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: max_component_nodes magnitude golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding the interpreter's Unicode category Nd set -- the
+  # characters int() accepts -- and each one's decimal value. Both come from the
+  # deployed interpreter's unicode data and move on a Python upgrade with no
+  # diff here. The guard also covers the GENERATED Go table, because a stale
+  # table alongside a fresh fixture leaves the parser on the old set with the
+  # tests green.
+  proof_file="${proof_dir}/python-decimal-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python decimal-digit set did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: compute_time_bounds and _node_time_bounds, whose per-type
+  # fallback chains decide the stored TimeBounds on every work unit. Does not
+  # touch input_hash, so a drift here re-dates units rather than re-billing
+  # categorisation.
+  proof_file="${proof_dir}/time-bounds-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: time-bounds golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/pythonparity (frozen json.dumps golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestEdgeShapesGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
+        ./internal/pythonparity
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason the two above have theirs: a THIRD
+  # distinct producer -- CPython's json.dumps over evidence.build_text_bundle's
+  # payload -- and the only one whose divergence costs money rather than
+  # correctness. input_hash is categorization_input_hash, the LLM
+  # skip-existing key; a drifted hash matches no stored row and re-categorizes
+  # every work unit on every run, silently. A shared marker could be satisfied
+  # by either guard above while this one was filtered out of -run.
+  proof_file="${proof_dir}/python-json-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again. It shares the band golden's producer but guards a
+  # DIFFERENT axis: string and token spellings rather than float rendering.
+  # Someone "fixing" the column with ensure_ascii=False or allow_nan=False would
+  # leave the band golden green, so a shared marker would let that through.
+  proof_file="${proof_dir}/evidence-json-edge-shapes-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json edge-shapes golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the only fixture here whose producer is the REAL
+  # APPLICATION PATH rather than a direct library call: it builds a
+  # Recommendation and calls recommendation_to_record, so its bytes come out of
+  # loader.py:448 itself. That makes it sensitive to a key added to or reordered
+  # in the evidence dict literal, a changed rounding depth at a `value=` site,
+  # or an EvidenceRef rename -- none of which the direct-json guards can see.
+  proof_file="${proof_dir}/evidence-json-repr-band-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json repr-band golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for a producer that is neither a computation nor a
+  # dependency but a set of DEFAULT ARGUMENTS. json.dumps(value) with no
+  # sort_keys is a DIFFERENT reference from json.dumps(value, sort_keys=True)
+  # guarded above, and the two emit different bytes for the same data --
+  # recommendations/loader.py:448 writes the evidence_json column with the
+  # bare form. This marker is separate because a shared one would be satisfied
+  # by the sort_keys guard while this one was filtered out of -run, which is
+  # exactly the substitution that makes the two look interchangeable.
+  proof_file="${proof_dir}/python-json-insertion-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps insertion-order golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, and this one guards a producer that lives OUTSIDE
+  # this repository: CPython's str.isspace(), i.e. the interpreter's Unicode
+  # tables. A Python upgrade can move it with no diff in src/ for a reviewer to
+  # notice, and pythonparity.IsSpace hard-codes the current 0x1c-0x1f delta.
+  proof_file="${proof_dir}/python-whitespace-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python whitespace predicate did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, guarding the most fragile producer here: a THIRD-PARTY
+  # DEPENDENCY. clickhouse-connect decodes String columns as UTF-8 and, on
+  # failure, substitutes the lowercase hex of the whole value -- two lines
+  # inside its read loop, not part of its documented API. A lockfile bump moves
+  # it with no diff anywhere in this repository. chquery applies that policy to
+  # every String column, and those strings are hashed into input_hash and into
+  # work_unit_id.
+  proof_file="${proof_dir}/clickhouse-string-decode-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: clickhouse String decode policy did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
+  # used Neumaier compensated summation for floats since 3.12 and was a naive
+  # accumulation before. The fixture therefore depends on the interpreter
+  # version with no diff in this repository, in BOTH directions -- a downgrade
+  # below 3.12 would make pythonparity.Sum's compensation wrong, not merely
+  # unnecessary.
+  proof_file="${proof_dir}/python-sum-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
 
   printf 'go test -count=1: internal/jobs/workgraph/edges (frozen issue<->issue edge golden vs live Python)\n'
   if ! (
@@ -618,8 +884,28 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestWorkgraphIssueEdgesGoldenMatchesLivePython$' \
+        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
         ./internal/jobs/workgraph/edges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # A SECOND invocation, not another name in the -run pattern above: `-run`
+  # selects tests within the packages named on the command line, so a guard in a
+  # different package is silently never run if it is only added to the pattern.
+  # That failure is invisible -- the command exits 0 having matched nothing --
+  # which is why the marker check below is what actually proves it executed.
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestEveryRuneMatchesLivePythonCharacterClasses|TestPythonDigitValueMatchesLivePythonForEveryDigit)$' \
+        ./internal/jobs/workgraph/textrefs
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -631,6 +917,72 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-issue-edges-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again, per the capacity-forecast reasoning: this guard derives
+  # a Unicode property table from the live interpreter, a different producer from
+  # the edge golden above it, and it is the only thing standing between a Python
+  # upgrade and a silent parity break in which pipeline owns a dependency row.
+  proof_file="${proof_dir}/workgraph-numeric-digit-table"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the Numeric_Type=Digit table was not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: a different Unicode property from the digit table above, and
+  # the one that decides which BRANCH of the canonicalisation a row takes.
+  proof_file="${proof_dir}/workgraph-python-lower"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: pythonLower was not re-derived against live str.lower()\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: this one reads an interpreter SETTING rather than a Unicode
+  # property, so it rots for a different reason from every guard above --
+  # sys.set_int_max_str_digits() can change it at runtime, and it did not exist
+  # before Python 3.11. A deployment that raised or lowered it would leave this
+  # port disagreeing about which PR ids are convertible, in the direction that
+  # mislabels a build-aborting row as an ordinary PR.
+  # Its own marker: this is the guard that stops Go's unicode package being the
+  # oracle for a Python-facing predicate. It derives Python's DECIMAL set (the
+  # direction the digit-table guard above does not cover) and compares the two
+  # planes' Unicode versions, which is how a Go-only Nd rune parsed a PR number
+  # Python does not recognise.
+  # Its own marker: this one enumerates EVERY code point rather than a derived
+  # subset, because the two previous case guards were each blind to a one-rune
+  # property they did not think to vary -- context-sensitive final sigma, then
+  # Unicode version skew between x/text and the interpreter.
+  proof_file="${proof_dir}/workgraph-python-lower-allrunes"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the all-runes lowercase comparison was not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: this guard covers the THREE regex character classes the text
+  # extractor substitutes (\s, \w, \d), which is a different Unicode surface
+  # from the case-mapping and digit-table guards above. It fails in two
+  # directions for different reasons -- a rune Python accepts and Go rejects is
+  # a defect, while a rune Go accepts and Python does not is version skew with a
+  # pinned count -- so it also rots when either side upgrades its tables.
+  # This marker carries DATA as well as the fact of execution: the two UCD
+  # versions the parity claim was established against. So it is a prefix test,
+  # not equality -- an undated parity claim is the thing being avoided.
+  proof_file="${proof_dir}/workgraph-textrefs-charclass-allrunes"
+  if [ ! -f "${proof_file}" ] || ! grep -q '^executed ucd_python=.* ucd_go=' "${proof_file}"; then
+    printf 'ERROR: the text-extractor character classes were not compared against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/workgraph-python-decimal-blocks"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: Python decimal-digit blocks were not re-derived from live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/workgraph-int-max-str-digits"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: int_max_str_digits was not read back from live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -728,6 +1080,56 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/query-api-principal-envelope"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the Go effective-principal verifier was not compared against a real Python-issued envelope\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: cmd/dev-health-worker (build-scope parity table vs the live bridge, CHAOS-4837)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestBuildScopeParityTableMatchesLivePython$' \
+        ./cmd/dev-health-worker
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Registering the guard here is the LOAD-BEARING half of CHAOS-4837, not
+  # bookkeeping. The issue/PR golden's rot guard was written first and did not
+  # run AT ALL until its dispatcher entry existed -- a guard nothing invokes is
+  # indistinguishable from a guard that passes. The proof marker is what makes
+  # "it ran" checkable rather than assumed.
+  proof_file="${proof_dir}/build-scope-parity-table"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the build-scope parity table was not re-measured against the live bridge\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/pythonparity (float round/repr/format mirrors vs the live interpreter)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestFloatTextGoldenMatchesLivePython$' \
+        ./internal/pythonparity/...
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/pythonparity-float-text"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the CPython float round/repr/format golden was not re-derived from the live interpreter\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -1338,15 +1740,88 @@ check_integration_shard_plan() {
   emit_integration_shard_matrix
 }
 
-# Read the test dependency from the production Go harness instead of copying a
-# digest into the workflow. Exact hosted evidence for this retry is PR #1735,
+# Read the test dependencies from the production Go harness instead of copying
+# digests into the workflow. Exact hosted evidence for this retry is PR #1735,
 # run 31524982512, job 93891310235: Docker Hub returned 502 for this pinned
 # manifest and testcontainers made no second pull attempt. The bounded pre-pull
 # keeps the immutable digest contract and makes each registry attempt visible.
-discover_pinned_clickhouse_image() {
-  local image
+#
+# CHAOS-4778 widened this from ClickHouse alone to every image a container-backed
+# test pulls. Hosted evidence for the widening is run 33572737859, job
+# go-quality: `create container: reaper: new reaper: run container: Error
+# response from daemon: unauthorized: authentication required`. The image that
+# failed was testcontainers-go's own reaper, which no job pre-pulled and which
+# no job even names -- the library starts it before the first container of every
+# test binary.
+INTEGRATION_IMAGE_KEYS=(postgres clickhouse valkey reaper)
+
+# integration_image_declaration maps a key to the constant that declares it in
+# the harness. The reaper is the odd one out: it is a copy of a testcontainers-go
+# constant rather than a digest we choose (see harness.go), so it is exempt from
+# the digest contract below and TestReaperImageMatchesTestcontainers is what
+# keeps the copy current.
+integration_image_declaration() {
+  case "$1" in
+    postgres) printf 'PostgresImage\n' ;;
+    clickhouse) printf 'ClickHouseImage\n' ;;
+    valkey) printf 'ValkeyImage\n' ;;
+    reaper) printf 'ReaperImage\n' ;;
+    *) die "unknown test dependency image key '$1' (known: ${INTEGRATION_IMAGE_KEYS[*]})" ;;
+  esac
+}
+
+# integration_image_reference_pattern echoes the ERE that a NOT-digest-pinned
+# image must match. It is per-key on purpose. The previous generic
+# `^[^[:space:]]+:[^[:space:]]+$` asserted only "something, a colon, something",
+# which accepted `clickhouse/clickhouse-server:latest`,
+# `quay.io/other/clickhouse-server:latest` and `clickhouse/other-image:26.7`
+# alike -- a foreign registry so accepted then bypasses the ghcr mirror
+# downstream. Relaxing ClickHouse from a digest to a tag (CHAOS-4854) was a
+# change to the VERSION predicate; it should never have relaxed the IMAGE
+# domain along with it.
+integration_image_reference_pattern() {
+  case "$1" in
+    # chris's CHAOS-4854 ruling: "26.7 will pull all tags, 'matching' != matching
+    # exact. It's major version MATCHING." So the repository is fixed and only
+    # the 26.x version floats -- 26.7 and any patch inside it apply
+    # automatically, while `latest` and a different image do not. A digest stays
+    # legal so a future re-pin needs no change here.
+    clickhouse)
+      printf '%s\n' '^clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})$'
+      ;;
+    # The reaper's identity is pinned by TestReaperImageMatchesTestcontainers
+    # against testcontainers-go's own exported constant, which is a stronger
+    # control than a pattern here could be. This only rejects a bare repository.
+    #
+    # Deliberately UNCHANGED from the pattern this function replaced, including
+    # its acceptance of a digest form. Waiving the digest REQUIREMENT for a key
+    # should not also forbid a digest -- a digest is strictly more pinned than a
+    # tag, so refusing one here would reject an improvement. Narrowing this is
+    # out of scope for CHAOS-4854, which is about ClickHouse.
+    *)
+      printf '%s\n' '^[^[:space:]]+:[^[:space:]]+$'
+      ;;
+  esac
+}
+
+integration_image_requires_digest() {
+  # reaper: testcontainers-go picks its own tag, so we match the library.
+  # clickhouse: tracks the 26 MAJOR by tag so minor and patch upgrades apply --
+  # ruled by chris (CHAOS-4854), same policy CHAOS-4851 used for the CI service
+  # containers. Returning 1 here waives only the DIGEST requirement; each key
+  # still has to satisfy integration_image_reference_pattern above, which keeps
+  # the repository fixed.
+  case "$1" in
+    reaper | clickhouse) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+discover_test_dependency_image() {
+  local key="$1" declaration image reference_pattern
   local -a images=()
 
+  declaration="$(integration_image_declaration "${key}")"
   [ -f "${INTEGRATION_CONTAINER_HARNESS}" ] \
     || die "integration container harness not found: ${INTEGRATION_CONTAINER_HARNESS}"
   while IFS= read -r image; do
@@ -1354,42 +1829,114 @@ discover_pinned_clickhouse_image() {
     images+=("${image}")
   done < <(
     sed -nE \
-      's/^[[:space:]]*ClickHouseImage[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' \
+      "s/^[[:space:]]*${declaration}[[:space:]]*=[[:space:]]*\"([^\"]+)\".*\$/\1/p" \
       "${INTEGRATION_CONTAINER_HARNESS}"
   )
 
   [ "${#images[@]}" -eq 1 ] \
-    || die "expected exactly one ClickHouseImage declaration in ${INTEGRATION_CONTAINER_HARNESS}, found ${#images[@]}"
+    || die "expected exactly one ${declaration} declaration in ${INTEGRATION_CONTAINER_HARNESS}, found ${#images[@]}"
   image="${images[0]}"
-  if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
-    die "ClickHouseImage must be pinned by a full sha256 digest, got '${image}'"
+  if integration_image_requires_digest "${key}"; then
+    if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+      die "${declaration} must be pinned by a full sha256 digest, got '${image}'"
+    fi
+  else
+    reference_pattern="$(integration_image_reference_pattern "${key}")"
+    if [[ ! "${image}" =~ ${reference_pattern} ]]; then
+      die "${declaration} must match ${reference_pattern}, got '${image}'"
+    fi
   fi
   printf '%s\n' "${image}"
 }
 
-check_integration_prepull() {
-  local image attempt delay
+# mirrored_image applies TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX exactly as
+# testcontainers-go does, so the pre-pull warms the SAME ref the tests will later
+# ask for. Reusing the library's own variable rather than inventing a second one
+# is deliberate: one setting redirects both, and they cannot disagree about where
+# an image lives.
+#
+# The rule matches prependHubRegistry: an image that already names a registry is
+# left alone, where "names a registry" means its first path component contains a
+# dot or a colon (docker.io/x, localhost:5000/x). `postgres:18-alpine` does not
+# qualify -- the colon there is a tag -- which is exactly why the check looks at
+# the first component only.
+mirrored_image() {
+  local image="$1" prefix="${TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:-}" first
+  if [ -z "${prefix}" ]; then
+    printf '%s\n' "${image}"
+    return 0
+  fi
+  first="${image%%/*}"
+  # An explicitly written `docker.io/...` ref is REFUSED rather than guessed at.
+  # testcontainers-go cannot handle it coherently: ExtractRegistry normalises
+  # "docker.io" to the empty fallback, so its own `registry == "docker.io"`
+  # exclusion can never fire, and prependHubRegistry then builds
+  # `<prefix>/docker.io/<image>` -- a ref that does not resolve. Matching that
+  # would mean pre-warming a nonsense ref; diverging from it would mean this
+  # script warms one image while the test pulls another. Both are worse than
+  # refusing, and no pin here needs the prefix form.
+  if [ "${first}" != "${image}" ] && [ "$(printf '%s' "${first}" | tr '[:upper:]' '[:lower:]')" = "docker.io" ]; then
+    die "test dependency image '${image}' names docker.io explicitly. Write it without the registry (e.g. 'postgres:18-alpine@sha256:...') so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX can redirect it; testcontainers-go mishandles the explicit form."
+  fi
+  if [ "${first}" != "${image}" ] && case "${first}" in *.*|*:*) true ;; *) false ;; esac; then
+    printf '%s\n' "${image}"
+    return 0
+  fi
+  printf '%s/%s\n' "${prefix%/}" "${image}"
+}
+
+prepull_one_image() {
+  local key="$1" image attempt delay
   local max_attempts=3
 
-  command -v docker >/dev/null 2>&1 || die "docker is required for integration-prepull"
-  image="$(discover_pinned_clickhouse_image)"
+  image="$(mirrored_image "$(discover_test_dependency_image "${key}")")"
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    printf 'pre-pull pinned ClickHouse image %s (attempt %d/%d)\n' \
-      "${image}" "${attempt}" "${max_attempts}"
+    printf 'pre-pull %s test dependency image %s (attempt %d/%d)\n' \
+      "${key}" "${image}" "${attempt}" "${max_attempts}"
     if docker pull "${image}"; then
-      printf 'pre-pulled pinned ClickHouse image %s on attempt %d/%d\n' \
-        "${image}" "${attempt}" "${max_attempts}"
+      printf 'pre-pulled %s test dependency image %s on attempt %d/%d\n' \
+        "${key}" "${image}" "${attempt}" "${max_attempts}"
       return 0
     fi
     if [ "${attempt}" -eq "${max_attempts}" ]; then
-      printf 'ERROR: failed to pre-pull pinned ClickHouse image %s after %d attempts\n' \
-        "${image}" "${max_attempts}" >&2
+      printf 'ERROR: failed to pre-pull %s test dependency image %s after %d attempts\n' \
+        "${key}" "${image}" "${max_attempts}" >&2
       return 1
     fi
     delay=$((attempt * 5))
-    printf 'WARN: ClickHouse image pull attempt %d/%d failed; retrying in %ds\n' \
-      "${attempt}" "${max_attempts}" "${delay}" >&2
+    printf 'WARN: %s image pull attempt %d/%d failed; retrying in %ds\n' \
+      "${key}" "${attempt}" "${max_attempts}" "${delay}" >&2
     sleep "${delay}"
+  done
+}
+
+# print_test_dependency_images emits "<key><TAB><image>" for every declared
+# dependency, so anything that needs the set -- the pre-pull below, and the
+# mirror workflow that copies them to ghcr.io -- reads it from ONE parser
+# instead of each re-deriving it from harness.go and drifting.
+print_test_dependency_images() {
+  local key
+  for key in "${INTEGRATION_IMAGE_KEYS[@]}"; do
+    printf '%s\t%s\n' "${key}" "$(discover_test_dependency_image "${key}")"
+  done
+}
+
+# check_integration_prepull warms EVERY declared dependency image.
+#
+# It deliberately takes no arguments. An earlier revision let a job name the
+# subset it needed, which was cheaper -- go-quality starts no ClickHouse -- but
+# it made the correctness of every job depend on a list a human kept in the
+# workflow, and nothing checked that list against what the job actually starts.
+# A codex round demonstrated the hole: `integration-prepull clickhouse` followed
+# by `ci` passed every guard while leaving PostgreSQL cold, which is the exact
+# defect this verb exists to prevent. Warming all four costs one extra image pull
+# on go-quality and removes the entire class.
+check_integration_prepull() {
+  local key
+
+  command -v docker >/dev/null 2>&1 || die "docker is required for integration-prepull"
+  for key in "${INTEGRATION_IMAGE_KEYS[@]}"; do
+    prepull_one_image "${key}" || return 1
   done
 }
 
@@ -1623,6 +2170,10 @@ case "${1:-all}" in
   integration-shard-plan)
     [ "$#" -eq 1 ] || die "integration-shard-plan accepts no arguments"
     check_integration_shard_plan
+    ;;
+  integration-images)
+    [ "$#" -eq 1 ] || die "integration-images accepts no arguments"
+    print_test_dependency_images
     ;;
   integration-prepull)
     [ "$#" -eq 1 ] || die "integration-prepull accepts no arguments"

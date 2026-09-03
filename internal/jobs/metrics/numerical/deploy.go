@@ -155,14 +155,27 @@ func deployPercentile(values []float64, percentile float64) float64 {
 	if len(sorted) == 1 {
 		return sorted[0]
 	}
-	rank := float64(len(sorted)-1) * (percentile / 100.0)
+	// float64(...) here is load-bearing (CHAOS-4818), and the exposure is
+	// not the obvious spot: `rank` is a plain multiply with no adjacent
+	// add/sub at THIS statement, but the sort.Float64s call above forces
+	// the compiler to choose between spilling `rank` across the call or
+	// REMATERIALIZING it afterwards -- and on arm64 the rematerialized
+	// multiply gets fused with the very next statement's subtraction
+	// (`frac := rank - float64(lo)`) into one FNMSUBD, one rounding, where
+	// CPython's rank/frac are always two separate roundings. Measured: the
+	// unguarded form recomputes a DIFFERENT `frac` than the `rank` that
+	// produced `lo`, self-inconsistently, not just a mismatch against
+	// Python. An explicit conversion at the value the compiler would
+	// otherwise rematerialize blocks that fusion the same way it blocks
+	// fusion at an ordinary `x*y + z` call site.
+	rank := float64(float64(len(sorted)-1) * (percentile / 100.0))
 	lo := int(rank)
 	hi := lo + 1
 	if hi > len(sorted)-1 {
 		hi = len(sorted) - 1
 	}
 	frac := rank - float64(lo)
-	return sorted[lo]*(1-frac) + sorted[hi]*frac
+	return float64(sorted[lo]*(1-frac)) + float64(sorted[hi]*frac)
 }
 
 func deploySliceMin(values []float64) float64 {

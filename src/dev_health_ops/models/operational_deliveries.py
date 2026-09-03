@@ -64,6 +64,22 @@ class BillingNotification(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utc_now
     )
+    # CHAOS-3952: two-phase durable fence, kept as separate columns on
+    # purpose (0123) so a stuck claim is an observable, queryable state
+    # rather than indistinguishable from a real completion.
+    # claimed_at: set atomically BEFORE the send is attempted — this is the
+    #   dedup gate (`UPDATE ... WHERE claimed_at IS NULL`); its rowcount is
+    #   the decision, not a prior read.
+    # completed_at: set only AFTER the send call returns successfully. A row
+    #   with claimed_at set and completed_at NULL is either genuinely
+    #   in-flight or a stale/crashed claim if old enough — see
+    #   system_ops.py's `_STALE_CLAIM_THRESHOLD_SECONDS`.
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_billing_notification_key"),

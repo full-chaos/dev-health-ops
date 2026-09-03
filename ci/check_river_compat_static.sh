@@ -10,7 +10,15 @@ COMPOSE_FILE="${ROOT}/tests/compatibility/river/compose.compatibility.yml"
 RESULTS="${ROOT}/ci/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
 GO_WORKFLOW="${ROOT}/.github/workflows/go.yml"
 
-for command_name in bash docker jq shellcheck; do
+# NOTE: the linter is deliberately absent from this list -- ci/shellcheck_pinned.sh
+# owns both its presence check and its VERSION check, so one place decides what
+# "the linter is available" means. A second, weaker check here would pass on any
+# version and make the pin look satisfied when it is not.
+#
+# (This comment avoids starting a line with the linter's own name: a comment
+# beginning with that word is parsed as a DIRECTIVE, not prose -- SC1072/SC1073.
+# The pinned lint caught that on the first run of this very change.)
+for command_name in bash docker jq; do
   command -v "${command_name}" >/dev/null 2>&1 || {
     printf 'ERROR: %s is required\n' "${command_name}" >&2
     exit 2
@@ -23,7 +31,9 @@ docker compose version >/dev/null 2>&1 || {
 
 bash -n "${HARNESS}"
 bash -n "${RECORDER}"
-shellcheck "${HARNESS}" "${RECORDER}" "${ROOT}/ci/check_go.sh" "${BASH_SOURCE[0]}"
+# Pinned version + canonical file set live in one place (CHAOS-4915). This
+# used to be a bare `shellcheck ...` against whatever the runner shipped.
+bash "${ROOT}/ci/shellcheck_pinned.sh"
 # shellcheck disable=SC2016 # This is a literal source-contract assertion.
 grep -F 'if $mode == "direct" or $mode == "session" then' "${HARNESS}" >/dev/null || {
   printf 'ERROR: direct and session cancellation contracts must remain identical\n' >&2

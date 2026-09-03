@@ -157,12 +157,21 @@ flowchart LR
 
 `testops_risk`'s native executor still reads its inputs (this-day pipeline/test/coverage rows) by recomputing them in-process from the same raw tables Python's `testops_pipeline`/`testops_test`/`testops_coverage` families read (`compute_testops.py`, still bridge/`"pending"` -- CHAOS-4284) -- Go's native families run BEFORE the one combined compatibility-bridge call each partition, so those bridge-written daily tables never carry the CURRENT day's rows yet when this executor runs; see `internal/jobs/metrics/daily/testops_risk_native_clickhouse.go`'s package doc comment. The recompute itself lives in the sibling `internal/jobs/metrics/testops` package (a full, exported port of `compute_testops.py`, reused rather than reimplemented once CHAOS-4284 ports those three families natively).
 
-`workgraph.build` and the `investment.*` family share a second, separate bridge endpoint (`/internal/worker/workgraph/v1/execute`) with zero Go-native compute anywhere -- only React-to-request/ledger plumbing is Go:
+`workgraph.build` and the `investment.*` family share a second, separate bridge endpoint (`/internal/worker/workgraph/v1/execute`). This section read "with zero Go-native compute anywhere -- only React-to-request/ledger plumbing is Go" until #2099; that is no longer true. Two native Go producers now run inside a `workgraph.build` execution, on either side of the bridge call:
+
+| step | seam | ported from | status |
+| --- | --- | --- | --- |
+| `issue_pr_links` | **pre**-step | `_derive_issue_pr_links_from_dependencies` (builder.py:644) | native; the Python build READS what it writes four lines later, so it must precede the bridge |
+| `issue_issue_edges` | **post**-step | `_build_issue_issue_edges` (builder.py:828) | native; **post-step, last writer by design, until `_build_issue_issue_edges` retires** |
+
+The Python stage still runs for both, because `builder.build()` takes no arguments and has no stage selection. For the mapping that is harmless -- both planes compute identical rows, so whichever write wins is the same row. For the edges it is not: this port applies variant-C confidence (0.9 for the associative family, CHAOS-4752/4758) where Python writes 1.0 (builder.py:905), and `work_graph_edges` is `ReplacingMergeTree(last_synced)` whose `ORDER BY` excludes `confidence` -- so the two writes address the SAME row and collapse by version. Running last is the only ordering under which the divergence survives while the Python stage still runs, and it stops being necessary the moment that stage retires.
+
+Everything else on this endpoint remains bridge-owned:
 
 ```mermaid
 flowchart LR
   subgraph Go["Go (request/ledger plumbing only)"]
-    WGREQ["workgraph.build<br/>internal/jobs/workgraph/postgres.go"]
+    WGREQ["workgraph.build<br/>internal/jobs/workgraph/postgres.go<br/>pre-step: issue_pr_links · post-step: issue_issue_edges"]
     INVREQ["investment.materialize<br/>internal/jobs/workgraph/handler.go"]
     DEAD["investment.dispatch / investment.chunk / investment.finalize<br/>handlers wired, never invoked -- DEAD CODE"]
   end
@@ -260,6 +269,7 @@ Category key: **LIVE** = reached today from a live FastAPI bridge route. **CELER
 | `sync_scheduler.py` | CELERY-TASK-ONLY / DEAD | `@celery_app.task` (L394 dispatch_scheduled_syncs); sole importer tasks.py:14 | CHAOS-4439 (dead worker modules) |
 | `sync_units.py` | LIVE | dispatch_sync_run/finalize_sync_run imported worker_sync.py:26, served by /dispatch and /finalize | n/a |
 | `system_ops.py` | LIVE | imported worker_operational.py:15-18 (health_check, phone_home_heartbeat, send_billing_notification) | n/a |
+| `system_ops_metrics.py` | LIBRARY / SHARED | CHAOS-3952: sole importer is system_ops.py (BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL counter for the durable completion-fence outcomes on the live send_billing_notification path) — dual Prometheus/OTel instrument builder module, same shape as work_graph/investment/llm_telemetry_metrics.py | n/a |
 | `system_tasks.py` | LIBRARY / SHARED | corrected 2026-08-28 per codex review: NOT a dead shim — `api/webhooks/router.py:34` and `api/billing/router.py:45` import `process_webhook_event`/`send_billing_notification` from this module and call `.delay(...)`/`.apply_async(...)` on them, gated behind `if route_requires_celery(route):`. Since `operational.webhook_delivery`/`billing_notification` are `route=river` in migration-state.json, that gate evaluates false in production today, so the call is live-but-inert (same 'live call site, dead effect' shape as report_task.py above) — the module itself cannot be deleted without removing these two router imports first | CHAOS-4439 (coordinate with api/webhooks/router.py + api/billing/router.py, not a pure file deletion) |
 | `system_webhooks.py` | LIVE | imported worker_operational.py:19,166 (process_webhook_event) | n/a |
 | `task_utils.py` | LIBRARY / SHARED | imported by live files (sync_units, reference_discovery, team_autoimport, work_graph_tasks, system_webhooks) and dead ones — shared credential/cache helpers | n/a |

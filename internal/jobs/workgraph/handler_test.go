@@ -19,7 +19,7 @@ const (
 
 func TestBuildRenewsFenceAndCompletes(t *testing.T) {
 	store := &fakeStore{claim: testClaim(30 * time.Millisecond)}
-	handler, err := NewBuildHandler(store, blockingExecutor{delay: 80 * time.Millisecond})
+	handler, err := NewBuildHandler(store, blockingExecutor{delay: 80 * time.Millisecond}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestBuildRenewsFenceAndCompletes(t *testing.T) {
 // outcome, because only the snooze proves the job survived to reclaim at all.
 func TestBuildParksWhileAnotherClaimantHoldsALiveLease(t *testing.T) {
 	store := &fakeStore{claimErr: &LeaseActiveError{RetryAfter: 7 * time.Minute}}
-	handler, err := NewBuildHandler(store, blockingExecutor{})
+	handler, err := NewBuildHandler(store, blockingExecutor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestBuildParksWhileAnotherClaimantHoldsALiveLease(t *testing.T) {
 func TestBuildLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 	store := &fakeStore{claim: testClaim(30 * time.Millisecond), loseAt: 1}
 	executor := blockingExecutor{waitForCancellation: true}
-	handler, err := NewBuildHandler(store, executor)
+	handler, err := NewBuildHandler(store, executor, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestBuildLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 
 func TestCompatibilityFailureIsAmbiguousNotRetried(t *testing.T) {
 	store := &fakeStore{claim: testClaim(time.Second)}
-	handler, err := NewBuildHandler(store, failingExecutor{})
+	handler, err := NewBuildHandler(store, failingExecutor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestCompatibilityFailureIsAmbiguousNotRetried(t *testing.T) {
 
 func TestBuildRejectsTenantEnvelopeMismatchBeforeClaim(t *testing.T) {
 	store := &fakeStore{claim: testClaim(time.Second)}
-	handler, err := NewBuildHandler(store, failingExecutor{})
+	handler, err := NewBuildHandler(store, failingExecutor{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +112,9 @@ type fakeStore struct {
 	claim                                            *Claim
 	claimErr                                         error
 	claims, renewals, completions, ambiguous, loseAt int
+	// lastEvidence is what Complete received, so a test can assert what the
+	// step fragments merged into rather than only that a completion happened.
+	lastEvidence []byte
 }
 
 func (s *fakeStore) Claim(context.Context, string, Kind) (*Claim, error) {
@@ -125,7 +128,11 @@ func (s *fakeStore) Renew(context.Context, Claim) error {
 	}
 	return nil
 }
-func (s *fakeStore) Complete(context.Context, Claim, []byte) error  { s.completions++; return nil }
+func (s *fakeStore) Complete(_ context.Context, _ Claim, evidence []byte) error {
+	s.completions++
+	s.lastEvidence = evidence
+	return nil
+}
 func (*fakeStore) Fail(context.Context, Claim, string) error        { return nil }
 func (s *fakeStore) Ambiguous(context.Context, Claim, string) error { s.ambiguous++; return nil }
 

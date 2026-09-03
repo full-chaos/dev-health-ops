@@ -285,59 +285,64 @@ jobs:
           # the shape (a step that succeeds having done nothing) this workflow
           # has been bitten by repeatedly. So the absent branch ASSERTS the
           # condition that makes skipping correct, and fails loudly otherwise.
+          # STRUCTURAL, NOT TEXTUAL (team-lead, after three codex rounds).
+          #
+          # This guard used to read docker/Dockerfile and decide from its text
+          # whether the tree consumes a mirrored base. Three rounds found nine
+          # defects, every one a Dockerfile grammar feature the regexes did not
+          # model: assembled references (${REGISTRY}/${OWNER}/python), a direct
+          # FROM with no ARG, lowercase `from`, escaped-newline continuations,
+          # RUN heredoc bodies read as instructions, missing token boundaries
+          # (ARG PYTHON_BASE_IMAGE_OLD, ghcr.io/acme/python-builder), and the
+          # fact that `#` outside line start is NOT a comment but argument text
+          # -- which made the "comment stripping" a literal-corrupting rewrite.
+          #
+          # Each fix was correct and the next round found the next feature. That
+          # is not a converging series: it is an under-specified reimplementation
+          # of a parser, and a fourth round would find --platform flags and ARG
+          # stage scoping. So the guard stops parsing.
+          #
+          # The question was never "what does this Dockerfile say". It is "does
+          # this tree predate the mirror", and git answers that exactly. #2152
+          # added ci/python_base_ref.sh and the mirrored Dockerfile in ONE
+          # commit, so the script's presence IS the mirror -- no text needed.
+          MIRROR_LANDED=6fbd7dc8d4651b82f78b823a2b6f55cd53f0ff1f   # the #2152 merge
+
           if [ ! -f ci/python_base_ref.sh ]; then
-            # SKIP ONLY ON POSITIVE PROOF OF THE PRE-MIRROR CASE, and that proof
-            # needs BOTH probes. Round 1 and round 2 each defeated a single one:
-            #
-            #   round 1 HIGH   an assembled ref beat a registry regex --
-            #                  ARG REGISTRY=ghcr.io / ARG OWNER=... /
-            #                  FROM ${REGISTRY}/${OWNER}/python:...  no line
-            #                  matches ghcr.io/<owner>/python.
-            #   round 2 CRIT   a DIRECT `FROM ghcr.io/<owner>/python@sha256:...`
-            #                  with no ARG at all carries no PYTHON_BASE_IMAGE
-            #                  token, so the token probe skipped a tree that
-            #                  consumes the mirror.
-            #
-            # The second was a REGRESSION I introduced fixing the first: the
-            # registry regex round 1 defeated would have caught it. Inverting the
-            # question traded one blind spot for another. Neither probe is
-            # sufficient; each closes exactly what the other misses --
-            # ARG NAME closes assembly (a name cannot be built from variables),
-            # FROM REGEX closes direct references (no ARG to name).
-            #
-            # So: MIRRORED iff either probe fires. Skip iff BOTH are absent.
-            #
-            # Both read COMMENT-STRIPPED text (round 2 CRIT 2): a pre-mirror tree
-            # that merely mentions PYTHON_BASE_IMAGE in a comment was falsely
-            # refused. Whole-line comments are dropped, and a trailing comment is
-            # dropped only when preceded by whitespace -- Dockerfile `#` is a
-            # comment ONLY at line start, so an unanchored strip would corrupt a
-            # value legitimately containing `#`.
-            if ! dockerfile_text="$(cat docker/Dockerfile 2>/dev/null)"; then
-              echo "::error::cannot read docker/Dockerfile, so this tree cannot be" \
-                   "classified as pre-mirror or mirrored. Refusing to guess; an" \
-                   "unreadable tree is not a pre-mirror tree." >&2
+            # `--is-ancestor` is three-valued and the third value matters: 0 =
+            # ancestor, 1 = not an ancestor, ANYTHING ELSE (128 on a missing
+            # object, e.g. a shallow clone) = could not answer. Collapsing >=2
+            # into "not an ancestor" is exactly the grep-status-1-vs-2 mistake
+            # this guard already made once, so it is handled separately and
+            # fails closed.
+            if git merge-base --is-ancestor "$MIRROR_LANDED" HEAD 2>/dev/null; then
+              ancestry=yes
+            else
+              ancestry_status=$?
+              if [ "$ancestry_status" -eq 1 ]; then
+                ancestry=no
+              else
+                echo "::error::cannot determine whether ${MIRROR_LANDED} is an" \
+                     "ancestor of HEAD (git merge-base --is-ancestor exited" \
+                     "${ancestry_status}; a shallow clone cannot answer this)." \
+                     "Refusing to guess: an unanswerable history is not a" \
+                     "pre-mirror tree. The build checkout sets fetch-depth: 0," \
+                     "so this should not happen -- if it does, that changed." >&2
+                exit 1
+              fi
+            fi
+
+            if [ "$ancestry" = yes ]; then
+              echo "::error::this tree contains #2152 (${MIRROR_LANDED}), which added" \
+                   "ci/python_base_ref.sh and the mirrored base together, yet the" \
+                   "script is absent. The ref cannot be derived and the tree is" \
+                   "inconsistent; it is NOT the pre-mirror case." >&2
               exit 1
             fi
-            stripped="$(printf '%s\n' "$dockerfile_text" \
-                        | sed -e 's/[[:space:]]#.*$//' -e '/^[[:space:]]*#/d')"
-            has_arg=no; has_from=no
-            printf '%s\n' "$stripped" \
-              | grep -qE '^[[:space:]]*ARG[[:space:]]+PYTHON_BASE_IMAGE' && has_arg=yes
-            printf '%s\n' "$stripped" \
-              | grep -qE '^[[:space:]]*FROM[[:space:]].*ghcr\.io/[^/]+/python' && has_from=yes
-            if [ "$has_arg" = yes ] || [ "$has_from" = yes ]; then
-              echo "::error::docker/Dockerfile consumes a mirrored Python base" \
-                   "(ARG PYTHON_BASE_IMAGE=${has_arg}, mirrored FROM=${has_from})" \
-                   "but ci/python_base_ref.sh is absent, so the ref cannot be" \
-                   "derived. This tree is inconsistent; it is NOT the pre-mirror" \
-                   "case." >&2
-              exit 1
-            fi
-            echo "ci/python_base_ref.sh absent, and docker/Dockerfile has neither an" \
-                 "ARG PYTHON_BASE_IMAGE nor a mirrored FROM (comments excluded):" \
-                 "this tree predates CHAOS-4922 and pulls its Python base directly." \
-                 "Nothing to ensure; skipping."
+
+            echo "ci/python_base_ref.sh is absent and #2152 (${MIRROR_LANDED}) is not" \
+                 "an ancestor of HEAD: this tree predates the mirror and pulls its" \
+                 "Python base directly. Nothing to ensure; skipping."
             exit 0
           fi
           # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).

@@ -47,7 +47,19 @@ pre-commit:
       stage_fixed: true
     mypy:
       glob: "*.py"
-      run: scripts/run_py_tool.sh mypy
+      # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
+      # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
+      # internal/, ci/ and .github/ (196+ Python files, including every
+      # live-Python-oracle generator) from every local run. CI's typecheck job
+      # always runs `mypy .` once triggered -- the whole tree, no files-list
+      # restriction, since an explicit path argument overrides `files`
+      # entirely. Passing `.` here matches that exactly: the third,
+      # independently-drifting set is eliminated rather than kept in sync by
+      # enumeration (the same lesson #2157/CHAOS-4281 already learned for the
+      # workflow's own trigger-path list). `[tool.mypy] files` is left as-is
+      # in pyproject.toml for IDEs and any other bare invocation; it is just
+      # no longer load-bearing for this gate.
+      run: scripts/run_py_tool.sh mypy .
       fail_text: "mypy found type errors. Fix them, or `git commit --no-verify` to bypass (discouraged)."
 
 pre-push:
@@ -63,7 +75,19 @@ pre-push:
       fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     mypy:
       glob: "*.py"
-      run: scripts/run_py_tool.sh mypy
+      # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
+      # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
+      # internal/, ci/ and .github/ (196+ Python files, including every
+      # live-Python-oracle generator) from every local run. CI's typecheck job
+      # always runs `mypy .` once triggered -- the whole tree, no files-list
+      # restriction, since an explicit path argument overrides `files`
+      # entirely. Passing `.` here matches that exactly: the third,
+      # independently-drifting set is eliminated rather than kept in sync by
+      # enumeration (the same lesson #2157/CHAOS-4281 already learned for the
+      # workflow's own trigger-path list). `[tool.mypy] files` is left as-is
+      # in pyproject.toml for IDEs and any other bare invocation; it is just
+      # no longer load-bearing for this gate.
+      run: scripts/run_py_tool.sh mypy .
       fail_text: "mypy found type errors. Run `mypy` locally, fix them, commit, push again. Or `git push --no-verify` to bypass."
     shellcheck-pin:
       # CHAOS-4915. Same pinned version and same file set as CI, from one

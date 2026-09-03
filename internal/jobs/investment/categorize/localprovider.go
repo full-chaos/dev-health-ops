@@ -16,10 +16,11 @@ type LocalProviderConfig struct {
 	// against LMStudio/vLLM/any compatible server by pointing BaseURL at
 	// theirs -- local.py's own DEFAULT_ENDPOINTS table.
 	BaseURL string
-	// Model defaults to "gemma3" (Ollama's tag for the day-one local model
-	// chris named; local.py's own default was "llama3.2" for a generic
-	// local endpoint, not a specific gemma tag -- override via config for a
-	// different tag/quantization).
+	// Model defaults to "llama3.2" -- mirrors base.py's
+	// DEFAULT_MODEL_BY_PROVIDER["local"] byte-for-byte, NOT a guess at the
+	// gemma tag chris actually runs under LM Studio (that identifier is
+	// unconfirmed; team-lead ruling 2026-09-03: mirror Python's default
+	// rather than invent one). Set LOCAL_LLM_MODEL to override.
 	Model string
 	// APIKey is sent as a bearer token; most local servers ignore it.
 	APIKey          string
@@ -30,7 +31,7 @@ type LocalProviderConfig struct {
 
 const (
 	defaultLocalBaseURL     = "http://localhost:11434/v1"
-	defaultLocalModel       = "gemma3"
+	defaultLocalModel       = "llama3.2"
 	defaultLocalAPIKey      = "not-needed"
 	defaultLocalMaxTokens   = 4096
 	defaultLocalTemperature = 0.3

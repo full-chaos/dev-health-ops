@@ -75,6 +75,41 @@ func TestVariantCSurvivesOnlyWhenThisWriterGoesLast(t *testing.T) {
 	if err := conn.Exec(ctx, `SYSTEM STOP MERGES`); err != nil {
 		t.Fatal(err)
 	}
+	// Restart them on the way out. The stop above is SERVER-WIDE, and
+	// containers.StartClickHouse has a REMOTE branch (DEV_HEALTH_TEST_CLICKHOUSE_DSN)
+	// returning a SHARED instance rather than a fresh container. That path's
+	// cleanup drops its scratch DATABASE and does not reset server-level settings,
+	// so without this the test exits leaving merges stopped for every subsequent
+	// test on that server. CI uses containers and would not notice; a lane pointed
+	// at a shared ClickHouse would.
+	//
+	// BARE, matching the stop. The storage-versus-name hazard that makes a
+	// per-table restart risky after EXCHANGE TABLES is about restarting BY NAME;
+	// the bare form carries no name and cannot mis-target.
+	//
+	// `defer`, NOT t.Cleanup, and the difference is load-bearing HERE even though
+	// the restart precedents use t.Cleanup. Those files run their whole teardown
+	// through Cleanup -- github_deployments_effects registers t.Cleanup(cancel)
+	// and t.Cleanup(conn.Close) -- so a t.Cleanup restart runs BEFORE them under
+	// LIFO. This file tears down with defer: cancel (:34), instance.Close (:40),
+	// conn.Close (:45). t.Cleanup runs AFTER all defers, so a t.Cleanup restart
+	// here would execute against a CLOSED connection and a CANCELLED context and
+	// fail every run. Match THIS file's teardown mechanism, not the precedent's.
+	//
+	// Its own bounded context, not ctx: ctx carries a 3-minute deadline that a
+	// slow run can exhaust, which would turn the restart into a no-op exactly
+	// when the test took long enough to matter. Bounded rather than a bare
+	// Background so a wedged server cannot hang teardown indefinitely.
+	//
+	// The error is CHECKED. `defer conn.Exec(...)` discards it, and a failed
+	// restart then looks identical to a successful one while the leak persists.
+	defer func() {
+		resumeCtx, cancelResume := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelResume()
+		if err := conn.Exec(resumeCtx, `SYSTEM START MERGES`); err != nil {
+			t.Errorf("resume merges: %v", err)
+		}
+	}()
 
 	const org = "70d529e0-3c06-4597-8480-794fd02328b6"
 	// A `relates` row: the associative family, which is where variant-C differs.

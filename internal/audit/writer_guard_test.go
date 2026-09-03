@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -33,6 +34,24 @@ var guardedTables = []string{"auth_outbox_events", "security_audit_events"}
 var permittedWriters = map[string]string{
 	"internal/storage/postgres/authschema/capability_integration_test.go:insertFixtures":                         "the grant probe: it must write to prove the runtime role HOLDS the privilege",
 	"internal/storage/postgres/authschema/posture_integration_test.go:TestRuntimeRolePostureAgainstLivePostgres": "the posture control: its INSERT exercises the SEQUENCE grant as well as the table grant",
+
+	// The two halves of the mechanism itself. They are permitted for the
+	// reason the package exists, and they are listed rather than exempted by
+	// file so that a THIRD write appearing in audit.go still has to argue for
+	// itself.
+	"internal/audit/audit.go:insertOutboxEvent": "the mechanism: this IS the outbox insert Commit performs inside the transaction",
+	"internal/audit/audit.go:insertAuditEvent":  "the mechanism: this IS the audit-row insert Commit performs inside the transaction",
+
+	// The reaper deletes, which is the one verb that can destroy evidence, so
+	// its permission is the narrowest and the reason is the specific invariant
+	// it upholds -- not "it is the reaper".
+	"internal/audit/reaper.go:Reap": "reclaims ALREADY-PUBLISHED events only; published_at IS NOT NULL is the invariant, proven by TestReapNeverDeletesAnUnpublishedEvent",
+
+	// The reaper's tests need rows in states Commit cannot produce -- already
+	// published, and published three days ago. One seeding helper does that
+	// write, so the permission is one function wide rather than one file wide,
+	// and a new write elsewhere in that test file is still caught.
+	"internal/audit/reaper_integration_test.go:seedOutboxEvent": "seeds already-published rows the reaper is meant to reclaim; Commit cannot create a published row",
 }
 
 // guardPattern is the ONE definition of what counts as a write, shared by the
@@ -128,6 +147,42 @@ func guardPattern(table string) *regexp.Regexp {
 // The table name travels inside a SQL string literal, so an AST walk keyed on
 // call expressions sees `tx.Exec(ctx, someString)` and learns nothing. The
 // string is what carries the table name and the string is what must be read.
+// writeVerbPattern finds a write verb regardless of its target, so a write can
+// be noticed even when the guard cannot tell WHICH table it hits.
+var writeVerbPattern = regexp.MustCompile(`(?is)(?:INSERT` + sep + `INTO|DELETE` + sep + `FROM|UPDATE)` + sep)
+
+// targetWindow is how far past the verb the target is looked for. The real
+// statements put it immediately after; 200 bytes covers a line break and a
+// comment without reaching the next statement.
+const targetWindow = 200
+
+// isForUpdate reports whether the verb at off is the UPDATE of a FOR UPDATE
+// locking clause rather than an UPDATE statement. RE2 has no lookbehind, so
+// this is done by hand on the bytes before the match.
+func isForUpdate(body []byte, off int) bool {
+	if !bytes.EqualFold(body[off:min(off+6, len(body))], []byte("UPDATE")) {
+		return false
+	}
+	i := off - 1
+	for i >= 0 && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r') {
+		i--
+	}
+	if i < 2 {
+		return false
+	}
+	return bytes.EqualFold(body[i-2:i+1], []byte("FOR"))
+}
+
+func mentionsGuardedTable(b []byte) bool {
+	lower := bytes.ToLower(b)
+	for _, table := range guardedTables {
+		if bytes.Contains(lower, []byte(strings.ToLower(table))) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 	root := repoRoot(t)
 	// One pattern per table, whitespace-insensitive, because these statements
@@ -159,18 +214,21 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// THIS package is what the rule is about -- "nothing OUTSIDE
-		// internal/audit" -- so its own files are permitted by the rule rather
-		// than by an allowlist entry. Enumerating them was wrong twice over:
-		// audit.go needed permission to contain the mechanism, and widening the
-		// pattern for comments made this very test file match its own bypass
-		// fixtures. A rule stated as "outside X" should skip X, not list it.
+		// The guard's OWN fixtures are strings written to look exactly like
+		// writes -- that is what they are for -- so this ONE file is data, not
+		// a writer. Everything else in internal/audit is scanned like any other
+		// package.
 		//
-		// The bound, since it is real: a write added INSIDE this package is not
-		// caught here. That is in-package discipline, the same residue as the
-		// zero-value ValidatedIdentifier -- the guard is over the boundary.
+		// This used to skip the whole package, which was wrong once the package
+		// acquired a second writer. A blanket skip is a FILE-level exemption
+		// wearing a different hat: it let any future write anywhere in
+		// internal/audit inherit permission granted for the mechanism's sake.
+		// The reaper is the case that made it matter -- a DELETE must not
+		// inherit an INSERT's justification just by sharing a directory. So the
+		// in-package writers are now enumerated by function like everyone else,
+		// and audit.go's helpers carry their own reasons below.
 		if rel, err := filepath.Rel(root, path); err == nil &&
-			strings.HasPrefix(rel, filepath.Join("internal", "audit")+string(filepath.Separator)) {
+			rel == filepath.Join("internal", "audit", "writer_guard_test.go") {
 			return nil
 		}
 		body, err := os.ReadFile(path)
@@ -196,6 +254,59 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 					continue
 				}
 				offenders = append(offenders, key+" writes "+table)
+			}
+		}
+
+		// FAIL CLOSED ON AN UNRESOLVED TARGET.
+		//
+		// Everything above can only see a table NAME sitting near the verb. A
+		// writer that hoists the name into a variable --
+		//   table := authschema.Quote(schema) + ".auth_outbox_events"
+		//   ... "DELETE FROM " + table + " AS e"
+		// -- is invisible to it. That is not a contrived evasion: the reaper was
+		// written that way because the expression is used twice in one
+		// statement, and it slipped the guard on the first run. Ordinary
+		// idiomatic Go is a worse bypass than a clever one, because nobody
+		// needs to intend it.
+		//
+		// So a write whose target this scan CANNOT resolve is reported rather
+		// than passed over. The file-level condition is what keeps that honest:
+		// repo-wide, "flag every dynamic write" would fire on every DELETE in
+		// joboutbox and elsewhere, none of which concern these tables. Inside a
+		// file that names a guarded table at all, silence is the wrong default.
+		if mentionsGuardedTable(body) {
+			seen := map[string]bool{}
+			for _, loc := range writeVerbPattern.FindAllIndex(body, -1) {
+				// FOR UPDATE is a locking clause, not a write. The
+				// table-specific pattern never had to care because it required
+				// UPDATE <table> SET; a bare verb does, and the reaper's own
+				// FOR UPDATE SKIP LOCKED was the case that proved it -- the
+				// first version of this check reported Reap twice, once for the
+				// DELETE and once for the lock.
+				if isForUpdate(body, loc[0]) {
+					continue
+				}
+				window := body[loc[1]:min(loc[1]+targetWindow, len(body))]
+				if mentionsGuardedTable(window) || !bytes.Contains(window, []byte("`+")) {
+					continue
+				}
+				if parsed == nil {
+					parsed, err = parser.ParseFile(fset, path, body, 0)
+					if err != nil {
+						return err
+					}
+				}
+				key := rel + ":" + enclosingFunc(fset, parsed, loc[0])
+				if _, permitted := permittedWriters[key]; permitted {
+					matched[key] = true
+					continue
+				}
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				offenders = append(offenders,
+					key+" writes a table this guard cannot resolve (the name is built from a variable)")
 			}
 		}
 		return nil

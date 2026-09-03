@@ -231,20 +231,26 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 	}
 }
 
-// TestCallbackEndingTheTransactionIsRefused is the executed proof for round 2's
-// High finding, which the type system cannot close.
+// TestCallbackEndingTheTransactionIsRefused is the executed proof that a
+// mutation cannot end the transaction this helper owns.
 //
-// Exec must exist for a mutation to write anything, so Exec(ctx, "ROLLBACK")
-// and Exec(ctx, "COMMIT") reach the server whatever the parameter type is. The
-// damage is asymmetric and the ROLLBACK direction is the worse one: after it,
-// pgx's wrapper is still logically open, so the helper's outbox and audit
-// inserts would run OUTSIDE the rolled-back transaction and Commit could return
-// SUCCESS -- an event and an audit row for a state mutation that never
-// committed, reported as fine.
+// Round 2 reached the server with Exec(ctx, "COMMIT"), and the first repair --
+// reading the connection's transaction status after Apply returned -- DETECTED
+// that but could not undo it: the state row was already durable, so the run
+// showed [1 0 0] and the package's "all three or none" claim was false for that
+// path.
 //
-// Commit now reads the connection's transaction status after Apply returns and
-// refuses unless it is still in a transaction block. This asserts the refusal
-// and, more importantly, that NOTHING was written by either half.
+// The wrapper now refuses transaction control BEFORE sending it, so the state
+// is never committed and the claim stays true rather than becoming a boundary
+// to explain. This asserts the whole chain: Commit returns an error, and all
+// three tables are untouched -- including the state the callback wrote before
+// it tried to commit, which the rollback must still take with it.
+//
+// Both verbs are exercised because they fail differently. A raw COMMIT made
+// state durable; a raw ROLLBACK left the wrapper logically open so the outbox
+// and audit inserts would have run outside the rolled-back transaction and
+// Commit could have returned SUCCESS. The second is the worse one and the
+// reason the status check remains as a backstop.
 func TestCallbackEndingTheTransactionIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

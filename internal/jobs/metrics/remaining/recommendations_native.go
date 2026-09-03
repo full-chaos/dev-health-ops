@@ -130,14 +130,50 @@ func verifyRecommendationsSchema(ctx context.Context, conn driver.Conn) error {
 	return nil
 }
 
+// EvaluationInstant resolves (now, asOfDay) exactly as the live bridge caller
+// does at api/internal/worker_metrics.py:1859-1866.
+//
+//	as_of given:  now = MIDNIGHT UTC on (as_of_day + 1); as_of_day = as_of
+//	as_of absent: now = wall clock;                      as_of_day = now's date
+//
+// # WHY THE +1 IS LOAD-BEARING
+//
+// The engine derives window_end from now's date, and the loader treats
+// window_end as EXCLUSIVE (`day < {end:Date}`). Anchoring now to as_of_day
+// itself would therefore make window_end == as_of_day and exclude the very
+// partition that just finalized -- every run reading one day short, silently,
+// with no error anywhere (CHAOS-2373 round 2). Anchoring to as_of_day + 1 is
+// what makes the finalized day actually READ.
+//
+// # AND WHY MIDNIGHT, NOT WALL CLOCK
+//
+// `time.min` in the reference is 00:00:00, and `now` becomes the record's
+// computed_at, which is persisted and is the argMax key the readers order by.
+// Using a wall-clock instant on the as_of path would still produce the right
+// window while writing a different computed_at, so the rows would look correct
+// and order differently.
+func EvaluationInstant(asOf *time.Time, wallClock func() time.Time) (now, asOfDay time.Time) {
+	if asOf != nil {
+		day := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
+		return day.AddDate(0, 0, 1), day
+	}
+	current := wallClock()
+	return current, time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // ComputeTeam loads one team's window, evaluates every rule, and returns the
 // full state -- fired rows and tombstones alike.
+//
+// `now` is supplied by the caller rather than read from the clock here,
+// because it is NOT wall-clock on the scheduled path: see EvaluationInstant.
+// An executor that called time.Now() itself would compute a window one day
+// short and there would be no error to notice.
 //
 // It does NOT write. Persisting is the caller's step so the whole batch lands
 // in one insert, matching the reference's "one scheduled run replaces the rule
 // state for the team in a single, internally-consistent batch".
 func (executor *RecommendationsExecutor) ComputeTeam(
-	ctx context.Context, teamID, orgID string, windowDays int, ruleVersion string,
+	ctx context.Context, teamID, orgID string, now time.Time, windowDays int, ruleVersion string,
 ) ([]RecommendationRecord, error) {
 	if executor == nil || executor.conn == nil {
 		return nil, errRecommendationsUnavailable
@@ -145,11 +181,9 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	if strings.TrimSpace(teamID) == "" {
 		return nil, fmt.Errorf("%w: empty team id", ErrInvalidState)
 	}
-	now := executor.nowUTC()
-	// window_end is now's UTC DATE and window_start is that minus the window,
-	// exactly as engine.py derives them. Both are computed ONCE here: deriving
-	// them per rule would let a run straddle UTC midnight and emit two
-	// window_ends, which the argMax reader treats as two separate states.
+	// Both bounds derived ONCE from the caller's instant. Deriving them per
+	// rule would let a run straddle UTC midnight and emit two window_ends,
+	// which the argMax reader treats as two separate states.
 	windowEnd := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	windowStart := windowEnd.AddDate(0, 0, -windowDays)
 

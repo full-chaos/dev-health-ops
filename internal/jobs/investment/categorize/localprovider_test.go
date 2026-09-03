@@ -52,6 +52,33 @@ func TestLocalProviderDefaults(t *testing.T) {
 	}
 }
 
+func TestLocalProviderNilSchemaPreservesPlainText(t *testing.T) {
+	// codex round 1 (#2184, bigboy) P2: local.py only applies
+	// validate_json_or_empty when a schema was actually requested
+	// (`validate_json_or_empty(content) if is_schema_prompt else
+	// content`) -- this port called it UNCONDITIONALLY, so a no-schema
+	// completion returning ordinary non-JSON text silently became
+	// CompletionResult{Text: ""} with a nil error. Reproduces the
+	// round's own repro shape.
+	provider, _ := newTestLocalProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(localChatResponse{
+			Choices: []localChatChoice{{Message: localChatMessage{Content: "plain explanation"}}},
+		})
+	})
+
+	result, err := provider.Complete(context.Background(), CompletionRequest{
+		Prompt:        "prompt",
+		SystemMessage: "explain this",
+	})
+	if err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if result.Text != "plain explanation" {
+		t.Fatalf("Text = %q, want unstructured response preserved", result.Text)
+	}
+}
+
 func TestLocalProviderFallsBackToNoResponseFormatWhenSchemaIsNil(t *testing.T) {
 	// A CompletionRequest with no JSONSchema -- matches local.py's own
 	// non-schema-prompt branch, which omits response_format entirely

@@ -164,7 +164,17 @@ func (p *LocalProvider) Complete(ctx context.Context, request CompletionRequest)
 			return CompletionResult{}, classified
 		}
 
-		text := validateJSONOrEmpty(content)
+		// local.py: `validate_json_or_empty(content) if is_schema_prompt
+		// else content` -- the strict JSON gate applies ONLY when a schema
+		// was actually requested. codex round 1 (#2184, bigboy) P2: this
+		// port called validateJSONOrEmpty unconditionally, so a no-schema
+		// completion returning ordinary (non-JSON) text silently became
+		// CompletionResult{Text: ""} with a nil error -- reported success,
+		// answer lost.
+		text := content
+		if request.JSONSchema != nil {
+			text = validateJSONOrEmpty(content)
+		}
 		result := CompletionResult{Text: text, Model: p.cfg.Model}
 		if usage != nil {
 			result.InputTokens = usage.PromptTokens

@@ -269,3 +269,140 @@ def test_dockerfiles_label_the_revision_the_fan_in_job_reads() -> None:
             f"{job_name}'s build-args don't pass COMMIT -- the Dockerfile's "
             "LABEL references it, but nothing supplies a value at build time"
         )
+
+
+def _fan_in_run_text() -> str:
+    fan_in_jobs = [
+        job for name, job in _jobs().items() if "fan-in" in name or "fan_in" in name
+    ]
+    assert fan_in_jobs, "no fan-in job found (see the other tests in this file)"
+    return "\n".join(
+        str(step.get("run", "")) for job in fan_in_jobs for step in _steps(job)
+    )
+
+
+def test_branch_tag_sanitizer_satisfies_the_full_docker_grammar() -> None:
+    """ci-flakes review (delta on b172ebf0): Docker's tag grammar is
+    `[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}` -- the first character is
+    restricted AND the total length is capped at 128. `tr -c
+    'A-Za-z0-9_.-' '-'` alone only fixes interior characters, leaving a
+    real, valid git branch like `+foo` or `@work` sanitized to an invalid
+    leading `-` (verified against real bash: `+foo` -> `-foo`). A branch
+    name at or beyond 128 characters (or one that grows by one character
+    from the leading-character prefix) is a second, independent way to
+    violate the same grammar. Both guards must be present, and the length
+    cap must apply AFTER any prefix is added -- capping first and then
+    prefixing could hand back a 129-character tag."""
+    run_text = _fan_in_run_text()
+    assert "tr -c 'A-Za-z0-9_.-' '-'" in run_text, (
+        "the branch-tag sanitizer's character-class translation is missing "
+        "or was changed -- re-verify it against the Docker tag grammar "
+        "before trusting a different pattern"
+    )
+    assert "[A-Za-z0-9_]*" in run_text, (
+        "no leading-character guard found after the sanitizer -- a branch "
+        "like +foo or @work sanitizes to an invalid leading '-' without it"
+    )
+    assert ':0:128' in run_text, (
+        "no 128-character length cap found on the sanitized branch tag -- "
+        "Docker's tag grammar caps total length at 128 characters and a "
+        "long branch name (or one padded by the leading-character guard) "
+        "can still exceed it"
+    )
+    # The cap must come after the prefix, not before -- assert the
+    # truncation slice appears after the case-guard's prefixing line in
+    # the source text (a real ordering bug, not just presence).
+    prefix_pos = run_text.index("safe_branch_tag=\"x${safe_branch_tag}\"")
+    cap_pos = run_text.index(":0:128")
+    assert cap_pos > prefix_pos, (
+        "the 128-char truncation appears before the leading-character "
+        "prefix is added -- truncating first then prefixing can still "
+        "yield a 129-character tag"
+    )
+
+
+def test_digest_walk_candidates_use_single_attempt_no_retry() -> None:
+    """ci-flakes review (delta on b172ebf0): retrying is only worth paying
+    for where absence is anomalous. The digest-walk's per-candidate check
+    (up to 50 candidates) treats absence as the EXPECTED, common outcome
+    -- a commit whose CI failed before publishing, or a future CHAOS-4948
+    skip -- so retrying every miss 3x with sleeps between would turn a
+    fast walk into a slow one for no behavioural benefit. `_inspect_once`
+    (single attempt) must be the one used inside the candidate loop;
+    `_inspect_retry`/`_inspect_retry_classify` (multi-attempt) are for the
+    :latest and source-tag checks, where absence IS anomalous. Conflating
+    the two for "code cleanliness" would silently reintroduce the slow
+    walk this split exists to avoid."""
+    run_text = _fan_in_run_text()
+    walk_loop_start = run_text.index("while IFS= read -r candidate_sha")
+    walk_loop_end = run_text.index(
+        'done < <(git log --first-parent -n 50 --format=%H "${BUILT_SHA}")'
+    )
+    walk_loop_body = run_text[walk_loop_start:walk_loop_end]
+    assert "_inspect_once" in walk_loop_body, (
+        "the digest-walk candidate loop no longer calls _inspect_once -- "
+        "if it now calls a retrying helper instead, the walk pays for "
+        "retries on an outcome (absence) that is expected, not anomalous"
+    )
+    assert "_inspect_retry(" not in walk_loop_body and (
+        "_inspect_retry_classify" not in walk_loop_body
+    ), (
+        "the digest-walk candidate loop calls a multi-attempt inspect "
+        "helper -- absence is the expected, common outcome for most "
+        "candidates in a 50-commit walk, and retrying every miss would "
+        "turn a fast walk into a slow one for no benefit"
+    )
+
+
+def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
+    """team-lead ruling: a registry-read failure on `:latest` must not be
+    collapsed into a single "doesn't exist" outcome (that's the P1 this
+    item exists to close -- a transient failure on an EXISTING `:latest`
+    would otherwise trigger an unconditional overwrite). Live-verified on
+    bigboy (docker buildx 29.7.2 against ghcr.io, 2026-09-03): a
+    genuinely absent tag exits 1 with stderr exactly `ERROR: <ref>: not
+    found`; a present tag exits 0 with empty stderr. Only that verified
+    substring may be trusted as CONFIRMED ABSENT -- this test asserts on
+    ONLY the verified pattern; earlier drafts also guessed at "manifest
+    unknown"/"name unknown", which were never observed on this registry
+    and this buildx version and must not be reintroduced as if they were
+    verified. Anything that doesn't match must be classified UNKNOWN and
+    fail closed (decline, never bootstrap)."""
+    run_text = _fan_in_run_text()
+    assert "_inspect_classify" in run_text, (
+        "no _inspect_classify helper found -- the :latest check must "
+        "distinguish CONFIRMED ABSENT from UNKNOWN registry failures "
+        "instead of collapsing every failure into one outcome"
+    )
+    assert '"${ref}: not found"' in run_text, (
+        "the classifier doesn't match the live-verified 'not found' stderr "
+        "substring -- this is the only pattern actually observed against "
+        "ghcr.io with this buildx version, and it's what distinguishes "
+        "CONFIRMED ABSENT from UNKNOWN"
+    )
+    assert "manifest unknown" not in run_text and "name unknown" not in run_text, (
+        "found an unverified guessed error-text pattern ('manifest unknown' "
+        "or 'name unknown') in the fan-in job -- these were never confirmed "
+        "against a real registry response and must not be trusted as if "
+        "they were; only the live-verified 'not found' substring may be "
+        "used to classify CONFIRMED ABSENT"
+    )
+    assert "_inspect_retry_classify" in run_text, (
+        "no _inspect_retry_classify helper found -- the :latest check must "
+        "retry only the UNKNOWN outcome (a genuine ambiguity worth ruling "
+        "out as transient) while short-circuiting immediately on CONFIRMED "
+        "ABSENT (nothing to retry, the ref does not exist)"
+    )
+    # The :latest call site must branch on all three outcomes: found (0),
+    # confirmed absent (1, bootstrap), unknown (2, fail closed/decline).
+    latest_call_pos = run_text.index('_inspect_retry_classify "${image}:latest"')
+    tail = run_text[latest_call_pos:latest_call_pos + 1200]
+    assert '"${latest_rc}" -eq 1' in tail, (
+        "no branch on rc==1 (CONFIRMED ABSENT) found near the :latest call "
+        "site -- the three-way outcome must be handled explicitly"
+    )
+    assert '"${latest_rc}" -eq 2' in tail, (
+        "no branch on rc==2 (UNKNOWN) found near the :latest call site -- "
+        "an unrecognized registry failure must fail closed (decline), "
+        "never fall through to the bootstrap/overwrite path"
+    )

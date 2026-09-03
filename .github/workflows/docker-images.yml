@@ -769,21 +769,23 @@ jobs:
           # every time is treated as absence, same as before, just with
           # retries first rather than trusting a single attempt.
           #
-          # KNOWN, DELIBERATE RESIDUAL (ci-flakes review, delta on
-          # b172ebf0): this changes the PROBABILITY of misclassifying a
-          # transient failure as absence, not the classification itself --
-          # a SUSTAINED failure (registry 5xx, rate limiting, an expired
-          # token: exactly the incidents that last minutes, not seconds)
-          # still lands on "treat as absent" after this ~6s window.
-          # ci-flakes' hypothesis: stderr (discarded here by `2>/dev/null`)
-          # likely DOES distinguish a real "not found"/"manifest unknown"
-          # from a transport error, which would let this be fixed
-          # structurally rather than probabilistically -- neither reviewer
-          # could verify buildx's actual stderr wording without live
-          # registry access, so this is not implemented blind (a wrong
-          # guess at the exact error text would silently misclassify a
-          # GENUINE absence as an error, which is worse than today). Left
-          # as a follow-up needing a live probe, not solved in this PR.
+          # STRUCTURAL FIX (team-lead ruling: a documented-but-unimplemented
+          # gap was rejected here; this was verified live, not guessed).
+          # Live probe on bigboy, docker buildx 29.7.2 against ghcr.io,
+          # 2026-09-03: `imagetools inspect` on a genuinely absent tag
+          # exits 1 with stderr exactly `ERROR: <ref>: not found`; a
+          # present tag exits 0 with empty stderr and valid JSON on
+          # stdout. `_inspect_classify` below matches ONLY that verified
+          # substring as CONFIRMED ABSENT -- anything else (a different
+          # error, a network timeout, an auth failure, empty stderr with a
+          # nonzero exit) is UNKNOWN and fails closed. This is the SAME
+          # discipline as the retry helper below: don't guess at error
+          # shapes that were never actually observed, because a wrong
+          # guess would silently misclassify a genuine absence as an
+          # error, or a genuine transient error as absence -- either one
+          # is worse than today. The :latest call site below uses this to
+          # tell "doesn't exist" (bootstrap) from "couldn't tell"
+          # (decline, never bootstrap on an ambiguous read).
           #
           # ci-flakes review (delta on b172ebf0): the original version slept
           # after the FINAL attempt too, paying for a retry it would never
@@ -807,8 +809,71 @@ jobs:
             done
             return 1
           }
+          # `_inspect_once` is single-attempt, no retry -- and that is
+          # justified by FAIL-CLOSEDNESS, not by speed (team-lead review):
+          # every call site below feeds this into `[ -n "${candidate_digest}" ]`,
+          # so a failed inspect yields an empty digest, which can only ever
+          # produce a MISS (the candidate is skipped, the walk moves on) --
+          # it can never produce a false MATCH. Retrying here would only
+          # spend time; it changes no outcome a caller could get wrong.
+          # The `:latest` site below is the OPPOSITE shape and must never
+          # be migrated to this helper: there, an empty/failed read means
+          # "doesn't exist", which drives an unconditional overwrite
+          # (BOOTSTRAP) -- an ambiguous read there is not a safe miss, it's
+          # a wrong answer with a destructive side effect. That inversion
+          # is exactly why `:latest` needs `_inspect_retry_classify`
+          # (3-way: found / CONFIRMED ABSENT / UNKNOWN-fail-closed) instead
+          # of this helper. The two are not interchangeable and must not
+          # be merged for "code cleanliness".
           _inspect_once() {
             docker buildx imagetools inspect "$1" --format '{{json .}}' 2>/dev/null
+          }
+          # _inspect_classify: single attempt, but distinguishes WHY it
+          # failed instead of collapsing every failure into one outcome.
+          # See the STRUCTURAL FIX comment above for the live-verified
+          # stderr text this matches on. Returns JSON on stdout with exit
+          # 0 when found; on failure, exit 1 means CONFIRMED ABSENT
+          # (verified "not found" stderr), exit 2 means UNKNOWN (anything
+          # else) -- callers must treat 2 as fail-closed, never as
+          # equivalent to 1.
+          _inspect_classify() {
+            local ref="$1" out err_file rc
+            err_file="$(mktemp)"
+            if out="$(docker buildx imagetools inspect "${ref}" --format '{{json .}}' 2>"${err_file}")"; then
+              rm -f "${err_file}"
+              printf '%s' "${out}"
+              return 0
+            fi
+            if grep -qF "${ref}: not found" "${err_file}"; then
+              rc=1
+            else
+              rc=2
+            fi
+            rm -f "${err_file}"
+            return "${rc}"
+          }
+          # _inspect_retry_classify: retries ONLY the UNKNOWN outcome (a
+          # genuine ambiguity worth a few seconds to rule out as
+          # transient, same reasoning as `_inspect_retry` above) --
+          # CONFIRMED ABSENT short-circuits immediately, there is nothing
+          # to retry away, the ref does not exist. Note the `$?` capture:
+          # it happens on the line immediately inside the `else` branch,
+          # never via a bodyless `if` with no `else` -- that shape was
+          # proven (real bash) to reset `$?` to 0 on the false path,
+          # which would silently turn every UNKNOWN into a false ABSENT.
+          _inspect_retry_classify() {
+            local ref="$1" attempt out rc
+            for attempt in 1 2 3; do
+              if out="$(_inspect_classify "${ref}")"; then
+                printf '%s' "${out}"
+                return 0
+              else
+                rc=$?
+              fi
+              [ "${rc}" -eq 1 ] && return 1
+              [ "${attempt}" -lt 3 ] && sleep 2
+            done
+            return 2
           }
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
@@ -857,6 +922,12 @@ jobs:
                   [A-Za-z0-9_]*) ;;
                   *) safe_branch_tag="x${safe_branch_tag}" ;;
                 esac
+                # team-lead follow-up: Docker's tag grammar also caps the
+                # total length at 128 characters -- a long branch name
+                # (or one that grew by one char from the leading-char
+                # guard just above) can still exceed it. Truncate last,
+                # after any prefix has already been added.
+                safe_branch_tag="${safe_branch_tag:0:128}"
                 echo "NON-MAIN BRANCH ${family}: tagging ${safe_branch_tag} (from ref ${BRANCH_TAG}) unconditionally"
                 docker buildx imagetools create -t "${image}:${safe_branch_tag}" "${source_ref}"
               else
@@ -884,14 +955,26 @@ jobs:
             # arc-runner-image.yml, PR #2154, for the identical trap and
             # fix). `if cmd; then ... fi` keeps the `;` after the command's
             # own quotes are already closed, which parses cleanly.
-            if latest_json="$(_inspect_retry "${image}:latest")"; then
+            #
+            # Three-way outcome (see _inspect_retry_classify above): 0 =
+            # found, proceed with the label logic below. 1 = CONFIRMED
+            # ABSENT -- bootstrap unconditionally, same as before. 2 =
+            # UNKNOWN -- fail closed: decline and move on, NEVER
+            # bootstrap. Bootstrapping on an ambiguous read would still be
+            # the exact P1 this item exists to close (a transient failure
+            # on an EXISTING :latest silently overwriting it).
+            latest_rc=0
+            if latest_json="$(_inspect_retry_classify "${image}:latest")"; then
               :
             else
-              latest_json=""
+              latest_rc=$?
             fi
-            if [ -z "${latest_json}" ]; then
-              echo "BOOTSTRAP ${family}: no existing latest tag, tagging unconditionally"
+            if [ "${latest_rc}" -eq 1 ]; then
+              echo "BOOTSTRAP ${family}: no existing latest tag (confirmed absent), tagging unconditionally"
               docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+              continue
+            elif [ "${latest_rc}" -eq 2 ]; then
+              echo "WARNING: ${family}: could not read :latest and could not confirm it's absent (registry error of an unrecognized shape) -- declining rather than risk overwriting an existing image on an ambiguous read"
               continue
             fi
 

@@ -232,6 +232,19 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		executor.beforeWriteHook()
 	}
 
+	// Resolved BEFORE the write context opens, deliberately: a refused clock
+	// means nothing downstream should run at all, and there is no reason to
+	// pay for a context/timeout only to refuse a moment later. See
+	// executor_clock.go's nowOrRefuse doc for why this refuses rather than
+	// falling back to time.Now() -- the field cannot be nil in production
+	// (NewRecommendationsExecutor sets it unconditionally on its only
+	// non-nil-returning path), so this can only fire against a test's
+	// zero-valued literal.
+	writeInstant, err := executor.nowOrRefuse()
+	if err != nil {
+		return outcome, err
+	}
+
 	// The write context is ALWAYS detached from cancellation, and bounded --
 	// chosen fresh here, unconditionally, rather than gated on the `cancelled`
 	// sample above.
@@ -250,7 +263,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	// context from outliving the shutdown it was detached from.
 	writeCtx, stopWrite := context.WithTimeout(
 		context.WithoutCancel(ctx), recommendationsDetachedWriteTimeout)
-	written, err := executor.writeRecommendations(writeCtx, records, executor.wallClock()())
+	written, err := executor.writeRecommendations(writeCtx, records, writeInstant)
 	stopWrite()
 	if err != nil {
 		// A WRITE FAILURE OUTRANKS THE CANCELLATION, deliberately. On a run that

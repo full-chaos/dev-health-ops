@@ -66,3 +66,19 @@ func (executor *DORAExecutor) nowOrRefuse() (time.Time, error) {
 func (executor *CapacityExecutor) nowOrRefuse() (time.Time, error) {
 	return clockOrRefuse("CapacityExecutor", executor.nowUTC)
 }
+
+// nowOrRefuse yields this executor's instant, refusing an uninjected clock.
+//
+// CHAOS-4954/CHAOS-4935 merge conflict, fixed: this used to be a nil-safe
+// `wallClock()` accessor that fell back to `time.Now().UTC()` -- the SAME
+// shape this file's own doc comment names as wrong for a kind whose nowUTC
+// is the sole source. NewRecommendationsExecutor sets nowUTC unconditionally
+// on its only non-nil-returning path (recommendations_native.go), same as
+// DORA/Capacity, so a nil clock here is exactly as unreachable in production
+// as it is for them -- only reachable via a zero-valued literal, which is
+// what a test writes when it does not care about time. Refusing loudly
+// there is the correct failure mode, not a wall-clock fallback that makes
+// the test's result depend on the day it runs.
+func (executor *RecommendationsExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("RecommendationsExecutor", executor.nowUTC)
+}

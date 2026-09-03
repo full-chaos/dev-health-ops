@@ -90,6 +90,23 @@ RUN pip install --upgrade pip && \
 # Minimal image — no build tools, only the installed package and its runtime deps.
 FROM ${PYTHON_BASE_IMAGE} AS runtime
 
+ARG VERSION="dev"
+ARG COMMIT="unknown"
+ARG BUILD_TIME="1970-01-01T00:00:00Z"
+
+# CHAOS-4947: same mechanism docker/go-worker.Dockerfile's runtime stage
+# already uses -- one LABEL block, not a second (docker/build-push-action's
+# own `labels:` input would be a parallel path setting the same key). The
+# fan-in job in .github/workflows/docker-images.yml reads
+# org.opencontainers.image.revision off whatever is currently tagged
+# `latest` to decide whether a new build may move that tag.
+LABEL org.opencontainers.image.title="Dev Health ops runtime" \
+      org.opencontainers.image.description="dev-health-ops API and runner images" \
+      org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
+      org.opencontainers.image.version=${VERSION} \
+      org.opencontainers.image.revision=${COMMIT} \
+      org.opencontainers.image.created=${BUILD_TIME}
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1
 

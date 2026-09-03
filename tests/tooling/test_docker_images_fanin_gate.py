@@ -794,13 +794,26 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         "short-circuiting straight to bootstrap"
     )
 
+    # codex round 5, P2: every family shares this scenario uniformly (no
+    # source_tag_scenario override), so all nine hit `:latest` UNKNOWN --
+    # which is now the exact trigger for the post-loop
+    # tags_moved_count==0/any_unknown_count>0 job failure (see
+    # test_latest_check_all_unknown_fails_the_job below for the dedicated
+    # row on that mechanism). assert_success=False because this row's own
+    # point is the PER-FAMILY behaviour (no create, no fallback reached),
+    # not the job-level exit code.
     (
         unknown_record,
         unknown_log_called,
         unknown_mb_called,
         _unknown_stdout,
-        _unknown_rc,
-    ) = _run_latest_tag_step("unknown")
+        unknown_rc,
+    ) = _run_latest_tag_step("unknown", assert_success=False)
+    assert unknown_rc != 0, (
+        "all nine families hitting :latest UNKNOWN should now fail the "
+        f"step (post-loop tags_moved_count/any_unknown_count check), got "
+        f"returncode={unknown_rc}"
+    )
     assert unknown_record == "", (
         "UNKNOWN registry failure recorded an `imagetools create` call -- "
         f"it must decline and tag nothing, got: {unknown_record!r}"
@@ -823,8 +836,16 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # "wandered into the fallback and got lucky" -- verified by removing
     # the guard and confirming this specific assertion goes red while
     # the create-count assertion alone stays green.
-    empty_record, empty_log_called, empty_mb_called, empty_stdout, _empty_rc = (
-        _run_latest_tag_step("empty_success")
+    # codex round 5, P2: same uniform-scenario shape as "unknown" above --
+    # all nine families hit the empty-read case, which is now ALSO an
+    # any_unknown_count trigger (its own comment in the workflow already
+    # says "treating as unknown"), so this scenario fails the step too.
+    empty_record, empty_log_called, empty_mb_called, empty_stdout, empty_rc = (
+        _run_latest_tag_step("empty_success", assert_success=False)
+    )
+    assert empty_rc != 0, (
+        "all nine families hitting the rc==0-yet-empty :latest read should "
+        f"now fail the step, got returncode={empty_rc}"
     )
     assert empty_record == "", (
         "a reported-success (exit 0) but empty :latest read recorded an "
@@ -1107,9 +1128,9 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 9 families had a confirmed-present source tag" in stdout, (
-        "expected the job-level failure annotation naming the present/"
-        f"total counts, got stdout:\n{stdout}"
+    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+        "expected the job-level failure annotation naming the "
+        f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
 
 
@@ -1151,11 +1172,56 @@ def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 9 families had a confirmed-present source tag" in stdout, (
-        "expected the job-level failure annotation naming the present/"
-        f"total counts, got stdout:\n{stdout}"
+    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+        "expected the job-level failure annotation naming the "
+        f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
     assert "SKIP dev-health-go-migrate" in stdout, (
         "expected the one overridden-absent family to still get its own "
         f"silent SKIP line, got stdout:\n{stdout}"
+    )
+
+
+def test_latest_check_all_unknown_fails_the_job() -> None:
+    """codex round 5, P2 (reproduced): the round-3/round-4 no-op guard
+    only counted source-tag-stage ambiguity. An all-nine-source-PRESENT
+    run where every `:latest` read is then UNKNOWN reaches the identical
+    silent no-op shape one stage later -- zero `imagetools create` calls,
+    rc=0 -- because the source-tag-only check never looks at the
+    `:latest` stage at all.
+
+    Fixed structurally this round: `tags_moved_count` (incremented at
+    every `imagetools create` call site, any stage) and
+    `any_unknown_count` (incremented at every self-classified-ambiguous
+    branch, any stage) replace the source-tag-specific counters. This row
+    proves the SAME job-level failure now fires from the `:latest` stage,
+    not just the source-tag stage `test_source_tag_all_unknown_fails_the_
+    job_instead_of_a_silent_noop` already covers.
+
+    Every family shares one `short_sha` for the source-tag probe (default
+    "always found"), so all nine reach `:latest`; `scenario="unknown"`
+    then answers UNKNOWN for all nine uniformly. Verified this row goes
+    RED against the round-4-only condition (`source_present_count==0 and
+    source_unknown_count>0`, reverted from the round-5 `tags_moved_count`/
+    `any_unknown_count` form) before trusting it: source_present_count=9
+    there (every source tag WAS found), so that condition's own first
+    clause is false and the run exits 0."""
+    record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
+        "unknown", assert_success=False
+    )
+    assert returncode == 1, (
+        f"expected the all-:latest-UNKNOWN scenario (0 moved) to exit 1, "
+        f"got returncode={returncode}, stdout:\n{stdout}"
+    )
+    assert record == "", (
+        f"the failing run still recorded an `imagetools create` call: {record!r}"
+    )
+    assert not log_called and not mb_called, (
+        "the failing run reached the digest-walk fallback or the "
+        "merge-base ancestry check instead of failing immediately after "
+        "the per-family loop"
+    )
+    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+        "expected the job-level failure annotation naming the "
+        f"moved/ambiguous counts, got stdout:\n{stdout}"
     )

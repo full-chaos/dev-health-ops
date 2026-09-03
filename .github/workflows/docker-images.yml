@@ -899,7 +899,24 @@ jobs:
           family_total=0
           for _ in $families; do family_total=$((family_total + 1)); done
           source_unknown_count=0
-          source_present_count=0
+          # codex round 5, P2: the round-3/round-4 no-op guard only counted
+          # source-tag ambiguity -- an all-nine-present-source run that then
+          # hits an ambiguous `:latest` read on every family (latest_rc==2,
+          # or the rc==0-yet-empty-stdout case just below, both self-
+          # labelled "unknown" in their own comments) reaches the identical
+          # silent no-op shape one stage later, and the source-tag-only
+          # check never fires. Tracked structurally instead of adding a
+          # THIRD site-specific counter: `tags_moved_count` is incremented
+          # at every one of this loop's five `imagetools create` call
+          # sites (the single ground-truth signal for "did this run
+          # actually do anything"), `any_unknown_count` at every branch
+          # that self-classifies as an ambiguous/unknown read anywhere in
+          # the loop (source-tag AND :latest AND the empty-read case) --
+          # the post-loop check below is ONE condition covering all three
+          # sites, not three separate equality tests that each need their
+          # own future round to find the next gap.
+          tags_moved_count=0
+          any_unknown_count=0
           for family in $families; do
             image="ghcr.io/${OWNER}/${family}"
             source_ref="${image}:sha-${short_sha}"
@@ -930,17 +947,16 @@ jobs:
             elif [ "${source_rc}" -eq 2 ]; then
               echo "::error::${family}: could not confirm whether ${source_ref} exists (registry error of an unrecognized shape) -- declining rather than silently leaving this family stale while others move latest/main"
               source_unknown_count=$((source_unknown_count + 1))
+              any_unknown_count=$((any_unknown_count + 1))
               continue
             fi
-            # codex round 4, P2: reached only when source_rc==0 (the
-            # source tag was actually found) -- tracked separately from
-            # source_unknown_count because "all UNKNOWN" was too narrow a
-            # trigger for the post-loop failure below (see there).
-            source_present_count=$((source_present_count + 1))
+            # Reached only when source_rc==0 (the source tag was actually
+            # found).
 
             if [ "${IS_RELEASE}" = "true" ]; then
               echo "RELEASE ${family}: tagging latest unconditionally"
               docker buildx imagetools create -t "${image}:latest" "${source_ref}"
+              tags_moved_count=$((tags_moved_count + 1))
               continue
             fi
 
@@ -980,6 +996,7 @@ jobs:
                 safe_branch_tag="${safe_branch_tag:0:128}"
                 echo "NON-MAIN BRANCH ${family}: tagging ${safe_branch_tag} (from ref ${BRANCH_TAG}) unconditionally"
                 docker buildx imagetools create -t "${image}:${safe_branch_tag}" "${source_ref}"
+                tags_moved_count=$((tags_moved_count + 1))
               else
                 echo "NON-BRANCH REF ${family}: no moving tag applies"
               fi
@@ -1022,9 +1039,11 @@ jobs:
             if [ "${latest_rc}" -eq 1 ]; then
               echo "BOOTSTRAP ${family}: no existing latest tag (confirmed absent), tagging unconditionally"
               docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+              tags_moved_count=$((tags_moved_count + 1))
               continue
             elif [ "${latest_rc}" -eq 2 ]; then
               echo "WARNING: ${family}: could not read :latest and could not confirm it's absent (registry error of an unrecognized shape) -- declining rather than risk overwriting an existing image on an ambiguous read"
+              any_unknown_count=$((any_unknown_count + 1))
               continue
             fi
             # ci-flakes review (delta on fa119b2d): rc==0 means the inspect
@@ -1044,6 +1063,7 @@ jobs:
               # instead of a plain log line, so it doesn't silently blend
               # into a wall of ordinary per-family output.
               echo "::error::${family}: :latest inspect reported success but returned no data -- treating as unknown, declining rather than risk overwriting"
+              any_unknown_count=$((any_unknown_count + 1))
               continue
             fi
 
@@ -1127,6 +1147,7 @@ jobs:
               if [ -n "${found_base}" ]; then
                 echo "FALLBACK ${family}: unlabeled latest resolved to ${found_base} by digest walk (an ancestor of ${BUILT_SHA} by construction), tagging latest+main"
                 docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+                tags_moved_count=$((tags_moved_count + 1))
               else
                 echo "WARNING: ${family} has no revision label on :latest and no commit in the last 50 first-parent ancestors of ${BUILT_SHA} matches its digest -- declining rather than guessing. This should resolve itself once ${family} gets its next label-bearing build."
               fi
@@ -1136,33 +1157,48 @@ jobs:
             if git merge-base --is-ancestor "${base_sha}" "${BUILT_SHA}"; then
               echo "DESCENDANT ${family}: ${base_sha} -> ${BUILT_SHA}, tagging latest+main"
               docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+              tags_moved_count=$((tags_moved_count + 1))
             else
               echo "DECLINE ${family}: ${BUILT_SHA} is not a descendant of currently-latest ${base_sha}"
             fi
           done
 
-          # codex round 3, P2, WIDENED by codex round 4, P2: the original
-          # check only fired when EVERY family's source-tag read was
-          # UNKNOWN (source_unknown_count == family_total). A MIXED run --
-          # some UNKNOWN, the rest CONFIRMED ABSENT, zero actually FOUND --
-          # still reaches this point having applied no tags and printed no
-          # loud signal, because the round-3 check's equality test never
-          # matches when even one family declines via the "absent" branch
-          # instead of "unknown". Reproduced: 8 UNKNOWN + 1 CONFIRMED
-          # ABSENT (`family_total`=9, `source_unknown_count`=8) recorded
-          # zero `imagetools create` calls, rc=0, no annotation naming the
-          # failure as job-level.
+          # codex round 3, P2, WIDENED by round 4's P2, WIDENED AGAIN
+          # structurally by round 5's P2. History, briefly: round 3's
+          # check only fired on ALL-NINE source-tag UNKNOWN
+          # (source_unknown_count == family_total); round 4 found a MIXED
+          # UNKNOWN/ABSENT run (some declined "absent", not "unknown")
+          # slipped past that equality test, so the check was widened to
+          # source_present_count==0 && source_unknown_count>0 (source-tag
+          # stage only). Round 5 found the SAME silent-no-op shape one
+          # stage later: an all-nine-source-PRESENT run where every
+          # `:latest` read is then ambiguous (latest_rc==2, or the
+          # rc==0-yet-empty-stdout case, both self-labelled "unknown" in
+          # their own comments a few lines up) reached zero
+          # `imagetools create` calls and rc=0 exactly the same way,
+          # because the source-tag-only check never even looks at the
+          # :latest stage.
           #
-          # Correct condition: fail when NOTHING was actually found
-          # (source_present_count == 0) AND AT LEAST ONE read was
-          # genuinely ambiguous (source_unknown_count > 0) -- not "all
-          # UNKNOWN". An all-CONFIRMED-ABSENT run (source_present_count=0,
-          # source_unknown_count=0, e.g. a fresh org with nothing
-          # published yet) is still a legitimate steady state and must
-          # NOT trip this; any run where at least one family was actually
-          # found (source_present_count>=1) already did real work this
-          # run, even if others declined, so it's excluded too.
-          if [ "${source_present_count}" -eq 0 ] && [ "${source_unknown_count}" -gt 0 ]; then
-            echo "::error::0 of ${family_total} families had a confirmed-present source tag this run, and ${source_unknown_count} failed with an unrecognized registry error -- likely a registry outage, not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
+          # Fixed structurally this time, not with a third site-specific
+          # counter: `tags_moved_count` increments at every one of this
+          # loop's five `imagetools create` call sites (RELEASE,
+          # NON-MAIN BRANCH, BOOTSTRAP, DESCENDANT, FALLBACK) -- the
+          # single ground-truth signal for "did this run actually do
+          # anything, anywhere, for any family". `any_unknown_count`
+          # increments at every branch that self-classifies as an
+          # ambiguous/unknown read, at ANY stage (source-tag rc==2,
+          # :latest rc==2, :latest empty-read). The condition below is
+          # ONE check covering every current site and, structurally, any
+          # future one that follows the same "increment any_unknown_count
+          # when you decline as ambiguous" convention -- a fourth site
+          # added later needs only that one line, not a new post-loop
+          # check. An all-CONFIRMED-ABSENT run (tags_moved_count=0,
+          # any_unknown_count=0, e.g. a fresh org with nothing published
+          # yet) is still a legitimate steady state and does not trip
+          # this; any run where at least one family's tag actually moved
+          # (tags_moved_count>=1) already did real work, even if others
+          # declined, so it's excluded too.
+          if [ "${tags_moved_count}" -eq 0 ] && [ "${any_unknown_count}" -gt 0 ]; then
+            echo "::error::0 of ${family_total} families had a moving tag applied this run, and ${any_unknown_count} ambiguous (unrecognized registry error) read(s) occurred somewhere in the loop -- likely a registry outage, not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
             exit 1
           fi

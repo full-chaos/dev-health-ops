@@ -124,6 +124,26 @@ func repoRoot() (string, error) {
 
 // pythonBinary prefers the checked-out virtualenv, which is what the live
 // Python oracle gate already relies on, then an explicit override, then PATH.
+// Interpreter resolves the Python this package would use, for callers that
+// must run the SAME interpreter chschema does.
+//
+// It exists because a test in internal/jobs/metrics/remaining hard-coded
+// <root>/.venv/bin/python while chschema, three lines earlier in the same test,
+// resolved python3 from PATH -- so the schema setup succeeded in CI and the
+// caller's own Python invocation died with "no such file or directory". Two
+// lookups in one test disagreeing about where Python lives.
+//
+// Exported rather than duplicated on purpose: a copied resolver is the same
+// defect again one refactor later. It shares this package's repoRoot() as well
+// as its lookup order, so caller and schema setup cannot diverge on either.
+func Interpreter() (string, error) {
+	root, err := repoRoot()
+	if err != nil {
+		return "", err
+	}
+	return pythonBinary(root)
+}
+
 func pythonBinary(root string) (string, error) {
 	if override := os.Getenv("DEV_HEALTH_PYTHON"); override != "" {
 		return override, nil

@@ -257,7 +257,7 @@ func runPythonLoader(t *testing.T, dsn, teamID, orgID string) pythonSnapshot {
 	}
 	script := filepath.Join(root,
 		"internal/jobs/metrics/remaining/testdata/run_recommendations_loader_against_clickhouse.py")
-	python := filepath.Join(root, ".venv/bin/python")
+	python := loaderPythonBinary(t)
 
 	command := exec.Command(python, script,
 		"--dsn", dsn, "--team", teamID, "--org", orgID,
@@ -816,4 +816,34 @@ func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Co
 				group.table, duplicates, group.keyCols)
 		}
 	}
+}
+
+// loaderPythonBinary returns the interpreter chschema itself resolved, and
+// LOGS it so the CI record proves which Python actually ran.
+//
+// This test previously hard-coded <root>/.venv/bin/python. That works on a dev
+// host and on bigboy and FAILS IN CI, which has no .venv -- the comparison died
+// with "fork/exec .../.venv/bin/python: no such file or directory" while
+// chschema had already resolved python3 from PATH and run the migration chain.
+//
+// It went unnoticed because the `Go` workflow never COMPLETED on any earlier
+// tip; every run was superseded by the next push, so the first time the merge
+// oracle ran was the first time this surfaced.
+//
+// Calling chschema's own exported resolver rather than reimplementing its order
+// is the point: a duplicate would be the same defect one refactor later.
+//
+// Deliberately NO skip path. A skip would make this test silently vacuous
+// exactly where it matters, which is the defect class this file exists to
+// close, so a missing interpreter is a hard failure.
+func loaderPythonBinary(t *testing.T) string {
+	t.Helper()
+	python, err := chschema.Interpreter()
+	if err != nil {
+		t.Fatalf("no Python to run the reference loader: %v. This test compares the "+
+			"SHIPPED Python loader against the Go one, so without an interpreter it "+
+			"proves nothing -- failing rather than skipping is deliberate.", err)
+	}
+	t.Logf("reference interpreter resolved to: %s", python)
+	return python
 }

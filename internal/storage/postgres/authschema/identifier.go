@@ -78,6 +78,19 @@ func quoteIdentifier(v ValidatedIdentifier) string {
 	return `"` + v.name + `"`
 }
 
+// Quote renders a validated identifier for interpolation by ANOTHER package.
+//
+// It exists so a package that must name this schema in its own SQL --
+// internal/audit writes the outbox and audit tables inside a caller's
+// transaction -- uses THIS renderer instead of writing a second one. A second
+// renderer is the defect CHAOS-4918 is about: fmt.Sprintf with %q looks like
+// identifier quoting, is Go string-literal quoting, and escapes an embedded
+// quote as \" where PostgreSQL wants it doubled.
+//
+// Exported deliberately and narrowly: the TYPE is still the control, so a
+// caller cannot reach this without having passed the allowlist first.
+func Quote(v ValidatedIdentifier) string { return quoteIdentifier(v) }
+
 // mustValidatedIdentifier is for identifiers this package itself defines as
 // compile-time constants, where a failure is a build-time authoring error
 // rather than anything an operator or an attacker can influence. It is

@@ -74,10 +74,17 @@ jobs:
       # the whole run, not two conditionally-skipped ones.
       - name: Determine whether to publish
         id: publish
+        # Semgrep (code-scanning, PR #2154 round): github context data
+        # interpolated directly into a run: script is flagged as a shell-
+        # injection surface regardless of how trustworthy the specific field
+        # is -- route it through env: instead, per the tool's own remediation.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_IMAGE_INPUT: ${{ github.event.inputs.push_image }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ] \
-             && { [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ "${{ github.event.inputs.push_image }}" = "true" ]; }; then
+          if [ "$EVENT_NAME" != "pull_request" ] \
+             && { [ "$EVENT_NAME" != "workflow_dispatch" ] || [ "$PUSH_IMAGE_INPUT" = "true" ]; }; then
             echo "should_publish=true" >> "${GITHUB_OUTPUT}"
           else
             echo "should_publish=false" >> "${GITHUB_OUTPUT}"
@@ -158,11 +165,13 @@ jobs:
         id: mainhead
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BUILT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          current_main_sha="$(gh api "repos/${{ github.repository }}/branches/main" --jq .commit.sha)"
-          echo "built_sha=${{ github.sha }} current_main_sha=${current_main_sha}"
-          if [ "${{ github.sha }}" = "${current_main_sha}" ]; then
+          current_main_sha="$(gh api "repos/${REPO}/branches/main" --jq .commit.sha)"
+          echo "built_sha=${BUILT_SHA} current_main_sha=${current_main_sha}"
+          if [ "${BUILT_SHA}" = "${current_main_sha}" ]; then
             echo "is_main_head=true" >> "${GITHUB_OUTPUT}"
           else
             echo "is_main_head=false" >> "${GITHUB_OUTPUT}"

@@ -81,14 +81,7 @@ jobs:
             echo "relevant=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          if [ -n "${BASE_SHA:-}" ]; then
-            range="${BASE_SHA}...HEAD"
-          else
-            # push to main: compare against the previous commit.
-            range="HEAD^...HEAD"
-          fi
-          echo "diff range: ${range}"
-          git diff --name-only "${range}" > changed.txt || {
+          bash ci/typecheck_relevant_diff.sh > changed.txt || {
             echo "could not resolve the diff range; failing closed"
             echo "relevant=true" >> "${GITHUB_OUTPUT}"
             exit 0

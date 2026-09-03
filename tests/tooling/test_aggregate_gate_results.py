@@ -743,6 +743,17 @@ def test_typecheck_mypy_unconditional_arm_fails_on_a_literal_skip() -> None:
     assert proc2.returncode == 0
     assert "typecheck gate passed" in proc2.stdout
 
+    # Third leg (team-lead, over 4752-go's own later-withdrawn suggestion --
+    # kept for the documentation value 4752-go named: the two cases above
+    # pin the dangerous direction, a false PASS on a skip; this pins what the
+    # arm's contract actually is on the normal, expected path).
+    success = dict(env, GATED_JOB_1="typecheck-mypy|unconditional|success")
+    proc3 = subprocess.run(
+        ["bash", str(SCRIPT)], capture_output=True, text=True, env=success
+    )
+    assert proc3.returncode == 0
+    assert "typecheck gate passed" in proc3.stdout
+
 
 def test_a_filter_policy_without_a_selector_is_refused() -> None:
     # Given a job judged by the path filter, with no filter result to judge by.

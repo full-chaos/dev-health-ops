@@ -61,6 +61,24 @@ var ErrRuntimeRoleCanEscalate = fmt.Errorf(
 	"%w: the runtime role holds privileges the manifest does not declare", ErrMigrationFailed,
 )
 
+// privilegedPredefinedRoles is PostgreSQL's own set of roles that confer
+// capabilities OUTSIDE the object-privilege model — filesystem and program
+// execution, and unrestricted reads. `has_*_privilege` cannot see any of them,
+// so membership is the only observable.
+//
+// This is a CLOSED set defined by PostgreSQL, which is what makes enumerating
+// it legitimate here when enumerating attack routes was not: the list cannot
+// silently grow behind our backs the way "ways to reach DDL" could. A future
+// PostgreSQL adding one is a version upgrade, visible in release notes.
+var privilegedPredefinedRoles = map[string]struct{}{
+	"pg_execute_server_program": {},
+	"pg_read_server_files":      {},
+	"pg_write_server_files":     {},
+	"pg_read_all_data":          {},
+	"pg_write_all_data":         {},
+	"pg_maintain":               {},
+}
+
 // systemSchemaFilter excludes the catalogs, which every role can read and
 // which no manifest describes.
 const systemSchemaFilter = `n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'`
@@ -131,20 +149,47 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err := collect(ownershipViolations(ctx, conn, options)); err != nil {
 		return nil, err
 	}
-	// Membership is reported only when something else already failed, and only
-	// as CONTEXT. The effective-privilege checks above are what DETECT an
-	// inherited privilege -- that is the whole point of the inversion, and
-	// re-adding membership as a detector would reintroduce the open-world
-	// enumeration this file exists to replace. But a violation list of ninety
-	// inherited privileges does not tell an operator WHY, and "REVOKE the
-	// membership" is one statement where revoking ninety grants is not. So the
-	// cause is appended when there is already a failure to explain.
-	if len(violations) > 0 {
-		memberships, err := roleMemberships(ctx, conn, options)
-		if err != nil {
-			return nil, err
+	// Membership in a PRIVILEGED PREDEFINED ROLE is a DETECTOR, unconditionally.
+	//
+	// This reverses a decision I made and defended one round earlier. I had
+	// demoted membership to context-only -- reported only when some other
+	// violation already existed -- on the reasoning that inherited OBJECT
+	// privileges are already caught by the effective-privilege checks above,
+	// and that re-promoting membership to a detector would restore the
+	// open-world enumeration this file exists to replace.
+	//
+	// That reasoning is correct for ordinary roles and WRONG for PostgreSQL's
+	// predefined roles, because they confer capabilities that live entirely
+	// OUTSIDE the object-privilege model: `has_table_privilege` and its
+	// siblings see nothing at all. Codex round 3 executed it — membership in
+	// `pg_execute_server_program` let the runtime run
+	// `COPY (...) TO PROGRAM 'sh -c ...'` and write a file, while this
+	// function reported `extra_privileges: 0`.
+	//
+	// It does NOT reintroduce the open-world defect, and the distinction is
+	// the whole reason this is safe: the predefined roles are a CLOSED set
+	// fixed by PostgreSQL itself, not a list of attack routes I invented and
+	// must keep complete. Membership in any OTHER role stays context-only,
+	// because its effects are visible to the effective-privilege checks.
+	memberships, err := roleMemberships(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	for _, membership := range memberships {
+		if _, privileged := privilegedPredefinedRoles[membership.Object]; privileged {
+			violations = append(violations, membership)
 		}
-		violations = append(violations, memberships...)
+	}
+	if len(violations) > 0 {
+		// The remaining memberships are appended as CONTEXT for a failure the
+		// effective checks already found: a list of ninety inherited
+		// privileges does not tell an operator WHY, and "REVOKE the
+		// membership" is one statement where revoking ninety grants is not.
+		for _, membership := range memberships {
+			if _, privileged := privilegedPredefinedRoles[membership.Object]; !privileged {
+				violations = append(violations, membership)
+			}
+		}
 	}
 
 	sort.Slice(violations, func(i, j int) bool {
@@ -275,24 +320,44 @@ func sequenceViolations(
 	return violations, nil
 }
 
-// functionViolations checks functions in the AUTH schema only.
+// functionViolations flags SECURITY DEFINER functions this migrator's own
+// roles own, in ANY non-system schema.
 //
-// PostgreSQL grants EXECUTE on a new function to PUBLIC by default, so a
-// SECURITY DEFINER function owned by the migration role is a standing offer of
-// that role's authority to anyone who can call it (codex round 2, P1). The
-// manifest declares no functions at all, so any executable function here is a
-// violation.
+// A SECURITY DEFINER function runs as its OWNER, and PostgreSQL grants EXECUTE
+// on a new function to PUBLIC by default, so such a function is a standing
+// offer of its owner's authority to anyone who can call it. No grant to the
+// runtime role is needed for it to be reachable.
 //
-// Other schemas are deliberately NOT checked: a deployment's own extensions
-// legitimately expose functions to PUBLIC everywhere, and flagging those would
-// bury the auth-schema signal in noise from objects this migrator has no
-// authority over.
+// SCOPED BY OWNERSHIP, NOT BY LOCATION, and that distinction is the fix for a
+// real escalation (lane-auth-contracts, executed): the first version checked
+// only the auth schema, on the reasoning that a deployment's extensions
+// legitimately expose functions to PUBLIC everywhere and flagging them would
+// bury the signal. The noise argument was right; the SCOPE was wrong. A
+// SECURITY DEFINER function in `public` owned by the MIGRATION role is not
+// third-party noise — it is this migrator's own blast radius, and it let the
+// runtime role execute `CREATE TABLE auth.attacker` through a function call
+// while every direct attempt was correctly refused.
+//
+// Ownership is the right axis because extension functions are owned by
+// whoever installed them, normally a superuser, so they do not match and the
+// signal stays clean.
+//
+// The temporal half is what makes this worth flagging rather than documenting:
+// the route SURVIVES revocation of the grant that created it. Once the
+// function exists, removing the migration role's CREATE on that schema changes
+// nothing — the same shape as a default ACL, arriving from a second direction.
 func functionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
 	rows, err := conn.Query(ctx, `
-		SELECT p.proname, p.prosecdef
+		SELECT n.nspname, p.proname, owner.rolname
 		FROM pg_proc p
 		JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE n.nspname = $2
+		JOIN pg_roles owner ON owner.oid = p.proowner
+		WHERE `+systemSchemaFilter+`
+		  AND p.prosecdef
+		  AND (
+		        owner.rolname = current_user
+		     OR owner.oid = (SELECT nspowner FROM pg_namespace WHERE nspname = $2)
+		  )
 		  AND has_function_privilege($1, p.oid, 'EXECUTE')`,
 		options.RuntimeRole, options.Schema,
 	)
@@ -303,18 +368,16 @@ func functionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([
 
 	var violations []Violation
 	for rows.Next() {
-		var name string
-		var securityDefiner bool
-		if err := rows.Scan(&name, &securityDefiner); err != nil {
+		var schema, name, owner string
+		if err := rows.Scan(&schema, &name, &owner); err != nil {
 			return nil, fmt.Errorf("%w: reading a function privilege", ErrMigrationFailed)
 		}
-		detail := "the manifest declares no executable functions"
-		if securityDefiner {
-			detail = "SECURITY DEFINER: runs as its owner, so EXECUTE lends the owner's authority"
-		}
 		violations = append(violations, Violation{
-			Kind: "function", Schema: options.Schema, Object: name + "()",
-			Privilege: "EXECUTE", Detail: detail,
+			Kind: "function", Schema: schema, Object: name + "()", Privilege: "EXECUTE",
+			Detail: fmt.Sprintf(
+				"SECURITY DEFINER owned by %q: executing it lends that role's authority, "+
+					"and the route survives revoking the grant that created the function", owner,
+			),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -406,7 +469,8 @@ func defaultACLViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		FROM pg_default_acl d
 		LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
 		CROSS JOIN LATERAL aclexplode(d.defaclacl) AS a
-		WHERE n.nspname = $1 OR n.nspname IS NULL`,
+		WHERE n.nspname = $1
+		   OR (d.defaclnamespace = 0 AND has_schema_privilege(d.defaclrole, $1, 'CREATE'))`,
 		options.Schema,
 	)
 	if err != nil {
@@ -469,6 +533,39 @@ func ownershipViolations(ctx context.Context, conn *pgx.Conn, options Options) (
 		return nil, fmt.Errorf("%w: reading object ownership", ErrMigrationFailed)
 	}
 
+	// Types and domains are owned objects too, and an owner keeps DDL over
+	// them permanently. `pg_class` does not list them, so a runtime-owned
+	// DOMAIN passed the ownership check while its owner could still
+	// `ALTER DOMAIN ... ADD CONSTRAINT` — executed by codex round 3.
+	typeRows, err := conn.Query(ctx, `
+		SELECT n.nspname, t.typname
+		FROM pg_type t
+		JOIN pg_namespace n ON n.oid = t.typnamespace
+		JOIN pg_roles r ON r.oid = t.typowner
+		WHERE `+systemSchemaFilter+` AND r.rolname = $1
+		  AND t.typtype IN ('d', 'e', 'c', 'r')
+		  AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid)`,
+		options.RuntimeRole,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading type ownership", ErrMigrationFailed)
+	}
+	for typeRows.Next() {
+		var schema, name string
+		if err := typeRows.Scan(&schema, &name); err != nil {
+			typeRows.Close()
+			return nil, fmt.Errorf("%w: reading an owned type", ErrMigrationFailed)
+		}
+		violations = append(violations, Violation{
+			Kind: "ownership", Schema: schema, Object: name, Privilege: "OWNER",
+			Detail: "a type or domain owner keeps DDL over it permanently",
+		})
+	}
+	typeRows.Close()
+	if err := typeRows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading type ownership", ErrMigrationFailed)
+	}
+
 	var ownsSchema bool
 	if err := conn.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -507,11 +604,21 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options) ([]Vi
 		if err := rows.Scan(&name); err != nil {
 			return nil, fmt.Errorf("%w: reading a role membership", ErrMigrationFailed)
 		}
+		detail := fmt.Sprintf(
+			"likely cause of the privileges above; remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
+		)
+		if _, privileged := privilegedPredefinedRoles[name]; privileged {
+			// Not "the cause of the privileges above" — there are none. That
+			// is the whole point: a predefined role confers capability
+			// OUTSIDE the object-privilege model, so nothing else in this
+			// report will mention it.
+			detail = fmt.Sprintf(
+				"privileged predefined role: confers capability no object-privilege check can see; "+
+					"remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
+			)
+		}
 		context = append(context, Violation{
-			Kind: "role_membership", Object: name, Privilege: "MEMBER",
-			Detail: fmt.Sprintf(
-				"likely cause of the privileges above; remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
-			),
+			Kind: "role_membership", Object: name, Privilege: "MEMBER", Detail: detail,
 		})
 	}
 	if err := rows.Err(); err != nil {

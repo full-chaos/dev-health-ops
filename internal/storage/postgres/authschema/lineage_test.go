@@ -113,7 +113,19 @@ func TestLoadMigrationsRejectsMalformedLineages(t *testing.T) {
 // spelled, because it is measured AFTER the statement ran.
 
 // secretRoot names the substrings that make a column name suspicious.
-var secretRoot = regexp.MustCompile(`(?i)(password|secret|token|credential|private|key)`)
+// secretRoot names the substrings that make a column name suspicious.
+//
+// `bearer` was added after codex round 3 pointed out that a column called
+// `bearer text NOT NULL` stores a plaintext bearer credential and matched none
+// of the original roots. The lesson is not "add bearer" — it is that the root
+// list is a VOCABULARY and vocabularies are incomplete by nature, which is
+// exactly the open-world shape this package spent two rounds removing
+// elsewhere. It survives here only because the alternative (inspecting column
+// CONTENTS) is not something a schema check can do, and because the
+// consequence of a miss is bounded: a reviewer reading a migration still sees
+// the column. Treat an addition here as evidence the list is a floor, never a
+// ceiling.
+var secretRoot = regexp.MustCompile(`(?i)(password|secret|token|credential|private|key|bearer|passphrase|apikey|auth_?code|refresh)`)
 
 // approvedSecretColumns is the reviewed allowlist: every column whose name
 // trips secretRoot but which demonstrably holds no secret.
@@ -258,7 +270,7 @@ func TestEveryCreatedTableHasADeclaredPosture(t *testing.T) {
 // creates a real table that the previous pattern did not see, so the table
 // escaped TestEveryCreatedTableHasADeclaredPosture entirely and no manifest
 // decision was ever required for it.
-var createTableStatement = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?`)
+var createTableStatement = regexp.MustCompile(`(?i)CREATE\s+(?:UNLOGGED\s+|TEMPORARY\s+|TEMP\s+|GLOBAL\s+|LOCAL\s+)*TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?`)
 
 func createdTables(t *testing.T) map[string]struct{} {
 	t.Helper()

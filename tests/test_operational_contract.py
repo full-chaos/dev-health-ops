@@ -19,6 +19,7 @@ from dev_health_ops.models.operational import (
     canonical_operational_id,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from tests.conftest import answer_catalogue_probes
 from tests.fixtures.operational_lifecycles import equivalent_operational_lifecycles
 
 _MIGRATION = (
@@ -134,23 +135,11 @@ def test_clean_install_runner_applies_migration_066() -> None:
     # Given: a fresh non-default ClickHouse database with no recorded migrations.
     client = MagicMock()
 
-    # The fake answered EVERY query with this one row, including the existence
-    # probes migrations run against their own tables -- so `EXISTS TABLE x`
-    # came back as a migration FILENAME. Migration 084 rightly refuses to guess
-    # from that, and the abort surfaced here rather than in its own test.
-    #
-    # Answering the question actually asked is the fix. On a clean install the
-    # tables those probes ask about do not exist yet, so 0 is also the truthful
-    # answer, not merely a convenient one.
-    def _answer(query: str, *args: object, **kwargs: object) -> MagicMock:
-        result = MagicMock()
-        if query.strip().upper().startswith(("EXISTS TABLE", "DESCRIBE TABLE")):
-            result.result_rows = [(0,)] if "EXISTS" in query.upper() else []
-        else:
-            result.result_rows = [("067_operational_ordering_contract.py",)]
-        return result
-
-    client.query.side_effect = _answer
+    # One canned row for every query, including the catalogue probes migrations
+    # run against their own tables. answer_catalogue_probes handles those; the
+    # canned row stays for everything else.
+    client.query.return_value.result_rows = [("067_operational_ordering_contract.py",)]
+    answer_catalogue_probes(client)
     store = ClickHouseStore("clickhouse://localhost:8123/operational_contract_test")
 
     # When: the standard migration runner initializes the store.

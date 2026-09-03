@@ -515,6 +515,7 @@ func TestPredefinedRoleReachableThroughAnIntermediaryIsDetected(t *testing.T) {
 
 	cases := []struct {
 		name           string
+		roleAttribute  string // applied to the RUNTIME role before the grant
 		grantOptions   string
 		wantReported   bool
 		wantCanSetRole bool
@@ -522,6 +523,14 @@ func TestPredefinedRoleReachableThroughAnIntermediaryIsDetected(t *testing.T) {
 		{name: "default grant", grantOptions: "", wantReported: true, wantCanSetRole: true},
 		{name: "inherit false", grantOptions: " WITH INHERIT FALSE", wantReported: true, wantCanSetRole: true},
 		{name: "inherit false set false", grantOptions: " WITH INHERIT FALSE, SET FALSE", wantReported: false, wantCanSetRole: false},
+		// A role that is NOINHERIT by ATTRIBUTE, not by grant option. These are
+		// different mechanisms and PostgreSQL 16 made the grant option
+		// authoritative where the attribute used to be, so whether the shipped
+		// predicate agrees with itself across both spellings is a question
+		// rather than a deduction. The capability is still reachable by SET
+		// ROLE either way, so the expectation is the same as "inherit false" --
+		// if that turns out to be wrong, the predicate is wrong.
+		{name: "noinherit role attribute", roleAttribute: "NOINHERIT", grantOptions: "", wantReported: true, wantCanSetRole: true},
 	}
 
 	for _, testCase := range cases {
@@ -529,6 +538,19 @@ func TestPredefinedRoleReachableThroughAnIntermediaryIsDetected(t *testing.T) {
 			intermediary, err := containers.RoleName("auth_ops_helper", env.instance)
 			if err != nil {
 				t.Fatalf("derive role: %v", err)
+			}
+			if testCase.roleAttribute != "" {
+				// Before the GRANT, deliberately: PostgreSQL 16 reads the
+				// member's rolinherit at grant time to set the membership's
+				// INHERIT option, so applying it afterwards would test nothing.
+				if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %q %s", env.runtimeRole, testCase.roleAttribute)); err != nil {
+					t.Fatalf("apply role attribute: %v", err)
+				}
+				t.Cleanup(func() {
+					if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %q INHERIT", env.runtimeRole)); err != nil {
+						t.Errorf("restore INHERIT: %v", err)
+					}
+				})
 			}
 			for _, statement := range []string{
 				fmt.Sprintf("CREATE ROLE %q", intermediary),

@@ -40,7 +40,10 @@
 # Re-time it if that file grows.
 # internal/storage/postgres/authschema (CHAOS-4882): weight 60s. MEASURED, not
 # estimated -- a local run of all 15 Testcontainers-backed tests together took
-# 22.832s package time, each starting its own PostgreSQL container.
+# 23.467s package time, each starting its own PostgreSQL container. (The
+# reachability test's fourth SUBTEST does not add a container: subtests share
+# their parent's fixture, which is why the weight tracks top-level test count
+# rather than assertion count.)
 # (Two earlier revisions of this note said 2.752s for two tests and 11.404s for
 # four. Each was re-measured rather than left describing a run that no longer
 # existed: the note below says to re-time when tests are added, and a stale

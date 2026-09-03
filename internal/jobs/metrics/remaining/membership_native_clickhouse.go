@@ -37,6 +37,14 @@ type MembershipOutcome struct {
 // recommendations' ReadinessObserver.
 type MembershipObserver interface {
 	ObserveMembershipRun(orgID string, outcome MembershipOutcome)
+	// ObserveMembershipPruneFailed reports a failed retention prune
+	// (codex round 1, #2177, P2: a swallowed prune error was previously
+	// invisible -- the projection itself is correct and complete, only
+	// retention silently stopped keeping pace). Best-effort by design (see
+	// ComputeOrg's own comment on why a prune failure must not fail the
+	// partition); this is what makes a PERSISTENT failure visible instead
+	// of merely tolerated.
+	ObserveMembershipPruneFailed(orgID string)
 }
 
 // CollectorMembershipObserver adapts the metrics collector to
@@ -60,6 +68,13 @@ func (observer CollectorMembershipObserver) ObserveMembershipRun(_ string, outco
 		outcome.Components, outcome.Matched, outcome.Skipped, outcome.MembershipRows,
 		outcome.OversizedComponents, outcome.DroppedEdges, outcome.DroppedNodes,
 	)
+}
+
+func (observer CollectorMembershipObserver) ObserveMembershipPruneFailed(_ string) {
+	if observer.Collector == nil {
+		return
+	}
+	observer.Collector.ObserveMembershipPruneFailed()
 }
 
 // membershipDistribution is one work_unit_id's latest persisted
@@ -195,13 +210,25 @@ func (executor *MembershipExecutor) ComputeOrg(
 			return MembershipOutcome{}, fmt.Errorf("write completion marker: %w", err)
 		}
 		// Retention is best-effort (CHAOS-2433 round-5): a prune failure must
-		// not fail the projection -- the marker is already published and
-		// correct. The next run's prune is idempotent and will catch up.
-		// Errors are swallowed deliberately here, matching the Python sink's
-		// try/except; there is nowhere else in this call for a caller to
-		// observe it, and future telemetry can be added to the MembershipWriter
-		// interface if a silent prune failure ever needs its own signal.
-		_, _ = executor.writer.PruneMembershipRuns(ctx, orgID, membershipRetentionKeep)
+		// not FAIL the projection -- the marker is already published and
+		// correct, and the next run's prune is idempotent and will catch up.
+		// "Best-effort" means the partition still succeeds, NOT that the
+		// failure is silent (codex round 1, #2177, P2: it previously was --
+		// a swallowed error left growth invisible until someone happened to
+		// notice storage). Report it, then continue.
+		if _, pruneErr := executor.writer.PruneMembershipRuns(ctx, orgID, membershipRetentionKeep); pruneErr != nil {
+			if executor.logger != nil {
+				executor.logger.Warn(
+					"membership run retention prune failed; old generations will "+
+						"accumulate until a later run succeeds -- the partition "+
+						"itself is unaffected and still reports success",
+					"org_id", orgID, "error", pruneErr,
+				)
+			}
+			if executor.observer != nil {
+				executor.observer.ObserveMembershipPruneFailed(orgID)
+			}
+		}
 	} else {
 		scopedRecords := make([]MembershipScopedRunRecord, 0, len(repoIDs))
 		uniqueRepoIDs := sortedUniqueStrings(repoIDs)

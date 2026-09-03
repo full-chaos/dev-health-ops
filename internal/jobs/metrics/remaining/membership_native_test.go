@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -90,9 +91,14 @@ var _ MembershipWriter = (*fakeMembershipWriter)(nil)
 
 // fakeMembershipObserver records the outcome passed to it.
 type fakeMembershipObserver struct {
-	orgID   string
-	outcome MembershipOutcome
-	called  bool
+	orgID           string
+	outcome         MembershipOutcome
+	called          bool
+	pruneFailedOrgs []string
+}
+
+func (f *fakeMembershipObserver) ObserveMembershipPruneFailed(orgID string) {
+	f.pruneFailedOrgs = append(f.pruneFailedOrgs, orgID)
 }
 
 func (f *fakeMembershipObserver) ObserveMembershipRun(orgID string, outcome MembershipOutcome) {
@@ -274,6 +280,57 @@ func TestComputeOrgRepoScopedNeverPublishesOrgMarker(t *testing.T) {
 		t.Errorf("expected repo-a and repo-b, got %v", seenRepos)
 	}
 }
+
+// fakeMembershipLogger records every Warn call, so a test can assert a
+// prune failure is actually reported rather than merely tolerated.
+type fakeMembershipLogger struct {
+	warnings []string
+}
+
+func (f *fakeMembershipLogger) Warn(msg string, _ ...any) {
+	f.warnings = append(f.warnings, msg)
+}
+
+// TestComputeOrgReportsAPruneFailure is the fix for codex round 1's P2 on
+// #2177: a failed retention prune previously returned nil from ComputeOrg
+// with no log line and no counter, so a PERSISTENT failure was invisible.
+// The partition must still succeed (retention stays best-effort by design),
+// but the failure itself must now be observable.
+func TestComputeOrgReportsAPruneFailure(t *testing.T) {
+	matchedID, _ := matchedAndSkippedUnitIDs(t)
+	distribution := membershipDistribution{
+		ThemeDistribution:       units.NewDistribution(units.CategoryWeight{Category: "feature_delivery", Weight: 1.0}),
+		SubcategoryDistribution: units.NewDistribution(),
+		CategorizationStatus:    "completed",
+	}
+	writer := &fakeMembershipWriter{pruneErr: errPruneRepro}
+	observer := &fakeMembershipObserver{}
+	logger := &fakeMembershipLogger{}
+	executor := newTestMembershipExecutor(
+		fakeMembershipEdges{rows: twoDisjointComponentEdges()},
+		fakeMembershipDistributions{byUnit: map[string]membershipDistribution{matchedID: distribution}},
+		writer,
+	)
+	executor.conn = fakeDriverConnSentinel{}
+	executor.SetObserver(observer)
+	executor.SetLogger(logger)
+
+	_, err := executor.ComputeOrg(context.Background(), "org-1", nil, time.Now())
+	if err != nil {
+		t.Fatalf("ComputeOrg must still succeed on a prune failure (best-effort by design): %v", err)
+	}
+	if !writer.pruneCalled {
+		t.Fatal("prune was not called")
+	}
+	if len(observer.pruneFailedOrgs) != 1 || observer.pruneFailedOrgs[0] != "org-1" {
+		t.Errorf("expected exactly one ObserveMembershipPruneFailed(org-1) call, got %v", observer.pruneFailedOrgs)
+	}
+	if len(logger.warnings) != 1 {
+		t.Errorf("expected exactly one Warn call, got %v", logger.warnings)
+	}
+}
+
+var errPruneRepro = errors.New("forced prune failure")
 
 // fakeDriverConnSentinel is a non-nil placeholder satisfying driver.Conn's
 // identity for ComputeOrg's `executor.conn == nil` guard, without needing a

@@ -1117,7 +1117,13 @@ type MetricsCollector struct {
 	membershipOversizedComponents uint64
 	membershipDroppedEdges        uint64
 	membershipDroppedNodes        uint64
-	membershipRefusals            map[string]uint64
+	// membershipPruneFailures counts a retention prune (keep-latest-2) that
+	// failed (codex round 1, #2177, P2). The partition still succeeds --
+	// retention is best-effort by design -- so without this counter a
+	// PERSISTENT prune failure was invisible: old generations would
+	// accumulate with no signal anywhere.
+	membershipPruneFailures uint64
+	membershipRefusals      map[string]uint64
 
 	// Compatibility-bridge partitions (CHAOS-4243). Before this, the bridge
 	// could only ever report a status code, so a partition that wrote real
@@ -2623,6 +2629,14 @@ func (collector *MetricsCollector) ObserveMembershipRun(
 	return nil
 }
 
+// ObserveMembershipPruneFailed records one failed retention prune. See the
+// counter's own doc comment for why this exists (codex round 1, #2177, P2).
+func (collector *MetricsCollector) ObserveMembershipPruneFailed() {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.membershipPruneFailures++
+}
+
 // compatibilityBridgeFamilies is the closed set of remaining-metrics families
 // still routed through the Python compatibility bridge (dora and capacity are
 // native and observed separately above; membership_backfill joins them below,
@@ -3464,6 +3478,8 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	writeUintSample(output, "worker_membership_backfill_native_dropped_edges_total", nil, collector.membershipDroppedEdges)
 	writeMetadata(output, "worker_membership_backfill_native_dropped_nodes_total", "Nodes dropped by the native membership-backfill executor's oversized-component split.", "counter")
 	writeUintSample(output, "worker_membership_backfill_native_dropped_nodes_total", nil, collector.membershipDroppedNodes)
+	writeMetadata(output, "worker_membership_backfill_native_prune_failures_total", "Failed retention prunes (keep-latest-2) the native membership-backfill executor tolerated -- the partition still succeeds, but old generations accumulate until a later prune succeeds.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_prune_failures_total", nil, collector.membershipPruneFailures)
 	writeMetadata(output, "worker_membership_backfill_native_refused_total", "Native membership-backfill executor construction refusals, by reason.", "counter")
 	for _, reason := range membershipRefusalReasons {
 		writeUintSample(output, "worker_membership_backfill_native_refused_total",

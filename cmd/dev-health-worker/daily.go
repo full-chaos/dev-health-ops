@@ -429,6 +429,7 @@ func buildDailyWorker(
 				if collector, ok := observer.(*jobruntime.MetricsCollector); ok {
 					executor.SetObserver(remaining.CollectorMembershipObserver{Collector: collector})
 				}
+				executor.SetLogger(logger)
 				membershipExecutor = executor
 			}
 		}

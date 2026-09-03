@@ -84,6 +84,14 @@ type MembershipExecutor struct {
 	nowUTC        func() time.Time
 
 	observer MembershipObserver
+	logger   MembershipLogger
+}
+
+// MembershipLogger is the narrow logging capability ComputeOrg needs for a
+// non-fatal prune failure. Matches recommendations' ReadinessLogger shape;
+// *slog.Logger satisfies it directly.
+type MembershipLogger interface {
+	Warn(msg string, args ...any)
 }
 
 // NewMembershipExecutor refuses at construction rather than per partition,
@@ -118,6 +126,12 @@ func NewMembershipExecutor(
 // recommendations_native.go.
 func (executor *MembershipExecutor) SetObserver(observer MembershipObserver) {
 	executor.observer = observer
+}
+
+// SetLogger wires optional logging for a non-fatal prune failure. Nil is
+// tolerated, same discipline as SetObserver.
+func (executor *MembershipExecutor) SetLogger(logger MembershipLogger) {
+	executor.logger = logger
 }
 
 // verifyMembershipSchema checks every table the executor reads or writes.

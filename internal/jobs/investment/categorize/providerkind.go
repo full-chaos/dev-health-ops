@@ -27,12 +27,22 @@ const (
 	providerKindAuto ProviderKind = "auto"
 )
 
+// normalizeProviderKind ports providers/__init__.py's
+// _normalize_provider_name: `(name or "auto").strip().lower()`. The "auto"
+// substitution is on Python's `or`, which tests RAW (pre-strip) falsiness --
+// only a truly EMPTY string substitutes. codex round 2 (#2178, bigboy) P2:
+// the first Go cut substituted on the TRIMMED result instead, so a
+// whitespace-only value (non-empty, therefore not substituted in Python,
+// but trims to "" and WOULD be substituted by a trim-first check) silently
+// became "auto" here -- letting a malformed `LLM_PROVIDER=" "` fall through
+// to auto-detection and select a live provider, rather than resolving to
+// the same explicit, invalid "" Python returns (which fails loudly
+// downstream instead of picking one).
 func normalizeProviderKind(name string) ProviderKind {
-	trimmed := strings.ToLower(strings.TrimSpace(name))
-	if trimmed == "" {
-		trimmed = string(providerKindAuto)
+	if name == "" {
+		name = string(providerKindAuto)
 	}
-	return ProviderKind(trimmed)
+	return ProviderKind(strings.ToLower(strings.TrimSpace(name)))
 }
 
 // firstNonEmptyEnv returns the value of the first set environment variable

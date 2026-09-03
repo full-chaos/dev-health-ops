@@ -64,7 +64,12 @@ var secretPatterns = []*regexp.Regexp{
 	// underscore/hyphen between "api" and "key", so "api key: <secret>"
 	// (a literal space, as a real 403 body used) reached this pattern
 	// unredacted. Widened to any run of whitespace/underscore/hyphen.
-	regexp.MustCompile(`(?i)((?:api[\s_-]*key|authorization|x-api-key|token)\s*[:=]\s*)['"]?[^'"\s,;}]+`),
+	// codex round 2 (#2178, bigboy) P1: the label/value separator itself
+	// still REQUIRED a literal `:`/`=` ("\s*[:=]\s*"), so a body reading
+	// "api key <secret>" -- whitespace only, no punctuation -- still
+	// passed through. Widened the separator to "any run of
+	// whitespace/`:`/`=`" so a bare space alone is sufficient.
+	regexp.MustCompile(`(?i)((?:api[\s_-]*key|authorization|x-api-key|token)[\s:=]+)['"]?[^'"\s,;}]+`),
 }
 
 // sanitizeMessage ports errors.py's _sanitize_message: strip newlines,

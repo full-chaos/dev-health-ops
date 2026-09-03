@@ -22,6 +22,9 @@ func TestSanitizeMessageRedactsCredentials(t *testing.T) {
 		// allowed a single underscore/hyphen, missing this shape entirely.
 		{"api key with space", "http 403: api key: supersecretvalue123", "supersecretvalue123"},
 		{"bearer with colon separator", "request failed: Bearer: aVeryLongToken1234567890", "aVeryLongToken1234567890"},
+		// codex round 2 (#2178, bigboy) P1: no punctuation at all between the
+		// label and the value -- the round's own repro body.
+		{"api key with no punctuation", "http 403: api key review-secret-123", "review-secret-123"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

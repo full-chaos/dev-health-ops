@@ -98,6 +98,31 @@ func TestResolveProviderKindAutoDetectionPriorityOrder(t *testing.T) {
 	}
 }
 
+func TestResolveProviderKindWhitespaceLLMProviderDoesNotAutoDetect(t *testing.T) {
+	// codex round 2 (#2178, bigboy) P2: LLM_PROVIDER=" " (whitespace, not
+	// truly unset) trimmed to "" and was substituted back to "auto" by the
+	// old normalizeProviderKind, silently auto-detecting -- and selecting
+	// -- a live provider from OPENAI_API_KEY's mere presence. Python's own
+	// `(name or "auto")` does not re-substitute here (a whitespace string
+	// is truthy pre-strip), so it resolves to the literal, explicitly
+	// invalid "" instead -- which fails loudly downstream rather than
+	// silently placing a real API call.
+	clearProviderEnv(t)
+	t.Setenv("LLM_PROVIDER", "   ")
+	t.Setenv("OPENAI_API_KEY", "sk-should-not-be-auto-selected")
+
+	kind, err := ResolveProviderKind("auto")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if kind == ProviderKindOpenAI {
+		t.Fatal("ResolveProviderKind silently selected \"openai\" from a whitespace LLM_PROVIDER")
+	}
+	if kind != ProviderKind("") {
+		t.Fatalf("kind = %q, want the literal empty kind (matching Python's resolve_provider_name)", kind)
+	}
+}
+
 func TestResolveProviderKindNothingConfiguredErrors(t *testing.T) {
 	clearProviderEnv(t)
 	_, err := ResolveProviderKind("auto")

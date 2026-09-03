@@ -66,6 +66,12 @@ on:
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
       - '.github/workflows/go-quality.yml'
+      # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
+      # a lefthook-only change is relevant=false, so removing the pre-push hook
+      # would land with the pin's own CI job never running. The hook's presence
+      # is additionally asserted by ci/check_shellcheck_pin.sh, so deleting it
+      # now fails a check rather than silently un-wiring local enforcement.
+      - 'lefthook.yml'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'
@@ -129,6 +135,12 @@ on:
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
       - '.github/workflows/go-quality.yml'
+      # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
+      # a lefthook-only change is relevant=false, so removing the pre-push hook
+      # would land with the pin's own CI job never running. The hook's presence
+      # is additionally asserted by ci/check_shellcheck_pin.sh, so deleting it
+      # now fails a check rather than silently un-wiring local enforcement.
+      - 'lefthook.yml'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'

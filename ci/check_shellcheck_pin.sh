@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Self-test for the shellcheck pin (CHAOS-4915). No docker, no services.
 #
-# Two assertions, and the SECOND is the one that matters:
+# Three assertions, and only the FIRST is about the code being clean:
 #   1. the canonical file set is clean under the pinned version
-#   2. the deliberately-unclean fixture FAILS under it
+#   2. the deliberately-unclean fixture FAILS under it, with SC2015
+#   3. the lefthook pre-push hook still invokes this self-test
 #
 # (2) exists because (1) alone cannot distinguish "everything is clean" from
 # "the linter never ran". A lint step that silently stops linting reports
@@ -14,14 +15,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 PINNED="${SCRIPT_DIR}/shellcheck_pinned.sh"
 FIXTURE="${SCRIPT_DIR}/fixtures/shellcheck_unclean_fixture.sh"
 
-printf '== 1/2: canonical set must be CLEAN ==\n'
+printf '== 1/3: canonical set must be CLEAN ==\n'
 if ! bash "${PINNED}"; then
   printf 'FAIL: the canonical shellcheck set is not clean under the pinned version\n' >&2
   exit 1
 fi
 printf 'ok: canonical set clean\n\n'
 
-printf '== 2/2: unclean fixture must FAIL (proves the pin actually lints) ==\n'
+printf '== 2/3: unclean fixture must FAIL (proves the pin actually lints) ==\n'
 
 # THE FIXTURE MUST EXIST AND BE READABLE, CHECKED SEPARATELY.
 #
@@ -67,4 +68,34 @@ case "${fixture_output}" in
     exit 1
     ;;
 esac
-printf 'ok: fixture correctly rejected, with SC2015\n'
+printf 'ok: fixture correctly rejected, with SC2015\n\n'
+
+# 3/3 -- THE LOCAL HALF MUST STILL BE WIRED.
+#
+# codex round 2 (P2): nothing asserted that lefthook.yml still invokes this
+# script. Delete the pre-push hook and CI stays green -- the pin keeps working
+# in CI while the local equivalent, which is half the point of CHAOS-4915,
+# quietly stops existing. Nobody would notice until someone pushed an unclean
+# script and CI caught what their machine no longer did.
+#
+# Deliberately a grep of the pre-push SECTION rather than a YAML parse: this
+# also runs from the lefthook hook itself on developer machines, where PyYAML
+# is not guaranteed. It is a wiring assertion, not a schema check.
+printf '== 3/3: the lefthook pre-push hook must still be wired ==\n'
+LEFTHOOK="${SCRIPT_DIR}/../lefthook.yml"
+if [ ! -r "${LEFTHOOK}" ]; then
+  printf 'FAIL: lefthook.yml is missing or unreadable: %s\n' "${LEFTHOOK}" >&2
+  exit 1
+fi
+pre_push_section="$(awk '/^pre-push:/{f=1;next} /^[a-zA-Z0-9_-]+:/{f=0} f' "${LEFTHOOK}")"
+case "${pre_push_section}" in
+  *check_shellcheck_pin.sh*) printf 'ok: pre-push hook still invokes this self-test\n' ;;
+  *)
+    printf 'FAIL: lefthook.yml pre-push no longer invokes ci/check_shellcheck_pin.sh\n' >&2
+    printf '  CI would stay green while the LOCAL half of the pin silently\n' >&2
+    printf '  disappeared. Restore the pre-push command, or if the hook was\n' >&2
+    printf '  removed deliberately, remove this assertion in the same commit so\n' >&2
+    printf '  the decision is visible in the diff rather than implied by a gap.\n' >&2
+    exit 1
+    ;;
+esac

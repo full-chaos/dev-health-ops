@@ -432,25 +432,51 @@ def test_shallow_with_target_present_but_unreachable_is_refused(
 
     test_shallow_repository_refuses clones at depth 1 from a repo that has never
     heard of the target sha, so the target is ABSENT. That makes this mutation
-    survive -- verified, it left all seven rows green:
+    survive -- verified, it left all seven rows green::
 
         if [ "$(git rev-parse --is-shallow-repository ...)" = true ] \\
           && ! git cat-file -e "${MIRROR_LANDED}^{commit}" 2>/dev/null; then
 
-    The narrowed condition is still true when the object is absent, so the row
-    passed without observing the class its own comment claimed it caught.
+    THE FIXTURE MUST BE A TRUE ANCESTOR, AND THAT IS THE WHOLE ROW (084-prod).
+    My first version fetched a SIDE BRANCH: object present, unreachable,
+    `--is-ancestor` returned 1, and all three assertions passed -- while proving
+    nothing, because a side commit genuinely is not an ancestor, so 1 was the
+    CORRECT answer reached for the wrong reason. The row passed whether or not
+    the guard did anything. 084-prod built the same false positive independently
+    and caught it only by pinning the truth first.
 
-    This fixture builds the load-bearing state instead: shallow AND the target
-    object PRESENT AND non-ancestral, where `--is-ancestor` returns 1 -- a wrong
-    answer rather than an error. Only the pre-flight shallow refusal catches it.
+    So the target here IS an ancestor of main, and the row asserts `exit 0` in
+    the FULL repo before cloning. Only then does `1` in the shallow clone mean
+    what this row claims: a WRONG answer, silently, with no error -- the state
+    where the guard would take the skip path and print the pre-mirror message on
+    a tree that is nothing of the sort.
+
+    The trap is the file's third of this shape: a fixture in a state where the
+    correct and the incorrect answer coincide cannot discriminate.
+
+    Fetching a bare sha is refused server-side ("not our ref"), which is why
+    084-prod's earlier attempt failed; fetching a REF NAME works.
     """
     source = _scratch_repo(tmp_path, script=False)
-    _git(source, "checkout", "-q", "-b", "sidebranch")
-    (source / "side").write_text("side\n", encoding="utf-8")
-    _git(source, "add", "side")
-    _git(source, "commit", "-qm", "side commit")
-    side = _git(source, "rev-parse", "HEAD")
-    _git(source, "checkout", "-q", "main")
+    # A third commit, so the target can be a non-parent ancestor rather than
+    # HEAD's immediate parent.
+    (source / "third").write_text("third\n", encoding="utf-8")
+    _git(source, "add", "third")
+    _git(source, "commit", "-qm", "third")
+    ancestor = _git(source, "rev-parse", "HEAD~2")
+    _git(source, "branch", "ancref", ancestor)
+
+    # PIN THE TRUTH FIRST, in the full repo, where the answer is knowable.
+    assert (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, "main"], cwd=source
+        ).returncode
+        == 0
+    ), (
+        "the target must be a GENUINE ancestor in the full repo. Without this "
+        "the shallow clone's `1` is simply correct, and this row degenerates "
+        "into the side-branch false positive it exists to avoid."
+    )
 
     shallow = tmp_path / "shallow-present"
     subprocess.run(
@@ -460,43 +486,44 @@ def test_shallow_with_target_present_but_unreachable_is_refused(
         check=True,
     )
     subprocess.run(
-        ["git", "fetch", "--depth", "1", "origin", "sidebranch"],
+        ["git", "fetch", "--depth", "1", "origin", "ancref"],
         cwd=shallow,
         capture_output=True,
         text=True,
         check=True,
     )
 
-    # THE THREE PRECONDITIONS THIS ROW EXISTS FOR. Asserted, not assumed: a
-    # fixture that silently fails to establish them is a row that passes for
-    # the wrong reason, which is the same defect one level down.
+    # THE THREE PRECONDITIONS, ASSERTED RATHER THAN ASSUMED. A fixture that
+    # silently fails to establish them is a row that passes for the wrong
+    # reason, which is the same defect one level down.
     assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true", (
         "the fixture must be shallow"
     )
     assert (
         subprocess.run(
-            ["git", "cat-file", "-e", f"{side}^{{commit}}"], cwd=shallow
+            ["git", "cat-file", "-e", f"{ancestor}^{{commit}}"], cwd=shallow
         ).returncode
         == 0
     ), "the target object must be PRESENT -- that is what distinguishes this row"
     assert (
         subprocess.run(
-            ["git", "merge-base", "--is-ancestor", side, "HEAD"], cwd=shallow
+            ["git", "merge-base", "--is-ancestor", ancestor, "HEAD"], cwd=shallow
         ).returncode
         == 1
     ), (
-        "ancestry must return 1 (a wrong answer), not 128 (an error). If this "
-        "fails, the fixture has collapsed into the object-absent case and this "
-        "row is a duplicate of test_shallow_repository_refuses."
+        "ancestry must return 1 -- the WRONG answer, since the truth pinned "
+        "above is 0. If this returns 0 the clone is not truncating the walk; "
+        "if it returns 128 the object is absent and this row has collapsed "
+        "into test_shallow_repository_refuses."
     )
 
     (shallow / "ci").mkdir(exist_ok=True)
-    code, out, calls = _run_guard(shallow, tmp_path, mirror_sha=side)
+    code, out, calls = _run_guard(shallow, tmp_path, mirror_sha=ancestor)
     assert code == 1, f"a shallow repository must be refused, got {code}\n{out}"
     assert "this is a shallow repository" in out, (
-        f"the pre-flight refusal must fire. Ancestry here returns 1, so without "
-        f"the refusal the guard would SKIP -- exit 0 with the pre-mirror "
-        f"message -- which is the wrong answer this row exists to catch.\n{out}"
+        f"the pre-flight refusal must fire. Ancestry here returns 1 -- a wrong "
+        f"answer -- so without the refusal the guard SKIPS: exit 0 with the "
+        f"pre-mirror message, on a tree that contains the mirror.\n{out}"
     )
     assert SKIP_MARKER not in out, f"must not treat this as pre-mirror\n{out}"
     assert not calls, f"a refusal must not invoke docker: {calls!r}"

@@ -716,7 +716,7 @@ def test_fanout_generation_prefix_matches_the_go_writer() -> None:
 
     store = (_REPO_ROOT / "internal/jobs/metrics/daily/postgres.go").read_text()
     assert (
-        f'scheduledFanoutGenerationPrefix = "{_SCHEDULED_FANOUT_GENERATION_PREFIX}"'
+        f'ScheduledFanoutGenerationPrefix = "{_SCHEDULED_FANOUT_GENERATION_PREFIX}"'
         in store
     ), (
         "internal/jobs/metrics/daily/postgres.go no longer declares "

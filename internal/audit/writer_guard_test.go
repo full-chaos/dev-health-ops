@@ -197,6 +197,62 @@ func mentionsGuardedTable(b []byte) bool {
 	return false
 }
 
+// guardFinding is one write the guard objects to, located by byte offset so a
+// caller can name the enclosing function.
+type guardFinding struct {
+	offset     int
+	reason     string
+	unresolved bool // came from the fail-closed pass rather than a table match
+}
+
+// findGuardedWrites IS the guard's decision. The repository walk and the
+// statement-shape table below both call it, so neither can drift from the
+// other.
+//
+// It was extracted because of a gap lane-auth-contracts found: the offset test
+// RECORDS that a quoted aliased UPDATE falls through to the fail-closed branch,
+// and nothing asserted that fail-closed then CATCHES it. I had measured that
+// with a throwaway probe, and the probe was gone. The repository walk cannot
+// cover it either -- it scans real files and never synthesises a statement, and
+// no real file contains that shape -- so weakening the fail-closed branch would
+// have left an unguarded write to a guarded table with every test green.
+//
+// Sharing the function rather than restating the logic is the point: a shape
+// table that reimplemented these two passes would be testing a copy, which is
+// this package's oldest recurring defect.
+func findGuardedWrites(body []byte, patterns map[string]*regexp.Regexp) []guardFinding {
+	var out []guardFinding
+	covered := map[int]bool{}
+	for table, pattern := range patterns {
+		for _, loc := range pattern.FindAllIndex(body, -1) {
+			covered[loc[0]] = true
+			out = append(out, guardFinding{offset: loc[0], reason: "writes " + table})
+		}
+	}
+	if !mentionsGuardedTable(body) {
+		return out
+	}
+	for _, loc := range writeVerbPattern.FindAllIndex(body, -1) {
+		if isForUpdate(body, loc[0]) {
+			continue
+		}
+		if covered[loc[0]] {
+			continue
+		}
+		window := body[loc[1]:min(loc[1]+targetWindow, len(body))]
+		if !mentionsGuardedTable(window) && !bytes.Contains(window, []byte("`+")) {
+			continue
+		}
+		out = append(out, guardFinding{
+			offset: loc[0],
+			reason: "writes a guarded table in a form this guard cannot resolve " +
+				"(an unrecognised statement shape, or a table name built from a variable)",
+			unresolved: true,
+		})
+	}
+	return out
+}
+
 func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 	root := repoRoot(t)
 	// One pattern per table, whitespace-insensitive, because these statements
@@ -253,95 +309,28 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		var parsed *ast.File
-		coveredByTablePattern := map[int]bool{}
-		for table, pattern := range patterns {
-			for _, loc := range pattern.FindAllIndex(body, -1) {
-				if parsed == nil {
-					parsed, err = parser.ParseFile(fset, path, body, 0)
-					if err != nil {
-						return err
-					}
-				}
-				coveredByTablePattern[loc[0]] = true
-				key := rel + ":" + enclosingFunc(fset, parsed, loc[0])
-				if _, permitted := permittedWriters[key]; permitted {
-					matched[key] = true
-					continue
-				}
-				offenders = append(offenders, key+" writes "+table)
-			}
+		findings := findGuardedWrites(body, patterns)
+		if len(findings) == 0 {
+			return nil
 		}
-
-		// FAIL CLOSED ON AN UNRESOLVED TARGET.
-		//
-		// Everything above can only see a table NAME sitting near the verb. A
-		// writer that hoists the name into a variable --
-		//   table := authschema.Quote(schema) + ".auth_outbox_events"
-		//   ... "DELETE FROM " + table + " AS e"
-		// -- is invisible to it. That is not a contrived evasion: the reaper was
-		// written that way because the expression is used twice in one
-		// statement, and it slipped the guard on the first run. Ordinary
-		// idiomatic Go is a worse bypass than a clever one, because nobody
-		// needs to intend it.
-		//
-		// So a write whose target this scan CANNOT resolve is reported rather
-		// than passed over. The file-level condition is what keeps that honest:
-		// repo-wide, "flag every dynamic write" would fire on every DELETE in
-		// joboutbox and elsewhere, none of which concern these tables. Inside a
-		// file that names a guarded table at all, silence is the wrong default.
-		if mentionsGuardedTable(body) {
-			seen := map[string]bool{}
-			for _, loc := range writeVerbPattern.FindAllIndex(body, -1) {
-				// FOR UPDATE is a locking clause, not a write. The
-				// table-specific pattern never had to care because it required
-				// UPDATE <table> SET; a bare verb does, and the reaper's own
-				// FOR UPDATE SKIP LOCKED was the case that proved it -- the
-				// first version of this check reported Reap twice, once for the
-				// DELETE and once for the lock.
-				if isForUpdate(body, loc[0]) {
-					continue
-				}
-				// THE EXEMPTION IS NOW COVERAGE, NOT PROXIMITY.
-				//
-				// This used to skip any window that NAMED a guarded table, on the
-				// assumption that the table-specific pattern had therefore caught
-				// it. Round 1 found the hole: an aliased UPDATE is not matched by
-				// that pattern, yet its window names the table, so the pattern
-				// missed it AND this branch exempted it. Two mechanisms each
-				// assuming the other covered the case, with nothing checking that
-				// either did.
-				//
-				// Now the only thing that exempts a write is a table pattern
-				// having ACTUALLY matched at this offset. Everything else that
-				// looks like a write near a guarded table, or whose target is
-				// built from a variable, is reported.
-				if coveredByTablePattern[loc[0]] {
-					continue
-				}
-				window := body[loc[1]:min(loc[1]+targetWindow, len(body))]
-				if !mentionsGuardedTable(window) && !bytes.Contains(window, []byte("`+")) {
-					continue
-				}
-				if parsed == nil {
-					parsed, err = parser.ParseFile(fset, path, body, 0)
-					if err != nil {
-						return err
-					}
-				}
-				key := rel + ":" + enclosingFunc(fset, parsed, loc[0])
-				if _, permitted := permittedWriters[key]; permitted {
-					matched[key] = true
-					continue
-				}
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				offenders = append(offenders,
-					key+" writes a guarded table in a form this guard cannot resolve "+
-						"(an unrecognised statement shape, or a table name built from a variable)")
+		parsed, err := parser.ParseFile(fset, path, body, 0)
+		if err != nil {
+			return err
+		}
+		reported := map[string]bool{}
+		for _, f := range findings {
+			key := rel + ":" + enclosingFunc(fset, parsed, f.offset)
+			if _, permitted := permittedWriters[key]; permitted {
+				matched[key] = true
+				continue
 			}
+			if f.unresolved {
+				if reported[key] {
+					continue
+				}
+				reported[key] = true
+			}
+			offenders = append(offenders, key+" "+f.reason)
 		}
 		return nil
 	})
@@ -531,5 +520,80 @@ func TestVerbAndTablePatternsStartAtTheSameOffset(t *testing.T) {
 		t.Logf("negative control diverges as required: table pattern at %d, verb pattern at %d "+
 			"-- pairing by ordinal would be wrong here, which is why the guard pairs by offset",
 			dt[0], dv[0])
+	}
+}
+
+// TestTheGuardsVerdictOnStatementShapes pins the CONSEQUENCE, not just the
+// classification.
+//
+// lane-auth-contracts found the gap: TestVerbAndTablePatternsStartAtTheSameOffset
+// RECORDS that a quoted aliased UPDATE falls through to the fail-closed branch,
+// and nothing asserted that fail-closed then CATCHES it. I had measured exactly
+// that with a throwaway probe -- flagged against a guarded table, not flagged
+// against a non-guarded one -- and the probe no longer existed, so the property
+// that shape's safety rests on was verified once by an artefact nothing would
+// miss.
+//
+// The repository walk cannot cover it. It scans real files and never
+// synthesises a statement, and no file in the tree contains that shape, so the
+// walk will never meet it. Weaken the fail-closed branch -- restore a proximity
+// exemption, narrow the window, make the covered lookup forgiving -- and the
+// quoted aliased UPDATE becomes an unguarded write to a guarded table while
+// every existing test stays green.
+//
+// Every shape appears TWICE, against a guarded table and a non-guarded one,
+// because a guard that flags everything satisfies the first row alone.
+func TestTheGuardsVerdictOnStatementShapes(t *testing.T) {
+	patterns := make(map[string]*regexp.Regexp, len(guardedTables))
+	for _, table := range guardedTables {
+		patterns[table] = guardPattern(table)
+	}
+
+	// The SQL is wrapped in the Go it would really appear in, so the input has
+	// the shape the walk actually sees rather than a bare statement.
+	inGo := func(sql string) []byte {
+		return []byte("package p\n\nfunc w() {\n\t_, _ = tx.Exec(ctx, `" + sql + "`)\n}\n")
+	}
+
+	cases := []struct {
+		name        string
+		sql         string
+		wantFlagged bool
+	}{
+		{"quoted aliased UPDATE, guarded", `UPDATE "auth"."auth_outbox_events" AS e SET published_at = now()`, true},
+		{"quoted aliased UPDATE, not guarded", `UPDATE "auth"."other_table" AS e SET published_at = now()`, false},
+		{"aliased UPDATE, guarded", `UPDATE auth.auth_outbox_events AS e SET published_at = now()`, true},
+		{"aliased UPDATE, not guarded", `UPDATE auth.other_table AS e SET published_at = now()`, false},
+		{"plain UPDATE, guarded", `UPDATE auth.security_audit_events SET outcome = 'x'`, true},
+		{"plain UPDATE, not guarded", `UPDATE auth.other_table SET outcome = 'x'`, false},
+		{"INSERT, guarded", `INSERT INTO auth.auth_outbox_events (kid) VALUES (1)`, true},
+		{"INSERT, not guarded", `INSERT INTO auth.other_table (kid) VALUES (1)`, false},
+		{"DELETE, guarded", `DELETE FROM auth.auth_outbox_events WHERE id = 1`, true},
+		{"DELETE, not guarded", `DELETE FROM auth.other_table WHERE id = 1`, false},
+		{"SELECT only, guarded table named", `SELECT id FROM auth.auth_outbox_events WHERE id = 1`, false},
+		{"SELECT FOR UPDATE, guarded table named", `SELECT id FROM auth.auth_outbox_events FOR UPDATE SKIP LOCKED`, false},
+	}
+
+	var flagged, clean int
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := len(findGuardedWrites(inGo(c.sql), patterns)) > 0
+			if got != c.wantFlagged {
+				t.Errorf("guard flagged=%v, want %v, for:\n  %s", got, c.wantFlagged, c.sql)
+			}
+			if c.wantFlagged {
+				flagged++
+			} else {
+				clean++
+			}
+		})
+	}
+
+	// Both verdicts must be represented, or the table proves one direction.
+	if flagged == 0 {
+		t.Error("no case expected a flag; this table cannot detect a guard that stopped guarding")
+	}
+	if clean == 0 {
+		t.Error("no case expected no flag; this table cannot detect a guard that flags everything")
 	}
 }

@@ -1,0 +1,32 @@
+{
+  "case": "nested_list_of_maps",
+  "input": {
+    "type": "map",
+    "value": {
+      "items": {
+        "type": "list",
+        "value": [
+          {
+            "type": "map",
+            "value": {
+              "x": {
+                "type": "int",
+                "value": 1
+              }
+            }
+          },
+          {
+            "type": "map",
+            "value": {
+              "y": {
+                "type": "int",
+                "value": 2
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "output": "{\"items\": [{\"x\": 1}, {\"y\": 2}]}"
+}

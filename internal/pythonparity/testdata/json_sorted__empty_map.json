@@ -1,0 +1,8 @@
+{
+  "case": "empty_map",
+  "input": {
+    "type": "map",
+    "value": {}
+  },
+  "output": "{}"
+}

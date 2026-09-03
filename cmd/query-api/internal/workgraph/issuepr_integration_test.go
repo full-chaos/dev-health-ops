@@ -204,8 +204,15 @@ func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) 
 	// why a chained per-field check (anchor on one field, verify the others
 	// against it) is unsound: it can accept a hybrid whenever two candidates
 	// happen to share a value on the anchor field.
+	//
+	// confidence is float32, matching work_graph_issue_pr.confidence's real
+	// column type (014_work_graph.sql) -- NOT float64: a float64 literal like
+	// 0.95 and float64(float32(0.95)) (what the reader actually returns,
+	// after the driver-scan round-trip through the Float32 column) differ in
+	// their low bits, so a float64 key would never match what came back from
+	// a real query. Found by this test's own bigboy run, not by inspection.
 	type candidateTriple struct {
-		confidence float64
+		confidence float32
 		provenance string
 		evidence   string
 	}
@@ -223,7 +230,7 @@ func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) 
 	}
 	for triple := range candidates {
 		if err := batch.Append(
-			orgID, repoID, workItemID, prNumber, float32(triple.confidence), triple.provenance, triple.evidence, tiedLastSynced,
+			orgID, repoID, workItemID, prNumber, triple.confidence, triple.provenance, triple.evidence, tiedLastSynced,
 		); err != nil {
 			t.Fatalf("append tied row %+v: %v", triple, err)
 		}
@@ -249,7 +256,7 @@ func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) 
 	if got.workItemID != workItemID {
 		t.Fatalf("work_item_id = %q, want %q", got.workItemID, workItemID)
 	}
-	gotTriple := candidateTriple{got.confidence, got.provenance, got.evidence}
+	gotTriple := candidateTriple{float32(got.confidence), got.provenance, got.evidence}
 	if _, ok := candidates[gotTriple]; !ok {
 		t.Fatalf("HYBRID row: %+v matches neither candidate's full triple whole -- candidates: %v", gotTriple, candidates)
 	}

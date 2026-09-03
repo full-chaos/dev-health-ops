@@ -12,7 +12,16 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  # CHAOS-4906 fleet audit (09-03): `cancel-in-progress: false` meant a PR
+  # re-push never cancelled its own prior run -- the two share this same
+  # PR-numbered group, so the OLD run just sat queued/running behind the
+  # new one instead of being replaced, piling up stale CodeQL runs for
+  # commits nobody cares about anymore and consuming hosted concurrency
+  # for work whose result is already moot. Scoped to `pull_request` only
+  # (never `push`/`merge_group`/`schedule`/`workflow_dispatch`), matching
+  # the pattern already used by typecheck.yml/docker-images.yml/
+  # arc-runner-image.yml -- a push to main must never cancel another.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

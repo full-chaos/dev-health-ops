@@ -2395,12 +2395,16 @@ _UNMIRRORED_IMAGE_DEBT: set[tuple[str, str, str, str]] = set()
 # Actions that pull an image themselves. `docker/setup-buildx-action` pulls
 # `moby/buildkit:buildx-stable-1` from Docker Hub before any login runs -- the
 # reason it was removed from the mirror workflow, where it deadlocked against
-# the very quota that workflow exists to escape. These five are ticketed debt.
+# the very quota that workflow exists to escape. These six are ticketed debt.
 _IMAGE_PULLING_ACTION_DEBT = {
     ("docker-images.yml", "build", "docker/setup-buildx-action"),
     ("docker-images.yml", "merge", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+    # CHAOS-4947: fan-in-latest applies moving tags via `docker buildx
+    # imagetools create`, which -- like merge/go-merge above -- needs the
+    # docker-container buildx driver, not the default one.
+    ("docker-images.yml", "fan-in-latest", "docker/setup-buildx-action"),
     # CHAOS-4906: arc-runner-image.yml (PR #2154) needs a docker-container
     # buildx driver for cache-to: type=gha and for push+load together in one
     # build, neither of which the default docker-driven builder supports --

@@ -402,8 +402,20 @@ jobs:
               if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" 2>/dev/null)"; then
                 job_count="$(printf '%s' "${raw}" | jq '.jobs | length')"
                 if [ "${job_count}" -ge 100 ]; then
-                  echo "FATAL: this run reports ${job_count} jobs on a single per_page=100 page -- job_status can no longer see every job without real pagination; fix the script, do not silently trust page 1 the way the --paginate/--jq combination used to" >&2
-                  exit 1
+                  # ci-flakes measured: `exit 1` HERE only exits this
+                  # command substitution's subshell -- exactly the trap the
+                  # comment above `read -r a b <<<"$(job_status)"` already
+                  # documents for a failing `gh api` call, and this guard
+                  # had reintroduced the same shape it was written to avoid.
+                  # Verified live: the step printed FATAL and CONTINUED,
+                  # callsite exit 0 -- the guard degraded into exactly the
+                  # silent non-claiming behavior it exists to prevent, just
+                  # noisier. Fixed the same way `ambiguous` already is: emit
+                  # a sentinel, let a check running in the CALLER's shell
+                  # (fail_if_too_many_jobs, beside fail_if_ambiguous) do the
+                  # actual exit.
+                  echo "too_many_jobs null"
+                  return 0
                 fi
                 printf '%s' "${raw}" | jq -r '
                   [.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
@@ -420,6 +432,12 @@ jobs:
           fail_if_ambiguous() {
             if [ "${status}" = "ambiguous" ]; then
               echo "FATAL: more than one job named go-arm64-numeric-parity-self-hosted in this run's job list -- refusing to guess which is the real attempt rather than silently picking one (see the comment above job_status)" >&2
+              exit 1
+            fi
+          }
+          fail_if_too_many_jobs() {
+            if [ "${status}" = "too_many_jobs" ]; then
+              echo "FATAL: this run reports >=100 jobs on a single per_page=100 page -- job_status can no longer see every job without real pagination; fix the script, do not silently trust page 1 the way the --paginate/--jq combination used to" >&2
               exit 1
             fi
           }
@@ -468,6 +486,7 @@ jobs:
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
             fail_if_ambiguous
+            fail_if_too_many_jobs
             phase1_total_polls=$((phase1_total_polls + 1))
             # A poll that could not observe anything (transient `gh api`
             # failure, exhausted job_status's own retries) is not evidence
@@ -489,6 +508,7 @@ jobs:
           if [ "${left_queue}" != "true" ]; then
             read -r status conclusion <<<"$(job_status)"
             fail_if_ambiguous
+            fail_if_too_many_jobs
             phase1_total_polls=$((phase1_total_polls + 1))
             if [ "${status}" = "api_error" ]; then
               phase1_api_error_polls=$((phase1_api_error_polls + 1))
@@ -552,6 +572,7 @@ jobs:
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
             fail_if_ambiguous
+            fail_if_too_many_jobs
             total_polls=$((total_polls + 1))
             if [ "${status}" = "api_error" ]; then
               api_error_polls=$((api_error_polls + 1))
@@ -575,6 +596,7 @@ jobs:
           # missed and misreported as "never terminal".
           read -r status conclusion <<<"$(job_status)"
           fail_if_ambiguous
+          fail_if_too_many_jobs
           total_polls=$((total_polls + 1))
           if [ "${status}" = "api_error" ]; then
             api_error_polls=$((api_error_polls + 1))

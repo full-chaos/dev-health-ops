@@ -169,28 +169,12 @@ var excludedGenerators = map[string]struct {
 		missingModule: "httpx2",
 		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
 	},
-	// Runs fine against a full venv and fails in CI, which is the whole reason
-	// this map takes a missingModule rather than a bare name: the claim
-	// "cannot run" is only checkable against the closure it cannot run in.
-	//
-	// It imports the bridge's own `_scope_arguments` DELIBERATELY -- the corpus
-	// records what the reference admits, so reimplementing admission here would
-	// make the corpus agree with a copy of the bridge rather than the bridge.
-	// That import executes api/internal/__init__.py, which does
-	// `from .acr import router`, and acr.py:7 does `from limits import parse`.
-	//
-	// The generator keeps its --stdout flag, its corpus-aligned --count default
-	// and its explicitCorpusPaths entry, so the moment `limits` joins the closure
-	// this entry is deleted and the corpus is guarded with no other change.
-	"generate_scope_grammar_corpus.py": {
-		reason: "imports dev_health_ops.api.internal.worker_workgraph for the " +
-			"bridge's own scope admission; that package's __init__ imports " +
-			"api/internal/acr.py, which imports `limits`. The CI oracle closure " +
-			"is installed --no-deps and does not carry it, so this raises " +
-			"ModuleNotFoundError",
-		missingModule: "limits",
-		removeWhen:    "limits is added to ci/requirements-live-python-oracles.txt",
-	},
+	// generate_scope_grammar_corpus.py's exclusion (limits missing from the
+	// closure) was removed here CHAOS-4945, once `limits` (and its own
+	// transitives, deprecated and wrapt) were added to
+	// ci/requirements-live-python-oracles.txt. Its explicitCorpusPaths entry
+	// above already named its corpus, so it is guarded by discovery with no
+	// further change -- exactly as this comment on that entry predicted.
 }
 
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {

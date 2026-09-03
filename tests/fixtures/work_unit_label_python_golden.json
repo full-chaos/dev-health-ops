@@ -100,8 +100,8 @@
     {
       "commit_ids": [],
       "commit_map": {},
-      "expected_name": "Second issue title",
-      "expected_type": "feature",
+      "expected_name": "First by sort order, last in argument order",
+      "expected_type": "bug",
       "issue_ids": [
         "i2",
         "i1"
@@ -111,7 +111,7 @@
       "pr_map": {},
       "work_item_map": {
         "i1": {
-          "title": "",
+          "title": "First by sort order, last in argument order",
           "type": "bug"
         },
         "i2": {

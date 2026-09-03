@@ -67,13 +67,23 @@ def _scenarios() -> list[dict[str, Any]]:
             "work_item_map": {"i1": {"title": "Fix the bug", "type": ""}},
         },
         {
-            # Passed out of sort order (i2 first) -- the smaller sorted id
-            # (i1) must still win, and it has no title, so this falls
-            # through to i2's title, not i1's absence overriding it.
+            # Passed out of sort order (i2 first). BOTH issues carry a real,
+            # DISTINCT title -- the case that actually discriminates sorted
+            # order from argument order: an argument-order implementation
+            # would return i2's title (first in issue_ids); the real,
+            # sorted-order implementation returns i1's title (smaller
+            # sorted id). A version of this case where i1 had NO title
+            # could not tell the two implementations apart -- both would
+            # fall through to i2's title regardless of which order was
+            # used -- so it never actually exercised what its own label
+            # claimed.
             "label": "sorted_order_within_tier_not_argument_order",
             "issue_ids": ["i2", "i1"],
             "work_item_map": {
-                "i1": {"title": "", "type": "bug"},
+                "i1": {
+                    "title": "First by sort order, last in argument order",
+                    "type": "bug",
+                },
                 "i2": {"title": "Second issue title", "type": "feature"},
             },
         },

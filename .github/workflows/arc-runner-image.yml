@@ -1,0 +1,124 @@
+# Build and publish the ARC (actions-runner-controller) runner image used by
+# the oci-arc-runners scale set. See docker/arc-runner/Dockerfile for why
+# this exists (CHAOS-4906): upstream ghcr.io/actions/actions-runner lacks
+# make and postgresql-client, and CF's first job dispatched to that scale
+# set failed on the missing `make`.
+#
+# DESTINATION is ghcr.io/full-chaos/arc-runner -- flat, ops-scoped, matching
+# every other image this repo already publishes to ghcr.io/full-chaos
+# (postgres, clickhouse/clickhouse-server, etc. via mirror-test-images.yml),
+# not acr's nested ghcr.io/full-chaos/dev-health-acr/... convention -- GHCR
+# package write access is repo-scoped, and this package is owned by ops.
+#
+# CONCURRENCY is keyed per-SHA (not per-ref), matching the fix landed in
+# #2149 (docker-images.yml) for the identical failure mode: grouping by
+# github.ref alone means every push to main shares ONE group, so a
+# fast-follow commit can cancel an in-flight or pending build for an
+# earlier one. Per-SHA groups make that structurally impossible -- no two
+# distinct commits' builds can ever collide.
+#
+# The LATEST tag is gated the same way #2149 gates it: not by build order
+# (concurrent per-SHA builds can finish out of order), but by checking,
+# immediately before tagging, whether the commit just built is STILL main's
+# current head. An older build finishing late then publishes only its
+# immutable sha tag and can never clobber `latest` with older content.
+name: Build arc-runner image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docker/arc-runner/Dockerfile
+      - .github/workflows/arc-runner-image.yml
+  pull_request:
+    paths:
+      - docker/arc-runner/Dockerfile
+      - .github/workflows/arc-runner-image.yml
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push the image to ghcr.io (default: false)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-26.04-arm
+    outputs:
+      sha: ${{ github.sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Determine whether this build is main's current head
+        id: mainhead
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          current_main_sha="$(gh api "repos/${{ github.repository }}/branches/main" --jq .commit.sha)"
+          echo "built_sha=${{ github.sha }} current_main_sha=${current_main_sha}"
+          if [ "${{ github.sha }}" = "${current_main_sha}" ]; then
+            echo "is_main_head=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "is_main_head=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/full-chaos/arc-runner
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true' }}
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/arc-runner/Dockerfile
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Job-level summary line. Note: I found no existing "ensure"-named job
+      # or script anywhere in this repo's .github/ or ci/ to match a
+      # specific established convention by that name -- this follows the
+      # one $GITHUB_STEP_SUMMARY precedent that does exist here
+      # (docs-cloudflare.yml). Flag if a different pattern was intended.
+      - name: Summary
+        if: always()
+        run: |
+          {
+            if [ "${{ steps.build.outcome }}" = "success" ]; then
+              echo "✅ arc-runner image build: \`${{ steps.build.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags }}\`"
+            else
+              echo "❌ arc-runner image build failed (outcome: ${{ steps.build.outcome }})"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

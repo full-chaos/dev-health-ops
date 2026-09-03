@@ -399,33 +399,106 @@ jobs:
             fi
           }
 
+          # CF's acr-lane round 1 (CHAOS-4904/#399) found two more defects in
+          # this same shape, checked and both apply here too:
+          #
+          # F3: a `while now < deadline` loop that only reads-then-sleeps has
+          # a blind spot exactly as wide as the sleep interval, right at the
+          # deadline -- the last read happens some interval before the
+          # deadline, then the loop sleeps PAST the deadline before ever
+          # re-checking the condition, so a transition in that final window
+          # is never observed. Closed by one extra read immediately after
+          # the loop, before deciding "still queued"/"never terminal".
+          #
+          # F4: the ORIGINAL "left the queue" test was a BLACKLIST
+          # (`!= queued && != not_created`) over GitHub's actual job status
+          # vocabulary, which is NOT just queued/in_progress/completed --
+          # the documented enum also includes `waiting`, `requested`, and
+          # `pending` (jobs blocked on a required-reviewer/environment
+          # gate). None of those mean a runner has actually engaged with the
+          # job, but the blacklist treated all three as "left the queue",
+          # jumping straight to phase 2 to wait for a `completed` that would
+          # never arrive without an approval this job doesn't even declare
+          # today -- exactly the "default unrecognised shapes to safe
+          # instead of dangerous" mistake this repo's own review culture
+          # already names as a repeated failure class. Fixed the same way
+          # `fail_if_ambiguous` already is: enumerate the states that DO
+          # mean "started" POSITIVELY (`in_progress`, `completed`) rather
+          # than the states that mean "hasn't" -- an unrecognised future
+          # value (this job has no `strategy`/`environment` today, but
+          # nothing stops one being added later) now falls on the SAFE side
+          # (keep waiting) instead of the dangerous one (assume started).
+          job_left_queue() {
+            case "${status}" in
+              in_progress|completed) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
           left_queue="false"
           status="queued"
+          phase1_total_polls=0
+          phase1_api_error_polls=0
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
             fail_if_ambiguous
+            phase1_total_polls=$((phase1_total_polls + 1))
             # A poll that could not observe anything (transient `gh api`
             # failure, exhausted job_status's own retries) is not evidence
             # the attempt left the queue -- keep waiting, don't guess.
             if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
               sleep 15
               continue
             fi
-            # "not_created" counts as still-queued for phase 1's purposes --
-            # the attempt has not left the queue if it does not exist yet.
-            if [ "${status}" != "queued" ] && [ "${status}" != "not_created" ]; then
+            if job_left_queue; then
               left_queue="true"
               break
             fi
             sleep 15
           done
 
+          # F3: one more read right at/after the deadline, closing the
+          # sleep-interval-wide blind spot the loop's own condition leaves.
           if [ "${left_queue}" != "true" ]; then
-            echo "self-hosted attempt still queued after ${QUEUE_TIMEOUT_MINUTES}m -- claiming the work here"
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            phase1_total_polls=$((phase1_total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+            elif job_left_queue; then
+              left_queue="true"
+            fi
+          fi
+
+          if [ "${left_queue}" != "true" ]; then
+            # codex round 3 (P3): unconditionally logging "still queued" was
+            # a telemetry gap in round 2's own fix -- an `api_error` poll is
+            # SAFELY treated the same as "still queued" for the DECISION
+            # (claim the work here either way), but a persistent `gh api`
+            # outage and a genuinely saturated self-hosted pool are
+            # different things to page someone about, and the old message
+            # asserted the queue state was actually OBSERVED even when
+            # every single poll had failed to observe anything at all.
+            if [ "${phase1_api_error_polls}" -eq "${phase1_total_polls}" ] && [ "${phase1_total_polls}" -gt 0 ]; then
+              echo "self-hosted attempt's queue status could not be observed at all in ${phase1_total_polls} attempts (gh api kept failing) -- claiming the work here as the safe default, but this does NOT confirm the pool was actually saturated"
+            else
+              echo "self-hosted attempt still queued after ${QUEUE_TIMEOUT_MINUTES}m (${phase1_api_error_polls}/${phase1_total_polls} polls were api_error) -- claiming the work here"
+            fi
             echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+
+          report_terminal_conclusion() {
+            echo "self-hosted attempt completed with conclusion: ${conclusion}"
+            if [ "${conclusion}" = "success" ]; then
+              echo "outcome=claimed-success" >> "${GITHUB_OUTPUT}"
+            else
+              echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          }
 
           deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
           total_polls=0
@@ -440,16 +513,23 @@ jobs:
               continue
             fi
             if [ "${status}" = "completed" ]; then
-              echo "self-hosted attempt completed with conclusion: ${conclusion}"
-              if [ "${conclusion}" = "success" ]; then
-                echo "outcome=claimed-success" >> "${GITHUB_OUTPUT}"
-              else
-                echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
-              fi
-              exit 0
+              report_terminal_conclusion
             fi
             sleep 15
           done
+
+          # F3 (same class as phase 1's blind spot above): one more read
+          # right at/after the deadline before giving up, so an attempt
+          # that reaches `completed` in the final sleep interval is not
+          # missed and misreported as "never terminal".
+          read -r status conclusion <<<"$(job_status)"
+          fail_if_ambiguous
+          total_polls=$((total_polls + 1))
+          if [ "${status}" = "api_error" ]; then
+            api_error_polls=$((api_error_polls + 1))
+          elif [ "${status}" = "completed" ]; then
+            report_terminal_conclusion
+          fi
 
           # Distinguish "the attempt genuinely never finished" from "we
           # never actually got a good look at it" -- the two have the same

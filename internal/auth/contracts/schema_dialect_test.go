@@ -35,11 +35,53 @@ import (
 // anything passes every clean tree, which is indistinguishable from a guard
 // that works.
 
-// unicodeAmbiguousClasses are shorthand classes whose meaning differs between
-// Python's `re` (Unicode) and Go RE2 / ECMA-262 (ASCII). Written as the
-// two-character escape; the check below ignores an escaped backslash so that
-// a literal `\\d` in a pattern is not a false positive.
-var unicodeAmbiguousClasses = []string{`\d`, `\w`, `\s`, `\D`, `\W`, `\S`}
+// dialectSafeEscapes are the backslash escapes whose meaning is IDENTICAL in
+// Python `re`, Go RE2 and ECMA-262: escaped punctuation, which is literal in
+// all three.
+//
+// THE LIST IS INVERTED ON PURPOSE, and the previous version's shape is the
+// reason. It enumerated the classes known to diverge -- `\d`, `\w`, `\s` and
+// their complements -- and treated everything else as safe. Codex round 2
+// walked straight through the gap with `\b`, whose word-boundary is Unicode-
+// aware in Python and ASCII in the other two (Go's own regexp/syntax doc says
+// "at ASCII word boundary"). Measured on all three engines with `^\bé\b$`:
+// Python accepts "é", ECMA-262 rejects it, RE2's `\b` is ASCII by
+// specification. That was the FOURTH instance of this family on this branch
+// and the second the guard itself failed to catch.
+//
+// Enumerating today's known-bad shapes and defaulting the rest to safe is the
+// exact mistake the brief records as "default unrecognised shapes to
+// DANGEROUS, not safe" -- and this lane applied that rule to its own
+// fail-closed pattern rewriting while leaving this guard fail-open. So: any
+// backslash escape NOT in this list is reported, and adding one is a
+// deliberate act that requires knowing all three dialects agree on it.
+var dialectSafeEscapes = map[byte]bool{
+	'.': true, '\\': true, '/': true, '+': true, '*': true, '?': true,
+	'(': true, ')': true, '[': true, ']': true, '{': true, '}': true,
+	'^': true, '$': true, '|': true, '-': true,
+}
+
+// unsafeEscapesIn returns every backslash escape in a pattern that is not on
+// dialectSafeEscapes, walking the string so an escaped backslash cannot be
+// misread as introducing an escape.
+func unsafeEscapesIn(pattern string) []string {
+	var found []string
+	seen := map[byte]bool{}
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] != '\\' || i+1 >= len(pattern) {
+			continue
+		}
+		next := pattern[i+1]
+		i++ // consume the escaped byte, so `\\\\d` is a literal backslash then d
+		if dialectSafeEscapes[next] || seen[next] {
+			continue
+		}
+		seen[next] = true
+		found = append(found, `\\`+string(next))
+	}
+	sort.Strings(found)
+	return found
+}
 
 type schemaFinding struct {
 	file    string
@@ -49,13 +91,6 @@ type schemaFinding struct {
 
 func (f schemaFinding) String() string {
 	return fmt.Sprintf("%s %s: %s", f.file, f.pointer, f.problem)
-}
-
-// stripEscapedBackslashes removes `\\` pairs so that a following `d` is not
-// misread as the `\d` class. Without this, the pattern `\\د` (a literal
-// backslash then a letter) would be flagged wrongly.
-func stripEscapedBackslashes(pattern string) string {
-	return strings.ReplaceAll(pattern, `\\`, "")
 }
 
 // inspectSchemaNode walks a decoded schema document and reports dialect
@@ -82,19 +117,19 @@ func inspectSchemaNode(file, pointer string, node any, findings *[]schemaFinding
 			})
 		}
 		if raw, ok := typed["pattern"].(string); ok {
-			scanned := stripEscapedBackslashes(raw)
-			for _, class := range unicodeAmbiguousClasses {
-				if strings.Contains(scanned, class) {
-					*findings = append(*findings, schemaFinding{
-						file:    file,
-						pointer: pointer,
-						problem: fmt.Sprintf(
-							"pattern %q uses %s, whose meaning differs across the three "+
-								"validators: Python's `re` treats it as Unicode, Go RE2 and "+
-								"ECMA-262 as ASCII. Use an explicit class such as [0-9].",
-							raw, class),
-					})
-				}
+			for _, escape := range unsafeEscapesIn(raw) {
+				*findings = append(*findings, schemaFinding{
+					file:    file,
+					pointer: pointer,
+					problem: fmt.Sprintf(
+						"pattern %q uses the escape %s, which is not on the list of escapes "+
+							"all three validators agree on. Shorthand classes and boundaries "+
+							"(\\d, \\w, \\s, \\b and complements) are Unicode-aware in Python's "+
+							"`re` and ASCII in Go RE2 and ECMA-262. Use an explicit character "+
+							"class such as [0-9], or add the escape to dialectSafeEscapes once "+
+							"you have checked all three dialects agree.",
+						raw, escape),
+				})
 			}
 			if _, err := regexp.Compile(raw); err != nil {
 				*findings = append(*findings, schemaFinding{
@@ -179,12 +214,33 @@ func TestTheDialectGuardDetectsTheViolationsItExistsToCatch(t *testing.T) {
 		{
 			name:   "unicode-ambiguous digit class",
 			schema: `{"properties":{"when":{"type":"string","pattern":"^\\d{4}$"}}}`,
-			want:   "differs across the three validators",
+			want:   "not on the list of escapes",
 		},
 		{
 			name:   "nested deep inside $defs, not at the top level",
 			schema: `{"$defs":{"a":{"oneOf":[{"type":"null"},{"properties":{"b":{"pattern":"^\\w+$"}}}]}}}`,
-			want:   "differs across the three validators",
+			want:   "not on the list of escapes",
+		},
+		{
+			// The escape the ENUMERATED version of this guard walked straight
+			// past (codex round 2 P2). Python's `\b` is Unicode-aware, Go's is
+			// "at ASCII word boundary" by its own regexp/syntax doc, and
+			// ECMA-262 agrees with Go -- measured on all three with `^\bé\b$`:
+			// Python accepts "é", node rejects it. It is here as a named case
+			// rather than trusted to the safe-list, because it is the specific
+			// input that proved the old shape wrong.
+			name:   "unicode-sensitive word boundary",
+			schema: `{"properties":{"x":{"pattern":"^\\bé\\b$"}}}`,
+			want:   "not on the list of escapes",
+		},
+		{
+			// Proves the inversion is what makes this guard general: \p{L} is
+			// a perfectly ordinary escape that the enumerated version had no
+			// row for and would have accepted. RE2 and Python support it,
+			// ECMA-262 requires the /u flag, and ajv does not set one.
+			name:   "an escape the enumerated guard had no row for",
+			schema: `{"properties":{"x":{"pattern":"^\\p{L}+$"}}}`,
+			want:   "not on the list of escapes",
 		},
 		{
 			name:   "pattern RE2 cannot compile",
@@ -206,6 +262,18 @@ func TestTheDialectGuardDetectsTheViolationsItExistsToCatch(t *testing.T) {
 			var joined []string
 			for _, finding := range findings {
 				joined = append(joined, finding.String())
+			}
+			// Log EVERY finding, not only the one asserted on. A control that
+			// reports selectively is a control you cannot read: this test
+			// passes when the wanted finding is present, so if the guard ALSO
+			// fires for an unintended reason the extra finding is invisible
+			// and the control silently stops describing what it proves.
+			// (Returned by lane-auth-wave1, who hit the same shape on #2143:
+			// their six-way control logged only the regressions matching the
+			// expectation and so hid whether two of the six were caught at
+			// all.)
+			for _, finding := range joined {
+				t.Log("fired:", finding)
 			}
 			if !strings.Contains(strings.Join(joined, "\n"), testCase.want) {
 				t.Fatalf("guard fired but not for the expected reason; want substring %q, got:\n%s",

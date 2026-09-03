@@ -380,6 +380,18 @@ func TestEntitlementCannotBeSmuggledIntoAPrincipal(t *testing.T) {
 // fixture stopped validating, the rule would have quietly become a schema rule
 // and a test asserting only the refusal would still pass -- hiding that the
 // client check had become dead code.
+//
+// NON-VACUITY CONTROL, named here because it lives in another test and an
+// unlabelled control is one refactor away from being deleted as redundant:
+// the "must validate" assertion below is evidence rather than a tautology
+// ONLY because Validate is proven able to reject. That proof is
+// TestRejectedFixturesAreRejectedByTheDeclaredRule, which asserts Validate
+// refuses all 22 `reject` fixtures, plus
+// TestEntitlementCannotBeSmuggledIntoAPrincipal. The sibling category IS the
+// control for this one. (Identified by lane-auth-wave1 reviewing this file;
+// the same structure as their own posture suite, where the refusal
+// assertions had NO capability control beside them and so proved nothing --
+// the presence or absence of the sibling is the entire difference.)
 func TestClientEnforcedFixturesValidateButAreRefused(t *testing.T) {
 	root := testRoot(t)
 	for _, entry := range loadManifest(t).RejectByClient {
@@ -491,6 +503,49 @@ func TestPrincipalDecodesAnIntegralDecimalRevision(t *testing.T) {
 			}[field]
 			if got != 7 {
 				t.Errorf("%s = %d, want 7", field, got)
+			}
+		})
+	}
+}
+
+// TestRevisionRangeAgreesWithPython pins the int64 boundary in both
+// directions, because the first version of this guard got it wrong in a way
+// no fixture could see.
+//
+// The schema bounds revisions below at zero and not above -- correct for JSON
+// Schema, wrong for a cross-language contract, since Python's integers are
+// arbitrary-precision and Go's are not. Worse, the range check itself was
+// lossy: float64(math.MaxInt64) rounds UP to 2^63, so 2^63 passed the guard
+// and was SILENTLY CLAMPED to 2^63-1, making two different wire documents
+// produce one revision. A revision is a G-31 cache-key input; two inputs
+// collapsing to one value is the failure that key exists to prevent.
+func TestRevisionRangeAgreesWithPython(t *testing.T) {
+	for _, testCase := range []struct {
+		raw     string
+		want    Revision
+		wantErr bool
+	}{
+		{raw: "9223372036854775807", want: 9223372036854775807}, // MaxInt64, accepted
+		{raw: "9223372036854775808", wantErr: true},             // 2^63, silently clamped before the fix
+		{raw: "1e19", wantErr: true},                            // integral but far past the range
+		{raw: "1e18", want: 1000000000000000000},                // integral and inside it
+		{raw: "-1", want: -1},                                   // the SCHEMA forbids this; the type need not
+	} {
+		t.Run(testCase.raw, func(t *testing.T) {
+			var got Revision
+			err := json.Unmarshal([]byte(testCase.raw), &got)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("%s decoded to %d; out-of-range must be REFUSED, never clamped -- "+
+						"clamping makes two wire values one revision", testCase.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", testCase.raw, err)
+			}
+			if got != testCase.want {
+				t.Errorf("%s decoded to %d, want %d", testCase.raw, got, testCase.want)
 			}
 		})
 	}

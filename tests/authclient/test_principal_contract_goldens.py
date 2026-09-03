@@ -298,6 +298,15 @@ def test_client_enforced_fixture_validates_but_is_refused(name: str) -> None:
     such a fixture stopped validating, the rule would have quietly become a
     schema rule and this test would still pass on the second assertion alone --
     hiding the fact that the client check had become dead code.
+
+    NON-VACUITY CONTROL, named because it lives in another test and an
+    unlabelled control is one refactor away from being deleted as redundant:
+    the "must validate" assertion is evidence rather than a tautology ONLY
+    because ``violations`` is proven able to reject. That proof is
+    :func:`test_rejected_fixture_is_rejected_by_the_declared_rule`, over all 22
+    ``reject`` fixtures, plus
+    :func:`test_entitlement_cannot_be_smuggled_into_a_principal`. The sibling
+    category IS the control for this one.
     """
     document = _load(name)
     assert violations(SURFACE, document) == [], (
@@ -336,3 +345,32 @@ def test_strict_pattern_anchoring_fails_closed_on_a_shape_it_cannot_rewrite() ->
     """
     with pytest.raises(ContractError):
         strictly_anchored(r"^a$b$")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (2**63 - 1, 2**63 - 1),
+        (2**63, "refused"),
+        (10**19, "refused"),
+        (10**18, 10**18),
+        (1.0, 1),
+    ],
+)
+def test_revision_range_agrees_with_go(value: object, expected: object) -> None:
+    """Python must refuse the revisions Go cannot represent.
+
+    Python's integers are arbitrary-precision and Go's are not, so the
+    CONTRACT's range is Go's. Before this bound existed, ``10**19`` built a
+    Python principal that its Go counterpart could not decode -- a split
+    downstream of a validation both planes passed, which is the class the
+    golden corpus cannot see because every fixture assertion stops at "does
+    it validate".
+    """
+    document = _load("valid-zero-revisions.json")
+    document["membership_revision"] = value
+    if expected == "refused":
+        with pytest.raises(ContractError):
+            Principal.from_wire(document)
+        return
+    assert Principal.from_wire(document).membership_revision == expected

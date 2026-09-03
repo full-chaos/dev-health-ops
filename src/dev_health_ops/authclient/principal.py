@@ -92,6 +92,7 @@ def _parse_revision(raw: object, field: str) -> int:
         # bool is a subclass of int in Python; True would otherwise become 1.
         raise ContractError(f"{SURFACE}: /{field} is a boolean, not a revision")
     if isinstance(raw, int):
+        _require_int64_range(raw, field)
         return raw
     if isinstance(raw, float):
         if raw != int(raw):
@@ -99,8 +100,36 @@ def _parse_revision(raw: object, field: str) -> int:
                 f"{SURFACE}: /{field} = {raw!r} has a fractional part; "
                 "a revision is a whole counter"
             )
-        return int(raw)
+        coerced = int(raw)
+        _require_int64_range(coerced, field)
+        return coerced
     raise ContractError(f"{SURFACE}: /{field} = {raw!r} is not a number")
+
+
+#: The widest revision both clients can represent. Python's ints are
+#: arbitrary-precision and Go's are not, so the CONTRACT's range is Go's.
+INT64_MAX = 2**63 - 1
+INT64_MIN = -(2**63)
+
+
+def _require_int64_range(value: int, field: str) -> None:
+    """Refuse a revision Go cannot represent, so the two clients agree.
+
+    The schema bounds revisions below at zero and not above, which is correct
+    for JSON Schema and wrong for a cross-language contract: Python accepted
+    10**19 exactly while Go refused it (codex round 2 P2, re-executed). Worse,
+    Go's own range guard was lossy and SILENTLY CLAMPED 2**63 to 2**63-1, so
+    two different wire documents produced one revision -- the cache-key
+    collapse the fractional check exists to prevent. Both are fixed, and the
+    bound lives here as well so Python refuses what Go refuses rather than
+    building a principal its counterpart cannot.
+    """
+    if value > INT64_MAX or value < INT64_MIN:
+        raise ContractError(
+            f"{SURFACE}: /{field} = {value} is outside the int64 range this contract "
+            "can represent in both languages; refused rather than truncated, because "
+            "two wire values collapsing to one revision breaks the G-31 cache key"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,14 +185,36 @@ class Delegation:
 def _check_delegation_bounds(chain: tuple[Delegation, ...]) -> None:
     """Refuse an actor chain the schema cannot police.
 
-    TWO rules, not one. A hop must end after it starts, and it must not last
-    longer than :data:`MAX_DELEGATION_DURATION`. The ordering check is not
+    THREE rules. A hop must end after it starts; it must not last longer than
+    :data:`MAX_DELEGATION_DURATION`; and the chain must be ordered, each hop
+    starting no earlier and ending no later than the one it descends from.
+    The third was missing: reversing a two-hop chain validated cleanly and
+    made the LATER delegator the reported real actor, because
+    :attr:`Principal.real_actor_principal_id` reads index zero and nothing
+    enforced what index zero meant (codex round 2 P1). The ordering check is not
     redundant: a negative duration satisfies any maximum, so a bound written
     only as ``expires_at - started_at <= 15m`` accepts a session that ends
     before it begins. Both have fixtures in the manifest's
     ``reject_by_client`` list.
     """
     for index, hop in enumerate(chain):
+        if index > 0:
+            previous = chain[index - 1]
+            if hop.started_at < previous.started_at:
+                raise ContractError(
+                    f"{SURFACE}: /actor_chain/{index} starts at "
+                    f"{hop.started_at.isoformat()}, before the preceding hop's "
+                    f"{previous.started_at.isoformat()}; the chain is append-only "
+                    "and index zero is read as the originating actor, so an "
+                    "out-of-order chain reports the wrong real actor"
+                )
+            if hop.expires_at > previous.expires_at:
+                raise ContractError(
+                    f"{SURFACE}: /actor_chain/{index} expires at "
+                    f"{hop.expires_at.isoformat()}, after the delegation it descends "
+                    f"from ({previous.expires_at.isoformat()}); a sub-delegation that "
+                    "outlives its parent is not bounded by it (G-52)"
+                )
         if hop.expires_at <= hop.started_at:
             raise ContractError(
                 f"{SURFACE}: /actor_chain/{index} expires_at "

@@ -180,6 +180,14 @@
     {
       "file": "client-rejected-delegation-ends-before-it-starts.json",
       "why": "started_at 23:31Z is AFTER expires_at 23:30Z. Schema-valid for the same reason, and a negative duration trivially satisfies any maximum -- so a bound checked as `expires_at - started_at <= 15m` without also checking the sign accepts it. The ordering check and the duration check are two rules, and this fixture is the one that notices when only the second is implemented."
+    },
+    {
+      "file": "client-rejected-delegation-chain-reversed.json",
+      "why": "The canonical two-hop chain, reversed. Schema-valid: every hop is individually well formed and within its own 15-minute bound. But the chain is append-only (TRD section 8 rule 4) and both clients read index zero as the ORIGINATING actor, so a reversed chain reports the later delegator as the real actor -- G-49 requires the real actor to survive downstream, and it does not survive being silently relabelled. Executed before the fix: violations [] and real_actor = ...0003 instead of ...0002, in BOTH languages."
+    },
+    {
+      "file": "client-rejected-sub-delegation-outlives-parent.json",
+      "why": "Hop 1 expires at 23:31Z, after hop 0's 23:30Z. Schema-valid and each hop is individually under the 15-minute bound, so the per-hop checks pass; the chain as a whole is still unbounded, because a sub-delegation that outlives the delegation it descends from is not bounded by it (G-52). The ordering rule and the per-hop rule catch different things and this fixture is the one that notices when only the per-hop rule exists."
     }
   ]
 }

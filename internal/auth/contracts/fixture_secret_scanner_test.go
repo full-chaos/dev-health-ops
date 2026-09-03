@@ -240,6 +240,18 @@ func TestTheFixtureScannerDetectsWhatItExistsToCatch(t *testing.T) {
 			if len(findings) == 0 {
 				t.Fatalf("scanner reported nothing for content it must reject: %s", testCase.content)
 			}
+			// Log EVERY finding, not only the one asserted on. A control that
+			// reports selectively is a control you cannot read: this test
+			// passes when the wanted finding is present, so if the guard ALSO
+			// fires for an unintended reason the extra finding is invisible
+			// and the control silently stops describing what it proves.
+			// (Returned by lane-auth-wave1, who hit the same shape on #2143:
+			// their six-way control logged only the regressions matching the
+			// expectation and so hid whether two of the six were caught at
+			// all.)
+			for _, finding := range findings {
+				t.Log("fired:", finding)
+			}
 			if !strings.Contains(strings.Join(findings, "\n"), testCase.want) {
 				t.Fatalf("scanner fired but not for the expected reason; want %q, got:\n%s",
 					testCase.want, strings.Join(findings, "\n"))

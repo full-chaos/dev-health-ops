@@ -63,8 +63,27 @@ func (r *Revision) UnmarshalJSON(data []byte) error {
 	if asFloat != math.Trunc(asFloat) {
 		return fmt.Errorf("revision %s has a fractional part; a revision is a whole counter", number)
 	}
-	if asFloat > math.MaxInt64 || asFloat < math.MinInt64 {
-		return fmt.Errorf("revision %s is out of int64 range", number)
+	// Compare against the exact powers of two, NOT against math.MaxInt64.
+	//
+	// float64(math.MaxInt64) rounds UP to 2^63, so `asFloat > math.MaxInt64`
+	// is FALSE for asFloat == 2^63 and the conversion below then SILENTLY
+	// CLAMPS to MaxInt64. Measured: input 9223372036854775808 decoded to
+	// 9223372036854775807, so 2^63 and 2^63-1 -- two different wire
+	// documents -- produced the SAME revision. That is precisely the
+	// collapse the fractional check above exists to prevent, reintroduced by
+	// a lossy comparison in the guard meant to prevent it (codex round 2 P2,
+	// sharpened by the lane's own re-execution: the round reported a
+	// rejection, the real behaviour was a silent clamp).
+	//
+	// 2^63 and -2^63 are both exactly representable as float64, so these
+	// comparisons are exact.
+	const maxInt64AsFloat = 9223372036854775808.0  // 2^63, one past MaxInt64
+	const minInt64AsFloat = -9223372036854775808.0 // -2^63, exactly MinInt64
+	if asFloat >= maxInt64AsFloat || asFloat < minInt64AsFloat {
+		return fmt.Errorf(
+			"revision %s is outside the int64 range this contract can represent "+
+				"in both languages; refused rather than clamped, because two wire "+
+				"values collapsing to one revision breaks the G-31 cache key", number)
 	}
 	*r = Revision(int64(asFloat))
 	return nil
@@ -211,6 +230,32 @@ const MaxDelegationDuration = 15 * time.Minute
 // begins. Both have fixtures in the manifest's reject_by_client list.
 func checkDelegationBounds(chain []Delegation) error {
 	for index, hop := range chain {
+		// THREE rules now, not two. The chain is documented append-only
+		// (TRD section 8 rule 4) and RealActorPrincipalID reads index zero as
+		// the originating actor, but nothing enforced the order -- so
+		// reversing a two-hop chain validated cleanly and reported the LATER
+		// delegator as the real actor (codex round 2 P1, re-executed in both
+		// languages). G-49 requires the real actor to survive downstream;
+		// it does not survive being silently relabelled.
+		if index > 0 {
+			previous := chain[index-1]
+			if hop.StartedAt.Before(previous.StartedAt) {
+				return fmt.Errorf(
+					"%s: /actor_chain/%d starts at %s, before the preceding hop's %s; the "+
+						"chain is append-only and index zero is read as the originating "+
+						"actor, so an out-of-order chain reports the wrong real actor",
+					PrincipalSurface, index, hop.StartedAt.Format(time.RFC3339),
+					previous.StartedAt.Format(time.RFC3339))
+			}
+			if hop.ExpiresAt.After(previous.ExpiresAt) {
+				return fmt.Errorf(
+					"%s: /actor_chain/%d expires at %s, after the delegation it descends "+
+						"from (%s); a sub-delegation that outlives its parent is not bounded "+
+						"by it (G-52)",
+					PrincipalSurface, index, hop.ExpiresAt.Format(time.RFC3339),
+					previous.ExpiresAt.Format(time.RFC3339))
+			}
+		}
 		if !hop.ExpiresAt.After(hop.StartedAt) {
 			return fmt.Errorf(
 				"%s: /actor_chain/%d expires_at (%s) is not after started_at (%s); a delegated "+

@@ -44,10 +44,20 @@ type CompleteFunc func(ctx context.Context, requestedProvider, requestedModel, f
 // FiltersForCacheKey is whatever filters.model_dump(mode="json") would
 // have produced -- see ComputeCacheKey's own doc comment.
 type ExplainInvestmentMixOptions struct {
-	OrgID              string
-	StartTS            time.Time
-	EndTS              time.Time
-	RepoIDs            []string
+	OrgID   string
+	StartTS time.Time
+	EndTS   time.Time
+	RepoIDs []string
+	// ScopeLevel is filters.scope.level verbatim ("org" when absent) --
+	// needed here, not just to compute RepoIDs, because
+	// build_investment_response (api/services/investment.py:175) only
+	// applies repo-scope filtering to the BREAKDOWN query when
+	// ScopeLevel is "team" or "repo"; an "org"-scoped request with
+	// filters.what.repos set still resolves RepoIDs (for the WORK-UNIT
+	// query, which applies them unconditionally -- work_units.py:253)
+	// but must NOT filter the breakdown by them. See ExplainInvestmentMix's
+	// own comment at the breakdown-fetch call site.
+	ScopeLevel         string
 	WorkCategory       []string
 	Theme              string
 	Subcategory        string
@@ -206,11 +216,36 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		}
 	}
 
+	// themeFilters/subcategoryFilters (from filters.why.work_category) are
+	// computed here, BEFORE the breakdown fetch, because Python's own
+	// build_investment_response passes them into fetch_investment_breakdown
+	// (investment.py:187-188: themes=theme_filters or None,
+	// subcategories=subcategory_filters or None) -- a real query-level
+	// filter, not just the work-unit-level filtering below. A first draft
+	// computed this only after the breakdown fetch and never threaded it
+	// into BreakdownFilters at all, silently ignoring why.work_category for
+	// the top_themes/top_subcategories computation while still applying it
+	// to work units -- caught by codex round 1 (P1).
+	themeFilters, subcategoryFilters := splitCategoryFilters(opts.WorkCategory)
+
 	breakdownFilter := BreakdownFilters{
-		OrgID:   opts.OrgID,
-		StartTS: opts.StartTS,
-		EndTS:   opts.EndTS,
-		RepoIDs: opts.RepoIDs,
+		OrgID:         opts.OrgID,
+		StartTS:       opts.StartTS,
+		EndTS:         opts.EndTS,
+		Themes:        themeFilters,
+		Subcategories: subcategoryFilters,
+	}
+	// RepoIDs is applied to the BREAKDOWN query only for team/repo scope,
+	// matching build_investment_response's own conditional
+	// (investment.py:175: `if filters.scope.level in {"team", "repo"}:`) --
+	// an org-scoped request with filters.what.repos set still resolves
+	// RepoIDs (for the unconditional work-unit query below, work_units.py:
+	// 253) but Python's breakdown query is NOT scoped by it in that case.
+	// A first draft applied opts.RepoIDs unconditionally here, over-filtering
+	// the breakdown for exactly that request shape -- caught by codex round 1
+	// (P1).
+	if opts.ScopeLevel == "team" || opts.ScopeLevel == "repo" {
+		breakdownFilter.RepoIDs = opts.RepoIDs
 	}
 	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, breakdownFilter)
 	if err != nil {
@@ -238,7 +273,6 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		filteredSubcategoryItems = filtered
 	}
 
-	themeFilters, subcategoryFilters := splitCategoryFilters(opts.WorkCategory)
 	unitOpts := BuildWorkUnitInvestmentsOptions{
 		OrgID:              opts.OrgID,
 		StartTS:            opts.StartTS,
@@ -367,7 +401,14 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	}
 
 	payload := buildExplainPayload(explainPayloadInput{
-		Theme:            opts.Theme,
+		// theme (the locally-reconciled value, not opts.Theme) matches
+		// Python: investment_mix_explain.py:192-202 reassigns `theme` on a
+		// theme/subcategory mismatch BEFORE building the payload at line
+		// 345, so the LLM prompt must see the corrected theme. opts.Theme
+		// here was the original bug (caught by codex round 1, P1): the
+		// breakdown/unit filtering above already used the corrected
+		// `theme`, only the prompt payload still read the stale opts.Theme.
+		Theme:            theme,
 		Subcategory:      opts.Subcategory,
 		TotalEffort:      totalEffort,
 		TopThemes:        topThemes,
@@ -417,16 +458,19 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	themeSharesPct := sharesPct(themeDistribution.Items(), totalEffort)
 	subcategorySharesPct := sharesPct(filteredSubcategoryItems, totalEffort)
 
-	fallbackBandMixMap := make(map[string]int, len(bandCounts))
-	for _, bc := range bandCounts {
-		fallbackBandMixMap[bc.Band] = bc.Count
-	}
-
+	// bandCounts (a BandMix, order-preserving) is passed straight through
+	// as the parser's fallback band_mix -- no map[string]int round trip.
+	// A prior draft converted it to a map here first, which is exactly
+	// where the first-encounter order got lost (Go maps have no
+	// deterministic iteration order); explainOutputToExplanation then had
+	// to re-impose SOME order, and picked the wrong one -- caught by codex
+	// round 1 (P1). See Confidence.BandMix's own doc comment (types.go)
+	// for why this must stay order-preserving end to end.
 	parseResult := ParseInvestmentMixResponse(completion.Text, ParseOptions{
 		ThemeSharesPct:       themeSharesPct,
 		SubcategorySharesPct: subcategorySharesPct,
 		FallbackLevel:        confidenceLevel,
-		FallbackBandMix:      fallbackBandMixMap,
+		FallbackBandMix:      bandCounts,
 		FallbackDrivers:      qualityDrivers,
 		FallbackMean:         qualityMean,
 		FallbackStddev:       qualityStddev,
@@ -516,12 +560,15 @@ func explainOutputToExplanation(output InvestmentMixExplainOutput) InvestmentMix
 	for i, a := range output.WhatToCheckNext {
 		actions[i] = InvestmentMixActionItem{Action: a.Action, Why: a.Why, Where: a.Where}
 	}
-	bandMix := make(BandMix, 0, len(output.Confidence.BandMix))
-	for _, band := range []string{"high", "moderate", "low", "very_low", "unknown"} {
-		if count, ok := output.Confidence.BandMix[band]; ok {
-			bandMix = append(bandMix, BandCount{Band: band, Count: count})
-		}
-	}
+	// output.Confidence.BandMix is already order-preserving (types.go's
+	// Confidence.BandMix is BandMix, not map[string]int) and already IS
+	// the fallback band_mix explain.go passed in -- no re-derivation, no
+	// fixed band-list reconstruction. A prior draft rebuilt this in a
+	// fixed high/moderate/low/very_low/unknown order, which diverges from
+	// Python's real first-encounter order whenever a request's units
+	// don't happen to produce bands in that exact order -- caught by
+	// codex round 1 (P1).
+	bandMix := cloneBandMix(output.Confidence.BandMix)
 	status := "valid"
 	return InvestmentMixExplanation{
 		Summary:     output.Summary,

@@ -106,18 +106,34 @@ class _FakeUpstream:
         status_code: int,
         chunks: list[bytes],
         headers: dict[str, str] | None = None,
+        fail_after: int | None = None,
     ):
         self.status_code = status_code
         self.headers = headers or {"content-type": "application/json"}
         self._chunks = chunks
+        self._fail_after = fail_after
         self.closed = False
 
     async def aiter_bytes(self):
-        for chunk in self._chunks:
+        for i, chunk in enumerate(self._chunks):
+            if self._fail_after is not None and i == self._fail_after:
+                raise httpx.ReadError("connection lost mid-stream")
             yield chunk
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class _FakeCounter:
+    def __init__(self):
+        self.inc_calls: list[dict[str, str]] = []
+
+    def labels(self, **kwargs):
+        self.inc_calls.append(kwargs)
+        return self
+
+    def inc(self, amount: float = 1) -> None:
+        pass
 
 
 class _FakeClient:
@@ -331,3 +347,42 @@ async def test_success_streams_chunks_through_unbuffered(
     assert result.background is not None
     await result.background()
     assert fake_client.closed
+
+
+async def test_mid_stream_failure_after_200_is_logged_and_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regresses codex round 1 (P2): once the 200 headers are already
+    committed, a read failure partway through the body has no fallback
+    available -- it must at least be observable (a log line + a counter),
+    which it previously was not at all."""
+    _enable(monkeypatch)
+    _patch_envelope_inputs_ok(monkeypatch)
+
+    async def _send(request):
+        return _FakeUpstream(200, [b" ", b'{"partial": true'], fail_after=1)
+
+    fake_client = _FakeClient(_send)
+    monkeypatch.setattr(dispatcher_mod, "_build_http_client", lambda: fake_client)
+
+    fake_counter = _FakeCounter()
+    monkeypatch.setattr(
+        dispatcher_mod,
+        "INVESTMENT_EXPLAIN_DISPATCH_STREAM_TRUNCATED_TOTAL",
+        fake_counter,
+    )
+
+    result = await maybe_dispatch_investment_explain_to_go(
+        _make_request(),
+        current_user=_sample_user(),
+        llm_provider="auto",
+        force_refresh=False,
+    )
+    assert isinstance(result, StreamingResponse)
+
+    collected: list[str | bytes | memoryview] = []
+    with pytest.raises(httpx.ReadError):
+        async for chunk in result.body_iterator:
+            collected.append(chunk)
+    assert collected == [b" "]
+    assert fake_counter.inc_calls == [{"operation": "investment_explain"}]

@@ -17,11 +17,24 @@ type Finding struct {
 }
 
 // Confidence ports investment_mix_types.py's Confidence TypedDict.
+//
+// BandMix is the order-preserving type from explanation.go, not
+// map[string]int: parse_investment_mix_response's own confidence.band_mix
+// (investment_mix_parser.py:119, "band_mix": fallback_band_mix or {}) is
+// ALWAYS the caller-supplied fallback_band_mix, a real Python dict built
+// by explain_investment_mix's own first-encounter accumulation
+// (investment_mix_explain.py:278) -- never anything read back out of the
+// LLM's own raw JSON text, in EITHER the valid or invalid_llm_output
+// outcome. A map[string]int here would lose that order the moment
+// explain.go's caller builds it, and a fixed re-imposed order (the bug
+// codex round 1 caught, P1) is the only way that loss can even be
+// partially papered over downstream -- keeping this order-preserving
+// end to end removes the need for that repair entirely.
 type Confidence struct {
 	Level         string // one of "high", "moderate", "low", "unknown"
 	QualityMean   *float64
 	QualityStddev *float64
-	BandMix       map[string]int
+	BandMix       BandMix
 	Drivers       []string
 }
 

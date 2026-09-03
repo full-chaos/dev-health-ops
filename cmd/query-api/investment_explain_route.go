@@ -38,6 +38,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -228,17 +229,22 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				// already-started 200 response cannot change status code
 				// at this point, matching Python's own StreamingResponse
 				// behavior (headers are already sent).
-				first, _ := json.Marshal(map[string]string{
-					"error": "Streaming error", "detail": "An internal error has occurred.",
-				})
-				_, _ = w.Write(first)
+				//
+				// These are literal byte-parity strings, not
+				// json.Marshal(map[string]string{...}): encoding/json
+				// sorts map keys alphabetically ("detail" before "error")
+				// and uses compact separators, while Python's
+				// json.dumps({"error": ..., "detail": ...}) preserves the
+				// dict's own key order and the default ", "/": " spacing
+				// -- confirmed against a live `python3 -c 'json.dumps(...)'`
+				// run, not assumed. Caught by codex round 1 (P1); the two
+				// error bodies never carry attacker-controlled data, so a
+				// hand-written literal is safe and exact, not a shortcut.
+				_, _ = w.Write([]byte(`{"error": "Streaming error", "detail": "An internal error has occurred."}`))
 				if flusher != nil {
 					flusher.Flush()
 				}
-				second, _ := json.Marshal(map[string]string{
-					"error": "Streaming error", "detail": "An internal streaming error occurred.",
-				})
-				_, _ = w.Write(second)
+				_, _ = w.Write([]byte(`{"error": "Streaming error", "detail": "An internal streaming error occurred."}`))
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -325,6 +331,11 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	if err != nil {
 		return investmentexplain.ExplainInvestmentMixOptions{}, err
 	}
+	scope, _ := body.Filters["scope"].(map[string]any)
+	scopeLevel, _ := scope["level"].(string)
+	if scopeLevel == "" {
+		scopeLevel = "org"
+	}
 
 	var theme, subcategory, llmModel string
 	if body.Theme != nil {
@@ -337,15 +348,29 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		llmModel = *body.LLMModel
 	}
 
+	// A request whose JSON body omits "filters" entirely leaves
+	// body.Filters nil -- Pydantic materializes MetricFilter's own
+	// default_factory in that case (a real, fully-populated object), not
+	// null, so the cache key must be computed against THAT value, not a
+	// bare `null`. A first draft passed body.Filters straight through,
+	// silently hashing null for the omitted-filters request shape and
+	// missing every cache entry Python would have hit -- caught by codex
+	// round 1 (P1).
+	filtersForCacheKey := any(body.Filters)
+	if body.Filters == nil {
+		filtersForCacheKey = investmentexplain.DefaultMetricFilterForCacheKey()
+	}
+
 	return investmentexplain.ExplainInvestmentMixOptions{
 		OrgID:              orgID,
 		StartTS:            startTS,
 		EndTS:              endTS,
 		RepoIDs:            repoIDs,
+		ScopeLevel:         scopeLevel,
 		WorkCategory:       workCategoryFromFilters(body.Filters),
 		Theme:              theme,
 		Subcategory:        subcategory,
-		FiltersForCacheKey: body.Filters,
+		FiltersForCacheKey: filtersForCacheKey,
 		LLMProvider:        llmProvider,
 		LLMModel:           llmModel,
 		ForceRefresh:       forceRefresh,
@@ -431,10 +456,30 @@ func stringsFromAny(value any) []string {
 	return out
 }
 
+// intFromAny reads a JSON-decoded value the way Pydantic's lenient int
+// coercion reads a request field: a JSON number (encoding/json always
+// decodes a bare "2.0"/"2.5" number to float64) or a numeric STRING both
+// coerce -- e.g. `{"range_days": "2"}` is a normal Pydantic request body
+// (form/query-param-style stringly-typed JSON is common from hand-built
+// clients) and TimeFilter(range_days="2") genuinely resolves to 2, not a
+// validation error (confirmed via a live `uv run python3` construction
+// against the real TimeFilter model, not assumed). A first draft here
+// only handled float64, so a string "2" silently fell through to the
+// 14-day fallback instead of the request's own intent -- caught by codex
+// round 1 (P1). Non-numeric or absent values still fall back, matching
+// TimeFilter's own default_factory for an omitted field (an explicit
+// JSON null is a DIFFERENT case Pydantic actually rejects outright --
+// out of scope here, same as the rest of this route's documented
+// narrower-than-full-Pydantic-validation boundary).
 func intFromAny(value any, fallback int) int {
 	switch v := value.(type) {
 	case float64:
 		return int(v)
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+		return fallback
 	default:
 		return fallback
 	}

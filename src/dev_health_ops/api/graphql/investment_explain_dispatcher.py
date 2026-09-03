@@ -73,6 +73,7 @@ from .investment_explain_dispatch_telemetry import (
     INVESTMENT_EXPLAIN_DISPATCH_ATTEMPTED_TOTAL,
     INVESTMENT_EXPLAIN_DISPATCH_FALLBACK_TOTAL,
     INVESTMENT_EXPLAIN_DISPATCH_SERVED_GO_TOTAL,
+    INVESTMENT_EXPLAIN_DISPATCH_STREAM_TRUNCATED_TOTAL,
 )
 from .principal_envelope import issue_effective_principal_envelope
 
@@ -254,8 +255,29 @@ async def maybe_dispatch_investment_explain_to_go(
         await upstream.aclose()
         await client.aclose()
 
+    async def _stream_with_truncation_telemetry():
+        # Once these headers are sent, this dispatcher can no longer fall
+        # back (see the module docstring's "never fall back after
+        # dispatch" section) -- a read timeout/disconnect here is silent
+        # otherwise. This is the only telemetry for that specific failure
+        # class; codex round 1 (P2) found neither a log line nor a
+        # counter existed for it.
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        except httpx.HTTPError:
+            logger.warning(
+                "investment_explain_dispatch.stream_truncated plane=go org_id=%s",
+                current_user.org_id,
+                exc_info=True,
+            )
+            INVESTMENT_EXPLAIN_DISPATCH_STREAM_TRUNCATED_TOTAL.labels(
+                operation=_OPERATION_LABEL
+            ).inc()
+            raise
+
     return StreamingResponse(
-        upstream.aiter_bytes(),
+        _stream_with_truncation_telemetry(),
         status_code=200,
         media_type=upstream.headers.get("content-type", "application/json"),
         background=BackgroundTask(_close_upstream),

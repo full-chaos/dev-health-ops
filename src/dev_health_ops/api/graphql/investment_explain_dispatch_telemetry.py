@@ -34,6 +34,7 @@ __all__ = [
     "INVESTMENT_EXPLAIN_DISPATCH_ATTEMPTED_TOTAL",
     "INVESTMENT_EXPLAIN_DISPATCH_SERVED_GO_TOTAL",
     "INVESTMENT_EXPLAIN_DISPATCH_FALLBACK_TOTAL",
+    "INVESTMENT_EXPLAIN_DISPATCH_STREAM_TRUNCATED_TOTAL",
 ]
 
 _prometheus: Any = load_prometheus()
@@ -68,6 +69,21 @@ INVESTMENT_EXPLAIN_DISPATCH_FALLBACK_TOTAL = build_counter(
     "devhealth_investment_explain_dispatch_fallback_total",
     "POST /api/v1/investment/explain requests that fell back to Python, by reason",
     ["reason"],
+    meter=_meter,
+    prometheus=_prometheus,
+)
+
+#: A stream that already committed to plane=go (200 headers already sent
+#: to the client) and then failed mid-body -- CANNOT fall back (bytes are
+#: already on the wire), so this is the only telemetry for that failure
+#: class. Distinct from INVESTMENT_EXPLAIN_DISPATCH_FALLBACK_TOTAL, whose
+#: every reason is a pre-commitment decision. Added after codex round 1
+#: (P2): this failure class previously had neither a log line nor a
+#: counter at all.
+INVESTMENT_EXPLAIN_DISPATCH_STREAM_TRUNCATED_TOTAL = build_counter(
+    "devhealth_investment_explain_dispatch_stream_truncated_total",
+    "POST /api/v1/investment/explain streamed responses that failed mid-body after committing to plane=go",
+    ["operation"],
     meter=_meter,
     prometheus=_prometheus,
 )

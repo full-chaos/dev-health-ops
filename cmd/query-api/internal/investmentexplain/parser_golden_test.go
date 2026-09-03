@@ -8,12 +8,19 @@ import (
 	"testing"
 )
 
+// FallbackBandMix is BandMix, not map[string]int: it must decode the
+// golden JSON file's own fallback_band_mix object PRESERVING that file's
+// key order (BandMix.UnmarshalJSON, explanation.go, a token-stream
+// walker) -- a map[string]int here would randomize the order on every
+// decode, defeating the whole point of this golden testing the
+// order-preservation fix for codex round 1's P1 (Confidence.BandMix's
+// own doc comment, types.go, has the full story).
 type parserGoldenKwargs struct {
 	ThemeSharesPct       map[string]float64 `json:"theme_shares_pct"`
 	SubcategorySharesPct map[string]float64 `json:"subcategory_shares_pct"`
 	FallbackLevel        string             `json:"fallback_level"`
 	FallbackQualityBand  *string            `json:"fallback_quality_band"`
-	FallbackBandMix      map[string]int     `json:"fallback_band_mix"`
+	FallbackBandMix      BandMix            `json:"fallback_band_mix"`
 	FallbackDrivers      []string           `json:"fallback_drivers"`
 	FallbackMean         *float64           `json:"fallback_mean"`
 	FallbackStddev       *float64           `json:"fallback_stddev"`
@@ -34,11 +41,11 @@ type parserGoldenFinding struct {
 }
 
 type parserGoldenConfidence struct {
-	Level         string         `json:"level"`
-	QualityMean   *float64       `json:"quality_mean"`
-	QualityStddev *float64       `json:"quality_stddev"`
-	BandMix       map[string]int `json:"band_mix"`
-	Drivers       []string       `json:"drivers"`
+	Level         string   `json:"level"`
+	QualityMean   *float64 `json:"quality_mean"`
+	QualityStddev *float64 `json:"quality_stddev"`
+	BandMix       BandMix  `json:"band_mix"`
+	Drivers       []string `json:"drivers"`
 }
 
 type parserGoldenAction struct {

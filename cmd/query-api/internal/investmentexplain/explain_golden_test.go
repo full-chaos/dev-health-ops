@@ -287,40 +287,11 @@ func intPtr(i int) *int { return &i }
 // defaultMetricFilterForCacheKey is MetricFilter().model_dump(mode="json")
 // for a DEFAULT-CONSTRUCTED filter, matching what
 // generate_explain_investment_mix_golden.py passes (filters =
-// MetricFilter()) -- captured directly from a real model_dump call, not
-// hand-derived from reading the Pydantic class body.
+// MetricFilter()). Delegates to the exported DefaultMetricFilterForCacheKey
+// (defaultfilters.go) so this test and investment_explain_route.go's own
+// nil-filters case share one definition instead of two copies drifting.
 func defaultMetricFilterForCacheKey() map[string]any {
-	return map[string]any{
-		"time": map[string]any{
-			"range_days":   14,
-			"compare_days": 14,
-			"start_date":   nil,
-			"end_date":     nil,
-		},
-		"scope": map[string]any{
-			"level": "org",
-			"ids":   []any{},
-		},
-		"who": map[string]any{
-			"developers": nil,
-			"roles":      nil,
-		},
-		"what": map[string]any{
-			"repos":     nil,
-			"services":  nil,
-			"artifacts": nil,
-		},
-		"why": map[string]any{
-			"work_category": nil,
-			"issue_type":    nil,
-			"initiative":    nil,
-		},
-		"how": map[string]any{
-			"flow_stage": nil,
-			"blocked":    nil,
-			"wip_state":  nil,
-		},
-	}
+	return DefaultMetricFilterForCacheKey()
 }
 
 func assertExplanationMatchesGolden(t *testing.T, golden explainGolden, got InvestmentMixExplanation) {

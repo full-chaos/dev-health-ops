@@ -302,20 +302,18 @@ type ParseOptions struct {
 	SubcategorySharesPct map[string]float64
 	FallbackLevel        string // defaults to "unknown", matching Python's default
 	FallbackQualityBand  *string
-	FallbackBandMix      map[string]int
+	FallbackBandMix      BandMix
 	FallbackDrivers      []string
 	FallbackMean         *float64
 	FallbackStddev       *float64
 }
 
-func cloneBandMix(m map[string]int) map[string]int {
+func cloneBandMix(m BandMix) BandMix {
 	if len(m) == 0 {
-		return map[string]int{}
+		return BandMix{}
 	}
-	out := make(map[string]int, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	out := make(BandMix, len(m))
+	copy(out, m)
 	return out
 }
 

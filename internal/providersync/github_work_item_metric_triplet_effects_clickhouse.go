@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 type GitHubWorkItemMetricsDailyClickHouseEffects struct {
@@ -358,8 +359,8 @@ WHERE org_id = ? AND provider = ? AND work_item_id = ? AND day = ?`,
 		); err != nil {
 			return EffectConflict, err
 		}
-		actual.TeamID = githubWorkItemDerivationStringValue(teamID)
-		actual.TeamName = githubWorkItemDerivationStringValue(teamName)
+		actual.TeamID = teamattribution.GithubWorkItemDerivationStringValue(teamID)
+		actual.TeamName = teamattribution.GithubWorkItemDerivationStringValue(teamName)
 		actual.Day = newGitHubWorkItemMetricDay(day)
 		found++
 	}

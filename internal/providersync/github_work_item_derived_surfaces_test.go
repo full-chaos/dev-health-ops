@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // The production feed for computed_at is time.Now() (complete_route.go:118),
@@ -42,8 +44,8 @@ func TestGitHubWorkItemDerivedSurfacesQuantizeStampsAtBuilderEntry(t *testing.T)
 		}},
 	}
 	surfaces, err := buildGitHubWorkItemDerivedSurfaces(
-		claim, rows, day, computedAt, newGitHubWorkItemDerivationContext(
-			githubWorkItemDerivationFacts{},
+		claim, rows, day, computedAt, teamattribution.NewGitHubWorkItemDerivationContext(
+			teamattribution.GithubWorkItemDerivationFacts{},
 		),
 	)
 	if err != nil {
@@ -85,8 +87,8 @@ func githubWorkItemDerivedCollisionFixture(
 ) githubWorkItemDerivedSurfaces {
 	t.Helper()
 	claim := githubWorkItemOracleClaim()
-	facts := githubWorkItemDerivationFacts{
-		Members: []githubWorkItemDerivationMemberFact{
+	facts := teamattribution.GithubWorkItemDerivationFacts{
+		Members: []teamattribution.GithubWorkItemDerivationMemberFact{
 			{
 				Provider: "github", TeamID: "payments", TeamName: "Payments",
 				MemberID: "m1", RawProviderUserID: stringPointer("octocat"),
@@ -113,7 +115,7 @@ func githubWorkItemDerivedCollisionFixture(
 	}}}
 	surfaces, err := buildGitHubWorkItemDerivedSurfaces(
 		claim, rows, time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC), computedAt,
-		newGitHubWorkItemDerivationContext(facts),
+		teamattribution.NewGitHubWorkItemDerivationContext(facts),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -503,7 +505,7 @@ func TestGitHubWorkItemDerivedBuildersAssertTenancyBeforeSkipping(t *testing.T) 
 			FromStatus: "todo", ToStatus: "in_progress", OrgID: claim.OrgID,
 		}},
 	}
-	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{})
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{})
 	if _, err := buildGitHubWorkItemDerivedSurfaces(
 		claim, rows, day, computedAt, derived,
 	); !errors.Is(err, ErrInvalidConfiguration) {
@@ -552,8 +554,8 @@ func TestGitHubWorkItemStateDurationsKeepFullPrecisionSegmentEnd(t *testing.T) {
 		}},
 	}
 	surfaces, err := buildGitHubWorkItemDerivedSurfaces(
-		claim, rows, day, computedAt, newGitHubWorkItemDerivationContext(
-			githubWorkItemDerivationFacts{},
+		claim, rows, day, computedAt, teamattribution.NewGitHubWorkItemDerivationContext(
+			teamattribution.GithubWorkItemDerivationFacts{},
 		),
 	)
 	if err != nil {

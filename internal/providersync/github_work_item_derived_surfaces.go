@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -69,7 +70,7 @@ type githubWorkItemTeamAttributionRow struct {
 	// deliberately). Carried here ONLY so WriteGitHubWorkItemEffect --
 	// the actual metrics-capable write boundary -- can derive the
 	// membership-layer telemetry label (chris/team-lead, 2026-08-26) from
-	// candidate.Priority (already on githubWorkItemDerivationCandidate,
+	// candidate.Priority (already on teamattribution.GithubWorkItemDerivationCandidate,
 	// no new field there) without threading a *providerfoundation.Metrics
 	// through the pure build*/resolve chain in between.
 	Priority int `json:"-"`
@@ -160,7 +161,7 @@ func buildGitHubWorkItemDerivedSurfaces(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemDerivedSurfaces, error) {
 	return buildWorkItemDerivedSurfacesForProvider(
 		"github", claim, rows, day, computedAt, derived,
@@ -177,7 +178,7 @@ func buildWorkItemDerivedSurfacesForProvider(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemDerivedSurfaces, error) {
 	if claim.Validate() != nil || claim.Provider != provider ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
@@ -229,7 +230,7 @@ func buildGitHubEstimateCoverageMetricsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
 	dayUTC, end, computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) ([]githubEstimateCoverageMetricsDailyRow, error) {
 	buckets := make(map[githubEstimateCoverageKey]*githubEstimateCoverageBucket)
 	order := make([]githubEstimateCoverageKey, 0, len(rows.WorkItems))
@@ -244,10 +245,10 @@ func buildGitHubEstimateCoverageMetricsDaily(
 			continue
 		}
 		subject := githubWorkItemDerivationSubjectFromRow(item)
-		teamID, teamName, _ := derived.resolve(subject)
+		teamID, teamName, _ := derived.Resolve(subject)
 		key := githubEstimateCoverageKey{
 			provider:    item.Provider,
-			workScopeID: workItemDerivationScope(subject),
+			workScopeID: teamattribution.WorkItemDerivationScope(subject),
 			teamID:      normalizeGitHubWorkItemDerivedTeamID(teamID),
 		}
 		bucket := buckets[key]
@@ -339,14 +340,14 @@ func buildGitHubWorkItemTeamAttributions(
 	claim Claim,
 	rows githubWorkItemRows,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) ([]githubWorkItemTeamAttributionRow, error) {
 	result := make([]githubWorkItemTeamAttributionRow, 0, len(rows.WorkItems))
 	for _, item := range rows.WorkItems {
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
 			return nil, err
 		}
-		_, _, candidates := derived.resolve(githubWorkItemDerivationSubjectFromRow(item))
+		_, _, candidates := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
 		for _, candidate := range candidates {
 			// Python emits candidate.team_id / team_name UNNORMALISED here --
 			// unlike every other derived surface, which routes them through
@@ -395,7 +396,7 @@ func buildGitHubWorkItemStateDurationsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
 	dayUTC, end, computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) ([]githubWorkItemStateDurationDailyRow, error) {
 	transitionsByItem := make(map[string][]githubWorkItemTransitionRow)
 	for _, transition := range rows.StatusTransitions {
@@ -424,10 +425,10 @@ func buildGitHubWorkItemStateDurationsDaily(
 			continue
 		}
 		subject := githubWorkItemDerivationSubjectFromRow(item)
-		teamIDValue, teamNameValue, _ := derived.resolve(subject)
+		teamIDValue, teamNameValue, _ := derived.Resolve(subject)
 		teamID := normalizeGitHubWorkItemDerivedTeamID(teamIDValue)
 		teamName := normalizeGitHubWorkItemDerivedTeamName(teamNameValue)
-		workScopeID := workItemDerivationScope(subject)
+		workScopeID := teamattribution.WorkItemDerivationScope(subject)
 		// Last contributing item wins, in work-item iteration order. The
 		// estimate-coverage builder above deliberately keeps the FIRST instead;
 		// the two rules disagree in Python and must not be shared.

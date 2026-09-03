@@ -26,7 +26,18 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # CHAOS-4921: unconditional cancel-in-progress meant every push (or
+  # workflow_dispatch) targeting main shared one concurrency group with
+  # every other main-targeting event, so a fast-follow push cancelled
+  # whatever main build was already in flight -- twice observed live:
+  # run 33706407469 (2d4abbbbb, the commit carrying CH migration 084) was
+  # cancelled by the fe5f540a9 push, whose own run then skipped the image
+  # build on its path filter, so no image containing 084 was ever built;
+  # separately, workflow_dispatch run 33709320991 was cancelled by the
+  # c3b3ff2ae push landing the same second. Main builds must not race each
+  # other out of existence -- only PR runs (which genuinely should cancel
+  # a stale in-flight build when the PR gets a new push) still cancel.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

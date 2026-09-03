@@ -534,6 +534,20 @@ jobs:
       matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      # CHAOS-4906 pool module cache (09-03): a warm, persistent GOMODCACHE/
+      # GOCACHE shared by every job on this pool (helm rev 6 -- see the
+      # oci-arc-runners `runner` container env, hostPath at
+      # /var/lib/oci-arc-runners/go-cache on bigboy), so the cold
+      # `go: downloading testcontainers-go` measured on this job's first
+      # pool run does not repeat on every one of up to 8 concurrent runner
+      # pods. Restated here explicitly rather than relying only on the pod
+      # env, so a reader of this file sees the real cache location without
+      # needing to know the helm values. NEVER run `go clean -cache` or
+      # `go clean -modcache` against this path in any job on this pool --
+      # it is shared, cross-job and cross-repo; cleanup ownership is the
+      # pool's, not this job's.
+      GOMODCACHE: /mnt/go-cache/mod
+      GOCACHE: /mnt/go-cache/build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -542,6 +556,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # `false`: actions/setup-go's own cache defaults to `true`, which
+          # restores/saves a GitHub Actions cache TARBALL into whatever
+          # GOMODCACHE/GOCACHE reports -- here, the pool's persistent,
+          # concurrently-shared hostPath (above). Extracting a possibly
+          # stale tarball into a directory OTHER matrix legs and other
+          # jobs are simultaneously reading/writing on this single-node
+          # pool is a real corruption risk, not just wasted redundancy
+          # with the persistent cache that already does this job. The
+          # persistent mount IS the cache; GH's own layer would fight it.
+          cache: false
 
       - name: Set up Python 3.14 for the ClickHouse migration chain
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -698,6 +722,17 @@ jobs:
     # 33764964602/33757500905) plus margin, per the contract's own
     # sizing clause.
     timeout-minutes: 25
+    env:
+      # CHAOS-4906 pool module cache (09-03): this job has no `setup-go`
+      # step of its own (ci/check_go_containers.sh shells out to `go`
+      # directly), so it already inherits GOMODCACHE/GOCACHE from the pod
+      # env (helm rev 6, oci-arc-runners `runner` container -- hostPath at
+      # /var/lib/oci-arc-runners/go-cache on bigboy). Restated here for a
+      # reader of this file, not because it changes behaviour. NEVER run
+      # `go clean -cache`/`go clean -modcache` against this path -- shared,
+      # cross-job, cross-repo; cleanup ownership is the pool's.
+      GOMODCACHE: /mnt/go-cache/mod
+      GOCACHE: /mnt/go-cache/build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

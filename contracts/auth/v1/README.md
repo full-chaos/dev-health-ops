@@ -95,6 +95,38 @@ bounds the same range makes Go report `maxLength` (first violation only) and
 Python report `pattern` (all violations) for one fixture, so the manifest cannot
 name a single expected keyword. One constraint per property.
 
+### Timestamps are bounded to their semantic range, not to a digit count
+
+Every component: year 0001-9999, month 01-12, day 01-31, hour 00-23, minute
+00-59, second 00-59, offset hours 00-23 and minutes 00-59.
+
+**This is written as a class rule because doing it one component at a time
+failed twice.** Round 2 of `error.v1` found `+24:00` and the offset alone was
+bounded; round 3 then found year `0000` — the same defect one component over.
+Enumerating the class at that point turned up a **second** split no reviewer had
+reported, running the opposite way: Go refuses `T24:00:00Z` while Python accepts
+it. A permissive digit-count pattern produces a cross-language split at every
+component independently, so bound them all or expect to be back.
+
+**Use an alternation for the year bound, never a lookahead.** The natural
+spelling is `(?!0000)`, and **RE2 has no lookahead** — that form compiles in
+Python and ECMA and fails in Go, which is divergence #2 reproduced inside a fix
+for divergence #1.
+
+**Leap seconds are REJECTED.** `23:59:60` is legal RFC 3339 and this contract
+refuses it, deliberately: the wire format is the intersection of what all three
+validators accept, and Python's `fromisoformat` refuses `:60`. Permitting it in
+the pattern would manufacture a third cross-language split rather than close
+one, and the server mints these timestamps and never emits `:60`. Ruled by
+team-lead and listed for chris as an open question carrying this default — if it
+is ever reversed, the fixture moves to `reject_by_client` and Python needs a
+`:60`-aware parse.
+
+**A regex cannot know February has 28 days.** `2026-02-30` satisfies the
+pattern; both clients refuse it at parse. That is a genuine client-enforced
+rule and it has a `reject_by_client` fixture stating so — the alternative is a
+gap that reads as an oversight rather than as a boundary.
+
 ### The manifest is the single inventory
 
 One `manifest.json` per surface, read by every runner. A runner that enumerates

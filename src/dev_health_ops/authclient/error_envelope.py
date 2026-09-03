@@ -101,12 +101,12 @@ def parse_bytes(
 ) -> ErrorEnvelope:
     """Parse an ``error.v1`` document from the RAW response body.
 
-    **Prefer this over :func:`parse` wherever the bytes are available.** It is
+    **Prefer this over :func:`parse_decoded` wherever the bytes are available.** It is
     the only entry point that can refuse duplicate members, because that check
     is impossible once the document has been decoded -- the evidence is
     destroyed by the decode itself.
 
-    :func:`parse` remains for callers holding an already-decoded object, and it
+    :func:`parse_decoded` remains for callers holding an already-decoded object, and it
     is documented there that such a caller has already lost this protection.
     That is a real boundary rather than an oversight: a function handed a
     ``dict`` cannot know what the bytes behind it said.
@@ -115,7 +115,7 @@ def parse_bytes(
         document = json.loads(raw, object_pairs_hook=_refuse_duplicate_members)
     except json.JSONDecodeError as exc:
         raise ContractError(f"{SURFACE}: document is not valid JSON: {exc}") from exc
-    return parse(document, http_status, now=now)
+    return parse_decoded(document, http_status, now=now)
 
 
 def _require_wire_int(document: Any, field: str) -> int | None:
@@ -200,7 +200,7 @@ class ErrorEnvelope:
         return self.status in TRANSIENT_STATUSES
 
 
-def parse(
+def parse_decoded(
     document: Any,
     http_status: int,
     *,
@@ -215,6 +215,12 @@ def parse(
 
     *now* is injectable so the skew check is testable without sleeping or
     mocking the clock.
+
+    Named ``parse_decoded``, not ``parse``, on purpose. The short primary-
+    sounding name belonged to the WEAKER function, and a caller reaching into
+    this module -- the one person the package's ``__all__`` does not stop --
+    reaches for whatever looks like the default. The caveat now lives in the
+    identifier, where it survives a reader who skips docstrings. (lane-auth-wave1)
 
     **This entry point CANNOT refuse duplicate object members**, because it is
     handed an already-decoded object and the decode is what discarded the

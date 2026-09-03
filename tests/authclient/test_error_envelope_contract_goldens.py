@@ -27,8 +27,8 @@ from dev_health_ops.authclient.error_envelope import (
     MAX_CLOCK_SKEW,
     SURFACE,
     TRANSIENT_STATUSES,
-    parse,
     parse_bytes,
+    parse_decoded,
 )
 
 
@@ -133,7 +133,7 @@ def test_client_enforced_fixtures_validate_but_are_refused(
     validate(SURFACE, document)  # must NOT raise
     # parse_bytes, not parse: one fixture carries a DUPLICATE member, which is
     # invisible to any caller handed an already-decoded object -- the decode is
-    # what discards it. Using parse() here would pass that fixture for the wrong
+    # what discards it. Using parse_decoded() here would pass that fixture for the
     # reason, or fail to exercise it at all.
     with pytest.raises(ContractError):
         parse_bytes(raw, entry["http_status"], now=NOW)
@@ -166,7 +166,7 @@ def test_a_matching_status_is_accepted() -> None:
     Without this, a client that refused EVERY envelope would pass all three
     reject_by_client cases.
     """
-    envelope = parse(_load("valid-403-grant-absent.json"), 403, now=NOW)
+    envelope = parse_decoded(_load("valid-403-grant-absent.json"), 403, now=NOW)
     assert envelope.status == 403
     assert envelope.reason_code == "grant_absent"
     assert envelope.retry_after_seconds is None
@@ -174,7 +174,7 @@ def test_a_matching_status_is_accepted() -> None:
 
 
 def test_a_transient_envelope_reports_itself_transient() -> None:
-    envelope = parse(_load("valid-429-with-retry.json"), 429, now=NOW)
+    envelope = parse_decoded(_load("valid-429-with-retry.json"), 429, now=NOW)
     assert envelope.is_transient
     assert envelope.retry_after_seconds == 30
 
@@ -189,11 +189,11 @@ def test_clock_skew_is_tolerated_up_to_the_bound_and_refused_past_it() -> None:
     stamped = datetime.fromisoformat(document["occurred_at"].replace("Z", "+00:00"))
 
     at_bound = stamped - MAX_CLOCK_SKEW
-    parse(document, 403, now=at_bound)  # exactly at the bound: accepted
+    parse_decoded(document, 403, now=at_bound)  # exactly at the bound: accepted
 
     past_bound = at_bound - timedelta(seconds=1)
     with pytest.raises(ContractError, match="ahead of"):
-        parse(document, 403, now=past_bound)
+        parse_decoded(document, 403, now=past_bound)
 
 
 def test_a_past_timestamp_is_never_refused() -> None:
@@ -205,14 +205,14 @@ def test_a_past_timestamp_is_never_refused() -> None:
     """
     document = _load("valid-403-grant-absent.json")
     much_later = NOW + timedelta(days=365)
-    parse(document, 403, now=much_later)
+    parse_decoded(document, 403, now=much_later)
 
 
-def test_parse_cannot_see_a_duplicate_member_and_parse_bytes_can() -> None:
+def test_parse_decoded_cannot_see_a_duplicate_member_and_parse_bytes_can() -> None:
     """The boundary between the two entry points, asserted rather than assumed.
 
     This is the one place the client's protection depends on WHICH function the
-    caller reached for, so the difference is pinned. If ``parse`` ever grew the
+    caller reached for, so the difference is pinned. If ``parse_decoded`` ever grew the
     ability to detect duplicates this test would fail, which is the correct
     signal: it would mean the decode boundary had moved.
     """
@@ -224,7 +224,7 @@ def test_parse_cannot_see_a_duplicate_member_and_parse_bytes_can() -> None:
     # Handed an already-decoded object, the duplicate is simply gone.
     collapsed = json.loads(raw)
     assert collapsed["reason_code"] == "grant_absent"
-    parse(collapsed, 403, now=NOW)  # accepts -- the evidence was destroyed
+    parse_decoded(collapsed, 403, now=NOW)  # accepts -- the evidence was destroyed
 
     # Handed the bytes, it is refused.
     with pytest.raises(ContractError, match="duplicate object member"):

@@ -167,19 +167,41 @@ jobs:
         # shell" (fail-closed by that scanner's own design -- an image it
         # can't determine is never assumed safe). Keeping each docker run a
         # complete, self-contained statement avoids tripping it, rather than
-        # working around a scanner that is behaving as intended.
+        # working around a scanner that is behaving as intended. The probe
+        # source is written to a plain file BEFORE either docker run (a
+        # heredoc on the host side, not inside a container invocation), so
+        # there's no `docker run`-internal sequencing operator to trip on
+        # either.
+        #
+        # Codex round 3 (b854c646, P3): the previous version only PRINTED
+        # `command -v gcc` wrapped in `echo` (which exits 0 even when gcc is
+        # missing -- `$(...)` substitution's exit code is discarded once
+        # it's inside the echo string) and PRINTED `go env CGO_ENABLED CC`
+        # (config, not an actual compile). A broken or absent compiler could
+        # pass this check silently. Both docker runs below now ASSERT
+        # instead of report: `command -v gcc` with no echo wrapper fails the
+        # step outright if gcc is missing, and the second run performs a
+        # REAL cgo compile (not a config dump) with CGO_ENABLED forced on,
+        # using the actual go binary this job's own setup-go step installed.
         run: |
           set -euo pipefail
+          cat > /tmp/cgo_probe.go <<'EOF'
+          package main
+          // #include <stdlib.h>
+          import "C"
+          func main() { C.malloc(1) }
+          EOF
+          docker run --rm --platform linux/arm64 \
+            ghcr.io/full-chaos/arc-runner:check \
+            sh -c 'command -v gcc'
           docker run --rm --platform linux/arm64 \
             -v "$(go env GOROOT)":/usr/local/go:ro \
+            -v /tmp/cgo_probe.go:/tmp/cgo_probe.go:ro \
             -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            -e CGO_ENABLED=1 \
+            -e HOME=/tmp \
             ghcr.io/full-chaos/arc-runner:check \
-            sh -c 'echo "gcc: $(command -v gcc)"'
-          docker run --rm --platform linux/arm64 \
-            -v "$(go env GOROOT)":/usr/local/go:ro \
-            -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            ghcr.io/full-chaos/arc-runner:check \
-            sh -c 'go env CGO_ENABLED CC'
+            go run /tmp/cgo_probe.go
 
       - name: Determine whether this build is main's current head
         if: steps.publish.outputs.should_publish == 'true'

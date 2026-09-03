@@ -105,6 +105,46 @@
 #      NOTE threshold) AND the residue dir holds files beyond the prompt/
 #      context inputs the wrapper itself copies in.
 #
+# v4.8.2 (2026-09-03) fixes unbounded disk accumulation (chris: "100s of gbs
+# is crazy to leave around" -- ~41G of leftover cache/tmp dirs found on this
+# Mac and on bigboy, none ever deleted). Two changes:
+#
+#   1. every cache/tmp dir this script creates is now named
+#      codex-review-<kind>-<lane>-<roundid>[-...] (kind: gocache, modcache,
+#      gotmp, worktree; <lane> is the lane worktree's basename, the same
+#      stable key GOCACHE was already keyed on -- see the comment below --
+#      falling back to "unattributed" if that basename cannot be determined;
+#      <roundid> is $TS, this round's own timestamp). The verdict/out dir
+#      (OUTDIR, caller-controlled, normally inside the lane's own worktree,
+#      not under /tmp) is deliberately NOT part of this scheme and is never
+#      touched by cleanup or either reap subcommand below.
+#   2. cleanup() (trap EXIT, so this also runs on error and on SIGTERM) now
+#      removes the gocache/modcache/gotmp dirs THIS RUN created, by their
+#      exact variable -- never a glob -- unless CODEX_KEEP_CACHE=1. This
+#      flips the old default (GOCACHE kept warm forever, relying on lanes to
+#      clean it up at close-out, which is exactly what stopped happening);
+#      CODEX_KEEP_CACHE=1 is the opt-in for a caller that wants the old warm
+#      cache back and will police its own cleanup.
+#
+# Two subcommands do the reaping for dirs from before this version, or from
+# a round that got SIGKILLed past the trap:
+#
+#   --reap-mine LANE        remove every codex-review-*-LANE-* dir under
+#                            $TMPDIR and /tmp with no open file (lsof/fuser),
+#                            skipping and reporting anything busy.
+#   --reap-stale HOURS [--dry-run]
+#                            remove UNATTRIBUTED leftovers older than HOURS
+#                            (mtime), with no open file: codex-go-cache-*,
+#                            codex-go-modcache-*, pysum_gocache_* (pre-4.8.2
+#                            names) and codex-review-*-unattributed-*.
+#                            --dry-run prints what would be removed instead.
+#
+# Neither subcommand ever touches `go env GOCACHE` (the user's shared
+# default build cache) or any path that does not match one of these exact
+# prefixes -- lane-4818 already ran `go clean -cache` against the shared
+# cache mid-flight on 09-02 and invalidated other lanes' in-progress work;
+# these prefixes exist so a reap can never repeat that by accident.
+#
 # Usage: scripts/codex-review.sh [options]   (run from the lane worktree,
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
@@ -120,11 +160,166 @@
 # Exit: 0 = codex finished AND verdict file exists AND lane HEAD unmoved.
 #       Non-zero otherwise, with the reason on stderr. The verdict file path
 #       is printed as the last stdout line: VERDICT=<path>
+#
+# codex-review.sh --reap-mine LANE | --reap-stale HOURS [--dry-run]
+#   Standalone maintenance subcommands -- see v4.8.2 note above. Exit 0 on
+#   completion (busy/skipped dirs are reported, not errors); non-zero only
+#   on a usage error (missing argument).
 
 set -euo pipefail
 
 warn() { printf 'codex-review: %s\n' "$*" >&2; }
 die()  { warn "$*"; exit 1; }
+
+# ---------------------------------------------------------------------------
+# v4.8.2 maintenance subcommands (--reap-mine / --reap-stale). Dispatched
+# before the round-running getopts parse below, since these take a GNU-style
+# long flag as $1 and never run a round.
+# ---------------------------------------------------------------------------
+
+# True (0) if anything under $1 has an open file handle; false (1) if the
+# check ran clean and found nothing, or no checking tool exists at all --
+# absence of lsof/fuser must not silently treat everything as busy forever,
+# but IS reported once so a caller relying on the safety net notices.
+#
+# lsof's OWN EXIT STATUS is not that signal: measured on this host's lsof,
+# `lsof +D busydir` prints the header plus every open file under it AND
+# still exits 1 -- the same exit status as the genuinely-empty case, which
+# prints nothing. Trusting the exit code here is the exact
+# `pgrep -fc ... || echo 0` shape this file already warns about elsewhere: a
+# reliably-wrong measurement that always takes the "not busy" branch. The
+# real signal is OUTPUT: lsof prints nothing at all when it finds nothing,
+# and at least its header line the moment it finds one open file.
+reap_dir_busy() {
+  local d="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    [ -n "$(lsof +D "$d" 2>/dev/null)" ]
+    return $?
+  fi
+  # fuser's exit status IS the documented, reliable signal (0 = accessed by
+  # some process, non-zero = not) -- unlike lsof above, this one holds.
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -s "$d" >/dev/null 2>&1
+    return $?
+  fi
+  warn "reap: no lsof or fuser on this host -- cannot check $d for open files, treating as NOT busy"
+  return 1
+}
+
+# The bases to scan. $TMPDIR and /tmp are frequently different paths (macOS:
+# $TMPDIR is /var/folders/**/T, /tmp is a separate symlink target) and BOTH
+# accumulate this wrapper's dirs depending on which mktemp calls used which
+# base, so both are always scanned. Deduplicated by resolved physical path so
+# a host where they coincide (most Linux hosts: $TMPDIR unset, defaults to
+# /tmp) is not scanned twice.
+reap_bases() {
+  local b1="/tmp" b2="${TMPDIR:-}"
+  printf '%s\n' "$b1"
+  if [ -n "$b2" ] && [ -d "$b2" ]; then
+    local r1 r2
+    r1=$(cd "$b1" 2>/dev/null && pwd -P || printf '%s' "$b1")
+    r2=$(cd "$b2" 2>/dev/null && pwd -P || printf '%s' "$b2")
+    [ "$r1" != "$r2" ] && printf '%s\n' "$b2"
+  fi
+}
+
+# Never let a reap pattern accidentally match the user's shared Go build
+# cache, wherever it is configured -- belt-and-braces alongside the fact
+# that every glob here is anchored to a codex-review/pysum/codex-go prefix,
+# which the shared cache's own path (~/Library/Caches/go-build,
+# ~/.cache/go-build, or whatever `go env GOCACHE` is set to) will not match.
+reap_shared_gocache() {
+  command -v go >/dev/null 2>&1 && go env GOCACHE 2>/dev/null || true
+}
+
+# Shared body for both subcommands: given a list of candidate dirs (one per
+# line on stdin, age already filtered by the caller's find) and whether this
+# is a dry run, remove the ones that pass, report the ones skipped as busy,
+# and never touch $shared or anything failing the exact-path check.
+reap_dirs() {
+  local dry_run="$1" shared kept skipped_busy d
+  shared=$(reap_shared_gocache)
+  kept=0 skipped_busy=0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ -d "$d" ] || continue
+    if [ -n "$shared" ]; then
+      local d_real shared_real
+      d_real=$(cd "$d" 2>/dev/null && pwd -P || printf '%s' "$d")
+      shared_real=$(cd "$shared" 2>/dev/null && pwd -P || printf '%s' "$shared")
+      if [ "$d_real" = "$shared_real" ]; then
+        warn "reap: REFUSING to touch $d -- it is the shared \`go env GOCACHE\` path"
+        continue
+      fi
+    fi
+    if reap_dir_busy "$d"; then
+      warn "reap: skipping $d (busy -- open file handle found)"
+      skipped_busy=$((skipped_busy + 1))
+      continue
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+      warn "reap: would remove $d"
+    else
+      rm -rf "$d"
+      warn "reap: removed $d"
+    fi
+    kept=$((kept + 1))
+  done
+  warn "reap: $([ "$dry_run" -eq 1 ] && echo would-remove || echo removed)=$kept skipped-busy=$skipped_busy"
+}
+
+reap_mine() {
+  local lane="$1" base
+  [ -n "$lane" ] || die "--reap-mine requires a lane name"
+  {
+    for base in $(reap_bases); do
+      # Trailing slash is REQUIRED, not cosmetic: /tmp is a symlink to
+      # /private/tmp on macOS, and BSD find with -mindepth/-maxdepth given a
+      # symlinked root WITHOUT a trailing slash silently descends into
+      # NOTHING -- exit 0, zero output, no error. Measured on this host.
+      find "$base/" -maxdepth 1 -mindepth 1 -type d -name "codex-review-*-$lane-*" 2>/dev/null
+    done
+  } | sort -u | reap_dirs 0
+}
+
+# Age filtering uses find's own -mmin (minutes since last modification),
+# NOT a hand-rolled `stat`-based epoch comparison: BSD stat (macOS default)
+# and GNU stat (Linux, and macOS when coreutils is on PATH ahead of
+# /usr/bin -- measured on THIS host, where `stat -f %m` silently runs
+# GNU stat's unrelated "-f" filesystem-info mode instead of erroring) use
+# incompatible flags for the same value, and detecting which one you have
+# is a second portability problem on top of the first. `-mmin` is the same
+# flag with the same meaning in both find implementations.
+reap_stale() {
+  local hours="$1" dry_run="$2" base mins
+  [ -n "$hours" ] || die "--reap-stale requires an hours argument"
+  case "$hours" in ''|*[!0-9]*) die "--reap-stale hours must be a non-negative integer, got '$hours'" ;; esac
+  mins=$((hours * 60))
+  {
+    for base in $(reap_bases); do
+      # Trailing slash required -- see reap_mine's comment on the same trap.
+      find "$base/" -maxdepth 1 -mindepth 1 -type d -mmin "+$mins" \
+        \( -name 'codex-go-cache-*' -o -name 'codex-go-modcache-*' \
+           -o -name 'pysum_gocache_*' -o -name 'codex-review-*-unattributed-*' \) \
+        2>/dev/null
+    done
+  } | sort -u | reap_dirs "$dry_run"
+}
+
+case "${1:-}" in
+  --reap-mine)
+    [ $# -ge 2 ] || die "usage: codex-review.sh --reap-mine LANE"
+    reap_mine "$2"
+    exit 0
+    ;;
+  --reap-stale)
+    [ $# -ge 2 ] || die "usage: codex-review.sh --reap-stale HOURS [--dry-run]"
+    DRY=0
+    [ "${3:-}" = "--dry-run" ] && DRY=1
+    reap_stale "$2" "$DRY"
+    exit 0
+    ;;
+esac
 
 WT="$PWD" NAME="" MODEL="${CODEX_REVIEW_MODEL:-gpt-5.6-terra}" EFF="${CODEX_REVIEW_EFFORT:-xhigh}"
 PROMPT="" TIP="" OUTDIR="" KEEP=0 ALLOW_UNPUSHED=0
@@ -171,8 +366,11 @@ L="$OUTDIR/$NAME-$TS.log"
 # $TMPDIR per round. The first version of this did exactly that while carrying a
 # comment claiming it was stable per lane; CF caught it on review.
 #
-# A lane's rounds therefore share one cache and stay warm. Lanes remove their own
-# cache dir at close-out (see SKILL.md).
+# v4.8.2: this cache is no longer left warm by default -- see the changelog
+# note near the top of the file. cleanup() below now removes it (by exact
+# variable, never a glob) unless CODEX_KEEP_CACHE=1, which is the opt-in for
+# a caller that wants the old warm-across-rounds behaviour back and will
+# police its own cleanup (e.g. by pinning CODEX_REVIEW_GOCACHE itself).
 # /tmp, NOT $TMPDIR. lane-4441 measured this: under the read-only sandbox,
 # $TMPDIR on macOS is /var/folders/**/T, which is NOT writable, while /tmp IS.
 # v4.3 pointed the reviewer's Go cache at the denied path, so `go test` failed
@@ -182,8 +380,24 @@ L="$OUTDIR/$NAME-$TS.log"
 # THEMSELVES -- they worked around the harness, not with it. A reviewer that
 # did not think to relocate would have reported "cannot execute here", which is
 # the pre-v4.3 state the execution work existed to remove.
-RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$(basename "$WT")}"
+#
+# LANE is the stable key GOCACHE was already keyed on (this worktree's own
+# basename, NOT $NAME -- see the historical comment this replaced: $NAME is
+# the ROUND name and keying on it would give a cold cache every round).
+# Falls back to "unattributed" only if that basename cannot be determined, so
+# the dir stays reapable by --reap-stale even then.
+LANE=$(basename "$WT" 2>/dev/null || true)
+case "$LANE" in ''|'.'|'/') LANE=unattributed ;; esac
+RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE-$TS}"
 mkdir -p "$RGOCACHE" || die "cannot create review GOCACHE $RGOCACHE"
+# GOMODCACHE, bounded for the same reason as GOCACHE: an unset GOMODCACHE
+# defaults to $HOME/go/pkg/mod, which read-only denies exactly like the
+# denied-$TMPDIR case above, and workspace-write should not be trusted to
+# widen access to the user's real mod cache just because it happens to be
+# writable there. New in v4.8.2 -- v4.8.1 and earlier left GOMODCACHE
+# unbounded.
+RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE-$TS}"
+mkdir -p "$RGOMODCACHE" || die "cannot create review GOMODCACHE $RGOMODCACHE"
 
 # Resolve the bounds ONCE, into variables, so the warn line below reports
 # exactly what is applied. The first version re-evaluated the defaults inside
@@ -211,13 +425,18 @@ case "$RSANDBOX" in
 esac
 
 START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
-RW=$(mktemp -d "${TMPDIR:-/tmp}/codex-rw-$NAME-XXXXXX")
+# v4.8.2: renamed codex-rw-$NAME-* -> codex-review-worktree-$LANE-$TS-* (see
+# changelog note near the top) so every wrapper-owned dir shares one
+# reapable naming scheme. Keyed on LANE+TS rather than $NAME: two concurrent
+# rounds against the same lane with the same explicit -n NAME must still get
+# distinct, individually reapable dirs.
+RW=$(mktemp -d "${TMPDIR:-/tmp}/codex-review-worktree-$LANE-$TS-XXXXXX")
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
 # /tmp for the same reason as RGOCACHE above.
-RGOTMPDIR=$(mktemp -d "/tmp/codex-gotmp-$NAME-XXXXXX")
+RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE-$TS-XXXXXX")
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -231,7 +450,7 @@ RGOTMPDIR=$(mktemp -d "/tmp/codex-gotmp-$NAME-XXXXXX")
 # sort, a python NamedTemporaryFile -- fails the same way, and the reviewer
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
-RTMPDIR=$(mktemp -d "/tmp/codex-tmp-$NAME-XXXXXX")
+RTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE-$TS-shell-XXXXXX")
 rmdir "$RW"   # git worktree add wants to create it
 # Everything the reviewer left in the worktree, preserved BEFORE the worktree is
 # removed. CF lost a 382k-token round because the reviewer wrote its findings to
@@ -381,10 +600,28 @@ cleanup() {
   if [ -n "${RGOTMPDIR:-}" ] && [ -d "$RGOTMPDIR" ]; then
     rm -rf "$RGOTMPDIR"
   fi
-  # RTMPDIR too, or every round leaves a /tmp/codex-tmp-* behind. Same if-block
-  # shape as its neighbours, for the reason documented above them.
+  # RTMPDIR too, or every round leaves a /tmp/codex-review-gotmp-*-shell-*
+  # behind. Same if-block shape as its neighbours, for the reason documented
+  # above them.
   if [ -n "${RTMPDIR:-}" ] && [ -d "$RTMPDIR" ]; then
     rm -rf "$RTMPDIR"
+  fi
+  # v4.8.2: GOCACHE/GOMODCACHE, by exact variable and never a glob (see the
+  # top-of-file changelog note). Straight rm -rf, not `go clean -cache`
+  # scoped to the dir first: for a large cache `go clean -cache` walks and
+  # re-verifies every entry, which is not cheap, while rm -rf on a path this
+  # script itself created and owns exclusively is. CODEX_KEEP_CACHE=1 is the
+  # explicit opt-out for a caller that wants the old warm-across-rounds
+  # cache back (see RGOCACHE above) and will police its own cleanup.
+  if [ "${CODEX_KEEP_CACHE:-0}" != 1 ]; then
+    if [ -n "${RGOCACHE:-}" ] && [ -d "$RGOCACHE" ]; then
+      rm -rf "$RGOCACHE"
+    fi
+    if [ -n "${RGOMODCACHE:-}" ] && [ -d "$RGOMODCACHE" ]; then
+      rm -rf "$RGOMODCACHE"
+    fi
+  else
+    warn "CODEX_KEEP_CACHE=1 -- keeping $RGOCACHE and $RGOMODCACHE"
   fi
   if [ "$KEEP" -eq 1 ]; then warn "keeping review worktree $RW (-k)"; return; fi
   git -C "$WT" worktree remove --force "$RW" 2>/dev/null \
@@ -436,7 +673,7 @@ for aux in .codex-review-context.md LEDGER.md; do
 done
 
 warn "round $NAME-$TS: model=$MODEL effort=$EFF tip=$TIP review-worktree=$RW"
-warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOTMPDIR=$RGOTMPDIR TMPDIR=$RTMPDIR sandbox=$RSANDBOX"
+warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE GOTMPDIR=$RGOTMPDIR TMPDIR=$RTMPDIR sandbox=$RSANDBOX"
 # NO PREDICTION ABOUT WHAT THE SANDBOX CAN DO.
 #
 # An earlier draft printed "sandbox=read-only: NOTHING is writable, so
@@ -506,7 +743,7 @@ if [ "$RSANDBOX" = "workspace-write" ]; then
   # The cache is deliberately NOT moved inside the per-round worktree: that
   # would make it cold every round, which is exactly what the GOCACHE comment
   # above warns against.
-  SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOTMPDIR\"]")
+  SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOMODCACHE\",\"$RGOTMPDIR\"]")
 fi
 # ROUND PROVENANCE. Written BEFORE codex runs, as the first line of the log.
 #
@@ -534,8 +771,8 @@ printf 'round-provenance: %s\n' "$PROV" > "$L"
 # stderr, which nobody keeps. The log recorded the failures and not the
 # configuration that caused them, so the two could not be correlated after the
 # fact without the operator's terminal scrollback.
-printf 'round-bounds: GOFLAGS=%s GOMAXPROCS=%s GOCACHE=%s GOTMPDIR=%s TMPDIR=%s sandbox=%s\n' \
-  "$RGOFLAGS" "$RGOMAXPROCS" "$RGOCACHE" "$RGOTMPDIR" "$RTMPDIR" "$RSANDBOX" >> "$L"
+printf 'round-bounds: GOFLAGS=%s GOMAXPROCS=%s GOCACHE=%s GOMODCACHE=%s GOTMPDIR=%s TMPDIR=%s sandbox=%s\n' \
+  "$RGOFLAGS" "$RGOMAXPROCS" "$RGOCACHE" "$RGOMODCACHE" "$RGOTMPDIR" "$RTMPDIR" "$RSANDBOX" >> "$L"
 warn "round-provenance: $PROV"
 
 # NOTE THE APPEND. This redirect was `> "$L"`; it MUST stay `>>` now, or codex
@@ -546,6 +783,7 @@ warn "round-provenance: $PROV"
     GOFLAGS="$RGOFLAGS" \
     GOMAXPROCS="$RGOMAXPROCS" \
     GOCACHE="$RGOCACHE" \
+    GOMODCACHE="$RGOMODCACHE" \
     GOTMPDIR="$RGOTMPDIR" \
     TMPDIR="$RTMPDIR" \
     codex exec -m "$MODEL" -c "model_reasoning_effort=\"$EFF\"" \

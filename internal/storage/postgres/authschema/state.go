@@ -34,19 +34,53 @@ func currentUser(ctx context.Context, pool *pgxpool.Pool) (string, error) {
 // is what keeps DDL out of the runtime role's reach without needing a REVOKE.
 func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Options) error {
 	schema := quoteIdentifier(options.Schema)
-	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli -- PostgreSQL cannot bind an
-	// IDENTIFIER, so a schema/table name must reach the statement as text. ValidateIdentifier
-	// (allowlist ^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection) runs at apply.go:165,
-	// before ensureSchemaAndVersionTable at apply.go:191; quoteIdentifier is belt-and-braces.
-	// Evidence: TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by team-lead.
+	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
+	// statement as text. ValidateIdentifier (allowlist ^[a-z][a-z0-9_]{0,62}$ plus
+	// reserved-word rejection) runs at apply.go:165, before this call on the Apply
+	// path; quoteIdentifier is belt-and-braces. Evidence:
+	// TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by
+	// team-lead (chris's option A).
+	//
+	// TWO things about the token below are load-bearing, and BOTH were wrong on a
+	// first attempt that still passed every local check:
+	//  1. It must sit on the line IMMEDIATELY above the statement. Semgrep honours
+	//     nosemgrep only on the finding's own line or the one directly preceding
+	//     it; four lines up, inside this prose, it is inert.
+	//  2. The id must be the RULE id, not the config path. The rule is
+	//     `...sqli.pgx-sqli.pgx-sqli` -- the last component is DOUBLED. Written as
+	//     the config path `...sqli.pgx-sqli` it matches nothing and suppresses
+	//     nothing, silently.
+	// Neither error is visible to go test, go vet or gofmt, because none of them
+	// run Semgrep. Verify a suppression by the SCANNER reporting zero, and confirm
+	// the zero is real by removing one annotation and watching exactly one finding
+	// return -- otherwise a rule that stopped matching reads identically to a
+	// suppression that works.
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
 	if _, err := conn.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+schema); err != nil {
 		return fmt.Errorf("%w: creating schema", ErrMigrationFailed)
 	}
-	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli -- PostgreSQL cannot bind an
-	// IDENTIFIER, so a schema/table name must reach the statement as text. ValidateIdentifier
-	// (allowlist ^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection) runs at apply.go:165,
-	// before ensureSchemaAndVersionTable at apply.go:191; quoteIdentifier is belt-and-braces.
-	// Evidence: TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by team-lead.
+	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
+	// statement as text. ValidateIdentifier (allowlist ^[a-z][a-z0-9_]{0,62}$ plus
+	// reserved-word rejection) runs at apply.go:165, before this call on the Apply
+	// path; quoteIdentifier is belt-and-braces. Evidence:
+	// TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by
+	// team-lead (chris's option A).
+	//
+	// TWO things about the token below are load-bearing, and BOTH were wrong on a
+	// first attempt that still passed every local check:
+	//  1. It must sit on the line IMMEDIATELY above the statement. Semgrep honours
+	//     nosemgrep only on the finding's own line or the one directly preceding
+	//     it; four lines up, inside this prose, it is inert.
+	//  2. The id must be the RULE id, not the config path. The rule is
+	//     `...sqli.pgx-sqli.pgx-sqli` -- the last component is DOUBLED. Written as
+	//     the config path `...sqli.pgx-sqli` it matches nothing and suppresses
+	//     nothing, silently.
+	// Neither error is visible to go test, go vet or gofmt, because none of them
+	// run Semgrep. Verify a suppression by the SCANNER reporting zero, and confirm
+	// the zero is real by removing one annotation and watching exactly one finding
+	// return -- otherwise a rule that stopped matching reads identically to a
+	// suppression that works.
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s.%s (
 			version    integer      PRIMARY KEY,
@@ -61,11 +95,28 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Op
 
 // appliedVersions reads the lineage positions this database already holds.
 func appliedVersions(ctx context.Context, conn *pgx.Conn, schema string) (map[int]struct{}, error) {
-	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli -- PostgreSQL cannot bind an
-	// IDENTIFIER, so a schema/table name must reach the statement as text. ValidateIdentifier
-	// (allowlist ^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection) runs at apply.go:165,
-	// before ensureSchemaAndVersionTable at apply.go:191; quoteIdentifier is belt-and-braces.
-	// Evidence: TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by team-lead.
+	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
+	// statement as text. ValidateIdentifier (allowlist ^[a-z][a-z0-9_]{0,62}$ plus
+	// reserved-word rejection) runs at apply.go:165, before this call on the Apply
+	// path; quoteIdentifier is belt-and-braces. Evidence:
+	// TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by
+	// team-lead (chris's option A).
+	//
+	// TWO things about the token below are load-bearing, and BOTH were wrong on a
+	// first attempt that still passed every local check:
+	//  1. It must sit on the line IMMEDIATELY above the statement. Semgrep honours
+	//     nosemgrep only on the finding's own line or the one directly preceding
+	//     it; four lines up, inside this prose, it is inert.
+	//  2. The id must be the RULE id, not the config path. The rule is
+	//     `...sqli.pgx-sqli.pgx-sqli` -- the last component is DOUBLED. Written as
+	//     the config path `...sqli.pgx-sqli` it matches nothing and suppresses
+	//     nothing, silently.
+	// Neither error is visible to go test, go vet or gofmt, because none of them
+	// run Semgrep. Verify a suppression by the SCANNER reporting zero, and confirm
+	// the zero is real by removing one annotation and watching exactly one finding
+	// return -- otherwise a rule that stopped matching reads identically to a
+	// suppression that works.
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
 	rows, err := conn.Query(ctx, fmt.Sprintf(
 		`SELECT version FROM %s.%s`, quoteIdentifier(schema), quoteIdentifier(versionTable),
 	))

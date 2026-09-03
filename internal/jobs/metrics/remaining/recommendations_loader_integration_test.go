@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os/exec"
 	"path/filepath"
@@ -67,10 +68,24 @@ const (
 	// One point is not a slope. Pinning absent-at-zero AND present-at-one turns
 	// "absent" into a measurement rather than a default.
 	loaderOneHotspotOrgID = "org-loader-one-hotspot"
-	loaderTeamA           = "team-alpha"
-	loaderTeamB           = "team-beta"
-	loaderWindowStart     = "2026-08-01"
-	loaderWindowEnd       = "2026-09-01"
+	// An org whose repo_metrics_daily rows OVERFLOW to +Inf under the loader's
+	// own avg().
+	//
+	// SafeFloat drops NaN and PASSES ±Inf through, and the comment on it calls
+	// that asymmetry load-bearing -- but no fixture row ever produced an Inf on
+	// that path, so the claim was STATED and never ASSERTED. lane-4441 found it
+	// by mutating SafeFloat to drop Inf as well: it survived, with controls
+	// proving SafeFloat was reached and NaN was exercised.
+	//
+	// Two rows at 1.7976931348623157e308 sum to +Inf before avg() divides, so
+	// the infinity comes out of the loader's ARITHMETIC rather than being
+	// stored directly -- which is how it would actually arise in production.
+	// Its own org, so the primary fixture's assertions are undisturbed.
+	loaderInfOrgID    = "org-loader-infinite"
+	loaderTeamA       = "team-alpha"
+	loaderTeamB       = "team-beta"
+	loaderWindowStart = "2026-08-01"
+	loaderWindowEnd   = "2026-09-01"
 )
 
 type pythonSnapshot struct {
@@ -513,6 +528,24 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 		"one-hotspot/only.py", 0.5, mustTimestamp(t, "2026-08-26 00:00:00"),
 		loaderOneHotspotOrgID)
 
+	// See loaderInfOrgID: two max-float rows whose SUM overflows, so avg()
+	// yields +Inf and SafeFloat must pass it through.
+	for _, seed := range []struct {
+		repo, day, computedAt string
+	}{
+		{"55555555-5555-5555-5555-555555555555", "2026-08-03", "2026-08-04 00:00:00"},
+		{"66666666-6666-6666-6666-666666666666", "2026-08-04", "2026-08-05 00:00:00"},
+	} {
+		exec(`INSERT INTO repo_metrics_daily
+			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
+			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
+			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
+			 change_failure_rate, computed_at, org_id)
+			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), math.MaxFloat64, math.MaxFloat64,
+			mustTimestamp(t, seed.computedAt), loaderInfOrgID)
+	}
+
 	// repo_metrics_daily: latency and rework. NO team column -- this is the
 	// CHAOS-4897 surface. Two repos so the org-wide avg is over both.
 	for _, seed := range []struct {
@@ -686,6 +719,24 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 
 	// ONE side. Without this the zero side cannot distinguish "correctly zero"
 	// from "trivially nothing".
+	// ±Inf must SURVIVE SafeFloat. NaN is dropped, Inf is kept, and that
+	// asymmetry had no fixture row behind it until now.
+	infinite := loadForOrg(t, ctx, conn, loaderInfOrgID)
+	if !infinite.ReviewLatencyP75HoursKnown {
+		t.Errorf("inf org: review_latency_p75_hours is ABSENT; avg() over two " +
+			"max-float rows overflows to +Inf, and SafeFloat must PASS Inf through " +
+			"(it drops only NaN). If this fails, SafeFloat is discarding infinities " +
+			"-- which diverges from Python's _safe_float, and the asymmetry this " +
+			"fixture exists to pin has been lost.")
+	} else if !math.IsInf(infinite.ReviewLatencyP75Hours, 1) {
+		t.Errorf("inf org: review_latency_p75_hours is %v, want +Inf -- the fixture "+
+			"no longer overflows, so the Inf path is unexercised and a SafeFloat "+
+			"mutation dropping Inf would survive again",
+			infinite.ReviewLatencyP75Hours)
+	}
+	compareSnapshotAgainstPython(t, "inf-org", infinite,
+		runPythonLoader(t, dsn, loaderTeamA, loaderInfOrgID))
+
 	one := loadForOrg(t, ctx, conn, loaderOneHotspotOrgID)
 	if !one.HotspotChurnOverlapKnown {
 		t.Errorf("one-hotspot org: hotspot_churn_overlap is ABSENT; an org with " +

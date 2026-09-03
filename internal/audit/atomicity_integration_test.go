@@ -181,9 +181,11 @@ func newAuditFixture(t *testing.T, ctx context.Context) *auditFixture {
 // `INSERT ...; COMMIT;` is one round trip carrying two commands, so the scan
 // sees INSERT, passes it, and the COMMIT runs anyway -- the state commits and
 // the helper never learns. auth-contracts put it on the residue list and
-// team-lead ruled the answer: forward pgx.QueryExecModeExec on every call, so
-// the server refuses a multi-statement string rather than the lexer having to
-// see through it.
+// the first answer was forwarding pgx.QueryExecModeExec, and it was measured as
+// insufficient: the server refuses a multi-statement string only when the query
+// carries bind arguments, and this one has none. The LEXER is what refuses this
+// document; the exec mode is a second line that does not engage here. The test
+// name says the property, not the mechanism.
 //
 // This asserts the refusal AND that nothing was written, because a refusal that
 // still commits the first statement would be worse than no check.

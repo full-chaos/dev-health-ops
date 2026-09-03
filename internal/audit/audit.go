@@ -1,6 +1,24 @@
 // Package audit commits a security-state mutation, its outbox event and its
 // audit row in ONE PostgreSQL transaction.
 //
+// WHAT THIS GUARANTEES, stated at the strength three review rounds measured
+// rather than the strength it is tempting to claim:
+//
+//	It makes breaking atomicity BY ACCIDENT impossible. It DETECTS several
+//	deliberate breaks. It CANNOT prevent a caller who reaches around it, and
+//	no in-process API can.
+//
+// The last clause is not modesty. A caller in this process has ambient
+// authority: the pool passed to Commit is in scope for any closure they write,
+// and a second connection from it commits state the helper's transaction knows
+// nothing about. Three rounds each closed a mechanism and found the next one --
+// an interface type-asserted back to Commit, a status check that detected a
+// self-commit it could not undo, an exec mode unreachable for parameterless
+// queries, a raw connection handed out by a return value. Each was correct
+// about the object it named and wrong about the property claimed. The pattern
+// stopped being evidence about the implementations and became evidence about
+// the approach.
+//
 // WHY THE THREE ARE INSEPARABLE. G-53 requires a state change and its outbox
 // event to commit together, so an event can never describe a mutation that did
 // not commit and a committed mutation can never be missing its event. The
@@ -102,9 +120,14 @@ type OutboxEvent struct {
 // fix for it.
 //
 // A concrete struct has no dynamic value to recover. `tx.(anything)` does not
-// compile, because a type assertion requires an interface operand. The
-// transaction is unexported and reachable only through the three delegating
-// methods below.
+// compile, because a type assertion requires an interface operand.
+//
+// It does NOT follow that the transaction is reachable only through these three
+// methods, and this comment claimed that until round 3 disproved it: Query
+// returned a pgx.Rows carrying a public Conn(), so the raw connection left
+// through a RETURN TYPE while the receiver looked sealed. Query now returns a
+// Rows of our own with no Conn at any depth. What remains reachable is
+// everything the caller already holds -- see the package doc.
 //
 // TRANSACTION CONTROL IS REFUSED BEFORE IT IS SENT. Exec must exist for a
 // mutation to write anything, so round 2 reached the server with
@@ -112,27 +135,36 @@ type OutboxEvent struct {
 // token is transaction control, so the state is never committed and
 // "all three or none" stays true rather than becoming a boundary to explain.
 //
-// TWO RESIDUES, both stated so neither is read as closed. Dynamic SQL the
-// lexer cannot see -- a statement assembled at runtime whose first token is
-// computed -- still reaches the server; Commit”'s TxStatus check DETECTS that
-// before reporting success, but the state such a mutation already committed is
-// durable and cannot be undone. Multi-statement strings are handled by the
-// protocol rather than the lexer: every forward carries QueryExecModeExec, so
-// the server refuses them.
+// THE RESIDUES, stated so none is read as closed.
 //
-// Retention past the callback remains possible and remains characterised
-// rather than prevented, by TestRetainedTxOpsIsUnusableAfterCommit.
+//   - Dynamic SQL the lexer cannot see -- a statement assembled at runtime
+//     whose first token is computed -- reaches the server. Commit's TxStatus
+//     check DETECTS a transaction ended that way before reporting success, but
+//     state such a mutation already committed is durable and cannot be undone.
+//   - Retention of the wrapper past the callback is possible and only
+//     characterised, by TestRetainedTxOpsIsUnusableAfterCommit.
+//   - Anything the caller already holds. The pool passed to Commit is in scope
+//     for any closure they write; a second connection from it commits state
+//     this transaction never sees, and TxStatus reads 'T' throughout. This is
+//     the one no narrowing can reach.
+//
+// Multi-statement strings are NOT in this list: refuseMultipleStatements
+// rejects them before the send. QueryExecModeExec is a second line that catches
+// the parameterised case at the server, and it was wrongly credited here as the
+// control until that claim was measured.
+
 type TxOps struct{ tx pgx.Tx }
 
 // EVERY forward carries pgx.QueryExecModeExec, and that is a second control
 // rather than a performance choice.
 //
-// A first-token scan sees the FIRST statement. Under the simple protocol
-// `INSERT ...; COMMIT;` is one round trip carrying two commands, so the scan
-// reads INSERT, passes it, and the COMMIT executes anyway. Forcing the extended
-// protocol makes the server refuse a multi-statement string outright -- "cannot
-// insert multiple commands into a prepared statement" -- so the lexer's blind
-// spot is closed by the wire protocol instead of by a smarter lexer.
+// It is a SECOND line, not the control, and this comment said otherwise until
+// the claim was measured. Forcing the extended protocol makes the server refuse
+// a multi-statement string -- but ONLY when the query carries bind arguments.
+// Measured: `SELECT 1; SELECT 2;` with no arguments is accepted, because pgx
+// takes a parameterless path that never builds a prepared statement, so the
+// mode is unreachable rather than ignored. The attack statement has no
+// parameters. refuseMultipleStatements is what actually refuses it.
 //
 // It goes first in args because pgx reads exec-mode options from the leading
 // arguments.
@@ -143,12 +175,52 @@ func (t TxOps) Exec(ctx context.Context, sql string, args ...any) (pgconn.Comman
 	return t.tx.Exec(ctx, sql, prependExecMode(args)...)
 }
 
-func (t TxOps) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+func (t TxOps) Query(ctx context.Context, sql string, args ...any) (Rows, error) {
 	if err := refuseTransactionControl(sql); err != nil {
-		return nil, err
+		return Rows{}, err
 	}
-	return t.tx.Query(ctx, sql, prependExecMode(args)...)
+	rows, err := t.tx.Query(ctx, sql, prependExecMode(args)...)
+	if err != nil {
+		return Rows{}, err
+	}
+	return Rows{rows}, nil
 }
+
+// Rows delegates pgx.Rows WITHOUT Conn().
+//
+// Round 3's fifth escape: pgx.Rows carries a public Conn() returning the raw
+// *pgx.Conn, so a callback could Query, take rows.Conn(), and Exec a COMMIT on
+// it -- past the first-token check, past the semicolon rule, and detected only
+// by the TxStatus backstop after the state was already durable.
+//
+// Hiding Conn on TxOps was never enough, because the capability left through a
+// RETURN TYPE rather than through the receiver. Explicit methods, no embedding:
+// embedding pgx.Rows would promote Conn() and reopen the hole silently the next
+// time pgx adds a method.
+type Rows struct{ rows pgx.Rows }
+
+// A zero Rows is what an errored Query returns. Its methods must not panic --
+// a caller that ignores the error and iterates gets an empty result and an
+// error from Err(), which is pgx's own convention.
+func (r Rows) valid() bool { return r.rows != nil }
+
+func (r Rows) Close() {
+	if r.valid() {
+		r.rows.Close()
+	}
+}
+func (r Rows) Err() error {
+	if !r.valid() {
+		return ErrMutationFailed
+	}
+	return r.rows.Err()
+}
+func (r Rows) CommandTag() pgconn.CommandTag                { return r.rows.CommandTag() }
+func (r Rows) FieldDescriptions() []pgconn.FieldDescription { return r.rows.FieldDescriptions() }
+func (r Rows) Next() bool                                   { return r.valid() && r.rows.Next() }
+func (r Rows) Scan(dest ...any) error                       { return r.rows.Scan(dest...) }
+func (r Rows) Values() ([]any, error)                       { return r.rows.Values() }
+func (r Rows) RawValues() [][]byte                          { return r.rows.RawValues() }
 
 func prependExecMode(args []any) []any {
 	return append([]any{pgx.QueryExecModeExec}, args...)

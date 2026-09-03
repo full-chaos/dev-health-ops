@@ -60,6 +60,12 @@ on:
       - 'ci/shellcheck_pinned.sh'
       - 'ci/check_shellcheck_pin.sh'
       - 'ci/fixtures/shellcheck_unclean_fixture.sh'
+      # go-quality.yml HOSTS those steps, and codex round 1 found it was not
+      # itself Go-relevant: `ci/go_relevance.py` returned relevant=false for it,
+      # so a commit editing ONLY that workflow -- including one that removes the
+      # pin's install or check step -- would green-skip the very enforcement it
+      # was editing. Verified before and after this line was added.
+      - '.github/workflows/go-quality.yml'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'
@@ -117,6 +123,12 @@ on:
       - 'ci/shellcheck_pinned.sh'
       - 'ci/check_shellcheck_pin.sh'
       - 'ci/fixtures/shellcheck_unclean_fixture.sh'
+      # go-quality.yml HOSTS those steps, and codex round 1 found it was not
+      # itself Go-relevant: `ci/go_relevance.py` returned relevant=false for it,
+      # so a commit editing ONLY that workflow -- including one that removes the
+      # pin's install or check step -- would green-skip the very enforcement it
+      # was editing. Verified before and after this line was added.
+      - '.github/workflows/go-quality.yml'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'

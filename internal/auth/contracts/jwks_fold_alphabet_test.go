@@ -196,6 +196,66 @@ func discriminatingFoldsOf(name string) []string {
 	return out
 }
 
+// THE EXPECTATION IS A LITERAL, AND THAT IS THE POINT.
+//
+// Round 4 found that every "independent" expectation still bottomed out in
+// foldCycle -- which the GENERATOR also calls. Executed: suppressing the fold
+// cycle for `k` alone removes U+212A from generation AND from every expectation
+// simultaneously, long-s survives so no set empties, and the whole suite stays
+// GREEN with an entire code-point class silently gone. Derivation made the
+// expectation agree with the code instead of constraining it.
+//
+// A literal cannot move with the code. These two are the fold alphabet for the
+// declared member names, and a human must edit them deliberately:
+var (
+	wantNonASCIIFoldCodePoints  = []rune{0x017F, 0x212A} // long s, Kelvin sign
+	wantDiscriminatingSpellings = []string{"keyſ", "uſe"}
+)
+
+// TestTheDerivedFoldAlphabetStillMatchesTheLiterals is the canary that keeps the
+// literals from going stale.
+//
+// A literal expectation is immune to a code change and blind to a WORLD change.
+// If a Unicode table update under a toolchain upgrade adds a third fold for one
+// of these letters -- exactly the event deriving the alphabet was meant to
+// absorb -- the literals above would silently under-assert. So the derivation is
+// still computed and compared against them: a genuine change fails HERE, saying
+// update the literal, rather than quietly shrinking coverage everywhere else.
+//
+// Derivation as the canary, literal as the yardstick. They fail in different
+// circumstances, which is the whole reason to keep both.
+func TestTheDerivedFoldAlphabetStillMatchesTheLiterals(t *testing.T) {
+	seen := map[rune]bool{}
+	var derived []rune
+	for _, name := range declaredMemberNames {
+		for _, r := range name {
+			for _, f := range foldCycle(r) {
+				if f > unicode.MaxASCII && !seen[f] {
+					seen[f] = true
+					derived = append(derived, f)
+				}
+			}
+		}
+	}
+	sort.Slice(derived, func(i, j int) bool { return derived[i] < derived[j] })
+
+	want := append([]rune(nil), wantNonASCIIFoldCodePoints...)
+	sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
+
+	if len(derived) != len(want) {
+		t.Fatalf("the fold relation now yields %d non-ASCII code points, the literal expects %d "+
+			"(derived %U, literal %U). If Unicode changed, UPDATE THE LITERAL and add a fixture "+
+			"for any new discriminating spelling; do not switch the assertions back to the "+
+			"derivation, which is what made them agree with the generator instead of constraining it",
+			len(derived), len(want), derived, want)
+	}
+	for i := range want {
+		if derived[i] != want[i] {
+			t.Errorf("fold code point %d: derived U+%04X, literal U+%04X", i, derived[i], want[i])
+		}
+	}
+}
+
 func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing.T) {
 	// THE CHECK ROUND 3 SHOWED WAS MISSING, and the reason it was missing is
 	// worth more than the check.
@@ -287,22 +347,34 @@ func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing
 	// and of OTHER declared names -- leaving the comparison running against
 	// ASCII case variants only, which is exactly the comparison that cannot
 	// tell EqualFold from round 3's ToLower.
-	for _, want := range nonASCIIFoldsOf("keys") {
+	for _, want := range wantNonASCIIFoldCodePoints {
 		if comparedCodePoint[want] == 0 {
 			t.Errorf("no `keys` spelling carrying U+%04X reached the runtime comparison; the "+
 				"check would be running on ASCII case variants alone, which cannot distinguish "+
 				"a Unicode-fold predicate from an ASCII-case one", want)
 		}
 	}
-	for _, want := range discriminatingFoldsOf("keys") {
+	// Only `keys` spellings reach the runtime comparison -- the branch above
+	// compares against the consumer for that member alone, because a folded
+	// `use` binds nothing on its own. `uſe` is still floored, in the
+	// differential, where every spelling is exercised.
+	var wantKeysDiscriminating []string
+	for _, want := range wantDiscriminatingSpellings {
+		if strings.EqualFold(want, "keys") {
+			wantKeysDiscriminating = append(wantKeysDiscriminating, want)
+		}
+	}
+	if len(wantKeysDiscriminating) == 0 {
+		t.Fatal("no literal discriminating spelling folds to `keys`; the floor below is vacuous")
+	}
+	for _, want := range wantKeysDiscriminating {
 		if comparedDiscriminating[want] == 0 {
 			t.Errorf("the discriminating spelling %q never reached the runtime comparison; it is "+
 				"the only kind that tells the two predicates apart", want)
 		}
 	}
-	if len(discriminatingFoldsOf("keys")) == 0 {
-		t.Fatal("no discriminating spelling exists for `keys`; the alphabet has collapsed and " +
-			"the two floors above are vacuous")
+	if len(wantNonASCIIFoldCodePoints) == 0 || len(wantDiscriminatingSpellings) == 0 {
+		t.Fatal("the literal fold expectations are empty; every floor above is vacuous")
 	}
 	t.Logf("%d fold variants checked, %d compared against the runtime", checked, folded)
 	for _, cp := range nonASCIIFoldsOf("keys") {

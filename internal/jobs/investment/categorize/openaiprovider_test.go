@@ -63,7 +63,7 @@ func TestOpenAIProviderCompleteSuccessViaOutputText(t *testing.T) {
 		})
 	})
 
-	result, err := provider.Complete(context.Background(), "DEV_HEALTH_RESPONSE_FORMAT=investment_categorization\nprompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("DEV_HEALTH_RESPONSE_FORMAT=investment_categorization\nprompt"))
 	if err != nil {
 		t.Fatalf("Complete returned error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestOpenAIProviderCompleteSuccessViaOutputContentFallback(t *testing.T) {
 		})
 	})
 
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("Complete returned error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestOpenAIProviderCompleteRetriesOnTruncatedOutputThenSucceeds(t *testing.T
 		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{OutputText: `{"ok": true}`})
 	})
 
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("Complete returned error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestOpenAIProviderCompleteReturnsEmptyAfterExhaustingRetries(t *testing.T) 
 		})
 	})
 
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("Complete returned an error for an exhausted-retry truncation, want empty text: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestOpenAIProviderCompleteRetriesOnRateLimitThenSucceeds(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{OutputText: `{"ok": true}`})
 	})
 
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("Complete returned error after rate-limit retry: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestOpenAIProviderCompleteDoesNotRetryAuthError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error": {"code": "invalid_api_key", "message": "Bearer sk-realsecretvalue1234"}}`))
 	})
 
-	_, err := provider.Complete(context.Background(), "prompt")
+	_, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err == nil {
 		t.Fatal("expected an error for a 401 response")
 	}
@@ -215,7 +215,7 @@ func TestOpenAIProviderClassifiesDNSFailureAsRetryableTransport(t *testing.T) {
 	})
 	t.Cleanup(func() { provider.Close() })
 
-	_, err := provider.Complete(context.Background(), "prompt")
+	_, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err == nil {
 		t.Fatal("expected an error for a DNS failure")
 	}
@@ -258,7 +258,7 @@ func TestOpenAIProviderTrimsTrailingSlashFromBaseURL(t *testing.T) {
 	})
 	t.Cleanup(func() { provider.Close() })
 
-	if _, err := provider.Complete(context.Background(), "prompt"); err != nil {
+	if _, err := provider.Complete(context.Background(), CategorizationRequest("prompt")); err != nil {
 		t.Fatal(err)
 	}
 	if transport.path != "/v1/responses" {

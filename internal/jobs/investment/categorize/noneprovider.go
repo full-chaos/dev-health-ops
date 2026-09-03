@@ -8,7 +8,7 @@ import "context"
 // which refuses. "none" means deliberately disabled, not "not built yet."
 type NoneProvider struct{}
 
-func (NoneProvider) Complete(_ context.Context, _ string) (CompletionResult, error) {
+func (NoneProvider) Complete(_ context.Context, _ CompletionRequest) (CompletionResult, error) {
 	return CompletionResult{Model: "none"}, nil
 }
 

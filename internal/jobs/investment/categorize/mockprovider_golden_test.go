@@ -67,7 +67,7 @@ func TestMockProviderCompleteMatchesPythonGolden(t *testing.T) {
 	var provider MockProvider
 	for _, testCase := range doc.Cases {
 		t.Run(testCase.Label, func(t *testing.T) {
-			result, err := provider.Complete(context.Background(), mockProviderPrompt(testCase.SourceBlock))
+			result, err := provider.Complete(context.Background(), CategorizationRequest(mockProviderPrompt(testCase.SourceBlock)))
 			if err != nil {
 				t.Fatalf("Complete: %v", err)
 			}
@@ -117,6 +117,87 @@ func TestMockProviderCompleteMatchesPythonGolden(t *testing.T) {
 	}
 }
 
+type mockProviderExplanationGoldenCase struct {
+	Label              string   `json:"label"`
+	Prompt             string   `json:"prompt"`
+	Summary            string   `json:"summary"`
+	DominantThemes     []string `json:"dominant_themes"`
+	KeyDrivers         []string `json:"key_drivers"`
+	OperationalSignals []string `json:"operational_signals"`
+	ConfidenceNote     string   `json:"confidence_note"`
+}
+
+type mockProviderExplanationGoldenDocument struct {
+	Cases []mockProviderExplanationGoldenCase `json:"cases"`
+}
+
+func loadMockProviderExplanationGolden(t *testing.T) mockProviderExplanationGoldenDocument {
+	t.Helper()
+	path := filepath.Join(categorizeRepositoryRoot(t), "tests", "fixtures", "mock_provider_explanation_python_golden.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", path, err)
+	}
+	var doc mockProviderExplanationGoldenDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal golden: %v", err)
+	}
+	return doc
+}
+
+// TestMockProviderInvestmentMixExplanationMatchesPythonGolden proves the Go
+// MockProvider's OTHER branch (selected via
+// CompletionRequest.ResponseFormatName rather than Python's prompt-content
+// sniffing -- see provider.go's own doc comment) produces the same
+// evidence-quality band, dominant category, and narrative text as mock.py
+// for every case in the frozen golden. CHAOS-4977: the generalization this
+// package needed before an investment-mix-explanation caller could exist
+// at all.
+func TestMockProviderInvestmentMixExplanationMatchesPythonGolden(t *testing.T) {
+	doc := loadMockProviderExplanationGolden(t)
+	if len(doc.Cases) == 0 {
+		t.Fatal("golden carries zero cases -- a vacuous corpus proves nothing")
+	}
+
+	var provider MockProvider
+	for _, testCase := range doc.Cases {
+		t.Run(testCase.Label, func(t *testing.T) {
+			request := InvestmentMixExplanationRequest(testCase.Prompt)
+			result, err := provider.Complete(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			var payload struct {
+				Summary            string   `json:"summary"`
+				DominantThemes     []string `json:"dominant_themes"`
+				KeyDrivers         []string `json:"key_drivers"`
+				OperationalSignals []string `json:"operational_signals"`
+				ConfidenceNote     string   `json:"confidence_note"`
+			}
+			if err := json.Unmarshal([]byte(result.Text), &payload); err != nil {
+				t.Fatalf("Complete returned invalid JSON: %v\ntext=%s", err, result.Text)
+			}
+
+			if payload.Summary != testCase.Summary {
+				t.Errorf("summary = %q, want %q", payload.Summary, testCase.Summary)
+			}
+			if len(payload.DominantThemes) != len(testCase.DominantThemes) || (len(payload.DominantThemes) > 0 && payload.DominantThemes[0] != testCase.DominantThemes[0]) {
+				t.Errorf("dominant_themes = %v, want %v", payload.DominantThemes, testCase.DominantThemes)
+			}
+			if len(payload.KeyDrivers) != len(testCase.KeyDrivers) {
+				t.Errorf("len(key_drivers) = %d, want %d", len(payload.KeyDrivers), len(testCase.KeyDrivers))
+			}
+			if len(payload.OperationalSignals) != len(testCase.OperationalSignals) {
+				t.Errorf("len(operational_signals) = %d, want %d", len(payload.OperationalSignals), len(testCase.OperationalSignals))
+			}
+			if payload.ConfidenceNote != testCase.ConfidenceNote {
+				t.Errorf("confidence_note = %q, want %q", payload.ConfidenceNote, testCase.ConfidenceNote)
+			}
+		})
+	}
+}
+
 // TestMockProviderResponsePassesOwnValidator is an end-to-end sanity check
 // distinct from the golden test above: every response MockProvider ever
 // emits must pass THIS package's own ValidateLLMPayload with zero errors --
@@ -140,7 +221,7 @@ func TestMockProviderResponsePassesOwnValidator(t *testing.T) {
 	}
 
 	for _, prompt := range prompts {
-		result, err := provider.Complete(context.Background(), prompt)
+		result, err := provider.Complete(context.Background(), CategorizationRequest(prompt))
 		if err != nil {
 			t.Fatalf("Complete: %v", err)
 		}

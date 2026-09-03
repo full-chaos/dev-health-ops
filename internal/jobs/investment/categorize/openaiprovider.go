@@ -21,9 +21,14 @@ type OpenAIProviderConfig struct {
 	// <= GPT-4) has no Go port, since day-one production config names a
 	// GPT-5 model.
 	Model string
-	// MaxOutputTokens is a floor, not a cap: the provider config's own
-	// minimum (openai.py always floors at 2048 for a schema prompt, which
-	// every prompt this package builds is -- see responseschema.go).
+	// MaxOutputTokens is a floor, not a cap: openai.py's own minimum is
+	// 2048 for categorization but 4096 for investment-mix explanation
+	// (its narrative payloads run larger -- "Explanation payloads are
+	// large; start higher than 4096" is openai.py's own comment). This
+	// port applies ONE floor (openAIMinOutputTokens) regardless of
+	// CompletionRequest.ResponseFormatName; a future mix-explanation
+	// caller should pass a higher MaxOutputTokens explicitly rather than
+	// rely on a per-format default this config doesn't provide.
 	MaxOutputTokens int
 	HTTPClient      *http.Client
 }
@@ -87,9 +92,9 @@ type openAIResponseText struct {
 
 type openAITextFormat struct {
 	Type   string         `json:"type"`
-	Name   string         `json:"name"`
-	Strict bool           `json:"strict"`
-	Schema map[string]any `json:"schema"`
+	Name   string         `json:"name,omitempty"`
+	Strict bool           `json:"strict,omitempty"`
+	Schema map[string]any `json:"schema,omitempty"`
 }
 
 type openAIReasoning struct {
@@ -127,22 +132,27 @@ type openAITokenDetails struct {
 }
 
 // Complete ports openai.py's OpenAIGPT5Provider.complete.
-func (p *OpenAIProvider) Complete(ctx context.Context, prompt string) (CompletionResult, error) {
+func (p *OpenAIProvider) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
 	maxTokens := p.cfg.MaxOutputTokens
+
+	textFormat := openAITextFormat{Type: "json_object"}
+	if request.JSONSchema != nil {
+		textFormat = openAITextFormat{
+			Type:   "json_schema",
+			Name:   request.ResponseFormatName,
+			Strict: true,
+			Schema: request.JSONSchema,
+		}
+	}
 
 	var lastErr *llmError
 	for attempt := 0; attempt <= openAIMaxRetries; attempt++ {
 		body := openAIResponsesRequest{
 			Model:        p.cfg.Model,
-			Instructions: categorizationSystemMessage,
-			Input:        prompt,
+			Instructions: request.SystemMessage,
+			Input:        request.Prompt,
 			Text: openAIResponseText{
-				Format: openAITextFormat{
-					Type:   "json_schema",
-					Name:   "categorization",
-					Strict: true,
-					Schema: categorizationJSONSchema(),
-				},
+				Format:    textFormat,
 				Verbosity: "low",
 			},
 			Reasoning:       openAIReasoning{Effort: "low"},

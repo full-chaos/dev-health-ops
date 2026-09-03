@@ -120,22 +120,25 @@ type localChatUsage struct {
 }
 
 // Complete ports local.py's LocalProvider.complete.
-func (p *LocalProvider) Complete(ctx context.Context, prompt string) (CompletionResult, error) {
-	responseFormat := &localResponseFormat{
-		Type: "json_schema",
-		JSONSchema: &localJSONSchemaWrapper{
-			Name:   "categorization",
-			Schema: categorizationJSONSchema(),
-			Strict: true,
-		},
+func (p *LocalProvider) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
+	var responseFormat *localResponseFormat
+	if request.JSONSchema != nil {
+		responseFormat = &localResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &localJSONSchemaWrapper{
+				Name:   request.ResponseFormatName,
+				Schema: request.JSONSchema,
+				Strict: true,
+			},
+		}
 	}
 
 	for attempt := 0; attempt <= localMaxRetries; attempt++ {
 		body := localChatRequest{
 			Model: p.cfg.Model,
 			Messages: []localChatMessage{
-				{Role: "system", Content: categorizationSystemMessage},
-				{Role: "user", Content: prompt},
+				{Role: "system", Content: request.SystemMessage},
+				{Role: "user", Content: request.Prompt},
 			},
 			MaxCompletionTokens: p.cfg.MaxOutputTokens,
 			Temperature:         *p.cfg.Temperature,

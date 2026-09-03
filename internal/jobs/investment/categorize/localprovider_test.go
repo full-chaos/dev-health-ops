@@ -71,7 +71,7 @@ func TestLocalProviderCompleteSuccess(t *testing.T) {
 		})
 	})
 
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("Complete returned error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestLocalProviderExplicitZeroTemperatureIsSentVerbatim(t *testing.T) {
 	})
 	t.Cleanup(func() { provider.Close() })
 
-	if _, err := provider.Complete(context.Background(), "prompt"); err != nil {
+	if _, err := provider.Complete(context.Background(), CategorizationRequest("prompt")); err != nil {
 		t.Fatalf("Complete returned error: %v", err)
 	}
 	if calls != 1 {
@@ -142,7 +142,7 @@ func TestLocalProviderRetriesWithPlainTextOn400(t *testing.T) {
 		})
 	})
 
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("Complete returned error after 400 fallback: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestLocalProviderDoesNotRetryNonRetryableAfter400Exhausted(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error": "still invalid_request_error"}`))
 	})
 
-	_, err := provider.Complete(context.Background(), "prompt")
+	_, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err == nil {
 		t.Fatal("expected an error once the 400 fallback retry is also rejected")
 	}
@@ -196,7 +196,7 @@ func TestLocalProviderTrimsTrailingSlashFromBaseURL(t *testing.T) {
 	})
 	t.Cleanup(func() { provider.Close() })
 
-	if _, err := provider.Complete(context.Background(), "prompt"); err != nil {
+	if _, err := provider.Complete(context.Background(), CategorizationRequest("prompt")); err != nil {
 		t.Fatal(err)
 	}
 	if transport.path != "/v1/chat/completions" {

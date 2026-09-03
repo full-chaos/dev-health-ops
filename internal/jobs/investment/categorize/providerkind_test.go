@@ -146,7 +146,7 @@ func TestNewProviderFromEnvNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	result, err := provider.Complete(context.Background(), "prompt")
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err != nil {
 		t.Fatalf("NoneProvider.Complete returned an error: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestNewProviderFromEnvUnimplementedKindsRefuseExplicitly(t *testing.T) {
 			if IsProviderKindImplemented(kind) {
 				t.Fatalf("%q reported as implemented, but has no real client", kind)
 			}
-			_, completeErr := provider.Complete(context.Background(), "prompt")
+			_, completeErr := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 			if completeErr == nil {
 				t.Fatalf("%q's stub Complete() must refuse, got a nil error", kind)
 			}

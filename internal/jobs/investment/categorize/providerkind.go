@@ -141,7 +141,7 @@ type unimplementedProvider struct {
 	kind ProviderKind
 }
 
-func (p unimplementedProvider) Complete(_ context.Context, _ string) (CompletionResult, error) {
+func (p unimplementedProvider) Complete(_ context.Context, _ CompletionRequest) (CompletionResult, error) {
 	return CompletionResult{}, fmt.Errorf(
 		"LLM provider kind %q is not yet implemented in Go -- implemented kinds: openai, local, mock, none",
 		p.kind,

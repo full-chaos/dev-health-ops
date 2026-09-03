@@ -3,6 +3,8 @@ package categorize
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
@@ -14,23 +16,36 @@ import (
 // evidence.go's sourceTypeOrder / mock.py's own {"issue", "pr", "commit"}.
 var mockSourceHeaders = map[string]struct{}{"issue": {}, "pr": {}, "commit": {}}
 
-// MockProvider is llm/providers/mock.py's MockProvider, narrowed to the
-// _mock_categorization path -- the ONLY path investment.categorize's
-// canonical prompt ever takes (mock.py's OTHER branch answers a different
-// LLM use case, the investment-view explanation, out of scope here). A
-// deterministic, dev/test-only stand-in: never a real provider, never a
-// byte-exact parity target the way the prompt/schema ports are, so this
-// file uses Go's plain strings.ToLower for keyword matching rather than a
-// Python-parity fold -- the worst case is a different mock top_category
-// pick for exotic non-ASCII input, which affects no real product path.
+// MockProvider is llm/providers/mock.py's MockProvider. Python's
+// MockProvider.complete decides its response shape by SNIFFING the prompt
+// text (does it contain "Output schema"+'"subcategories"'+
+// '"evidence_quotes"', or "matching the schema"?); this port instead
+// branches on CompletionRequest.ResponseFormatName, the explicit
+// discriminator CompletionRequest exists to provide -- the caller already
+// knows which format it asked for, so there is no need to re-derive it by
+// parsing prompt text. A deterministic, dev/test-only stand-in: never a
+// real provider, never a byte-exact parity target the way the
+// prompt/schema ports are, so this file uses Go's plain strings.ToLower
+// for keyword matching rather than a Python-parity fold -- the worst case
+// is a different mock top-category pick for exotic non-ASCII input, which
+// affects no real product path.
 type MockProvider struct{}
 
-// Complete ports mock.py's MockProvider.complete, restricted to the
-// categorization branch (the canonical prompt always contains "Output
-// schema", '"subcategories"' and '"evidence_quotes"' -- see prompts.go's
-// canonicalPromptBody).
-func (MockProvider) Complete(_ context.Context, prompt string) (CompletionResult, error) {
-	text, err := mockCategorization(prompt)
+// Complete ports mock.py's MockProvider.complete's two branches:
+// categorization (investment.categorize's only caller today) and
+// investment-mix explanation (CHAOS-4977's future caller). Anything else
+// requested falls back to the categorization shape, matching Python's own
+// default branch (its sniff only special-cases the mix-explanation shape;
+// everything else it treats as categorization).
+func (MockProvider) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
+	if request.ResponseFormatName == investmentMixExplanationResponseFormatName {
+		text, err := mockInvestmentMixExplanation(request.Prompt)
+		if err != nil {
+			return CompletionResult{}, err
+		}
+		return CompletionResult{Text: text, Model: "mock"}, nil
+	}
+	text, err := mockCategorization(request.Prompt)
 	if err != nil {
 		return CompletionResult{}, err
 	}
@@ -167,6 +182,96 @@ func containsAny(haystack string, tokens ...string) bool {
 		}
 	}
 	return false
+}
+
+// mockInvestmentMixExplanation ports mock.py's MockProvider.complete's
+// non-categorization branch: parse the prompt for an "Evidence Quality:
+// (band)" marker and "  - category: NN.NN%" lines, keep whichever category
+// scores highest (defaulting to feature_delivery.customer at 0.25 if none
+// beats that), and build a canned narrative using only approved
+// probabilistic language ("appears", "leans", "suggests" -- never "is",
+// "was", "detected", "determined").
+func mockInvestmentMixExplanation(prompt string) (string, error) {
+	// Python: prompt.split("\n") -- a plain literal-separator split, NOT
+	// splitlines() (the categorization branch below uses splitlines()
+	// instead, via pythonparity.SplitLines -- the two Python methods
+	// differ on \r\n/trailing-newline handling, so strings.Split(prompt,
+	// "\n") is the exact match for THIS branch specifically).
+	lines := strings.Split(prompt, "\n")
+	evidenceQualityBand := "moderate"
+	topCategory := "feature_delivery.customer"
+	topScore := 0.25
+
+	for _, rawLine := range lines {
+		if strings.Contains(rawLine, "Evidence Quality:") {
+			switch {
+			case strings.Contains(rawLine, "(high)"):
+				evidenceQualityBand = "high"
+			case strings.Contains(rawLine, "(moderate)"):
+				evidenceQualityBand = "moderate"
+			case strings.Contains(rawLine, "(low)"):
+				evidenceQualityBand = "low"
+			case strings.Contains(rawLine, "(very_low)"):
+				evidenceQualityBand = "very_low"
+			}
+		}
+		if strings.Contains(rawLine, "  - ") && strings.Contains(rawLine, ":") && strings.Contains(rawLine, "%") {
+			// Python: line.strip().lstrip("- ").split(":") -- lstrip("- ")
+			// strips any run of '-'/' ' chars (a character SET, not a
+			// literal prefix), then split(":") on every colon (not just
+			// the first), silently ignoring a 3rd+ segment the same way
+			// Python's parts[0]/parts[1] indexing does.
+			trimmed := strings.TrimLeft(pythonparity.Strip(rawLine), "- ")
+			parts := strings.Split(trimmed, ":")
+			if len(parts) < 2 {
+				continue
+			}
+			category := pythonparity.Strip(parts[0])
+			scoreText := strings.TrimRight(pythonparity.Strip(parts[1]), "%")
+			score, err := strconv.ParseFloat(scoreText, 64)
+			if err != nil {
+				// Python: except (ValueError, IndexError): pass -- a
+				// malformed score line is silently ignored, keeping
+				// whatever top_category/top_score was already found.
+				continue
+			}
+			score /= 100
+			if score > topScore {
+				topScore = score
+				topCategory = category
+			}
+		}
+	}
+
+	dominantTheme := topCategory
+	if idx := strings.Index(topCategory, "."); idx >= 0 {
+		dominantTheme = topCategory[:idx]
+	}
+
+	response := map[string]any{
+		"summary": fmt.Sprintf(
+			"Based on the precomputed investment view, this work unit appears to lean toward %s work.",
+			topCategory,
+		),
+		"dominant_themes": []string{dominantTheme},
+		"key_drivers": []string{
+			"Structural evidence appears to contribute most significantly to the categorization.",
+			"Textual phrases appear to align with the investment interpretation.",
+		},
+		"operational_signals": []string{
+			fmt.Sprintf("Evidence quality bands indicate %s uncertainty.", evidenceQualityBand),
+			"Lower-weight categories may still represent meaningful aspects of the work.",
+		},
+		"confidence_note": fmt.Sprintf(
+			"This analysis reflects %s evidence quality. The categorization leans toward %s but may not fully capture the nuanced nature of the work.",
+			evidenceQualityBand, topCategory,
+		),
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 var _ Provider = MockProvider{}

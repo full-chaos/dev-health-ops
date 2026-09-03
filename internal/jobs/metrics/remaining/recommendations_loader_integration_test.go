@@ -349,12 +349,21 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 	// another test happens to have set is not a test, it is a coincidence.
 	//
 	// recommendations_daily is in this list even though the fixture never seeds
-	// it: it is the WRITE target, it is ReplacingMergeTree(computed_at), and two
-	// assertions downstream depend on its rows not collapsing -- the two-run
-	// supersession test needs both generations to survive, and the row-count
-	// comparison needs raw count to equal what was written. Omitting it because
-	// "the fixture does not seed it" is exactly the reasoning that would make
-	// those assertions merge-dependent.
+	// it: it is the WRITE target and is ReplacingMergeTree(computed_at).
+	//
+	// It earns its place for ONE assertion, not the two I first claimed. The
+	// two-run supersession test writes the SAME ORDER BY keys twice, differing
+	// only in computed_at -- precisely what an RMT collapses -- so a merge there
+	// turns two generations into one and destroys the property. The single-run
+	// row count does NOT need this: its keys are all distinct, so no merge can
+	// change it either way (established by mutation; see the FINAL comment in
+	// the round-trip test).
+	//
+	// Note what that means for anyone tempted to narrow this list further:
+	// dropping recommendations_daily does not fail the suite deterministically.
+	// Merges are opportunistic, so the two-run test would pass most of the time
+	// and fail occasionally -- a latent flake rather than a visible break, which
+	// is the worse outcome and the reason this entry is explicit.
 	mergeStopped := []string{
 		"work_item_metrics_daily", "repo_metrics_daily", "user_metrics_daily",
 		"team_metrics_daily", "repo_complexity_daily", "file_hotspot_daily",

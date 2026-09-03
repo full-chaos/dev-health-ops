@@ -435,13 +435,28 @@ func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
 	// ON DISK. Without the detached write context the insert cannot execute at
 	// all, and those tombstones are lost exactly when the run is torn down.
 	var persisted uint64
-	// FINAL, deliberately. recommendations_daily is
-	// ReplacingMergeTree(computed_at), so a raw count() equals what was written
-	// only while merges are stopped -- which the fixture does, but relying on
-	// that makes this assertion depend on a global set elsewhere in the file.
-	// FINAL makes the comparison mean the same thing whether or not a merge has
-	// run, so narrowing or removing the fixture's merge stop cannot silently
-	// turn this row-count check flaky (found by 4752-go's peer read).
+	// FINAL here is DEFENCE, NOT THE LOAD-BEARING PART, and the difference was
+	// established by mutation rather than by reasoning.
+	//
+	// Peer review predicted this count would go flaky once the fixture's merge
+	// stop was narrowed per-table. It does not, and the reason is the key:
+	// recommendations_daily is ReplacingMergeTree ORDER BY
+	// (org_id, team_id, rule_id, window_end), and an RMT collapses only rows
+	// that SHARE a key. One run writes one row per (team, rule) for a single
+	// window, so every key is distinct and no merge can change count() with or
+	// without FINAL. The mutation that should have caught it -- narrow the stop
+	// AND drop FINAL -- PASSED, which is what showed the premise was wrong.
+	//
+	// FINAL stays because it costs nothing and it is correct the moment a
+	// future test writes two rows under one key. But it is not what protects
+	// this assertion, and a comment claiming otherwise would send the next
+	// reader to defend the wrong thing.
+	//
+	// THE REAL MERGE EXPOSURE IS THE TWO-RUN TEST BELOW, where two runs write
+	// the SAME keys differing only in computed_at -- exactly what an RMT
+	// collapses. That test is protected by recommendations_daily being in the
+	// fixture's stop list, and it must NOT use FINAL: FINAL would collapse the
+	// two generations to one and destroy the property it asserts.
 	if err := conn.QueryRow(ctx,
 		`SELECT count() FROM recommendations_daily FINAL WHERE org_id = ?`, loaderOrgID,
 	).Scan(&persisted); err != nil {

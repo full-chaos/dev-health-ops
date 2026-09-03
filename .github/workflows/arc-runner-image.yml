@@ -110,6 +110,43 @@ jobs:
             arc-runner:check \
             sh -c 'echo "gcc: $(command -v gcc)"; go env CGO_ENABLED CC'
 
+      # OCI labels (org.opencontainers.image.revision/source/created/...) are
+      # derived from the git context, not from the tag/latest decision, so
+      # they can be computed now -- before the mainhead check -- and applied
+      # to the digest push below. Only human-readable TAGS need to wait for
+      # that check; see the later "Docker meta" step for those.
+      - name: Docker labels
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
+        id: labels
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/full-chaos/arc-runner
+
+      # A SECOND build, not a reuse of the first: pushed by DIGEST ONLY, no
+      # human tags decided yet. cache-from reuses the first build's GHA
+      # cache -- USUALLY a fast cache hit, but ci-flakes' round-2 delta read
+      # correctly flagged that "usually" is exactly the gap: GHA cache is
+      # evictable and cold on a first run, so this step's own duration is
+      # not guaranteed short. Fixed structurally, not just observed: the
+      # main-head check below runs AFTER this step finishes (however long
+      # that took), and the ONLY thing after the check is a manifest-tag
+      # operation (next step), never another build. So the gap between
+      # "check main's head" and "the action that depends on it" is always
+      # just that tiny manifest op, regardless of whether THIS step was a
+      # cache hit or a real rebuild.
+      - name: Build and push by digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/arc-runner/Dockerfile
+          platforms: linux/arm64
+          tags: ghcr.io/full-chaos/arc-runner
+          labels: ${{ steps.labels.outputs.labels }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha
+
       - name: Determine whether this build is main's current head
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
         id: mainhead
@@ -135,25 +172,21 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true' }}
 
-      # A SECOND build, not a reuse of the first: it needs real tags (only
-      # known now, after the head check) and push=true, and build-push-
-      # action's tags/push are set at build time, not patchable after the
-      # fact. cache-from reuses the first build's GHA cache, so this is a
-      # cache hit -- not a real rebuild -- keeping the gap between the head
-      # check and the actual push to just this near-instant step, which is
-      # the whole point of checking here rather than before the first build.
-      - name: Build and push
+      # Tags the ALREADY-PUSHED digest -- a manifest-copy, not a build, so
+      # this is the actual fast, bounded action the main-head check gates.
+      # Bash array, not jq + word-splitting: same reasoning docker-images.yml
+      # (#2149) accepts as an intentional exception, sidestepped here rather
+      # than repeated.
+      - name: Tag and push
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
-        id: push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: docker/arc-runner/Dockerfile
-          platforms: linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          push: true
-          cache-from: type=gha
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r t; do
+            [ -n "$t" ] && args+=(-t "$t")
+          done <<< "${{ steps.meta.outputs.tags }}"
+          docker buildx imagetools create "${args[@]}" \
+            "ghcr.io/full-chaos/arc-runner@${{ steps.push.outputs.digest }}"
 
       # Job-level summary line. Note: I found no existing "ensure"-named job
       # or script anywhere in this repo's .github/ or ci/ to match a

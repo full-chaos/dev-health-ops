@@ -71,9 +71,9 @@ lands, copy from the table above and expect to delete your copy afterwards.
 
 ### Constraints live in the cross-language dialect intersection
 
-Five divergences are known. **They are enforced by three different mechanisms,
+Six divergences are known. **They are enforced by four different mechanisms,
 and one of them is not enforced at all** — an earlier version of this table
-attributed all five to one Go test, which was false for two of them.
+attributed all of them to one Go test, which was false for two.
 
 | divergence | consequence | actually enforced by |
 | --- | --- | --- |
@@ -82,6 +82,7 @@ attributed all five to one Go test, which was false for two of them.
 | `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups | same test |
 | a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite | **the client, not a schema guard** — `authclient/contracts.py` `strictly_anchored` |
 | ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **review only — there is no ajv runner in this repository** |
+| `maxLength` counts CODE POINTS; Go's `len()` counts BYTES | to mirror a Go byte bound, restrict the alphabet to one-byte characters so the two counts coincide | the `jwks.v1` corpus — `invalid-kid-non-ascii.json` plus `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` |
 
 That last row is a real gap, not a formality. **No committed code or CI job runs
 ajv against these contracts**, so the ECMA-262 leg of every "three languages
@@ -159,6 +160,49 @@ agree about which documents are acceptable.
 pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a
 gap that reads as an oversight rather than as a boundary.
+
+### A contract with one real consumer is pinned in BOTH directions
+
+Most surfaces here are validated by two clients this repository owns. `jwks.v1`
+is not: Python's `build_envelope_jwks()` **produces** the document and
+dev-health-go's `Ed25519JWKSVerifier` **consumes** it, from another repository,
+through a mounted file. That changes what the corpus has to prove.
+
+A schema for a surface like this can fail in two opposite ways, and only one of
+them is habitually tested:
+
+* **looser than the consumer** — the schema certifies a document the only
+  reader refuses. This is the familiar direction, and the `accept` fixtures are
+  run through the real `Keys()` to close it.
+* **stricter than the consumer** — the schema refuses a document the reader
+  would have accepted. Nobody writes this test, because a rejection always
+  looks like the schema working. It is the more dangerous direction: the false
+  alarm eventually gets "fixed" by loosening whichever rule was load-bearing.
+  `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` closes it.
+
+Where the schema is deliberately narrower than the consumer, say so **in the
+schema** and keep no fixture for it in `reject` — otherwise the second test
+above is the one that has to be silenced, and silencing it removes the guard
+for every other row at the same time.
+
+**Pin the producer too.** `test_the_live_producer_emits_a_document_this_schema_accepts`
+calls the real `build_envelope_jwks()` and validates its output. Without it a
+schema can describe an idealised document, pass its own corpus forever, and
+never once touch what production actually writes.
+
+### A wrong length is not a style point when the consumer panics
+
+`ed25519.Verify` **panics** on a 31- or 33-byte public key rather than returning
+an error, and *both* languages' base64 decoders accept those lengths without
+complaint — the decode never checks. So for Ed25519 key material the length has
+to be pinned in the schema or it is pinned nowhere.
+
+`^[A-Za-z0-9_-]{43}$` does it, and does two other jobs at once: 43 characters of
+the URL-safe alphabet always decode to exactly 32 bytes (verified by sampling
+200000 random such strings — every one, no errors), the alphabet excludes `+`
+and `/`, and the fixed count excludes `=` padding. Python's
+`urlsafe_b64decode` accepts padding *and* the standard `+/` alphabet; Go's
+`RawURLEncoding` rejects both. One pattern, three classes, no `format` keyword.
 
 ### The manifest is the single inventory
 

@@ -1,0 +1,152 @@
+{
+  "description": "The golden corpus for the jwks.v1 wire contract. This manifest is the SINGLE inventory of the corpus: the Go runner and the Python runner both read THIS file over THESE fixtures, so a third copy of the list cannot drift out of step with the first two (G-70).\n\nThe consumer named throughout is dev-health-go's the `Keys()` method of dev-health-go's `Ed25519JWKSVerifier`, which is what actually reads this document in production. The Go runner drives the REAL consumer against every fixture, so `accept` means \"the consumer accepts it\" as well as \"the schema validates it\" -- the two directions that together stop the schema drifting either looser or stricter than the code it describes.",
+  "accept": [
+    {
+      "file": "valid-single-signing-key.json",
+      "why": "The ordinary steady state: one key, `use` omitted. The minimal document the consumer accepts."
+    },
+    {
+      "file": "valid-single-key-with-use-sig.json",
+      "why": "`use` present and `sig`. Means exactly what its absence means; both forms are on the wire today because the producer emits it and the consumer does not require it."
+    },
+    {
+      "file": "valid-two-keys-during-rotation.json",
+      "why": "A rotation in progress. Two DISTINCT kids, so envelopes signed by the outgoing key still verify while they remain within their TTL. This is why `keys` is an array and not an object."
+    },
+    {
+      "file": "valid-kid-at-maximum-length.json",
+      "why": "`kid` at exactly the consumer's 256-byte ceiling. An upper bound with no at-the-bound case is a bound nobody has checked: a future off-by-one to 255 would break no other fixture."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-keys-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No `keys` at all. The consumer decodes to a nil slice and refuses on len==0, so the schema must not treat the member as optional."
+    },
+    {
+      "file": "invalid-keys-empty.json",
+      "expect_instance_location": "/keys",
+      "expect_keyword": "minItems",
+      "why": "A syntactically valid document that yields no key material. The consumer refuses it rather than reporting a healthy-but-empty keyset -- otherwise every verification fails as a kid lookup miss, which is indistinguishable from an unknown kid and sends the reader to the wrong cause."
+    },
+    {
+      "file": "invalid-unknown-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An extra top-level member. The consumer decodes with DisallowUnknownFields and rejects the WHOLE document, so a plausible-looking addition like `issuer` is not forward-compatible here -- it is an outage."
+    },
+    {
+      "file": "invalid-unknown-key-member.json",
+      "expect_instance_location": "/keys/0",
+      "expect_keyword": "additionalProperties",
+      "why": "A standard RFC 7517 member the consumer does not know. RFC 7517 says ignore unrecognised JWK members; the consumer refuses them. The schema follows the CONSUMER, because a schema that permitted `x5c` would certify a document that cannot be read."
+    },
+    {
+      "file": "invalid-private-key-material-present.json",
+      "expect_instance_location": "/keys/0",
+      "expect_keyword": "additionalProperties",
+      "why": "The private scalar in a document whose entire purpose is to publish the PUBLIC half. Refused by `additionalProperties` rather than by a rule naming `d`: the subtractive contract makes the leak unrepresentable instead of prohibited, so `p`, `q` and every other private member are closed by the same clause without being enumerated."
+    },
+    {
+      "file": "invalid-kty-rsa.json",
+      "expect_instance_location": "/keys/0/kty",
+      "expect_keyword": "const",
+      "why": "Wrong key type. Refused before any key material is looked at."
+    },
+    {
+      "file": "invalid-crv-x25519.json",
+      "expect_instance_location": "/keys/0/crv",
+      "expect_keyword": "const",
+      "why": "The same key TYPE (OKP) on the key-agreement curve. X25519 never signs anything, so accepting it here would defer a certain failure to a confusing signature mismatch later."
+    },
+    {
+      "file": "invalid-alg-absent.json",
+      "expect_instance_location": "/keys/0",
+      "expect_keyword": "required",
+      "why": "`alg` is optional in RFC 7517 and REQUIRED here, because the consumer compares it literally -- an absent `alg` reads as the empty string and the document is refused. The schema states the requirement rather than letting it surface as a mystery rejection."
+    },
+    {
+      "file": "invalid-alg-lowercase.json",
+      "expect_instance_location": "/keys/0/alg",
+      "expect_keyword": "const",
+      "why": "Case matters. The consumer's comparison is byte equality, not a case-folded match."
+    },
+    {
+      "file": "invalid-use-not-sig.json",
+      "expect_instance_location": "/keys/0/use",
+      "expect_keyword": "const",
+      "why": "An encryption key offered where a signing key is required."
+    },
+    {
+      "file": "invalid-kid-absent.json",
+      "expect_instance_location": "/keys/0",
+      "expect_keyword": "required",
+      "why": "No `kid`. The consumer reads the missing member as \"\", which fails its non-empty check, and an envelope could never be matched to this key anyway."
+    },
+    {
+      "file": "invalid-kid-empty.json",
+      "expect_instance_location": "/keys/0/kid",
+      "expect_keyword": "pattern",
+      "why": "An empty `kid`. Refused by the pattern rather than by `minLength`, so that this case and the whitespace-only case below trip the SAME keyword -- they are one rule in the consumer (TrimSpace then non-empty) and are kept one rule here."
+    },
+    {
+      "file": "invalid-kid-whitespace-only.json",
+      "expect_instance_location": "/keys/0/kid",
+      "expect_keyword": "pattern",
+      "why": "A `kid` of three spaces. `minLength: 1` ACCEPTS this -- length 3 -- and the consumer REFUSES it, because it trims before testing for empty. Excluding space from the alphabet is what closes the gap; executed against the consumer's own validKeyID, not argued."
+    },
+    {
+      "file": "invalid-kid-non-ascii.json",
+      "expect_instance_location": "/keys/0/kid",
+      "expect_keyword": "pattern",
+      "why": "256 code points and 512 UTF-8 BYTES. `maxLength: 256` accepts it and the consumer refuses it, because JSON Schema counts code points and Go's len() counts bytes. Restricting the alphabet to one-byte characters makes the two counts the same number; this fixture is what fails if someone \"simplifies\" the pattern back to a maxLength."
+    },
+    {
+      "file": "invalid-kid-over-maximum-length.json",
+      "expect_instance_location": "/keys/0/kid",
+      "expect_keyword": "pattern",
+      "why": "One character past the consumer's ceiling. Paired with valid-kid-at-maximum-length.json so the boundary is pinned from both sides."
+    },
+    {
+      "file": "invalid-x-absent.json",
+      "expect_instance_location": "/keys/0",
+      "expect_keyword": "required",
+      "why": "No key material."
+    },
+    {
+      "file": "invalid-x-base64-padded.json",
+      "expect_instance_location": "/keys/0/x",
+      "expect_keyword": "pattern",
+      "why": "Padded base64url. RFC 7515 section 2 forbids the padding, the consumer's RawURLEncoding rejects `=`, and Python's urlsafe_b64decode ACCEPTS it -- so a Python-side reader written later would disagree with the consumer unless the wire form is pinned here."
+    },
+    {
+      "file": "invalid-x-standard-base64-alphabet.json",
+      "expect_instance_location": "/keys/0/x",
+      "expect_keyword": "pattern",
+      "why": "The standard base64 alphabet. `+` and `/` are rejected by the consumer's RawURLEncoding and silently ACCEPTED by Python's urlsafe_b64decode, which translates them before decoding. Same split as the padding case, different cause."
+    },
+    {
+      "file": "invalid-x-decodes-too-short.json",
+      "expect_instance_location": "/keys/0/x",
+      "expect_keyword": "pattern",
+      "why": "42 characters, which decodes to 31 bytes. BOTH base64 decoders accept it happily -- the length is not checked anywhere in the decode. ed25519.Verify PANICS on a 31-byte public key rather than returning an error, so this pattern is the only thing standing between a malformed JWKS and a crashed verifier."
+    },
+    {
+      "file": "invalid-x-decodes-too-long.json",
+      "expect_instance_location": "/keys/0/x",
+      "expect_keyword": "pattern",
+      "why": "44 characters, which decodes to 33 bytes. Same panic class as the short case; kept as its own fixture because a bound checked on one side only is not a bound."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-duplicate-kid.json",
+      "why": "Two keys sharing one `kid` and carrying DIFFERENT key material. The schema accepts it and the consumer refuses it. `uniqueItems` cannot help: it compares whole array items, and these items differ in `x`, so they are unique by that test while being ambiguous by the only measure that matters -- which key does an envelope stamped with this kid verify against? Executed both directions rather than reasoned."
+    }
+  ],
+  "reject_by_client_note": "Valid against the schema, refused by the consumer. The category exists for rules JSON Schema cannot express at all, never for rules that were merely inconvenient to write.",
+  "regex_dialect_note": "Both patterns here use explicit character RANGES and no shorthand class. `\\d`, `\\w`, `\\s` and `\\b` are Unicode-aware in Python's re and ASCII-only in RE2 and ECMA-262, which is the split that has bitten the other surfaces in this directory; `[!-~]` and `[A-Za-z0-9_-]` mean the same thing in all three.",
+  "known_gap_duplicate_json_members": "A repeated JSON member inside one key object -- two `kid` members, say -- is NOT refused by any current reader. Every parser keeps the LAST value, so the earlier one never reaches validation. error.v1 refuses this at the raw-bytes boundary before decoding, but that check lives in a client this repository owns; the JWKS consumer is dev-health-go, and adding a shadow reader here to catch it would create exactly the second implementation this programme exists to remove. Recorded as a gap for a dev-health-go change, not papered over with a local wrapper."
+}

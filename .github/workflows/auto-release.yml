@@ -8,6 +8,19 @@ on:
     types: [ closed ]
   workflow_dispatch:
 
+concurrency:
+  # CHAOS-4906 fleet audit (09-03, chris binding). Named explicitly rather
+  # than silently mechanical: this job publishes a git tag/release
+  # (attestations, contents: write) on PR close, a state-changing action a
+  # mid-flight cancellation could interrupt partway (tag pushed, release not
+  # yet created, or vice versa). Accepted anyway -- a `closed` event fires
+  # once per PR under normal operation, so a same-PR re-trigger (re-closing
+  # after a re-open) is the only real collision, and superseding that stale
+  # attempt is the correct behaviour, not a risk worth a bespoke exemption.
+  # Canonical fleet-wide shape (this workflow has no push trigger, so only
+  # the pull_request half is reachable in practice).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   tag-and-release:

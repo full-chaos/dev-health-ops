@@ -10,12 +10,17 @@
 # not acr's nested ghcr.io/full-chaos/dev-health-acr/... convention -- GHCR
 # package write access is repo-scoped, and this package is owned by ops.
 #
-# CONCURRENCY is keyed per-SHA (not per-ref), matching the fix landed in
-# #2149 (docker-images.yml) for the identical failure mode: grouping by
-# github.ref alone means every push to main shares ONE group, so a
-# fast-follow commit can cancel an in-flight or pending build for an
+# CONCURRENCY groups a push to MAIN per-SHA (not per-ref), matching the fix
+# landed in #2149 (docker-images.yml) for the identical failure mode:
+# grouping by github.ref alone means every push to main shares ONE group,
+# so a fast-follow commit can cancel an in-flight or pending build for an
 # earlier one. Per-SHA groups make that structurally impossible -- no two
-# distinct commits' builds can ever collide.
+# distinct commits' builds can ever collide. CHAOS-4906 fleet audit
+# (09-03, chris binding, incident-informed) narrowed this from "always
+# per-SHA" to "per-SHA on a push to main only" -- a pull_request re-push
+# now cancels its own stale run (grouped and cancelled by PR number, as
+# every other workflow does), while main pushes keep the original #2149
+# protection.
 #
 # The LATEST tag is gated the same way #2149 gates it: not by build order
 # (concurrent per-SHA builds can finish out of order), but by checking,
@@ -45,8 +50,8 @@ on:
         type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read

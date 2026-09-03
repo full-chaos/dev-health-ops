@@ -41,8 +41,17 @@ concurrency:
   # flags it as `property "ref" is not defined in object type {}`, and it would
   # silently evaluate empty. Copying the sibling's key verbatim looked like
   # consistency and was cargo-culting; the shapes differ because the triggers do.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  #
+  # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed)
+  # narrowed the sha fallback from "every non-PR event" to "a push to main,
+  # or a merge_group entry" specifically, and widened `cancel-in-progress`
+  # to also cancel a stale push on a non-main branch (none exists today --
+  # push is main-only above -- so this is a no-op in practice, kept for
+  # consistency and so it isn't a silent gap if that ever changes). The
+  # CHAOS-4946 protection itself is unchanged: main pushes and merge_group
+  # entries still never collide or cancel each other.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read

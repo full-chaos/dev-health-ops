@@ -116,66 +116,199 @@ _WORKFLOW_DISPATCH_CONTEXT = {
     # could define one, so the token itself must still resolve.
     "github.event.inputs.ref": "",
 }
+# CHAOS-4906 fleet audit (09-03): the canonical shape distinguishes a push
+# to `main` from a push to any other branch, so `_PUSH_CONTEXT` above (a
+# feature-branch push) is no longer enough on its own -- these two add the
+# main-push and merge_group cases the canonical shape treats specially
+# (sha-keyed, never cancelled).
+_PUSH_MAIN_CONTEXT = {
+    "github.head_ref": "",
+    "github.ref_name": "main",
+    "github.ref": "refs/heads/main",
+    "github.event.pull_request.number": "",
+    "github.event.number": "",
+    "github.workflow": "W",
+    "github.event_name": "push",
+    "github.sha": "mainsha1",
+    "github.run_id": "5",
+    "github.event.inputs.ref": "",
+}
+_MERGE_GROUP_CONTEXT = {
+    "github.head_ref": "",
+    "github.ref_name": "gh-readonly-queue/main/pr-7-abcdef",
+    "github.ref": "refs/heads/gh-readonly-queue/main/pr-7-abcdef",
+    "github.event.pull_request.number": "",
+    "github.event.number": "",
+    "github.workflow": "W",
+    "github.event_name": "merge_group",
+    "github.sha": "mergegroupsha1",
+    "github.run_id": "6",
+    "github.event.inputs.ref": "",
+}
 
 _EXPRESSION = re.compile(r"\$\{\{(.+?)\}\}", re.DOTALL)
-# CHAOS-4928: matches the one compound shape a group key now uses --
-# `(github.some_context == 'literal' && github.other_context)` -- as a single
-# `||`-alternative. GitHub Actions' `&&`/`||` return one of their OPERAND
-# VALUES (JS-like), not a coerced boolean: `A && B` is `A` if `A` is falsy,
-# else `B`; `A || B` is `A` if `A` is truthy, else `B`. Here the left side of
-# `&&` is itself an `==` comparison, which DOES evaluate to a real boolean,
-# so `false && B` is exactly `false` -- falsy either way, so the difference
-# doesn't matter for what this test checks, but the comment says so because
-# assuming coercion transparently, then also matching it in the compound
-# form.
-_CONDITIONAL = re.compile(
-    r"^\(\s*(?P<lhs_ctx>[\w.]+)\s*==\s*'(?P<lhs_val>[^']*)'\s*&&\s*(?P<rhs_ctx>[\w.]+)\s*\)$"
+
+# CHAOS-4906 fleet audit (09-03): the fleet's canonical concurrency shape
+# grew a genuinely nested boolean expression --
+#   pr.number || ((ref == 'refs/heads/main' || event_name == 'merge_group')
+#                  && sha) || ref
+# -- an OR-inside-an-AND-inside-an-OR, plus a plain `!=` comparison for
+# cancel-in-progress. The previous evaluator handled exactly one compound
+# shape via a single-purpose regex (`_CONDITIONAL`) and a naive
+# `.split("||")` that does not respect parentheses at all -- it mis-tokenized
+# the new expression's nested parens outright (confirmed live: it produced
+# the mangled token `"((github.ref == 'refs/heads/main'"` and raised).
+# Replaced with a real (if minimal) recursive-descent evaluator for the
+# actual GitHub Actions expression grammar this fleet uses: `||`/`&&`
+# (JS-like, returning an OPERAND's value, not a coerced boolean),
+# `==`/`!=` comparisons (which DO produce a real boolean), string literals,
+# parenthesised grouping, and bare context tokens. Deliberately still not
+# general-purpose -- an operator or literal shape outside this grammar
+# raises rather than being assumed safe, same philosophy as its
+# predecessor, just with a grammar wide enough to actually cover what the
+# fleet's workflows use today.
+_TOKEN = re.compile(
+    r"""\s*(?:(?P<op>\|\||&&|==|!=|\(|\))|(?P<str>'[^']*')|(?P<ident>[A-Za-z_][\w.]*))"""
 )
 
 
-def _evaluate(expression: str, context: dict[str, str]) -> str:
-    """Evaluate the `a || b` chains these groups actually use.
-
-    Deliberately small. Anything it cannot model raises, so an unrecognised
-    expression fails the test rather than silently evaluating to something
-    convenient -- an unknown shape must not be assumed safe.
-    """
-    for alternative in expression.split("||"):
-        token = alternative.strip()
-        if token.startswith(("'", '"')) and token.endswith(("'", '"')):
-            literal = token[1:-1]
-            if literal:
-                return literal
-            # `''` is FALSY in Actions, so `${{ '' || github.ref }}` falls
-            # through to the ref. Returning the empty literal made both events
-            # model as empty and therefore equal -- a false alarm, but the model
-            # must match GitHub, not be conservative in a direction of its own.
-            continue
-        conditional = _CONDITIONAL.match(token)
-        if conditional:
-            lhs_ctx, lhs_val, rhs_ctx = conditional.group(
-                "lhs_ctx", "lhs_val", "rhs_ctx"
+def _tokenize(expression: str) -> list[str]:
+    tokens: list[str] = []
+    pos = 0
+    length = len(expression)
+    while pos < length:
+        match = _TOKEN.match(expression, pos)
+        if not match or match.end() == pos:
+            if expression[pos:].strip() == "":
+                break
+            raise AssertionError(
+                f"concurrency expression uses a shape this test cannot "
+                f"tokenize at {expression[pos:]!r} (full expression "
+                f"{expression!r}); extend _TOKEN/_tokenize rather than "
+                "assuming it is safe"
             )
-            if lhs_ctx not in context or rhs_ctx not in context:
+        pos = match.end()
+        token = match.group("op") or match.group("str") or match.group("ident")
+        if token is not None:
+            tokens.append(token)
+    return tokens
+
+
+class _Parser:
+    """Recursive-descent evaluator over `||`/`&&`/`==`/`!=`/parens/tokens.
+
+    Follows GitHub Actions' actual (JS-like) semantics: `A || B` returns `A`
+    if `A` is truthy else `B`; `A && B` returns `B` if `A` is truthy else
+    `A`. A comparison (`==`/`!=`) always produces a real `bool`. A bare
+    context token resolves through `context`, where an empty string models
+    "falsy/undefined" -- an unmodelled token raises rather than being
+    assumed safe.
+    """
+
+    def __init__(self, tokens: list[str], context: dict[str, str], source: str):
+        self._tokens = tokens
+        self._context = context
+        self._source = source
+        self._pos = 0
+
+    def _peek(self) -> str | None:
+        return self._tokens[self._pos] if self._pos < len(self._tokens) else None
+
+    def _advance(self) -> str:
+        token = self._tokens[self._pos]
+        self._pos += 1
+        return token
+
+    def parse(self) -> bool | str:
+        value = self._parse_or()
+        if self._pos != len(self._tokens):
+            raise AssertionError(
+                f"concurrency expression {self._source!r} has trailing "
+                f"tokens this test cannot model: {self._tokens[self._pos :]!r}"
+            )
+        return value
+
+    def _parse_or(self) -> bool | str:
+        value = self._parse_and()
+        while self._peek() == "||":
+            self._advance()
+            rhs = self._parse_and()
+            value = value if _truthy(value) else rhs
+        return value
+
+    def _parse_and(self) -> bool | str:
+        value = self._parse_comparison()
+        while self._peek() == "&&":
+            self._advance()
+            rhs = self._parse_comparison()
+            value = rhs if _truthy(value) else value
+        return value
+
+    def _parse_comparison(self) -> bool | str:
+        lhs = self._parse_atom()
+        if self._peek() in ("==", "!="):
+            op = self._advance()
+            rhs = self._parse_atom()
+            return (lhs == rhs) if op == "==" else (lhs != rhs)
+        return lhs
+
+    def _parse_atom(self) -> bool | str:
+        token = self._peek()
+        if token is None:
+            raise AssertionError(
+                f"concurrency expression {self._source!r} ended where a "
+                "value was expected"
+            )
+        if token == "(":
+            self._advance()
+            value = self._parse_or()
+            if self._advance() != ")":
                 raise AssertionError(
-                    f"concurrency expression uses {token!r}, which this test "
-                    "cannot model; extend the context above rather than "
-                    "assuming it is safe"
+                    f"concurrency expression {self._source!r} is missing a "
+                    "closing paren"
                 )
-            if context[lhs_ctx] != lhs_val:
-                continue  # the `==` is false -> this alternative is falsy
-            if context[rhs_ctx]:
-                return context[rhs_ctx]
-            continue
-        if token in context:
-            if context[token]:
-                return context[token]
-            continue
+            return value
+        self._advance()
+        if token.startswith("'") and token.endswith("'"):
+            return token[1:-1]
+        if token not in self._context:
+            raise AssertionError(
+                f"concurrency expression {self._source!r} references "
+                f"{token!r}, which this test's context does not model; "
+                "extend the context above rather than assuming it is safe"
+            )
+        return self._context[token]
+
+
+def _truthy(value: bool | str) -> bool:
+    return value if isinstance(value, bool) else value != ""
+
+
+def _evaluate(expression: str, context: dict[str, str]) -> str:
+    """Evaluate one `${{ ... }}` expression's inner text to its rendered
+    string value (used for concurrency GROUP keys, which always resolve to
+    a string in every shape this fleet uses -- a top-level boolean result
+    here is a modelling bug in the expression or the test, not a valid
+    render, so it raises rather than silently stringifying `True`/`False`
+    in a way GitHub itself would not)."""
+    value = _Parser(_tokenize(expression), context, expression).parse()
+    if isinstance(value, bool):
         raise AssertionError(
-            f"concurrency expression uses {token!r}, which this test cannot "
-            "model; extend the context above rather than assuming it is safe"
+            f"concurrency expression {expression!r} rendered to a bare "
+            f"boolean ({value!r}) at the top level -- group keys must "
+            "resolve to a string; this is a real modelling mismatch, not "
+            "safe to stringify away"
         )
-    return ""
+    return value
+
+
+def _evaluate_boolean(expression: str, context: dict[str, str]) -> bool:
+    """Evaluate a `cancel-in-progress` expression (a real top-level
+    boolean, unlike a group key) to `True`/`False`."""
+    inner_match = _EXPRESSION.search(expression)
+    inner = inner_match.group(1).strip() if inner_match else expression.strip()
+    value = _Parser(_tokenize(inner), context, expression).parse()
+    return _truthy(value)
 
 
 def _render(group: str, context: dict[str, str]) -> str:
@@ -361,35 +494,8 @@ def test_mirror_test_images_serialises_push_and_schedule_but_isolates_dispatch_a
 # This guard checks every workflow with a PR-numbered group and an actual
 # `pull_request` trigger: `cancel-in-progress` must not be hardcoded
 # `false`, and if it is an expression, it must evaluate truthy for a
-# `pull_request` event.
-_BOOLEAN_EQ = re.compile(r"^(?P<ctx>[\w.]+)\s*(?P<op>==|!=)\s*'(?P<val>[^']*)'$")
-
-
-def _evaluate_boolean(expression: str, context: dict[str, str]) -> bool:
-    """Evaluate the single comparison shape every PR-numbered-group
-    workflow's `cancel-in-progress` expression actually uses today
-    (`github.event_name == 'pull_request'`). Deliberately narrow, like
-    `_evaluate` above: an unrecognised shape raises rather than being
-    assumed safe -- a workflow with a genuinely more complex
-    `cancel-in-progress` expression needs this model extended, not
-    silently skipped."""
-    match = _EXPRESSION.search(expression)
-    inner = match.group(1).strip() if match else expression.strip()
-    comparison = _BOOLEAN_EQ.match(inner)
-    if not comparison:
-        raise AssertionError(
-            f"cancel-in-progress expression {expression!r} uses a shape "
-            "this test cannot model; extend _evaluate_boolean rather than "
-            "assuming it is safe"
-        )
-    ctx, op, val = comparison.group("ctx", "op", "val")
-    if ctx not in context:
-        raise AssertionError(
-            f"cancel-in-progress expression {expression!r} references "
-            f"{ctx!r}, which this test's context does not model"
-        )
-    actual = context[ctx]
-    return (actual == val) if op == "==" else (actual != val)
+# `pull_request` event. (`_evaluate_boolean` is the general recursive-
+# descent evaluator defined above, alongside `_evaluate`/`_render`.)
 
 
 def test_pr_numbered_groups_cancel_on_pull_request() -> None:
@@ -429,3 +535,157 @@ def test_pr_numbered_groups_cancel_on_pull_request() -> None:
         "concurrency group -- this test would pass vacuously, which is "
         "the failure mode it exists to prevent"
     )
+
+
+# Workflows with their own deliberate, narrower, already-tested contract
+# instead of the fleet's canonical shape below. mirror-test-images.yml
+# shares ONE group across push+schedule on purpose (CHAOS-4928, tested by
+# test_mirror_test_images_serialises_push_and_schedule_but_isolates_dispatch_and_pr
+# above) -- a repo-wide lock chris's 09-03 ruling explicitly carves out.
+_CANONICAL_SHAPE_EXEMPT: set[str] = {"mirror-test-images.yml"}
+
+
+def _in_scope_workflows() -> list[Path]:
+    found: list[Path] = []
+    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        if path.name in _CANONICAL_SHAPE_EXEMPT:
+            continue
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        triggers = document.get(True) or document.get("on") or {}
+        if not isinstance(triggers, dict):
+            continue
+        if "push" in triggers or "pull_request" in triggers:
+            found.append(path)
+    return found
+
+
+def _with_inputs_action(context: dict[str, str]) -> dict[str, str]:
+    # docs-cloudflare.yml's group has a trailing `${{ inputs.action ||
+    # 'preview' }}` segment that every other in-scope workflow's group
+    # lacks. `inputs.*` (unlike `github.event.inputs.*`) is a context this
+    # module never otherwise models; adding it here, local to this test,
+    # keeps that one file's extra segment from making every context dict
+    # above carry a token every other workflow never references.
+    return {**context, "inputs.action": ""}
+
+
+def _cancels(cancel: object, context: dict[str, str]) -> bool:
+    """`cancel-in-progress` is sometimes a bare YAML boolean (`true`/
+    `false`) and sometimes an `${{ ... }}` expression string -- normalise
+    both through the same evaluator's truthiness so a regression back to a
+    bare `true` (which WOULD cancel main/merge_group) is caught by the
+    same assertions as an equivalent but wrongly-shaped expression."""
+    if isinstance(cancel, bool):
+        return cancel
+    return _evaluate_boolean(str(cancel), context)
+
+
+@pytest.mark.parametrize(
+    "path",
+    _in_scope_workflows(),
+    ids=lambda value: value.name if isinstance(value, Path) else "",
+)
+def test_canonical_shape_never_cancels_main_or_merge_group(path: Path) -> None:
+    """CHAOS-4906 fleet ruling (09-03, chris binding, incident-informed).
+
+    Every workflow that triggers on `pull_request` or `push` must key its
+    concurrency group by PR number (`pull_request`), by ref (a push to a
+    non-main branch), or by commit sha (a push to `main`, or a
+    `merge_group` entry) -- and must cancel a stale `pull_request` run and
+    a stale non-main-branch push, while NEVER cancelling a main push or a
+    `merge_group` entry.
+
+    That "never" is not theoretical: a main push or merge_group entry WAS
+    cancelled by an earlier, less careful version of exactly this kind of
+    group key, and each time it was a measured, ticketed incident, not a
+    hypothetical --
+      - CHAOS-3948 / CHAOS-4676 (go.yml): a burst of fast-follow merges to
+        main cancelled each other's Go coverage; a merge_group burst did
+        the same to go-storage-integration.
+      - CHAOS-4921 / #2149 (docker-images.yml, arc-runner-image.yml): a
+        fast-follow push to main cancelled an in-flight or pending image
+        build for an earlier commit -- that commit's image was simply
+        never built.
+      - CHAOS-4946 (typecheck.yml): a fast-follow push to main cancelled
+        the INTRODUCING commit's own post-merge check and, separately, its
+        fix commit's check -- misattributing the regression to a later,
+        unrelated PR.
+
+    This is the single test asserting that canonical shape fleet-wide,
+    rather than one bespoke regex per workflow -- a future workflow that
+    copies an old, uncancelled-main-unsafe pattern fails here immediately.
+    """
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    triggers = document.get(True) or document.get("on") or {}
+    concurrency = document.get("concurrency") or {}
+    group = str(concurrency.get("group", ""))
+    cancel = concurrency.get("cancel-in-progress")
+
+    assert group, (
+        f"{path.name}: triggers on pull_request or push but declares no "
+        "concurrency group at all"
+    )
+    assert cancel is not None, (
+        f"{path.name}: triggers on pull_request or push but declares no "
+        "cancel-in-progress at all"
+    )
+
+    if "pull_request" in triggers:
+        pr_context = _with_inputs_action(_PULL_REQUEST_CONTEXT)
+        assert _cancels(cancel, pr_context) is True, (
+            f"{path.name}: cancel-in-progress does not cancel a stale "
+            "pull_request run -- a re-push will pile up behind it"
+        )
+        pr_group = _render(group, pr_context)
+        assert _PULL_REQUEST_CONTEXT["github.event.pull_request.number"] in pr_group, (
+            f"{path.name}: pull_request group {pr_group!r} is not keyed by PR number"
+        )
+        assert _PULL_REQUEST_CONTEXT["github.sha"] not in pr_group, (
+            f"{path.name}: pull_request group {pr_group!r} is keyed by "
+            "commit sha instead of PR number -- a re-push would get its "
+            "own group and never cancel the run it superseded"
+        )
+
+    if "push" in triggers:
+        non_main_context = _with_inputs_action(_PUSH_CONTEXT)
+        assert _cancels(cancel, non_main_context) is True, (
+            f"{path.name}: cancel-in-progress does not cancel a stale push "
+            "to a non-main branch"
+        )
+        non_main_group = _render(group, non_main_context)
+        assert _PUSH_CONTEXT["github.sha"] not in non_main_group, (
+            f"{path.name}: a push to a non-main branch is keyed by commit "
+            f"sha ({non_main_group!r}) instead of ref"
+        )
+
+        main_context = _with_inputs_action(_PUSH_MAIN_CONTEXT)
+        assert _cancels(cancel, main_context) is False, (
+            f"{path.name}: cancel-in-progress cancels a push to main -- "
+            "reopens CHAOS-3948/CHAOS-4921/#2149/CHAOS-4946 (see this "
+            "test's docstring)"
+        )
+        main_group = _render(group, main_context)
+        assert _PUSH_MAIN_CONTEXT["github.sha"] in main_group, (
+            f"{path.name}: a push to main is not keyed by commit sha (got "
+            f"{main_group!r}) -- two different commits pushed to main "
+            "close together would share a group and could cancel or "
+            "displace each other"
+        )
+        assert _PUSH_MAIN_CONTEXT["github.ref"] not in main_group, (
+            f"{path.name}: a push to main's group {main_group!r} still "
+            "contains the literal ref -- every main push would share ONE "
+            "group instead of one per commit"
+        )
+
+    if "merge_group" in triggers:
+        mg_context = _with_inputs_action(_MERGE_GROUP_CONTEXT)
+        assert _cancels(cancel, mg_context) is False, (
+            f"{path.name}: cancel-in-progress cancels a merge_group entry "
+            "-- a burst of merges would lose every result but the last "
+            "(exactly CHAOS-3948's merge_group half)"
+        )
+        mg_group = _render(group, mg_context)
+        assert _MERGE_GROUP_CONTEXT["github.sha"] in mg_group, (
+            f"{path.name}: a merge_group entry is not keyed by commit sha "
+            f"(got {mg_group!r})"
+        )

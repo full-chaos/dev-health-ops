@@ -99,6 +99,16 @@ var explicitCorpusPaths = map[string]string{
 	// /tmp/build_scope_parity_table.json, so no repo-relative constant exists to
 	// match -- but it takes --stdout and its corpus is committed beside it.
 	"generate_build_scope_parity_table.py": "build_scope_parity_table.json",
+	// Its corpus is a GO PACKAGE's testdata, so it lives beside the package that
+	// loads it rather than in tests/fixtures/ -- ordinary Go layout, and not
+	// something to bend for this guard. No Path(__file__)-relative declaration can
+	// name it, because the file is not beside the generator.
+	//
+	// Naming it here makes it GUARDED rather than excused: the ratchet's surface
+	// shrinks by one instead of the corpus being permitted to rot. The generator
+	// runs fine and takes --stdout, so excludedGenerators would be the wrong map
+	// (its self-check demands a missingModule).
+	"generate_scope_grammar_corpus.py": "../../internal/pythonparity/scopeparity/testdata/corpus_seed1.json",
 }
 
 func declaredOutputPath(source []byte) (string, bool) {
@@ -159,6 +169,16 @@ var excludedGenerators = map[string]struct {
 		missingModule: "httpx2",
 		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
 	},
+	// generate_scope_grammar_corpus.py's exclusion (limits missing from the
+	// closure) was removed here CHAOS-4945, once `limits` (and its own
+	// transitives, deprecated and wrapt) were added to
+	// ci/requirements-live-python-oracles.txt. Its explicitCorpusPaths entry
+	// above already named its corpus, so it is guarded by discovery with no
+	// further change -- exactly as this comment on that entry predicted, and
+	// exactly as main's own now-superseded comment on this entry predicted
+	// too ("When limits lands this entry goes and the corpus becomes guarded
+	// with no other change") -- resolved by taking the deletion, not the
+	// comment expansion, since `limits` landing is this PR's own change.
 }
 
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {

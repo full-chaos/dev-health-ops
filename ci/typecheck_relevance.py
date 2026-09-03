@@ -103,7 +103,19 @@ def github_glob_to_regex(pattern: str) -> re.Pattern[str]:
         else:
             out.append(re.escape(pattern[index]))
             index += 1
-    return re.compile("^" + "".join(out) + "$")
+    # re.DOTALL (CHAOS-4843, round 4 of #2169's peer review, P2): without
+    # it, `.` (from `**`/`**/` above) does NOT match a literal newline in a
+    # path -- `src/**` compiled to `^src/.*$` cannot match
+    # `src/newline\ndirectory/module.py` because `.*` refuses to cross the
+    # embedded `\n` to reach the string's real end, so `$` never matches.
+    # `[^/]*` (from a bare `*`) was never affected -- a negated character
+    # class matches a literal newline regardless of DOTALL, which is
+    # exactly why the sibling control-character test (a newline inside the
+    # FINAL filename segment, matched by `[^/]*`) already passed while this
+    # gap (a newline inside a NON-final directory segment, needing `.*` to
+    # cross it) went uncaught. DOTALL only changes what `.` matches; `$`'s
+    # own end-of-string anchoring is unaffected (no MULTILINE here).
+    return re.compile("^" + "".join(out) + "$", re.DOTALL)
 
 
 def is_relevant(changed: list[str], patterns: list[str]) -> list[str]:

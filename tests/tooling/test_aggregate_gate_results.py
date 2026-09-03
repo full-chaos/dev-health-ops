@@ -1285,6 +1285,21 @@ TYPECHECK_RELEVANCE_SCRIPT = ROOT / "ci" / "typecheck_relevance.py"
         # "mypy.ini" and matched it anyway. NUL-splitting (main()'s current
         # form) never touches the path's own whitespace.
         pytest.param([" mypy.ini"], False, id="leading-space-is-not-the-real-mypy-ini"),
+        # CHAOS-4843, round 4 of #2169's peer review, P2: a literal newline
+        # in a NON-final path segment defeated `**`/`**/`'s `.*` translation
+        # (Python's `.` does not match `\n` without re.DOTALL) even though
+        # the producer side (`-z`, NUL-split, round 2/3's fix) delivers the
+        # literal path correctly -- the matcher's own regex translation was
+        # the gap, not the pipe. A newline in the FINAL segment (see
+        # tests/tooling/test_typecheck_relevant_diff.py's control-character
+        # test) already worked, because that position is matched by
+        # `[^/]*` (a bare `*`), a negated character class that matches `\n`
+        # regardless of DOTALL -- only `.*` (from `**`) needed the fix.
+        pytest.param(
+            ["src/newline\ndirectory/module.py"],
+            True,
+            id="newline-in-a-non-final-path-segment",
+        ),
     ],
 )
 def test_typecheck_relevance_script_behaviour(

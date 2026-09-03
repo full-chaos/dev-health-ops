@@ -199,9 +199,15 @@ func (t TxOps) Query(ctx context.Context, sql string, args ...any) (Rows, error)
 // time pgx adds a method.
 type Rows struct{ rows pgx.Rows }
 
-// A zero Rows is what an errored Query returns. Its methods must not panic --
-// a caller that ignores the error and iterates gets an empty result and an
-// error from Err(), which is pgx's own convention.
+// A zero Rows is what an errored Query returns, and NONE of its methods may
+// panic.
+//
+// The first version guarded three of eight and the comment claimed all of them.
+// Close, Err and Next were safe, so the iterate path described in that comment
+// really was fine -- but CommandTag, FieldDescriptions, Scan, Values and
+// RawValues dereferenced a nil pgx.Rows, and calling CommandTag after a Query
+// without iterating is an ordinary thing to do. A claim about all methods
+// backed by a check on three: found by lane-auth-contracts.
 func (r Rows) valid() bool { return r.rows != nil }
 
 func (r Rows) Close() {
@@ -215,12 +221,37 @@ func (r Rows) Err() error {
 	}
 	return r.rows.Err()
 }
-func (r Rows) CommandTag() pgconn.CommandTag                { return r.rows.CommandTag() }
-func (r Rows) FieldDescriptions() []pgconn.FieldDescription { return r.rows.FieldDescriptions() }
-func (r Rows) Next() bool                                   { return r.valid() && r.rows.Next() }
-func (r Rows) Scan(dest ...any) error                       { return r.rows.Scan(dest...) }
-func (r Rows) Values() ([]any, error)                       { return r.rows.Values() }
-func (r Rows) RawValues() [][]byte                          { return r.rows.RawValues() }
+func (r Rows) CommandTag() pgconn.CommandTag {
+	if !r.valid() {
+		return pgconn.CommandTag{}
+	}
+	return r.rows.CommandTag()
+}
+func (r Rows) FieldDescriptions() []pgconn.FieldDescription {
+	if !r.valid() {
+		return nil
+	}
+	return r.rows.FieldDescriptions()
+}
+func (r Rows) Next() bool { return r.valid() && r.rows.Next() }
+func (r Rows) Scan(dest ...any) error {
+	if !r.valid() {
+		return ErrMutationFailed
+	}
+	return r.rows.Scan(dest...)
+}
+func (r Rows) Values() ([]any, error) {
+	if !r.valid() {
+		return nil, ErrMutationFailed
+	}
+	return r.rows.Values()
+}
+func (r Rows) RawValues() [][]byte {
+	if !r.valid() {
+		return nil
+	}
+	return r.rows.RawValues()
+}
 
 func prependExecMode(args []any) []any {
 	return append([]any{pgx.QueryExecModeExec}, args...)

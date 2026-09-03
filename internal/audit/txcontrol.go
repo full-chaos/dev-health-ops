@@ -131,14 +131,40 @@ func refuseMultipleStatements(sql string) error {
 				}
 			}
 			i = j
-		case sql[i] == '\'':
-			// A single-quoted literal. '' is an escaped quote, not the end.
+		case sql[i] == '"':
+			// A double-quoted IDENTIFIER. PostgreSQL permits a semicolon
+			// inside one, and "" is an escaped quote. Round 3 found this:
+			// `SELECT 1 AS "x;!"; COMMIT;` slipped through because the scanner
+			// did not know quoted identifiers existed.
 			j := i + 1
 			for j < len(sql) {
-				if sql[j] == '\\' {
-					// Only meaningful in E'' strings, but skipping the next
-					// byte is harmless in a standard literal: a backslash there
-					// is an ordinary character and cannot be a quote.
+				if sql[j] == '"' {
+					if j+1 < len(sql) && sql[j+1] == '"' {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			i = j
+		case sql[i] == '\'':
+			// A single-quoted literal. '' is an escaped quote, not the end.
+			//
+			// A BACKSLASH IS NOT AN ESCAPE HERE. Under the default
+			// standard_conforming_strings=on, an ordinary literal treats
+			// backslash literally; only E'...' gives it escaping power. The
+			// first version of this scanner skipped backslash-plus-next-byte
+			// in every literal, and the comment even said doing so was
+			// harmless. It was not: in `'n\'` the backslash is data, the
+			// quote that follows CLOSES the literal, and skipping it swallowed
+			// the closing quote and then the command separator after it.
+			// Round 3 found that. The E-prefix is checked instead.
+			escapes := i > 0 && (sql[i-1] == 'E' || sql[i-1] == 'e')
+			j := i + 1
+			for j < len(sql) {
+				if escapes && sql[j] == '\\' {
 					j += 2
 					continue
 				}

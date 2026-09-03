@@ -129,7 +129,7 @@ func TestNothingOutsideThisPackageWritesTheGuardedTables(t *testing.T) {
 	}
 
 	for _, offender := range offenders {
-		t.Errorf("%s — every write to a guarded table must go through audit.Commit, "+
+		t.Errorf("%s — every INSERT into a guarded table must go through audit.Commit (this guard covers INSERT only), "+
 			"so the state mutation, the outbox event and the audit row commit together. "+
 			"If this write is legitimate, add it to permittedWriters with the reason.", offender)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -35,6 +36,23 @@ func TestTxOpsCannotBeAssertedBackToACommitCapableValue(t *testing.T) {
 	}
 	if _, ok := boxed.(interface{ Conn() any }); ok {
 		t.Error("TxOps exposes the connection")
+	}
+
+	// ROUND 3'S FIFTH ESCAPE, pinned. pgx.Rows carries a public Conn()
+	// returning the raw *pgx.Conn, so hiding Conn on TxOps was never enough --
+	// the capability left through a RETURN TYPE. Query now returns our own
+	// concrete Rows, which has no Conn at any depth.
+	// The signature must be pgx's REAL one. A probe written as
+	// `interface{ Conn() any }` matches nothing and passes whatever is
+	// returned -- including pgx.Rows itself. That version was written here
+	// first and would have certified the escape as closed while testing
+	// nothing, which is the substitution this whole package is a case study in.
+	var rows any = Rows{}
+	if _, ok := rows.(interface{ Conn() *pgx.Conn }); ok {
+		t.Error("Rows exposes Conn() — the capability leaves through the return type again")
+	}
+	if _, ok := rows.(interface{ Commit(context.Context) error }); ok {
+		t.Error("Rows exposes Commit()")
 	}
 
 	// The accepting half: it must still satisfy what a mutation legitimately

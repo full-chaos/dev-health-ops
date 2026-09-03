@@ -86,6 +86,20 @@ func TestMultipleStatementsAreRefused(t *testing.T) {
 		{"dollar-quoted body", `INSERT INTO t (a) VALUES ($$; COMMIT;$$)`, false},
 		{"tagged dollar-quoted body", `INSERT INTO t (a) VALUES ($tag$; COMMIT;$tag$)`, false},
 		{"no semicolon at all", `INSERT INTO t (a) VALUES (1)`, false},
+
+		// ROUND 3 FOUND BOTH OF THESE. Permanent red fixtures.
+		{"semicolon inside a quoted identifier",
+			`INSERT INTO t SELECT 1 AS "x;!"; COMMIT;`, true},
+		{"ordinary string ending in a backslash: the quote still closes",
+			`INSERT INTO t VALUES ('n\', chr(115)); COMMIT;`, true},
+
+		// The accepting halves of the same two rules.
+		{"quoted identifier with a semicolon and NO second statement",
+			`INSERT INTO t SELECT 1 AS "x;!"`, false},
+		{"E-string genuinely escapes, so the quote does not close",
+			`INSERT INTO t VALUES (E'n\'; COMMIT;')`, false},
+		{"escaped double quote inside an identifier",
+			`INSERT INTO t SELECT 1 AS "a""b;c"`, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := refuseMultipleStatements(c.sql)

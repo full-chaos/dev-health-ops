@@ -89,6 +89,28 @@ def _scenarios() -> list[dict[str, Any]]:
             },
         },
         {
+            # ALL THREE tiers carry real, non-empty content simultaneously --
+            # every other sort-order case above keeps tiers cleanly
+            # separated (at most one ever has a real title/message), which
+            # lets a regression that only preserves argument order when
+            # OTHER tiers are also populated hide undetected (CHAOS-4441 r3
+            # finding). issue_ids out of sort order, same opposite-direction
+            # Zebra/Apple shape as the issue-only case above, PLUS a
+            # nonempty PR and a nonempty commit that must both be ignored
+            # (issue tier outranks them) -- proves priority AND
+            # within-tier sort order at the same time.
+            "label": "sorted_order_within_tier_holds_with_all_tiers_populated",
+            "issue_ids": ["i2", "i1"],
+            "work_item_map": {
+                "i1": {"title": "Zebra issue title", "type": "bug"},
+                "i2": {"title": "Apple issue title", "type": "feature"},
+            },
+            "pr_ids": ["p1"],
+            "pr_map": {"p1": {"title": "PR title must be ignored"}},
+            "commit_ids": ["c1"],
+            "commit_map": {"c1": {"message": "Commit message must be ignored"}},
+        },
+        {
             "label": "pr_title_used_when_no_issue_title",
             "issue_ids": ["i1"],
             "work_item_map": {"i1": {"title": "", "type": "bug"}},

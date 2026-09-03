@@ -121,6 +121,41 @@
       }
     },
     {
+      "commit_ids": [
+        "c1"
+      ],
+      "commit_map": {
+        "c1": {
+          "message": "Commit message must be ignored"
+        }
+      },
+      "expected_name": "Zebra issue title",
+      "expected_type": "bug",
+      "issue_ids": [
+        "i2",
+        "i1"
+      ],
+      "label": "sorted_order_within_tier_holds_with_all_tiers_populated",
+      "pr_ids": [
+        "p1"
+      ],
+      "pr_map": {
+        "p1": {
+          "title": "PR title must be ignored"
+        }
+      },
+      "work_item_map": {
+        "i1": {
+          "title": "Zebra issue title",
+          "type": "bug"
+        },
+        "i2": {
+          "title": "Apple issue title",
+          "type": "feature"
+        }
+      }
+    },
+    {
       "commit_ids": [],
       "commit_map": {},
       "expected_name": "PR title wins",

@@ -132,6 +132,62 @@ def test_fan_in_gate_reads_ancestry_not_equality() -> None:
     )
 
 
+def test_fan_in_job_serialises_via_a_never_cancelled_concurrency_group() -> None:
+    """The re-read-immediately-before-tagging inside the fan-in job
+    NARROWS the cross-run race, it doesn't close it (team-lead review):
+    two fan-in runs at different commits can each pass their own ancestor
+    check against a `latest` that predates the other's write, then tag in
+    the wrong order regardless. A dedicated concurrency group serializes
+    every fan-in run against every other one -- and it must never cancel a
+    queued run, because cancelling one here means that commit's moving-tag
+    decision never happens at all, not that it happens late."""
+    jobs = _jobs()
+    fan_in_jobs = {
+        name: job for name, job in jobs.items() if "fan-in" in name or "fan_in" in name
+    }
+    assert fan_in_jobs, "no fan-in job found (see the other test in this file)"
+    for name, job in fan_in_jobs.items():
+        concurrency = job.get("concurrency")
+        assert isinstance(concurrency, dict) and concurrency.get("group"), (
+            f"{name}: no concurrency group set -- fan-in runs for different "
+            "commits can race each other even with the ancestor check in place"
+        )
+        assert concurrency.get("cancel-in-progress") is False, (
+            f"{name}: concurrency.cancel-in-progress must be explicitly false -- "
+            "cancelling a queued fan-in run silently drops that commit's "
+            "moving-tag decision entirely, the exact failure shape this ticket "
+            "exists to close"
+        )
+
+
+def test_fan_in_job_has_a_bounded_fallback_for_unlabeled_families() -> None:
+    """dev-hops-runner and dev-hops-api predate this ticket's revision
+    label and currently carry no Labels map at all (measured, lane-084-
+    prod) -- a labelless `:latest` is not the same as a missing `:latest`
+    (bootstrap) and needs its own resolution path, not a permanent
+    decline. The fallback must be a BOUNDED walk (an unbounded one is a
+    runaway API-call risk against the registry) and must use digest
+    equality against successive candidate commits, not a single lookup --
+    digest equality alone only answers "is `latest` at commit X" for a
+    known X (ci-flakes review), so the fallback has to supply that X by
+    walking, not assume it."""
+    fan_in_jobs = [
+        job for name, job in _jobs().items() if "fan-in" in name or "fan_in" in name
+    ]
+    assert fan_in_jobs, "no fan-in job found (see the other test in this file)"
+    combined_run_text = "\n".join(
+        str(step.get("run", "")) for job in fan_in_jobs for step in _steps(job)
+    )
+    assert "git log --first-parent" in combined_run_text, (
+        "the fan-in job's unlabeled-family fallback must walk first-parent "
+        "history from the built commit, not the label alone"
+    )
+    assert "-n 50" in combined_run_text or "-n50" in combined_run_text, (
+        "the fan-in job's history walk for unlabeled families must be bounded "
+        "-- an unbounded walk against the registry is a runaway API-call risk"
+    )
+
+
 def test_build_jobs_set_the_revision_label_the_fan_in_job_reads() -> None:
     """The fan-in job's ancestry check is only as good as the label it
     reads. If `build`/`go-build` stop setting

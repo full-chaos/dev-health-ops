@@ -608,6 +608,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [merge, go-merge]
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    # team-lead (CHAOS-4947 review): the re-read-immediately-before-tagging
+    # inside the step below NARROWS the cross-run race, it doesn't close
+    # it -- two fan-in runs at different commits can both pass their own
+    # ancestor check (each reading a `latest` that predates the other's
+    # write) and then tag in the wrong order regardless. A dedicated,
+    # never-cancelled concurrency group serializes every fan-in run against
+    # every other one, so the re-read step is always looking at the
+    # PREVIOUS fan-in's actual result, not a stale value racing against it.
+    # cancel-in-progress MUST stay false: cancelling a queued fan-in here
+    # would skip that commit's moving-tag decision entirely, not just delay
+    # it -- the exact "an event went by with no error and nothing tagged"
+    # shape this whole ticket exists to close.
+    concurrency:
+      group: latest-tagging
+      cancel-in-progress: false
     steps:
       # fetch-depth: 0 for `git merge-base --is-ancestor` below; checked out
       # at the exact commit this run built (needs.merge.outputs.sha), not
@@ -687,12 +702,75 @@ jobs:
               continue
             fi
 
-            base_sha="$(docker buildx imagetools inspect "${image}:latest" --format '{{json .}}' 2>/dev/null \
-              | jq -r '.image["linux/amd64"].config.Labels["org.opencontainers.image.revision"] // empty')"
-            if [ -z "${base_sha}" ]; then
-              echo "BOOTSTRAP ${family}: no existing latest (or no revision label on it), tagging unconditionally"
+            # No `|| true` here: that puts `||` on the same line as a
+            # `docker` invocation, which is exactly the shape that trips
+            # tests/tooling/test_go_integration_sharding.py's naive
+            # (quote-unaware) registry scanner (see the CGO-check step in
+            # arc-runner-image.yml, PR #2154, for the identical trap and
+            # fix). `if cmd; then ... fi` keeps the `;` after the command's
+            # own quotes are already closed, which parses cleanly.
+            if latest_json="$(docker buildx imagetools inspect "${image}:latest" --format '{{json .}}' 2>/dev/null)"; then
+              :
+            else
+              latest_json=""
+            fi
+            if [ -z "${latest_json}" ]; then
+              echo "BOOTSTRAP ${family}: no existing latest tag, tagging unconditionally"
               docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
-            elif git merge-base --is-ancestor "${base_sha}" "${BUILT_SHA}"; then
+              continue
+            fi
+
+            # `imagetools inspect` on a multi-platform tag returns a
+            # manifest LIST; the revision label lives in each platform's
+            # own image config, not on the list itself (team-lead review).
+            # Read both and require agreement -- a mismatch means the two
+            # platform images don't actually represent the same build (a
+            # broken/partial publish), and guessing which one is right is
+            # worse than declining.
+            amd64_rev="$(jq -r '.image["linux/amd64"].config.Labels["org.opencontainers.image.revision"] // empty' <<<"${latest_json}")"
+            arm64_rev="$(jq -r '.image["linux/arm64"].config.Labels["org.opencontainers.image.revision"] // empty' <<<"${latest_json}")"
+            if [ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ] && [ "${amd64_rev}" != "${arm64_rev}" ]; then
+              echo "DECLINE ${family}: platform labels disagree on :latest (amd64=${amd64_rev} arm64=${arm64_rev}) -- refusing to guess which is authoritative"
+              continue
+            fi
+            base_sha="${amd64_rev:-${arm64_rev}}"
+
+            if [ -z "${base_sha}" ]; then
+              # dev-hops-runner/dev-hops-api predate this PR's label and
+              # carry NO Labels map at all today (measured, 084-prod) -- a
+              # labelless :latest is NOT the same as a MISSING :latest
+              # (that's BOOTSTRAP, above), and it isn't the two-platforms-
+              # disagree case either. Best-effort, bounded, fail-closed
+              # fallback: walk the BUILT commit's own first-parent history
+              # (so anything this finds is an ancestor of BUILT_SHA by
+              # construction, no separate merge-base check needed) looking
+              # for the commit whose sha- tag has the SAME manifest digest
+              # as the current :latest -- digest equality answers "is
+              # :latest at commit X" for a KNOWN X, so this only works
+              # because the walk supplies successive candidate X's
+              # (ci-flakes review). Once this family's next build lands the
+              # label, this branch never runs for it again.
+              latest_digest="$(jq -r '.manifest.digest // empty' <<<"${latest_json}")"
+              found_base=""
+              while IFS= read -r candidate_sha; do
+                candidate_short="$(echo "${candidate_sha}" | cut -c1-7)"
+                candidate_digest="$(docker buildx imagetools inspect "${image}:sha-${candidate_short}" --format '{{json .}}' 2>/dev/null \
+                  | jq -r '.manifest.digest // empty')"
+                if [ -n "${candidate_digest}" ] && [ "${candidate_digest}" = "${latest_digest}" ]; then
+                  found_base="${candidate_sha}"
+                  break
+                fi
+              done < <(git log --first-parent -n 50 --format=%H "${BUILT_SHA}")
+              if [ -n "${found_base}" ]; then
+                echo "FALLBACK ${family}: unlabeled latest resolved to ${found_base} by digest walk (an ancestor of ${BUILT_SHA} by construction), tagging latest+main"
+                docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
+              else
+                echo "WARNING: ${family} has no revision label on :latest and no commit in the last 50 first-parent ancestors of ${BUILT_SHA} matches its digest -- declining rather than guessing. This should resolve itself once ${family} gets its next label-bearing build."
+              fi
+              continue
+            fi
+
+            if git merge-base --is-ancestor "${base_sha}" "${BUILT_SHA}"; then
               echo "DESCENDANT ${family}: ${base_sha} -> ${BUILT_SHA}, tagging latest+main"
               docker buildx imagetools create -t "${image}:latest" -t "${image}:main" "${source_ref}"
             else

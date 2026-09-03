@@ -46,6 +46,13 @@ type WorkItemAttributionOutcome struct {
 //     "team = ownership" means a membership change can retarget ANY item's
 //     assignee_membership/author_membership candidate ([[feedback_team_vs_member_attribution]]).
 //
+// A scoped run also rederives its linked_issue CLOSURE, not just the
+// originally detected repo/project set -- an item one inheritable-dependency
+// hop away from an affected item may need re-verifying too, in EITHER
+// direction (see evaluateClosurePromotion). If that closure exceeds
+// workItemAttributionClosurePromotionBound of the org's total item count,
+// the run is PROMOTED to fully org-wide instead.
+//
 // A run that finds nothing changed is a genuine no-op: it writes NOTHING,
 // not even a marker -- the EXISTING watermark is still the correct
 // high-water mark, and publishing a fresh one would just be a needless
@@ -111,6 +118,41 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if err != nil {
 		return outcome, err
 	}
+
+	// CLOSURE PROMOTION (team-lead's PR-B ruling): a scoped run also
+	// rederives its linked_issue closure -- never just the originally
+	// detected repo/project set -- and if that closure is big enough to be
+	// "effectively the whole org", the run is promoted to fully org-wide
+	// rather than writing a scoped marker for it. Only evaluated for a run
+	// detectScope did NOT already decide was org-wide: an org-wide run is
+	// already a superset of any closure it could compute.
+	if !scope.orgWide {
+		promoted, reason, err := executor.evaluateClosurePromotion(ctx, orgID, affectedIDs, dependencies)
+		if err != nil {
+			return outcome, err
+		}
+		if promoted {
+			scope = workItemAttributionScopeDecision{orgWide: true, promotedReason: reason}
+			subjects, err = executor.loadAffectedSubjects(ctx, orgID, scope)
+			if err != nil {
+				return outcome, err
+			}
+			affectedIDs = make(map[string]struct{}, len(subjects))
+			for id := range subjects {
+				affectedIDs[id] = struct{}{}
+			}
+			// Re-scoped to the WHOLE org as source: the closure-scoped
+			// dependencies above only ever covered the original, smaller
+			// affected set.
+			dependencies, err = executor.loadDependencyEdges(ctx, orgID, subjects)
+			if err != nil {
+				return outcome, err
+			}
+			outcome.OrgWide, outcome.RepoIDs, outcome.ProjectKeys = true, nil, nil
+			outcome.ItemsSeen = len(subjects)
+		}
+	}
+
 	donorIDs, donorKeys := workItemAttributionDonorTargets(dependencies, subjects)
 	donors, err := executor.loadDonorSubjects(ctx, orgID, donorIDs, donorKeys)
 	if err != nil {
@@ -213,6 +255,13 @@ type workItemAttributionScopeDecision struct {
 	orgWide     bool
 	repoIDs     []string
 	projectKeys []string
+	// promotedReason is set ONLY when a scoped run's linked_issue closure
+	// exceeded workItemAttributionClosurePromotionBound and orgWide was
+	// widened to true as a result (team-lead's PR-B ruling) -- never set
+	// for a run that was org-wide from detectScope's own decision (an
+	// identities/teams change). Recorded on the org-wide run marker so a
+	// reader can tell the two apart.
+	promotedReason string
 }
 
 // detectScope reads the org-wide and scoped watermarks, compares them
@@ -507,6 +556,136 @@ func workItemAttributionDonorTargets(
 	return idList, keyList
 }
 
+// workItemAttributionClosurePromotionBound is the fraction of an org's
+// total item count above which a scoped run's linked_issue closure gets
+// PROMOTED to org-wide instead of writing a scoped marker for a set that is
+// effectively the whole org anyway (team-lead's PR-B ruling).
+const workItemAttributionClosurePromotionBound = 0.25
+
+// evaluateClosurePromotion computes the ONE-HOP linked_issue closure around
+// a scoped run's affected set:
+//
+//   - forward: donors OF affected items -- an affected item's own
+//     inheritable-dependency target, read from forwardDependencies (already
+//     loaded by ComputeOrg, scoped to the affected set as source).
+//   - reverse: items WHOSE DONOR IS AFFECTED -- an item with an
+//     inheritable-dependency edge pointing AT an affected item. Its OWN
+//     attribution may now be stale too, since what it inherits from just
+//     changed team ownership; this direction needs its own query, since
+//     forwardDependencies never loaded edges scoped by TARGET.
+//
+// If the closure (affected ∪ forward ∪ reverse) exceeds
+// workItemAttributionClosurePromotionBound of the org's total item count,
+// the run is promoted: ComputeOrg treats it as fully org-wide rather than
+// rederiving only the closure. Crossing the bound means "effectively the
+// whole org", not "a slightly bigger scoped set" -- and deciding whether a
+// SECOND hop also needs covering is more expensive than just doing the
+// whole org once the first hop already crossed the line.
+func (executor *WorkItemAttributionExecutor) evaluateClosurePromotion(
+	ctx context.Context, orgID string,
+	affectedIDs map[string]struct{},
+	forwardDependencies []teamattribution.GithubWorkItemDerivationDependencyEdge,
+) (promoted bool, reason string, err error) {
+	closure := make(map[string]struct{}, len(affectedIDs))
+	for id := range affectedIDs {
+		closure[id] = struct{}{}
+	}
+	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(forwardDependencies) {
+		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
+			continue
+		}
+		closure[edge.TargetWorkItemID] = struct{}{}
+	}
+
+	reverseSourceIDs, err := executor.loadInheritableDependencySourcesTargeting(ctx, orgID, affectedIDs)
+	if err != nil {
+		return false, "", err
+	}
+	for _, id := range reverseSourceIDs {
+		closure[id] = struct{}{}
+	}
+
+	total, err := executor.orgItemCount(ctx, orgID)
+	if err != nil {
+		return false, "", err
+	}
+	if total <= 0 || float64(len(closure))/float64(total) <= workItemAttributionClosurePromotionBound {
+		return false, "", nil
+	}
+	return true, fmt.Sprintf(
+		"linked_issue_closure_exceeded_%.0fpct: affected=%d closure=%d org_total=%d",
+		workItemAttributionClosurePromotionBound*100, len(affectedIDs), len(closure), total,
+	), nil
+}
+
+// loadInheritableDependencySourcesTargeting loads the SOURCE work item ids
+// of every INHERITABLE work_item_dependencies edge whose TARGET is one of
+// targetIDs and whose source is not itself already in targetIDs -- the
+// reverse half of evaluateClosurePromotion's one-hop closure.
+func (executor *WorkItemAttributionExecutor) loadInheritableDependencySourcesTargeting(
+	ctx context.Context, orgID string, targetIDs map[string]struct{},
+) ([]string, error) {
+	if len(targetIDs) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(targetIDs))
+	for id := range targetIDs {
+		ids = append(ids, id)
+	}
+	rows, err := executor.conn.Query(ctx, `
+SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
+FROM work_item_dependencies FINAL
+WHERE org_id = ? AND has(?, target_work_item_id)`, orgID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("query work_item_dependencies (reverse closure): %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var edges []teamattribution.GithubWorkItemDerivationDependencyEdge
+	for rows.Next() {
+		var edge teamattribution.GithubWorkItemDerivationDependencyEdge
+		if err := rows.Scan(
+			&edge.SourceWorkItemID, &edge.TargetWorkItemID, &edge.RelationshipType, &edge.LastSynced,
+		); err != nil {
+			return nil, fmt.Errorf("scan work_item_dependencies row (reverse closure): %w", err)
+		}
+		edge.OrgID = orgID
+		edges = append(edges, edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var sources []string
+	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(edges) {
+		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
+			continue
+		}
+		if _, alreadyAffected := targetIDs[edge.SourceWorkItemID]; alreadyAffected {
+			continue
+		}
+		if _, duplicate := seen[edge.SourceWorkItemID]; duplicate {
+			continue
+		}
+		seen[edge.SourceWorkItemID] = struct{}{}
+		sources = append(sources, edge.SourceWorkItemID)
+	}
+	return sources, nil
+}
+
+// orgItemCount returns the org's total work-item count, the denominator
+// evaluateClosurePromotion compares a scoped run's closure size against.
+func (executor *WorkItemAttributionExecutor) orgItemCount(ctx context.Context, orgID string) (int, error) {
+	row := executor.conn.QueryRow(ctx, `SELECT count() FROM work_items FINAL WHERE org_id = ?`, orgID)
+	// count() is UInt64; clickhouse-go's Scan does not convert a UInt64
+	// column into a Go *int (only *uint64), so the destination must match
+	// the column's own width, not the width this file otherwise thinks in.
+	var count uint64
+	if err := row.Scan(&count); err != nil {
+		return 0, fmt.Errorf("count work_items: %w", err)
+	}
+	return int(count), nil
+}
+
 // loadFacts loads the org-wide, provider-neutral ownership facts via
 // teamattribution's own ClickHouseFactSource (PR-A) -- the SAME loader the
 // sync-time deriver's providersync.githubWorkItemClickHouseDerivationContextSource
@@ -551,6 +730,7 @@ func (executor *WorkItemAttributionExecutor) publishRunMarkers(
 	if scope.orgWide {
 		return executor.writer.WriteAttributionRun(ctx, WorkItemAttributionRunRecord{
 			OrgID: orgID, RunID: runID, CompletedAt: completedAt,
+			PromotedReason: scope.promotedReason,
 		})
 	}
 	records := make([]WorkItemAttributionScopedRunRecord, 0, len(scope.repoIDs)+len(scope.projectKeys))

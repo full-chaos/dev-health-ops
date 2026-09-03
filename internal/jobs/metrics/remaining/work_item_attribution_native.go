@@ -73,7 +73,7 @@ var workItemAttributionTableRequirements = map[string][]string{
 		"is_primary", "confidence", "evidence", "computed_at",
 	},
 	"work_item_attribution_backstop_runs": {
-		"org_id", "run_id", "completed_at",
+		"org_id", "run_id", "completed_at", "promoted_reason",
 	},
 	"work_item_attribution_backstop_scoped_runs": {
 		"org_id", "scope_kind", "scope_id", "run_id", "completed_at",

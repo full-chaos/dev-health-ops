@@ -49,10 +49,19 @@ type WorkItemAttributionRow struct {
 // row -- the org-wide completion marker, published as the LAST step of an
 // org-wide run (CHAOS-2433 protocol, same as membership_backfill's
 // MembershipRunRecord).
+//
+// PromotedReason is empty for a run that was org-wide from detectScope's own
+// decision (an identities/teams change). It is non-empty ONLY when a scoped
+// run's linked_issue closure exceeded the promotion bound and was widened to
+// org-wide instead of writing a scoped marker for a set that was effectively
+// the whole org anyway (team-lead's PR-B ruling) -- the one field this table
+// does NOT mirror from #2177's work_unit_membership_runs, since membership
+// has no equivalent closure-promotion concept.
 type WorkItemAttributionRunRecord struct {
-	OrgID       string
-	RunID       string
-	CompletedAt time.Time
+	OrgID          string
+	RunID          string
+	CompletedAt    time.Time
+	PromotedReason string
 }
 
 // WorkItemAttributionScopedRunRecord is one
@@ -172,12 +181,14 @@ func (w *WorkItemAttributionClickHouseWriter) WriteAttributionRun(
 		return ErrWorkItemAttributionWriteInvalidState
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_item_attribution_backstop_runs (
-		org_id, run_id, completed_at
+		org_id, run_id, completed_at, promoted_reason
 	)`)
 	if err != nil {
 		return fmt.Errorf("prepare work_item_attribution_backstop_runs batch: %w", err)
 	}
-	if err := batch.Append(record.OrgID, record.RunID, record.CompletedAt.UTC()); err != nil {
+	if err := batch.Append(
+		record.OrgID, record.RunID, record.CompletedAt.UTC(), record.PromotedReason,
+	); err != nil {
 		return fmt.Errorf("append work_item_attribution_backstop_runs row: %w", err)
 	}
 	if err := batch.Send(); err != nil {

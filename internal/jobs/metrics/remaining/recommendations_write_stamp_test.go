@@ -191,6 +191,58 @@ func TestTheInsertNamesEveryColumnTheSinkDoes(t *testing.T) {
 	}
 }
 
+// TestAppendedGoTypesMatchTheColumnTypes closes a gap the other tests in this
+// file structurally cannot see.
+//
+// recordingBatch accepts any value, so every assertion above passes regardless
+// of the Go type appended. The real driver does not: recommendations_daily
+// declares `fired Bool` (migration 039), and appending a uint8 there fails at
+// runtime with "converting uint8 to Bool is unsupported" -- which is exactly
+// what happened here, by copying capacity's boolToUInt8 helper along with the
+// shape of its append, where that sibling's flags genuinely are UInt8.
+//
+// A stub that accepts everything makes the unit tests agree with each other and
+// with nothing else. Pinning the TYPE is what lets this be caught before a
+// container run.
+func TestAppendedGoTypesMatchTheColumnTypes(t *testing.T) {
+	batch := &recordingBatch{}
+	executor := &RecommendationsExecutor{conn: &batchingConn{batch: batch}}
+
+	if _, err := executor.writeRecommendations(context.Background(),
+		[]RecommendationRecord{{TeamID: "team-a", Fired: true}}, time.Now()); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	const firedColumn = 6
+	if _, ok := batch.rows[0][firedColumn].(bool); !ok {
+		t.Errorf("fired was appended as %T; the column is declared Bool and the "+
+			"driver refuses any narrowing to it",
+			batch.rows[0][firedColumn])
+	}
+	for index, column := range []struct {
+		position int
+		name     string
+	}{
+		{0, "team_id"}, {1, "org_id"}, {2, "rule_id"}, {3, "rule_version"},
+		{7, "severity"}, {8, "title"}, {9, "rationale"},
+		{10, "success_criterion"}, {11, "evidence_json"},
+	} {
+		if _, ok := batch.rows[0][column.position].(string); !ok {
+			t.Errorf("case %d: %s was appended as %T, want string",
+				index, column.name, batch.rows[0][column.position])
+		}
+	}
+	for _, column := range []struct {
+		position int
+		name     string
+	}{{4, "window_start"}, {5, "window_end"}, {12, "computed_at"}} {
+		if _, ok := batch.rows[0][column.position].(time.Time); !ok {
+			t.Errorf("%s was appended as %T, want time.Time",
+				column.name, batch.rows[0][column.position])
+		}
+	}
+}
+
 func indexAfter(haystack, needle string, from int) int {
 	for index := from; index+len(needle) <= len(haystack); index++ {
 		if haystack[index:index+len(needle)] == needle {

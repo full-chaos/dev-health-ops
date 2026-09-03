@@ -227,7 +227,13 @@ func (executor *RecommendationsExecutor) writeRecommendations(
 		if err := batch.Append(
 			record.TeamID, record.OrgID, record.RuleID, record.RuleVersion,
 			record.WindowStart, record.WindowEnd,
-			boolToUInt8(record.Fired), record.Severity,
+			// A NATIVE bool, not boolToUInt8. recommendations_daily.fired is
+			// declared Bool, unlike capacity_forecasts' UInt8 flags whose
+			// append this otherwise mirrors -- and the driver refuses the
+			// narrowing outright ("converting uint8 to Bool is unsupported").
+			// Copying the sibling's helper along with its shape is what put
+			// the wrong type here.
+			record.Fired, record.Severity,
 			record.Title, record.Rationale, record.SuccessCriterion,
 			record.EvidenceJSON,
 			// The write stamp, NOT record.ComputedAt -- see above.

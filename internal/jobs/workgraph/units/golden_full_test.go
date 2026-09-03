@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -127,21 +128,39 @@ func TestBuildComponentsMatchesFrozenPythonGoldenExhaustivelyLegacyDeletePath(t 
 // comparator only asserted against a passing input is itself untested -- the
 // differential-oracle lesson this repo already paid for (CHAOS-3033).
 //
-// CHAOS-4771 KEYS THE COMPARISON BY work_unit_id, NOT POSITION -- a deliberate
-// change from the pre-fix comparator, not a loosening of it. Before this fix,
-// live and golden were produced by the IDENTICAL algorithm, so positional
-// equality and content equality were the same claim. Now that removeHubs
-// partitions instead of deletes, live carries extra singleton components that
-// the golden's own sorted-node-tuple ordering (components.py:301-303) can
-// insert ANYWHERE in the list -- a single extra element near the front shifts
-// every following index, so positional comparison would report thousands of
-// "mismatches" that are really just index drift, hiding any real defect in the
-// noise. The invariant that survives the fix, unconditionally, is: removeHubs's
+// CHAOS-4771 KEYS THE EXISTENCE/CONTENT CHECK BY work_unit_id, NOT RAW
+// POSITION -- a deliberate change from the pre-fix comparator, not a loosening
+// of it. Before this fix, live and golden were produced by the IDENTICAL
+// algorithm, so positional equality and content equality were the same claim.
+// Now that removeHubs partitions instead of deletes, live carries extra
+// singleton components that the golden's own sorted-node-tuple ordering
+// (components.py:301-303) can insert ANYWHERE in the list -- a single extra
+// element near the front shifts every following RAW index, so comparing raw
+// positions would report thousands of "mismatches" that are really just index
+// drift, hiding any real defect in the noise.
+//
+// CORRECTED (codex round 1 on #2172, P2): an earlier version of this comment
+// went further and dropped order-checking ENTIRELY, which was an
+// overcorrection -- component order IS still load-bearing (partitioned
+// materialization dispatches numeric component_indexes, chquery.go:24), and
+// throwing the whole invariant away to dodge the singleton-shift problem let a
+// real reordering bug (e.g. two components swapped) pass silently. What
+// actually survives the fix, provably: BuildComponents's final sort is ONE
+// stable total order over the combined (survivors + new singletons) list, so
+// two survivors' RELATIVE order to each other cannot flip just because
+// singletons were interleaved between them -- only an actual reordering bug
+// can do that. So this comparator checks order too, on the golden-matching
+// SUBSET of live (singletons excluded, since they have no golden position to
+// compare against) -- see the ORDER check below, keyed by filtering live to
+// golden's ids while preserving live's own sequence, not by raw index.
+//
+// The invariant that survives the fix, unconditionally: removeHubs's
 // hub-selection loop and the reduced active graph it recomputes each round are
 // BYTE-FOR-BYTE the pre-fix algorithm (see components.go) -- only what happens
 // to a chosen hub changed. So every golden component must still appear,
-// IDENTICALLY, somewhere in live, and live's only permitted extra output is one
-// singleton fragment per node the golden's own dropped_nodes counted.
+// IDENTICALLY and in golden's relative ORDER, somewhere in live, and live's
+// only permitted extra output is one singleton fragment per node the golden's
+// own dropped_nodes counted.
 //
 // Returns one message per divergence; empty means parity.
 func diffAgainstGoldenPartitioned(
@@ -178,6 +197,65 @@ func diffAgainstGoldenPartitioned(
 	}
 	if missing > 8 {
 		failures = append(failures, fmt.Sprintf("... and %d further missing/changed golden components", missing-8))
+	}
+
+	// ORDER, among the golden-matching subset of live (codex round 1 on #2172,
+	// P2): the earlier version of this comparator dropped position-checking
+	// entirely, reasoning that the new singleton fragments can sort anywhere
+	// and shift every following index -- true, but it threw out a real
+	// invariant along with the shifting one. Component order is load-bearing:
+	// partitioned materialization dispatches numeric component_indexes
+	// (chquery.go:24) and each chunk worker re-derives the list, so index N
+	// must name the same component on both planes. What survives the fix,
+	// provably: BuildComponents's final sort is a single GLOBAL sort by node
+	// key over the combined (survivors + new singletons) list -- a stable
+	// total order, so two survivors whose relative order was A-before-B in
+	// golden cannot come out B-before-A in live merely because singletons were
+	// interleaved between them; only an ACTUAL reordering bug could do that.
+	// So: filter live down to just the components matching a golden
+	// work_unit_id, preserve live's own order, and assert that sequence
+	// equals golden.Components exactly -- singletons are correctly excluded
+	// here (they have no golden counterpart) and checked separately below.
+	// ORDER, among the golden-matching subset of live (codex round 1 on #2172,
+	// P2): the earlier version of this comparator dropped position-checking
+	// entirely, reasoning that the new singleton fragments can sort anywhere
+	// and shift every following index -- true, but it threw out a real
+	// invariant along with the shifting one. Component order is load-bearing:
+	// partitioned materialization dispatches numeric component_indexes
+	// (chquery.go:24) and each chunk worker re-derives the list, so index N
+	// must name the same component on both planes. What survives the fix,
+	// provably: BuildComponents's final sort is a single GLOBAL sort by node
+	// key over the combined (survivors + new singletons) list -- a stable
+	// total order, so two survivors whose relative order was A-before-B in
+	// golden cannot come out B-before-A in live merely because singletons were
+	// interleaved between them; only an ACTUAL reordering bug could do that.
+	// So: filter live down to just the components matching a golden
+	// work_unit_id, preserve live's own order, and assert that sequence
+	// equals golden.Components exactly -- singletons are correctly excluded
+	// here (they have no golden counterpart) and checked separately below.
+	matchingLiveInOrder := make([]goldenComponent, 0, len(golden.Components))
+	for _, component := range live {
+		if _, inGolden := goldenByID[component.WorkUnitID]; inGolden {
+			matchingLiveInOrder = append(matchingLiveInOrder, component)
+		}
+	}
+	reordered := 0
+	for position := range golden.Components {
+		if position >= len(matchingLiveInOrder) {
+			break // component-count mismatch is reported separately below.
+		}
+		if golden.Components[position].WorkUnitID != matchingLiveInOrder[position].WorkUnitID {
+			reordered++
+			if reordered <= 8 {
+				failures = append(failures, fmt.Sprintf(
+					"component order: golden position %d is %s, go's matching-subset position %d is %s",
+					position, golden.Components[position].WorkUnitID, position, matchingLiveInOrder[position].WorkUnitID,
+				))
+			}
+		}
+	}
+	if reordered > 8 {
+		failures = append(failures, fmt.Sprintf("... and %d further order mismatches", reordered-8))
 	}
 
 	// live's only permitted addition over golden: one singleton fragment
@@ -337,8 +415,19 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 		for position, component := range baseline {
 			copied[position] = goldenComponent{
 				WorkUnitID: component.WorkUnitID,
-				Nodes:      append([][]string(nil), component.Nodes...),
-				EdgeIDs:    append([]string(nil), component.EdgeIDs...),
+				// slices.Clone, not append(T(nil), s...): the latter silently
+				// downgrades a non-nil EMPTY slice to nil (append with zero
+				// elements to add returns its nil-vs-not input verbatim through
+				// no realloc), which made every planted-defect mutation below
+				// pass for the WRONG reason -- reflect.DeepEqual sees
+				// "edge_ids": null diverge from golden's "edge_ids": [] on
+				// whichever zero-edge component this clone happened to
+				// disturb, regardless of what the mutation under test actually
+				// changed (found while adding the reordered-components case:
+				// it "passed" even with the order check deleted). slices.Clone
+				// preserves nil vs non-nil-empty exactly.
+				Nodes:   slices.Clone(component.Nodes),
+				EdgeIDs: slices.Clone(component.EdgeIDs),
 			}
 		}
 		return copied
@@ -383,6 +472,37 @@ func TestGoldenComparisonCatchesPlantedDefects(t *testing.T) {
 				// issue/pr/commit and silently discarding feature_flag,
 				// incident, escalation_policy, operational_service nodes.
 				components[multiNode].Nodes = components[multiNode].Nodes[1:]
+				return components
+			},
+		},
+		{
+			// codex round 1 on #2172, P2: the ORDER check this mutation targets
+			// did not exist before this round -- swapping two golden-matching
+			// (non-singleton) components passed silently, while
+			// component_indexes is numeric and load-bearing downstream
+			// (chquery.go:24). Swaps the FIRST TWO golden-matching components it
+			// finds, deliberately not touching any singleton (a singleton swap
+			// would be a no-op for the order check, since singletons have no
+			// golden position to compare against).
+			name: "reordered two golden-matching components",
+			mutate: func(components []goldenComponent) []goldenComponent {
+				goldenIDs := make(map[string]struct{}, len(golden.Components))
+				for _, component := range golden.Components {
+					goldenIDs[component.WorkUnitID] = struct{}{}
+				}
+				first := -1
+				for position, component := range components {
+					if _, inGolden := goldenIDs[component.WorkUnitID]; !inGolden {
+						continue
+					}
+					if first < 0 {
+						first = position
+						continue
+					}
+					components[first], components[position] = components[position], components[first]
+					return components
+				}
+				t.Fatal("fewer than two golden-matching components; this mutation is vacuous")
 				return components
 			},
 		},
@@ -495,8 +615,19 @@ func TestLegacyDeleteComparisonCatchesPlantedDefects(t *testing.T) {
 		for position, component := range baseline {
 			copied[position] = goldenComponent{
 				WorkUnitID: component.WorkUnitID,
-				Nodes:      append([][]string(nil), component.Nodes...),
-				EdgeIDs:    append([]string(nil), component.EdgeIDs...),
+				// slices.Clone, not append(T(nil), s...): the latter silently
+				// downgrades a non-nil EMPTY slice to nil (append with zero
+				// elements to add returns its nil-vs-not input verbatim through
+				// no realloc), which made every planted-defect mutation below
+				// pass for the WRONG reason -- reflect.DeepEqual sees
+				// "edge_ids": null diverge from golden's "edge_ids": [] on
+				// whichever zero-edge component this clone happened to
+				// disturb, regardless of what the mutation under test actually
+				// changed (found while adding the reordered-components case:
+				// it "passed" even with the order check deleted). slices.Clone
+				// preserves nil vs non-nil-empty exactly.
+				Nodes:   slices.Clone(component.Nodes),
+				EdgeIDs: slices.Clone(component.EdgeIDs),
 			}
 		}
 		return copied

@@ -94,7 +94,13 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
+    # CHAOS-4769 added internal/jobs/workgraph/issueprlinks (37 -> 38
+    # discovered, 37 -> 38 will run): the provenance-collision migration
+    # acceptance test is container-backed, so the package gained its first
+    # -tags integration file. The previous literal was 37 because
+    # internal/jobs/workgraph/edges (CHAOS-4766, #2121) had already landed
+    # on main; this branch adds the next one on top of it.
+    assert "38 package(s) discovered, 0 denylisted, 38 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

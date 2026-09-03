@@ -1,0 +1,66 @@
+-- 0006 an index serving the outbox reaper (CHAOS-4885).
+-- ADDITIVE ONLY. See 0001's header.
+
+-- 0005 indexed the PUBLISHER's hot query -- unpublished, due now, oldest first
+-- -- with a partial index over published_at IS NULL. The reaper's predicate is
+-- that index's exact complement:
+--
+--     published_at IS NOT NULL AND published_at < $1  ORDER BY published_at, id
+--
+-- so no index created in 0005 can serve it and the reclaimer scans the table.
+--
+-- The DIRECTION of that failure is why this is a migration and not a note.
+-- 0005's own comment observes that the published backlog grows "forever"; the
+-- reaper is the thing that stops it growing. An unindexed reap therefore gets
+-- slower exactly as the backlog it exists to reclaim gets larger -- it is
+-- slowest at the moment it matters most. It also holds its transaction open
+-- longer over a table the relay is concurrently reading, which is the very
+-- interaction the reaper's FOR UPDATE SKIP LOCKED was chosen to avoid.
+--
+-- Partial rather than total, mirroring the predicate: the unpublished rows are
+-- already served by auth_outbox_events_pending_idx, and excluding them keeps
+-- this index proportional to the reclaimable backlog instead of the table.
+--
+-- AND TODAY IT IS FREE, NOT MERELY PROPORTIONAL, WHICH IS A STRONGER PROPERTY
+-- THAN THE PARAGRAPH ABOVE CLAIMS. Rows are inserted with published_at unset --
+-- audit.Commit's INSERT names only (aggregate_type, aggregate_id, event_type,
+-- payload, idempotency_key) and the column carries no DEFAULT -- so every row
+-- enters NULL and NO ROW EVER ENTERS THIS INDEX. Until a publisher exists and
+-- begins setting published_at, this index costs nothing on the write path: no
+-- maintenance on insert, no entries, no bloat. A TOTAL index would have charged
+-- every outbox insert for a read benefit that cannot exist yet.
+--
+-- SO AN EMPTY INDEX HERE IS THE EXPECTED STATE, NOT DEAD WEIGHT. There is no
+-- publisher on the auth side yet: nothing outside tests sets published_at, and
+-- audit.Reap has no non-test caller (CHAOS-4960). Someone finding this index
+-- empty and concluding it is unused would be reading a correct state as a
+-- defect, and dropping it would remove the only index that can serve the reap
+-- predicate the moment a publisher starts writing.
+--
+-- Observed by lane-auth-contracts while reading #2166.
+-- WHEN THIS CAN BE APPLIED, which is not visible from the statement below.
+--
+-- This is a plain CREATE INDEX, so it holds a lock that blocks INSERT, UPDATE
+-- and DELETE on auth_outbox_events for the whole build. Every security-state
+-- mutation inserts into this table inside its transaction, so on a live system
+-- that lock blocks every mutation in the product, not merely the reaper.
+--
+-- CREATE INDEX CONCURRENTLY is not available here, and that is STRUCTURAL
+-- rather than an oversight: apply.go runs each migration inside a single
+-- transaction on purpose -- the version row commits with the DDL so the two
+-- can never disagree -- and PostgreSQL forbids a concurrent index build inside
+-- a transaction block. Expressing one would need a second, non-transactional
+-- application path, which is a change to the lineage and not to this file.
+--
+-- Today that costs nothing: authruntime.Routes() returns nil, nothing in
+-- production reads or writes these tables, the table is empty and the lock is
+-- instantaneous. The point is the SCHEDULE. This index exists because an
+-- unindexed reap is slowest exactly when the backlog is largest; building the
+-- index is also slowest, and its lock most damaging, at exactly that same
+-- moment. Same curve, same worst point. Applied before the first route mounts
+-- it is free forever; applied after, it becomes a maintenance-window job on
+-- the busiest table in the schema.
+--
+-- Found by lane-auth-contracts reading the lineage, not the diff.
+CREATE INDEX auth_outbox_events_reapable_idx
+    ON auth_outbox_events (published_at, id) WHERE published_at IS NOT NULL;

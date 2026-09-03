@@ -286,7 +286,22 @@ jobs:
           # has been bitten by repeatedly. So the absent branch ASSERTS the
           # condition that makes skipping correct, and fails loudly otherwise.
           if [ ! -f ci/python_base_ref.sh ]; then
-            if grep -q "ghcr.io/${{ github.repository_owner }}/python" docker/Dockerfile; then
+            # OWNER-AGNOSTIC ON PURPOSE (lane-084-prod, #2162 read).
+            #
+            # This asks one question: does this tree consume a MIRRORED base at
+            # all? It must NOT also decide whether the owner is right, because
+            # ci/python_base_ref.sh already owns that -- it fails on
+            # `ghcr.io/other-owner/python`. An owner-specific grep here would be
+            # a SECOND definition of "uses the mirrored base", and the two would
+            # disagree: the script fails loudly on an owner mismatch while a
+            # `${{ github.repository_owner }}` grep would silently miss and take
+            # the skip branch -- branch 2 firing on branch 3's condition, which
+            # is the exact misclassification this design exists to prevent.
+            #
+            # Two validators for one property is what CHAOS-4922 removed by
+            # making that script the only definition; re-introducing one inside
+            # the guard that protects it would be a poor trade.
+            if grep -qE "ghcr\.io/[^/]+/python" docker/Dockerfile; then
               echo "::error::docker/Dockerfile consumes the mirrored Python base" \
                    "but ci/python_base_ref.sh is absent from this tree -- the ref" \
                    "cannot be derived, so the base cannot be ensured. This tree is" \

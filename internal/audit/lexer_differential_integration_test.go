@@ -51,6 +51,7 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 
 	var checked, skipped, multi, boundary, dollarIdents int
 	skipReasons := map[string]int{}
+	var skipExamples []string
 	var firstDisagreement string
 
 	for i := 0; i < 3000; i++ {
@@ -78,6 +79,10 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 			} else {
 				skipped++
 				skipReasons[pgErr.Code]++
+				if len(skipExamples) < 6 {
+					skipExamples = append(skipExamples,
+						fmt.Sprintf("%s %s | %q", pgErr.Code, pgErr.Message, stmt))
+				}
 				continue
 			}
 		}
@@ -101,6 +106,9 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	t.Logf("checked %d, skipped %d (invalid SQL, by SQLSTATE: %v), server called %d multi-statement, %d single-with-semicolon",
 		checked, skipped, skipReasons, multi, boundary)
 	t.Logf("of those, %d carried a $-bearing identifier", dollarIdents)
+	for _, ex := range skipExamples {
+		t.Logf("SKIPPED: %s", ex)
+	}
 	if firstDisagreement != "" {
 		t.Fatalf("lexer and PostgreSQL disagree:\n%s", firstDisagreement)
 	}
@@ -116,6 +124,15 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	if boundary < 100 {
 		t.Errorf("only %d single statements contained a semicolon; the corpus is not exercising the boundary, whatever its size", boundary)
 	}
+	// EVERY generated statement must reach the oracle. A skip is not neutral:
+	// it is a case that was generated, looked plausible, and produced no
+	// verdict at all. The examples logged above name the shapes when this
+	// fires, because the useful question is always WHICH generator row is
+	// emitting invalid SQL rather than how many did.
+	if skipped != 0 {
+		t.Errorf("%d generated statements never reached the oracle (%v); the corpus is smaller than its case count", skipped, skipReasons)
+	}
+
 	// The class contracts asked for must actually be present, or a green run
 	// says nothing about it.
 	if dollarIdents < 100 {
@@ -203,7 +220,13 @@ func generateStatement(rng *rand.Rand) (string, bool) {
 		// $-bearing one.
 		`; COMMIT; --$$`,
 		`; COMMIT; /*$$*/`,
-		`; COMMIT;$$`,
+		// A dollar-quote in the tail must be a COMPLETE one. `; COMMIT;$$`
+		// was here first and left an unterminated body, so PostgreSQL rejected
+		// it as malformed before it could ever rule on how many commands it
+		// was: 282 of 3000 cases, a tenth of the corpus, producing no verdict
+		// while the run still reported PASS.
+		`; SELECT $$x$$`,
+		`; COMMIT; SELECT $$;$$`,
 	}
 	alias := aliases[rng.Intn(len(aliases))]
 	return fmt.Sprintf("SELECT %s, $1::int%s%s",

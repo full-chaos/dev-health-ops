@@ -99,12 +99,37 @@ var destructiveStatement = regexp.MustCompile(
 	`(?is)\b(DROP\s+(TABLE|SCHEMA|COLUMN|INDEX|CONSTRAINT|TYPE)|TRUNCATE|DELETE\s+FROM|UPDATE\s+\w+\s+SET|ALTER\s+TABLE\s+\S+\s+DROP)\b`,
 )
 
+// dynamicSQL matches the constructs that make a migration UNANALYSABLE by any
+// static rule: a DO block, an EXECUTE, or a dollar-quoted body.
+//
+// Codex round 1 (P1) showed why this is a separate, unconditional refusal
+// rather than a smarter destructiveStatement: a migration containing
+//
+//	DO $$ BEGIN EXECUTE 'DROP ' || 'TABLE auth.probe'; END $$;
+//
+// drops a table while containing no contiguous destructive token at all, and
+// the executed repro confirmed both halves — the table was gone and the regexp
+// produced no match. No pattern over concatenated string fragments can be made
+// reliable, so the guard refuses the CLASS it cannot reason about instead of
+// pretending to analyse it. This lineage contains no dynamic SQL; a future
+// migration that genuinely needs a function body has to remove this refusal
+// deliberately, which is the point.
+var dynamicSQL = regexp.MustCompile(`(?is)(\bDO\s*\$|\bEXECUTE\b|\$\$)`)
+
 func TestLineageIsAdditiveOnly(t *testing.T) {
 	migrations, err := Migrations()
 	if err != nil {
 		t.Fatalf("Migrations: %v", err)
 	}
 	for _, migration := range migrations {
+		body := stripComments(migration.SQL)
+		if match := dynamicSQL.FindString(body); match != "" {
+			t.Errorf(
+				"migration %04d_%s uses dynamic SQL (%q). No static guard can tell whether a "+
+					"constructed statement is additive, so this lineage refuses the construct outright.",
+				migration.Version, migration.Name, strings.TrimSpace(match),
+			)
+		}
 		for _, statement := range splitStatements(migration.SQL) {
 			if match := destructiveStatement.FindString(statement); match != "" {
 				t.Errorf(
@@ -133,6 +158,18 @@ func TestAdditiveGuardCatchesADestructiveStatement(t *testing.T) {
 			t.Errorf("the additive-only guard does not catch %q", statement)
 		}
 	}
+	// The evasions codex round 1 executed against this guard. Each is a real
+	// destructive migration that the pre-fix guard accepted.
+	for _, evasion := range []string{
+		"DO $$ BEGIN EXECUTE 'DROP ' || 'TABLE auth.probe'; END $$;",
+		"DO $do$ BEGIN EXECUTE format('TRUNCATE %I', 'security_audit_events'); END $do$;",
+		"EXECUTE 'DELETE FROM users';",
+	} {
+		if !dynamicSQL.MatchString(evasion) {
+			t.Errorf("the dynamic-SQL refusal does not catch %q", evasion)
+		}
+	}
+
 	// And it must not fire on the statements this lineage legitimately uses.
 	for _, statement := range []string{
 		"CREATE TABLE principals (id uuid PRIMARY KEY);",
@@ -141,6 +178,9 @@ func TestAdditiveGuardCatchesADestructiveStatement(t *testing.T) {
 	} {
 		if destructiveStatement.MatchString(statement) {
 			t.Errorf("the additive-only guard falsely rejects %q", statement)
+		}
+		if dynamicSQL.MatchString(statement) {
+			t.Errorf("the dynamic-SQL refusal falsely rejects %q", statement)
 		}
 	}
 }
@@ -172,7 +212,13 @@ var approvedSecretColumns = map[string]string{
 // approvedSecretSuffixes are the shapes that are safe by construction.
 var approvedSecretSuffixes = []string{"_hash", "_digest", "_ref", "_kind", "_prefix", "_id"}
 
-var columnDefinition = regexp.MustCompile(`(?m)^\s{4}([a-z_][a-z0-9_]*)\s+`)
+// columnDefinition accepts ANY leading whitespace. The previous form required
+// exactly four spaces, so a two-space or tab-indented `api_token` column was
+// valid PostgreSQL that the secret-name rule never examined (codex round 1,
+// P2) -- and because the lineage's other columns kept the examined count above
+// zero, the vacuity guard did not fire either. Matching more lines is safe:
+// extra candidates (a CONSTRAINT line, say) simply do not trip secretRoot.
+var columnDefinition = regexp.MustCompile(`(?m)^\s+([a-z_][a-z0-9_]*)\s+`)
 
 // TestNoPlaintextCredentialColumn enforces CHAOS-4882's acceptance criterion
 // "No plaintext credential/secret column is added anywhere in the new schema".
@@ -215,6 +261,59 @@ func TestNoPlaintextCredentialColumn(t *testing.T) {
 		t.Fatal("the secret-column guard examined no candidate columns; its extraction is broken, not the schema clean")
 	}
 	t.Logf("examined %d candidate column(s) against the secret-name rule", checked)
+}
+
+// TestExtractorsCatchTheRoundOneEvasions is the control for three regexp
+// repairs. Each pattern below is a construction codex round 1 executed against
+// the pre-fix guards, proving the property they name did not hold. A repair
+// that is not shown to catch the exact input that defeated it is a repair
+// nobody has tested.
+func TestExtractorsCatchTheRoundOneEvasions(t *testing.T) {
+	t.Run("quoted table names reach the posture check", func(t *testing.T) {
+		for _, statement := range []string{
+			`CREATE TABLE "unpostured_probe" (id integer);`,
+			`CREATE TABLE IF NOT EXISTS "quoted_probe" (id integer);`,
+		} {
+			match := createTableStatement.FindStringSubmatch(statement)
+			if match == nil {
+				t.Fatalf("createTableStatement missed %q", statement)
+			}
+			if strings.Contains(match[1], `"`) {
+				t.Fatalf("captured name %q still carries quotes", match[1])
+			}
+		}
+		// The unquoted form must keep working.
+		if match := createTableStatement.FindStringSubmatch(`CREATE TABLE principals (id uuid);`); match == nil || match[1] != "principals" {
+			t.Fatalf("createTableStatement broke on the unquoted form: %v", match)
+		}
+	})
+
+	t.Run("any indentation reaches the secret-name rule", func(t *testing.T) {
+		cases := map[string]string{
+			"two spaces":  "CREATE TABLE t (\n  api_token text NOT NULL\n);",
+			"tab":         "CREATE TABLE t (\n\tclient_secret text NOT NULL\n);",
+			"four spaces": "CREATE TABLE t (\n    password_plain text NOT NULL\n);",
+			"eight":       "CREATE TABLE t (\n        secret_value text NOT NULL\n);",
+		}
+		for name, body := range cases {
+			found := columnDefinition.FindAllStringSubmatch(body, -1)
+			if len(found) == 0 {
+				t.Errorf("%s indentation: columnDefinition found no column in %q", name, body)
+				continue
+			}
+			var sawSuspicious bool
+			for _, match := range found {
+				if secretRoot.MatchString(match[1]) && !hasApprovedSuffix(match[1]) {
+					if _, approved := approvedSecretColumns[match[1]]; !approved {
+						sawSuspicious = true
+					}
+				}
+			}
+			if !sawSuspicious {
+				t.Errorf("%s indentation: the secret-name rule would not have flagged %q", name, body)
+			}
+		}
+	})
 }
 
 func hasApprovedSuffix(column string) bool {
@@ -304,7 +403,12 @@ func TestEveryCreatedTableHasADeclaredPosture(t *testing.T) {
 	}
 }
 
-var createTableStatement = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)`)
+// createTableStatement accepts the optional double quotes codex round 1 (P2)
+// showed slipping past the bare-identifier form: `CREATE TABLE "probe" (...)`
+// creates a real table that the previous pattern did not see, so the table
+// escaped TestEveryCreatedTableHasADeclaredPosture entirely and no manifest
+// decision was ever required for it.
+var createTableStatement = regexp.MustCompile(`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?`)
 
 func createdTables(t *testing.T) map[string]struct{} {
 	t.Helper()

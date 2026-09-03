@@ -227,6 +227,41 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 		"schema", options.Schema, "runtime_role", options.RuntimeRole,
 		"tables", len(RuntimePosture()),
 	)
+
+	// Grants applied without error proves the statements succeeded. It does
+	// NOT prove the runtime role holds only what the manifest declares:
+	// object-level grants are not the only route to authority, and codex
+	// round 1 demonstrated two that survive a successful reapply -- membership
+	// in the object-owning migration role, and CREATE on the database. So the
+	// posture is RE-DERIVED from the live database here and the run FAILS if
+	// the runtime role can still escalate. A migrate that reports success over
+	// a runtime role which can SET ROLE to the schema's owner is worse than
+	// one that fails, because it is the report an operator will trust.
+	//
+	// The migrations themselves stay applied: they are additive and correct,
+	// and the escalation is a pre-existing cluster-level condition this tool
+	// deliberately does not rewrite (see EscalationPath's doc comment). What
+	// fails is the RUN, with the offending grant and its remedy named.
+	paths, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	if err != nil {
+		return result, err
+	}
+	if len(paths) > 0 {
+		logger.ErrorContext(
+			ctx, "runtime role can escalate beyond its declared posture",
+			"schema", options.Schema, "runtime_role", options.RuntimeRole,
+			"paths", len(paths),
+		)
+		return result, fmt.Errorf(
+			"%w (schema %q, role %q):\n%s",
+			ErrRuntimeRoleCanEscalate, options.Schema, options.RuntimeRole, describeEscalation(paths),
+		)
+	}
+	logger.InfoContext(
+		ctx, "verified auth runtime posture",
+		"schema", options.Schema, "runtime_role", options.RuntimeRole,
+		"escalation_paths", 0,
+	)
 	return result, nil
 }
 

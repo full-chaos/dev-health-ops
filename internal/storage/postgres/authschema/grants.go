@@ -129,7 +129,17 @@ func runtimeSequences() []string {
 // in an earlier release and has since been removed from the manifest would
 // survive forever, and the posture would drift wider with every deployment
 // while every check that only looks for MISSING privileges kept passing.
-// Revoke-then-grant makes the manifest authoritative in both directions.
+//
+// SCOPE OF THAT CLAIM, stated precisely because an earlier version of this
+// comment over-stated it. Revoke-then-grant makes the manifest authoritative
+// for OBJECT-LEVEL privileges inside this schema -- tables, sequences, and the
+// schema itself. It does NOT reach role memberships or database-level grants,
+// and codex round 1 proved both survive a successful reapply: a pre-existing
+// `GRANT <migration role> TO <runtime role>` let the runtime SET ROLE to the
+// schema's owner and CREATE a table, and a direct `GRANT CREATE ON DATABASE`
+// let it create a schema outside auth. Those are cluster and database scoped,
+// deliberately not rewritten here, and are caught instead by
+// VerifyRuntimePosture, which Apply calls and fails on.
 func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) error {
 	if err := ValidateIdentifier(options.Schema); err != nil {
 		return err

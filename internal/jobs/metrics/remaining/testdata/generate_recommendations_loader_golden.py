@@ -25,6 +25,7 @@ import struct
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -109,8 +110,16 @@ def encode_list(values):
     return [bits(v) for v in values]
 
 
-def scenario(name, **tables):
-    base = {
+# The fake client's table map: column names plus rows of arbitrary cell types.
+# Annotated because mypy cannot infer a useful type for a heterogeneous literal,
+# and an un-annotated dict[str, object] is not unpackable into typed callables.
+TableMap = dict[str, tuple[list[str], list[list[Any]]]]
+
+
+def scenario(
+    name: str, **tables: tuple[list[str], list[list[Any]]]
+) -> tuple[str, TableMap]:
+    base: TableMap = {
         "wip_throughput": (["day", "wip_total", "tp_total"], []),
         "latency": (["avg_p75"], []),
         "user_metrics_daily": (["author_email", "total_reviews"], []),
@@ -191,7 +200,10 @@ def build_scenarios():
         )
 
     # --- gini over the review loads ---
-    for label, loads in [
+    # Annotated because the literal below pairs a str label with a nested list;
+    # mypy otherwise widens the tuple's element type to object, which it will
+    # not iterate. Each group is a list of (author_email, total_reviews) pairs.
+    gini_loads: list[tuple[str, list[list[tuple[str, float | None]]]]] = [
         ("empty", []),
         ("single", [[("a@x", 5.0)]]),
         ("two-equal", [[("a@x", 5.0)], [("b@x", 5.0)]]),
@@ -200,8 +212,11 @@ def build_scenarios():
         ("with-zeros", [[("a@x", 0.0)], [("b@x", 0.0)], [("c@x", 7.0)]]),
         ("all-zero", [[("a@x", 0.0)], [("b@x", 0.0)]]),
         ("nonfinite", [[("a@x", INF)], [("b@x", 1.0)], [("c@x", 2.0)]]),
-    ]:
-        rows = [[pair[0], pair[1]] for group in loads for pair in group]
+    ]
+    for label, loads in gini_loads:
+        rows: list[list[Any]] = [
+            [pair[0], pair[1]] for group in loads for pair in group
+        ]
         scenarios.append(
             scenario(
                 f"gini-{label}",

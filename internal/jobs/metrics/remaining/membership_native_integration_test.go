@@ -113,9 +113,13 @@ func TestMembershipEndToEndAgainstRealClickHouse(t *testing.T) {
 				firstRunID, membershipRetentionKeep, finalRunIDs)
 		}
 	}
+	// Each run writes 6 rows under its OWN run_id (migration 049 put run_id
+	// in the dedup key precisely so per-run rows coexist rather than
+	// collapsing), so keep=2 surviving generations means 2*6=12 rows, not 6
+	// -- one generation's 6 rows plus the other generation's 6 rows.
 	waitForCondition(t, 10*time.Second, func() bool {
-		return len(queryMembershipRows(t, ctx, conn, orgID)) == 6
-	}, "expected exactly 6 membership rows to survive retention (the pruned generation's rows deleted, the kept generations' rows are byte-identical re-writes of the same seed)")
+		return len(queryMembershipRows(t, ctx, conn, orgID)) == 6*membershipRetentionKeep
+	}, "expected exactly 6*keep membership rows to survive retention (the pruned generation's 6 rows deleted, the kept generations' rows -- 6 each -- are byte-identical re-writes of the same seed)")
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, check func() bool, message string) {

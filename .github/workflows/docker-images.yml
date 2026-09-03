@@ -286,73 +286,58 @@ jobs:
           # has been bitten by repeatedly. So the absent branch ASSERTS the
           # condition that makes skipping correct, and fails loudly otherwise.
           if [ ! -f ci/python_base_ref.sh ]; then
-            # REQUIRE POSITIVE PROOF OF THE PRE-MIRROR CASE (codex round 1, HIGH).
+            # SKIP ONLY ON POSITIVE PROOF OF THE PRE-MIRROR CASE, and that proof
+            # needs BOTH probes. Round 1 and round 2 each defeated a single one:
             #
-            # The first cut asked "does this tree reference the mirrored base?"
-            # and skipped when it could not find one. That is absence-as-evidence,
-            # and a line-oriented grep does not see a base assembled from parts:
+            #   round 1 HIGH   an assembled ref beat a registry regex --
+            #                  ARG REGISTRY=ghcr.io / ARG OWNER=... /
+            #                  FROM ${REGISTRY}/${OWNER}/python:...  no line
+            #                  matches ghcr.io/<owner>/python.
+            #   round 2 CRIT   a DIRECT `FROM ghcr.io/<owner>/python@sha256:...`
+            #                  with no ARG at all carries no PYTHON_BASE_IMAGE
+            #                  token, so the token probe skipped a tree that
+            #                  consumes the mirror.
             #
-            #     ARG REGISTRY=ghcr.io
-            #     ARG OWNER=full-chaos
-            #     FROM ${REGISTRY}/${OWNER}/python:3.14-slim@sha256:...
+            # The second was a REGRESSION I introduced fixing the first: the
+            # registry regex round 1 defeated would have caught it. Inverting the
+            # question traded one blind spot for another. Neither probe is
+            # sufficient; each closes exactly what the other misses --
+            # ARG NAME closes assembly (a name cannot be built from variables),
+            # FROM REGEX closes direct references (no ARG to name).
             #
-            # No line matches `ghcr.io/<owner>/python`, so the guard printed
-            # "nothing to ensure" for a build that needs the mirrored base --
-            # branch 2 firing on branch 3's condition, which is the exact
-            # misclassification this guard exists to prevent, reintroduced by a
-            # different route. Reproduced before fixing: exit 0, skip message.
+            # So: MIRRORED iff either probe fires. Skip iff BOTH are absent.
             #
-            # Inverted: skip ONLY on positive proof that the tree predates the
-            # mirror, which is the ABSENCE of the `PYTHON_BASE_IMAGE` ARG that
-            # CHAOS-4922 introduced alongside the script. An ARG's own NAME
-            # cannot be assembled from variables, so indirection cannot hide it.
-            # Anything else is unrecognised, and unrecognised means dangerous.
-            #
-            # THE IMMUNITY IS TO ASSEMBLY, NOT TO RENAMING (084-prod, round-2
-            # read). UN-INDIRECTABLE IS NOT UN-RENAMEABLE. This probe closes the
-            # HIGH -- a base assembled from `${REGISTRY}/${OWNER}/python` cannot
-            # hide the ARG's own name -- and it does NOT close a tree that renames
-            # the ARG: `grep PYTHON_BASE_IMAGE` then exits 1, which is the
-            # pre-mirror branch, so such a tree SKIPS. Same misclassification,
-            # different token, and no single-token probe can close it.
-            #
-            # Left as a known gap rather than chased: reaching it needs a triply
-            # inconsistent tree -- script absent, ARG renamed, mirrored base still
-            # consumed -- which is more pathological than the case branch 3 exists
-            # for. Written down so the next reader does not over-read the immunity
-            # as total and drop a fail-closed default somewhere on the strength of
-            # it. (For contrast, a pre-mirror tree that merely MENTIONS
-            # PYTHON_BASE_IMAGE in a comment classifies as mirrored and fails
-            # loudly: a false failure, but in the correct direction.)
-            if grep -q 'PYTHON_BASE_IMAGE' docker/Dockerfile 2>/dev/null; then
-              probe_status=0
-            else
-              probe_status=$?
-            fi
-            # GREP STATUS 1 AND 2 ARE DIFFERENT ANSWERS (codex round 1, MEDIUM).
-            # 1 = "no match", a real reading of a readable file. >=2 = "could not
-            # read it at all". The first cut collapsed them, so a MISSING
-            # docker/Dockerfile took the skip branch: reproduced, exit 0, with
-            # `grep: docker/Dockerfile: No such file or directory` printed just
-            # above the words "nothing to ensure". `grep -q` inside an `if` is
-            # exempt from `set -e`, so nothing aborted -- but not aborting is not
-            # handling it. An unreadable tree is not a pre-mirror tree.
-            if [ "$probe_status" -ge 2 ]; then
-              echo "::error::cannot read docker/Dockerfile (grep exit ${probe_status}) so" \
-                   "this tree cannot be classified as pre-mirror or mirrored." \
-                   "Refusing to guess; an unreadable tree is not a pre-mirror tree." >&2
+            # Both read COMMENT-STRIPPED text (round 2 CRIT 2): a pre-mirror tree
+            # that merely mentions PYTHON_BASE_IMAGE in a comment was falsely
+            # refused. Whole-line comments are dropped, and a trailing comment is
+            # dropped only when preceded by whitespace -- Dockerfile `#` is a
+            # comment ONLY at line start, so an unanchored strip would corrupt a
+            # value legitimately containing `#`.
+            if ! dockerfile_text="$(cat docker/Dockerfile 2>/dev/null)"; then
+              echo "::error::cannot read docker/Dockerfile, so this tree cannot be" \
+                   "classified as pre-mirror or mirrored. Refusing to guess; an" \
+                   "unreadable tree is not a pre-mirror tree." >&2
               exit 1
             fi
-            if [ "$probe_status" -eq 0 ]; then
-              echo "::error::docker/Dockerfile declares PYTHON_BASE_IMAGE, so this tree" \
-                   "consumes a mirrored base, but ci/python_base_ref.sh is absent and the" \
-                   "ref cannot be derived. This tree is inconsistent; it is NOT the" \
-                   "pre-mirror case." >&2
+            stripped="$(printf '%s\n' "$dockerfile_text" \
+                        | sed -e 's/[[:space:]]#.*$//' -e '/^[[:space:]]*#/d')"
+            has_arg=no; has_from=no
+            printf '%s\n' "$stripped" \
+              | grep -qE '^[[:space:]]*ARG[[:space:]]+PYTHON_BASE_IMAGE' && has_arg=yes
+            printf '%s\n' "$stripped" \
+              | grep -qE '^[[:space:]]*FROM[[:space:]].*ghcr\.io/[^/]+/python' && has_from=yes
+            if [ "$has_arg" = yes ] || [ "$has_from" = yes ]; then
+              echo "::error::docker/Dockerfile consumes a mirrored Python base" \
+                   "(ARG PYTHON_BASE_IMAGE=${has_arg}, mirrored FROM=${has_from})" \
+                   "but ci/python_base_ref.sh is absent, so the ref cannot be" \
+                   "derived. This tree is inconsistent; it is NOT the pre-mirror" \
+                   "case." >&2
               exit 1
             fi
-            echo "ci/python_base_ref.sh absent and docker/Dockerfile declares no" \
-                 "PYTHON_BASE_IMAGE: this tree predates CHAOS-4922 and pulls its Python" \
-                 "base directly. Nothing to ensure; skipping."
+            echo "ci/python_base_ref.sh absent, and docker/Dockerfile has neither an" \
+                 "ARG PYTHON_BASE_IMAGE nor a mirrored FROM (comments excluded):" \
+                 "this tree predates CHAOS-4922 and pulls its Python base directly." \
+                 "Nothing to ensure; skipping."
             exit 0
           fi
           # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).

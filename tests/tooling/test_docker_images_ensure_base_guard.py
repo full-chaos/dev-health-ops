@@ -52,6 +52,7 @@ pass vacuously against a workflow that no longer contains the thing it describes
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -92,7 +93,33 @@ UNMIRRORED = "FROM python:3.14-slim"
 RENAMED_ARG = 'ARG PY_BASE="ghcr.io/full-chaos/python:3.14-slim@sha256:aa"'
 # The marker a stubbed derivation script prints. Seeing it is the ONLY proof that
 # control reached the real work rather than merely declining to skip.
-DERIVATION_MARKER = "DERIVATION-REACHED"
+# Recorded by the `docker` shim below. Seeing an `imagetools` invocation is the
+# ONLY proof the ensure WORK ran. An earlier version stubbed the derivation script
+# to print a marker and abort, which proved the SCRIPT was reached and nothing
+# more -- inserting `exit 0` after the derivation call still passed every axis
+# (codex round 2, warning). That is the same defect one level deeper than the one
+# the marker was introduced to fix.
+DOCKER_LOG = "docker-invocations.txt"
+
+# A tree that consumes the mirror via a DIRECT FROM, with no ARG anywhere. The
+# ARG-name probe alone skips this (codex round 2, critical 1) -- and the registry
+# regex it replaced would have caught it, so the token-only version was a
+# regression. Requires the conjunction.
+MIRRORED_DIRECT_FROM = "FROM ghcr.io/full-chaos/python:3.14-slim@sha256:aa"
+
+# A genuinely PRE-MIRROR tree that merely MENTIONS the token in a comment. The
+# unstripped probe falsely refused this (codex round 2, critical 2).
+# A genuinely PRE-MIRROR tree whose FROM line carries a TRAILING comment naming a
+# mirrored ref. This is the shape comment-stripping exists for, and finding it took
+# a mutation: my first fixture used a WHOLE-LINE comment, which the anchored probes
+# already reject (a comment line starts with `#`, not ARG/FROM), so removing the
+# stripping left that row passing and proved nothing. Here `.*` in the FROM probe
+# spans the trailing comment and matches `ghcr.io/.../python` inside it -- a false
+# refusal of a tree that pulls its base straight from Docker Hub.
+PRE_MIRROR_TRAILING_COMMENT = (
+    "# PYTHON_BASE_IMAGE arrives in CHAOS-4922\n"
+    "FROM python:3.14-slim  # was ghcr.io/full-chaos/python before the revert"
+)
 
 
 def _guard_script() -> str:
@@ -134,36 +161,51 @@ def _guard_script() -> str:
 
 def _run_guard(
     tmp_path: Path, dockerfile: str | None, *, script: bool
-) -> tuple[int, str]:
+) -> tuple[int, str, list[str]]:
+    """Run the whole step, with `docker` shimmed so the ensure WORK is observable.
+
+    The shim records every invocation and returns success, so the block runs to
+    completion instead of dying at the first real registry call. What the test
+    then asserts is the RECORDED INVOCATIONS -- an observation of the work, not an
+    inference from "we got past the guard".
+    """
     (tmp_path / "docker").mkdir(exist_ok=True)
     (tmp_path / "ci").mkdir(exist_ok=True)
-    # dockerfile=None means "no docker/Dockerfile at all" -- the grep status-2
-    # case. An unreadable tree is not a pre-mirror tree.
     if dockerfile is not None:
         (tmp_path / "docker" / "Dockerfile").write_text(
             dockerfile + "\n", encoding="utf-8"
         )
     if script:
-        # Stubbed to PRINT A MARKER and then fail, so the run block stops before
-        # its real registry work. Seeing the marker is the ONLY proof control
-        # reached the derivation; "exit 0 and no skip message" is equally
-        # consistent with the guard having done nothing at all, which is the
-        # defect an earlier version of this test could not detect.
+        # Emits what the real derivation emits, so the block proceeds normally.
         (tmp_path / "ci" / "python_base_ref.sh").write_text(
-            f"echo {DERIVATION_MARKER} >&2\nexit 9\n", encoding="utf-8"
+            "echo 'ghcr ghcr.io/full-chaos/python:3.14-slim@sha256:aa'\n"
+            "echo 'upstream python:3.14-slim'\n",
+            encoding="utf-8",
         )
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / DOCKER_LOG
+    shim = bindir / "docker"
+    shim.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> {log}\nexit 0\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
     proc = subprocess.run(
         ["bash", "-c", _guard_script()],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         timeout=60,
+        env=env,
     )
-    return proc.returncode, proc.stdout + proc.stderr
+    invocations = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return proc.returncode, proc.stdout + proc.stderr, invocations
 
 
 @pytest.mark.parametrize(
-    ("dockerfile", "script", "want_skip", "want_error", "want_derivation", "why"),
+    ("dockerfile", "script", "want_skip", "want_error", "want_ensure", "why"),
     [
         (
             UNMIRRORED,
@@ -189,16 +231,34 @@ def _run_guard(
             False,
             "mirrored under another owner: still mirrored, still must fail",
         ),
-        # codex round 1, HIGH: reproduced skipping on this shape before the fix.
+        # round 1 HIGH: assembled reference, no line matches a registry regex.
         (
             MIRRORED_VIA_ARGS,
             False,
             False,
             True,
             False,
-            "base assembled from ARGs: no line matches a registry regex, must NOT skip",
+            "base assembled from ARGs: ARG-name probe must catch it",
         ),
-        # codex round 1, MEDIUM: reproduced skipping on grep status 2.
+        # round 2 CRITICAL 1: direct FROM, no ARG. The token probe alone SKIPS this.
+        (
+            MIRRORED_DIRECT_FROM,
+            False,
+            False,
+            True,
+            False,
+            "direct mirrored FROM with no ARG: FROM-regex probe must catch it",
+        ),
+        # round 2 CRITICAL 2: token mentioned only in comments on a pre-mirror tree.
+        (
+            PRE_MIRROR_TRAILING_COMMENT,
+            False,
+            True,
+            False,
+            False,
+            "mirrored ref only in a TRAILING comment: stripping must prevent refusal",
+        ),
+        # round 1 MEDIUM: unreadable is not pre-mirror.
         (
             None,
             False,
@@ -207,22 +267,24 @@ def _run_guard(
             False,
             "docker/Dockerfile missing entirely: unreadable is not pre-mirror",
         ),
-        # ACCEPTED LIMIT, asserted as true behaviour rather than as protection.
+        # Accepted limit: renaming defeats both probes. Asserted as TRUE behaviour.
         (
             RENAMED_ARG,
             False,
             True,
             False,
             False,
-            "renamed ARG: grep exits 1 = pre-mirror branch, so it SKIPS (known limit)",
+            "renamed ARG with an unmirrored-looking value: SKIPS (known limit)",
         ),
+        # round 2 WARNING: these prove the ensure WORK ran, not that we got past
+        # the guard. want_ensure is checked against RECORDED docker invocations.
         (
             MIRRORED,
             True,
             False,
             False,
             True,
-            "script present: must reach the derivation, not merely decline to skip",
+            "script present: the ensure work must actually run",
         ),
         (
             UNMIRRORED,
@@ -230,7 +292,7 @@ def _run_guard(
             False,
             False,
             True,
-            "script present on a pre-mirror Dockerfile: must still reach it",
+            "script present on a pre-mirror Dockerfile: ensure work must still run",
         ),
     ],
 )
@@ -240,18 +302,14 @@ def test_guard_branches(
     script: bool,
     want_skip: bool,
     want_error: bool,
-    want_derivation: bool,
+    want_ensure: bool,
     why: str,
 ) -> None:
-    code, output = _run_guard(tmp_path, dockerfile, script=script)
+    code, output, invocations = _run_guard(tmp_path, dockerfile, script=script)
     skipped = SKIP_MARKER in output
     errored = "::error::" in output
-    reached = DERIVATION_MARKER in output
+    ensured = any("imagetools" in call for call in invocations)
 
-    # Three independent axes. Exit status alone cannot tell a deliberate skip from
-    # a fall-through, and neither can distinguish a fall-through that reaches the
-    # derivation from one that quietly does nothing -- the defect an earlier
-    # version of this test could not detect.
     assert skipped is want_skip, (
         f"{why}: skipped={skipped}, wanted {want_skip}\n{output}"
     )
@@ -259,9 +317,11 @@ def test_guard_branches(
         f"{why}: ::error:: emitted={errored}, wanted {want_error}. A bare non-zero "
         f"exit is not enough; the failure must say what it could not classify.\n{output}"
     )
-    assert reached is want_derivation, (
-        f"{why}: derivation reached={reached}, wanted {want_derivation}. This is the "
-        f"assertion that fails if the guard exits before the real work.\n{output}"
+    # The axis that survives an `exit 0` inserted anywhere before the registry
+    # work: it observes the invocation rather than inferring it from control flow.
+    assert ensured is want_ensure, (
+        f"{why}: imagetools invoked={ensured}, wanted {want_ensure}. Recorded "
+        f"docker calls: {invocations!r}\n{output}"
     )
     if want_error:
         assert code == 1, (

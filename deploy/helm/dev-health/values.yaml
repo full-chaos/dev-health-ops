@@ -30,6 +30,22 @@ api:
   enabled: true
   replicas: 2
   port: 8000
+  # -- The api Service's own type/nodePort, expressible in values instead of
+  #    a hand kubectl-patch. CHAOS-4984: a local kind/kiac profile that needs
+  #    NodePort access (no ingress controller, no LoadBalancer support) had
+  #    no values-driven way to set it -- the Service's `type: ClusterIP` was
+  #    hardcoded in api-service.yaml, so the profile hand-patched the
+  #    rendered Service to NodePort 30530 out of band. That patch is
+  #    invisible to Helm's own state, so the NEXT `helm upgrade` re-asserts
+  #    ClusterIP via Server-Side Apply and the two field managers conflict
+  #    on `spec.type`/`spec.ports[].nodePort`, either overwriting the patch
+  #    silently or failing outright depending on how the patch was applied.
+  #    `nodePort` is only meaningful when `type: NodePort` (or
+  #    `LoadBalancer`) and is otherwise ignored by the API server; leave it
+  #    unset (empty string, below) to let Kubernetes allocate one.
+  service:
+    type: ClusterIP
+    nodePort: ""
   args:
     - "--host"
     - "0.0.0.0"

@@ -91,6 +91,14 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatal(err)
 		}
+		// PRECONDITION: the replay must have produced a SECOND physical row on this
+		// key. Asserted, not inferred from "two writes happened" (CHAOS-4950).
+		//
+		// Without it this subtest can degenerate into its neighbour and still pass,
+		// for the neighbour's reasons: if the replay write ever no-ops, no key ever
+		// carries two rows, the assertion below is satisfied identically with and
+		// without dedup, and nothing in the output says which case ran.
+		assertGitHubWorkItemContestedPair(t, ctx, conn, githubWorkItemMetricsDailyDestination, row.OrgID)
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a replayed write stopped being recognized")
 
@@ -143,6 +151,14 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatal(err)
 		}
+		// PRECONDITION: the replay must have produced a SECOND physical row on this
+		// key. Asserted, not inferred from "two writes happened" (CHAOS-4950).
+		//
+		// Without it this subtest can degenerate into its neighbour and still pass,
+		// for the neighbour's reasons: if the replay write ever no-ops, no key ever
+		// carries two rows, the assertion below is satisfied identically with and
+		// without dedup, and nothing in the output says which case ran.
+		assertGitHubWorkItemContestedPair(t, ctx, conn, githubWorkItemUserMetricsDailyDestination, row.OrgID)
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a replayed write stopped being recognized")
 
@@ -196,6 +212,14 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatal(err)
 		}
+		// PRECONDITION: the replay must have produced a SECOND physical row on this
+		// key. Asserted, not inferred from "two writes happened" (CHAOS-4950).
+		//
+		// Without it this subtest can degenerate into its neighbour and still pass,
+		// for the neighbour's reasons: if the replay write ever no-ops, no key ever
+		// carries two rows, the assertion below is satisfied identically with and
+		// without dedup, and nothing in the output says which case ran.
+		assertGitHubWorkItemContestedPair(t, ctx, conn, githubWorkItemCycleTimesDestination, row.OrgID)
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a replayed write stopped being recognized")
 
@@ -358,5 +382,29 @@ func assertGitHubWorkItemMetricInspection(
 	}
 	if got != want {
 		t.Fatalf("%s: inspection = %s, want %s", message, got, want)
+	}
+}
+
+// assertGitHubWorkItemContestedPair proves a replay actually produced a second
+// PHYSICAL row on the same dedup key, which is what makes a deduplicating read
+// distinguishable from a non-deduplicating one.
+//
+// Counts WITHOUT FINAL deliberately: physical rows are the thing in question,
+// and a count with FINAL would collapse them and always read 1. The foreign
+// tenant's row carries a different org_id and is excluded.
+func assertGitHubWorkItemContestedPair(
+	t *testing.T, ctx context.Context, conn driver.Conn, table, orgID string,
+) {
+	t.Helper()
+	var contested uint64
+	if err := conn.QueryRow(ctx,
+		"SELECT count() FROM "+table+" WHERE org_id = ?", orgID,
+	).Scan(&contested); err != nil {
+		t.Fatalf("count contested rows in %s: %v", table, err)
+	}
+	if contested != 2 {
+		t.Fatalf("%s contested row count = %d, want 2: the replay did not produce a second "+
+			"row on this key, so this subtest cannot tell a deduplicating read from a "+
+			"non-deduplicating one", table, contested)
 	}
 }

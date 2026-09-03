@@ -359,11 +359,14 @@ func TestReservedKindsAreNotActive(t *testing.T) {
 // to end -- recognised, counted, and refused -- so activation is one line and
 // its effect is already measurable.
 //
-// Uses jira_dev_status, the remaining reserved kind, now that
-// github_closing_reference has been activated (see
-// TestGithubClosingReferenceIsAdmittedAndWrittenAsNative below) -- this test's
-// job is to keep exercising the STILL-reserved path, not the one that just
-// graduated from it.
+// Uses testReservedKind (via testReservedAdmissions, derive_test.go), a
+// synthetic reserved kind that has never been and never will be a real
+// Admission -- codex round 2 on #2179, P3: this test used to use
+// jira_dev_status directly, but that kind is now ACTIVATED by this PR
+// (TestJiraDevStatusIsAdmittedAndWrittenAsNative), so a real reserved kind
+// would no longer exercise the still-reserved path this test is named for.
+// The synthetic kind keeps exercising it regardless of which real kinds
+// graduate out of ReservedAdmissions in the future.
 func TestReservedKindIsSeenButNotAdmitted(t *testing.T) {
 	inputs := baseInputs()
 	inputs.Dependencies[0].RelationshipTypeRaw = testReservedKind
@@ -546,8 +549,9 @@ func repositoryRootPath(t *testing.T) string {
 // well-formed would report zero for a provider shipping broken rows — the same
 // "nothing arrived" / "arrived malformed" conflation as round-1 F2.
 //
-// Uses jira_dev_status now that github_closing_reference is active -- see
-// TestReservedKindIsSeenButNotAdmitted's doc for why.
+// Uses testReservedKind now that jira_dev_status (and github_closing_reference
+// before it) are both active -- see TestReservedKindIsSeenButNotAdmitted's doc
+// for why a real reserved kind no longer serves this test's purpose.
 func TestReservedKindIsSeenEvenWhenMalformed(t *testing.T) {
 	inputs := baseInputs()
 	inputs.Dependencies[0].RelationshipTypeRaw = testReservedKind

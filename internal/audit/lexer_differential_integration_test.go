@@ -136,6 +136,15 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 					// exercise none of the boundary.
 					boundary++
 				}
+				// ONLY THE FIRST DISAGREEMENT IS RECORDED, which enumeration made a
+				// real cost rather than a detail. Under random sampling the two >=0x80
+				// deletion mutations happened to surface different shapes -- ü$$ for
+				// the first-byte branch, aü$$ for the continuation branch -- which is
+				// how they were shown to be separately caught. Deterministic order now
+				// gives both the same first line, so the distinction is still TRUE
+				// (mutation 1 cannot break aü$$, whose first character is ASCII) but no
+				// longer VISIBLE here. Recording every disagreement would restore it
+				// and is a change worth its own delta.
 				if lexerRefuses != serverRefuses && firstDisagreement == "" {
 					firstDisagreement = fmt.Sprintf(
 						"lexer=%v server=%v for:\n%s", lexerRefuses, serverRefuses, stmt)
@@ -161,9 +170,14 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	if checked-multi == 0 {
 		t.Error("every checked statement was multi-statement: no accepting cases were exercised")
 	}
-	// EXHAUSTIVENESS, which is what enumeration buys and sampling could not.
-	// Not "at least N of a class appeared" but "every combination in the
-	// grammar was built AND the oracle answered for it".
+	// A CONTROL-FLOW CHECK, NOT EVIDENCE ABOUT THE GRAMMAR. `total` is computed
+	// from the same three slices the loop iterates, so this cannot detect a
+	// wrong or shrunken grammar -- only an early break, a mis-nested loop, or a
+	// path that leaves the body without reaching the oracle. That is worth
+	// catching and it is all this catches; the claims about the grammar's
+	// CONTENT are the two literal-backed class assertions below.
+	// (lane-auth-contracts flagged that the previous wording read as though this
+	// were evidence of size.)
 	if generated != total {
 		t.Errorf("built %d statements, expected the full cross-product of %d", generated, total)
 	}
@@ -171,26 +185,36 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 		t.Errorf("only %d of %d enumerated statements reached the oracle", checked, total)
 	}
 
-	// EXACT class counts, derived from the grammar rather than asserted as
-	// floors. Because the counters now sit below the skip, an exact match also
-	// proves every member of the class was COMPARED, not merely emitted.
-	expectDollar, expectBareNonASCII := 0, 0
-	for _, a := range aliases {
-		if strings.Contains(a, "$") {
-			expectDollar++
-		}
-		if !strings.Contains(a, `"`) && hasNonASCII(a) {
-			expectBareNonASCII++
-		}
-	}
+	// EXACT class counts, with the EXPECTED SIDE TAKEN FROM THE REQUIREMENT.
+	//
+	// The first version of this counted the classes by walking `aliases` -- the
+	// same slice the generator draws from. Delete the four non-ASCII aliases and
+	// the expectation went to zero, the observation went to zero, and the
+	// equality HELD: the class could vanish in silence. The floor it replaced,
+	// `bareNonASCII < 100`, would have caught exactly that.
+	//
+	// lane-auth-contracts named the rule and then narrowed it in my favour:
+	// exactness was never the problem and is the stronger property. The problem
+	// was measuring with a yardstick made of the subject. So these are literals
+	// -- the number of aliases each class REQUIRES, which a reviewer changes
+	// deliberately when the grammar changes -- and an expectation that cannot
+	// follow the generator down. The existence check comes free: a literal 4
+	// cannot quietly become 0.
+	const (
+		requiredDollarAliases       = 8 // "$$;$$", a$$, ab$$, a$1, a$b, ü$$, ü$b, aü$$
+		requiredBareNonASCIIAliases = 4 // ü$$, ü$b, ünïcode, aü$$ -- the >=0x80 branches
+	)
 	per := len(payloads) * len(tails)
-	if want := expectDollar * per; dollarIdents != want {
-		t.Errorf("%d statements carried a $-bearing identifier, expected exactly %d", dollarIdents, want)
+	if want := requiredDollarAliases * per; dollarIdents != want {
+		t.Errorf("%d statements carried a $-bearing identifier, require exactly %d "+
+			"(%d aliases x %d payload/tail pairs). If the grammar changed on purpose, change the "+
+			"literal on purpose", dollarIdents, want, requiredDollarAliases, per)
 	}
-	if want := expectBareNonASCII * per; bareNonASCII != want {
-		t.Errorf("%d statements carried a bare non-ASCII identifier, expected exactly %d; the "+
-			">=0x80 branches in identChar and continuesIdentifier are not being exercised as expected",
-			bareNonASCII, want)
+	if want := requiredBareNonASCIIAliases * per; bareNonASCII != want {
+		t.Errorf("%d statements carried a bare non-ASCII identifier, require exactly %d "+
+			"(%d aliases x %d payload/tail pairs). This class exists to exercise the >=0x80 "+
+			"branches in identChar and continuesIdentifier; at 0 those branches are untested",
+			bareNonASCII, want, requiredBareNonASCIIAliases, per)
 	}
 
 	// The population that matters. Without this the run can drift into all-easy

@@ -236,9 +236,29 @@ def test_shard_aggregator_needs_both_legs() -> None:
 def test_neither_self_hosted_job_has_a_poll_step() -> None:
     # Structural confirmation the v1.5.1 fallback-poller pattern (pick-
     # runner, job_status()/gh api polling, steps.own.outputs.run_here) was
-    # actually retired here, not left dangling alongside the new gate.
+    # actually retired for THIS PR's two routed jobs, not left dangling
+    # alongside the new gate. This does not assert the poller is gone from
+    # the whole file: go-arm64-numeric-parity (#2145) still uses it, and its
+    # conversion to v1.6 is an explicit, separately-tracked follow-up (see
+    # the merge-resolution note above go-storage-integration-plan) -- a
+    # file-wide "no pick-runner job anywhere" assertion would be testing a
+    # decision this PR never made.
     for job_name in (_SHARD_SELF_HOSTED, _REPRO_SELF_HOSTED):
-        steps_raw = _job(job_name).get("steps") or []
+        job = _job(job_name)
+        needs = _needs(job)
+        assert "pick-runner" not in needs, (
+            f"{WORKFLOW_PATH.name}: {job_name!r} still `needs:` "
+            "pick-runner -- contract v1.6 gates directly on "
+            "vars.SELF_HOSTED_RUNNERS, no kill-switch intermediary job "
+            "needed for this PR's own jobs"
+        )
+        job_if = str(job.get("if", ""))
+        assert "pick-runner" not in job_if, (
+            f"{WORKFLOW_PATH.name}: {job_name!r}'s `if:` references "
+            f"pick-runner ({job_if!r}) -- contract v1.6 gates directly on "
+            "vars.SELF_HOSTED_RUNNERS"
+        )
+        steps_raw = job.get("steps") or []
         assert isinstance(steps_raw, list)
         for step in steps_raw:
             assert isinstance(step, dict)
@@ -252,8 +272,3 @@ def test_neither_self_hosted_job_has_a_poll_step() -> None:
                 "steps.own.outputs.run_here -- contract v1.6 retires the "
                 "fallback poller's ownership-decision step"
             )
-    assert "pick-runner" not in _dict_field(_document(), "jobs"), (
-        f"{WORKFLOW_PATH.name}: a pick-runner job still exists -- contract "
-        "v1.6 gates directly on vars.SELF_HOSTED_RUNNERS, no kill-switch "
-        "intermediary job needed"
-    )

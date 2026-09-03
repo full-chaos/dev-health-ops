@@ -256,8 +256,45 @@ permissions:
   packages: read
 
 jobs:
-  go-arm64-numeric-parity:
-    runs-on: ubuntu-26.04-arm
+  # Self-hosted-runner fallback, phase 1 (chris 09-02: "we need a fallback to
+  # the github runners when ours take too long, it can't be all or nothing").
+  # Scoped to go-arm64-numeric-parity only for this PR -- it is the one job in
+  # this file with zero image risk on the arm64 oci-arc-runners pool, since
+  # BOTH legs below already run on real arm64 (ubuntu-26.04-arm today, the
+  # self-hosted pool tomorrow); nothing about correctness changes with the
+  # runner, only wall-clock. go-storage-integration-shard is NOT included yet:
+  # its pinned PostgresImage (internal/testsupport/containers/harness.go) has
+  # no arm64 manifest in the ghcr.io/full-chaos mirror today (confirmed via
+  # `docker buildx imagetools inspect`, index digest), so routing it to
+  # oci-arc-runners would fail the pull outright, not just run slow -- that is
+  # a mirror-workflow gap to close separately, not a fallback-logic problem.
+  #
+  # `pick-runner` gates everything behind a repository-variable kill switch,
+  # defaulting OFF (`vars.SELF_HOSTED_RUNNERS` unset or anything other than
+  # 'enabled'): when off, this job is skipped entirely and downstream `needs`
+  # resolve to `success()` regardless (a skipped dependency does not fail
+  # `success()`), so the fallback-only leg below runs exactly as this job
+  # always has. Fork PRs are excluded even when the switch is on, matching
+  # PR #1432's precedent -- `secrets.*`/self-hosted access should not be
+  # reachable from an untrusted fork's workflow run.
+  pick-runner:
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      try_self_hosted: ${{ steps.decide.outputs.try_self_hosted }}
+    steps:
+      - id: decide
+        run: echo "try_self_hosted=true" >> "${GITHUB_OUTPUT}"
+
+  # Attempt leg: real work on the self-hosted arm64 pool. Only exists when
+  # pick-runner actually ran and said yes -- if the switch is off or this is
+  # a fork PR, this job is skipped (not failed), which is what lets the
+  # fallback leg below run unconditionally as the sole leg in that case.
+  go-arm64-numeric-parity-self-hosted:
+    needs: pick-runner
+    if: needs.pick-runner.outputs.try_self_hosted == 'true'
+    runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -269,6 +306,438 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+
+      - name: Run FMA bit-pattern goldens on real arm64
+        run: |
+          set -euo pipefail
+          # -timeout 8m: the DOUBLE-BOUND lesson from acr's own self-hosted
+          # sibling (CF, 09-03) -- that job's `timeout-minutes: 10` alone
+          # measured 9m58s-10m03s wall time, close enough that ordinary
+          # variance turned an ordinary run into a CANCELLED job, which
+          # this contract's own job_status() then reads as claimed-failure
+          # (a red required check for a test that was actually passing,
+          # just slow to report). `go test`'s own `-timeout` fires INSIDE
+          # the job and produces a real test failure with a goroutine dump
+          # -- an actionable signal -- well before either job-level cap
+          # (10m self-hosted, 20m fallback) can turn a slow-but-passing run
+          # into an ambiguous cancellation. 8m leaves >2m of headroom under
+          # the tighter (self-hosted) 10m cap for checkout/setup-go/binary
+          # startup, which this job's own one real measurement (1m12s
+          # total, run 33728426935, job 100573965740) shows is generous --
+          # but that measurement is n=1, which is exactly why the INNER
+          # bound matters here: it fails loud on its own terms rather than
+          # depending on that single data point staying representative.
+          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... \
+            -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
+            | tee go-test-output.json
+          ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
+          echo "tests actually run: ${ran}"
+          if [ "${ran}" -eq 0 ]; then
+            echo "0 tests matched the -run pattern -- this job would prove NOTHING and stay green even if every named test were renamed or deleted. Failing loud rather than reporting a silent pass." >&2
+            exit 1
+          fi
+
+  # Fallback leg: GitHub-hosted arm64, always defined, and the SOLE source of
+  # truth for the required check below (see that job's own comment for why).
+  # When the self-hosted attempt is not running at all (switch off, fork PR),
+  # this leg does the real work unconditionally -- byte-for-byte the job that
+  # lived here before this PR. When the attempt IS running, this leg polls
+  # the run's own job list (documented API, not a guess) in two phases:
+  #
+  #   Phase 1 (queue bound): wait up to QUEUE_TIMEOUT_MINUTES for the attempt
+  #   to leave `queued`. `timeout-minutes` on the self-hosted job cannot
+  #   protect against a hang here because GitHub only starts that clock once
+  #   a job is picked up, never while queued -- a self-hosted pool that never
+  #   schedules the job would otherwise queue for GitHub's own documented
+  #   self-hosted backstop of 24h ("A job can be in the queue for 24 hours
+  #   before it is automatically cancelled"), far too long to be a usable
+  #   fallback. This phase is the actual hang guard: a fixed, finite loop on
+  #   GitHub-hosted infrastructure that does not depend on the self-hosted
+  #   pool being healthy at all. If the attempt is still queued when this
+  #   phase times out, this leg claims the work itself.
+  #
+  #   Phase 2 (result bound, only entered if phase 1 saw the attempt leave
+  #   the queue): a start is not a pass -- reporting success as soon as the
+  #   attempt is merely `in_progress` would greenlight this check before its
+  #   test even ran. So this phase polls further, up to ATTEMPT_TIMEOUT_MINUTES
+  #   (kept in sync with the self-hosted job's own `timeout-minutes` above;
+  #   duplicated because workflow YAML has no cross-job expression for it)
+  #   plus a reporting-lag buffer, for the attempt to reach `completed`, then
+  #   propagates its actual conclusion as this leg's own result.
+  #
+  # Trade-off, documented rather than hidden: if both legs are near the
+  # phase-1 boundary at once, both may execute the real work (double
+  # compute, rare) -- accepted in exchange for a provable bound instead of
+  # relying on GitHub Actions' concurrency-group semantics to cancel a
+  # sibling job in the same run, which is not a documented guarantee for
+  # that case, and instead of a per-job cancel API, which does not exist
+  # (confirmed against the REST "workflow jobs" reference: get-job and
+  # list-jobs-for-a-run are read-only; only a whole-RUN cancel exists).
+  go-arm64-numeric-parity-fallback:
+    needs: pick-runner
+    if: always()
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Determine the self-hosted attempt's outcome, or that it never left the queue
+        id: wait
+        if: needs.pick-runner.outputs.try_self_hosted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_TIMEOUT_MINUTES: 5
+          ATTEMPT_TIMEOUT_MINUTES: 10
+        run: |
+          set -euo pipefail
+          # `job_status` must tolerate the attempt job not appearing in the
+          # run's job list YET -- the jobs API can lag briefly behind job
+          # creation, and `[.jobs[] | select(...)][0]` on no match is `null`;
+          # indexing `null.status` would abort `jq` (and, under `pipefail`,
+          # this whole script) on the very first poll. Reported as
+          # "not_created", never a hard error.
+          #
+          # Runner-routing contract v1.5.1's F2 clause (staleness
+          # discrimination for CROSS-RUN designs -- a candidate matching
+          # head SHA/workflow/path/event/ref, keyed off a created_at floor,
+          # with a re-run sub-clause for run_attempt > 1) does NOT apply
+          # here. This query is scoped to `${GITHUB_RUN_ID}` -- SAME-RUN,
+          # not cross-run -- and carries no commit-SHA-based discriminator
+          # or cross-run search of any kind (verified: this file has no
+          # such query anywhere).
+          # GitHub's documented `filter=latest` default on this endpoint
+          # already excludes a prior attempt's jobs before this script ever
+          # sees them, so there is no stale-attempt candidate for F2's
+          # discrimination logic to distinguish -- v1.4's own text already
+          # named this same-run lookup exempt from F2 (and from F5's
+          # tie-break, for the same reason: nothing to sort). Confirmed
+          # again against v1.5.1 (2026-09-03): the re-run sub-clause adds
+          # nothing new to discriminate here either, since a re-run of THIS
+          # run never returns the old attempt's job in the response at all.
+          # tests/tooling/test_go_arm64_runner_fallback_same_run_lookup.py
+          # asserts this query stays same-run-shaped; a future refactor
+          # toward a cross-run design trips that test, which is the signal
+          # to re-examine this exemption rather than carry it forward
+          # unchecked.
+          #
+          # codex round 1 (CHAOS-4906, P1): the ORIGINAL version of this
+          # query took `[0]` unconditionally, so more than one job entry
+          # sharing this exact name -- this specific job has no matrix, so
+          # GitHub's own default `filter=latest` on this endpoint should make
+          # that unreachable in practice (a re-run bumps the run's attempt
+          # number and `filter=latest`, the default this call already uses,
+          # excludes prior attempts) -- would silently select whichever entry
+          # happened to sort first, which could be a stale terminal record
+          # while the real attempt is still queued: a false-green exactly
+          # like the "0 tests matched" trap this same file already guards
+          # against elsewhere. Reachable-or-not by the documented API
+          # contract today, an unguarded `[0]` is a latent fragility this
+          # job's own review culture does not accept on faith -- so the
+          # match count is asserted explicitly and more than one match FAILS
+          # LOUD ("ambiguous") instead of silently picking one.
+          # codex round 2 (CHAOS-4906, P2): `read -r a b <<<"$(job_status)"`
+          # SUCCEEDS (exit 0) even when `job_status`/`gh api` itself failed --
+          # reading an empty here-string is a successfully-read empty line,
+          # not an error, so `set -e` never fires here. A transient `gh api`
+          # failure (rate limit, 5xx) therefore produced status="" (empty),
+          # which the OLD phase-1 check read as "not queued, not not_created"
+          # -> falsely "left the queue" on the very first API hiccup, then
+          # phase 2 could spend its whole budget failing the same way and
+          # report a misleading "attempt never reached a terminal state"
+          # claimed-failure -- a false RED caused by an API blip, not by the
+          # attempt itself. Fixed at the source: `job_status` now retries a
+          # failing `gh api` call itself (matching this repo's existing
+          # bounded-retry idiom for exactly this class of transient
+          # rejection, e.g. ci/check_go.sh's pre-pull), and reports an
+          # explicit `api_error` sentinel -- distinct from every real job
+          # status -- only after retries are exhausted. Both phases below
+          # treat `api_error` as "learned nothing this poll, try again",
+          # never as "left the queue" or "completed": a poll that observes
+          # nothing is not evidence of anything.
+          # ci-flakes-measured latent defect: `gh api ... --paginate --jq
+          # '<program>'` runs the jq program ONCE PER PAGE and emits one
+          # output line PER PAGE, not one line for the whole paginated
+          # result. `read -r status conclusion <<<"$(job_status)"` only
+          # consumes the FIRST line of whatever job_status prints -- with
+          # more than one page of jobs (>30, GitHub's default page size),
+          # a target job on page 2+ meant job_status's first line (from
+          # page 1 alone) reported "not_created", so phase 1 silently
+          # waited out its whole budget and handed the work to the hosted
+          # leg -- not a crash, not a red check, just a fallback that
+          # quietly stopped claiming self-hosted attempts the moment this
+          # workflow grew past 30 jobs. Not firing today (~20-21 jobs),
+          # one matrix entry away from firing with zero visible symptom.
+          # Fixed: request `per_page=100` directly (no `--paginate`), fetch
+          # the RAW response once, and run exactly one jq program against
+          # it locally -- guaranteeing a single JSON document processed by
+          # a single jq invocation, never gh's per-page --jq behavior.
+          # Also asserts the job count is under the page size and fails
+          # loud rather than silently repeating this exact defect if this
+          # workflow ever grows to (or past) 100 jobs.
+          job_status() {
+            local raw attempt job_count
+            for attempt in 1 2 3; do
+              if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" 2>/dev/null)"; then
+                job_count="$(printf '%s' "${raw}" | jq '.jobs | length')"
+                if [ "${job_count}" -ge 100 ]; then
+                  # ci-flakes measured: `exit 1` HERE only exits this
+                  # command substitution's subshell -- exactly the trap the
+                  # comment above `read -r a b <<<"$(job_status)"` already
+                  # documents for a failing `gh api` call, and this guard
+                  # had reintroduced the same shape it was written to avoid.
+                  # Verified live: the step printed FATAL and CONTINUED,
+                  # callsite exit 0 -- the guard degraded into exactly the
+                  # silent non-claiming behavior it exists to prevent, just
+                  # noisier. Fixed the same way `ambiguous` already is: emit
+                  # a sentinel, let a check running in the CALLER's shell
+                  # (fail_if_too_many_jobs, beside fail_if_ambiguous) do the
+                  # actual exit.
+                  echo "too_many_jobs null"
+                  return 0
+                fi
+                printf '%s' "${raw}" | jq -r '
+                  [.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
+                  | if ($matches | length) > 1 then "ambiguous null"
+                    elif ($matches | length) == 0 then "not_created null"
+                    else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
+                    end'
+                return 0
+              fi
+              sleep 5
+            done
+            printf 'api_error null\n'
+          }
+          fail_if_ambiguous() {
+            if [ "${status}" = "ambiguous" ]; then
+              echo "FATAL: more than one job named go-arm64-numeric-parity-self-hosted in this run's job list -- refusing to guess which is the real attempt rather than silently picking one (see the comment above job_status)" >&2
+              exit 1
+            fi
+          }
+          fail_if_too_many_jobs() {
+            if [ "${status}" = "too_many_jobs" ]; then
+              echo "FATAL: this run reports >=100 jobs on a single per_page=100 page -- job_status can no longer see every job without real pagination; fix the script, do not silently trust page 1 the way the --paginate/--jq combination used to" >&2
+              exit 1
+            fi
+          }
+
+          # CF's acr-lane round 1 (CHAOS-4904/#399) found two more defects in
+          # this same shape, checked and both apply here too:
+          #
+          # F3: a `while now < deadline` loop that only reads-then-sleeps has
+          # a blind spot exactly as wide as the sleep interval, right at the
+          # deadline -- the last read happens some interval before the
+          # deadline, then the loop sleeps PAST the deadline before ever
+          # re-checking the condition, so a transition in that final window
+          # is never observed. Closed by one extra read immediately after
+          # the loop, before deciding "still queued"/"never terminal".
+          #
+          # F4: the ORIGINAL "left the queue" test was a BLACKLIST
+          # (`!= queued && != not_created`) over GitHub's actual job status
+          # vocabulary, which is NOT just queued/in_progress/completed --
+          # the documented enum also includes `waiting`, `requested`, and
+          # `pending` (jobs blocked on a required-reviewer/environment
+          # gate). None of those mean a runner has actually engaged with the
+          # job, but the blacklist treated all three as "left the queue",
+          # jumping straight to phase 2 to wait for a `completed` that would
+          # never arrive without an approval this job doesn't even declare
+          # today -- exactly the "default unrecognised shapes to safe
+          # instead of dangerous" mistake this repo's own review culture
+          # already names as a repeated failure class. Fixed the same way
+          # `fail_if_ambiguous` already is: enumerate the states that DO
+          # mean "started" POSITIVELY (`in_progress`, `completed`) rather
+          # than the states that mean "hasn't" -- an unrecognised future
+          # value (this job has no `strategy`/`environment` today, but
+          # nothing stops one being added later) now falls on the SAFE side
+          # (keep waiting) instead of the dangerous one (assume started).
+          job_left_queue() {
+            case "${status}" in
+              in_progress|completed) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
+          left_queue="false"
+          status="queued"
+          phase1_total_polls=0
+          phase1_api_error_polls=0
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            phase1_total_polls=$((phase1_total_polls + 1))
+            # A poll that could not observe anything (transient `gh api`
+            # failure, exhausted job_status's own retries) is not evidence
+            # the attempt left the queue -- keep waiting, don't guess.
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+              sleep 15
+              continue
+            fi
+            if job_left_queue; then
+              left_queue="true"
+              break
+            fi
+            sleep 15
+          done
+
+          # F3: one more read right at/after the deadline, closing the
+          # sleep-interval-wide blind spot the loop's own condition leaves.
+          if [ "${left_queue}" != "true" ]; then
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            phase1_total_polls=$((phase1_total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+            elif job_left_queue; then
+              left_queue="true"
+            fi
+          fi
+
+          if [ "${left_queue}" != "true" ]; then
+            # codex round 3 (P3): unconditionally logging "still queued" was
+            # a telemetry gap in round 2's own fix -- an `api_error` poll is
+            # SAFELY treated the same as "still queued" for the DECISION
+            # (claim the work here either way), but a persistent `gh api`
+            # outage and a genuinely saturated self-hosted pool are
+            # different things to page someone about, and the old message
+            # asserted the queue state was actually OBSERVED even when
+            # every single poll had failed to observe anything at all.
+            if [ "${phase1_api_error_polls}" -eq "${phase1_total_polls}" ] && [ "${phase1_total_polls}" -gt 0 ]; then
+              echo "self-hosted attempt's queue status could not be observed at all in ${phase1_total_polls} attempts (gh api kept failing) -- claiming the work here as the safe default, but this does NOT confirm the pool was actually saturated"
+            else
+              echo "self-hosted attempt still queued after ${QUEUE_TIMEOUT_MINUTES}m (${phase1_api_error_polls}/${phase1_total_polls} polls were api_error) -- claiming the work here"
+            fi
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          report_terminal_conclusion() {
+            echo "self-hosted attempt completed with conclusion: ${conclusion}"
+            if [ "${conclusion}" = "success" ]; then
+              echo "outcome=claimed-success" >> "${GITHUB_OUTPUT}"
+            else
+              echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          }
+
+          # CF acr round 2: a self-hosted runner can be LOST mid-run --
+          # GitHub moves the job back from `in_progress` to `queued` (or
+          # another non-started state) rather than leaving it stuck. The
+          # ORIGINAL phase 2 only recognised `completed` as a reason to
+          # stop polling, so a lost runner just sat there as an unrecognised
+          # status until the whole budget was exhausted, reporting a
+          # misleading claimed-failure -- reds the required check for a
+          # job nobody is running anymore, when the honest, immediate
+          # answer is "the self-hosted attempt is no longer active, claim
+          # the work here right now" rather than waiting out the clock for
+          # nothing. `job_lost_runner`: true when the attempt has left
+          # `in_progress` for anything OTHER than `completed` -- i.e. it
+          # regressed from started back to a non-started state.
+          job_lost_runner() {
+            case "${status}" in
+              completed) return 1 ;;
+              in_progress) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+
+          deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
+          total_polls=0
+          api_error_polls=0
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            total_polls=$((total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              api_error_polls=$((api_error_polls + 1))
+              sleep 15
+              continue
+            fi
+            if [ "${status}" = "completed" ]; then
+              report_terminal_conclusion
+            fi
+            if job_lost_runner; then
+              echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of waiting out the remaining budget"
+              echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 15
+          done
+
+          # F3 (same class as phase 1's blind spot above): one more read
+          # right at/after the deadline before giving up, so an attempt
+          # that reaches `completed` in the final sleep interval is not
+          # missed and misreported as "never terminal".
+          read -r status conclusion <<<"$(job_status)"
+          fail_if_ambiguous
+          fail_if_too_many_jobs
+          total_polls=$((total_polls + 1))
+          if [ "${status}" = "api_error" ]; then
+            api_error_polls=$((api_error_polls + 1))
+          elif [ "${status}" = "completed" ]; then
+            report_terminal_conclusion
+          elif job_lost_runner; then
+            echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of reporting a failure"
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Distinguish "the attempt genuinely never finished" from "we
+          # never actually got a good look at it" -- the two have the same
+          # PRACTICAL outcome here (claim nothing, report failure, and let a
+          # human look) but a very different diagnosis, and the old message
+          # named only the first even when every poll in this phase had
+          # failed to observe the attempt at all.
+          if [ "${api_error_polls}" -eq "${total_polls}" ] && [ "${total_polls}" -gt 0 ]; then
+            echo "self-hosted attempt's status could not be observed at all in ${total_polls} attempts (gh api kept failing) -- NOT claiming this reflects the attempt's own outcome; treating as a failure rather than reporting a silent pass" >&2
+          else
+            echo "self-hosted attempt left the queue but never reached a terminal state within $((ATTEMPT_TIMEOUT_MINUTES + 3))m (${api_error_polls}/${total_polls} polls were api_error) -- its own timeout-minutes should have ended it by now; treating this as a failure rather than reporting a silent pass" >&2
+          fi
+          echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+
+      - name: Determine whether this leg owns the real work
+        id: own
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.pick-runner.outputs.try_self_hosted }}" != "true" ] || [ "${{ steps.wait.outputs.outcome }}" = "unclaimed" ]; then
+            echo "run_here=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run_here=false" >> "${GITHUB_OUTPUT}"
+            echo "self-hosted attempt already reached a terminal state (${{ steps.wait.outputs.outcome }}); skipping the fallback's own real-work steps"
+          fi
+
+      - name: Fail this leg if the self-hosted attempt itself failed
+        # The attempt's failure/timeout must become THIS leg's failure too,
+        # since the required check below trusts only this job's result.
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "self-hosted attempt (go-arm64-numeric-parity-self-hosted) did not succeed; failing this leg so the required check reflects it" >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.own.outputs.run_here == 'true'
+
+      - name: Set up Go
+        if: steps.own.outputs.run_here == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Confirm this runner is actually arm64
+        if: steps.own.outputs.run_here == 'true'
         # A mislabeled or reassigned runner would make this job's absence of
         # findings mean nothing -- fail loud rather than silently validate
         # the wrong architecture (same principle as ci/check_go.sh's stage
@@ -282,6 +751,7 @@ jobs:
           fi
 
       - name: Run FMA bit-pattern goldens on real arm64
+        if: steps.own.outputs.run_here == 'true'
         # team-lead ruling (CHAOS-4818): `go test -run <pattern>` exits 0
         # when the pattern matches ZERO tests -- correct Go semantics, but
         # if a future rename ever empties this job's -run pattern (a test
@@ -298,7 +768,24 @@ jobs:
         # exist on main.
         run: |
           set -euo pipefail
-          go test -mod=readonly -count=1 -json ./internal/jobs/... \
+          # -timeout 8m: the DOUBLE-BOUND lesson from acr's own self-hosted
+          # sibling (CF, 09-03) -- that job's `timeout-minutes: 10` alone
+          # measured 9m58s-10m03s wall time, close enough that ordinary
+          # variance turned an ordinary run into a CANCELLED job, which
+          # this contract's own job_status() then reads as claimed-failure
+          # (a red required check for a test that was actually passing,
+          # just slow to report). `go test`'s own `-timeout` fires INSIDE
+          # the job and produces a real test failure with a goroutine dump
+          # -- an actionable signal -- well before either job-level cap
+          # (10m self-hosted, 20m fallback) can turn a slow-but-passing run
+          # into an ambiguous cancellation. 8m leaves >2m of headroom under
+          # the tighter (self-hosted) 10m cap for checkout/setup-go/binary
+          # startup, which this job's own one real measurement (1m12s
+          # total, run 33728426935, job 100573965740) shows is generous --
+          # but that measurement is n=1, which is exactly why the INNER
+          # bound matters here: it fails loud on its own terms rather than
+          # depending on that single data point staying representative.
+          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... \
             -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
             | tee go-test-output.json
           ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
@@ -307,6 +794,65 @@ jobs:
             echo "0 tests matched the -run pattern -- this job would prove NOTHING and stay green even if every named test were renamed or deleted. Failing loud rather than reporting a silent pass." >&2
             exit 1
           fi
+
+  # Preserves the original job NAME as a stable status-check target (in case
+  # anything -- branch protection, another workflow's `needs:` -- ever comes
+  # to depend on it by name), same aggregator shape as go-storage-integration
+  # below -- but with a deliberate difference from that pattern: this
+  # `needs:` ONLY the fallback leg, never the self-hosted attempt directly.
+  #
+  # Reason (team-lead review, 09-02): the self-hosted attempt can end up
+  # permanently `queued` (pool down, or already at its max(2) capacity with
+  # no autoscale headroom) with no terminal state of its own until GitHub's
+  # 24h self-hosted queue backstop eventually cancels it. A job that never
+  # reaches success/failure/skipped/cancelled never satisfies another job's
+  # `needs:` -- an aggregator that `needs` it directly would sit "in
+  # progress" for up to 24h instead of resolving in minutes, defeating the
+  # entire point of a fast fallback. The fallback leg above is built to be
+  # the sole source of truth instead: it either does the real work itself,
+  # or polls the attempt through to an actual terminal conclusion and
+  # propagates it as its own success/failure. Accepted trade-off: in the
+  # pool-down/at-capacity case, the self-hosted attempt job is left dangling
+  # in `queued` in the run's job list even after this required check has
+  # gone green -- harmless (bounded by the 24h backstop) but visually odd;
+  # documented here rather than papered over.
+  go-arm64-numeric-parity:
+    name: go-arm64-numeric-parity
+    if: always()
+    needs:
+      - go-arm64-numeric-parity-fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FALLBACK_RESULT: ${{ needs.go-arm64-numeric-parity-fallback.result }}
+    steps:
+      - name: Require the fallback leg to have succeeded
+        run: |
+          set -euo pipefail
+          if [ "${FALLBACK_RESULT}" = "success" ]; then
+            echo "arm64 numeric parity passed (fallback leg result: ${FALLBACK_RESULT})"
+            exit 0
+          fi
+          echo "fallback leg result: ${FALLBACK_RESULT}" >&2
+          exit 1
+
+  go-storage-integration-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Validate and emit deterministic integration shards
+        id: plan
+        run: bash ci/check_go.sh integration-shard-plan
 
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
@@ -354,24 +900,6 @@ jobs:
             exit 1
           fi
           echo "docker build + run succeeded: ${output}"
-
-  go-storage-integration-plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-
-      - name: Validate and emit deterministic integration shards
-        id: plan
-        run: bash ci/check_go.sh integration-shard-plan
 
   # Runner contract v1.6: exactly one of this job and its self-hosted twin
   # below runs per workflow run, gated on complementary conditions over

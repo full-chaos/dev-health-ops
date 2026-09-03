@@ -338,3 +338,26 @@ func executeInvestmentQualityStats(ctx context.Context, client QueryClient, q co
 		UnknownCount:      int(unknown),
 	}, true, nil
 }
+
+// EvidenceQualityStatsRow is the exported form of investmentQualityStatsRow
+// -- the raw scanned row from fetch_investment_quality_stats
+// (investment.py:1008-1079), before resolveEvidenceQualityStats's
+// GraphQL-shaping (mean/stddev NaN-guarding, band-count JSON marshaling).
+type EvidenceQualityStatsRow = investmentQualityStatsRow
+
+// FetchInvestmentQualityStats is CHAOS-4977's entry point into this
+// package's existing fetch_investment_quality_stats port. It exists so
+// cmd/query-api/internal/investmentexplain (a sibling package under
+// cmd/query-api/internal, per Go's internal/ visibility rules) can reuse
+// compileInvestmentQualityStats/executeInvestmentQualityStats rather than
+// carrying a second, independent Go port of this dedup-critical query
+// (CHAOS-2374, CHAOS-4547) that could drift from this one.
+//
+// found is false only when the query returned zero rows outright -- see
+// executeInvestmentQualityStats's own doc comment: an aggregate query
+// with no GROUP BY normally returns exactly one row (Total==0) even over
+// an empty match set, so found is normally true.
+func FetchInvestmentQualityStats(ctx context.Context, client QueryClient, orgID string, startDate, endDate graphqldate.Date, scopeFilter string, scopeBindings []clickhouse.Binding, themes []string, teamScopeIDs []string) (EvidenceQualityStatsRow, bool, error) {
+	q := compileInvestmentQualityStats(orgID, startDate, endDate, scopeFilter, scopeBindings, themes, teamScopeIDs)
+	return executeInvestmentQualityStats(ctx, client, q)
+}

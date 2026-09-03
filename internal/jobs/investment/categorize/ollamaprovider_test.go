@@ -277,6 +277,31 @@ func TestOllamaProviderRedactsURICredentialInErrorBody(t *testing.T) {
 	}
 }
 
+func TestOllamaProviderRedactsCredentialContainingLiteralScheme(t *testing.T) {
+	// codex round 2 (#2189) P1: a password containing a raw, non-percent-
+	// encoded "://" (e.g. "postgres://user:sekret://noted@host") defeated
+	// the earlier URI pattern -- excluding '/' from the userinfo class
+	// stopped the first scheme://userinfo@ match short of '@', so the
+	// regex engine instead matched starting at the INNER "sekret://noted@"
+	// shape, leaving "billing_user:sekret" (half the real credential)
+	// unredacted. A raw '/' in userinfo is already non-conformant per
+	// RFC 3986 (a real password would percent-encode it), so this is a
+	// malformed/adversarial-diagnostic shape, not a well-formed DSN.
+	const credentialPrefix = "billing_user:sekret"
+	provider, _ := newTestOllamaProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error": "upstream diagnostic: postgres://` + credentialPrefix + `://noted@db.internal"}`))
+	})
+
+	_, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
+	if err == nil {
+		t.Fatal("expected an error for a 403 response")
+	}
+	if strings.Contains(err.Error(), credentialPrefix) {
+		t.Fatalf("returned error leaked the raw credential prefix: %v", err)
+	}
+}
+
 func TestOllamaProviderRedactsSecretInEmbedded200Error(t *testing.T) {
 	provider, _ := newTestOllamaProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -1,8 +1,10 @@
 package categorize
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +54,13 @@ func TestSanitizeMessageRedactsCredentials(t *testing.T) {
 		// the password (the round's own repro shape) must not defeat it.
 		{"URI userinfo credential, percent-encoded", "upstream diagnostic: postgres://billing_user:pa%24s%2Fwd!@db.internal", "billing_user:pa%24s%2Fwd!"},
 		{"URI userinfo credential, plain", "dial failed: redis://default:hunter2@cache.internal:6379/0", "default:hunter2"},
+		// codex round 2 (#2189) P1: a password containing a raw, non-
+		// percent-encoded "://" defeated the earlier version of this
+		// pattern (which excluded '/' from the userinfo class) -- the
+		// first match attempt stopped short of '@', so the engine matched
+		// the INNER "sekret://noted@" instead, leaving "billing_user:sekret"
+		// unredacted.
+		{"URI userinfo credential containing a literal scheme", "upstream diagnostic: postgres://billing_user:sekret://noted@db.internal", "billing_user:sekret"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,6 +139,73 @@ func TestClassifyProviderErrorInvalidRequestIsNotRetryable(t *testing.T) {
 	}
 	if isRetryable(err) {
 		t.Fatal("invalid-request error must not be retryable")
+	}
+}
+
+// forbiddenCredentialTransport returns a fixed 403 whose body carries a raw
+// URI-userinfo credential, for every provider's own HTTPClient.
+type forbiddenCredentialTransport struct{ body string }
+
+func (rt forbiddenCredentialTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusForbidden)
+	_, _ = recorder.Write([]byte(rt.body))
+	return recorder.Result(), nil
+}
+
+// TestClassifiedErrorCauseIsSanitizedAcrossProviders is codex round 2
+// (#2189) P1's own repro shape: classifyProviderError's Error() redacts the
+// message it returns, but every provider previously retained the RAW,
+// unsanitized error as the *llmError's cause -- a caller that unwraps the
+// returned error (errors.Unwrap, or asserting to *httpStatusError to read
+// .body directly, exactly what statusCodeOf/headerOf themselves do) got the
+// original, unredacted provider response text, defeating the sanitizer
+// entirely for anything that unwraps rather than calls .Error(). Covers all
+// three providers that route through classifyProviderError, since the fix
+// (sanitizedCause) lives in shared code, not any one provider.
+func TestClassifiedErrorCauseIsSanitizedAcrossProviders(t *testing.T) {
+	const credential = "billing_user:pa%24s%2Fwd!"
+	body := `{"error":"upstream diagnostic: postgres://` + credential + `@db.internal"}`
+	client := &http.Client{Transport: forbiddenCredentialTransport{body: body}}
+
+	cases := []struct {
+		name     string
+		complete func() error
+	}{
+		{"local", func() error {
+			provider := NewLocalProvider(LocalProviderConfig{BaseURL: "http://provider.invalid", HTTPClient: client})
+			_, err := provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
+			return err
+		}},
+		{"openai", func() error {
+			provider := NewOpenAIProvider(OpenAIProviderConfig{BaseURL: "http://provider.invalid", HTTPClient: client})
+			_, err := provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
+			return err
+		}},
+		{"ollama", func() error {
+			provider := NewOllamaProvider(OllamaProviderConfig{BaseURL: "http://provider.invalid", HTTPClient: client})
+			_, err := provider.Complete(context.Background(), CompletionRequest{Prompt: "prompt"})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.complete()
+			if err == nil {
+				t.Fatal("expected a 403 error")
+			}
+			cause := errors.Unwrap(err)
+			if cause == nil {
+				t.Fatal("expected a retained cause")
+			}
+			if strings.Contains(cause.Error(), credential) {
+				t.Fatalf("unwrapped cause retains raw URI credential: %v", cause)
+			}
+			var statusErr *httpStatusError
+			if errors.As(err, &statusErr) && strings.Contains(statusErr.body, credential) {
+				t.Fatalf("httpStatusError.body retains raw URI credential: %v", statusErr)
+			}
+		})
 	}
 }
 

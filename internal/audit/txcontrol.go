@@ -161,7 +161,15 @@ func refuseMultipleStatements(sql string) error {
 			// quote that follows CLOSES the literal, and skipping it swallowed
 			// the closing quote and then the command separator after it.
 			// Round 3 found that. The E-prefix is checked instead.
-			escapes := i > 0 && (sql[i-1] == 'E' || sql[i-1] == 'e')
+			// The E must be its OWN token, not merely the last byte before the
+			// quote. PostgreSQL allows a literal adjacent to a preceding
+			// keyword, and several keywords end in E -- so a one-character
+			// lookbehind reads ELSE'n\\' and LIKE'a\\' as E-strings and applies
+			// backslash escaping to an ORDINARY literal. That is the exact
+			// defect round 3 found, reintroduced by its own fix, one line above
+			// the comment explaining it. Found by lane-auth-contracts.
+			escapes := i > 0 && (sql[i-1] == 'E' || sql[i-1] == 'e') &&
+				(i == 1 || !identChar(sql[i-2]))
 			j := i + 1
 			for j < len(sql) {
 				if escapes && sql[j] == '\\' {
@@ -222,4 +230,12 @@ func dollarTag(s string) string {
 		}
 	}
 	return ""
+}
+
+// identChar reports whether b can appear inside an SQL identifier or keyword.
+// Bytes >= 0x80 count: a multi-byte identifier's continuation bytes must not
+// look like a token boundary.
+func identChar(b byte) bool {
+	return b == '_' || b >= 0x80 ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }

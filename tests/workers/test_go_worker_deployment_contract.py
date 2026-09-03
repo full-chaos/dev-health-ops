@@ -1330,10 +1330,16 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
     template = (_HELM_CHART / "templates" / "go-workers.yaml").read_text(
         encoding="utf-8"
     )
+    # CHAOS-4984: envFrom is built into a list variable (extraEnvFrom first,
+    # then these two) and toYaml'd, rather than written as literal envFrom
+    # entries, so the pinned strings are the dict-builder calls instead.
     assert (
-        'configMapRef: {name: {{ include "dev-health.configMapName" $ }}}' in template
+        'dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))'
+        in template
     )
-    assert 'secretRef: {name: {{ include "dev-health.secretName" $ }}}' in template
+    assert (
+        'dict "secretRef" (dict "name" (include "dev-health.secretName" $))' in template
+    )
 
     resolved = set(values["config"]) | set(values["secrets"]["data"])
     missing = _pagerduty_required_env() - resolved
@@ -1394,13 +1400,13 @@ def test_kubernetes_and_helm_api_carry_bridge_token_and_webhook_transport() -> N
     template = (_HELM_CHART / "templates" / "api-deployment.yaml").read_text(
         encoding="utf-8"
     )
+    # CHAOS-4984: same dict-builder pattern as go-workers.yaml above.
     assert (
-        'configMapRef:\n                name: {{ include "dev-health.configMapName" .'
+        'dict "configMapRef" (dict "name" (include "dev-health.configMapName" .))'
         in template
     )
     assert (
-        'secretRef:\n                name: {{ include "dev-health.secretName" .'
-        in template
+        'dict "secretRef" (dict "name" (include "dev-health.secretName" .))' in template
     )
     values = _load_yaml(_HELM_CHART / "values.yaml")
     resolved = set(values["config"]) | set(values["secrets"]["data"])

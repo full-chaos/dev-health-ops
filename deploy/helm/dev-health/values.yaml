@@ -68,6 +68,14 @@ api:
   podAnnotations: {}
   # -- Extra environment variables (list of name/value pairs)
   extraEnv: []
+  # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
+  #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
+  #    and Secret in api-deployment.yaml's envFrom list. Kubernetes resolves
+  #    a key present in more than one envFrom source in favour of the LAST
+  #    source that sets it, so an entry here loses any key the chart's own
+  #    config/secret also sets -- put values that must win here, and only
+  #    values this chart is meant to override in config/secrets.
+  extraEnvFrom: []
 
 # =============================================================================
 # Metrics API (CHAOS-4351)
@@ -189,6 +197,14 @@ goWorkers:
   # out-of-scope concern. Omitted defaults to contract 1 (rollout-safe); see
   # deploy/go-workers/README.md's rollout note before changing this value.
   operationalOrderingContract: "1"
+  # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
+  #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
+  #    and Secret in go-workers.yaml's envFrom list, same rule and same
+  #    order as api.extraEnvFrom above -- Kubernetes resolves a duplicate
+  #    key in favour of the LAST envFrom source, so this loses to the
+  #    chart's own config/secret on any key both set. Shared by every
+  #    worker group; there is no per-group override.
+  extraEnvFrom: []
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and
   # coordinator locks use independent session pools: those connections cannot

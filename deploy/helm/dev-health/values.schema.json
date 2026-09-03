@@ -1,7 +1,51 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
+  "definitions": {
+    "envFromEntry": {
+      "type": "object",
+      "description": "One Kubernetes envFrom source: exactly one of configMapRef or secretRef, each carrying only a Secret/ConfigMap name -- matches the shape api-deployment.yaml/go-workers.yaml build for their own two hardcoded entries, so an extraEnvFrom entry can't carry a key (e.g. a typo'd field) the chart would silently drop when it toYaml's the combined list.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "configMapRef": {
+              "type": "object",
+              "properties": { "name": { "type": "string" } },
+              "required": ["name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["configMapRef"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "secretRef": {
+              "type": "object",
+              "properties": { "name": { "type": "string" } },
+              "required": ["name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["secretRef"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "extraEnvFrom": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/envFromEntry" }
+    }
+  },
   "properties": {
+    "api": {
+      "type": "object",
+      "properties": {
+        "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" }
+      }
+    },
     "migrations": {
       "type": "object",
       "properties": {
@@ -43,6 +87,7 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
+        "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" },
         "pgbouncer": {
           "type": "object",
           "properties": {

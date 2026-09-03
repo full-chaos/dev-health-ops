@@ -81,6 +81,25 @@ type RecommendationsExecutor struct {
 	// and the test silently degenerates into the vacuous unit-level version it
 	// was written to replace. A hook is honest scaffolding; a sleep is a
 	// fixture whose shape changes with the weather.
+	//
+	// # A DOCUMENTED EXCEPTION TO "PRODUCTION CODE IS NEVER BENT FOR A MOCK"
+	//
+	// Ruled by the orchestrator after peer review, on this condition: prefer a
+	// wrapper around an injected per-TEAM boundary, and keep this hook only if
+	// no such boundary exists. It does not.
+	//
+	//   - `loader` is a CONCRETE *RecommendationsLoader, not an interface, so
+	//     there is nothing injected here to wrap. Making it an interface to
+	//     serve one test would be a larger production change than this field.
+	//   - The one boundary that IS injectable, `conn driver.Conn`, is called
+	//     SIX times per team by LoadTeamMetricsWindow. Cancelling on "the
+	//     second call" would couple the test to the loader's internal query
+	//     count -- a number with no contract, which any added metric silently
+	//     changes. That is a worse seam than this one: invisible, and it breaks
+	//     without anyone touching the test.
+	//
+	// So the seam sits at the only per-team boundary that exists, is
+	// unexported, is nil in production, and is guarded at its single call site.
 	afterTeamHook func()
 }
 

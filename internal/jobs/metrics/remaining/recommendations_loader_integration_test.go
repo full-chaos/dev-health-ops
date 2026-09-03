@@ -121,7 +121,7 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 		t.Fatalf("clickhouse dsn: %v", err)
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
-	seedLoaderFixture(t, ctx, conn)
+	defer seedLoaderFixture(t, ctx, conn)()
 
 	loader, err := NewRecommendationsLoader(conn, loaderOrgID)
 	if err != nil {
@@ -318,7 +318,7 @@ func mustDate(t *testing.T, text string) time.Time {
 // wrong value -- so a Go query that dropped an argMax would read the wrong
 // number and fail against Python rather than passing on a fixture where every
 // key has exactly one row.
-func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
+func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (restoreMergesFn func()) {
 	t.Helper()
 	exec := func(query string, args ...any) {
 		if err := conn.Exec(ctx, query, args...); err != nil {
@@ -363,11 +363,26 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	for _, table := range mergeStopped {
 		exec("SYSTEM STOP MERGES " + table)
 	}
-	t.Cleanup(func() {
+	// The caller DEFERS the returned restore. Not t.Cleanup: cleanups run after
+	// every deferred call in the test, so a t.Cleanup restart would fire after
+	// conn.Close() and after the container teardown -- too late to restart
+	// anything, and silently so (4752-go, who nearly shipped that inversion by
+	// copying a precedent's form without its teardown lifecycle).
+	//
+	// The restart uses a FRESH context: the test's own is usually cancelled by
+	// the time defers run, and a restart on a cancelled context is a no-op that
+	// looks like a restart.
+	restoreMerges := func() {
+		restartCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		for _, table := range mergeStopped {
-			exec("SYSTEM START MERGES " + table)
+			if err := conn.Exec(restartCtx, "SYSTEM START MERGES "+table); err != nil {
+				// Errorf, not Fatalf: FailNow from a deferred function does not
+				// stop the remaining tables from being restarted.
+				t.Errorf("restart merges on %s: %v", table, err)
+			}
 		}
-	})
+	}
 
 	repoAlpha := "11111111-1111-1111-1111-111111111111"
 	repoBeta := "22222222-2222-2222-2222-222222222222"
@@ -689,6 +704,8 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 		VALUES (?, ?, 'team', ?, ?, 'elevated', 0, 0, 0, 0, ?)`,
 		loaderOrgID, mustDate(t, "2026-08-20"), loaderTeamA, 0.62,
 		mustTimestamp(t, "2026-08-21 00:00:00"))
+
+	return restoreMerges
 }
 
 func mustTimestamp(t *testing.T, text string) time.Time {

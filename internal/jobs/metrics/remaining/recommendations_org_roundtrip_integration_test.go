@@ -43,7 +43,7 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 		t.Fatalf("clickhouse dsn: %v", err)
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
-	seedLoaderFixture(t, ctx, conn)
+	defer seedLoaderFixture(t, ctx, conn)()
 
 	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
 	if err != nil {
@@ -262,7 +262,7 @@ func TestASecondRunSupersedesTheFirstOnUnchangedData(t *testing.T) {
 		t.Fatalf("clickhouse dsn: %v", err)
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
-	seedLoaderFixture(t, ctx, conn)
+	defer seedLoaderFixture(t, ctx, conn)()
 
 	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
 	if err != nil {
@@ -397,7 +397,7 @@ func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
 		t.Fatalf("clickhouse dsn: %v", err)
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
-	seedLoaderFixture(t, ctx, conn)
+	defer seedLoaderFixture(t, ctx, conn)()
 
 	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
 	if err != nil {

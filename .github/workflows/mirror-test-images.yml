@@ -217,46 +217,13 @@ jobs:
           #
           # The ref carries its digest, so this mirrors a specific image rather
           # than whatever the tag points at today.
-          # The OWNER must be OURS, not merely "some ghcr owner" (codex round 1).
-          # This sed used to accept any owner while the destination below is
-          # rebuilt with ${OWNER} -- so `ghcr.io/other-owner/python:...` passed,
-          # mirrored to ghcr.io/<us>/python:..., and left the build pulling an
-          # owner we never publish to. Anchoring on the real owner makes the
-          # derived ref and the destination the same image by construction.
-          python_ref=$(sed -nE "s|^ARG PYTHON_BASE_IMAGE=\"ghcr\.io/${OWNER}/([^\"]+)\".*$|\1|p" \
-            docker/Dockerfile)
-          # ASSERT THE OUTCOME, NOT THE INPUT (lane-4441).
-          #
-          # This guard used to be `grep -qE '^ARG PYTHON_BASE_IMAGE="ghcr\.io/'`
-          # -- a check on the SHAPE OF THE LINE. But the sed additionally requires
-          # an OWNER segment (`[^/]+/`), so every line satisfying the guard but not
-          # that passed silently while deriving NOTHING. Measured:
-          #
-          #   ghcr.io/full-chaos/python:3.14-slim@sha256:X   guard ok  -> correct
-          #   ghcr.io/python:3.14-slim@sha256:X              guard ok  -> EMPTY
-          #   ghcr.io/full-chaos/lib/python:3.14-slim@X      guard ok  -> wrong ref
-          #
-          # The second is the exact failure this guard exists to prevent: drop the
-          # owner segment while bumping the base, mirror nothing, and leave the
-          # Dockerfile naming a ghcr ref that exists nowhere.
-          #
-          # So the question is not "does the line look right" but "did the
-          # derivation produce exactly one usable ref". That is bounded and
-          # positive: one ref, well-formed, or fail.
-          python_n=$(printf '%s' "${python_ref}" | grep -c . || true)
-          if [ "${python_n:-0}" -ne 1 ]; then
-            echo "::error::derived ${python_n:-0} Python base refs from docker/Dockerfile, expected exactly 1."
-            echo "::error::PYTHON_BASE_IMAGE must be ghcr.io/<owner>/<repo>:<tag>@<digest>."
-            exit 1
-          fi
-          # A ref containing whitespace or an extra path segment is malformed here:
-          # the mirror maps <repo>:<tag> onto ghcr.io/<owner>/, so a nested path
-          # would mirror to a location the Dockerfile does not name.
-          if printf '%s' "${python_ref}" | grep -qE '[[:space:]/]'; then
-            echo "::error::derived a malformed Python base ref: ${python_ref}"
-            exit 1
-          fi
-          printf '%s\n' "${python_ref}" >> images.raw
+          # ONE derivation, shared with docker-images.yml's ensure-base step
+          # (CHAOS-4922). These were two separate validators and they disagreed
+          # on the same Dockerfile in both directions -- most dangerously, this
+          # one accepted a ref with NO DIGEST and would have published a
+          # floating tag before the build noticed. See ci/python_base_ref.sh.
+          bash ci/python_base_ref.sh "${OWNER}" \
+            | awk '$1 == "upstream" { print $2 }' >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }

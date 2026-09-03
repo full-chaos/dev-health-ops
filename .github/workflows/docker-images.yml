@@ -144,26 +144,14 @@ jobs:
       - name: Ensure the Python base image is mirrored
         run: |
           set -euo pipefail
-          ref=$(sed -nE 's/^ARG PYTHON_BASE_IMAGE="([^"]+)".*$/\1/p' docker/Dockerfile)
-          n=$(printf '%s' "${ref}" | grep -c . || true)
-          # Same outcome assertion as the mirror workflow's derivation: exactly
-          # one ref, or fail. Two ARG lines are legal Dockerfile syntax and the
-          # second wins the build, so "some line matched" is not the question.
-          if [ "${n:-0}" -ne 1 ]; then
-            echo "::error::derived ${n:-0} PYTHON_BASE_IMAGE refs, expected exactly 1"
-            exit 1
-          fi
-          # OUR owner specifically, not any ghcr owner (codex round 1): the
-          # mirror publishes under ${{ github.repository_owner }}, so a ref
-          # naming a different owner would be pulled from somewhere this
-          # workflow never writes to.
-          case "${ref}" in
-            ghcr.io/${{ github.repository_owner }}/*@sha256:*) : ;;
-            *) echo "::error::PYTHON_BASE_IMAGE must be digest-pinned under ghcr.io/${{ github.repository_owner }}/: ${ref}"; exit 1 ;;
-          esac
+          # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).
+          # Two validators for one property diverged; the gap was the silent
+          # failure set. ci/python_base_ref.sh is now the only definition.
+          eval "$(bash ci/python_base_ref.sh "${{ github.repository_owner }}" \
+                  | awk '$1 == "ghcr" { print "ref=" $2 } $1 == "upstream" { print "upstream=" $2 }')"
           tag="${ref%@*}"
           digest="${ref##*@}"
-          repo="${tag##*/}"; repo="${repo%%:*}"
+          repo="${upstream%%:*}"
           if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
             echo "base already mirrored, no action: ${ref}"
           else

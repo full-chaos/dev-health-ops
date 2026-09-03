@@ -20,11 +20,15 @@
 #                                          0.9.0  0.10.0  0.11.0
 #   [ A ] && echo x || echo y                no      no      no
 #   [ A ] && { echo x; } || { echo y; }     yes     yes     yes
-#   [ A ] && true || false                    -     yes     yes
+#   [ A ] && true || false                  yes     yes     yes
 #   [ A ] && [ B ] || { C; }                YES     YES      no   <-- differs
-#   [ A ] && [ B ] && [ C ] || { D; }         -     YES      no   <-- differs
-#   grep -q x f && [ B ] || { C; }            -     YES      no   <-- differs
-#   [ A ] && f || { f; }                      -     yes     yes
+#   [ A ] && [ B ] && [ C ] || { D; }       YES     YES      no   <-- differs
+#   grep -q x f && [ B ] || { C; }          YES     YES      no   <-- differs
+#   [ A ] && f || { f; }                    yes     yes     yes
+#
+# Every cell measured against a real binary of that version -- the 0.9.0 column
+# was completed by lane-4441 and re-measured here. 0.9.0 and 0.10.0 agree
+# everywhere; only 0.11.0 differs, and only where a TEST command precedes `||`.
 #
 # 0.9.0 matters because it is what the runner ACTUALLY ships: the step never
 # printed a version, and the ubuntu-24.04 image manifest lists 0.9.0. The
@@ -32,7 +36,7 @@
 # runner -- which is its own lesson about version claims nobody printed.
 #
 # So a script using `... && [ test ] || { ... }` -- the ordinary argument-count
-# idiom -- is clean on 0.11.0 and fails on 0.10.0. That is exactly how an
+# idiom -- is clean on 0.11.0 and fails on 0.9.0 and 0.10.0. That is exactly how an
 # unpinned linter reds a build nobody changed.
 #
 # (An earlier revision of this comment claimed the drift was false. That was
@@ -89,10 +93,15 @@ fi
 #   run_ask_dev_provider_profile.sh).
 #
 # ALSO EXCLUDED, and for a different reason worth stating -- these are clean
-# under 0.11.0 but DIRTY under 0.10.0, i.e. they pass only because of the
+# under 0.11.0 but DIRTY under 0.9.0 and 0.10.0, i.e. they pass only because of the
 # narrowing described above:
-#   scripts/acceptance/armed_corpus_run.sh   (SC2015 under 0.10.0)
-#   scripts/backup-standing.sh               (SC2015 under 0.10.0)
+#   scripts/acceptance/armed_corpus_run.sh   (SC2015 under 0.9.0 AND 0.10.0)
+#   scripts/backup-standing.sh               (SC2015 under 0.9.0 AND 0.10.0)
+# 0.9.0 is named first deliberately: it is the version the runner actually
+# ships, so it is the one that makes these exclusions load-bearing today.
+# Citing only 0.10.0 -- a reproduction binary nobody runs in CI -- would leave a
+# future reader re-deriving the exclusion under 0.9.0 and finding it justified,
+# but not for the reason given. That is the same confusion this rewrite fixed.
 # Enrolling a file that passes only under the relaxed rule would quietly bank
 # the relaxation as coverage. Every file below is clean under BOTH versions.
 FILES=(

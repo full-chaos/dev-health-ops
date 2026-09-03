@@ -7,8 +7,9 @@
 # codebase with no problems, and both report success.
 #
 # NOTE ON THE SHAPE -- MEASURED, NOT DERIVED. The obvious
-# `[ -f x ] && echo yes || echo no` does NOT trigger SC2015 in 0.9.0, 0.10.0 or
-# 0.11.0. It fires on a braced group and on `&& true || false`. Using the
+# `[ -f x ] && echo yes || echo no` does NOT trigger SC2015 in 0.9.0 (the
+# version the runner ships), 0.10.0, or 0.11.0 -- measured against all three.
+# It fires on a braced group and on `&& true || false`. Using the
 # non-triggering shape would have produced a "red-first" fixture that is
 # silently green -- the exact failure this fixture exists to detect.
 #

@@ -392,14 +392,16 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 	cases := generateJWKSDocuments(t, 2000)
 
 	var (
-		agree            int
-		declaredNarrower int
-		clientEnforced   int
-		byPredicate      = map[string]int{}
-		schemaAccepts    int
-		consumerAccepts  int
-		undeclared       []string
-		schemaLooser     []string
+		agree             int
+		declaredNarrower  int
+		clientEnforced    int
+		undeclaredCount   int
+		schemaLooserCount int
+		byPredicate       = map[string]int{}
+		schemaAccepts     int
+		consumerAccepts   int
+		undeclared        []string
+		schemaLooser      []string
 	)
 
 	for _, c := range cases {
@@ -440,6 +442,7 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 				}
 			}
 			if explained == "" {
+				schemaLooserCount++
 				if len(schemaLooser) < 5 {
 					schemaLooser = append(schemaLooser, fmt.Sprintf("%s: %s", c.label, raw))
 				}
@@ -457,6 +460,7 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 				}
 			}
 			if explained == "" {
+				undeclaredCount++
 				if len(undeclared) < 5 {
 					undeclared = append(undeclared, fmt.Sprintf("%s: %s", c.label, raw))
 				}
@@ -465,6 +469,26 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 			declaredNarrower++
 			byPredicate[explained]++
 		}
+	}
+
+	// SKIPPED MUST BE ZERO -- every generated document lands in exactly one
+	// bucket, and the buckets are asserted to sum to the population.
+	//
+	// Adopted from lane-auth-wave1's harness, where the equivalent counter is
+	// what makes their pass meaningful: their first draft treated any
+	// non-42601 error as a skip, so a dead container would have "passed" 3000
+	// cases having compared none of them. Nothing here can skip by
+	// construction -- a marshal or write failure is t.Fatalf, not a continue --
+	// but "by construction" is exactly the kind of claim this lane has been
+	// wrong about twice today, so it is counted rather than reasoned.
+	accounted := agree + declaredNarrower + clientEnforced + undeclaredCount + schemaLooserCount
+	if accounted != len(cases) {
+		t.Fatalf("accounting does not close: %d documents generated, %d classified "+
+			"(agree=%d narrowing=%d client-enforced=%d undeclared=%d schema-looser=%d). "+
+			"A document that reaches no bucket is a silent skip, and a harness that can skip "+
+			"can report a pass having compared nothing",
+			len(cases), accounted, agree, declaredNarrower, clientEnforced,
+			undeclaredCount, schemaLooserCount)
 	}
 
 	// NON-VACUITY, asserted rather than hoped for. This whole test exists
@@ -494,23 +518,23 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	t.Logf("%d documents: %d agree, %d declared narrowings, %d client-enforced",
-		len(cases), agree, declaredNarrower, clientEnforced)
+	t.Logf("%d documents, %d classified, skipped 0: %d agree, %d declared narrowings, %d client-enforced",
+		len(cases), accounted, agree, declaredNarrower, clientEnforced)
 	t.Logf("  schema accepted %d, consumer accepted %d", schemaAccepts, consumerAccepts)
 	for _, n := range names {
 		t.Logf("  narrowing exercised %4d times: %s", byPredicate[n], n)
 	}
 
 	if len(schemaLooser) > 0 {
-		t.Errorf("THE SCHEMA ACCEPTED %d+ DOCUMENT(S) THE REAL CONSUMER REFUSES. The contract is "+
+		t.Errorf("THE SCHEMA ACCEPTED %d DOCUMENT(S) THE REAL CONSUMER REFUSES. The contract is "+
 			"certifying documents its only reader rejects:\n  %s",
-			len(schemaLooser), strings.Join(schemaLooser, "\n  "))
+			schemaLooserCount, strings.Join(schemaLooser, "\n  "))
 	}
 	if len(undeclared) > 0 {
-		t.Errorf("THE SCHEMA REFUSED %d+ DOCUMENT(S) THE CONSUMER ACCEPTS, matching no declared "+
+		t.Errorf("THE SCHEMA REFUSED %d DOCUMENT(S) THE CONSUMER ACCEPTS, matching no declared "+
 			"narrowing. Either the schema is wrong, or this is a real narrowing that needs a "+
 			"narrower_than_consumer fixture and a predicate -- round 1 blocked this contract for "+
 			"exactly four of these:\n  %s",
-			len(undeclared), strings.Join(undeclared, "\n  "))
+			undeclaredCount, strings.Join(undeclared, "\n  "))
 	}
 }

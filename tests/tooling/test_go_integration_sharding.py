@@ -51,6 +51,7 @@ EXPECTED_PACKAGES = {
     "internal/jobs/system",
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
+    "internal/jobs/workgraph/issueprlinks",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -100,9 +101,36 @@ def _pinned_clickhouse_image() -> str:
         r'(?m)^\s*ClickHouseImage\s*=\s*"(?P<image>[^"]+)"',
         CONTAINER_HARNESS.read_text(encoding="utf-8"),
     )
-    assert match is not None
+    assert match is not None, (
+        "no ClickHouseImage declaration found in the container harness -- if it "
+        "was renamed this helper is silently dead, so fix the pattern rather "
+        "than the assertion"
+    )
     image = match.group("image")
-    assert re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", image)
+    # A TAG, not a digest. ClickHouse tracks the 26 MAJOR so minor and patch
+    # upgrades apply -- ruled by chris (CHAOS-4854), the same policy CHAOS-4851
+    # used for the CI service containers.
+    #
+    # The REPOSITORY is fixed even so. An earlier revision asserted only
+    # `[^@\s]+:[^@\s]+|...`, i.e. "a reference of some kind", which blessed
+    # `:latest`, `clickhouse/other-image:26.7` and
+    # `quay.io/other/clickhouse-server:latest`. This helper feeds the pre-pull
+    # expectations below, so whatever it accepts is what the mirror assertions
+    # are then derived FROM -- a foreign registry accepted here would be
+    # asserted as correct rather than caught.
+    # `[0-9]`, never `\d`. This same pattern is written in three dialects --
+    # bash ERE in ci/check_go.sh, Go RE2 in harness_test.go, and Python here --
+    # and they must accept the same set. Python's `\d` is UNICODE-aware, so it
+    # matches Arabic-Indic and other non-ASCII digits; bash `[0-9]` and Go RE2
+    # (whose Perl classes are ASCII-only) both reject them. Measured: the tag
+    # `26.\u0667` was ACCEPTED by Python's `\d` and rejected by the other two.
+    # `[0-9]` is the one spelling that means the same thing in all three.
+    assert re.fullmatch(
+        r"clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})", image
+    ), (
+        "ClickHouseImage must be clickhouse/clickhouse-server pinned to a 26.x "
+        f"tag or a sha256 digest, got {image!r}"
+    )
     return image
 
 
@@ -299,8 +327,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 37 package(s)" in result.stdout
+    # CHAOS-4769 added internal/jobs/workgraph/issueprlinks (37 -> 38
+    # discovered, 37 -> 38 will run): the provenance-collision migration
+    # acceptance test is container-backed, so the package gained its first
+    # -tags integration file. The previous literal was 37 because
+    # internal/jobs/workgraph/edges (CHAOS-4766, #2121) had already landed
+    # on main; this branch adds the next one on top of it.
+    assert "38 package(s) discovered, 0 denylisted, 38 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 38 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -330,7 +364,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is the FLATTENED set across all shards, so unlike the selected-package
     # count above it INCLUDES the providersync shard-1 package.
     # CHAOS-4766: 37, not 36 -- internal/jobs/workgraph/edges added.
-    assert len(flattened) == len(set(flattened)) == 37
+    # CHAOS-4769: 38, not 37 -- issueprlinks added. FLATTENED includes the
+    # providersync shard-1 package.
+    assert len(flattened) == len(set(flattened)) == 38
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1630,7 +1666,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4766: 36, not 35 -- internal/jobs/workgraph/edges added
     # (37 discovered - 1 for the providersync shard-1 package = 36 across
     # shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 36
+    # CHAOS-4769: 37, not 36 -- issueprlinks added
+    # (38 discovered - 1 for the providersync shard-1 package = 37).
+    assert len(selected_packages) == len(set(selected_packages)) == 37
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

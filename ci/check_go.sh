@@ -841,7 +841,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestEdgeShapesGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -857,6 +857,42 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-json-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again. It shares the band golden's producer but guards a
+  # DIFFERENT axis: string and token spellings rather than float rendering.
+  # Someone "fixing" the column with ensure_ascii=False or allow_nan=False would
+  # leave the band golden green, so a shared marker would let that through.
+  proof_file="${proof_dir}/evidence-json-edge-shapes-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json edge-shapes golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the only fixture here whose producer is the REAL
+  # APPLICATION PATH rather than a direct library call: it builds a
+  # Recommendation and calls recommendation_to_record, so its bytes come out of
+  # loader.py:448 itself. That makes it sensitive to a key added to or reordered
+  # in the evidence dict literal, a changed rounding depth at a `value=` site,
+  # or an EvidenceRef rename -- none of which the direct-json guards can see.
+  proof_file="${proof_dir}/evidence-json-repr-band-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json repr-band golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for a producer that is neither a computation nor a
+  # dependency but a set of DEFAULT ARGUMENTS. json.dumps(value) with no
+  # sort_keys is a DIFFERENT reference from json.dumps(value, sort_keys=True)
+  # guarded above, and the two emit different bytes for the same data --
+  # recommendations/loader.py:448 writes the evidence_json column with the
+  # bare form. This marker is separate because a shared one would be satisfied
+  # by the sort_keys guard while this one was filtered out of -run, which is
+  # exactly the substitution that makes the two look interchangeable.
+  proof_file="${proof_dir}/python-json-insertion-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps insertion-order golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi
@@ -1792,12 +1828,55 @@ integration_image_declaration() {
   esac
 }
 
+# integration_image_reference_pattern echoes the ERE that a NOT-digest-pinned
+# image must match. It is per-key on purpose. The previous generic
+# `^[^[:space:]]+:[^[:space:]]+$` asserted only "something, a colon, something",
+# which accepted `clickhouse/clickhouse-server:latest`,
+# `quay.io/other/clickhouse-server:latest` and `clickhouse/other-image:26.7`
+# alike -- a foreign registry so accepted then bypasses the ghcr mirror
+# downstream. Relaxing ClickHouse from a digest to a tag (CHAOS-4854) was a
+# change to the VERSION predicate; it should never have relaxed the IMAGE
+# domain along with it.
+integration_image_reference_pattern() {
+  case "$1" in
+    # chris's CHAOS-4854 ruling: "26.7 will pull all tags, 'matching' != matching
+    # exact. It's major version MATCHING." So the repository is fixed and only
+    # the 26.x version floats -- 26.7 and any patch inside it apply
+    # automatically, while `latest` and a different image do not. A digest stays
+    # legal so a future re-pin needs no change here.
+    clickhouse)
+      printf '%s\n' '^clickhouse/clickhouse-server(:26(\.[0-9]+)*|@sha256:[0-9a-f]{64})$'
+      ;;
+    # The reaper's identity is pinned by TestReaperImageMatchesTestcontainers
+    # against testcontainers-go's own exported constant, which is a stronger
+    # control than a pattern here could be. This only rejects a bare repository.
+    #
+    # Deliberately UNCHANGED from the pattern this function replaced, including
+    # its acceptance of a digest form. Waiving the digest REQUIREMENT for a key
+    # should not also forbid a digest -- a digest is strictly more pinned than a
+    # tag, so refusing one here would reject an improvement. Narrowing this is
+    # out of scope for CHAOS-4854, which is about ClickHouse.
+    *)
+      printf '%s\n' '^[^[:space:]]+:[^[:space:]]+$'
+      ;;
+  esac
+}
+
 integration_image_requires_digest() {
-  [ "$1" != "reaper" ]
+  # reaper: testcontainers-go picks its own tag, so we match the library.
+  # clickhouse: tracks the 26 MAJOR by tag so minor and patch upgrades apply --
+  # ruled by chris (CHAOS-4854), same policy CHAOS-4851 used for the CI service
+  # containers. Returning 1 here waives only the DIGEST requirement; each key
+  # still has to satisfy integration_image_reference_pattern above, which keeps
+  # the repository fixed.
+  case "$1" in
+    reaper | clickhouse) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 discover_test_dependency_image() {
-  local key="$1" declaration image
+  local key="$1" declaration image reference_pattern
   local -a images=()
 
   declaration="$(integration_image_declaration "${key}")"
@@ -1819,8 +1898,11 @@ discover_test_dependency_image() {
     if [[ ! "${image}" =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
       die "${declaration} must be pinned by a full sha256 digest, got '${image}'"
     fi
-  elif [[ ! "${image}" =~ ^[^[:space:]]+:[^[:space:]]+$ ]]; then
-    die "${declaration} must name an image and tag, got '${image}'"
+  else
+    reference_pattern="$(integration_image_reference_pattern "${key}")"
+    if [[ ! "${image}" =~ ${reference_pattern} ]]; then
+      die "${declaration} must match ${reference_pattern}, got '${image}'"
+    fi
   fi
   printf '%s\n' "${image}"
 }

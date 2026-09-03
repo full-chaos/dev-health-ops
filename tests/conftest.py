@@ -282,3 +282,46 @@ def pytest_report_header(config):
             "ambient env kept for an announced lane: " + ", ".join(sorted(lane_kept))
         )
     return lines
+
+
+def answer_catalogue_probes(client):
+    """Make a mock ClickHouse client answer catalogue probes truthfully.
+
+    Migrations run whenever a ClickHouse store is constructed, and migration 084
+    asks the catalogue two questions before it plans anything: does
+    `work_graph_issue_pr` exist, and what shape is it. A real server answers
+    `EXISTS TABLE` with exactly 0 or 1, so 084 RAISES on anything else -- an
+    unanswerable probe means the client is not answering the question asked, and
+    guessing would either rebuild or decline to rebuild on a fiction.
+
+    Most mock clients in this suite return `result_rows=[]` for every query
+    because they were never meant to answer anything; they exist to assert that
+    `insert` or `command` was called. Under 084's contract that empty answer is
+    a refusal, so the migration raises and an unrelated test fails.
+
+    The fix belongs here rather than in the migration: production code is not
+    bent to satisfy a mock, and a per-test patch means every future
+    store-constructing test has to learn about a probe it has no interest in.
+
+    `[(0,)]` is the TRUTHFUL answer, not merely a convenient one -- these tests
+    construct a store against a client with no tables at all, so the table
+    genuinely does not exist. 084 then skips at its own existence check and
+    never reaches DESCRIBE.
+
+    Call tracking survives: this sets `side_effect` on the existing mock rather
+    than replacing it, so `client.query.called` and friends still work. The
+    fall-through reads `return_value` LAZILY, so a test that configures its rows
+    AFTER calling this -- which is the common order -- still gets them.
+    """
+    from types import SimpleNamespace
+
+    def _answer(sql="", *args, **kwargs):
+        text = str(sql).strip().upper()
+        if text.startswith("EXISTS TABLE"):
+            return SimpleNamespace(result_rows=[(0,)])
+        if text.startswith("DESCRIBE TABLE"):
+            return SimpleNamespace(result_rows=[])
+        return client.query.return_value
+
+    client.query.side_effect = _answer
+    return client

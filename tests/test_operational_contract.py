@@ -19,6 +19,7 @@ from dev_health_ops.models.operational import (
     canonical_operational_id,
 )
 from dev_health_ops.storage.clickhouse import ClickHouseStore
+from tests.conftest import answer_catalogue_probes
 from tests.fixtures.operational_lifecycles import equivalent_operational_lifecycles
 
 _MIGRATION = (
@@ -133,7 +134,12 @@ def test_clean_install_migration_creates_each_canonical_operational_table() -> N
 def test_clean_install_runner_applies_migration_066() -> None:
     # Given: a fresh non-default ClickHouse database with no recorded migrations.
     client = MagicMock()
+
+    # One canned row for every query, including the catalogue probes migrations
+    # run against their own tables. answer_catalogue_probes handles those; the
+    # canned row stays for everything else.
     client.query.return_value.result_rows = [("067_operational_ordering_contract.py",)]
+    answer_catalogue_probes(client)
     store = ClickHouseStore("clickhouse://localhost:8123/operational_contract_test")
 
     # When: the standard migration runner initializes the store.

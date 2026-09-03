@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -116,7 +117,7 @@ func (engine *GitHubWorkItemEngineDeriver) Derive(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	return engine.deriveForProvider(
 		ctx, "github", claim, rows, day, computedAt, derived,
@@ -130,7 +131,7 @@ func (engine *GitHubWorkItemEngineDeriver) deriveForProvider(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	engineRows, err := engine.deriveRowsForProvider(
 		ctx, provider, claim, rows, day, computedAt, derived,
@@ -174,7 +175,7 @@ func (engine *GitHubWorkItemEngineDeriver) deriveRowsForProvider(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemEngineRows, error) {
 	if ctx == nil || engine == nil || engine.statusMapping == nil ||
 		engine.investmentClassifier == nil || claim.Validate() != nil ||
@@ -247,13 +248,13 @@ func buildGitHubIssueTypeMetricsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
 	dayUTC, end, computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 	statusMapping *StatusMapping,
 ) []githubIssueTypeMetricsDailyRow {
 	buckets := make(map[githubIssueTypeMetricsKey]*githubIssueTypeMetricsBucket)
 	order := make([]githubIssueTypeMetricsKey, 0, len(rows.WorkItems))
 	for _, item := range rows.WorkItems {
-		teamID, _, _ := derived.resolve(githubWorkItemDerivationSubjectFromRow(item))
+		teamID, _, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
 		key := githubIssueTypeMetricsKey{
 			repoID:        newGitHubNullableUUIDKey(item.RepoID),
 			provider:      item.Provider,
@@ -360,7 +361,7 @@ func buildGitHubInvestmentDestinationsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
 	dayUTC, end, computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 	classifier *InvestmentClassifier,
 ) ([]githubInvestmentClassificationDailyRow, []githubInvestmentMetricsDailyRow, error) {
 	classifications := make([]githubInvestmentClassificationDailyRow, 0, len(rows.WorkItems))
@@ -405,7 +406,7 @@ func buildGitHubInvestmentDestinationsDaily(
 		if completed.Before(dayUTC) || !completed.Before(end) {
 			continue
 		}
-		teamID, _, _ := derived.resolve(githubWorkItemDerivationSubjectFromRow(item))
+		teamID, _, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
 		team := normalizeGitHubWorkItemDerivedTeamID(teamID)
 		if team == githubWorkItemUnassignedTeamID {
 			team = ""

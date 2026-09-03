@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -189,9 +190,9 @@ type LinearWorkItemDeriver struct {
 
 // StoredEdgeMergeObservation reports the stored-edge union this deriver has
 // observed so far on its unit (CHAOS-3978).
-func (deriver *LinearWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+func (deriver *LinearWorkItemDeriver) StoredEdgeMergeObservation() teamattribution.GithubWorkItemStoredEdgeMergeObservation {
 	if deriver == nil {
-		return githubWorkItemStoredEdgeMergeObservation{}
+		return teamattribution.GithubWorkItemStoredEdgeMergeObservation{}
 	}
 	return deriver.observations.storedEdgeMergeSnapshot()
 }
@@ -206,7 +207,7 @@ func (adapter linearWorkItemEngineDeriver) Derive(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	if adapter.engine == nil {
 		return nil, ErrInvalidConfiguration
@@ -270,7 +271,7 @@ func (deriver LinearWorkItemDeriver) Derive(
 	if err != nil {
 		return nil, err
 	}
-	deriver.observations.recordStoredEdgeMerge(derivationContext.storedEdgeMerge)
+	deriver.observations.recordStoredEdgeMerge(derivationContext.StoredEdgeMerge)
 	aiAttributions, err := normalizeLinearWorkItemAIAttributions(claim, rows, normalizedAt)
 	if err != nil {
 		return nil, err

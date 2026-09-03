@@ -445,7 +445,10 @@ func TestAPerTeamFailureIsReportedRatherThanSwallowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
 	}
-	executor := &RecommendationsExecutor{conn: conn, loader: loader}
+	executor := &RecommendationsExecutor{
+		conn: conn, loader: loader,
+		nowUTC: func() time.Time { return time.Now().UTC() },
+	}
 
 	// Explicit team, so discovery is skipped and the single team's evaluation
 	// is what fails -- against a live, uncancelled context.
@@ -498,7 +501,10 @@ func TestCancellationReportsTheInterruptionRatherThanATeamFailure(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
 	}
-	executor := &RecommendationsExecutor{conn: conn, loader: loader}
+	executor := &RecommendationsExecutor{
+		conn: conn, loader: loader,
+		nowUTC: func() time.Time { return time.Now().UTC() },
+	}
 
 	// Already cancelled before the first team is evaluated: the harshest case,
 	// and the one where a write is most likely to be skipped as pointless.
@@ -596,7 +602,10 @@ func TestTheWriteContextIsDetachedFromCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new loader: %v", err)
 	}
-	executor := &RecommendationsExecutor{conn: conn, loader: loader}
+	executor := &RecommendationsExecutor{
+		conn: conn, loader: loader,
+		nowUTC: func() time.Time { return time.Now().UTC() },
+	}
 
 	// Cancelled BEFORE the run, so the write is guaranteed to be reached with
 	// the run in a cancelled state -- no timing, no hook, no successful-team
@@ -651,6 +660,7 @@ func TestTheWriteContextClosesTheGapAfterTheCancellationSample(t *testing.T) {
 	executor := &RecommendationsExecutor{
 		conn:   conn,
 		loader: loader,
+		nowUTC: func() time.Time { return time.Now().UTC() },
 		beforeWriteHook: func() {
 			// Fires after the post-loop sample already read ctx.Err() == nil
 			// (the team loop had exactly one team, which succeeded) and

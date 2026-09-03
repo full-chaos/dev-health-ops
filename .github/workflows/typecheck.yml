@@ -73,7 +73,16 @@ jobs:
       - name: Decide whether this change set is typecheck-relevant
         id: relevance
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # CHAOS-4843, 4752-go's peer read of #2169, round 1, P2a: a push
+          # event used to leave BASE_SHA empty, which made
+          # ci/typecheck_relevant_diff.sh fall back to `HEAD^...HEAD` --
+          # only the LAST commit of a multi-commit push, silently dropping
+          # earlier commits from the range. `github.event.before` is the
+          # push event's own pre-push sha; the script itself now refuses
+          # (exit non-zero) rather than guess if this value is the
+          # all-zeros sentinel or no longer an ancestor of HEAD, which
+          # triggers the fail-open branch below.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -82,7 +91,11 @@ jobs:
             exit 0
           fi
           bash ci/typecheck_relevant_diff.sh > changed.txt || {
-            echo "could not resolve the diff range; failing closed"
+            # Fails OPEN, not closed: relevant=true runs the real gate rather
+            # than silently skipping it. An unresolvable range (or the
+            # all-zeros sentinel / non-ancestor BASE_SHA the script now
+            # refuses) is exactly the case where guessing would be wrong.
+            echo "could not resolve the diff range; failing open to relevant=true"
             echo "relevant=true" >> "${GITHUB_OUTPUT}"
             exit 0
           }

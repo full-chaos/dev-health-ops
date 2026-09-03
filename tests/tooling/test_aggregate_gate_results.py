@@ -1377,6 +1377,38 @@ def test_lefthook_mypy_checks_the_same_tree_as_ci(hook: str) -> None:
     )
 
 
+@pytest.mark.parametrize("hook", ["pre-commit", "pre-push"])
+def test_lefthook_glob_matches_typecheck_relevance_patterns(hook: str) -> None:
+    # CHAOS-4843, 4752-go's peer read of #2169, round 1, P3: `mypy .` (above)
+    # closes the WHAT-GETS-CHECKED gap, but a bare `glob: "*.py"` still
+    # decides WHETHER the command runs at all -- a change touching only
+    # mypy.ini or pyproject.toml never triggered the hook, while CI's
+    # ci/typecheck_relevance.py explicitly treats those files as relevant
+    # and runs mypy. The two decisions (does this hook run; is this change
+    # typecheck-relevant) must be made from the SAME list, or they silently
+    # diverge again -- this asserts they still are, in both directions
+    # (a missing pattern OR an extra one fails this test).
+    lefthook = _load(LEFTHOOK_PATH)
+    hook_block = lefthook[hook]
+    assert isinstance(hook_block, dict)
+    commands = hook_block["commands"]
+    assert isinstance(commands, dict)
+    mypy_command = commands["mypy"]
+    assert isinstance(mypy_command, dict)
+    lefthook_glob = mypy_command["glob"]
+    assert isinstance(lefthook_glob, list), (
+        f"lefthook.yml's {hook} mypy command's glob is not a list -- "
+        "expected the full pattern list, not a single bare string"
+    )
+    relevance_patterns = _typecheck_relevance_patterns()
+    assert set(lefthook_glob) == set(relevance_patterns), (
+        f"lefthook.yml's {hook} mypy glob and ci/typecheck_relevance.py's "
+        "RELEVANT_PATTERNS have diverged -- "
+        f"only in lefthook: {sorted(set(lefthook_glob) - set(relevance_patterns))}, "
+        f"only in typecheck_relevance: {sorted(set(relevance_patterns) - set(lefthook_glob))}"
+    )
+
+
 def test_paths_filter_covers_the_acceptance_runtime_dependencies() -> None:
     # Given the acceptance suite hashes a fixed set of runtime inputs and
     # asserts on them, a change to any of them can turn the suite red. Only

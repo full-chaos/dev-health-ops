@@ -128,3 +128,87 @@ def test_a_wrong_base_sha_yields_a_different_nonempty_list(repo: ScratchRepo) ->
     wrong = _run(repo.dir, repo.feature2, repo.base)
     assert wrong != correct
     assert wrong == ["feature_change.py", "feature_change2.py", "trunk_only.txt"]
+
+
+def _run_raw(
+    cwd: Path, head: str, env_extra: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    _git(cwd, "checkout", "-q", head)
+    env = {"PATH": "/usr/bin:/bin:/usr/local/bin", **env_extra}
+    return subprocess.run(
+        ["bash", str(SCRIPT)], cwd=cwd, capture_output=True, text=True, env=env
+    )
+
+
+def test_multicommit_push_sees_every_commit_not_just_the_last(
+    repo: ScratchRepo,
+) -> None:
+    # CHAOS-4843, 4752-go's peer read of #2169, round 1, P2a: a multi-commit
+    # push's BASE_SHA is the pre-push tip (github.event.before), which can be
+    # more than one commit back. feature1 -> feature2 is exactly that shape:
+    # BASE_SHA=trunk (two commits back from feature2) must see BOTH commits'
+    # files, not just feature2's own (which `HEAD^...HEAD` would give).
+    assert _run(repo.dir, repo.feature2, repo.trunk) == [
+        "feature_change.py",
+        "feature_change2.py",
+    ]
+    # And HEAD^...HEAD (the local/no-BASE_SHA fallback) would have seen only
+    # the last commit -- proving the two are genuinely different answers,
+    # not the same range under two names.
+    head_caret_only = sorted(
+        line
+        for line in _git(repo.dir, "diff", "--name-only", "HEAD^...HEAD").splitlines()
+        if line
+    )
+    assert head_caret_only == ["feature_change2.py"]
+
+
+def test_all_zeros_base_sha_refuses_rather_than_guessing(repo: ScratchRepo) -> None:
+    # A new branch's first push reports `github.event.before` as the
+    # all-zeros sentinel -- there is no previous commit to diff against.
+    # Silently falling back to HEAD^...HEAD would still produce SOME answer,
+    # which is exactly the wrong shape: an invalid BASE_SHA must refuse
+    # (exit non-zero) so the caller's own fail-open branch takes over,
+    # rather than the script guessing a range that happens to look plausible.
+    zero_sha = "0" * 40
+    proc = _run_raw(repo.dir, repo.feature2, {"BASE_SHA": zero_sha})
+    assert proc.returncode != 0, "must refuse, not silently fall back to HEAD^...HEAD"
+    assert "all-zeros" in proc.stderr
+
+
+def test_non_ancestor_base_sha_refuses_rather_than_guessing(repo: ScratchRepo) -> None:
+    # A force-push can leave `github.event.before` pointing at a commit no
+    # longer reachable from the new HEAD. Using it anyway would silently
+    # diff against history that no longer exists on this branch; the script
+    # must refuse instead.
+    proc = _run_raw(repo.dir, repo.push_head, {"BASE_SHA": repo.feature2})
+    assert proc.returncode != 0, "must refuse, not silently diff against a non-ancestor"
+    assert "not an ancestor" in proc.stderr
+
+
+def test_non_ascii_filename_is_not_lost_to_git_quoting(tmp_path: Path) -> None:
+    # CHAOS-4843, 4752-go's peer read of #2169, round 1, P2b: git C-quotes a
+    # non-ASCII path in `--name-only` output by default (`src/café.py`
+    # becomes `"src/caf\303\251.py"`), which then fails to match
+    # ci/typecheck_relevance.py's `src/**` pattern. This is a red-proof
+    # against a raw `git diff --name-only` call (WITHOUT the script's own
+    # `-c core.quotePath=false`), confirming the quoting genuinely happens
+    # on this host/git version, then confirms the script itself is immune.
+    r = tmp_path / "unicode-scratch"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@example.com")
+    _git(r, "config", "user.name", "test")
+    base = _commit(r, "base.txt", "base")
+    (r / "src").mkdir()
+    (r / "src" / "café.py").write_text("x = 1\n", encoding="utf-8")
+    _git(r, "add", "src/café.py")
+    _git(r, "commit", "-q", "-m", "add café.py")
+
+    # Red proof: the default (quoted) form loses the path's real name.
+    quoted = _git(r, "diff", "--name-only", f"{base}...HEAD")
+    assert quoted != "src/café.py", "expected git to C-quote this path by default"
+    assert "caf" in quoted and "café" not in quoted
+
+    # The script itself must not reproduce that loss.
+    assert _run(r, "HEAD", base) == ["src/café.py"]

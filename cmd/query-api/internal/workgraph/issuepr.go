@@ -102,24 +102,50 @@ func fetchLinkedIssueRowsFinal(
 
 // fetchLinkedIssueRowsFastPath is CHAOS-4924's native fast path: same
 // filter, grouping and ordering as fetchLinkedIssueRowsFinal, but collapsed
-// by argMax(col, version_rank) instead of a forced FINAL merge on
+// by argMax(..., version_rank) instead of a forced FINAL merge on
 // last_synced. See fetchLinkedIssueRows's doc comment for why this is
 // correct once migration 084 has run, and fetchLinkedIssueRowsFinal's doc
 // comment for why confidence is wrapped in toFloat64.
+//
+// argMax(tuple(confidence, provenance, evidence), version_rank), NOT three
+// separate argMax(col, version_rank) calls (codex round 1 on #2183, P2): two
+// unmerged rows can share the exact same version_rank -- same provenance
+// AND the same last_synced to the millisecond, e.g. two writes in one batch
+// stamped with a single captured timestamp -- and ClickHouse documents
+// argMax's tie-break as implementation-defined. Three INDEPENDENT argMax
+// calls could each break that tie differently and return a HYBRID row that
+// never existed in any single physical insert (confidence from one write,
+// evidence from another). One tupled argMax picks a single winning row
+// ATOMICALLY -- still not guaranteed to match FINAL's own physical
+// insertion-order tie-break under an exact value tie (a residual this
+// package cannot close without paying for FINAL, which defeats the point of
+// this reader), but it closes the WORSE defect: the result is always a row
+// that actually existed, never an invented composite. See
+// TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie.
 func fetchLinkedIssueRowsFastPath(
 	ctx context.Context, client QueryClient, orgID, repoID string, prNumber int,
 ) ([]issuePRLinkRow, error) {
+	// The tupled argMax is computed ONCE, in the inner query, and its parts
+	// extracted in the outer SELECT -- not three separate top-level
+	// argMax(tuple(...), ...) calls, which would risk each one being
+	// evaluated independently and re-breaking the same tie three different
+	// ways, defeating the whole point of tupling them together.
 	const query = `
         SELECT
             work_item_id,
-            toFloat64(argMax(confidence, version_rank)) AS confidence,
-            argMax(provenance, version_rank) AS provenance,
-            argMax(evidence, version_rank) AS evidence
-        FROM work_graph_issue_pr
-        WHERE org_id = {org_id:String}
-          AND toString(repo_id) = {repo_id:String}
-          AND pr_number = {pr_number:UInt32}
-        GROUP BY work_item_id
+            toFloat64(winner.1) AS confidence,
+            winner.2 AS provenance,
+            winner.3 AS evidence
+        FROM (
+            SELECT
+                work_item_id,
+                argMax(tuple(confidence, provenance, evidence), version_rank) AS winner
+            FROM work_graph_issue_pr
+            WHERE org_id = {org_id:String}
+              AND toString(repo_id) = {repo_id:String}
+              AND pr_number = {pr_number:UInt32}
+            GROUP BY work_item_id
+        )
         ORDER BY confidence DESC, work_item_id ASC
         LIMIT 500
     `

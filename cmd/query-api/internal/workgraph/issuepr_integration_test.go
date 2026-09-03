@@ -134,3 +134,111 @@ func TestFetchLinkedIssueRowsFastPathMatchesFinal(t *testing.T) {
 		})
 	}
 }
+
+// TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie is codex round
+// 1 on #2183's P2 finding, closed: two unmerged rows for one identity can
+// share the EXACT SAME version_rank -- same provenance and the same
+// last_synced to the millisecond, e.g. two writes in one batch stamped with a
+// single captured timestamp. ClickHouse documents argMax's tie-break as
+// implementation-defined; THREE separate argMax(col, version_rank) calls (the
+// pre-fix shape) could each independently break that tie a different way and
+// return a row that never existed -- confidence from one physical insert,
+// evidence from another.
+//
+// This does NOT assert the fast path agrees with fetchLinkedIssueRowsFinal on
+// this exact scenario -- it deliberately cannot, per fetchLinkedIssueRowsFastPath's
+// own doc comment: matching FINAL's physical insertion-order tie-break under
+// an exact value tie would require paying for FINAL, defeating the point of
+// this reader. What IS asserted, and IS achievable: the result must be one of
+// the two candidate rows' full (confidence, evidence) pairs, in full,
+// never a mix of the two.
+func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const (
+		orgID      = "org-4924-tie"
+		repoID     = "00000000-4924-0000-0000-000000000002"
+		workItemID = "issue:OPS-3"
+		prNumber   = 200
+	)
+	tiedLastSynced := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	candidates := map[[2]string]struct{}{
+		{"native", "batch-token-a"}: {},
+		{"native", "batch-token-b"}: {},
+	}
+	batch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO work_graph_issue_pr (
+            org_id, repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced
+        )
+    `)
+	if err != nil {
+		t.Fatalf("prepare work_graph_issue_pr batch: %v", err)
+	}
+	confidences := map[string]float32{"batch-token-a": 0.70, "batch-token-b": 0.95}
+	for pair := range candidates {
+		provenance, evidence := pair[0], pair[1]
+		if err := batch.Append(
+			orgID, repoID, workItemID, prNumber, confidences[evidence], provenance, evidence, tiedLastSynced,
+		); err != nil {
+			t.Fatalf("append tied row (provenance=%q evidence=%q): %v", provenance, evidence, err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send work_graph_issue_pr batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	fastPath, err := fetchLinkedIssueRowsFastPath(ctx, client, orgID, repoID, prNumber)
+	if err != nil {
+		t.Fatalf("fetchLinkedIssueRowsFastPath: %v", err)
+	}
+	if len(fastPath) != 1 {
+		t.Fatalf("got %d fast-path row(s), want exactly 1: %+v", len(fastPath), fastPath)
+	}
+	got := fastPath[0]
+	if got.workItemID != workItemID {
+		t.Fatalf("work_item_id = %q, want %q", got.workItemID, workItemID)
+	}
+	// Anchor on evidence -- the one field that unambiguously names which of
+	// the two candidate rows this result claims to be -- then verify
+	// provenance AND confidence match THAT SAME row's real values. A hybrid
+	// (evidence from one physical row, confidence or provenance from the
+	// other) fails here even though each field individually looks valid.
+	wantConfidence, isKnownEvidence := confidences[got.evidence]
+	if !isKnownEvidence {
+		t.Fatalf("evidence %q matches neither candidate row: %+v", got.evidence, got)
+	}
+	if _, ok := candidates[[2]string{got.provenance, got.evidence}]; !ok {
+		t.Fatalf("HYBRID row: provenance %q does not belong with evidence %q in either candidate: %+v",
+			got.provenance, got.evidence, got)
+	}
+	if got.confidence != float64(wantConfidence) {
+		t.Fatalf("HYBRID row: evidence %q implies confidence %v, got %v: %+v",
+			got.evidence, wantConfidence, got.confidence, got)
+	}
+}

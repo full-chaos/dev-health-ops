@@ -433,17 +433,15 @@ def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
         "an unrecognized registry failure must fail closed (decline), "
         "never fall through to the bootstrap/overwrite path"
     )
-    # team-lead ruling: a reported-success-but-empty :latest read is a
-    # genuinely surprising outcome, not a routine per-family decline --
-    # it must surface as a `::error::` GitHub Actions annotation, not
-    # blend into the wall of ordinary per-family log lines. (Outside the
-    # 1200-char `tail` window above -- checked against the full run
-    # text, since it's the only `::error::` this step should ever emit.)
-    assert "::error::" in run_text, (
-        "the rc==0-yet-empty-stdout guard doesn't emit a `::error::` "
-        "GitHub Actions annotation -- this surprising outcome must be "
-        "visible as an annotation, not just a plain log line"
-    )
+    # NOTE: the `::error::` annotation for the rc==0-yet-empty-stdout case
+    # is checked BEHAVIOURALLY, not here -- see
+    # test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence.
+    # ci-flakes review: a source-text check only proves the literal was
+    # typed somewhere, not that it's emitted on the path that should emit
+    # it (a guard moved to the wrong branch would still pass a
+    # source-text check). The behavioural test captures actual stdout on
+    # the empty-read path specifically, plus a negative control on the
+    # present-read path.
 
 
 def _latest_tag_step_script() -> str:
@@ -518,14 +516,15 @@ exit 0
 """
 
 
-def _run_latest_tag_step(scenario: str) -> tuple[str, bool]:
+def _run_latest_tag_step(scenario: str) -> tuple[str, bool, str]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
     `git` shimmed to just record whether it was invoked (the digest-walk
     fallback is the only thing in this step that calls git). Returns
-    (recorded `imagetools create` invocations, whether git was called).
-    `IS_MAIN_REF=true` and a source-tag probe that always "finds" its
-    ref, so every family reaches the :latest check under test."""
+    (recorded `imagetools create` invocations, whether git was called,
+    captured stdout). `IS_MAIN_REF=true` and a source-tag probe that
+    always "finds" its ref, so every family reaches the :latest check
+    under test."""
     script = _latest_tag_step_script()
     with tempfile.TemporaryDirectory() as tmp:
         bin_dir = Path(tmp) / "bin"
@@ -571,7 +570,11 @@ def _run_latest_tag_step(scenario: str) -> tuple[str, bool]:
             f"fan-in script exited {result.returncode} under scenario "
             f"{scenario!r} -- stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        return record_file.read_text(encoding="utf-8"), git_called_file.exists()
+        return (
+            record_file.read_text(encoding="utf-8"),
+            git_called_file.exists(),
+            result.stdout,
+        )
 
 
 def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> None:
@@ -583,11 +586,17 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     script under bash with a recording `docker` shim standing in for the
     registry, and observe what it DOES: CONFIRMED ABSENT must record an
     `imagetools create ... :latest` call; UNKNOWN must record none; a
-    reported-success-but-empty read must also record none (ci-flakes'
-    third finding -- rc==0 doesn't guarantee non-empty stdout, and that
-    case must fail closed too, not fall through to whatever jq/digest-
-    walk happens to do with empty input)."""
-    absent_record, absent_git_called = _run_latest_tag_step("absent")
+    reported-success-but-empty read must also record none and must emit
+    a `::error::` annotation (ci-flakes' third finding, and their
+    follow-up: a source-text check for `::error::` only proves the
+    literal was typed somewhere, not that it's emitted on the path that
+    should emit it -- a guard moved to the wrong branch, or made
+    unreachable, would still pass a source-text check. Asserting it in
+    THIS behavioural row, alongside the git-shim discrimination, means
+    the assertion can't pass by shadowing a neighbouring branch. Also
+    asserts the negative control: a genuinely present (found) read
+    emits no `::error::`)."""
+    absent_record, absent_git_called, _absent_stdout = _run_latest_tag_step("absent")
     assert "imagetools create" in absent_record and ":latest" in absent_record, (
         "CONFIRMED ABSENT did not record a bootstrap `imagetools create "
         "...:latest` call -- the classifier's rc==1 branch must "
@@ -598,7 +607,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         "invoked) instead of short-circuiting straight to bootstrap"
     )
 
-    unknown_record, unknown_git_called = _run_latest_tag_step("unknown")
+    unknown_record, unknown_git_called, _unknown_stdout = _run_latest_tag_step("unknown")
     assert unknown_record == "", (
         "UNKNOWN registry failure recorded an `imagetools create` call -- "
         f"it must decline and tag nothing, got: {unknown_record!r}"
@@ -620,7 +629,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # "wandered into the fallback and got lucky" -- verified by removing
     # the guard and confirming this specific assertion goes red while
     # the create-count assertion alone stays green.
-    empty_record, empty_git_called = _run_latest_tag_step("empty_success")
+    empty_record, empty_git_called, empty_stdout = _run_latest_tag_step("empty_success")
     assert empty_record == "", (
         "a reported-success (exit 0) but empty :latest read recorded an "
         "`imagetools create` call -- an empty read must fail closed the "
@@ -631,4 +640,29 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         "digest-walk fallback instead of declining immediately -- this "
         "must be handled as an explicit UNKNOWN case, not left to whatever "
         "the downstream label/digest logic happens to do with empty input"
+    )
+    # team-lead ruling (following ci-flakes' review of the first version
+    # of this test): a source-text check for `::error::` only proves the
+    # literal appears somewhere in the script, not that it's emitted on
+    # THIS path -- moving the annotation to the wrong branch, or making
+    # it unreachable, would still pass a source-text check but must fail
+    # here. Verified: moving the `::error::` echo into the neighbouring
+    # rc==2 branch (so this path never reaches it) turns this specific
+    # assertion red while the create-count/git-called assertions above
+    # stay green, proving it observes something they don't.
+    assert "::error::" in empty_stdout, (
+        "a reported-success (exit 0) but empty :latest read did not emit "
+        "a `::error::` GitHub Actions annotation on its own path -- this "
+        f"surprising outcome must be visible as an annotation, got stdout: "
+        f"{empty_stdout!r}"
+    )
+
+    # Negative control: a genuinely present (found) read must emit no
+    # `::error::` at all -- if it did, the annotation would be noise on
+    # the common case instead of a signal on the surprising one.
+    _found_record, _found_git_called, found_stdout = _run_latest_tag_step("present")
+    assert "::error::" not in found_stdout, (
+        "a genuinely present :latest read emitted a `::error::` "
+        f"annotation -- it should only fire on the empty-read case, got "
+        f"stdout: {found_stdout!r}"
     )

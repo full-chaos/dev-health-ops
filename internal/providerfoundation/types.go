@@ -33,6 +33,14 @@ var (
 	ErrSinkGenerationUnsafe = errors.New("provider sink generation is not safely deduplicated")
 	ErrSinkReplayConflict   = errors.New("provider sink generation replay has different content")
 	ErrNormalizationInvalid = errors.New("provider normalized record is invalid")
+	// ErrInvalidConfiguration and ErrRecoveryUnsafe are the canonical identity
+	// for providersync's ErrInvalidConfiguration/ErrEffectRecoveryUnsafe
+	// (internal/providersync/lease.go), aliased there rather than duplicated so
+	// errors.Is comparisons keep working across the package boundary.
+	// internal/teamattribution (extracted from providersync, CHAOS-3092 PR-A)
+	// references these directly, since it cannot import providersync back.
+	ErrInvalidConfiguration = errors.New("provider sync configuration is invalid")
+	ErrRecoveryUnsafe       = errors.New("provider sync effect recovery is outside the bounded contract")
 )
 
 // TenantScope is derived from a claimed sync unit, never from a provider

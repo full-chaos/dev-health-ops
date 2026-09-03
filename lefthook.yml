@@ -76,6 +76,7 @@ pre-commit:
         - "uv.lock"
         - "scripts/**"
         - "**/*.py"
+        - "lefthook.yml"
       # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
       # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
       # internal/, ci/ and .github/ (196+ Python files, including every
@@ -133,6 +134,7 @@ pre-push:
         - "uv.lock"
         - "scripts/**"
         - "**/*.py"
+        - "lefthook.yml"
       # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
       # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
       # internal/, ci/ and .github/ (196+ Python files, including every

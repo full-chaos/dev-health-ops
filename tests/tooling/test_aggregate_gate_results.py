@@ -1272,12 +1272,19 @@ TYPECHECK_RELEVANCE_SCRIPT = ROOT / "ci" / "typecheck_relevance.py"
         pytest.param(["mypy.ini"], True, id="mypy-ini"),
         pytest.param(["pyproject.toml"], True, id="pyproject-toml"),
         pytest.param(["setup.cfg"], True, id="setup-cfg"),
+        pytest.param(["lefthook.yml"], True, id="lefthook-yml-CHAOS-4843-r2"),
         # A change with nothing typecheck-relevant in it.
         pytest.param(["worker/main.go", "README.md"], False, id="go-and-docs-only"),
         # Empty diff: fail closed (main()'s own stated reason -- an empty
         # diff usually means the base ref was wrong, not that nothing
         # changed).
         pytest.param([], True, id="empty-diff-fails-closed"),
+        # CHAOS-4843, round 2 of #2169's peer review, P3: a REAL file named
+        # " mypy.ini" (leading space) is unrelated to the root mypy config,
+        # but the old line-based reader's `.strip()` turned it into
+        # "mypy.ini" and matched it anyway. NUL-splitting (main()'s current
+        # form) never touches the path's own whitespace.
+        pytest.param([" mypy.ini"], False, id="leading-space-is-not-the-real-mypy-ini"),
     ],
 )
 def test_typecheck_relevance_script_behaviour(
@@ -1290,9 +1297,14 @@ def test_typecheck_relevance_script_behaviour(
     # `relevant=false` on real changes and every existing test would still
     # pass. This test actually runs the script, end to end, the same way the
     # workflow step does.
+    #
+    # NUL-joined, not newline-joined (CHAOS-4843, round 2 of #2169's peer
+    # review, P2a/P3): main() now reads `git diff --name-only -z`-shaped
+    # input exclusively -- see ci/typecheck_relevant_diff.sh and main()'s own
+    # comment for why a path must never be line-split or stripped.
     proc = subprocess.run(
         ["python3", str(TYPECHECK_RELEVANCE_SCRIPT)],
-        input="\n".join(changed_files),
+        input="\0".join(changed_files),
         capture_output=True,
         text=True,
         check=False,
@@ -1338,6 +1350,7 @@ def test_typecheck_relevance_script_matches_the_registered_patterns() -> None:
         "uv.lock",
         "scripts/**",
         "**/*.py",
+        "lefthook.yml",
     ]
     assert _typecheck_relevance_patterns() == expected, (
         "ci/typecheck_relevance.py's RELEVANT_PATTERNS no longer matches the "
@@ -1406,6 +1419,25 @@ def test_lefthook_glob_matches_typecheck_relevance_patterns(hook: str) -> None:
         "RELEVANT_PATTERNS have diverged -- "
         f"only in lefthook: {sorted(set(lefthook_glob) - set(relevance_patterns))}, "
         f"only in typecheck_relevance: {sorted(set(relevance_patterns) - set(lefthook_glob))}"
+    )
+
+
+def test_paths_filter_covers_lefthook_yml() -> None:
+    # CHAOS-4843, round 2 of #2169's peer review, P2b. The guard immediately
+    # above (test_lefthook_glob_matches_typecheck_relevance_patterns) only
+    # runs at all if this workflow's own `changes` job selects lefthook.yml
+    # for the diff -- otherwise a PR touching ONLY lefthook.yml (narrowing
+    # its mypy glob, or reverting the command to a bare `mypy`) gets
+    # code=false, skips test-matrix entirely, and the one guard built to
+    # catch exactly that regression never runs. Same shape as the
+    # .gitignore/.ignore entries a few lines up in test.yml, which exist for
+    # the identical reason (CHAOS-3513 round 2): a guard's own trigger scope
+    # can be the actual gap, even when the guard itself is correct.
+    patterns = _code_filter_patterns()
+    assert _is_covered("lefthook.yml", patterns), (
+        "test.yml's path filter has no lefthook.yml entry -- "
+        "test_lefthook_glob_matches_typecheck_relevance_patterns cannot run "
+        "to catch a regression on a lefthook.yml-only change"
     )
 
 

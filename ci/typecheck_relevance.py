@@ -56,6 +56,15 @@ RELEVANT_PATTERNS: list[str] = [
     "uv.lock",
     "scripts/**",
     "**/*.py",
+    # CHAOS-4843, round 2 of #2169's peer review, P2b: lefthook.yml's own
+    # `mypy` command/glob is what makes the LOCAL gate track this script's
+    # decision at all (see lefthook.yml's own comment on this same list). A
+    # lefthook.yml-only change (e.g. reverting the mypy command back to a
+    # bare `mypy`, or narrowing its glob) is exactly the kind of edit this
+    # relevance decision must not wave through as irrelevant -- it changes
+    # WHETHER local typechecking runs, which is what this whole ticket
+    # exists to keep in sync with CI.
+    "lefthook.yml",
 ]
 
 
@@ -103,7 +112,20 @@ def is_relevant(changed: list[str], patterns: list[str]) -> list[str]:
 
 
 def main() -> int:
-    changed = [line.strip() for line in sys.stdin if line.strip()]
+    # NUL-split, NOT line-split (CHAOS-4843, round 2 of #2169's peer review,
+    # P2a/P3). This stdin comes from `ci/typecheck_relevant_diff.sh`'s
+    # `git diff --name-only -z`, whose whole POINT is that a path is never
+    # quoted or escaped -- it is the literal byte sequence, NUL-terminated.
+    # Splitting on newlines instead would (a) still lose a path containing
+    # its own embedded newline (the exact P2a gap `-z` exists to close --
+    # the newline inside the name would be misread as a second, bogus
+    # entry), and (b) required a `.strip()` to drop the trailing `\n`, which
+    # ALSO stripped genuine leading/trailing whitespace from a real
+    # filename (P3: a tracked file literally named ` mypy.ini` became
+    # `mypy.ini` and matched the root mypy config's own pattern). NUL-
+    # splitting needs no stripping at all -- there is nothing but the path
+    # between one NUL and the next.
+    changed = [path for path in sys.stdin.read().split("\0") if path]
     if not changed:
         # An empty diff is not evidence of irrelevance -- it usually means the
         # base ref was wrong. Fail closed and run the gate.

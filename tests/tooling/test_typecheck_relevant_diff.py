@@ -89,7 +89,14 @@ def _run(cwd: Path, head: str, base_sha: str) -> list[str]:
         ["bash", str(SCRIPT)], cwd=cwd, capture_output=True, text=True, env=env
     )
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    return sorted(line for line in proc.stdout.splitlines() if line)
+    # NUL-split, not line-split (CHAOS-4843, round 2 of #2169's peer review,
+    # P2a): the script now emits `git diff --name-only -z`, NUL-terminated
+    # entries with no quoting at all -- splitting on newlines here would
+    # silently pass even if the script regressed to newline-based output
+    # that mis-splits a path containing its own embedded newline (see
+    # test_control_character_filename_survives_the_null_separated_pipe
+    # below, which exercises exactly that path shape).
+    return sorted(path for path in proc.stdout.split("\0") if path)
 
 
 def test_push_shape_diffs_against_the_previous_commit(repo: ScratchRepo) -> None:
@@ -212,3 +219,71 @@ def test_non_ascii_filename_is_not_lost_to_git_quoting(tmp_path: Path) -> None:
 
     # The script itself must not reproduce that loss.
     assert _run(r, "HEAD", base) == ["src/café.py"]
+
+
+def test_control_character_filename_survives_the_full_producer_to_matcher_pipe(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-4843, round 2 of #2169's peer review, P2a. `core.quotePath=false`
+    # (round 1's fix, above) closes the non-ASCII case but is a NO-OP for a
+    # CONTROL character in a tracked path -- git C-quotes those regardless of
+    # that setting. This is also the "end-to-end producer-to-matcher
+    # boundary" the round flagged as uncovered: the non-ASCII test above only
+    # asserts on this script's own output, never pipes it into
+    # ci/typecheck_relevance.py the way typecheck.yml's real step does.
+    RELEVANCE_SCRIPT = ROOT / "ci" / "typecheck_relevance.py"
+
+    r = tmp_path / "control-char-scratch"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@example.com")
+    _git(r, "config", "user.name", "test")
+    base = _commit(r, "base.txt", "base")
+    (r / "src").mkdir()
+    control_name = "linebreak\nmodule.py"
+    (r / "src" / control_name).write_text("x = 1\n", encoding="utf-8")
+    _git(r, "add", "--", f"src/{control_name}")
+    _git(r, "commit", "-q", "-m", "add newline-named file")
+
+    # Red proof 1: even WITH core.quotePath=false, the raw git call still
+    # quotes a control character -- proving this is a genuinely different
+    # gap from round 1's non-ASCII case, not a re-test of the same fix.
+    quoted = subprocess.run(
+        ["git", "-c", "core.quotePath=false", "diff", "--name-only", f"{base}...HEAD"],
+        cwd=r,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "\\n" in quoted or "$'" in quoted, (
+        f"expected git to still C-quote the embedded newline even with "
+        f"core.quotePath=false, got: {quoted!r}"
+    )
+
+    # The script's own (now `-z`) output must carry the literal name.
+    assert _run(r, "HEAD", base) == [f"src/{control_name}"]
+
+    # End to end: pipe the script's real stdout into the real matcher, the
+    # same way typecheck.yml's step does (`bash ... > changed.txt; python3
+    # ci/typecheck_relevance.py < changed.txt`) -- this is the boundary the
+    # round found nothing had ever exercised.
+    _git(r, "checkout", "-q", "HEAD")
+    diff_proc = subprocess.run(
+        ["bash", str(SCRIPT)],
+        cwd=r,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "BASE_SHA": base},
+    )
+    assert diff_proc.returncode == 0, diff_proc.stderr
+    relevance_proc = subprocess.run(
+        ["python3", str(RELEVANCE_SCRIPT)],
+        input=diff_proc.stdout,
+        capture_output=True,
+        text=False,
+    )
+    assert relevance_proc.returncode == 0
+    stdout = relevance_proc.stdout.decode("utf-8")
+    assert "relevant=true" in stdout, (
+        f"a real .py file under src/** was reported irrelevant through the "
+        f"full producer-to-matcher pipe: {stdout!r}"
+    )

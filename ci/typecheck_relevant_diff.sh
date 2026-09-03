@@ -58,9 +58,15 @@ else
 fi
 
 echo "diff range: ${range}" >&2
-# core.quotePath=false: without it, git C-quotes any non-ASCII path in its
-# --name-only output (CHAOS-4843, 4752-go's peer read of #2169, round 1,
-# P2b) -- e.g. `src/café.py` prints as `"src/caf\303\251.py"`, which then
-# fails to match ci/typecheck_relevance.py's `src/**` pattern and reports a
-# genuinely relevant change as irrelevant.
-git -c core.quotePath=false diff --name-only "${range}"
+# `-z`, NOT `-c core.quotePath=false` (CHAOS-4843, round 2 of #2169's peer
+# review, P2a). `core.quotePath=false` only stops git C-quoting non-ASCII
+# bytes (round 1, P2b) -- it does nothing for a CONTROL character in a
+# tracked path (e.g. a literal newline in the filename), which git still
+# C-quotes regardless of that setting. `-z` NUL-terminates each entry
+# instead of newline-separating them, which disables ALL path quoting
+# unconditionally (git's own documented behavior for `-z`, superset of what
+# `core.quotePath=false` covers) -- so the output is the literal byte
+# sequence of each path, whatever it contains, with no quoting logic to have
+# a gap in. ci/typecheck_relevance.py's stdin reading was changed to match
+# (NUL-split, not line-split) in the same commit; the two must move together.
+git diff --name-only -z "${range}"

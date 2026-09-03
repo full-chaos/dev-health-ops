@@ -162,40 +162,57 @@ type Admission struct {
 // DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer
 // will turn into mapping rows today.
 //
-// It holds Linear alone, deliberately. That makes the Go active set IDENTICAL
-// to the live Python gate (_is_linear_pr_attachment_dependency, a Linear
-// literal), which is what lets the parity oracle be a plain statement rather
-// than one with an asterisk for the whole window in which both planes are
-// write-capable. See ReservedAdmissions for why the other two are not here yet.
+// CHAOS-4771 (below) is why this table is no longer required to equal the live
+// Python gate exactly: Go is SANCTIONED to lead Python's admission set, the
+// same direction #2121's variant-C confidence policy already took (a Go
+// post-step writing edges Python never wrote, ranked correctly by
+// last-writer-wins on version). That is the intended shape of the cutover, not
+// a divergence hazard -- as long as every admitted row carries its own
+// provenance and the version ranking that decides collisions is proven, which
+// CHAOS-4769 (below) is precisely what proves.
+//
+// github_closing_reference (CHAOS-4757 slice A) is activated here.
+// Precondition, now satisfied: migration 084
+// (`084_issue_pr_provenance_version_precedence.py`) makes `work_graph_issue_pr`
+// rank by provenance before recency (`version_rank = rank(provenance)*2^45 +
+// last_synced`, native=3 highest), so a row this admission writes -- stamped
+// Provenance: ProvenanceNative, same as every other admitted kind -- now beats
+// a colliding explicit_text/heuristic row unconditionally, regardless of which
+// plane wrote which row first. Before that migration, admitting this kind
+// would have let Python's text-parse fallback (`_build_issue_pr_edges`,
+// builder.py:1352) discard the provider's own closing reference on a
+// (org_id, repo_id, work_item_id, pr_number) collision -- inverting the
+// standing rule that provider-attached is PRIMARY. See
+// TestIssuePRProvenanceCollisionSurvivesMerge
+// (provenance_collision_integration_test.go) for the mechanism proof; it is
+// generic over provenance strings, not over RelationshipTypeRaw, so it already
+// covers this admission -- Derive stamps ProvenanceNative for every admitted
+// kind, github_closing_reference included, so no kind-specific collision test
+// is needed on top of it.
+//
+// jira_dev_status stays reserved -- see ReservedAdmissions.
 var DefaultAdmissions = []Admission{
 	{RelationshipTypeRaw: "linear_attachment", TargetPrefix: "linear:"},
+	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:"},
 }
 
 // ReservedAdmissions are the raw kinds whose shape is FROZEN and implemented
 // but which this producer must not admit yet. Promoting one is a one-line move
 // into DefaultAdmissions -- no other code changes.
 //
-//   - `github_closing_reference` (CHAOS-4757 slice A). lane-4757's Go PR will
-//     start writing these rows. Admitting them BEFORE CHAOS-4769 is fixed makes
-//     that defect reachable: Python's fallback text-parse writer
-//     (`_build_issue_pr_edges`, builder.py:1352) can mint the SAME
-//     (org_id, repo_id, work_item_id, pr_number) from a "closes #N" PR body,
-//     stamped with build time, while this producer stamps the dependency row's
-//     earlier `last_synced`. `work_graph_issue_pr` is a
-//     ReplacingMergeTree(last_synced), so the text-parsed row would WIN and the
-//     provider's own closing reference would be discarded -- inverting the
-//     standing rule that provider-attached is PRIMARY and text parsing is
-//     FALLBACK. Ruling (team-lead, 2026-09-01): fix CHAOS-4769 on the Go readers
-//     first, activate this second, in its own PR with before/after evidence.
-//   - `jira_dev_status` (CHAOS-4757 slice B). No writer exists on either plane;
-//     both planes' Jira normalizers cover issue-to-issue `issuelinks` only.
-//     Reserved until a Jira ingestion writer exists.
+//   - `jira_dev_status` (CHAOS-4757 slice B). A Go writer already exists
+//     (`extractJiraDevStatusDependencies`, internal/providersync/jira_dev_status.go)
+//     and stamps this raw kind today, same shape as github_closing_reference
+//     before this PR -- so the CHAOS-4769 precondition this admission needs is
+//     ALSO already satisfied (migration 084 is generic over provenance, not
+//     per-kind). Left reserved here only because activating it was not part of
+//     this PR's scope; it did not require new engineering to become ready and
+//     is worth its own one-line-move PR, flagged separately rather than bundled
+//     in silently.
 //
-// Declaring them here rather than leaving them undeclared is the point: the
-// shape is agreed and tested, so activation is a decision, not an
-// implementation.
+// Declaring it here rather than leaving it undeclared is the point: the shape
+// is agreed and tested, so activation is a decision, not an implementation.
 var ReservedAdmissions = []Admission{
-	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:"},
 	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
 }
 

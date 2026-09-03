@@ -284,14 +284,23 @@ func TestDeriveAccountsForEveryDependencyRow(t *testing.T) {
 			result.DependenciesRead, golden.Counts["dependencies"],
 		)
 	}
-	// Linear is the only ACTIVE admission, and it must stay reachable.
+	// linear_attachment must stay reachable -- it is this org's primary
+	// mechanism and the oldest active admission.
 	if result.AdmittedByRawKind["linear_attachment"] == 0 {
 		t.Fatal("no linear_attachment rows admitted -- the proof org's primary mechanism vanished")
 	}
+	// This fixture predates github_closing_reference's activation (it is a
+	// frozen capture of the deployed PYTHON producer, which never admits it),
+	// so it has none to assert nonzero on -- that evidence lives in
+	// TestGithubClosingReferenceIsAdmittedAndWrittenAsNative instead, on a
+	// synthetic input built for exactly this purpose.
+	//
 	// Nothing reserved may be admitted, and nothing reserved has appeared in
-	// the data yet. The second assertion is the interesting one: when
-	// lane-4757's GitHub ingestion starts writing, this fails and tells us the
-	// activation decision now has evidence behind it (CHAOS-4769 sequencing).
+	// the data yet. The second assertion is the interesting one: when a
+	// provider starts writing a currently-reserved kind, this fails and tells
+	// us the activation decision now has evidence behind it (CHAOS-4769
+	// sequencing) -- the same signal that made this PR's own activation
+	// decision-ready.
 	for _, reserved := range ReservedAdmissions {
 		if count := result.AdmittedByRawKind[reserved.RelationshipTypeRaw]; count != 0 {
 			t.Errorf("admitted %d %s rows, but that kind is RESERVED", count, reserved.RelationshipTypeRaw)
@@ -324,25 +333,40 @@ func TestReservedKindsAreNotActive(t *testing.T) {
 			)
 		}
 	}
-	// The active set must equal the live Python gate's set exactly, for as long
-	// as both planes can write. That equality IS the parity oracle's premise.
-	if len(DefaultAdmissions) != 1 || DefaultAdmissions[0].RelationshipTypeRaw != "linear_attachment" {
-		t.Errorf(
-			"active admissions are %+v; Python's live gate (_is_linear_pr_attachment_dependency) "+
-				"admits linear_attachment alone, and the two must match while both planes write",
-			DefaultAdmissions,
-		)
+	// CHAOS-4771's precedent (#2121, variant C) sanctioned Go leading Python's
+	// admission set, so the active set is no longer required to equal Python's
+	// live gate exactly -- see DefaultAdmissions's doc. What this asserts
+	// instead: the active set is EXACTLY what has been deliberately activated
+	// (linear_attachment always; github_closing_reference since CHAOS-4757/
+	// CHAOS-4769), so a silent widening still fails loudly here.
+	wantActive := map[string]struct{}{
+		"linear_attachment":        {},
+		"github_closing_reference": {},
+	}
+	if len(DefaultAdmissions) != len(wantActive) {
+		t.Fatalf("active admissions are %+v, want exactly %v", DefaultAdmissions, wantActive)
+	}
+	for _, admission := range DefaultAdmissions {
+		if _, want := wantActive[admission.RelationshipTypeRaw]; !want {
+			t.Errorf("%s is active but was not a deliberately activated kind", admission.RelationshipTypeRaw)
+		}
 	}
 }
 
 // TestReservedKindIsSeenButNotAdmitted proves the reserved kinds are wired end
 // to end -- recognised, counted, and refused -- so activation is one line and
 // its effect is already measurable.
+//
+// Uses jira_dev_status, the remaining reserved kind, now that
+// github_closing_reference has been activated (see
+// TestGithubClosingReferenceIsAdmittedAndWrittenAsNative below) -- this test's
+// job is to keep exercising the STILL-reserved path, not the one that just
+// graduated from it.
 func TestReservedKindIsSeenButNotAdmitted(t *testing.T) {
 	inputs := baseInputs()
-	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
-	inputs.Dependencies[0].TargetWorkItemID = "gh:owner/repo#5"
-	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "gh:owner/repo#5"}}
+	inputs.Dependencies[0].RelationshipTypeRaw = "jira_dev_status"
+	inputs.Dependencies[0].TargetWorkItemID = "jira:OPS-5"
+	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "jira:OPS-5"}}
 
 	result := Derive(inputs)
 	if result.Written() != 0 {
@@ -351,8 +375,53 @@ func TestReservedKindIsSeenButNotAdmitted(t *testing.T) {
 	if got := result.Rejected[ReasonNotAdmissible]; got != 1 {
 		t.Errorf("rejected[not_admissible] = %d, want 1", got)
 	}
-	if got := result.ReservedSeenByRawKind["github_closing_reference"]; got != 1 {
-		t.Errorf("reserved_seen[github_closing_reference] = %d, want 1", got)
+	if got := result.ReservedSeenByRawKind["jira_dev_status"]; got != 1 {
+		t.Errorf("reserved_seen[jira_dev_status] = %d, want 1", got)
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}
+
+// TestGithubClosingReferenceIsAdmittedAndWrittenAsNative is the activation
+// proof for this PR: a github_closing_reference dependency row -- previously
+// rejected as not_admissible (see git history of this test) -- is now admitted
+// and written with the SAME provenance every other admitted kind gets.
+//
+// That last part is the load-bearing assertion, not a formality: Derive stamps
+// Provenance: ProvenanceNative unconditionally for every admission (see
+// issueprlinks.go), so this row enters the exact version-ranking tier
+// TestIssuePRProvenanceCollisionSurvivesMerge
+// (provenance_collision_integration_test.go) already proves survives an RMT
+// collision against explicit_text/heuristic rows on a real ClickHouse merge --
+// that test is generic over the provenance STRING, not over
+// RelationshipTypeRaw, so it already covers this admission with no
+// kind-specific integration case needed on top of it.
+func TestGithubClosingReferenceIsAdmittedAndWrittenAsNative(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+	inputs.Dependencies[0].TargetWorkItemID = "gh:owner/repo#5"
+	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "gh:owner/repo#5"}}
+
+	result := Derive(inputs)
+	if result.Written() != 1 {
+		t.Fatalf("wrote %d links, want 1 (rejections %v)", result.Written(), result.Rejected)
+	}
+	if got := result.Rejected[ReasonNotAdmissible]; got != 0 {
+		t.Errorf("rejected[not_admissible] = %d, want 0 -- this kind is now active", got)
+	}
+	if got := result.AdmittedByRawKind["github_closing_reference"]; got != 1 {
+		t.Errorf("admitted[github_closing_reference] = %d, want 1", got)
+	}
+	if got := result.ReservedSeenByRawKind["github_closing_reference"]; got != 0 {
+		t.Errorf("reserved_seen[github_closing_reference] = %d, want 0 -- it is no longer reserved", got)
+	}
+	link := result.Links[0]
+	if link.Provenance != ProvenanceNative {
+		t.Errorf("provenance = %q, want %q -- this is the tier the CHAOS-4769 version_rank fix ranks highest", link.Provenance, ProvenanceNative)
+	}
+	if link.Evidence != "github_closing_reference" {
+		t.Errorf("evidence = %q, want %q", link.Evidence, "github_closing_reference")
 	}
 	if !result.Balanced() {
 		t.Fatalf("accounting does not balance: %+v", result)
@@ -383,18 +452,21 @@ func repositoryRootPath(t *testing.T) string {
 // that the provider has started writing that raw kind. Counting it only when
 // well-formed would report zero for a provider shipping broken rows — the same
 // "nothing arrived" / "arrived malformed" conflation as round-1 F2.
+//
+// Uses jira_dev_status now that github_closing_reference is active -- see
+// TestReservedKindIsSeenButNotAdmitted's doc for why.
 func TestReservedKindIsSeenEvenWhenMalformed(t *testing.T) {
 	inputs := baseInputs()
-	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+	inputs.Dependencies[0].RelationshipTypeRaw = "jira_dev_status"
 	inputs.Dependencies[0].TargetWorkItemID = testLinear // wrong id space for this kind
 
 	result := Derive(inputs)
 	if result.Written() != 0 {
 		t.Fatalf("wrote %d links for a malformed reserved row", result.Written())
 	}
-	if got := result.ReservedSeenByRawKind["github_closing_reference"]; got != 1 {
+	if got := result.ReservedSeenByRawKind["jira_dev_status"]; got != 1 {
 		t.Errorf(
-			"reserved_seen[github_closing_reference] = %d, want 1: a malformed row is still "+
+			"reserved_seen[jira_dev_status] = %d, want 1: a malformed row is still "+
 				"evidence the provider has started writing this kind", got,
 		)
 	}

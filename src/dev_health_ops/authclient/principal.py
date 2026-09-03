@@ -22,7 +22,7 @@ compatibility implementation this migration retires.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,22 @@ from dev_health_ops.authclient.contracts import ContractError, validate
 
 SCHEMA_VERSION = "principal.v1"
 SURFACE = "principal.v1"
+
+#: ACP-ADR-03's bound on a delegated/impersonation session, and G-52's
+#: requirement that it be shorter than the base session and independently
+#: revocable.
+#:
+#: Enforced HERE, in the client, because JSON Schema cannot subtract two
+#: timestamps. The schema requires an ``expires_at`` on every actor-chain hop,
+#: and codex round 1 demonstrated that requiring the FIELD is not a bound: a
+#: 30-minute delegated session validated cleanly and ``effective_deadline``
+#: reported it happily, because taking the earliest supplied deadline says
+#: nothing about how far away that deadline is.
+#:
+#: This is the "a property the code CLAIMED but did not ENFORCE" class, so the
+#: bound is a named constant with the ADR beside it rather than a literal
+#: buried in a comparison.
+MAX_DELEGATION_DURATION = timedelta(minutes=15)
 
 
 def _parse_timestamp(raw: str, field: str) -> datetime:
@@ -49,6 +65,42 @@ def _parse_timestamp(raw: str, field: str) -> datetime:
             f"{SURFACE}: /{field} passed schema validation but is not parseable "
             f"by datetime.fromisoformat: {raw!r} ({exc})"
         ) from exc
+
+
+def _parse_revision(raw: object, field: str) -> int:
+    """Normalise a revision the way the CONTRACT permits, not the way Python parses.
+
+    JSON Schema draft 2020-12 defines ``"type": "integer"`` as any number with
+    a zero fractional part, so ``1.0`` IS a valid integer by the specification
+    and the schema is right to accept it. ``json.load`` gives that back as a
+    Python ``float``, and Go's ``encoding/json`` refuses it outright against an
+    ``int64``.
+
+    That produced a real cross-language split, found by codex round 1 and
+    re-executed before fixing: ``{"membership_revision": 1.0}`` validated in
+    BOTH planes, then Python built a principal carrying ``1.0`` as a float and
+    Go failed to decode the same bytes. The disagreement lives DOWNSTREAM of a
+    validation both passed, which is why the golden corpus could not see it --
+    every fixture assertion stops at "does it validate".
+
+    A fractional value is refused rather than truncated: silently turning 1.5
+    into 1 would let two different wire documents produce one in-memory
+    principal, and a revision is a cache-invalidation key (G-31) where two
+    inputs collapsing to one value is exactly the failure mode.
+    """
+    if isinstance(raw, bool):
+        # bool is a subclass of int in Python; True would otherwise become 1.
+        raise ContractError(f"{SURFACE}: /{field} is a boolean, not a revision")
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        if raw != int(raw):
+            raise ContractError(
+                f"{SURFACE}: /{field} = {raw!r} has a fractional part; "
+                "a revision is a whole counter"
+            )
+        return int(raw)
+    raise ContractError(f"{SURFACE}: /{field} = {raw!r} is not a number")
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +153,35 @@ class Delegation:
     permitted_actions: tuple[str, ...]
 
 
+def _check_delegation_bounds(chain: tuple[Delegation, ...]) -> None:
+    """Refuse an actor chain the schema cannot police.
+
+    TWO rules, not one. A hop must end after it starts, and it must not last
+    longer than :data:`MAX_DELEGATION_DURATION`. The ordering check is not
+    redundant: a negative duration satisfies any maximum, so a bound written
+    only as ``expires_at - started_at <= 15m`` accepts a session that ends
+    before it begins. Both have fixtures in the manifest's
+    ``reject_by_client`` list.
+    """
+    for index, hop in enumerate(chain):
+        if hop.expires_at <= hop.started_at:
+            raise ContractError(
+                f"{SURFACE}: /actor_chain/{index} expires_at "
+                f"({hop.expires_at.isoformat()}) is not after started_at "
+                f"({hop.started_at.isoformat()}); a delegated session that ends "
+                "before it begins is not a bounded session"
+            )
+        duration = hop.expires_at - hop.started_at
+        if duration > MAX_DELEGATION_DURATION:
+            raise ContractError(
+                f"{SURFACE}: /actor_chain/{index} lasts {duration}, exceeding the "
+                f"{MAX_DELEGATION_DURATION} bound ACP-ADR-03 sets for a delegated "
+                "session (G-52 also requires it shorter than the base session). "
+                "JSON Schema cannot express a duration, so this is enforced here; "
+                "the fixture proving it is in the manifest's reject_by_client list"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class Principal:
     """A resolved ``principal.v1`` document (TRD section 8)."""
@@ -126,7 +207,7 @@ class Principal:
 
         raw_credential = document["credential"]
         raw_authentication = document["authentication"]
-        return cls(
+        principal = cls(
             principal_id=document["principal_id"],
             principal_type=document["principal_type"],
             subject_id=document["subject_id"],
@@ -161,13 +242,23 @@ class Principal:
                 )
                 for index, hop in enumerate(document["actor_chain"])
             ),
-            membership_revision=document["membership_revision"],
-            policy_revision=document["policy_revision"],
-            grant_revision=document["grant_revision"],
-            entitlement_revision=document["entitlement_revision"],
+            membership_revision=_parse_revision(
+                document["membership_revision"], "membership_revision"
+            ),
+            policy_revision=_parse_revision(
+                document["policy_revision"], "policy_revision"
+            ),
+            grant_revision=_parse_revision(
+                document["grant_revision"], "grant_revision"
+            ),
+            entitlement_revision=_parse_revision(
+                document["entitlement_revision"], "entitlement_revision"
+            ),
             issued_at=_parse_timestamp(document["issued_at"], "issued_at"),
             expires_at=_parse_timestamp(document["expires_at"], "expires_at"),
         )
+        _check_delegation_bounds(principal.actor_chain)
+        return principal
 
     @property
     def is_delegated(self) -> bool:

@@ -25,12 +25,17 @@ from ``ci/check_endpoint_profiles.py``'s precedent for the same hazards:
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 import jsonschema
+import jsonschema.exceptions
+import jsonschema.protocols
+import jsonschema.validators
 
 #: Repo-relative location of the v1 wire schemas. Resolved from this file's
 #: own path rather than from a working directory, so a caller's cwd cannot
@@ -66,6 +71,97 @@ def contracts_dir(root: Path | None = None) -> Path:
     return (root or repo_root()) / _CONTRACTS_SUBPATH
 
 
+#: Cache of pattern -> strictly-anchored compiled regex, keyed by the pattern
+#: text exactly as it appears in the schema.
+_STRICT_PATTERNS: dict[str, re.Pattern[str]] = {}
+
+
+def _unescaped_dollar_positions(pattern: str) -> list[int]:
+    """Indices of every ``$`` that is a regex anchor rather than a literal."""
+    positions = []
+    for index, char in enumerate(pattern):
+        if char != "$":
+            continue
+        backslashes = 0
+        walk = index - 1
+        while walk >= 0 and pattern[walk] == "\\":
+            backslashes += 1
+            walk -= 1
+        if backslashes % 2 == 0:
+            positions.append(index)
+    return positions
+
+
+def strictly_anchored(pattern: str) -> re.Pattern[str]:
+    r"""Compile *pattern* so ``$`` means end-of-input, as Go RE2 and ECMA-262 do.
+
+    THE DIVERGENCE, measured on three engines with one document:
+
+        python  ^prn_[A-Za-z0-9_-]+$  vs  "prn_EXAMPLE0000000000000001\n"  -> MATCH
+        go RE2  same pattern, same input                                    -> no match
+        node    same pattern, same input (ECMA-262, which ajv implements)   -> false
+
+    Python's ``$`` matches at the end of the string OR immediately before a
+    single trailing newline. Go RE2 and ECMA-262 match only at true end. So a
+    principal id with a trailing newline was ACCEPTED by this validator and
+    REJECTED by the other two -- Python the sole outlier, 1 of 3, exactly as
+    with the Unicode ``\d`` divergence. Found by codex round 1; it is a
+    genuine oracle attack, because the golden corpus and the schema dialect
+    guard both pass while it is present.
+
+    The schema cannot fix this. ``\Z`` is Python-only and ``\z`` is RE2-only;
+    ECMA-262 has neither, so no single portable pattern expresses "true end".
+    The fix therefore belongs in the divergent runtime, and this is it: rewrite
+    a trailing anchor to ``\Z``, which Python does implement as absolute end.
+
+    FAILS CLOSED. A pattern carrying an unescaped ``$`` anywhere other than its
+    final character is REFUSED rather than passed through untransformed, even
+    though such a pattern is legal and might well be harmless. The alternative
+    -- transform what is recognised and silently accept the rest -- is the
+    "default unrecognised shapes to safe" mistake, and here the unrecognised
+    shape is precisely the one whose semantics are in question.
+    """
+    cached = _STRICT_PATTERNS.get(pattern)
+    if cached is not None:
+        return cached
+
+    anchors = _unescaped_dollar_positions(pattern)
+    if anchors and anchors != [len(pattern) - 1]:
+        raise ContractError(
+            f"pattern {pattern!r} contains an unescaped '$' that is not the final "
+            "character. This validator rewrites a TRAILING '$' to Python's '\\Z' so "
+            "that '$' means end-of-input as it does in Go RE2 and ECMA-262; it "
+            "refuses any other placement rather than guessing, because a '$' whose "
+            "semantics differ between the three validators is the exact defect this "
+            "rewrite exists to close. Rewrite the pattern, or extend this function "
+            "deliberately with a test."
+        )
+
+    source = pattern[:-1] + r"\Z" if anchors else pattern
+    compiled = re.compile(source)
+    _STRICT_PATTERNS[pattern] = compiled
+    return compiled
+
+
+def _strict_pattern_keyword(
+    validator: Any, patrn: str, instance: Any, schema: Any
+) -> Iterator[jsonschema.exceptions.ValidationError]:
+    """The ``pattern`` keyword, with Go/ECMA end-of-input semantics."""
+    if not isinstance(instance, str):
+        return
+    if strictly_anchored(patrn).search(instance) is None:
+        yield jsonschema.exceptions.ValidationError(
+            f"{instance!r} does not match {patrn!r}"
+        )
+
+
+#: Draft 2020-12 with the one keyword whose Python semantics diverge from the
+#: other two validators replaced. Everything else is stock.
+StrictDraft202012Validator = jsonschema.validators.extend(
+    jsonschema.Draft202012Validator, {"pattern": _strict_pattern_keyword}
+)
+
+
 def _require_format_assertion() -> None:
     checkers = jsonschema.Draft202012Validator.FORMAT_CHECKER.checkers
     if "date-time" not in checkers:
@@ -88,22 +184,40 @@ def load_json(path: Path) -> Any:
 
 
 @cache
-def _validator_for(schema_path_str: str) -> jsonschema.Draft202012Validator:
+def _validator_for(schema_path_str: str) -> jsonschema.protocols.Validator:
     _require_format_assertion()
     schema = load_json(Path(schema_path_str))
     # check_schema first: an invalid schema otherwise fails per-instance in
     # ways that read like instance errors, and a schema this validator cannot
     # interpret must be a hard stop, never a skip.
     jsonschema.Draft202012Validator.check_schema(schema)
-    return jsonschema.Draft202012Validator(
+    # Compile every pattern up front so a shape strictly_anchored refuses is a
+    # LOAD-time failure, not a per-instance surprise that only fires when some
+    # document happens to reach that field.
+    for pattern in _every_pattern(schema):
+        strictly_anchored(pattern)
+    return StrictDraft202012Validator(
         schema,
         format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
     )
 
 
+def _every_pattern(node: Any) -> Iterator[str]:
+    """Yield every ``pattern`` string anywhere in a schema document."""
+    if isinstance(node, dict):
+        found = node.get("pattern")
+        if isinstance(found, str):
+            yield found
+        for value in node.values():
+            yield from _every_pattern(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _every_pattern(value)
+
+
 def validator_for(
     surface: str, root: Path | None = None
-) -> jsonschema.Draft202012Validator:
+) -> jsonschema.protocols.Validator:
     """Return the Draft 2020-12 validator for one wire surface.
 
     *surface* is the schema's stem, e.g. ``"principal.v1"`` for

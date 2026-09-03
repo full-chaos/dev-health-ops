@@ -3,6 +3,8 @@ package contracts
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 )
 
@@ -18,6 +20,55 @@ const PrincipalSurface = "principal.v1"
 // principal's credential generation counter, and the "v1" path segment --
 // which move independently.
 const PrincipalSchemaVersion = "principal.v1"
+
+// Revision is a monotonic revision counter decoded leniently enough to match
+// what the CONTRACT actually permits.
+//
+// JSON Schema draft 2020-12 defines "type": "integer" as any number with a
+// zero fractional part, so `1.0` IS a valid integer by the specification and
+// the schema is right to accept it. Plain `int64` is not: encoding/json
+// refuses `1.0` with "cannot unmarshal number 1.0 into ... of type int64".
+//
+// That produced a real cross-language split, found by codex round 1 and
+// re-executed here: `{"membership_revision": 1.0}` validated in BOTH planes,
+// then Python built a principal carrying a float and Go failed to decode the
+// same bytes. The disagreement lives DOWNSTREAM of a validation both passed,
+// which is exactly why the golden corpus could not see it -- every fixture
+// stops at "does it validate".
+//
+// Rejecting `1.0` in the schema was the wrong fix: it would make the contract
+// stricter than the specification it declares, and a conforming producer
+// emitting `1.0` would be turned away by us and accepted by every other
+// draft-2020-12 validator. Normalising in the decoders is the fix, so both
+// languages land on the same integer.
+type Revision int64
+
+// UnmarshalJSON accepts an integer or an integral decimal and rejects a
+// genuinely fractional value.
+//
+// A fractional revision is refused rather than truncated: silently turning
+// 1.5 into 1 would make two different wire documents produce one in-memory
+// principal, and a revision is a cache-invalidation key (G-31) where two
+// inputs collapsing to one value is precisely the failure mode.
+func (r *Revision) UnmarshalJSON(data []byte) error {
+	number := json.Number(strings.TrimSpace(string(data)))
+	if integer, err := number.Int64(); err == nil {
+		*r = Revision(integer)
+		return nil
+	}
+	asFloat, err := number.Float64()
+	if err != nil {
+		return fmt.Errorf("revision %s is not a number: %w", number, err)
+	}
+	if asFloat != math.Trunc(asFloat) {
+		return fmt.Errorf("revision %s has a fractional part; a revision is a whole counter", number)
+	}
+	if asFloat > math.MaxInt64 || asFloat < math.MinInt64 {
+		return fmt.Errorf("revision %s is out of int64 range", number)
+	}
+	*r = Revision(int64(asFloat))
+	return nil
+}
 
 // Credential is the credential that authenticated a principal.
 //
@@ -124,15 +175,58 @@ type Principal struct {
 	// 8's example shows only membership and policy; that example is
 	// under-specified against the guardrail, which is stated as an acceptance
 	// criterion rather than a suggestion.
-	MembershipRevision  int64     `json:"membership_revision"`
-	PolicyRevision      int64     `json:"policy_revision"`
-	GrantRevision       int64     `json:"grant_revision"`
-	EntitlementRevision int64     `json:"entitlement_revision"`
+	MembershipRevision  Revision  `json:"membership_revision"`
+	PolicyRevision      Revision  `json:"policy_revision"`
+	GrantRevision       Revision  `json:"grant_revision"`
+	EntitlementRevision Revision  `json:"entitlement_revision"`
 	IssuedAt            time.Time `json:"issued_at"`
 	// ExpiresAt is enforced by the relying party. ACP-ADR-03 removes the
 	// envelope's per-call TTL override outright: a security bound any call
 	// site may widen is not a bound.
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// MaxDelegationDuration is ACP-ADR-03's bound on a delegated/impersonation
+// session, and G-52's requirement that it be shorter than the base session and
+// independently revocable.
+//
+// Enforced HERE, in the client, because JSON Schema cannot subtract two
+// timestamps. The schema requires an expires_at on every actor-chain hop, and
+// codex round 1 demonstrated that requiring the FIELD is not a bound: a
+// 30-minute delegated session validated cleanly and EffectiveDeadline reported
+// it happily, because taking the earliest supplied deadline says nothing about
+// how far away that deadline is.
+//
+// This is the "a property the code CLAIMED but did not ENFORCE" class, so the
+// bound is a named constant with its ADR beside it rather than a literal
+// buried in a comparison.
+const MaxDelegationDuration = 15 * time.Minute
+
+// checkDelegationBounds refuses an actor chain the schema cannot police.
+//
+// TWO rules, not one. A hop must end after it starts, and it must not last
+// longer than MaxDelegationDuration. The ordering check is not redundant: a
+// negative duration satisfies any maximum, so a bound written only as
+// "expires_at - started_at <= 15m" accepts a session that ends before it
+// begins. Both have fixtures in the manifest's reject_by_client list.
+func checkDelegationBounds(chain []Delegation) error {
+	for index, hop := range chain {
+		if !hop.ExpiresAt.After(hop.StartedAt) {
+			return fmt.Errorf(
+				"%s: /actor_chain/%d expires_at (%s) is not after started_at (%s); a delegated "+
+					"session that ends before it begins is not a bounded session",
+				PrincipalSurface, index, hop.ExpiresAt.Format(time.RFC3339), hop.StartedAt.Format(time.RFC3339))
+		}
+		if duration := hop.ExpiresAt.Sub(hop.StartedAt); duration > MaxDelegationDuration {
+			return fmt.Errorf(
+				"%s: /actor_chain/%d lasts %s, exceeding the %s bound ACP-ADR-03 sets for a "+
+					"delegated session (G-52 also requires it shorter than the base session). "+
+					"JSON Schema cannot express a duration, so this is enforced here; the "+
+					"fixture proving it is in the manifest's reject_by_client list",
+				PrincipalSurface, index, duration, MaxDelegationDuration)
+		}
+	}
+	return nil
 }
 
 // PrincipalFromWire validates raw against principal.v1 and then decodes it.
@@ -153,6 +247,9 @@ func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
 	var principal Principal
 	if err := json.Unmarshal(raw, &principal); err != nil {
 		return nil, fmt.Errorf("%s: decoding validated document: %w", PrincipalSurface, err)
+	}
+	if err := checkDelegationBounds(principal.ActorChain); err != nil {
+		return nil, err
 	}
 	return &principal, nil
 }

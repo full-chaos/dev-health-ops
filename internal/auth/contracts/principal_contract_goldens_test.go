@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fixtureManifest mirrors contracts/auth/v1/examples/principal/manifest.json.
@@ -28,6 +29,16 @@ type fixtureManifest struct {
 		ExpectKeyword          string `json:"expect_keyword"`
 		Why                    string `json:"why"`
 	} `json:"reject"`
+	// RejectByClient is the third category: documents the schema MUST accept
+	// and every language client MUST refuse, for rules JSON Schema cannot
+	// express at all. A duration bound is the clear case -- JSON Schema cannot
+	// subtract two timestamps, so requiring an expires_at FIELD is not a
+	// duration BOUND. Without this category the rule would have nowhere to
+	// live but a comment.
+	RejectByClient []struct {
+		File string `json:"file"`
+		Why  string `json:"why"`
+	} `json:"reject_by_client"`
 }
 
 // goMessageForKeyword maps a JSON Schema keyword to the token
@@ -142,6 +153,9 @@ func TestTheCorpusIsNotEmptyInEitherDirection(t *testing.T) {
 	if len(manifest.Reject) == 0 {
 		t.Error("manifest declares no reject fixtures")
 	}
+	if len(manifest.RejectByClient) == 0 {
+		t.Error("manifest declares no client-enforced fixtures")
+	}
 }
 
 func TestEveryFixtureFileOnDiskIsClaimedByTheManifest(t *testing.T) {
@@ -164,6 +178,9 @@ func TestEveryFixtureFileOnDiskIsClaimedByTheManifest(t *testing.T) {
 		claimed[a.File] = true
 	}
 	for _, r := range manifest.Reject {
+		claimed[r.File] = true
+	}
+	for _, r := range manifest.RejectByClient {
 		claimed[r.File] = true
 	}
 	var unclaimed, missing []string
@@ -353,5 +370,128 @@ func TestEntitlementCannotBeSmuggledIntoAPrincipal(t *testing.T) {
 				"ACP-ADR-07 decision 2 makes entitlement an input to a decision and never " +
 				"a claim in a credential; G-14 forbids it by name.",
 		)
+	}
+}
+
+// TestClientEnforcedFixturesValidateButAreRefused covers the third manifest
+// category.
+//
+// BOTH halves are asserted, and the first is the one that matters. If such a
+// fixture stopped validating, the rule would have quietly become a schema rule
+// and a test asserting only the refusal would still pass -- hiding that the
+// client check had become dead code.
+func TestClientEnforcedFixturesValidateButAreRefused(t *testing.T) {
+	root := testRoot(t)
+	for _, entry := range loadManifest(t).RejectByClient {
+		t.Run(entry.File, func(t *testing.T) {
+			raw := loadFixture(t, entry.File)
+			var document any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatalf("fixture is not valid JSON: %v", err)
+			}
+			if err := Validate(root, PrincipalSurface, document); err != nil {
+				t.Fatalf("must VALIDATE against the schema but did not (%v). If the rule has "+
+					"moved into the schema, this fixture belongs in `reject`, not "+
+					"`reject_by_client`.", err)
+			}
+			if _, err := PrincipalFromWire(root, raw); err == nil {
+				t.Fatalf("the client ACCEPTED it; %s", entry.Why)
+			}
+		})
+	}
+}
+
+// TestTheDelegationBoundIsTheADRValueNotALiteral pins the constant to
+// ACP-ADR-03's number, so a silent widening is visible in a diff.
+func TestTheDelegationBoundIsTheADRValueNotALiteral(t *testing.T) {
+	if MaxDelegationDuration != 15*time.Minute {
+		t.Errorf("MaxDelegationDuration = %s, want 15m0s (ACP-ADR-03)", MaxDelegationDuration)
+	}
+}
+
+// TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne pins the
+// cross-language agreement codex round 1 found missing.
+//
+// Draft 2020-12 defines "type": "integer" as any number with a zero fractional
+// part, so 1.0 IS a valid integer and both languages must land on the same
+// value. Before the fix Python produced a float and Go refused to decode.
+func TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne(t *testing.T) {
+	for _, testCase := range []struct {
+		raw     string
+		want    Revision
+		wantErr bool
+	}{
+		{raw: "1", want: 1},
+		{raw: "1.0", want: 1},
+		{raw: "0", want: 0},
+		{raw: "42.000", want: 42},
+		{raw: "1.5", wantErr: true},
+		{raw: "-1.5", wantErr: true},
+	} {
+		t.Run(testCase.raw, func(t *testing.T) {
+			var got Revision
+			err := json.Unmarshal([]byte(testCase.raw), &got)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatalf("%s decoded to %d; a fractional revision must be refused, never "+
+						"truncated -- two wire documents collapsing to one revision breaks the "+
+						"G-31 cache key", testCase.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", testCase.raw, err)
+			}
+			if got != testCase.want {
+				t.Errorf("%s decoded to %d, want %d", testCase.raw, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestPrincipalDecodesAnIntegralDecimalRevision tests the WIRING, not the type.
+//
+// TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne unmarshals into
+// a bare Revision and so proves only that the TYPE behaves. It says nothing
+// about whether Principal's fields actually USE that type -- and they very
+// nearly did not: the edit that introduced Revision changed the type
+// declaration but silently failed to change the four struct fields, because
+// gofmt had realigned them and an exact-match replacement no-opped. The build
+// stayed green, the type test stayed green, and only decoding a whole document
+// showed Go still rejecting 1.0.
+//
+// So this decodes a real fixture with a decimal revision through
+// PrincipalFromWire, which is the path production takes. Reverting any of the
+// four fields to int64 turns it red.
+func TestPrincipalDecodesAnIntegralDecimalRevision(t *testing.T) {
+	root := testRoot(t)
+	for _, field := range []string{
+		"membership_revision", "policy_revision", "grant_revision", "entitlement_revision",
+	} {
+		t.Run(field, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+				t.Fatalf("fixture is not valid JSON: %v", err)
+			}
+			document[field] = json.RawMessage("7.0")
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatalf("re-marshalling: %v", err)
+			}
+			principal, err := PrincipalFromWire(root, raw)
+			if err != nil {
+				t.Fatalf("PrincipalFromWire refused an integral decimal, which draft 2020-12 "+
+					"defines as a valid integer and the Python client accepts: %v", err)
+			}
+			got := map[string]Revision{
+				"membership_revision":  principal.MembershipRevision,
+				"policy_revision":      principal.PolicyRevision,
+				"grant_revision":       principal.GrantRevision,
+				"entitlement_revision": principal.EntitlementRevision,
+			}[field]
+			if got != 7 {
+				t.Errorf("%s = %d, want 7", field, got)
+			}
+		})
 	}
 }

@@ -17,12 +17,20 @@ suite that only asserts rejections.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from dev_health_ops.authclient import Principal, contracts_dir, violations
+from dev_health_ops.authclient import (
+    ContractError,
+    Principal,
+    contracts_dir,
+    violations,
+)
+from dev_health_ops.authclient.contracts import strictly_anchored
+from dev_health_ops.authclient.principal import MAX_DELEGATION_DURATION
 
 SURFACE = "principal.v1"
 FIXTURE_DIRNAME = "principal"
@@ -46,6 +54,7 @@ REJECT = [
     (entry["file"], entry["expect_instance_location"], entry["expect_keyword"])
     for entry in MANIFEST["reject"]
 ]
+REJECT_BY_CLIENT = [entry["file"] for entry in MANIFEST["reject_by_client"]]
 
 
 def test_the_corpus_is_not_empty_in_either_direction() -> None:
@@ -58,6 +67,7 @@ def test_the_corpus_is_not_empty_in_either_direction() -> None:
     """
     assert ACCEPT, "manifest declares no accept fixtures"
     assert REJECT, "manifest declares no reject fixtures"
+    assert REJECT_BY_CLIENT, "manifest declares no client-enforced fixtures"
 
 
 def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
@@ -72,7 +82,7 @@ def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
         for path in _fixture_dir().glob("*.json")
         if path.name != "manifest.json"
     }
-    claimed = set(ACCEPT) | {name for name, _, _ in REJECT}
+    claimed = set(ACCEPT) | {name for name, _, _ in REJECT} | set(REJECT_BY_CLIENT)
     assert on_disk == claimed, (
         f"unclaimed on disk: {sorted(on_disk - claimed)}; "
         f"claimed but absent: {sorted(claimed - on_disk)}"
@@ -278,3 +288,51 @@ def test_format_assertion_is_actually_enabled_not_merely_requested() -> None:
 def test_the_manifest_declares_that_format_assertion_is_required() -> None:
     """The manifest is the contract between the three runners; pin its flag."""
     assert MANIFEST["requires_format_assertion"] is True
+
+
+@pytest.mark.parametrize("name", REJECT_BY_CLIENT)
+def test_client_enforced_fixture_validates_but_is_refused(name: str) -> None:
+    """The third category: schema-valid, client-refused.
+
+    Both halves are asserted, and the first half is the one that matters. If
+    such a fixture stopped validating, the rule would have quietly become a
+    schema rule and this test would still pass on the second assertion alone --
+    hiding the fact that the client check had become dead code.
+    """
+    document = _load(name)
+    assert violations(SURFACE, document) == [], (
+        f"{name} must VALIDATE against the schema; if it no longer does, the rule has moved "
+        "into the schema and belongs in `reject`, not `reject_by_client`"
+    )
+    with pytest.raises(ContractError):
+        Principal.from_wire(document)
+
+
+def test_the_delegation_bound_is_the_adr_value_not_a_literal() -> None:
+    """Pin the constant to ACP-ADR-03's number, so a silent widening is visible."""
+    assert MAX_DELEGATION_DURATION == timedelta(minutes=15)
+
+
+def test_strict_pattern_anchoring_is_installed_not_merely_intended() -> None:
+    """Prove `$` means end-of-input here, the way Go RE2 and ECMA-262 read it.
+
+    Python's `re` accepts a single trailing newline before `$`; the other two
+    validators do not. Measured on all three engines. The client rewrites a
+    trailing `$` to `\\Z`, and this asserts the rewrite is actually in force --
+    the same shape as the format-assertion check, and for the same reason: a
+    correction that silently is not applied looks exactly like one that is.
+    """
+    strict = strictly_anchored(r"^prn_[A-Za-z0-9_-]+$")
+    assert strict.search("prn_EXAMPLE0000000000000001") is not None
+    assert strict.search("prn_EXAMPLE0000000000000001\n") is None
+
+
+def test_strict_pattern_anchoring_fails_closed_on_a_shape_it_cannot_rewrite() -> None:
+    """An unrecognised `$` placement is REFUSED, never passed through.
+
+    Passing it through would be the "default unrecognised shapes to safe"
+    mistake, and the unrecognised shape here is precisely the one whose
+    semantics are in question.
+    """
+    with pytest.raises(ContractError):
+        strictly_anchored(r"^a$b$")

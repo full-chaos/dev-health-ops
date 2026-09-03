@@ -36,46 +36,10 @@
   "regex_dialect_note": "Every `pattern` here stays inside the common subset of Go RE2, ECMA-262 and Python `re`. RE2 has no back-references and no lookaround, and `\\d`/`\\w`/`\\s` are Unicode in Python and ASCII in the other two. Guarded by a test with positive and negative controls, not by review.",
   "reject": [
     {
-      "expect_instance_location": "/",
-      "expect_keyword": "additionalProperties",
-      "file": "invalid-entitlement-claim-smuggled.json",
-      "why": "ACP-ADR-07 decision 2, G-14 and TRD section 8's own rule (\"Grants and entitlements are not identity claims\"): entitlement is an input to a decision and never a claim in a credential. This fixture is the executable form of that rule."
-    },
-    {
-      "expect_instance_location": "/",
-      "expect_keyword": "additionalProperties",
-      "file": "invalid-permissions-field-present.json",
-      "why": "TRD section 11 and G-14 forbid embedding a complete mutable permission set in a credential. The first draft of this schema carried `permissions` copied from the legacy envelope; this fixture is what stops it coming back."
-    },
-    {
-      "expect_instance_location": "/",
-      "expect_keyword": "additionalProperties",
-      "file": "invalid-is-superuser-field-present.json",
-      "why": "TRD section 3 and G-23: platform-admin authority moves to a separate platform role/action namespace resolved against current state. A superuser bit in a principal is the mechanism being migrated away from, not a field to preserve."
-    },
-    {
-      "expect_instance_location": "/",
-      "expect_keyword": "additionalProperties",
-      "file": "invalid-role-field-present.json",
-      "why": "ACP-ADR-05 decision 4 / G-27: an explicit action at the call site, never a broad role check as the final decision."
-    },
-    {
-      "expect_instance_location": "/credential/class",
-      "expect_keyword": "enum",
-      "file": "invalid-unknown-credential-class.json",
-      "why": "ACP-ADR-05 decision 1 / G-26: unknown denies. A class absent from both the Wave 0 frozen 30 and the documented Wave 1 additions is not a compatibility convenience."
-    },
-    {
-      "expect_instance_location": "/actor_chain/0/permitted_actions/0",
-      "expect_keyword": "pattern",
-      "file": "invalid-bare-action-name.json",
-      "why": "G-27: a single-segment action is the `is_admin` shape, made unrepresentable rather than merely discouraged."
-    },
-    {
-      "expect_instance_location": "/credential/scopes/0",
-      "expect_keyword": "pattern",
-      "file": "invalid-scope-uses-action-syntax.json",
-      "why": "Scopes are colon-separated and actions are dotted, deliberately different shapes so the two vocabularies cannot be confused at a call site (G-5: authentication is not authorization)."
+      "expect_instance_location": "/actor_chain/0",
+      "expect_keyword": "required",
+      "file": "invalid-actor-chain-entry-missing-expiry.json",
+      "why": "ACP-ADR-03 bounds a delegated session at 15 minutes and G-52 requires it revocable and shorter than the base session; a delegation with no expiry is an unbounded one."
     },
     {
       "expect_instance_location": "/",
@@ -84,16 +48,100 @@
       "why": "actor_chain is REQUIRED and explicitly empty when absent, so a deserializer defaulting a missing array to nil cannot make 'absent' read as 'not delegated'."
     },
     {
-      "expect_instance_location": "/actor_chain/0",
-      "expect_keyword": "required",
-      "file": "invalid-actor-chain-entry-missing-expiry.json",
-      "why": "ACP-ADR-03 bounds a delegated session at 15 minutes and G-52 requires it revocable and shorter than the base session; a delegation with no expiry is an unbounded one."
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-authenticated-at-not-rfc3339.json",
+      "why": "Same cross-language floor as expires_at, asserted on a NESTED field -- a walker or a validator that only enforced the top level would pass this."
     },
     {
-      "expect_instance_location": "/principal_type",
-      "expect_keyword": "enum",
-      "file": "invalid-unknown-principal-type.json",
-      "why": "The taxonomy is the Wave 0 closed vocabulary; unknown denies."
+      "expect_instance_location": "/actor_chain/0/permitted_actions/0",
+      "expect_keyword": "pattern",
+      "file": "invalid-bare-action-name.json",
+      "why": "G-27: a single-segment action is the `is_admin` shape, made unrepresentable rather than merely discouraged."
+    },
+    {
+      "expect_instance_location": "/credential",
+      "expect_keyword": "required",
+      "file": "invalid-credential-missing-audience.json",
+      "why": "G-13 requires an exact audience to be pinned; an absent audience is the fail-open case, because an empty expected audience disables the check in at least one JWT library."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-entitlement-claim-smuggled.json",
+      "why": "ACP-ADR-07 decision 2, G-14 and TRD section 8's own rule (\"Grants and entitlements are not identity claims\"): entitlement is an input to a decision and never a claim in a credential. This fixture is the executable form of that rule."
+    },
+    {
+      "expect_instance_location": "/entitlement_revision",
+      "expect_keyword": "minimum",
+      "file": "invalid-entitlement-revision-negative.json",
+      "why": "Revisions are monotonic and non-negative."
+    },
+    {
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-expires-at-not-rfc3339.json",
+      "why": "The enforced keyword is `pattern`, not `format`: github.com/google/jsonschema-go records `format` and ignores it during validation, so a fixture asserting `format` would be checked in Python and TypeScript and vacuous in Go."
+    },
+    {
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-expires-at-unicode-digits.json",
+      "why": "REGRESSION GUARD for a MEASURED divergence. With the digit class spelled \\d this exact document was ACCEPTED by the Python validator and REJECTED by the Go one: Python's `re` treats \\d as Unicode and matches Devanagari digits, Go RE2 and ECMA-262 treat it as ASCII. Every digit class is now [0-9], and this fixture is what stops \\d being reintroduced -- under \\d it turns green in one language and stays red in another."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-grant-revision-missing.json",
+      "why": "G-31 requires an allow-cache key to bind grant revision. A principal missing it lets a consumer build a cache key that a grant bump cannot invalidate."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-is-superuser-field-present.json",
+      "why": "TRD section 3 and G-23: platform-admin authority moves to a separate platform role/action namespace resolved against current state. A superuser bit in a principal is the mechanism being migrated away from, not a field to preserve."
+    },
+    {
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "minLength",
+      "file": "invalid-organization-id-empty-string.json",
+      "why": "Empty string is not null. Python treats \"\" as falsy where Go nil-checks a pointer, so a contract accepting \"\" would mean two different things in two runtimes."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-permissions-field-present.json",
+      "why": "TRD section 11 and G-14 forbid embedding a complete mutable permission set in a credential. The first draft of this schema carried `permissions` copied from the legacy envelope; this fixture is what stops it coming back."
+    },
+    {
+      "file": "invalid-principal-id-trailing-newline.json",
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "why": "REGRESSION GUARD for a MEASURED divergence, the third in the same family. Python's `re` treats `$` as matching at end-of-string OR immediately before a single trailing newline; Go RE2 and ECMA-262 match only at true end. Executed on all three engines with this exact document: Python ACCEPTED, Go rejected, Node (which is what ajv implements) returned false -- Python the sole outlier, 1 of 3, exactly as with the Unicode \\d divergence. No portable pattern fixes it (\\Z is Python-only, \\z is RE2-only, ECMA-262 has neither), so the Python validator rewrites a trailing `$` to `\\Z` and this fixture is what proves that rewrite is installed and working."
+    },
+    {
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-principal-id-wrong-prefix.json",
+      "why": "TRD section 8 rule 1 / G-20: the authorization subject is the stable principal id, not the user record id. Using a subject id where a principal id belongs is the confusion the two separate fields exist to prevent, so the prefix makes it detectable."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-role-field-present.json",
+      "why": "ACP-ADR-05 decision 4 / G-27: an explicit action at the call site, never a broad role check as the final decision."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "A relying party must reject an unrecognised contract version rather than parse optimistically. TRD section 21: breaking semantics require v2, and a v2 document is not a v1 document."
+    },
+    {
+      "expect_instance_location": "/credential/scopes/0",
+      "expect_keyword": "pattern",
+      "file": "invalid-scope-uses-action-syntax.json",
+      "why": "Scopes are colon-separated and actions are dotted, deliberately different shapes so the two vocabularies cannot be confused at a call site (G-5: authentication is not authorization)."
     },
     {
       "expect_instance_location": "/authentication/methods/0",
@@ -108,61 +156,30 @@
       "why": "NIST SP 800-63B defines aal1-aal3. An unrecognised assurance must deny, not compare greater-than by string order."
     },
     {
-      "expect_instance_location": "/organization_id",
-      "expect_keyword": "minLength",
-      "file": "invalid-organization-id-empty-string.json",
-      "why": "Empty string is not null. Python treats \"\" as falsy where Go nil-checks a pointer, so a contract accepting \"\" would mean two different things in two runtimes."
+      "expect_instance_location": "/credential/class",
+      "expect_keyword": "enum",
+      "file": "invalid-unknown-credential-class.json",
+      "why": "ACP-ADR-05 decision 1 / G-26: unknown denies. A class absent from both the Wave 0 frozen 30 and the documented Wave 1 additions is not a compatibility convenience."
     },
     {
-      "expect_instance_location": "/",
-      "expect_keyword": "required",
-      "file": "invalid-grant-revision-missing.json",
-      "why": "G-31 requires an allow-cache key to bind grant revision. A principal missing it lets a consumer build a cache key that a grant bump cannot invalidate."
-    },
-    {
-      "expect_instance_location": "/entitlement_revision",
-      "expect_keyword": "minimum",
-      "file": "invalid-entitlement-revision-negative.json",
-      "why": "Revisions are monotonic and non-negative."
-    },
-    {
-      "expect_instance_location": "/principal_id",
-      "expect_keyword": "pattern",
-      "file": "invalid-principal-id-wrong-prefix.json",
-      "why": "TRD section 8 rule 1 / G-20: the authorization subject is the stable principal id, not the user record id. Using a subject id where a principal id belongs is the confusion the two separate fields exist to prevent, so the prefix makes it detectable."
-    },
-    {
-      "expect_instance_location": "/credential",
-      "expect_keyword": "required",
-      "file": "invalid-credential-missing-audience.json",
-      "why": "G-13 requires an exact audience to be pinned; an absent audience is the fail-open case, because an empty expected audience disables the check in at least one JWT library."
-    },
-    {
-      "expect_instance_location": "/schema_version",
-      "expect_keyword": "const",
-      "file": "invalid-schema-version-wrong.json",
-      "why": "A relying party must reject an unrecognised contract version rather than parse optimistically. TRD section 21: breaking semantics require v2, and a v2 document is not a v1 document."
-    },
-    {
-      "expect_instance_location": "/expires_at",
-      "expect_keyword": "pattern",
-      "file": "invalid-expires-at-not-rfc3339.json",
-      "why": "The enforced keyword is `pattern`, not `format`: github.com/google/jsonschema-go records `format` and ignores it during validation, so a fixture asserting `format` would be checked in Python and TypeScript and vacuous in Go."
-    },
-    {
-      "expect_instance_location": "/authentication/authenticated_at",
-      "expect_keyword": "pattern",
-      "file": "invalid-authenticated-at-not-rfc3339.json",
-      "why": "Same cross-language floor as expires_at, asserted on a NESTED field -- a walker or a validator that only enforced the top level would pass this."
-    },
-    {
-      "expect_instance_location": "/expires_at",
-      "expect_keyword": "pattern",
-      "file": "invalid-expires-at-unicode-digits.json",
-      "why": "REGRESSION GUARD for a MEASURED divergence. With the digit class spelled \\d this exact document was ACCEPTED by the Python validator and REJECTED by the Go one: Python's `re` treats \\d as Unicode and matches Devanagari digits, Go RE2 and ECMA-262 treat it as ASCII. Every digit class is now [0-9], and this fixture is what stops \\d being reintroduced -- under \\d it turns green in one language and stays red in another."
+      "expect_instance_location": "/principal_type",
+      "expect_keyword": "enum",
+      "file": "invalid-unknown-principal-type.json",
+      "why": "The taxonomy is the Wave 0 closed vocabulary; unknown denies."
     }
   ],
   "requires_format_assertion": true,
   "schema": "../../jsonschema/principal.v1.schema.json",
-  "schema_version": "contract-fixture-manifest.v1"
+  "schema_version": "contract-fixture-manifest.v1",
+  "client_enforced_note": "Some rules the contract states cannot be expressed in JSON Schema at all, and the honest place for them is a THIRD fixture category rather than a silence. A duration bound is the clear case: ACP-ADR-03 fixes a delegated session at 15 minutes and G-52 requires it shorter than the base session, but JSON Schema cannot subtract two timestamps, so requiring an `expires_at` FIELD is not a duration BOUND. Fixtures listed here MUST validate against the schema and MUST be refused by every language client. They are what stops the gap being closed by a comment: codex round 1 found this by constructing exactly such a document, and an inventory with only accept/reject had nowhere to put the answer.",
+  "reject_by_client": [
+    {
+      "file": "client-rejected-delegation-exceeds-bound.json",
+      "why": "A 30-minute delegated session (hop 23:15Z -> 23:45Z). Schema-valid: every timestamp is well formed and expires_at is present. ACP-ADR-03 bounds a delegated session at 15 minutes and G-52 requires it strictly shorter than the base session, so every client must refuse it. Executed before the fix: violations [] and effective_deadline 23:45Z, i.e. accepted end to end."
+    },
+    {
+      "file": "client-rejected-delegation-ends-before-it-starts.json",
+      "why": "started_at 23:31Z is AFTER expires_at 23:30Z. Schema-valid for the same reason, and a negative duration trivially satisfies any maximum -- so a bound checked as `expires_at - started_at <= 15m` without also checking the sign accepts it. The ordering check and the duration check are two rules, and this fixture is the one that notices when only the second is implemented."
+    }
+  ]
 }

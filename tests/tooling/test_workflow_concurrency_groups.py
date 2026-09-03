@@ -193,6 +193,17 @@ def _workflows_with_both_triggers() -> list[tuple[Path, str]]:
         triggers = document.get(True) or document.get("on") or {}
         if not ("push" in triggers and "pull_request" in triggers):
             continue
+        # WORKFLOW-level concurrency only. A JOB-level `concurrency:` block
+        # (mirror-test-images.yml's `mirror` job has one, CHAOS-4928) is
+        # unmodelled here -- deliberately not extended to cover it. This
+        # test hunts for an expression that renders the SAME value for two
+        # events that must NOT share a slot; the `mirror` job's group is the
+        # static literal `mirror-publish`, identical for every event by
+        # construction, with no event-conditional expression to mis-render.
+        # There's nothing for this evaluator to get wrong about a value that
+        # never varies. If a future job-level group EVER becomes
+        # event-conditional, it will need its own modelling here -- it gets
+        # none today because none is needed.
         group = (document.get("concurrency") or {}).get("group")
         if group:
             found.append((path, str(group)))

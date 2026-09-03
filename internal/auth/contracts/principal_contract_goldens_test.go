@@ -258,8 +258,44 @@ func TestAcceptedFixturesRoundTripThroughTheClient(t *testing.T) {
 			if principal.ExpiresAt.IsZero() {
 				t.Error("expires_at decoded to the zero time -- check the JSON tag")
 			}
-			if principal.Revisions == (Revisions{}) {
-				t.Error("revisions decoded to all zeroes -- check the JSON tags")
+			// The nested objects are where a wrong JSON tag hides: the
+			// document validates, the struct decodes, and the field is
+			// silently a zero value nobody asserted on.
+			if principal.Credential.Class == "" {
+				t.Error("credential.class decoded empty -- check the JSON tag")
+			}
+			if principal.Credential.CredentialID == "" {
+				t.Error("credential.credential_id decoded empty -- check the JSON tag")
+			}
+			if principal.Credential.Audience == "" {
+				t.Error("credential.audience decoded empty -- check the JSON tag")
+			}
+			if principal.Authentication.Assurance == "" {
+				t.Error("authentication.assurance decoded empty -- check the JSON tag")
+			}
+			if principal.Authentication.AuthenticatedAt.IsZero() {
+				t.Error("authentication.authenticated_at decoded to the zero time")
+			}
+			if len(principal.Authentication.Methods) == 0 {
+				t.Error("authentication.methods decoded empty -- the schema requires minItems 1")
+			}
+			// A delegated fixture must decode its chain: an actor_chain that
+			// silently decodes to nil would make every delegation assertion
+			// below vacuous while the document still validated.
+			var rawChain struct {
+				ActorChain []map[string]any `json:"actor_chain"`
+			}
+			if err := json.Unmarshal(loadFixture(t, entry.File), &rawChain); err != nil {
+				t.Fatalf("re-reading actor_chain: %v", err)
+			}
+			if len(rawChain.ActorChain) != len(principal.ActorChain) {
+				t.Fatalf("actor_chain decoded %d hops, document has %d -- check the JSON tags",
+					len(principal.ActorChain), len(rawChain.ActorChain))
+			}
+			for i, hop := range principal.ActorChain {
+				if hop.ActorPrincipalID == "" || hop.DelegationID == "" || hop.ExpiresAt.IsZero() {
+					t.Errorf("actor_chain[%d] decoded with empty fields: %+v", i, hop)
+				}
 			}
 		})
 	}

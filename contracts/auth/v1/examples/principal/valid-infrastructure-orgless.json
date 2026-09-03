@@ -1,24 +1,30 @@
 {
-  "audience": "dev-health-ops",
-  "expires_at": "2026-09-02T23:25:00Z",
-  "impersonation": null,
-  "is_superuser": false,
-  "is_superuser_verified": false,
-  "issued_at": "2026-09-02T23:15:00Z",
-  "issuer": "https://auth.fullchaos.dev/",
-  "organization_id": null,
-  "permissions": [
-    "platform.health.read"
-  ],
-  "principal_id": "infra_01J9Z2Q4H8M3K7N0P5R6S8T1Y5",
-  "principal_type": "infrastructure",
-  "revisions": {
-    "entitlement_revision": 3,
-    "grant_revision": 12,
-    "membership_revision": 7,
-    "policy_revision": 41
+  "actor_chain": [],
+  "authentication": {
+    "assurance": "aal1",
+    "authenticated_at": "2026-09-02T23:14:00Z",
+    "methods": [
+      "swk"
+    ]
   },
-  "role": null,
+  "credential": {
+    "audience": "dev-health-platform",
+    "class": "infrastructure_deployment_credentials",
+    "credential_id": "inf_EXAMPLE0000000000000001",
+    "issuer": "https://auth.fullchaos.dev/",
+    "scopes": [
+      "platform:health"
+    ]
+  },
+  "entitlement_revision": 3,
+  "expires_at": "2026-09-02T23:25:00Z",
+  "grant_revision": 12,
+  "issued_at": "2026-09-02T23:15:00Z",
+  "membership_revision": 17,
+  "organization_id": null,
+  "policy_revision": 42,
+  "principal_id": "prn_EXAMPLE0000000000000003",
+  "principal_type": "infrastructure",
   "schema_version": "principal.v1",
-  "token_version": 0
+  "subject_id": null
 }

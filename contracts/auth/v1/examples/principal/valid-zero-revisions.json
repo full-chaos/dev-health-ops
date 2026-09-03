@@ -16,15 +16,15 @@
       "api:access"
     ]
   },
-  "entitlement_revision": 3,
+  "entitlement_revision": 0,
   "expires_at": "2026-09-02T23:25:00Z",
-  "grant_revision": 12,
+  "grant_revision": 0,
   "issued_at": "2026-09-02T23:15:00Z",
-  "membership_revision": 17,
+  "membership_revision": 0,
   "organization_id": "org_EXAMPLE0000000000000001",
-  "policy_revision": 42,
+  "policy_revision": 0,
   "principal_id": "prn_EXAMPLE0000000000000001",
-  "principal_type": "bot",
+  "principal_type": "human",
   "schema_version": "principal.v1",
   "subject_id": "usr_EXAMPLE0000000000000001"
 }

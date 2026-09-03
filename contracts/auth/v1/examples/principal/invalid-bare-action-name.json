@@ -1,24 +1,41 @@
 {
-  "audience": "dev-health-ops",
-  "expires_at": "2026-09-02T23:25:00Z",
-  "impersonation": null,
-  "is_superuser": false,
-  "is_superuser_verified": false,
-  "issued_at": "2026-09-02T23:15:00Z",
-  "issuer": "https://auth.fullchaos.dev/",
-  "organization_id": "org_01J9Z2Q4H8M3K7N0P5R6S8T1V3",
-  "permissions": [
-    "admin"
+  "actor_chain": [
+    {
+      "actor_principal_id": "prn_EXAMPLE0000000000000002",
+      "delegation_id": "dlg_EXAMPLE0000000000000001",
+      "expires_at": "2026-09-02T23:30:00Z",
+      "permitted_actions": [
+        "admin"
+      ],
+      "reason": "r",
+      "started_at": "2026-09-02T23:15:00Z"
+    }
   ],
-  "principal_id": "usr_01J9Z2Q4H8M3K7N0P5R6S8T1V2",
-  "principal_type": "human",
-  "revisions": {
-    "entitlement_revision": 3,
-    "grant_revision": 12,
-    "membership_revision": 7,
-    "policy_revision": 41
+  "authentication": {
+    "assurance": "aal1",
+    "authenticated_at": "2026-09-02T23:10:00Z",
+    "methods": [
+      "pwd"
+    ]
   },
-  "role": "member",
+  "credential": {
+    "audience": "dev-health-api",
+    "class": "user_access_token",
+    "credential_id": "ses_EXAMPLE0000000000000001",
+    "issuer": "https://auth.fullchaos.dev/",
+    "scopes": [
+      "api:access"
+    ]
+  },
+  "entitlement_revision": 3,
+  "expires_at": "2026-09-02T23:25:00Z",
+  "grant_revision": 12,
+  "issued_at": "2026-09-02T23:15:00Z",
+  "membership_revision": 17,
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "policy_revision": 42,
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "principal_type": "human",
   "schema_version": "principal.v1",
-  "token_version": 4
+  "subject_id": "usr_EXAMPLE0000000000000001"
 }

@@ -2,37 +2,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/principal.v1.schema.json",
   "title": "Auth Control Plane principal (v1 wire format)",
-  "description": "The resolved principal the Auth Control Plane hands to a relying party once a credential has been verified. This is a WIRE contract: the JSON Schema, the OpenAPI document that references it, and the golden fixtures under contracts/auth/v1/examples/principal/ are the source of truth, and the Go/Python/TypeScript types are implementations of it, never the other way round.\n\nDistinct from contracts/auth/v1/endpoint-profiles.ops.json and credential-classes.json, which are the Wave 0 INVENTORY contract describing what authentication exists today. This file describes what the new service emits. Neither constrains the other, and this file changes nothing about them.\n\nDELIBERATE OMISSION, load-bearing: there is no `tier` and no `licensed_features`. ACP-ADR-07 decision 2 (Accepted 2026-09-02) states that entitlement is an input to a decision and never a claim in a credential, and deprecates both fields from the effective-principal envelope's claim schema at its next `v` bump; G-14 forbids entitlement travelling inside a credential by name. The existing envelope carries them today (cmd/query-api/internal/principal/claims.go), so a reader comparing this schema against that struct will find two fields missing and must not `fix` it -- their absence IS the ADR. Entitlement reaches a relying party through the authorization decision, not through the principal.",
+  "description": "The resolved principal the Auth Control Plane hands to a relying party once a credential has been verified. Field-for-field this implements the canonical `principal.v1` document in TRD section 8, extended only where guardrail G-31 requires more than the TRD's example shows (see `grant_revision`/`entitlement_revision`).\n\nThis is a WIRE contract. The JSON Schema, the OpenAPI document that references it, and the golden fixtures under contracts/auth/v1/examples/principal/ are the source of truth; the Go, Python and TypeScript types are implementations of it, never the other way round (TRD section 2 principle 12, TRD section 21).\n\nDistinct from contracts/auth/v1/endpoint-profiles.ops.json and credential-classes.json, which are the Wave 0 INVENTORY contract describing what authentication exists today. This file describes what the new service emits. Nothing here changes their semantics.\n\nFOUR DELIBERATE OMISSIONS, all load-bearing, none an oversight to repair:\n  * no `tier` and no `licensed_features` -- ACP-ADR-07 decision 2 makes entitlement an input to a DECISION and never a claim in a credential; G-14 forbids it by name; TRD section 8's own rule says \"Grants and entitlements are not identity claims\".\n  * no `permissions` -- TRD section 11 and G-14 forbid embedding a complete mutable permission set in a credential. A relying party asks the authorization surface, which also binds entitlement (ACP-ADR-07 decision 3: both gates must pass independently).\n  * no `role` -- ACP-ADR-05 decision 4 and G-27 require an explicit action at the call site and forbid a broad role check as the final decision.\n  * no `is_superuser` -- TRD section 3 and G-23 move platform-admin authority to a separate platform role/action namespace resolved against CURRENT state. A superuser bit carried in a principal is the mechanism being migrated away from.\nThe existing effective-principal envelope (cmd/query-api/internal/principal/claims.go) carries all four today. It is the COMPATIBILITY implementation this migration retires; diffing this schema against that struct will show four things 'missing', and their absence is the decision.",
   "type": "object",
   "required": [
     "schema_version",
     "principal_id",
     "principal_type",
+    "subject_id",
     "organization_id",
-    "permissions",
-    "is_superuser",
-    "is_superuser_verified",
-    "token_version",
-    "impersonation",
-    "revisions",
+    "credential",
+    "authentication",
+    "actor_chain",
+    "membership_revision",
+    "policy_revision",
+    "grant_revision",
+    "entitlement_revision",
     "issued_at",
-    "expires_at",
-    "issuer",
-    "audience"
+    "expires_at"
   ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
       "const": "principal.v1",
-      "description": "Identifies this document's contract. A relying party MUST reject an unrecognised value rather than parse optimistically (ACP-ADR-05 decision 1: unknown denies). Note this is NOT the effective-principal envelope's `v` claim -- see the `v`-vs-`.v1` note on `token_version`."
+      "description": "Identifies this document's contract. A relying party MUST reject an unrecognised value rather than parse optimistically (ACP-ADR-05 decision 1 / G-26: unknown denies). TRD section 21: contract evolution is additive within v1; breaking semantics require v2. Distinct from the three other version-shaped values in this system -- the effective-principal envelope's `v` claim, a principal's credential generation counter, and the `v1` path segment -- which move independently."
     },
     "principal_id": {
       "type": "string",
       "minLength": 1,
-      "description": "Stable opaque identifier for the acting principal. For principal_type `human` this is the user id and corresponds to the existing envelope's `sub` claim. Opaque to relying parties: never parse it, never infer type from its shape."
+      "pattern": "^prn_[A-Za-z0-9_-]+$",
+      "description": "Stable identifier for the acting principal, and THE AUTHORIZATION SUBJECT (TRD section 8 rule 1; G-20). Never an email, username, provider display name or token prefix, all of which are mutable. Opaque to relying parties: never parse it, never infer principal type from its shape."
     },
     "principal_type": {
-      "description": "Which kind of principal is acting. This enum is REUSED VERBATIM from contracts/auth/v1/credential-classes.schema.json ($defs.credentialClass.properties.principal_type), the Wave 0 closed vocabulary covering all 30 frozen credential classes -- it is deliberately not a new vocabulary. A seventh kind is a change to that file first and this one second, never here alone.",
+      "description": "Which kind of principal is acting. This enum is REUSED VERBATIM from contracts/auth/v1/credential-classes.schema.json ($defs.credentialClass.properties.principal_type), the Wave 0 closed vocabulary covering all 30 frozen credential classes, and matches TRD section 8's principal taxonomy. It is deliberately not a new vocabulary; a seventh kind is a change to that file first and this one second.",
       "enum": [
         "human",
         "service_account",
@@ -42,131 +43,227 @@
         "infrastructure"
       ]
     },
+    "subject_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "The underlying subject record this principal resolves to -- a user id for a `human`, a service-account or workload record elsewhere. SEPARATE from principal_id by design (TRD section 8): the credential authenticates a principal but is not automatically the principal, and authorization keys on principal_id, never on this. null where the principal has no distinct underlying subject. A relying party that authorizes on subject_id has used the wrong field."
+    },
     "organization_id": {
       "type": [
         "string",
         "null"
       ],
       "minLength": 1,
-      "description": "Tenant this principal is acting within. null ONLY for a principal that is genuinely org-less (an `infrastructure` principal acting on the platform itself). A relying party that scopes by organization MUST treat null as `no organization` and deny, never as `any organization` -- ACP-ADR-12 decision 3 makes org-scoped-from-claims the default idiom precisely so a caller-supplied organization is unrepresentable rather than merely rejected."
+      "description": "Tenant this principal is acting within. null ONLY for a genuinely org-less principal (TRD section 8: \"Organization may be absent for platform/pre-organization operations\"). A relying party that scopes by organization MUST treat null as NO organization and DENY -- never as ANY organization. G-22: an organization is session context, not membership proof; membership is checked against authoritative state or an unexpired decision, never inferred from this field's presence."
     },
-    "role": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "description": "Coarse role name where the principal has one, null otherwise. Present for continuity with the current model and for audit legibility. It is NOT an authorization input: ACP-ADR-05 decision 4 requires an explicit action name at the call site and forbids an `is_admin`-style check as the final decision (G-27). Authorize on `permissions`, or on an authorization decision; never on this field."
-    },
-    "permissions": {
-      "type": "array",
-      "uniqueItems": true,
-      "description": "The principal's resolved action set, sorted, from the registered closed action vocabulary (ACP-ADR-05 decision 1). Unknown action denies. An empty array is a valid, meaningful value -- an authenticated principal that may do nothing -- and MUST NOT be treated as `unrestricted` or as `not populated`.",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
-        "description": "A dotted, namespaced action name: `members.invite`, `acr.context.read`, `billing.subscription.manage` (ACP-ADR-05 decision 4). At least two segments is deliberate -- a single bare segment is the shape of the `is_admin` check G-27 exists to forbid, so the pattern makes it unrepresentable rather than merely discouraged."
-      }
-    },
-    "is_superuser": {
-      "type": "boolean",
-      "description": "The principal holds the platform superuser bit. On its own this is a CLAIM, not an authorization: pair it with is_superuser_verified, which is the half that carries current-state evidence."
-    },
-    "is_superuser_verified": {
-      "type": "boolean",
-      "description": "The superuser bit was re-verified against current state when this principal was resolved, rather than carried forward from an earlier decision. A relying party performing a cross-organization or otherwise superuser-gated action MUST require this to be true (threat model 3.2's current-state check). is_superuser true with is_superuser_verified false is a legitimate, expressible state and means `claimed but unverified` -- deny the superuser-gated path on it."
-    },
-    "token_version": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "The principal's credential-generation counter; a bump invalidates previously issued credentials for this principal. Distinct from `schema_version` above and from the effective-principal envelope's `v` claim -- three different version-shaped numbers exist in this system and conflating them is the trap: `v`/`schema_version` version the CONTRACT, `token_version` versions the PRINCIPAL'S CREDENTIALS, and the `.v1` in this file's name versions the API SURFACE."
-    },
-    "impersonation": {
-      "description": "Active impersonation context, or null when the principal is acting as itself. Never omitted -- the key is REQUIRED and explicitly null, so `absent` cannot be confused with `not impersonating` by a consumer whose deserializer defaults a missing object to a zero value.",
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "type": "object",
-          "required": [
-            "impersonated_by",
-            "started_at",
-            "expires_at"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "impersonated_by": {
-              "type": "string",
-              "minLength": 1,
-              "description": "principal_id of the operator acting AS this principal. The surrounding principal_id/organization_id/role remain the TARGET's identity, matching the current issuer's behaviour; this field is the only place the operator appears."
-            },
-            "started_at": {
-              "type": "string",
-              "format": "date-time",
-              "description": "RFC 3339 timestamp at which the impersonation session began. CROSS-LANGUAGE NOTE: `format` is carried for semantics and IS asserted by the Python and TypeScript validators, but github.com/google/jsonschema-go states in its own doc.go (\"Deviations from the specification\") that `format` is recorded and then IGNORED during validation -- it does not even produce an annotation -- and recommends `pattern` instead. The `pattern` beside it is therefore the cross-language FLOOR that all three validators enforce identically; `format` is the stricter calendar check the two that support it apply on top. Never rely on `format` alone in these schemas: it would be enforced in two languages out of three, which is the drift class the cross-language goldens exist to catch. The digit class is written [0-9] and NEVER \\d: Python's `re` treats \\d as UNICODE and accepts Arabic-Indic and Devanagari digits, while Go RE2 and ECMA-262 treat it as ASCII only -- MEASURED, not assumed: the Devanagari timestamp in examples/principal/invalid-expires-at-unicode-digits.json was accepted by the Python validator and rejected by the Go one under the \\d spelling. Same hazard for \\w and \\s. Always use an explicit character class in these schemas.",
-              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
-            },
-            "expires_at": {
-              "type": "string",
-              "format": "date-time",
-              "description": "RFC 3339 expiry of the impersonation session. ACP-ADR-03 fixes the delegated/impersonation session at 15 minutes and independently revocable -- shorter than the base session (G-52). This bound is independent of the enclosing principal's own expires_at and neither one widens the other. CROSS-LANGUAGE NOTE: `format` is carried for semantics and IS asserted by the Python and TypeScript validators, but github.com/google/jsonschema-go states in its own doc.go (\"Deviations from the specification\") that `format` is recorded and then IGNORED during validation -- it does not even produce an annotation -- and recommends `pattern` instead. The `pattern` beside it is therefore the cross-language FLOOR that all three validators enforce identically; `format` is the stricter calendar check the two that support it apply on top. Never rely on `format` alone in these schemas: it would be enforced in two languages out of three, which is the drift class the cross-language goldens exist to catch. The digit class is written [0-9] and NEVER \\d: Python's `re` treats \\d as UNICODE and accepts Arabic-Indic and Devanagari digits, while Go RE2 and ECMA-262 treat it as ASCII only -- MEASURED, not assumed: the Devanagari timestamp in examples/principal/invalid-expires-at-unicode-digits.json was accepted by the Python validator and rejected by the Go one under the \\d spelling. Same hazard for \\w and \\s. Always use an explicit character class in these schemas.",
-              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
-            }
-          }
-        }
-      ]
-    },
-    "revisions": {
+    "credential": {
       "type": "object",
-      "description": "The monotonic revisions this principal was resolved against. ACP-ADR-05 decision 3 requires policy_revision in every decision and requires every allow-cache key to bind membership, grant and entitlement revisions alongside it (G-31), so that a revision bump invalidates by construction rather than by an explicit purge. A consumer that caches anything derived from this principal MUST include all four values in its cache key.",
+      "description": "The credential that authenticated this principal. Present because TRD section 2 principle 1 makes credential class part of the route contract and G-2/G-3 forbid treating every bearer value as one class or discovering the class by validator fan-out. The credential authenticates a principal but IS NOT the principal (TRD section 8 rule 2).",
       "required": [
-        "policy_revision",
-        "membership_revision",
-        "grant_revision",
-        "entitlement_revision"
+        "class",
+        "credential_id",
+        "issuer",
+        "audience",
+        "scopes"
       ],
       "additionalProperties": false,
       "properties": {
-        "policy_revision": {
-          "type": "integer",
-          "minimum": 0
+        "class": {
+          "description": "Credential class, from the closed vocabulary. The first 30 values are the Wave 0 frozen set in contracts/auth/v1/credential-classes.json; the remaining three are the new platform credentials TRD section 11 defines and which therefore cannot appear in a Wave 0 freeze of what exists today (`user_access_token`, `refresh_credential`, `workload_token`). Unknown denies (ACP-ADR-05 decision 1 / G-26). This enum is a DECLARATION, not a second source of truth: a guard test asserts it equals the ids in credential-classes.json plus exactly that documented addition list, so the two cannot drift and a new class cannot be smuggled in here alone.",
+          "enum": [
+            "acr_client_credential",
+            "acr_device_flow_code",
+            "acr_web_assertion",
+            "acr_workload_identity_exchange",
+            "auth_js_browser_session",
+            "email_verification_token",
+            "external_push_ingest_token",
+            "github_app_installation_token",
+            "github_webhook_signature",
+            "gitlab_webhook_signature",
+            "impersonation_session",
+            "infrastructure_deployment_credentials",
+            "internal_svc_acr_token",
+            "internal_svc_worker_token",
+            "jira_webhook_signature",
+            "legacy_ingest_api_key",
+            "legacy_ingest_hmac_signature",
+            "license_key",
+            "llm_api_keys",
+            "ops_access_token_hs256",
+            "ops_refresh_token",
+            "org_context_header",
+            "org_invite_token",
+            "pagerduty_oauth_credential",
+            "password_reset_token",
+            "refresh_credential",
+            "social_oauth_exchange",
+            "sso_oidc_exchange",
+            "sso_saml_exchange",
+            "stripe_webhook_signature",
+            "user_access_token",
+            "worker_operational_bridge_token",
+            "workload_token"
+          ]
         },
-        "membership_revision": {
-          "type": "integer",
-          "minimum": 0
+        "credential_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque identifier for the credential instance (a session id, a registration id). An IDENTIFIER, never the secret: G-16 forbids a credential value in any fixture, log, trace, metric label or audit row, and G-17 makes plaintext secrets one-time output that list/read APIs never return."
         },
-        "grant_revision": {
-          "type": "integer",
-          "minimum": 0
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Issuing authority. A verifier MUST pin an exact expected issuer (G-13). An empty expected issuer disables issuer checking outright in at least one widely used JWT library -- see NewVerifier's doc comment in cmd/query-api/internal/principal/verifier.go -- which fails OPEN, not closed."
         },
-        "entitlement_revision": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "The entitlement projection revision this resolution saw. This is a CACHE-INVALIDATION input, not an entitlement value -- it says which snapshot was current, never what it granted. Carrying the revision here is what lets a consumer bind its cache correctly without the principal carrying entitlement itself, which ACP-ADR-07 decision 2 forbids."
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact intended audience (G-13, G-34: a token for one audience cannot call another). Same fail-open hazard as issuer when the expected value is empty."
+        },
+        "scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "Credential scopes, sorted. A DIFFERENT vocabulary from authorization actions: scopes bound what the credential may be used for, actions are what the authorization surface decides (G-5: authentication is not authorization). An empty array is a valid, meaningful value and MUST NOT be read as unrestricted.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(:[a-z][a-z0-9_]*)+$",
+            "description": "A colon-separated scope such as `api:access` (TRD section 8). Deliberately a different shape from the dotted action names in an authorization decision, so the two vocabularies cannot be confused at a call site."
+          }
         }
       }
+    },
+    "authentication": {
+      "type": "object",
+      "description": "How and when this principal authenticated. `assurance` is a first-class input to authorization: G-31 names assurance as part of an allow-cache key and G-51 requires step-up gating for high-risk actions during impersonation, neither of which is expressible without it.",
+      "required": [
+        "methods",
+        "authenticated_at",
+        "assurance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "methods": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "Authentication methods used, sorted. Values are RFC 8176 `amr` names; this enum is the subset the platform's currently described flows can produce (TRD section 13: local password per the ACP-ADR-01 addendum, plus the MFA factors ACP-ADR-10 will settle). Unknown denies (G-26), so widening it is a deliberate schema amendment and ACP-ADR-10 is where MFA additions are decided. Federated sign-in is identified by the credential class and the upstream identity, not by an `amr` value.",
+          "items": {
+            "enum": [
+              "pwd",
+              "otp",
+              "mfa",
+              "hwk",
+              "swk"
+            ]
+          }
+        },
+        "authenticated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+          "description": "RFC 3339 instant at which the principal actually authenticated. NOT the same as `issued_at`: a principal document can be re-resolved many times from one authentication event, and a step-up decision needs the age of the AUTHENTICATION, not the age of this document. Written as an explicit [0-9] class and never \\d: Python's `re` treats \\d as UNICODE and accepts Devanagari and Arabic-Indic digits where Go RE2 and ECMA-262 treat it as ASCII -- MEASURED, and pinned by examples/principal/invalid-expires-at-unicode-digits.json. The `pattern` is the CROSS-LANGUAGE FLOOR: github.com/google/jsonschema-go records `format` and ignores it during validation (its doc.go, \"Deviations from the specification\"), so a constraint carried only by `format` is enforced in two languages out of three."
+        },
+        "assurance": {
+          "enum": [
+            "aal1",
+            "aal2",
+            "aal3"
+          ],
+          "description": "NIST SP 800-63B authenticator assurance level (TRD section 8 uses `aal1`). A relying party enforcing a step-up obligation compares against this; G-29 makes ignoring an obligation equivalent to ignoring a denial."
+        }
+      }
+    },
+    "actor_chain": {
+      "type": "array",
+      "description": "Server-derived, append-only chain of delegation (TRD section 8 rule 4). EMPTY means the principal is acting as itself; the key is REQUIRED and the empty array explicit, so a deserializer defaulting a missing array to nil cannot make 'absent' read as 'not delegated'.\n\nA chain rather than a single impersonator because G-49 requires the real actor and the effective subject BOTH to survive through token, decision, audit and downstream execution, and delegation can nest. The surrounding principal_id/subject_id/organization_id remain the EFFECTIVE (target) identity; the real actors appear only here. G-50: while delegated, permissions derive from the effective subject -- real-actor platform authority does not implicitly authorize target actions.",
+      "items": {
+        "type": "object",
+        "required": [
+          "actor_principal_id",
+          "delegation_id",
+          "reason",
+          "started_at",
+          "expires_at",
+          "permitted_actions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "actor_principal_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^prn_[A-Za-z0-9_-]+$",
+            "description": "principal_id of the REAL actor acting as the effective subject."
+          },
+          "delegation_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Independent identifier for this delegated session, so it can be revoked on its own without revoking the base session (G-52)."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why the delegation was granted. G-52 requires a reason to be recorded; it is an audit input, and G-65 forbids secrets or raw payloads in audit metadata."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 instant the delegated session began (G-52). Written as an explicit [0-9] class and never \\d: Python's `re` treats \\d as UNICODE and accepts Devanagari and Arabic-Indic digits where Go RE2 and ECMA-262 treat it as ASCII -- MEASURED, and pinned by examples/principal/invalid-expires-at-unicode-digits.json. The `pattern` is the CROSS-LANGUAGE FLOOR: github.com/google/jsonschema-go records `format` and ignores it during validation (its doc.go, \"Deviations from the specification\"), so a constraint carried only by `format` is enforced in two languages out of three."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+            "description": "RFC 3339 expiry of THIS delegated session. ACP-ADR-03 sets it at 15 minutes and independently revocable, strictly shorter than the base session (G-52). It does not widen, and is not widened by, the enclosing principal's own expires_at: the effective deadline is the EARLIEST of all of them. Written as an explicit [0-9] class and never \\d: Python's `re` treats \\d as UNICODE and accepts Devanagari and Arabic-Indic digits where Go RE2 and ECMA-262 treat it as ASCII -- MEASURED, and pinned by examples/principal/invalid-expires-at-unicode-digits.json. The `pattern` is the CROSS-LANGUAGE FLOOR: github.com/google/jsonschema-go records `format` and ignores it during validation (its doc.go, \"Deviations from the specification\"), so a constraint carried only by `format` is enforced in two languages out of three."
+          },
+          "permitted_actions": {
+            "type": "array",
+            "uniqueItems": true,
+            "description": "The bounded action set this delegation may exercise (G-52). Empty means the delegation authorizes no action by itself -- a valid, meaningful state, and never to be read as unrestricted.",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+              "description": "A dotted, namespaced action such as `members.invite` or `acr.context.read` (ACP-ADR-05 decision 4). At least two segments is deliberate: a bare single segment is the shape of the `is_admin` check G-27 forbids, made unrepresentable rather than merely discouraged."
+            }
+          }
+        }
+      }
+    },
+    "membership_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Revision of the principal's organization memberships. Monotonic revision. ACP-ADR-05 decision 3 requires policy_revision in every decision, and G-31 requires an allow-cache key to bind principal, actor chain, credential/session, organization, action, resource, POLICY, MEMBERSHIP, GRANT and ENTITLEMENT revisions and assurance. A consumer caching anything derived from this principal MUST include all four in its cache key; a key built from a subset is a cache a revision bump cannot invalidate.\n\nTRD section 8's example carries only membership_revision and policy_revision. That example is under-specified against G-31, which is stated as an acceptance criterion rather than a suggestion, so all four are carried here. Flat rather than nested to stay as close to the TRD's spelling as the guardrail allows."
+    },
+    "policy_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Revision of the active policy set. Monotonic revision. ACP-ADR-05 decision 3 requires policy_revision in every decision, and G-31 requires an allow-cache key to bind principal, actor chain, credential/session, organization, action, resource, POLICY, MEMBERSHIP, GRANT and ENTITLEMENT revisions and assurance. A consumer caching anything derived from this principal MUST include all four in its cache key; a key built from a subset is a cache a revision bump cannot invalidate.\n\nTRD section 8's example carries only membership_revision and policy_revision. That example is under-specified against G-31, which is stated as an acceptance criterion rather than a suggestion, so all four are carried here. Flat rather than nested to stay as close to the TRD's spelling as the guardrail allows."
+    },
+    "grant_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Revision of the principal's explicit resource grants. Monotonic revision. ACP-ADR-05 decision 3 requires policy_revision in every decision, and G-31 requires an allow-cache key to bind principal, actor chain, credential/session, organization, action, resource, POLICY, MEMBERSHIP, GRANT and ENTITLEMENT revisions and assurance. A consumer caching anything derived from this principal MUST include all four in its cache key; a key built from a subset is a cache a revision bump cannot invalidate.\n\nTRD section 8's example carries only membership_revision and policy_revision. That example is under-specified against G-31, which is stated as an acceptance criterion rather than a suggestion, so all four are carried here. Flat rather than nested to stay as close to the TRD's spelling as the guardrail allows."
+    },
+    "entitlement_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Revision of the entitlement projection this resolution saw. A CACHE-INVALIDATION input, not an entitlement value -- it says WHICH snapshot was current, never what it granted. Carrying the revision is what lets a consumer bind its cache correctly while the principal itself stays free of entitlement, which ACP-ADR-07 decision 2 requires. Monotonic revision. ACP-ADR-05 decision 3 requires policy_revision in every decision, and G-31 requires an allow-cache key to bind principal, actor chain, credential/session, organization, action, resource, POLICY, MEMBERSHIP, GRANT and ENTITLEMENT revisions and assurance. A consumer caching anything derived from this principal MUST include all four in its cache key; a key built from a subset is a cache a revision bump cannot invalidate.\n\nTRD section 8's example carries only membership_revision and policy_revision. That example is under-specified against G-31, which is stated as an acceptance criterion rather than a suggestion, so all four are carried here. Flat rather than nested to stay as close to the TRD's spelling as the guardrail allows."
     },
     "issued_at": {
       "type": "string",
       "format": "date-time",
-      "description": "RFC 3339 timestamp at which this principal document was resolved. CROSS-LANGUAGE NOTE: `format` is carried for semantics and IS asserted by the Python and TypeScript validators, but github.com/google/jsonschema-go states in its own doc.go (\"Deviations from the specification\") that `format` is recorded and then IGNORED during validation -- it does not even produce an annotation -- and recommends `pattern` instead. The `pattern` beside it is therefore the cross-language FLOOR that all three validators enforce identically; `format` is the stricter calendar check the two that support it apply on top. Never rely on `format` alone in these schemas: it would be enforced in two languages out of three, which is the drift class the cross-language goldens exist to catch. The digit class is written [0-9] and NEVER \\d: Python's `re` treats \\d as UNICODE and accepts Arabic-Indic and Devanagari digits, while Go RE2 and ECMA-262 treat it as ASCII only -- MEASURED, not assumed: the Devanagari timestamp in examples/principal/invalid-expires-at-unicode-digits.json was accepted by the Python validator and rejected by the Go one under the \\d spelling. Same hazard for \\w and \\s. Always use an explicit character class in these schemas.",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "RFC 3339 instant at which this principal document was resolved. Written as an explicit [0-9] class and never \\d: Python's `re` treats \\d as UNICODE and accepts Devanagari and Arabic-Indic digits where Go RE2 and ECMA-262 treat it as ASCII -- MEASURED, and pinned by examples/principal/invalid-expires-at-unicode-digits.json. The `pattern` is the CROSS-LANGUAGE FLOOR: github.com/google/jsonschema-go records `format` and ignores it during validation (its doc.go, \"Deviations from the specification\"), so a constraint carried only by `format` is enforced in two languages out of three."
     },
     "expires_at": {
       "type": "string",
       "format": "date-time",
-      "description": "RFC 3339 expiry. ACP-ADR-03 sets the bounds per credential class and states that the effective-principal envelope's per-call TTL override is REMOVED: a security bound any call site may widen is not a bound. Relying parties MUST enforce this and MUST NOT accept an issuer-supplied extension. CROSS-LANGUAGE NOTE: `format` is carried for semantics and IS asserted by the Python and TypeScript validators, but github.com/google/jsonschema-go states in its own doc.go (\"Deviations from the specification\") that `format` is recorded and then IGNORED during validation -- it does not even produce an annotation -- and recommends `pattern` instead. The `pattern` beside it is therefore the cross-language FLOOR that all three validators enforce identically; `format` is the stricter calendar check the two that support it apply on top. Never rely on `format` alone in these schemas: it would be enforced in two languages out of three, which is the drift class the cross-language goldens exist to catch. The digit class is written [0-9] and NEVER \\d: Python's `re` treats \\d as UNICODE and accepts Arabic-Indic and Devanagari digits, while Go RE2 and ECMA-262 treat it as ASCII only -- MEASURED, not assumed: the Devanagari timestamp in examples/principal/invalid-expires-at-unicode-digits.json was accepted by the Python validator and rejected by the Go one under the \\d spelling. Same hazard for \\w and \\s. Always use an explicit character class in these schemas.",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
-    },
-    "issuer": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Issuing authority. A verifier MUST require a non-empty expected issuer -- an empty expected value disables issuer checking outright in at least one widely used JWT library (see NewVerifier's doc comment in cmd/query-api/internal/principal/verifier.go), which fails open rather than closed."
-    },
-    "audience": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Intended audience. Same fail-open hazard as issuer: an empty expected audience disables the check rather than failing it."
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "RFC 3339 expiry of this principal document. ACP-ADR-03 removes the effective-principal envelope's per-call TTL override outright: a security bound any call site may widen is not a bound. Relying parties MUST enforce this and MUST NOT accept an issuer-supplied extension. Where an actor_chain entry expires sooner, THAT is the effective deadline. Written as an explicit [0-9] class and never \\d: Python's `re` treats \\d as UNICODE and accepts Devanagari and Arabic-Indic digits where Go RE2 and ECMA-262 treat it as ASCII -- MEASURED, and pinned by examples/principal/invalid-expires-at-unicode-digits.json. The `pattern` is the CROSS-LANGUAGE FLOOR: github.com/google/jsonschema-go records `format` and ignores it during validation (its doc.go, \"Deviations from the specification\"), so a constraint carried only by `format` is enforced in two languages out of three."
     }
   }
 }

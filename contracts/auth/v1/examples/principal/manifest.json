@@ -1,105 +1,168 @@
 {
   "accept": [
     {
-      "file": "valid-deep-action-namespace.json"
-    },
-    {
-      "file": "valid-human-impersonated.json"
-    },
-    {
       "file": "valid-human-minimal.json"
     },
     {
-      "file": "valid-human-superuser-unverified.json"
+      "file": "valid-human-delegated-one-hop.json"
     },
     {
-      "file": "valid-human-superuser-verified.json"
+      "file": "valid-human-delegated-two-hops.json"
+    },
+    {
+      "file": "valid-human-step-up-aal2.json"
+    },
+    {
+      "file": "valid-workload.json"
     },
     {
       "file": "valid-infrastructure-orgless.json"
     },
     {
-      "file": "valid-workload.json"
+      "file": "valid-service-account.json"
+    },
+    {
+      "file": "valid-empty-scope-and-action-sets.json"
+    },
+    {
+      "file": "valid-legacy-credential-class.json"
+    },
+    {
+      "file": "valid-zero-revisions.json"
     }
   ],
-  "description": "The single fixture inventory for contracts/auth/v1/jsonschema/principal.v1.schema.json, read by the Go, Python and TypeScript golden runners. ONE manifest, ONE fixture directory, three runners -- three copies of the same fixtures is the drift class G-70 exists to catch, so a runner that maintains its own list is a review defect.\n\n`accept` is a positive control corpus and carries equal weight to `reject`: a validator that is too strict passes every rejection test while breaking every real caller, and that failure mode is invisible to a suite that only asserts rejections.",
-  "format_assertion_note": "Two different things, do not conflate them. (1) CROSS-LANGUAGE FLOOR: every constraint a reject fixture asserts must be expressible in a keyword all three validators enforce -- in practice `pattern`, never `format`, because github.com/google/jsonschema-go records `format` and ignores it during validation (its own doc.go, \"Deviations from the specification\"). (2) DEFENCE IN DEPTH where available: the Python and TypeScript runners MUST still enable format assertion (Python: Draft202012Validator(format_checker=...), which needs rfc3339-validator installed or it silently registers no date-time checker; TypeScript: ajv-formats) and MUST FAIL rather than skip if they cannot -- a format check that silently checks nothing while exiting 0 is the exact defect this contract exists to prevent.",
+  "description": "The single fixture inventory for contracts/auth/v1/jsonschema/principal.v1.schema.json, read by the Go, Python and TypeScript golden runners. ONE manifest, ONE fixture directory, three runners -- three copies of one corpus is the drift G-70 exists to catch, so a runner that maintains its own list is a review defect.\n\n`accept` is a positive control corpus carrying equal weight to `reject`: a validator that is too strict passes every rejection test while breaking every real caller, and that failure is invisible to a suite asserting only rejections.\n\nEvery identifier is unmistakably synthetic per G-73 (fixed EXAMPLE bodies, zero-padded counters, no plausible entropy) and the corpus is swept by a scanner rather than trusted to care -- G-16 forbids a credential value in any golden fixture, and these repos are public.",
+  "format_assertion_note": "Two different things, do not conflate them. (1) CROSS-LANGUAGE FLOOR: every constraint a reject fixture asserts must use a keyword all three validators enforce -- in practice `pattern`, never `format`, because github.com/google/jsonschema-go records `format` and ignores it during validation (its doc.go, \"Deviations from the specification\"). (2) DEFENCE IN DEPTH where available: the Python and TypeScript runners MUST still enable format assertion (Python: Draft202012Validator(format_checker=...), which needs rfc3339-validator installed or it silently registers no date-time checker; TypeScript: ajv-formats) and MUST FAIL rather than skip if they cannot -- a format check that silently checks nothing while exiting 0 is the defect this contract exists to prevent.",
+  "regex_dialect_note": "Every `pattern` here stays inside the common subset of Go RE2, ECMA-262 and Python `re`. RE2 has no back-references and no lookaround, and `\\d`/`\\w`/`\\s` are Unicode in Python and ASCII in the other two. Guarded by a test with positive and negative controls, not by review.",
   "reject": [
-    {
-      "expect_instance_location": "/permissions/0",
-      "expect_keyword": "pattern",
-      "file": "invalid-bare-action-name.json",
-      "why": "ACP-ADR-05 decision 4 / G-27: a single-segment action is the is_admin shape, made unrepresentable rather than merely discouraged."
-    },
     {
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",
       "file": "invalid-entitlement-claim-smuggled.json",
-      "why": "ACP-ADR-07 decision 2 and G-14: entitlement must never travel inside a credential. This fixture is the executable form of that ADR -- re-adding tier/licensed_features to the principal turns this red."
+      "why": "ACP-ADR-07 decision 2, G-14 and TRD section 8's own rule (\"Grants and entitlements are not identity claims\"): entitlement is an input to a decision and never a claim in a credential. This fixture is the executable form of that rule."
     },
     {
-      "expect_instance_location": "/expires_at",
-      "expect_keyword": "pattern",
-      "file": "invalid-expires-at-not-rfc3339.json",
-      "why": "Draft 2020-12 makes `format` annotation-only unless the validator opts in, and github.com/google/jsonschema-go ignores it outright (its doc.go, \"Deviations from the specification\"). The enforced keyword here is therefore `pattern`, which all three validators apply identically; the schema also carries `format: date-time`, which Python and TypeScript assert as a stricter calendar check on top. Asserting `pattern` rather than `format` is what makes this fixture mean the same thing in all three languages."
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-permissions-field-present.json",
+      "why": "TRD section 11 and G-14 forbid embedding a complete mutable permission set in a credential. The first draft of this schema carried `permissions` copied from the legacy envelope; this fixture is what stops it coming back."
     },
     {
-      "file": "invalid-expires-at-unicode-digits.json",
-      "expect_instance_location": "/expires_at",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-is-superuser-field-present.json",
+      "why": "TRD section 3 and G-23: platform-admin authority moves to a separate platform role/action namespace resolved against current state. A superuser bit in a principal is the mechanism being migrated away from, not a field to preserve."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-role-field-present.json",
+      "why": "ACP-ADR-05 decision 4 / G-27: an explicit action at the call site, never a broad role check as the final decision."
+    },
+    {
+      "expect_instance_location": "/credential/class",
+      "expect_keyword": "enum",
+      "file": "invalid-unknown-credential-class.json",
+      "why": "ACP-ADR-05 decision 1 / G-26: unknown denies. A class absent from both the Wave 0 frozen 30 and the documented Wave 1 additions is not a compatibility convenience."
+    },
+    {
+      "expect_instance_location": "/actor_chain/0/permitted_actions/0",
       "expect_keyword": "pattern",
-      "why": "REGRESSION GUARD for a MEASURED cross-language divergence, not a hypothetical one. With the digit class spelled \\d this exact document was ACCEPTED by the Python validator and REJECTED by the Go one: Python's `re` treats \\d as Unicode and matches Devanagari digits, while Go RE2 and ECMA-262 treat it as ASCII. The schemas now spell every digit class [0-9], and this fixture is what stops a future edit reintroducing \\d -- under \\d it turns green in Python and stays red in Go, which is precisely the one-language-disagrees drift the cross-language corpus exists to catch."
+      "file": "invalid-bare-action-name.json",
+      "why": "G-27: a single-segment action is the `is_admin` shape, made unrepresentable rather than merely discouraged."
+    },
+    {
+      "expect_instance_location": "/credential/scopes/0",
+      "expect_keyword": "pattern",
+      "file": "invalid-scope-uses-action-syntax.json",
+      "why": "Scopes are colon-separated and actions are dotted, deliberately different shapes so the two vocabularies cannot be confused at a call site (G-5: authentication is not authorization)."
     },
     {
       "expect_instance_location": "/",
       "expect_keyword": "required",
-      "file": "invalid-impersonation-key-absent.json",
-      "why": "impersonation is REQUIRED and explicitly nullable, so a deserializer that defaults a missing object to a zero value cannot silently read absent as not-impersonating."
+      "file": "invalid-actor-chain-key-absent.json",
+      "why": "actor_chain is REQUIRED and explicitly empty when absent, so a deserializer defaulting a missing array to nil cannot make 'absent' read as 'not delegated'."
     },
     {
-      "expect_instance_location": "/impersonation",
-      "expect_keyword": "oneOf",
-      "file": "invalid-impersonation-missing-expiry.json",
-      "why": "ACP-ADR-03 bounds the impersonation session at 15 minutes; an impersonation object with no expiry is an unbounded delegated session."
-    },
-    {
-      "expect_instance_location": "/organization_id",
-      "expect_keyword": "minLength",
-      "file": "invalid-organization-id-empty-string.json",
-      "why": "Empty string is not null. Python treats \"\" as falsy where Go nil-checks a pointer, so a contract that accepted \"\" would mean two different things in two runtimes."
-    },
-    {
-      "expect_instance_location": "/permissions",
-      "expect_keyword": "uniqueItems",
-      "file": "invalid-permissions-duplicated.json",
-      "why": "A duplicated action makes set-cardinality reasoning about the permission set wrong."
-    },
-    {
-      "expect_instance_location": "/revisions",
+      "expect_instance_location": "/actor_chain/0",
       "expect_keyword": "required",
-      "file": "invalid-revisions-entitlement-missing.json",
-      "why": "ACP-ADR-05 decision 3 / G-31: every allow-cache key binds all four revisions. A partial revisions object would let a consumer build a cache key that a bump cannot invalidate."
-    },
-    {
-      "expect_instance_location": "/schema_version",
-      "expect_keyword": "const",
-      "file": "invalid-schema-version-wrong.json",
-      "why": "A relying party must reject an unrecognised contract version rather than parse optimistically."
-    },
-    {
-      "expect_instance_location": "/token_version",
-      "expect_keyword": "minimum",
-      "file": "invalid-token-version-negative.json",
-      "why": "A credential generation counter is monotonic and non-negative."
+      "file": "invalid-actor-chain-entry-missing-expiry.json",
+      "why": "ACP-ADR-03 bounds a delegated session at 15 minutes and G-52 requires it revocable and shorter than the base session; a delegation with no expiry is an unbounded one."
     },
     {
       "expect_instance_location": "/principal_type",
       "expect_keyword": "enum",
       "file": "invalid-unknown-principal-type.json",
-      "why": "ACP-ADR-05 decision 1: unknown denies. The vocabulary is the Wave 0 closed set."
+      "why": "The taxonomy is the Wave 0 closed vocabulary; unknown denies."
+    },
+    {
+      "expect_instance_location": "/authentication/methods/0",
+      "expect_keyword": "enum",
+      "file": "invalid-unknown-amr-method.json",
+      "why": "`amr` values are the RFC 8176 subset this platform can produce. Federated sign-in is identified by the credential class and the upstream identity, not by an amr value -- and `saml` is not a registered amr name."
+    },
+    {
+      "expect_instance_location": "/authentication/assurance",
+      "expect_keyword": "enum",
+      "file": "invalid-unknown-assurance.json",
+      "why": "NIST SP 800-63B defines aal1-aal3. An unrecognised assurance must deny, not compare greater-than by string order."
+    },
+    {
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "minLength",
+      "file": "invalid-organization-id-empty-string.json",
+      "why": "Empty string is not null. Python treats \"\" as falsy where Go nil-checks a pointer, so a contract accepting \"\" would mean two different things in two runtimes."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-grant-revision-missing.json",
+      "why": "G-31 requires an allow-cache key to bind grant revision. A principal missing it lets a consumer build a cache key that a grant bump cannot invalidate."
+    },
+    {
+      "expect_instance_location": "/entitlement_revision",
+      "expect_keyword": "minimum",
+      "file": "invalid-entitlement-revision-negative.json",
+      "why": "Revisions are monotonic and non-negative."
+    },
+    {
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-principal-id-wrong-prefix.json",
+      "why": "TRD section 8 rule 1 / G-20: the authorization subject is the stable principal id, not the user record id. Using a subject id where a principal id belongs is the confusion the two separate fields exist to prevent, so the prefix makes it detectable."
+    },
+    {
+      "expect_instance_location": "/credential",
+      "expect_keyword": "required",
+      "file": "invalid-credential-missing-audience.json",
+      "why": "G-13 requires an exact audience to be pinned; an absent audience is the fail-open case, because an empty expected audience disables the check in at least one JWT library."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "A relying party must reject an unrecognised contract version rather than parse optimistically. TRD section 21: breaking semantics require v2, and a v2 document is not a v1 document."
+    },
+    {
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-expires-at-not-rfc3339.json",
+      "why": "The enforced keyword is `pattern`, not `format`: github.com/google/jsonschema-go records `format` and ignores it during validation, so a fixture asserting `format` would be checked in Python and TypeScript and vacuous in Go."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-authenticated-at-not-rfc3339.json",
+      "why": "Same cross-language floor as expires_at, asserted on a NESTED field -- a walker or a validator that only enforced the top level would pass this."
+    },
+    {
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-expires-at-unicode-digits.json",
+      "why": "REGRESSION GUARD for a MEASURED divergence. With the digit class spelled \\d this exact document was ACCEPTED by the Python validator and REJECTED by the Go one: Python's `re` treats \\d as Unicode and matches Devanagari digits, Go RE2 and ECMA-262 treat it as ASCII. Every digit class is now [0-9], and this fixture is what stops \\d being reintroduced -- under \\d it turns green in one language and stays red in another."
     }
   ],
   "requires_format_assertion": true,
   "schema": "../../jsonschema/principal.v1.schema.json",
-  "schema_version": "contract-fixture-manifest.v1",
-  "regex_dialect_note": "Every `pattern` in these schemas must stay inside the common subset of Go RE2, ECMA-262 and Python `re`. RE2 has no back-references and no lookaround, so a pattern using them either errors or means something different in Go than in the other two -- silently, on the permissive side. google/jsonschema-go names this deviation explicitly. Guarded by a test, not left to review."
+  "schema_version": "contract-fixture-manifest.v1"
 }

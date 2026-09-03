@@ -1,7 +1,7 @@
 {
   "actor_chain": [],
   "authentication": {
-    "assurance": "aal1",
+    "assurance": "aal4",
     "authenticated_at": "2026-09-02T23:10:00Z",
     "methods": [
       "pwd"
@@ -24,7 +24,7 @@
   "organization_id": "org_EXAMPLE0000000000000001",
   "policy_revision": 42,
   "principal_id": "prn_EXAMPLE0000000000000001",
-  "principal_type": "bot",
+  "principal_type": "human",
   "schema_version": "principal.v1",
   "subject_id": "usr_EXAMPLE0000000000000001"
 }

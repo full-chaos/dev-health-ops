@@ -89,10 +89,98 @@ def test_accepted_fixture_validates(name: str) -> None:
 
 @pytest.mark.parametrize("name", ACCEPT)
 def test_accepted_fixture_round_trips_through_the_client(name: str) -> None:
-    """Validation alone does not prove the client can read the document."""
-    principal = Principal.from_wire(_load(name))
+    """Validation alone does not prove the client can read the document.
+
+    The nested objects are where a wrong key hides: the document validates,
+    the dataclass constructs, and a field is silently absent or empty with
+    nothing asserting on it. Every required leaf is checked, and the actor
+    chain's length is compared against the raw document so a chain that
+    silently decoded to empty cannot make the delegation assertions vacuous.
+    """
+    raw = _load(name)
+    principal = Principal.from_wire(raw)
+
     assert principal.principal_id
     assert principal.principal_type
+    assert principal.credential.cls
+    assert principal.credential.credential_id
+    assert principal.credential.issuer
+    assert principal.credential.audience
+    assert principal.authentication.methods
+    assert principal.authentication.assurance
+    assert principal.authentication.authenticated_at is not None
+    assert principal.issued_at is not None
+    assert principal.expires_at is not None
+
+    assert len(principal.actor_chain) == len(raw["actor_chain"])
+    for hop in principal.actor_chain:
+        assert hop.actor_principal_id
+        assert hop.delegation_id
+        assert hop.reason
+        assert hop.expires_at is not None
+
+
+@pytest.mark.parametrize("name", ACCEPT)
+def test_effective_deadline_is_never_later_than_any_component_expiry(name: str) -> None:
+    """ACP-ADR-03's bound must hold whichever expiry is the earliest.
+
+    Asserts the property rather than the implementation: the deadline is
+    <= the principal's own expiry AND <= every delegation's. A version that
+    returned only ``self.expires_at`` passes the first half and fails the
+    second on the delegated fixtures, which is the case that matters.
+    """
+    principal = Principal.from_wire(_load(name))
+    deadline = principal.effective_deadline()
+    assert deadline <= principal.expires_at
+    for hop in principal.actor_chain:
+        assert deadline <= hop.expires_at
+
+
+def test_the_cache_key_binds_every_dimension_g31_requires() -> None:
+    """G-31 names the dimensions; this asserts each one actually moves the key.
+
+    Checking that the tuple has the right length would pass with two fields
+    swapped or a constant in a slot. Instead each dimension is perturbed on
+    its own and the key must change -- a dimension that is named but not
+    bound is a cache a revision bump cannot invalidate, which is the exact
+    failure G-31 exists to prevent.
+    """
+    base = _load("valid-human-delegated-one-hop.json")
+    baseline = Principal.from_wire(base).cache_key_dimensions()
+
+    perturbations: dict[str, Any] = {
+        "policy_revision": {"policy_revision": base["policy_revision"] + 1},
+        "membership_revision": {"membership_revision": base["membership_revision"] + 1},
+        "grant_revision": {"grant_revision": base["grant_revision"] + 1},
+        "entitlement_revision": {
+            "entitlement_revision": base["entitlement_revision"] + 1
+        },
+        "principal_id": {"principal_id": "prn_EXAMPLE0000000000000009"},
+        "organization_id": {"organization_id": "org_EXAMPLE0000000000000009"},
+        "credential_id": {
+            "credential": {
+                **base["credential"],
+                "credential_id": "ses_EXAMPLE0000000000000009",
+            }
+        },
+        "assurance": {
+            "authentication": {**base["authentication"], "assurance": "aal2"}
+        },
+        "actor_chain": {
+            "actor_chain": [
+                {
+                    **base["actor_chain"][0],
+                    "delegation_id": "dlg_EXAMPLE0000000000000009",
+                }
+            ]
+        },
+    }
+    for dimension, override in perturbations.items():
+        changed = Principal.from_wire({**base, **override}).cache_key_dimensions()
+        assert changed != baseline, (
+            f"changing {dimension} did not change the cache key, so an allow decision cached "
+            f"against it would survive a change G-31 requires to invalidate it"
+        )
 
 
 @pytest.mark.parametrize(("name", "pointer", "keyword"), REJECT)

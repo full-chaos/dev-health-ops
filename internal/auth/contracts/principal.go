@@ -12,105 +12,136 @@ const PrincipalSurface = "principal.v1"
 
 // PrincipalSchemaVersion is the only schema_version this package accepts.
 //
-// Three different version-shaped numbers exist in this system and conflating
-// them is the trap: this one and the envelope's `v` claim version the
-// CONTRACT; Principal.TokenVersion versions THE PRINCIPAL'S CREDENTIALS; and
-// the ".v1" in the surface name versions the API SURFACE. They move
-// independently.
+// TRD section 21: contract evolution is additive within v1; breaking
+// semantics require v2. Distinct from the three other version-shaped values
+// in this system -- the effective-principal envelope's `v` claim, a
+// principal's credential generation counter, and the "v1" path segment --
+// which move independently.
 const PrincipalSchemaVersion = "principal.v1"
 
-// Impersonation is an active impersonation session.
+// Credential is the credential that authenticated a principal.
 //
-// ACP-ADR-03 bounds the delegated/impersonation session at 15 minutes and
-// independently revocable, shorter than the base session (G-52). ExpiresAt
-// here and the enclosing Principal.ExpiresAt bound different things and
-// neither widens the other: the effective deadline is the EARLIER of the
-// two, so a caller checking only one of them is checking the wrong one half
-// the time. Use Principal.EffectiveDeadline rather than picking by hand.
-type Impersonation struct {
-	// ImpersonatedBy is the principal id of the OPERATOR acting as this
-	// principal. The surrounding PrincipalID/OrganizationID/Role stay the
-	// TARGET's identity; this is the only field naming the operator.
-	ImpersonatedBy string    `json:"impersonated_by"`
-	StartedAt      time.Time `json:"started_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
+// Present because TRD section 2 principle 1 makes credential class part of
+// the route contract, and G-2/G-3 forbid treating every bearer value as one
+// class or discovering the class by validator fan-out. The credential
+// authenticates a principal but IS NOT the principal (TRD section 8 rule 2).
+type Credential struct {
+	// Class is a value from the closed vocabulary: the Wave 0 frozen 30 in
+	// contracts/auth/v1/credential-classes.json plus the three new platform
+	// credentials TRD section 11 defines. Unknown denies (G-26). The schema
+	// enforces it, so a value here has already been checked.
+	Class string `json:"class"`
+	// CredentialID identifies the credential INSTANCE. Never the secret:
+	// G-16 forbids a credential value in any fixture, log, trace, metric
+	// label or audit row, and G-17 makes plaintext secrets one-time output.
+	CredentialID string `json:"credential_id"`
+	Issuer       string `json:"issuer"`
+	Audience     string `json:"audience"`
+	// Scopes bound what the credential may be used for. A DIFFERENT
+	// vocabulary from authorization actions (G-5: authentication is not
+	// authorization). Empty is meaningful and never means unrestricted.
+	Scopes []string `json:"scopes"`
 }
 
-// Revisions are the monotonic revisions a principal was resolved against.
+// Authentication records how and when the principal authenticated.
 //
-// ACP-ADR-05 decision 3 requires every allow-cache key to bind all four
-// (G-31) so that a revision bump invalidates by construction rather than by
-// an explicit purge. A cache key built from a subset is a cache a bump
-// cannot invalidate.
-type Revisions struct {
-	PolicyRevision     int64 `json:"policy_revision"`
-	MembershipRevision int64 `json:"membership_revision"`
-	GrantRevision      int64 `json:"grant_revision"`
-	// EntitlementRevision says WHICH entitlement snapshot this resolution
-	// saw. It never says what that snapshot granted -- carrying the revision
-	// is what lets a consumer bind its cache correctly while the principal
-	// itself stays free of entitlement, which ACP-ADR-07 decision 2 requires.
-	EntitlementRevision int64 `json:"entitlement_revision"`
+// Assurance is an authorization input, not decoration: G-31 names it as part
+// of an allow-cache key, and G-51 requires step-up gating for high-risk
+// actions during impersonation.
+type Authentication struct {
+	// Methods are RFC 8176 amr names, restricted by the schema to the subset
+	// this platform's described flows can produce.
+	Methods []string `json:"methods"`
+	// AuthenticatedAt is when the principal actually authenticated, which is
+	// NOT Principal.IssuedAt: one authentication event can produce many
+	// resolved principal documents, and a step-up decision needs the age of
+	// the authentication rather than the age of this document.
+	AuthenticatedAt time.Time `json:"authenticated_at"`
+	// Assurance is a NIST SP 800-63B level: aal1, aal2 or aal3.
+	Assurance string `json:"assurance"`
 }
 
-// Principal is a resolved principal.v1 document.
+// Delegation is one hop in the actor chain.
 //
-// DELIBERATELY ABSENT, and load-bearing: there is no Tier and no
-// LicensedFeatures. ACP-ADR-07 decision 2 (Accepted 2026-09-02) makes
-// entitlement an input to a decision and never a claim in a credential, and
-// G-14 forbids entitlement travelling inside a credential by name. The
-// existing effective-principal envelope carries both today
-// (cmd/query-api/internal/principal/claims.go:38-39) and ADR-07 deprecates
-// them from it at its next `v` bump. A reader diffing this struct against
-// that one will find two fields missing: that absence IS the ADR, not an
-// oversight to repair. Entitlement reaches a relying party through an
-// authorization decision.
+// ACP-ADR-03 bounds a delegated session at 15 minutes; G-52 requires an
+// independent id, a reason, an explicit permitted action set, and independent
+// revocability. G-50: while delegated, permissions derive from the effective
+// subject -- real-actor platform authority does not implicitly authorize
+// target actions.
+type Delegation struct {
+	// ActorPrincipalID is the REAL actor acting as the effective subject.
+	ActorPrincipalID string    `json:"actor_principal_id"`
+	DelegationID     string    `json:"delegation_id"`
+	Reason           string    `json:"reason"`
+	StartedAt        time.Time `json:"started_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	// PermittedActions is the bounded set this delegation may exercise.
+	// Empty means the delegation authorizes nothing by itself -- a real
+	// state, never "unrestricted".
+	PermittedActions []string `json:"permitted_actions"`
+}
+
+// Principal is a resolved principal.v1 document (TRD section 8).
+//
+// FOUR DELIBERATE OMISSIONS, none an oversight to repair:
+//
+//   - no Tier / LicensedFeatures -- ACP-ADR-07 decision 2, G-14, and TRD
+//     section 8's own rule "Grants and entitlements are not identity claims".
+//   - no Permissions -- TRD section 11 and G-14 forbid embedding a complete
+//     mutable permission set in a credential; ask the authorization surface,
+//     which also binds entitlement as an independent gate.
+//   - no Role -- ACP-ADR-05 decision 4 and G-27 require an explicit action at
+//     the call site, never a broad role check as the final decision.
+//   - no IsSuperuser -- TRD section 3 and G-23 move platform authority to a
+//     separate role/action namespace resolved against CURRENT state.
+//
+// The existing effective-principal envelope
+// (cmd/query-api/internal/principal/claims.go) carries all four today. It is
+// the compatibility implementation this migration retires; a reader diffing
+// against it will find four things "missing", and the absence is the design.
 type Principal struct {
 	SchemaVersion string `json:"schema_version"`
+	// PrincipalID is the stable authorization subject (TRD section 8 rule 1,
+	// G-20) -- never an email, username or token prefix.
 	PrincipalID   string `json:"principal_id"`
-	// PrincipalType is one of the six values in the Wave 0 closed vocabulary
-	// (contracts/auth/v1/credential-classes.schema.json). Unknown denies
-	// (ACP-ADR-05 decision 1); the schema enforces it, so a value here has
-	// already been checked.
 	PrincipalType string `json:"principal_type"`
-	// OrganizationID is nil ONLY for a genuinely org-less principal (an
-	// "infrastructure" principal acting on the platform itself). A relying
-	// party that scopes by organization must treat nil as "no organization"
-	// and DENY -- never as "any organization".
-	OrganizationID *string `json:"organization_id"`
-	// Role is present for continuity and audit legibility and is NOT an
-	// authorization input: ACP-ADR-05 decision 4 requires an explicit action
-	// name at the call site and forbids an is_admin-style check as the final
-	// decision (G-27). Authorize on Permissions or on a decision, never here.
-	Role        *string  `json:"role"`
-	Permissions []string `json:"permissions"`
-	// IsSuperuser on its own is a CLAIM. IsSuperuserVerified is the half
-	// carrying current-state evidence; a superuser-gated path must require
-	// BOTH. IsSuperuser true with IsSuperuserVerified false is a legitimate,
-	// expressible state meaning "claimed but unverified" -- deny on it.
-	IsSuperuser         bool           `json:"is_superuser"`
-	IsSuperuserVerified bool           `json:"is_superuser_verified"`
-	TokenVersion        int64          `json:"token_version"`
-	Impersonation       *Impersonation `json:"impersonation"`
-	Revisions           Revisions      `json:"revisions"`
-	IssuedAt            time.Time      `json:"issued_at"`
+	// SubjectID is the underlying subject record, SEPARATE from PrincipalID
+	// by design: authorization keys on PrincipalID, never on this. nil where
+	// the principal has no distinct underlying subject.
+	SubjectID *string `json:"subject_id"`
+	// OrganizationID is nil only for a genuinely org-less principal. A
+	// relying party that scopes by organization must treat nil as "no
+	// organization" and DENY, never as "any organization" (G-22).
+	OrganizationID *string        `json:"organization_id"`
+	Credential     Credential     `json:"credential"`
+	Authentication Authentication `json:"authentication"`
+	// ActorChain is server-derived and append-only (TRD section 8 rule 4).
+	// Empty means acting as itself. A chain rather than a single impersonator
+	// because G-49 requires the real actor and the effective subject both to
+	// survive downstream, and delegation nests.
+	ActorChain []Delegation `json:"actor_chain"`
+	// All four revisions are required by G-31's allow-cache key. TRD section
+	// 8's example shows only membership and policy; that example is
+	// under-specified against the guardrail, which is stated as an acceptance
+	// criterion rather than a suggestion.
+	MembershipRevision  int64     `json:"membership_revision"`
+	PolicyRevision      int64     `json:"policy_revision"`
+	GrantRevision       int64     `json:"grant_revision"`
+	EntitlementRevision int64     `json:"entitlement_revision"`
+	IssuedAt            time.Time `json:"issued_at"`
 	// ExpiresAt is enforced by the relying party. ACP-ADR-03 removes the
-	// effective-principal envelope's per-call TTL override outright: a
-	// security bound any call site may widen is not a bound.
+	// envelope's per-call TTL override outright: a security bound any call
+	// site may widen is not a bound.
 	ExpiresAt time.Time `json:"expires_at"`
-	Issuer    string    `json:"issuer"`
-	Audience  string    `json:"audience"`
 }
 
 // PrincipalFromWire validates raw against principal.v1 and then decodes it.
 //
-// The order is the point. A decoder that reads fields first and validates
-// afterwards has already made decisions on unvalidated input by the time the
-// validator speaks. Validation runs against the DECODED JSON VALUE, not
+// The order is the point. Validation runs against the DECODED JSON VALUE, not
 // against this struct, so the contract is checked on the bytes that actually
 // arrived rather than on Go's rendering of them -- decoding into the struct
 // first would silently drop any field the struct does not declare, which is
-// exactly the divergence additionalProperties:false is there to catch.
+// exactly the divergence additionalProperties:false exists to catch.
 func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
 	var document any
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -126,39 +157,67 @@ func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
 	return &principal, nil
 }
 
-// HasPermission is a membership test against the resolved action set.
+// IsDelegated reports whether at least one actor is acting as this principal.
+func (p *Principal) IsDelegated() bool { return len(p.ActorChain) > 0 }
+
+// RealActorPrincipalID returns the originating real actor, or the principal
+// itself when not delegated.
 //
-// This is a lookup, NOT an authorization decision. ACP-ADR-05 decision 4
-// requires an explicit action name at the call site; ACP-ADR-07 decision 3
-// makes entitlement and authorization independent gates that must BOTH pass
-// (a role grants no product, a paid product grants no action). Take the real
-// decision from the authorization surface, which binds both.
-func (p *Principal) HasPermission(action string) bool {
-	for _, granted := range p.Permissions {
-		if granted == action {
-			return true
-		}
+// G-49 requires the real actor and the effective subject to stay
+// distinguishable through token, decision, audit and downstream execution.
+// One named accessor so that question has one answer instead of being
+// re-derived, and got wrong, at each call site.
+func (p *Principal) RealActorPrincipalID() string {
+	if len(p.ActorChain) > 0 {
+		return p.ActorChain[0].ActorPrincipalID
 	}
-	return false
+	return p.PrincipalID
 }
 
-// IsImpersonated reports whether an operator is acting as this principal.
-func (p *Principal) IsImpersonated() bool { return p.Impersonation != nil }
-
-// EffectiveDeadline returns the earlier of the principal's own expiry and, if
-// an impersonation session is active, that session's expiry.
+// EffectiveDeadline returns the earliest of the principal's own expiry and
+// every delegation's.
 //
-// Exists so the "which expiry bounds this request" question has one answer
-// with one call site, instead of being re-derived (and got wrong in one
-// direction) at each. ACP-ADR-03 requires the delegated session to be
-// strictly shorter than the base session, but this function does not assume
-// that holds on the wire -- it takes the minimum rather than trusting the
-// ordering, because a bound that relies on an invariant it does not check is
-// only a bound while the invariant lasts.
+// Takes the minimum rather than trusting ACP-ADR-03's requirement that a
+// delegated session be strictly shorter than the base session: a bound that
+// relies on an invariant it does not check is only a bound while the
+// invariant holds.
 func (p *Principal) EffectiveDeadline() time.Time {
 	deadline := p.ExpiresAt
-	if p.Impersonation != nil && p.Impersonation.ExpiresAt.Before(deadline) {
-		deadline = p.Impersonation.ExpiresAt
+	for _, hop := range p.ActorChain {
+		if hop.ExpiresAt.Before(deadline) {
+			deadline = hop.ExpiresAt
+		}
 	}
 	return deadline
+}
+
+// CacheKeyDimensions returns every dimension G-31 requires an allow-cache key
+// to bind, from the principal's side.
+//
+// G-31: "An allow cache key includes principal, actor chain,
+// credential/session, organization, action, resource, policy revision,
+// membership/grant revisions, entitlement revision when applicable, and
+// relevant assurance." Action and resource belong to the decision rather than
+// the principal, so a caller appends those; everything the PRINCIPAL
+// contributes is produced here, in one place, so a consumer cannot bind a
+// subset by accident. A key built from a subset is a cache a revision bump
+// cannot invalidate.
+func (p *Principal) CacheKeyDimensions() []string {
+	organization := "<nil>"
+	if p.OrganizationID != nil {
+		organization = *p.OrganizationID
+	}
+	dimensions := []string{p.PrincipalID}
+	for _, hop := range p.ActorChain {
+		dimensions = append(dimensions, "dlg="+hop.DelegationID)
+	}
+	return append(dimensions,
+		"cred="+p.Credential.CredentialID,
+		"org="+organization,
+		fmt.Sprintf("policy=%d", p.PolicyRevision),
+		fmt.Sprintf("membership=%d", p.MembershipRevision),
+		fmt.Sprintf("grant=%d", p.GrantRevision),
+		fmt.Sprintf("entitlement=%d", p.EntitlementRevision),
+		"assurance="+p.Authentication.Assurance,
+	)
 }

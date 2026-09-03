@@ -1,24 +1,31 @@
 {
-  "audience": "dev-health-query-api",
-  "expires_at": "2026-09-02T23:20:00Z",
-  "impersonation": null,
-  "is_superuser": false,
-  "is_superuser_verified": false,
-  "issued_at": "2026-09-02T23:15:00Z",
-  "issuer": "https://auth.fullchaos.dev/",
-  "organization_id": "org_01J9Z2Q4H8M3K7N0P5R6S8T1V3",
-  "permissions": [
-    "jobs.sync.execute"
-  ],
-  "principal_id": "wl_01J9Z2Q4H8M3K7N0P5R6S8T1X4",
-  "principal_type": "workload",
-  "revisions": {
-    "entitlement_revision": 3,
-    "grant_revision": 12,
-    "membership_revision": 7,
-    "policy_revision": 41
+  "actor_chain": [],
+  "authentication": {
+    "assurance": "aal1",
+    "authenticated_at": "2026-09-02T23:14:00Z",
+    "methods": [
+      "swk"
+    ]
   },
-  "role": null,
+  "credential": {
+    "audience": "dev-health-query-api",
+    "class": "workload_token",
+    "credential_id": "wlc_EXAMPLE0000000000000001",
+    "issuer": "https://auth.fullchaos.dev/",
+    "scopes": [
+      "api:access",
+      "jobs:execute"
+    ]
+  },
+  "entitlement_revision": 3,
+  "expires_at": "2026-09-02T23:20:00Z",
+  "grant_revision": 12,
+  "issued_at": "2026-09-02T23:15:00Z",
+  "membership_revision": 17,
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "policy_revision": 42,
+  "principal_id": "prn_EXAMPLE0000000000000002",
+  "principal_type": "workload",
   "schema_version": "principal.v1",
-  "token_version": 0
+  "subject_id": null
 }

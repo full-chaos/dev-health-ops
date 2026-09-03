@@ -18,17 +18,19 @@ from dev_health_ops.authclient.contracts import (
 )
 from dev_health_ops.authclient.principal import (
     SCHEMA_VERSION,
-    Impersonation,
+    Authentication,
+    Credential,
+    Delegation,
     Principal,
-    Revisions,
 )
 
 __all__ = [
     "SCHEMA_VERSION",
+    "Authentication",
     "ContractError",
-    "Impersonation",
+    "Credential",
+    "Delegation",
     "Principal",
-    "Revisions",
     "Violation",
     "contracts_dir",
     "repo_root",

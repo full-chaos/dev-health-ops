@@ -174,7 +174,11 @@ var excludedGenerators = map[string]struct {
 	// transitives, deprecated and wrapt) were added to
 	// ci/requirements-live-python-oracles.txt. Its explicitCorpusPaths entry
 	// above already named its corpus, so it is guarded by discovery with no
-	// further change -- exactly as this comment on that entry predicted.
+	// further change -- exactly as this comment on that entry predicted, and
+	// exactly as main's own now-superseded comment on this entry predicted
+	// too ("When limits lands this entry goes and the corpus becomes guarded
+	// with no other change") -- resolved by taking the deletion, not the
+	// comment expansion, since `limits` landing is this PR's own change.
 }
 
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {

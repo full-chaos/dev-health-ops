@@ -443,11 +443,21 @@ jobs:
               exit 1
             fi
 
+            # NO SEMICOLON IN THIS MESSAGE. tests/tooling's registry guard
+            # (test_run_steps_do_not_pull_from_unapproved_registries) splits a
+            # run block on `[\n;]|&&|\|\|` BEFORE tokenising and does not
+            # respect quotes, so a `;` inside a quoted string cuts the line in
+            # half and the tail loses its opening quote -- `shlex.split` then
+            # raises "No closing quotation" and the step is reported as
+            # unparseable. It scans this step at all only because the word
+            # `docker` appears in the text. Verified: this was the single
+            # unparseable step in the whole file, and it turned the Tests
+            # workflow red. Use a comma.
             echo "ci/python_base_ref.sh is absent, #2152 (${MIRROR_LANDED}) is not" \
                  "an ancestor of HEAD, and docker/Dockerfile does not name" \
                  "ghcr.io/${{ github.repository_owner }}/python: this tree predates" \
                  "the" \
-                 "mirror and pulls its Python base directly. Nothing to ensure;" \
+                 "mirror and pulls its Python base directly. Nothing to ensure," \
                  "skipping."
             exit 0
           fi

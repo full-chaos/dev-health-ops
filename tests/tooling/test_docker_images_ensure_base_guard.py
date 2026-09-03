@@ -64,7 +64,10 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "docker-images.yml"
 STEP_PREFIX = "Ensure the Python base image"
-SKIP_MARKER = "Nothing to ensure; skipping"
+# NOTE: comma, not semicolon. A `;` in this message made the step unparseable
+# to tests/tooling's registry guard, which splits on `;` without respecting
+# quotes -- see the comment beside the echo in docker-images.yml.
+SKIP_MARKER = "Nothing to ensure, skipping"
 # The #2152 merge, which the guard treats as the moment the mirror landed.
 MIRROR_LANDED = "6fbd7dc8d4651b82f78b823a2b6f55cd53f0ff1f"
 

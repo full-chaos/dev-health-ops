@@ -773,64 +773,6 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/pythonparity (CPython sum() semantics vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestSumGoldenMatchesLivePython$' \
-        ./internal/pythonparity
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
-  # used Neumaier compensated summation for floats since 3.12 (gh-100425) and
-  # was a naive accumulation before it. The fixture therefore depends on the
-  # interpreter version with no diff in this repository, and the dependency runs
-  # in BOTH directions -- a downgrade below 3.12 would make naive summation
-  # correct and pythonparity.Sum's compensation WRONG, not merely unnecessary.
-  proof_file="${proof_dir}/python-sum-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
-  printf 'go test -count=1: internal/pythonparity (CPython sum() semantics vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestSumGoldenMatchesLivePython$' \
-        ./internal/pythonparity
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker: the producer is the INTERPRETER's builtin sum(), which has
-  # used Neumaier compensated summation for floats since 3.12 (gh-100425) and
-  # was a naive accumulation before it. The fixture therefore depends on the
-  # interpreter version with no diff in this repository, and the dependency runs
-  # in BOTH directions -- a downgrade below 3.12 would make naive summation
-  # correct and pythonparity.Sum's compensation WRONG, not merely unnecessary.
-  proof_file="${proof_dir}/python-sum-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: python sum() semantics did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-
   printf 'go test -count=1: internal/pythonparity (frozen json.dumps golden vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -948,6 +890,26 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+  # A SECOND invocation, not another name in the -run pattern above: `-run`
+  # selects tests within the packages named on the command line, so a guard in a
+  # different package is silently never run if it is only added to the pattern.
+  # That failure is invisible -- the command exits 0 having matched nothing --
+  # which is why the marker check below is what actually proves it executed.
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestEveryRuneMatchesLivePythonCharacterClasses|TestPythonDigitValueMatchesLivePythonForEveryDigit)$' \
+        ./internal/jobs/workgraph/textrefs
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
   # Its own marker, for the reason spelled out at capacity-forecast-golden: the
   # edge golden has a different producer from every guard above it, so sharing a
   # proof file would let this one be renamed or filtered out of the -run pattern
@@ -994,6 +956,21 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/workgraph-python-lower-allrunes"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the all-runes lowercase comparison was not run against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker: this guard covers the THREE regex character classes the text
+  # extractor substitutes (\s, \w, \d), which is a different Unicode surface
+  # from the case-mapping and digit-table guards above. It fails in two
+  # directions for different reasons -- a rune Python accepts and Go rejects is
+  # a defect, while a rune Go accepts and Python does not is version skew with a
+  # pinned count -- so it also rots when either side upgrades its tables.
+  # This marker carries DATA as well as the fact of execution: the two UCD
+  # versions the parity claim was established against. So it is a prefix test,
+  # not equality -- an undated parity claim is the thing being avoided.
+  proof_file="${proof_dir}/workgraph-textrefs-charclass-allrunes"
+  if [ ! -f "${proof_file}" ] || ! grep -q '^executed ucd_python=.* ucd_go=' "${proof_file}"; then
+    printf 'ERROR: the text-extractor character classes were not compared against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

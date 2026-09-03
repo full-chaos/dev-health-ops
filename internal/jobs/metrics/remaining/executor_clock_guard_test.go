@@ -82,6 +82,16 @@ func TestCapacityRefusesAnUninjectedClock(t *testing.T) {
 		return err
 	})
 
+	// The clock guard must be what fired, not an upstream one. Without this the
+	// test would pass for the SAME REASON the latent panic never fired: stopped
+	// early by a precondition, never reaching the clock at all. The mutation
+	// matrix cannot distinguish those two worlds on its own -- "only the
+	// injected-clock test dies" is consistent with a working guard AND with
+	// three tests that never get past a seed or scope check.
+	if errors.Is(err, ErrCapacitySeedMissing) || errors.Is(err, ErrInvalidState) {
+		t.Fatalf("stopped at an UPSTREAM guard (%v); this test must drive past "+
+			"every precondition and reach the clock", err)
+	}
 	if !errors.Is(err, errExecutorClockUnset) {
 		t.Fatalf("returned %v, want errExecutorClockUnset -- a capacity run past "+
 			"the seed guard reaches the clock, and an uninjected clock must "+
@@ -110,6 +120,16 @@ func TestDORAComputePartitionRefusesAnUninjectedClock(t *testing.T) {
 		return err
 	})
 
+	// The clock guard must be what fired, not an upstream one. Without this the
+	// test would pass for the SAME REASON the latent panic never fired: stopped
+	// early by a precondition, never reaching the clock at all. The mutation
+	// matrix cannot distinguish those two worlds on its own -- "only the
+	// injected-clock test dies" is consistent with a working guard AND with
+	// three tests that never get past a seed or scope check.
+	if errors.Is(err, ErrCapacitySeedMissing) || errors.Is(err, ErrInvalidState) {
+		t.Fatalf("stopped at an UPSTREAM guard (%v); this test must drive past "+
+			"every precondition and reach the clock", err)
+	}
 	if !errors.Is(err, errExecutorClockUnset) {
 		t.Fatalf("returned %v, want errExecutorClockUnset -- the partition stamp "+
 			"is taken before the day loop and must refuse when no clock was "+
@@ -132,6 +152,16 @@ func TestDORALoadIncidentsRefusesAnUninjectedClock(t *testing.T) {
 		return err
 	})
 
+	// The clock guard must be what fired, not an upstream one. Without this the
+	// test would pass for the SAME REASON the latent panic never fired: stopped
+	// early by a precondition, never reaching the clock at all. The mutation
+	// matrix cannot distinguish those two worlds on its own -- "only the
+	// injected-clock test dies" is consistent with a working guard AND with
+	// three tests that never get past a seed or scope check.
+	if errors.Is(err, ErrCapacitySeedMissing) || errors.Is(err, ErrInvalidState) {
+		t.Fatalf("stopped at an UPSTREAM guard (%v); this test must drive past "+
+			"every precondition and reach the clock", err)
+	}
 	if !errors.Is(err, errExecutorClockUnset) {
 		t.Fatalf("returned %v, want errExecutorClockUnset -- as_of is bound from "+
 			"the clock, and an uninjected clock must refuse before the query "+

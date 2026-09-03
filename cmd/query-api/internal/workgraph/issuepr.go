@@ -69,13 +69,24 @@ func fetchLinkedIssueRows(
 // match. Never change this query to track the fast path; if the two drift
 // intentionally, that is exactly what the differential test exists to
 // force a conscious decision about.
+//
+// toFloat64(argMax(confidence, ...)): work_graph_issue_pr.confidence is
+// Float32 (014_work_graph.sql) and argMax() preserves its input's
+// ClickHouse type -- the native Go driver refuses to scan a Float32 result
+// column into *float64 outright, the SAME trap edges.go's
+// fetchDedupedEdgeRows doc comment already documents for work_graph_edges'
+// identically-typed confidence column. Caught here by this PR's own golden
+// test the first time this query actually ran against real ClickHouse, not
+// by inspection -- a fake-based unit test cannot catch a driver-level type
+// mismatch. Python's driver has no such restriction, so this cast is a
+// Go-side necessity, not a value-changing divergence from Python.
 func fetchLinkedIssueRowsFinal(
 	ctx context.Context, client QueryClient, orgID, repoID string, prNumber int,
 ) ([]issuePRLinkRow, error) {
 	const query = `
         SELECT
             work_item_id,
-            argMax(confidence, last_synced) AS confidence,
+            toFloat64(argMax(confidence, last_synced)) AS confidence,
             argMax(provenance, last_synced) AS provenance,
             argMax(evidence, last_synced) AS evidence
         FROM work_graph_issue_pr FINAL
@@ -93,14 +104,15 @@ func fetchLinkedIssueRowsFinal(
 // filter, grouping and ordering as fetchLinkedIssueRowsFinal, but collapsed
 // by argMax(col, version_rank) instead of a forced FINAL merge on
 // last_synced. See fetchLinkedIssueRows's doc comment for why this is
-// correct once migration 084 has run.
+// correct once migration 084 has run, and fetchLinkedIssueRowsFinal's doc
+// comment for why confidence is wrapped in toFloat64.
 func fetchLinkedIssueRowsFastPath(
 	ctx context.Context, client QueryClient, orgID, repoID string, prNumber int,
 ) ([]issuePRLinkRow, error) {
 	const query = `
         SELECT
             work_item_id,
-            argMax(confidence, version_rank) AS confidence,
+            toFloat64(argMax(confidence, version_rank)) AS confidence,
             argMax(provenance, version_rank) AS provenance,
             argMax(evidence, version_rank) AS evidence
         FROM work_graph_issue_pr

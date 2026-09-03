@@ -61,6 +61,11 @@ _PUSH_CONTEXT = {
     "github.event_name": "push",
     "github.sha": "abc123",
     "github.run_id": "1",
+    # `inputs.*` only exists in the event payload for `workflow_dispatch` --
+    # a `push` event has no `inputs` object at all, so any reference to it
+    # is unconditionally empty (CHAOS-4921's group key falls back through
+    # `github.event.inputs.ref` before `github.sha`).
+    "github.event.inputs.ref": "",
 }
 _PULL_REQUEST_CONTEXT = {
     "github.head_ref": "topic-branch",
@@ -72,6 +77,9 @@ _PULL_REQUEST_CONTEXT = {
     "github.event_name": "pull_request",
     "github.sha": "def456",
     "github.run_id": "2",
+    # Same reasoning as _PUSH_CONTEXT: `inputs.*` does not exist outside
+    # `workflow_dispatch`, so it is unconditionally empty on `pull_request`.
+    "github.event.inputs.ref": "",
 }
 
 _EXPRESSION = re.compile(r"\$\{\{(.+?)\}\}", re.DOTALL)

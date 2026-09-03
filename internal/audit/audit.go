@@ -89,29 +89,41 @@ type OutboxEvent struct {
 
 // TxOps is what a mutation may do inside the transaction.
 //
-// Deliberately NOT pgx.Tx. The lifecycle methods are the ones that break "all
-// three or none": a callback given the real transaction can Commit it, at which
-// point the state is durable, the outbox insert fails on a closed transaction,
-// and the deferred rollback is a no-op -- Commit returns an error with the
-// mutation committed and no event and no audit row. Codex round 1 found that
-// path; lane-auth-contracts had named the shape an hour earlier. pgx.Tx
-// satisfies this interface, so the helper still passes the real transaction and
-// the caller simply cannot reach Commit, Rollback or Conn.
+// A STRUCT, not an interface, and that is the whole point. Round 1 replaced
+// pgx.Tx with a narrow INTERFACE; round 2 walked through it in one line:
 //
-// WHAT THIS DOES NOT CLOSE, stated because a boundary left implicit is the
-// defect this package keeps finding in its own comments:
+//	raw := tx.(interface{ Commit(context.Context) error })
+//	raw.Commit(ctx)
 //
-//   - Raw SQL. Exec is necessarily present, so `Exec(ctx, "COMMIT")` still
-//     reaches the server. No Go type can prevent that; it is a caller writing
-//     transaction control by hand, which is visible in review in a way that
-//     calling a method is not.
-//   - Retention. A callback can keep the value and use it after Commit
-//     returns. A type cannot express "only during this call". The subtest
-//     TestRetainedTxOpsIsUnusableAfterCommit pins what happens when it does.
-type TxOps interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+// An interface hides methods from the METHOD SET while leaving the dynamic
+// value intact, so a type assertion recovers everything the narrowing removed.
+// Three of us checked the method set and asserted a property of the program --
+// the same substitution the round before had just blocked, committed inside the
+// fix for it.
+//
+// A concrete struct has no dynamic value to recover. `tx.(anything)` does not
+// compile, because a type assertion requires an interface operand. The
+// transaction is unexported and reachable only through the three delegating
+// methods below.
+//
+// STILL NOT CLOSED, and now checked rather than documented: Exec must exist, so
+// Exec(ctx, "COMMIT") or Exec(ctx, "ROLLBACK") still reaches the server. Commit
+// verifies the transaction status after Apply returns and refuses if the
+// callback ended it -- see the TxStatus check there. Retention past the
+// callback is still possible and still only characterised, by
+// TestRetainedTxOpsIsUnusableAfterCommit.
+type TxOps struct{ tx pgx.Tx }
+
+func (t TxOps) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return t.tx.Exec(ctx, sql, args...)
+}
+
+func (t TxOps) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return t.tx.Query(ctx, sql, args...)
+}
+
+func (t TxOps) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return t.tx.QueryRow(ctx, sql, args...)
 }
 
 // Mutation is the state change and the two records that must accompany it.
@@ -167,8 +179,24 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	// successful commit, so this is correct rather than merely defensive.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := m.Apply(ctx, tx); err != nil {
+	if err := m.Apply(ctx, TxOps{tx: tx}); err != nil {
 		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, err)
+	}
+	// The callback could have ended the transaction with raw SQL -- Exec must
+	// exist, so Exec(ctx, "COMMIT") and Exec(ctx, "ROLLBACK") reach the server
+	// and no Go type prevents them. Round 2 showed the damage: after a raw
+	// ROLLBACK the pgx wrapper stays logically open, so the outbox and audit
+	// inserts below would run OUTSIDE the rolled-back transaction and Commit
+	// could return success -- records for a mutation that never committed.
+	//
+	// So this asks the CONNECTION what state it is really in rather than
+	// trusting that the callback left it alone. 'T' is "in a transaction
+	// block"; anything else means the callback ended it and nothing after this
+	// point would be atomic with the state it wrote.
+	if status := tx.Conn().PgConn().TxStatus(); status != 'T' {
+		return fmt.Errorf("%w: the mutation ended the transaction itself (status %q); "+
+			"the outbox event and audit row could not be written atomically with it",
+			ErrMutationFailed, string(status))
 	}
 	if err := insertOutboxEvent(ctx, tx, schema, m.Event); err != nil {
 		return err

@@ -632,14 +632,37 @@ jobs:
     # inside the step below NARROWS the cross-run race, it doesn't close
     # it -- two fan-in runs at different commits can both pass their own
     # ancestor check (each reading a `latest` that predates the other's
-    # write) and then tag in the wrong order regardless. A dedicated,
-    # never-cancelled concurrency group serializes every fan-in run against
-    # every other one, so the re-read step is always looking at the
-    # PREVIOUS fan-in's actual result, not a stale value racing against it.
-    # cancel-in-progress MUST stay false: cancelling a queued fan-in here
-    # would skip that commit's moving-tag decision entirely, not just delay
-    # it -- the exact "an event went by with no error and nothing tagged"
-    # shape this whole ticket exists to close.
+    # write) and then tag in the wrong order regardless. A dedicated
+    # concurrency group serializes every fan-in run against every other
+    # one, so the re-read step is always looking at the PREVIOUS fan-in's
+    # actual result, not a stale value racing against it.
+    #
+    # 084-prod (second review): `cancel-in-progress: false` does NOT mean
+    # every fan-in run actually executes -- this file's own comment at the
+    # top (CHAOS-4921) documents GitHub's rule that a group holds at most
+    # ONE pending run even with cancel-in-progress false: a third event
+    # arriving with one running and one already pending EVICTS that
+    # pending one outright. On a burst of merges, a middle commit's
+    # fan-in run can be silently evicted before it ever runs.
+    #
+    # This is BOUNDED, not open-ended, and self-heals except at the tail:
+    # an evicted commit's fan-in never runs, but the NEXT commit's fan-in
+    # (whenever it runs) re-reads whatever is currently tagged `latest`
+    # fresh and, being a later descendant, still passes its own ancestor
+    # check and tags correctly -- so "latest only ever advances to a
+    # descendant" holds regardless of which fan-in runs got evicted along
+    # the way. The one case this does NOT heal: if the LAST fan-in in a
+    # burst is the one evicted and no further merge follows it, `latest`
+    # is permanently stranded one (or more) commits behind head, with
+    # nothing left to trigger a self-heal -- exactly the state prod is in
+    # right now. That tail case is a KNOWN, ACCEPTED GAP for this PR (see
+    # CHAOS-4955 for the reconcile-path follow-up: a scheduled or
+    # workflow_dispatch fan-in-only run that re-derives and re-applies
+    # moving tags with no merge required to trigger it). Per-SHA
+    # concurrency keys were considered and rejected here: they would lose
+    # the serialization this read-modify-write decision actually needs
+    # (see the comment above this job's Apply step, at the re-read site,
+    # for the self-heal argument restated where the read happens).
     concurrency:
       group: latest-tagging
       cancel-in-progress: false
@@ -722,6 +745,18 @@ jobs:
               continue
             fi
 
+            # THIS read is also where the concurrency group's self-heal
+            # actually happens (084-prod review, see the job-level
+            # concurrency comment above for the full argument): if this
+            # run's own fan-in got evicted from the group's pending slot
+            # last time around, that's invisible from here -- this step
+            # simply reads whatever :latest is RIGHT NOW, which already
+            # reflects every fan-in that DID execute, evicted or not. A
+            # later descendant commit's fan-in always sees a correct,
+            # up-to-date base here; only the tail case (no later commit
+            # ever runs this step again) has no read left to self-heal it
+            # (CHAOS-4955).
+            #
             # No `|| true` here: that puts `||` on the same line as a
             # `docker` invocation, which is exactly the shape that trips
             # tests/tooling/test_go_integration_sharding.py's naive
@@ -743,22 +778,38 @@ jobs:
             # `imagetools inspect` on a multi-platform tag returns a
             # manifest LIST; the revision label lives in each platform's
             # own image config, not on the list itself (team-lead review).
-            # Read both and require agreement -- a mismatch means the two
-            # platform images don't actually represent the same build (a
-            # broken/partial publish), and guessing which one is right is
-            # worse than declining.
+            # Read both and require BOTH present and equal before trusting
+            # either -- 084-prod review caught that `${amd64_rev:-
+            # ${arm64_rev}}` silently takes whichever exists when only ONE
+            # platform is labeled, which is exactly the "guessing which
+            # platform is authoritative" the disagree-case comment already
+            # refuses, and it's reachable NOW: every family currently has a
+            # labelless :latest during this PR's own migration, and a mixed
+            # amd64-old/arm64-new index from an interrupted publish is not
+            # hypothetical this week. Two present and equal -> use it. Two
+            # present and different -> genuine disagreement, decline
+            # outright (broken/partial publish, guessing is worse than
+            # declining). Anything else (zero or exactly one present) ->
+            # NOT enough to trust, but also not evidence of disagreement --
+            # treat as unlabeled and fall through to the digest-walk
+            # fallback below, same as the two-Python-families case.
             amd64_rev="$(jq -r '.image["linux/amd64"].config.Labels["org.opencontainers.image.revision"] // empty' <<<"${latest_json}")"
             arm64_rev="$(jq -r '.image["linux/arm64"].config.Labels["org.opencontainers.image.revision"] // empty' <<<"${latest_json}")"
-            if [ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ] && [ "${amd64_rev}" != "${arm64_rev}" ]; then
-              echo "DECLINE ${family}: platform labels disagree on :latest (amd64=${amd64_rev} arm64=${arm64_rev}) -- refusing to guess which is authoritative"
-              continue
+            base_sha=""
+            if [ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]; then
+              if [ "${amd64_rev}" != "${arm64_rev}" ]; then
+                echo "DECLINE ${family}: platform labels disagree on :latest (amd64=${amd64_rev} arm64=${arm64_rev}) -- refusing to guess which is authoritative"
+                continue
+              fi
+              base_sha="${amd64_rev}"
             fi
-            base_sha="${amd64_rev:-${arm64_rev}}"
 
             if [ -z "${base_sha}" ]; then
+              # Reached with zero OR exactly one platform label present.
               # dev-hops-runner/dev-hops-api predate this PR's label and
-              # carry NO Labels map at all today (measured, 084-prod) -- a
-              # labelless :latest is NOT the same as a MISSING :latest
+              # carry NO Labels map at all today (measured, 084-prod) --
+              # that's the zero case. A labelless :latest is NOT the same
+              # as a MISSING :latest
               # (that's BOOTSTRAP, above), and it isn't the two-platforms-
               # disagree case either. Best-effort, bounded, fail-closed
               # fallback: walk the BUILT commit's own first-parent history

@@ -160,6 +160,42 @@ def test_fan_in_job_serialises_via_a_never_cancelled_concurrency_group() -> None
         )
 
 
+def test_platform_label_agreement_does_not_fall_back_to_whichever_exists() -> None:
+    """084-prod review: with `base_sha="${amd64_rev:-${arm64_rev}}"`, a
+    family with exactly ONE platform labeled (the other empty) falls
+    through the "both present and differ" disagree-check untouched and
+    silently takes whichever value exists -- which IS "guessing which
+    platform is authoritative", the exact thing the disagree-case comment
+    says it refuses. Reachable now, not theoretical: every family has a
+    labelless `:latest` during this PR's own migration, and a mixed
+    amd64-old/arm64-new index from an interrupted publish is not
+    hypothetical (084-prod: two partial publishes the same night this was
+    reviewed). The fix requires BOTH platform labels present (and equal)
+    before trusting either; anything else -- zero present, or exactly
+    one -- must fall through to the unlabeled/digest-walk path, not decline
+    outright and not guess."""
+    fan_in_jobs = [
+        job for name, job in _jobs().items() if "fan-in" in name or "fan_in" in name
+    ]
+    assert fan_in_jobs, "no fan-in job found (see the other test in this file)"
+    combined_run_text = "\n".join(
+        str(step.get("run", "")) for job in fan_in_jobs for step in _steps(job)
+    )
+    assert "${amd64_rev:-${arm64_rev}}" not in combined_run_text, (
+        "found the exact `${amd64_rev:-${arm64_rev}}` pattern -- this silently "
+        "takes whichever platform's revision label exists when only one is "
+        "present, which is guessing, not agreement. Both platform labels must "
+        "be required present (and equal) before trusting either."
+    )
+    assert (
+        '[ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]' in combined_run_text
+    ), (
+        "no explicit both-platforms-present guard found before the base_sha "
+        "assignment -- a family with exactly one platform labeled must not "
+        "be treated as agreeing"
+    )
+
+
 def test_fan_in_job_has_a_bounded_fallback_for_unlabeled_families() -> None:
     """dev-hops-runner and dev-hops-api predate this ticket's revision
     label and currently carry no Labels map at all (measured, lane-084-

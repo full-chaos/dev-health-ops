@@ -100,7 +100,7 @@
     {
       "commit_ids": [],
       "commit_map": {},
-      "expected_name": "First by sort order, last in argument order",
+      "expected_name": "Zebra issue title",
       "expected_type": "bug",
       "issue_ids": [
         "i2",
@@ -111,11 +111,11 @@
       "pr_map": {},
       "work_item_map": {
         "i1": {
-          "title": "First by sort order, last in argument order",
+          "title": "Zebra issue title",
           "type": "bug"
         },
         "i2": {
-          "title": "Second issue title",
+          "title": "Apple issue title",
           "type": "feature"
         }
       }
@@ -145,6 +145,27 @@
       }
     },
     {
+      "commit_ids": [],
+      "commit_map": {},
+      "expected_name": "Zebra PR title",
+      "expected_type": "pr",
+      "issue_ids": [],
+      "label": "sorted_order_within_pr_tier_not_argument_order",
+      "pr_ids": [
+        "p2",
+        "p1"
+      ],
+      "pr_map": {
+        "p1": {
+          "title": "Zebra PR title"
+        },
+        "p2": {
+          "title": "Apple PR title"
+        }
+      },
+      "work_item_map": {}
+    },
+    {
       "commit_ids": [
         "c1"
       ],
@@ -157,6 +178,27 @@
       "expected_type": "commit",
       "issue_ids": [],
       "label": "commit_message_used_when_nothing_else",
+      "pr_ids": [],
+      "pr_map": {},
+      "work_item_map": {}
+    },
+    {
+      "commit_ids": [
+        "c2",
+        "c1"
+      ],
+      "commit_map": {
+        "c1": {
+          "message": "Zebra commit message"
+        },
+        "c2": {
+          "message": "Apple commit message"
+        }
+      },
+      "expected_name": "Zebra commit message",
+      "expected_type": "commit",
+      "issue_ids": [],
+      "label": "sorted_order_within_commit_tier_not_argument_order",
       "pr_ids": [],
       "pr_map": {},
       "work_item_map": {}

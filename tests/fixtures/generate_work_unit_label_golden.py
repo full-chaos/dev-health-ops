@@ -67,24 +67,25 @@ def _scenarios() -> list[dict[str, Any]]:
             "work_item_map": {"i1": {"title": "Fix the bug", "type": ""}},
         },
         {
-            # Passed out of sort order (i2 first). BOTH issues carry a real,
-            # DISTINCT title -- the case that actually discriminates sorted
-            # order from argument order: an argument-order implementation
-            # would return i2's title (first in issue_ids); the real,
-            # sorted-order implementation returns i1's title (smaller
-            # sorted id). A version of this case where i1 had NO title
-            # could not tell the two implementations apart -- both would
-            # fall through to i2's title regardless of which order was
-            # used -- so it never actually exercised what its own label
-            # claimed.
+            # Passed out of sort order (i2 first). i1's title is
+            # LEXICALLY LARGER than i2's ("Zebra" > "Apple") -- deliberately
+            # the OPPOSITE direction from ID sort order (i1 < i2). This is
+            # what actually discriminates an ID-sorted implementation from
+            # a title-lexically-sorted one: a "pick the lexically smallest
+            # TITLE" bug would return i2's "Apple..." title; the real,
+            # ID-sorted implementation returns i1's "Zebra..." title. A
+            # prior version of this case had both the ID order AND the
+            # title's lexical order agree (i1's title started with "First",
+            # i2's with "Second") -- a title-lexical-sort bug would have
+            # coincidentally passed it too, so it never actually isolated
+            # ID-based ordering from title-based ordering (CHAOS-4441,
+            # codex round r1/gate-rounds's P2, then r2's re-find one level
+            # deeper).
             "label": "sorted_order_within_tier_not_argument_order",
             "issue_ids": ["i2", "i1"],
             "work_item_map": {
-                "i1": {
-                    "title": "First by sort order, last in argument order",
-                    "type": "bug",
-                },
-                "i2": {"title": "Second issue title", "type": "feature"},
+                "i1": {"title": "Zebra issue title", "type": "bug"},
+                "i2": {"title": "Apple issue title", "type": "feature"},
             },
         },
         {
@@ -95,9 +96,38 @@ def _scenarios() -> list[dict[str, Any]]:
             "pr_map": {"p1": {"title": "PR title wins"}},
         },
         {
+            # PR tier's own sort-order case, same shape and same reasoning
+            # as the issue-tier case above: p1's title is lexically LARGER
+            # than p2's, and p1 is passed SECOND in pr_ids -- an
+            # argument-order OR a title-lexical-order PR implementation
+            # would both return p2's "Apple..." title; only genuine
+            # ID-sorted-within-tier returns p1's. No issues are present, so
+            # this exercises the PR tier specifically (round r2's own
+            # finding: a case with only a SINGLE PR/commit id can never
+            # test either tier's internal ordering at all).
+            "label": "sorted_order_within_pr_tier_not_argument_order",
+            "pr_ids": ["p2", "p1"],
+            "pr_map": {
+                "p1": {"title": "Zebra PR title"},
+                "p2": {"title": "Apple PR title"},
+            },
+        },
+        {
             "label": "commit_message_used_when_nothing_else",
             "commit_ids": ["c1"],
             "commit_map": {"c1": {"message": "Fix the login flow\n\nDetails here."}},
+        },
+        {
+            # Commit tier's own sort-order case, same shape again: c1's
+            # message is lexically LARGER than c2's, and c1 is passed
+            # SECOND in commit_ids -- only genuine ID-sorted-within-tier
+            # returns c1's message.
+            "label": "sorted_order_within_commit_tier_not_argument_order",
+            "commit_ids": ["c2", "c1"],
+            "commit_map": {
+                "c1": {"message": "Zebra commit message"},
+                "c2": {"message": "Apple commit message"},
+            },
         },
         {
             "label": "commit_message_leading_blank_lines",

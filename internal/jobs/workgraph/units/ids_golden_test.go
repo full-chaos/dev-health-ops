@@ -67,6 +67,18 @@ func TestParsePRFromIDMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("ok = %v, want %v (input %q)", ok, wantOK, testCase.Input)
 			}
 			if !wantOK {
+				// A regression that parses far enough to build a non-nil
+				// repoID or a non-zero number, then only fails validation
+				// AFTER computing them (e.g. failing the number parse but
+				// still returning the already-parsed repo), would still
+				// satisfy ok==false above and pass silently without this
+				// check -- CHAOS-4441 r2's own finding on this exact gap.
+				if repoID != nil {
+					t.Fatalf("repo_id = %v, want nil (input %q, ok=false)", repoID, testCase.Input)
+				}
+				if number != 0 {
+					t.Fatalf("number = %d, want 0 (input %q, ok=false)", number, testCase.Input)
+				}
 				return
 			}
 			if repoID == nil || repoID.String() != *expected.RepoID {
@@ -98,6 +110,16 @@ func TestParseCommitFromIDMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("ok = %v, want %v (input %q)", ok, wantOK, testCase.Input)
 			}
 			if !wantOK {
+				// Same gap as ParsePRFromID's golden above: a regression
+				// that computes a non-nil repoID or a non-empty hash before
+				// failing validation would still satisfy ok==false and pass
+				// silently without this check.
+				if repoID != nil {
+					t.Fatalf("repo_id = %v, want nil (input %q, ok=false)", repoID, testCase.Input)
+				}
+				if hash != "" {
+					t.Fatalf("hash = %q, want \"\" (input %q, ok=false)", hash, testCase.Input)
+				}
 				return
 			}
 			if repoID == nil || repoID.String() != *expected.RepoID {

@@ -122,6 +122,28 @@ def _scenarios() -> list[dict[str, Any]]:
             "pr_churn": {_pr_id(REPO_B, 1): 20.0},
         },
         {
+            # A LONE negative commit (the case above) can't distinguish
+            # "commitTotal sums ALL churn, including negatives" (correct --
+            # see AllocateRepoEffort's own `total += churn` before the
+            # positive-only per-repo skip) from "commitTotal sums only
+            # POSITIVE churn": with a single negative value, a positive-only
+            # accumulator sees nothing at all and a real accumulator sees a
+            # negative number -- both are <= 0, so both fall to PR the same
+            # way. MIXING a positive and a negative commit makes the two
+            # diverge: the real total here is 4 + (-5) = -1 (<= 0, falls to
+            # PR); a positive-only accumulator would see only +4 (> 0,
+            # WRONGLY selects commit_churn as the source). CHAOS-4441 r2's
+            # own finding on this exact gap.
+            "label": "mixed_positive_and_negative_commit_total_falls_to_pr",
+            "commit_ids": [_commit_id(REPO_A, "h1"), _commit_id(REPO_A, "h2")],
+            "commit_churn": {
+                _commit_id(REPO_A, "h1"): 4.0,
+                _commit_id(REPO_A, "h2"): -5.0,
+            },
+            "pr_ids": [_pr_id(REPO_B, 1)],
+            "pr_churn": {_pr_id(REPO_B, 1): 9.0},
+        },
+        {
             "label": "nan_commit_total_falls_to_pr",
             "commit_ids": [_commit_id(REPO_A, "h1")],
             "commit_churn": {_commit_id(REPO_A, "h1"): NAN},

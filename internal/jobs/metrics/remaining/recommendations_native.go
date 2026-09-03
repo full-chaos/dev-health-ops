@@ -68,6 +68,20 @@ type RecommendationsExecutor struct {
 	conn   driver.Conn
 	loader *RecommendationsLoader
 	nowUTC func() time.Time
+
+	// afterTeamHook runs after each team is evaluated. It is nil in production
+	// and exists solely so an integration test can cancel the run at a
+	// DETERMINISTIC point -- after one team has produced records and before the
+	// next is evaluated.
+	//
+	// The alternative is cancelling from a goroutine on a timer, which makes
+	// the test's own correctness depend on how long a ClickHouse query takes.
+	// That would be flaky in exactly the direction that matters: on a slow run
+	// it cancels before any team finishes, the fixture stops carrying records,
+	// and the test silently degenerates into the vacuous unit-level version it
+	// was written to replace. A hook is honest scaffolding; a sleep is a
+	// fixture whose shape changes with the weather.
+	afterTeamHook func()
 }
 
 // NewRecommendationsExecutor refuses at construction rather than per partition.

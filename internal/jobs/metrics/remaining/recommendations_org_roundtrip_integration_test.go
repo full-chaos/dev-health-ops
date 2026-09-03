@@ -4,6 +4,7 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -354,4 +355,102 @@ func distinctStamps(t *testing.T, ctx context.Context, conn driver.Conn) []time.
 func expectedTombstoneText(ruleID string) (ruleDefinition, bool) {
 	definition, ok := ruleRegistry[ruleID]
 	return definition, ok
+}
+
+// TestCancellationMidRunStillPersistsTheTeamsThatFinished closes the gap the
+// unit-level cancellation test could not reach.
+//
+// # WHY THIS NEEDS A CONTAINER
+//
+// The property is "rows computed before the interruption are still written".
+// Observing it requires a team that SUCCEEDS — which requires a real loader
+// against real data — followed by a cancellation. With a stubbed loader every
+// team fails, so there are no records, so the write returns early in both the
+// fixed and the broken world and the fixture never enters the distinguishing
+// state. That unit test was mutation-verified and its mutant SURVIVED; this is
+// the test that can actually fail.
+//
+// # WHY THE PATH DESERVES ITS OWN TEST
+//
+// This branch's worst defect (the round-3 P1) was introduced INTO this exact
+// branch of code while fixing it: `cancelled = ctx.Err(); break` swallowed
+// ordinary per-team failures because ctx.Err() is nil on a live context. A path
+// that has already produced a silent failure once, and whose write half nothing
+// could observe, is the last place to accept an untested assertion.
+func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	seedLoaderFixture(t, ctx, conn)
+
+	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+
+	// Cancel AFTER the first team's evaluation and BEFORE the second's, so the
+	// run carries real records when the interruption arrives. A context
+	// cancelled up front would produce no records and reproduce the unit
+	// test's vacuity on a container.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	evaluated := 0
+	cancelAfterFirstTeam := func() {
+		evaluated++
+		if evaluated == 1 {
+			cancelRun()
+		}
+	}
+	executor.afterTeamHook = cancelAfterFirstTeam
+	t.Cleanup(func() { executor.afterTeamHook = nil })
+
+	asOf := mustDate(t, "2026-08-31")
+	now, _ := EvaluationInstant(&asOf, nil)
+
+	outcome, err := executor.ComputeOrg(runCtx, loaderOrgID, now, 30, "v1", "")
+
+	// HALF ONE: the interruption is reported, not disguised as a team failure.
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("returned %v, want context.Canceled — an interrupted run's team "+
+			"list is incomplete, so a TeamEvaluationFailure would understate "+
+			"what went unevaluated", err)
+	}
+
+	// HALF TWO, the one no unit fixture can reach: the finished team's rows are
+	// ON DISK. Without the detached write context the insert cannot execute at
+	// all, and those tombstones are lost exactly when the run is torn down.
+	var persisted uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM recommendations_daily WHERE org_id = ?`, loaderOrgID,
+	).Scan(&persisted); err != nil {
+		t.Fatalf("count persisted rows: %v", err)
+	}
+	if persisted == 0 {
+		t.Error("PERSISTED ROWS: the run was interrupted after a team had already " +
+			"evaluated, and nothing was written — the teams that finished lose " +
+			"their fresh tombstones and keep stale fired guidance")
+	}
+	if outcome.RowsWritten == 0 {
+		t.Error("PERSISTED ROWS: the outcome reports zero rows written despite a " +
+			"completed team")
+	}
+	if uint64(outcome.RowsWritten) != persisted {
+		t.Errorf("PERSISTED ROWS: the outcome claims %d rows, the table holds %d",
+			outcome.RowsWritten, persisted)
+	}
 }

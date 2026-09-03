@@ -189,6 +189,10 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 				outcome.FiredRows++
 			}
 		}
+		// Nil in production. See the field's comment.
+		if executor.afterTeamHook != nil {
+			executor.afterTeamHook()
+		}
 	}
 	outcome.FailedTeams = len(failedTeams)
 

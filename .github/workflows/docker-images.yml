@@ -788,28 +788,31 @@ jobs:
           # tell "doesn't exist" (bootstrap) from "couldn't tell"
           # (decline, never bootstrap on an ambiguous read).
           #
-          # ci-flakes review (delta on b172ebf0): the original version slept
-          # after the FINAL attempt too, paying for a retry it would never
-          # make. Fixed to skip the trailing sleep. Used for the TWO checks
-          # where absence is an anomaly worth a few retries to rule out a
-          # transient blip (:latest, and the just-published source tag) --
-          # NOT for the digest-walk's per-candidate checks below, where
-          # absence is the EXPECTED, common outcome for most candidates (a
-          # commit whose CI failed before publishing, or a future
-          # CHAOS-4948 skip) and retrying every miss would turn a fast walk
-          # into a slow one for no benefit; that loop uses the single-shot
-          # `_inspect_once` instead.
-          _inspect_retry() {
-            local ref="$1" attempt
-            # shellcheck disable=SC2034
-            for attempt in 1 2 3; do
-              if docker buildx imagetools inspect "$ref" --format '{{json .}}' 2>/dev/null; then
-                return 0
-              fi
-              [ "$attempt" -lt 3 ] && sleep 2
-            done
-            return 1
-          }
+          # ci-flakes review (delta on b172ebf0): an earlier retry helper
+          # slept after the FINAL attempt too, paying for a retry it would
+          # never make -- fixed below in `_inspect_retry_classify`, which
+          # is now used for BOTH checks where absence is an anomaly worth
+          # a few retries to rule out a transient blip: `:latest`, and
+          # (codex round 2 -- see the source-tag call site below) the
+          # just-published source tag, which had its own, separate P2:
+          # a plain retry-then-skip conflated CONFIRMED ABSENT (a
+          # legitimate skip) with UNKNOWN (an unrecognized registry
+          # failure on a tag that WAS actually published), leaving that
+          # family stranded stale while every sibling family moved
+          # latest/main -- the exact cross-family coherence bug this whole
+          # job exists to prevent, just relocated from the :latest read to
+          # here. Neither of these is for the digest-walk's per-candidate
+          # checks below, where absence is the EXPECTED, common outcome
+          # for most candidates (a commit whose CI failed before
+          # publishing, or a future CHAOS-4948 skip) and retrying every
+          # miss would turn a fast walk into a slow one for no benefit;
+          # that loop uses the single-shot `_inspect_once` instead. (A
+          # separate, PLAIN multi-attempt `_inspect_retry` helper -- retry
+          # without classification -- existed here through round 1 but is
+          # gone: once both anomaly-sensitive checks needed the 3-way
+          # classification, nothing called the unclassified version any
+          # more, and an unused helper is exactly the kind of drift a
+          # later reviewer has to waste time re-deriving is dead.)
           # `_inspect_once` is single-attempt, no retry -- and that is
           # justified by FAIL-CLOSEDNESS, not by speed (team-lead review):
           # every call site below feeds this into `[ -n "${candidate_digest}" ]`,
@@ -855,7 +858,7 @@ jobs:
           }
           # _inspect_retry_classify: retries ONLY the UNKNOWN outcome (a
           # genuine ambiguity worth a few seconds to rule out as
-          # transient, same reasoning as `_inspect_retry` above) --
+          # transient, same reasoning as the plain retry above) --
           # CONFIRMED ABSENT short-circuits immediately, there is nothing
           # to retry away, the ref does not exist. Note the `$?` capture:
           # it happens on the line immediately inside the `else` branch,
@@ -884,8 +887,32 @@ jobs:
           for family in $families; do
             image="ghcr.io/${OWNER}/${family}"
             source_ref="${image}:sha-${short_sha}"
-            if ! _inspect_retry "${source_ref}" >/dev/null; then
-              echo "SKIP ${family}: ${source_ref} was not published this run (or unreachable after 3 tries)"
+            # codex round 2: this collapsed CONFIRMED ABSENT (the source
+            # tag genuinely wasn't published this run -- a legitimate,
+            # silent skip) and UNKNOWN (a transient/unrecognized registry
+            # failure on a source tag that WAS actually published) into
+            # one SKIP outcome. A single unlucky read on an otherwise-fine
+            # family left it stale while every other family moved
+            # latest/main -- the exact cross-family coherence failure
+            # this job exists to prevent, just moved from the :latest
+            # read (fixed earlier) to the source-tag read (missed).
+            # Verified: forcing a connection-reset on one family's
+            # source-tag probe while the other eight succeed tagged all
+            # eight and silently skipped the ninth, with a zero-exit job.
+            # Same 3-way classification as the :latest site: absent is a
+            # real skip; unknown fails closed with a visible annotation,
+            # never a plain, easy-to-miss SKIP line.
+            source_rc=0
+            if _inspect_retry_classify "${source_ref}" >/dev/null; then
+              :
+            else
+              source_rc=$?
+            fi
+            if [ "${source_rc}" -eq 1 ]; then
+              echo "SKIP ${family}: ${source_ref} was not published this run (confirmed absent)"
+              continue
+            elif [ "${source_rc}" -eq 2 ]; then
+              echo "::error::${family}: could not confirm whether ${source_ref} exists (registry error of an unrecognized shape) -- declining rather than silently leaving this family stale while others move latest/main"
               continue
             fi
 
@@ -1058,7 +1085,7 @@ jobs:
                 # instead of just treating that one candidate as a
                 # non-match and continuing the walk. Guarded the same way
                 # the :latest read above is -- but using `_inspect_once`
-                # (single attempt, no retry), not `_inspect_retry`:
+                # (single attempt, no retry), not `_inspect_retry_classify`:
                 # ci-flakes review (delta on b172ebf0) correctly separated
                 # these -- absence here is the EXPECTED, common outcome for
                 # most candidates in a 50-commit walk, and retrying every

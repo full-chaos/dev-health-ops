@@ -521,8 +521,30 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
       esac
       ;;
     *)
-      # the just-published sha- source-tag probe: always "found".
-      echo '{"manifest":{"digest":"sha256:bbbb"}}'
+      # This branch answers BOTH the just-published sha- source-tag probe
+      # AND the digest-walk's per-candidate sha- probes (same ref shape,
+      # `<image>:sha-<short>`) -- they're distinguished only by which
+      # short-sha is being asked about, not by any other structural cue.
+      #
+      # codex round 2, P3 (my own least-sure item from round 2's prompt,
+      # confirmed both ways): the harness's `git log` shim always returned
+      # empty history, so the digest-walk's actual found-a-match path
+      # (walk N candidates, find one whose digest equals :latest's,
+      # `break`, tag from it) was NEVER exercised -- only "walked, found
+      # nothing, declined". A regression in the match/break/found_base
+      # logic passed every existing row. If $DIGEST_WALK_MATCH_SHORT is
+      # set, the candidate whose short-sha matches it gets the SAME
+      # digest as :latest's (sha256:aaaa, the `unlabelled` scenario's
+      # fixed digest) -- every OTHER candidate gets the existing default
+      # (sha256:bbbb, guaranteed != aaaa), so the walk must actually
+      # iterate past real misses to find the real match, not just accept
+      # the first candidate it's handed.
+      candidate_short="${ref##*:sha-}"
+      if [ -n "${DIGEST_WALK_MATCH_SHORT:-}" ] && [ "${candidate_short}" = "${DIGEST_WALK_MATCH_SHORT}" ]; then
+        echo '{"manifest":{"digest":"sha256:aaaa"}}'
+      else
+        echo '{"manifest":{"digest":"sha256:bbbb"}}'
+      fi
       exit 0
       ;;
   esac
@@ -549,16 +571,24 @@ exit 0
 # is a defect with good luck" (ci-flakes, this same review thread).
 #
 # For `git log` (the digest-walk fallback) this shim returns NOTHING
-# (empty history) after marking it called -- reaching the fallback at
-# all is itself the observable the empty/unknown/absent scenarios check,
-# independent of what the (real, unrelated) checkout this test runs
-# inside happens to contain for a nonsense BUILT_SHA. For `git
-# merge-base --is-ancestor` (the labelled scenario's actual ancestry
-# decision) it answers per $MERGE_BASE_IS_ANCESTOR: exit 0 (is an
-# ancestor / descendant) or exit 1 (is not).
+# (empty history) after marking it called, UNLESS $DIGEST_WALK_CANDIDATES
+# is set (newline-separated full SHAs, oldest-relevant-first-parent order)
+# -- in which case it prints exactly that, letting a test construct a
+# specific walk history (codex round 2: needed to exercise the found-a-
+# match path, which an always-empty history could never reach). Reaching
+# the fallback at all (empty-history case) is itself the observable the
+# empty/unknown/absent scenarios check, independent of what the (real,
+# unrelated) checkout this test runs inside happens to contain for a
+# nonsense BUILT_SHA. For `git merge-base --is-ancestor` (the labelled
+# scenario's actual ancestry decision) it answers per
+# $MERGE_BASE_IS_ANCESTOR: exit 0 (is an ancestor / descendant) or exit 1
+# (is not).
 _GIT_SHIM = r"""#!/usr/bin/env bash
 if [ "$1" = "log" ]; then
   touch "${GIT_LOG_CALLED_FILE}"
+  if [ -n "${DIGEST_WALK_CANDIDATES:-}" ]; then
+    printf '%s\n' "${DIGEST_WALK_CANDIDATES}"
+  fi
   exit 0
 fi
 if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
@@ -574,14 +604,23 @@ exit 0
 
 
 def _run_latest_tag_step(
-    scenario: str, merge_base_is_ancestor: bool = True
+    scenario: str,
+    merge_base_is_ancestor: bool = True,
+    digest_walk_candidates: list[str] | None = None,
+    digest_walk_match_short: str = "",
 ) -> tuple[str, bool, bool, str]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
     `git` shimmed to record `log` and `merge-base --is-ancestor`
     invocations SEPARATELY (see `_GIT_SHIM`'s comment for why one shared
     marker isn't good enough), and to answer `merge-base --is-ancestor`
-    per `merge_base_is_ancestor` for the `labelled` scenario. Returns
+    per `merge_base_is_ancestor` for the `labelled` scenario. Passing
+    `digest_walk_candidates` (full SHAs, first-parent order) feeds a
+    scripted `git log` history to the digest-walk fallback instead of the
+    default empty one; `digest_walk_match_short` names which candidate's
+    short-sha should report the SAME digest as :latest's (everything else
+    gets a deliberate miss) -- both together let a test exercise the
+    found-a-match path, not just "walked, found nothing". Returns
     (recorded `imagetools create` invocations, whether `git log` was
     called, whether `git merge-base --is-ancestor` was called, captured
     stdout). `IS_MAIN_REF=true` and a source-tag probe that always
@@ -622,6 +661,8 @@ def _run_latest_tag_step(
                 "GIT_MERGE_BASE_CALLED_FILE": str(git_merge_base_called_file),
                 "LABELLED_REVISION": _LABELLED_REVISION,
                 "MERGE_BASE_IS_ANCESTOR": "true" if merge_base_is_ancestor else "false",
+                "DIGEST_WALK_CANDIDATES": "\n".join(digest_walk_candidates or []),
+                "DIGEST_WALK_MATCH_SHORT": digest_walk_match_short,
             }
         )
         result = subprocess.run(
@@ -801,4 +842,46 @@ def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
         "the built commit still recorded an `imagetools create` call -- "
         "a non-descendant build must decline, never overwrite a newer "
         f"currently-latest, got: {non_descendant_record!r}"
+    )
+
+
+def test_digest_walk_finds_a_match_partway_through_history() -> None:
+    """codex round 2, P3 (my own least-sure item from round 2's prompt,
+    confirmed both ways): every scenario above that reaches the digest
+    walk (`unlabelled`) fed it an EMPTY `git log` history -- that proves
+    "walked, found nothing, declined", never "walked, found the actual
+    match, tagged from it". A regression in the match/`break`/
+    `found_base` logic at the workflow's `[ -n "${candidate_digest}" ] &&
+    [ "${candidate_digest}" = "${latest_digest}" ]` check passed all
+    prior rows in this file.
+
+    Feeds a 3-candidate scripted history with the match at the MIDDLE
+    position (not the first candidate checked) -- proving the walk
+    actually iterates past a real miss rather than accepting whatever
+    it's handed first. Verified this row goes red against the mutation
+    codex used (`if [ -n ... ] && [ ... = ... ]` replaced with `if
+    false`) before trusting it."""
+    candidates = [
+        "1111111111111111111111111111111111111a",  # miss (checked first)
+        "2222222222222222222222222222222222222b",  # THE MATCH (checked second)
+        "3333333333333333333333333333333333333c",  # never reached (walk breaks at #2)
+    ]
+    record, log_called, mb_called, stdout = _run_latest_tag_step(
+        "unlabelled",
+        digest_walk_candidates=candidates,
+        digest_walk_match_short="2222222",
+    )
+    assert log_called and not mb_called, (
+        "expected the digest-walk (git log) to be reached, not the "
+        f"merge-base ancestry check -- log_called={log_called}, "
+        f"merge_base_called={mb_called}"
+    )
+    assert "imagetools create" in record and ":latest" in record, (
+        "a digest walk with a real match partway through its scripted "
+        "history did not record an `imagetools create ...:latest` call "
+        f"-- got record: {record!r}, stdout: {stdout!r}"
+    )
+    assert "2222222222222222222222222222222222222b" in stdout, (
+        "the FALLBACK log line should name the matched candidate sha -- "
+        f"got stdout: {stdout!r}"
     )

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -45,65 +44,103 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	}
 	defer conn.Release()
 
-	const seed = 20260903
-	rng := rand.New(rand.NewSource(seed))
-	t.Logf("seed %d — rerun with the same seed to reproduce any disagreement", seed)
+	// ENUMERATED, NOT SAMPLED. This used to draw 3000 statements at random,
+	// WITH REPLACEMENT, from a grammar whose cross-product is 4455. Measured
+	// over 200 simulated runs, that covered 2180 of 4455 combinations -- 48.9%
+	// -- so slightly over HALF the grammar went untested in any given run, and
+	// WHICH half depended on the seed. Every population figure this test
+	// reported before now described a random ~49% sample of a space small
+	// enough to cover exactly.
+	//
+	// Enumeration needs no seed, is reproducible without one, and lets the class
+	// counts be EXACT rather than floors. It is not free -- 4455 cases is 48%
+	// MORE work than the 3000 draws it replaces -- but the run is a few seconds
+	// and the alternative is a coverage figure nobody can state.
+	//
+	// Where an axis is enumerable, enumerate it: lane-auth-contracts' rule.
+	//
+	// A correction worth keeping, because it is the same defect twice in one
+	// night: I first reported this space as 3267 and the loss as 40%. Both were
+	// wrong. I counted the alias list with a script that matched lines ending in
+	// a comma, and the four non-ASCII aliases carry trailing comments, so they
+	// were silently dropped -- 11 counted where there were 15. I read a number
+	// off a tool without checking what the tool counts, which is exactly how I
+	// had just miscounted a diff by including its `+++` header. The figures
+	// above come from the enumeration itself, which reports its own dimensions.
+	payloads, aliases, tails := grammar()
+	total := len(payloads) * len(aliases) * len(tails)
+	t.Logf("enumerating the whole grammar: %d payloads x %d aliases x %d tails = %d statements",
+		len(payloads), len(aliases), len(tails), total)
 
 	var checked, skipped, multi, boundary, dollarIdents, bareNonASCII int
 	skipReasons := map[string]int{}
 	var skipExamples []string
 	var firstDisagreement string
+	generated := 0
 
-	for i := 0; i < 3000; i++ {
-		g := generateStatement(rng)
-		stmt := g.sql
-		if g.dollarIdent {
-			dollarIdents++
-		}
-		if g.bareNonASCII {
-			bareNonASCII++
-		}
+	for _, payload := range payloads {
+		for _, alias := range aliases {
+			for _, tail := range tails {
+				g := buildStatement(payload, alias, tail)
+				stmt := g.sql
+				generated++
 
-		lexerRefuses := refuseMultipleStatements(stmt) != nil
+				lexerRefuses := refuseMultipleStatements(stmt) != nil
 
-		_, execErr := conn.Exec(ctx, stmt, pgx.QueryExecModeExec, 1)
+				_, execErr := conn.Exec(ctx, stmt, pgx.QueryExecModeExec, 1)
 
-		// Only a rejection BY THE SERVER is a verdict. A transport or context
-		// failure is not a skip -- if the container dies, every case would
-		// "skip" and the run would report a pass over an empty comparison.
-		var serverRefuses bool
-		if execErr != nil {
-			var pgErr *pgconn.PgError
-			if !errors.As(execErr, &pgErr) {
-				t.Fatalf("case %d: not a server rejection, so the oracle is not answering: %v\nstatement:\n%s",
-					i, execErr, stmt)
-			}
-			if pgErr.Code == "42601" && strings.Contains(pgErr.Message, "multiple commands") {
-				serverRefuses = true
-			} else {
-				skipped++
-				skipReasons[pgErr.Code]++
-				if len(skipExamples) < 6 {
-					skipExamples = append(skipExamples,
-						fmt.Sprintf("%s %s | %q", pgErr.Code, pgErr.Message, stmt))
+				// Only a rejection BY THE SERVER is a verdict. A transport or context
+				// failure is not a skip -- if the container dies, every case would
+				// "skip" and the run would report a pass over an empty comparison.
+				var serverRefuses bool
+				if execErr != nil {
+					var pgErr *pgconn.PgError
+					if !errors.As(execErr, &pgErr) {
+						t.Fatalf("case %d: not a server rejection, so the oracle is not answering: %v\nstatement:\n%s",
+							generated, execErr, stmt)
+					}
+					if pgErr.Code == "42601" && strings.Contains(pgErr.Message, "multiple commands") {
+						serverRefuses = true
+					} else {
+						skipped++
+						skipReasons[pgErr.Code]++
+						if len(skipExamples) < 6 {
+							skipExamples = append(skipExamples,
+								fmt.Sprintf("%s %s | %q", pgErr.Code, pgErr.Message, stmt))
+						}
+						continue
+					}
 				}
-				continue
+				checked++
+				// COUNTED HERE, NOT AT GENERATION. lane-auth-contracts found these two
+				// increments sitting above the skip `continue`, which made
+				// "bareNonASCII >= 100" mean 100 were EMITTED, not 100 were COMPARED
+				// against PostgreSQL. Those coincide only while skipped is zero, so the
+				// class assertions were silently borrowing their validity from the skip
+				// assertion -- the 282-skip failure one layer in, and the axis it would
+				// have hidden is the one just added. Below the continue, a class count
+				// means the oracle answered for that many.
+				if g.dollarIdent {
+					dollarIdents++
+				}
+				if g.bareNonASCII {
+					bareNonASCII++
+				}
+				if serverRefuses {
+					multi++
+				} else if strings.Contains(stmt, ";") {
+					// A single statement that CONTAINS a semicolon is where this lexer
+					// can actually be wrong. A case count says nothing about how many
+					// of those there were: a corpus of 3000 obviously-multi statements
+					// and 3000 semicolon-free ones would report the same 3000 and
+					// exercise none of the boundary.
+					boundary++
+				}
+				if lexerRefuses != serverRefuses && firstDisagreement == "" {
+					firstDisagreement = fmt.Sprintf(
+						"lexer=%v server=%v for:\n%s", lexerRefuses, serverRefuses, stmt)
+				}
 			}
-		}
-		checked++
-		if serverRefuses {
-			multi++
-		} else if strings.Contains(stmt, ";") {
-			// A single statement that CONTAINS a semicolon is where this lexer
-			// can actually be wrong. A case count says nothing about how many
-			// of those there were: a corpus of 3000 obviously-multi statements
-			// and 3000 semicolon-free ones would report the same 3000 and
-			// exercise none of the boundary.
-			boundary++
-		}
-		if lexerRefuses != serverRefuses && firstDisagreement == "" {
-			firstDisagreement = fmt.Sprintf(
-				"lexer=%v server=%v for:\n%s", lexerRefuses, serverRefuses, stmt)
 		}
 	}
 
@@ -124,8 +161,40 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	if checked-multi == 0 {
 		t.Error("every checked statement was multi-statement: no accepting cases were exercised")
 	}
+	// EXHAUSTIVENESS, which is what enumeration buys and sampling could not.
+	// Not "at least N of a class appeared" but "every combination in the
+	// grammar was built AND the oracle answered for it".
+	if generated != total {
+		t.Errorf("built %d statements, expected the full cross-product of %d", generated, total)
+	}
+	if checked != total {
+		t.Errorf("only %d of %d enumerated statements reached the oracle", checked, total)
+	}
+
+	// EXACT class counts, derived from the grammar rather than asserted as
+	// floors. Because the counters now sit below the skip, an exact match also
+	// proves every member of the class was COMPARED, not merely emitted.
+	expectDollar, expectBareNonASCII := 0, 0
+	for _, a := range aliases {
+		if strings.Contains(a, "$") {
+			expectDollar++
+		}
+		if !strings.Contains(a, `"`) && hasNonASCII(a) {
+			expectBareNonASCII++
+		}
+	}
+	per := len(payloads) * len(tails)
+	if want := expectDollar * per; dollarIdents != want {
+		t.Errorf("%d statements carried a $-bearing identifier, expected exactly %d", dollarIdents, want)
+	}
+	if want := expectBareNonASCII * per; bareNonASCII != want {
+		t.Errorf("%d statements carried a bare non-ASCII identifier, expected exactly %d; the "+
+			">=0x80 branches in identChar and continuesIdentifier are not being exercised as expected",
+			bareNonASCII, want)
+	}
+
 	// The population that matters. Without this the run can drift into all-easy
-	// cases and still report three thousand.
+	// cases and still report the full count.
 	if boundary < 100 {
 		t.Errorf("only %d single statements contained a semicolon; the corpus is not exercising the boundary, whatever its size", boundary)
 	}
@@ -138,31 +207,6 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 		t.Errorf("%d generated statements never reached the oracle (%v); the corpus is smaller than its case count", skipped, skipReasons)
 	}
 
-	// The class contracts asked for must actually be present, or a green run
-	// says nothing about it.
-	if bareNonASCII < 100 {
-		t.Errorf("only %d statements carried a bare non-ASCII identifier; the >=0x80 branches "+
-			"in identChar and continuesIdentifier are not being exercised", bareNonASCII)
-	}
-	if dollarIdents < 100 {
-		t.Errorf("only %d statements carried a $-bearing identifier; that axis is not being exercised", dollarIdents)
-	}
-	// A SEVERITY PAIR WITH THE SKIP ASSERTION ABOVE, not a redundant copy of it.
-	// checked is 3000 minus skipped, so this fires only past ~2500 skips: the
-	// one above says SOMETHING was exempted and points at the generator row,
-	// this one says so little reached the oracle that no number in the run
-	// means anything. Different next actions.
-	//
-	// The two are COUPLED THROUGH THE SEVERITY OF THE FIRST, and that coupling
-	// is invisible at both sites. t.Errorf does not stop the test, so execution
-	// reaches here even when the skip assertion has already failed. Rewrite
-	// that one as t.Fatalf and this one becomes genuinely unreachable. I read
-	// this pair as already-dead while auditing it, on exactly that unchecked
-	// assumption; lane-auth-contracts caught it and t.Errorf's behaviour was
-	// then confirmed by execution.
-	if checked < 500 {
-		t.Errorf("only %d cases reached the oracle; too many were skipped to conclude anything", checked)
-	}
 }
 
 // generateStatement builds `SELECT <payload>, $1::int [alias] [; COMMIT] [;]`.
@@ -172,8 +216,8 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 // when the query actually carries a bind argument -- the parameterless path
 // never builds a prepared statement, which is the measurement that moved this
 // rule out of the protocol and into the lexer.
-func generateStatement(rng *rand.Rand) generated {
-	payloads := []string{
+func grammar() (payloads, aliases, tails []string) {
+	payloads = []string{
 		`'a'`,
 		`'it''s'`,
 		`'n\'`,
@@ -208,7 +252,7 @@ func generateStatement(rng *rand.Rand) generated {
 		`E'$$;$$'`,
 		`'$$' || ';' || '$$'`,
 	}
-	aliases := []string{
+	aliases = []string{
 		``,
 		` AS "x;y"`,
 		` AS "a""b;c"`,
@@ -245,7 +289,7 @@ func generateStatement(rng *rand.Rand) generated {
 		" AS \u00fcn\u00efcode", // non-ASCII, no $ at all
 		" AS a\u00fc$$",         // ASCII start, non-ASCII CONTINUATION byte
 	}
-	tails := []string{
+	tails = []string{
 		``,
 		`;`,
 		`; COMMIT`,
@@ -268,12 +312,13 @@ func generateStatement(rng *rand.Rand) generated {
 		`; SELECT $$x$$`,
 		`; COMMIT; SELECT $$;$$`,
 	}
-	alias := aliases[rng.Intn(len(aliases))]
+	return payloads, aliases, tails
+}
+
+// buildStatement assembles one point of the cross-product.
+func buildStatement(payload, alias, tail string) generated {
 	return generated{
-		sql: fmt.Sprintf("SELECT %s, $1::int%s%s",
-			payloads[rng.Intn(len(payloads))],
-			alias,
-			tails[rng.Intn(len(tails))]),
+		sql:          fmt.Sprintf("SELECT %s, $1::int%s%s", payload, alias, tail),
 		dollarIdent:  strings.Contains(alias, "$"),
 		bareNonASCII: !strings.Contains(alias, `"`) && hasNonASCII(alias),
 	}

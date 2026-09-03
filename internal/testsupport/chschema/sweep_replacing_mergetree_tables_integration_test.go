@@ -17,7 +17,8 @@ import (
 // replacingMergeTreeTable is one row of the CHAOS-4902 AUTHORITATIVE sweep
 // population: the engine after all migrations apply, read from
 // system.tables, rather than a regex over migration text (which answered
-// 88 against the schema's 85 -- see the count test below).
+// 88 against the schema's original 85 -- see the count test below for the
+// current count and its own history).
 type replacingMergeTreeTable struct {
 	name       string
 	sortingKey string
@@ -133,17 +134,24 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 }
 
 // TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount is a
-// recurrence guard, not a one-shot enumeration: asserts len == 85 rather
-// than printing it, so a future migration that adds or drops a
+// recurrence guard, not a one-shot enumeration: asserts len == wantCount
+// rather than printing it, so a future migration that adds or drops a
 // ReplacingMergeTree table without updating the dedup sweep's scope fails
 // this test instead of silently drifting.
 //
 // A prior regex-over-migration-text instrument answered 88; this schema
-// read answers 85. The 3-table diff was the instrument's own error list --
-// the count asserted here is the number the CHAOS-4902 dedup sweep was
-// actually scoped against, not the regex's guess.
+// read originally answered 85 (the 3-table diff was the instrument's own
+// error list). 85 -> 86, CHAOS-4441 (#2171): merging main into this branch
+// pulled in 085_work_unit_supersessions.sql, whose sidecar table
+// (`work_unit_supersessions`) is itself a ReplacingMergeTree -- confirmed
+// by re-running this exact test on bigboy (`found 86 ... table(s), want
+// ... 85`, `work_unit_supersessions` present in the printed list, and no
+// OTHER new migration in main's drift touches a Replacing table). This is
+// the recurrence guard correctly catching a real, legitimate schema change,
+// not a bug in the guard -- the fix is updating the count to match reality,
+// same as every prior number in this constant's own history.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 85
+	const wantCount = 86
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

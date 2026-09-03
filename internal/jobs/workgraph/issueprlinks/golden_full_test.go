@@ -494,6 +494,12 @@ func TestGithubClosingReferenceRejectsMalformedIssueNumber(t *testing.T) {
 		{"empty issue number", "gh:owner/repo#"},
 		{"no separator at all", "gh:owner/repo"},
 		{"empty repo slug", "gh:#5"},
+		// codex round 2 on #2174, P2: the writer (github_work_items_rows.go:784)
+		// only ever formats via strconv.Itoa, which never emits a leading zero
+		// -- these are strings ParseUint alone would accept but the writer can
+		// never produce.
+		{"leading zero", "gh:owner/repo#01"},
+		{"multiple leading zeros", "gh:owner/repo#007"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			inputs := baseInputs()

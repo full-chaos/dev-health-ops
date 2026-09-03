@@ -61,6 +61,7 @@ WHAT THIS TEST ASSERTS
 from __future__ import annotations
 
 import re
+import subprocess
 from functools import lru_cache
 from pathlib import Path
 
@@ -155,11 +156,53 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
 }
 
 
-# Directories no walk in this file descends: VCS internals, virtualenvs, caches.
-# Shared so the two oracles below cannot drift apart on what they skip.
-_SKIP_DIRECTORIES = frozenset(
-    {".git", ".venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache"}
-)
+# Every walk in this file enumerates TRACKED files rather than the filesystem.
+#
+# It used to walk `rglob("*")` and subtract a hardcoded set of six directory
+# names (.git, .venv, node_modules, __pycache__, .mypy_cache, .ruff_cache). That
+# list had to be extended by hand for every new ignored directory, and it had
+# already fallen behind: `.uv-cache`, which ci/run_tests.sh creates at the repo
+# root, was NOT in it. That cache holds third-party `testdata/` and `fixtures/`
+# directories -- 11 non-Go files when measured (sqlalchemy fixtures, protobuf
+# testdata) -- every one of which the coverage oracle would have collected as a
+# REPO fixture demanding workflow path coverage, and then failed for not finding
+# it named in any workflow.
+#
+# Tracking is also the correct domain rather than merely a convenient filter: CI
+# path filters match paths in a COMMIT, so an untracked file cannot be the reason
+# a job should have run. Deriving the exclusion from git rather than from a list
+# fixes the class -- a directory added to .gitignore tomorrow is excluded without
+# anyone remembering to edit this file.
+@lru_cache(maxsize=8)
+def _tracked_paths(anchor: Path) -> tuple[Path, ...]:
+    """Absolute paths of every file git tracks under *anchor*."""
+    completed = subprocess.run(
+        ["git", "-C", str(anchor), "ls-files", "-z"],
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        # Not a git repository. This file's own tests build synthetic trees
+        # under pytest's tmp_path to exercise the resolver, and those are not
+        # repos. Walking them is correct there -- a temp tree has no ignored
+        # directories to exclude -- but this branch must NEVER apply to the real
+        # tree, where the whole point is that git decides what is excluded.
+        assert anchor != REPO_ROOT, (
+            f"git ls-files failed inside the repo root ({anchor}): "
+            f"{completed.stderr.decode()[:200]}. Refusing to fall back to a "
+            "filesystem walk here, because that silently reinstates the "
+            "hardcoded-exclusion bug this helper exists to remove"
+        )
+        return tuple(path for path in anchor.rglob("*") if path.is_file())
+    names = [name for name in completed.stdout.decode().split("\0") if name]
+    # A walk that finds nothing reports exactly what a clean tree reports. If
+    # git ever returns an empty list here -- wrong directory, not a repo, a
+    # future flag change -- every oracle below would pass by examining nothing.
+    assert names, (
+        f"git ls-files found no tracked files under {anchor}; every check in "
+        "this file would pass vacuously, so this fails loudly instead"
+    )
+    return tuple(anchor / name for name in names)
 
 
 def _fixture_like_files_on_disk() -> set[str]:
@@ -180,12 +223,8 @@ def _fixture_like_files_on_disk() -> set[str]:
     """
     root = REPO_ROOT
     found: set[str] = set()
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
+    for path in _tracked_paths(root):
         parts = path.relative_to(root).parts
-        if _SKIP_DIRECTORIES.intersection(parts):
-            continue
         if path.suffix == ".go":
             continue
         if not any(segment in ("testdata", "fixtures") for segment in parts):
@@ -255,9 +294,8 @@ def _files_named_by_go_tests() -> set[str]:
     and the docstring gets corrected instead of quietly going stale.
     """
     found: set[str] = set()
-    for source_file in REPO_ROOT.rglob("*.go"):
-        parts = source_file.relative_to(REPO_ROOT).parts
-        if _SKIP_DIRECTORIES.intersection(parts):
+    for source_file in _tracked_paths(REPO_ROOT):
+        if source_file.suffix != ".go":
             continue
         try:
             source = source_file.read_text(encoding="utf-8")
@@ -275,10 +313,8 @@ def _files_by_basename(anchor: Path) -> dict[str, tuple[str, ...]]:
     each time is quadratic over the tree.
     """
     index: dict[str, list[str]] = {}
-    for path in anchor.rglob("*"):
+    for path in _tracked_paths(anchor):
         relative = path.relative_to(anchor)
-        if _SKIP_DIRECTORIES.intersection(relative.parts) or not path.is_file():
-            continue
         index.setdefault(path.name, []).append(relative.as_posix())
     return {name: tuple(paths) for name, paths in index.items()}
 
@@ -457,10 +493,10 @@ def _unresolvable_named_paths() -> list[tuple[str, str, tuple[str, ...]]]:
     index = _files_by_basename(root)
     unresolvable: list[tuple[str, str, tuple[str, ...]]] = []
 
-    for source_file in root.rglob("*.go"):
-        relative = source_file.relative_to(root)
-        if _SKIP_DIRECTORIES.intersection(relative.parts):
+    for source_file in _tracked_paths(root):
+        if source_file.suffix != ".go":
             continue
+        relative = source_file.relative_to(root)
         try:
             source = source_file.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -1056,3 +1092,69 @@ def test_the_shared_translator_refuses_what_it_cannot_express() -> None:
     for unsupported in ("a?b", "a[bc]d", "!negated"):
         with pytest.raises(SystemExit):
             github_glob_to_regex(unsupported)
+
+
+def test_a_gitignored_directory_is_not_collected_as_a_repo_fixture() -> None:
+    """The defect that motivated enumerating tracked files instead of walking.
+
+    `ci/run_tests.sh` creates `.uv-cache/` at the repo root. It is gitignored,
+    but the old walk subtracted a hardcoded list of six directory names and
+    `.uv-cache` was not among them -- so its contents were walked. uv's cache
+    contains third-party packages, and some ship directories literally named
+    `fixtures/` and `testdata/`: sqlalchemy and protobuf between them put 11
+    non-Go files there on the machine where this was measured. Every one would
+    have been collected as a REPO fixture and then reported as uncovered by any
+    workflow path filter -- a failure caused entirely by a dependency's internal
+    layout, in a check about this repository's CI configuration.
+
+    Asserting the property rather than adding `.uv-cache` to a list is the whole
+    point: the next ignored directory is excluded without anyone editing this
+    file.
+    """
+    probe_root = REPO_ROOT / ".uv-cache" / "synthetic-probe" / "fixtures"
+    probe = probe_root / "probe.json"
+    created_marker = REPO_ROOT / ".uv-cache"
+    already_existed = created_marker.exists()
+
+    probe_root.mkdir(parents=True, exist_ok=True)
+    probe.write_text("{}\n", encoding="utf-8")
+    try:
+        # Control 1: git really does ignore it. If this ever stops being true the
+        # test below would pass for the wrong reason -- the file being absent
+        # because it is tracked-and-missing rather than ignored.
+        ignored = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "check-ignore", str(probe)],
+            capture_output=True,
+            check=False,
+        )
+        assert ignored.returncode == 0, (
+            f"{probe} is not gitignored, so this test no longer exercises the "
+            "ignored-directory path at all"
+        )
+
+        # Control 2: the probe satisfies every criterion the collector uses, so
+        # its absence below is due to tracking and nothing else.
+        assert probe.suffix != ".go"
+        assert "fixtures" in probe.relative_to(REPO_ROOT).parts
+
+        _tracked_paths.cache_clear()
+        collected = _fixture_like_files_on_disk()
+
+        # Control 3: the collector is live. A collector returning nothing would
+        # pass the real assertion below while checking nothing at all.
+        assert collected, "the fixture collector returned nothing; it is not live"
+
+        relative = probe.relative_to(REPO_ROOT).as_posix()
+        assert relative not in collected, (
+            f"{relative} was collected as a repo fixture. It lives in a "
+            "gitignored dependency cache; treating it as this repository's "
+            "fixture makes the coverage oracle fail on a third-party package's "
+            "internal directory names"
+        )
+    finally:
+        probe.unlink(missing_ok=True)
+        probe_root.rmdir()
+        probe_root.parent.rmdir()
+        if not already_existed:
+            created_marker.rmdir()
+        _tracked_paths.cache_clear()

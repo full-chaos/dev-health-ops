@@ -10,6 +10,18 @@ const (
 	investmentMixExplanationResponseFormatName = "investment_mix_explanation"
 )
 
+// Per-format max_output_tokens floors -- openai.py's OpenAIGPT5Provider:
+// `max(self.cfg.max_output_tokens, 4096 if not is_schema_prompt else 2048)`.
+// Investment-mix explanation gets the higher floor because its narrative
+// payloads run larger than a categorization response (openai.py's own
+// comment: "Explanation payloads are large; start higher than 4096").
+// Combined with a provider's own configured floor via max(), never used
+// standalone -- see OpenAIProvider.Complete.
+const (
+	categorizationMaxOutputTokensFloor           = 2048
+	investmentMixExplanationMaxOutputTokensFloor = 4096
+)
+
 // categorizationSystemMessage and investmentMixExplanationSystemMessage
 // port openai.py's system_message: the JSON-schema branch (categorization)
 // gets a strict "generate only JSON" instruction; the other branch

@@ -44,6 +44,61 @@ func decodeOpenAIRequest(t *testing.T, r *http.Request) openAIResponsesRequest {
 	return body
 }
 
+func TestOpenAIProviderPerFormatMaxOutputTokensFloor(t *testing.T) {
+	// CHAOS-4977: openai.py floors max_output_tokens at 2048 for
+	// categorization but 4096 for investment-mix explanation (larger
+	// narrative payloads) -- CategorizationRequest/
+	// InvestmentMixExplanationRequest carry that floor now, combined
+	// with the provider's own configured floor via max().
+	cases := []struct {
+		name           string
+		request        CompletionRequest
+		configFloor    int
+		wantMaxTokens  int
+		wantSchemaName string
+	}{
+		{"categorization uses its own 2048 floor", CategorizationRequest("prompt"), 0, 2048, "categorization"},
+		{"explanation uses its own 4096 floor", InvestmentMixExplanationRequest("prompt"), 0, 4096, "investment_mix_explanation"},
+		{"a higher provider config floor wins", CategorizationRequest("prompt"), 6000, 6000, "categorization"},
+		// 3000 clears NewOpenAIProvider's own openAIMinOutputTokens (2048)
+		// floor unmodified, so this genuinely exercises "the per-request
+		// floor (4096) raises a provider config floor that's already
+		// above the package minimum but still below it" -- not just
+		// re-observing openAIMinOutputTokens's own normalization.
+		{"the request floor raises a mid-range provider config floor", InvestmentMixExplanationRequest("prompt"), 3000, 4096, "investment_mix_explanation"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var seenMaxTokens int
+			var seenSchemaName string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				req := decodeOpenAIRequest(t, r)
+				seenMaxTokens = req.MaxOutputTokens
+				seenSchemaName = req.Text.Format.Name
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(openAIResponsesResponse{OutputText: `{"ok": true}`})
+			}))
+			t.Cleanup(server.Close)
+
+			provider := NewOpenAIProvider(OpenAIProviderConfig{
+				APIKey: "unused", BaseURL: server.URL, Model: "gpt-5-nano",
+				MaxOutputTokens: tc.configFloor,
+			})
+			t.Cleanup(func() { provider.Close() })
+
+			if _, err := provider.Complete(context.Background(), tc.request); err != nil {
+				t.Fatalf("Complete returned error: %v", err)
+			}
+			if seenMaxTokens != tc.wantMaxTokens {
+				t.Errorf("max_output_tokens = %d, want %d", seenMaxTokens, tc.wantMaxTokens)
+			}
+			if seenSchemaName != tc.wantSchemaName {
+				t.Errorf("text.format.name = %q, want %q", seenSchemaName, tc.wantSchemaName)
+			}
+		})
+	}
+}
+
 func TestOpenAIProviderCompleteSuccessViaOutputText(t *testing.T) {
 	provider, calls := newTestOpenAIProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		req := decodeOpenAIRequest(t, r)

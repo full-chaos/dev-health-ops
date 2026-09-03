@@ -42,6 +42,13 @@ type CompletionRequest struct {
 	// a plain json_object/text response format, matching Python's own
 	// non-schema-prompt branch.
 	JSONSchema map[string]any
+	// MaxOutputTokens is a per-format FLOOR, combined with a provider's
+	// own configured floor via max() -- openai.py's OpenAIGPT5Provider
+	// floors at 2048 for categorization but 4096 for investment-mix
+	// explanation ("Explanation payloads are large; start higher than
+	// 4096" is openai.py's own comment). Zero means "no per-request
+	// floor," leaving the provider's own configured minimum as-is.
+	MaxOutputTokens int
 }
 
 // CategorizationRequest builds the CompletionRequest investment
@@ -54,6 +61,7 @@ func CategorizationRequest(prompt string) CompletionRequest {
 		SystemMessage:      categorizationSystemMessage,
 		ResponseFormatName: categorizationResponseFormatName,
 		JSONSchema:         categorizationJSONSchema(),
+		MaxOutputTokens:    categorizationMaxOutputTokensFloor,
 	}
 }
 
@@ -70,6 +78,7 @@ func InvestmentMixExplanationRequest(prompt string) CompletionRequest {
 		SystemMessage:      investmentMixExplanationSystemMessage,
 		ResponseFormatName: investmentMixExplanationResponseFormatName,
 		JSONSchema:         investmentMixExplanationJSONSchema(),
+		MaxOutputTokens:    investmentMixExplanationMaxOutputTokensFloor,
 	}
 }
 

@@ -21,14 +21,12 @@ type OpenAIProviderConfig struct {
 	// <= GPT-4) has no Go port, since day-one production config names a
 	// GPT-5 model.
 	Model string
-	// MaxOutputTokens is a floor, not a cap: openai.py's own minimum is
-	// 2048 for categorization but 4096 for investment-mix explanation
-	// (its narrative payloads run larger -- "Explanation payloads are
-	// large; start higher than 4096" is openai.py's own comment). This
-	// port applies ONE floor (openAIMinOutputTokens) regardless of
-	// CompletionRequest.ResponseFormatName; a future mix-explanation
-	// caller should pass a higher MaxOutputTokens explicitly rather than
-	// rely on a per-format default this config doesn't provide.
+	// MaxOutputTokens is a floor, not a cap: openAIMinOutputTokens (2048)
+	// applies here regardless of format; the PER-FORMAT floor (2048
+	// categorization / 4096 investment-mix explanation, openai.py's own
+	// asymmetry) comes from CompletionRequest.MaxOutputTokens instead,
+	// combined with this one via max() in Complete -- see
+	// CategorizationRequest/InvestmentMixExplanationRequest.
 	MaxOutputTokens int
 	HTTPClient      *http.Client
 }
@@ -133,7 +131,11 @@ type openAITokenDetails struct {
 
 // Complete ports openai.py's OpenAIGPT5Provider.complete.
 func (p *OpenAIProvider) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
-	maxTokens := p.cfg.MaxOutputTokens
+	// openai.py: max(self.cfg.max_output_tokens, <per-format floor>) --
+	// the request's own floor (set by CategorizationRequest/
+	// InvestmentMixExplanationRequest) never LOWERS the provider's
+	// configured minimum, only raises it.
+	maxTokens := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
 
 	textFormat := openAITextFormat{Type: "json_object"}
 	if request.JSONSchema != nil {

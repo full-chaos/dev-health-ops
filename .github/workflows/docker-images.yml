@@ -768,6 +768,34 @@ jobs:
           # clear within that window, and a call that fails identically
           # every time is treated as absence, same as before, just with
           # retries first rather than trusting a single attempt.
+          #
+          # KNOWN, DELIBERATE RESIDUAL (ci-flakes review, delta on
+          # b172ebf0): this changes the PROBABILITY of misclassifying a
+          # transient failure as absence, not the classification itself --
+          # a SUSTAINED failure (registry 5xx, rate limiting, an expired
+          # token: exactly the incidents that last minutes, not seconds)
+          # still lands on "treat as absent" after this ~6s window.
+          # ci-flakes' hypothesis: stderr (discarded here by `2>/dev/null`)
+          # likely DOES distinguish a real "not found"/"manifest unknown"
+          # from a transport error, which would let this be fixed
+          # structurally rather than probabilistically -- neither reviewer
+          # could verify buildx's actual stderr wording without live
+          # registry access, so this is not implemented blind (a wrong
+          # guess at the exact error text would silently misclassify a
+          # GENUINE absence as an error, which is worse than today). Left
+          # as a follow-up needing a live probe, not solved in this PR.
+          #
+          # ci-flakes review (delta on b172ebf0): the original version slept
+          # after the FINAL attempt too, paying for a retry it would never
+          # make. Fixed to skip the trailing sleep. Used for the TWO checks
+          # where absence is an anomaly worth a few retries to rule out a
+          # transient blip (:latest, and the just-published source tag) --
+          # NOT for the digest-walk's per-candidate checks below, where
+          # absence is the EXPECTED, common outcome for most candidates (a
+          # commit whose CI failed before publishing, or a future
+          # CHAOS-4948 skip) and retrying every miss would turn a fast walk
+          # into a slow one for no benefit; that loop uses the single-shot
+          # `_inspect_once` instead.
           _inspect_retry() {
             local ref="$1" attempt
             # shellcheck disable=SC2034
@@ -775,9 +803,12 @@ jobs:
               if docker buildx imagetools inspect "$ref" --format '{{json .}}' 2>/dev/null; then
                 return 0
               fi
-              sleep 2
+              [ "$attempt" -lt 3 ] && sleep 2
             done
             return 1
+          }
+          _inspect_once() {
+            docker buildx imagetools inspect "$1" --format '{{json .}}' 2>/dev/null
           }
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
@@ -808,7 +839,24 @@ jobs:
                 # this direct call didn't. Replace slashes (and anything
                 # else outside the tag-safe character set) with `-`, same
                 # convention most CI systems use for branch-derived tags.
+                #
+                # ci-flakes review (delta on b172ebf0): Docker's tag grammar
+                # is `[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}` -- the FIRST
+                # character may not be `.`/`-`. `tr` alone only fixes
+                # interior characters, so a real, valid git branch starting
+                # with a character outside A-Za-z0-9_ (e.g. `+foo`, `@work`,
+                # or any non-ASCII first character) sanitizes to a leading
+                # `-`, which is itself an invalid tag -- verified: `+foo` ->
+                # `-foo`. An empty BRANCH_TAG (an edge case, not raised by
+                # ci-flakes but caught applying their fix) also sanitizes to
+                # an empty string, `image:` -- also invalid. Guard the
+                # leading character explicitly; verified against real bash
+                # for +foo/@work/empty/a valid case before trusting it.
                 safe_branch_tag="$(printf '%s' "${BRANCH_TAG}" | tr -c 'A-Za-z0-9_.-' '-')"
+                case "${safe_branch_tag}" in
+                  [A-Za-z0-9_]*) ;;
+                  *) safe_branch_tag="x${safe_branch_tag}" ;;
+                esac
                 echo "NON-MAIN BRANCH ${family}: tagging ${safe_branch_tag} (from ref ${BRANCH_TAG}) unconditionally"
                 docker buildx imagetools create -t "${image}:${safe_branch_tag}" "${source_ref}"
               else
@@ -902,12 +950,19 @@ jobs:
                 # if/else -- under `set -euo pipefail`, ANY candidate whose
                 # sha- tag was never published (a real gap: a commit whose
                 # CI run failed before publishing, or one skipped by a
-                # future CHAOS-4948) made `_inspect_retry` fail, made the
+                # future CHAOS-4948) made the inspect call fail, made the
                 # pipeline fail, and aborted the ENTIRE job immediately
                 # instead of just treating that one candidate as a
                 # non-match and continuing the walk. Guarded the same way
-                # the :latest read above is.
-                if candidate_digest="$(_inspect_retry "${image}:sha-${candidate_short}" | jq -r '.manifest.digest // empty')"; then
+                # the :latest read above is -- but using `_inspect_once`
+                # (single attempt, no retry), not `_inspect_retry`:
+                # ci-flakes review (delta on b172ebf0) correctly separated
+                # these -- absence here is the EXPECTED, common outcome for
+                # most candidates in a 50-commit walk, and retrying every
+                # miss 3x with sleeps between would turn a fast walk into a
+                # slow one paying for retries that were never going to
+                # succeed.
+                if candidate_digest="$(_inspect_once "${image}:sha-${candidate_short}" | jq -r '.manifest.digest // empty')"; then
                   :
                 else
                   candidate_digest=""

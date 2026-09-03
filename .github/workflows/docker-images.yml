@@ -307,6 +307,23 @@ jobs:
             # CHAOS-4922 introduced alongside the script. An ARG's own NAME
             # cannot be assembled from variables, so indirection cannot hide it.
             # Anything else is unrecognised, and unrecognised means dangerous.
+            #
+            # THE IMMUNITY IS TO ASSEMBLY, NOT TO RENAMING (084-prod, round-2
+            # read). UN-INDIRECTABLE IS NOT UN-RENAMEABLE. This probe closes the
+            # HIGH -- a base assembled from `${REGISTRY}/${OWNER}/python` cannot
+            # hide the ARG's own name -- and it does NOT close a tree that renames
+            # the ARG: `grep PYTHON_BASE_IMAGE` then exits 1, which is the
+            # pre-mirror branch, so such a tree SKIPS. Same misclassification,
+            # different token, and no single-token probe can close it.
+            #
+            # Left as a known gap rather than chased: reaching it needs a triply
+            # inconsistent tree -- script absent, ARG renamed, mirrored base still
+            # consumed -- which is more pathological than the case branch 3 exists
+            # for. Written down so the next reader does not over-read the immunity
+            # as total and drop a fail-closed default somewhere on the strength of
+            # it. (For contrast, a pre-mirror tree that merely MENTIONS
+            # PYTHON_BASE_IMAGE in a comment classifies as mirrored and fails
+            # loudly: a false failure, but in the correct direction.)
             if grep -q 'PYTHON_BASE_IMAGE' docker/Dockerfile 2>/dev/null; then
               probe_status=0
             else

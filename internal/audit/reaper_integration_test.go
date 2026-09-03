@@ -19,15 +19,17 @@ func seedOutboxEvent(
 	t *testing.T,
 	env *auditFixture,
 	key string,
+	availableAt time.Time,
 	publishedAt *time.Time,
 ) int64 {
 	t.Helper()
 	var id int64
 	err := env.pool.QueryRow(ctx, `
 		INSERT INTO `+authschema.Quote(env.schema)+`.auth_outbox_events
-		    (aggregate_type, aggregate_id, event_type, payload, idempotency_key, published_at)
-		VALUES ('principal', 'p1', 'seeded', '{}'::jsonb, $1, $2)
-		RETURNING id`, key, publishedAt).Scan(&id)
+		    (aggregate_type, aggregate_id, event_type, payload, idempotency_key,
+		     available_at, published_at)
+		VALUES ('principal', 'p1', 'seeded', '{}'::jsonb, $1, $2, $3)
+		RETURNING id`, key, availableAt, publishedAt).Scan(&id)
 	if err != nil {
 		t.Fatalf("seeding %s: %v", key, err)
 	}
@@ -72,9 +74,18 @@ func TestReapNeverDeletesAnUnpublishedEvent(t *testing.T) {
 	long := time.Now().Add(-72 * time.Hour)
 	cutoff := time.Now().Add(-1 * time.Hour)
 
-	// Both are OLDER than the cutoff. The only difference is publication.
-	seedOutboxEvent(ctx, t, env, "unpublished-and-ancient", nil)
-	seedOutboxEvent(ctx, t, env, "published-and-ancient", &long)
+	// Both rows are ancient BY EVERY MEASURE -- available_at as well as
+	// published_at -- so publication is the ONLY difference between them.
+	//
+	// available_at matters and this test did not set it at first. Left to its
+	// now() default, the unpublished row was young, and a reaper rewritten to
+	// sweep on COALESCE(published_at, available_at) -- reaping by AGE, the
+	// plausible bug this test exists to catch -- still spared it. The test
+	// passed against a reaper that would delete undelivered work, because the
+	// name said "at any age" and the fixture only ever had a new row. Found by
+	// mutating the reaper, not by reading the test.
+	seedOutboxEvent(ctx, t, env, "unpublished-and-ancient", long, nil)
+	seedOutboxEvent(ctx, t, env, "published-and-ancient", long, &long)
 
 	deleted, err := Reap(ctx, env.pool, env.schema, cutoff, 100)
 	if err != nil {
@@ -107,9 +118,9 @@ func TestReapHonoursTheCutoffAndTheLimit(t *testing.T) {
 	recent := time.Now().Add(-1 * time.Minute)
 	cutoff := time.Now().Add(-1 * time.Hour)
 
-	seedOutboxEvent(ctx, t, env, "published-recently", &recent)
+	seedOutboxEvent(ctx, t, env, "published-recently", old, &recent)
 	for _, key := range []string{"old-a", "old-b", "old-c"} {
-		seedOutboxEvent(ctx, t, env, key, &old)
+		seedOutboxEvent(ctx, t, env, key, old, &old)
 	}
 
 	// The limit must bound the sweep: 2 of the 3 eligible rows.

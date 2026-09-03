@@ -18,8 +18,23 @@ import "fmt"
 // Making the identifier a TYPE converts the claim from one a reader has to
 // check into one the compiler checks: quoteIdentifier accepts only this type,
 // the only way to obtain one is NewValidatedIdentifier, and the only way to
-// build that is to pass the allowlist. A new DDL path cannot skip validation
-// without failing to compile.
+// build that is to pass the allowlist.
+//
+// THE SCOPE OF THAT GUARANTEE, STATED PRECISELY, because a first version of
+// this comment overstated it and a review round caught the overstatement:
+// every site that renders an identifier THROUGH quoteIdentifier is covered,
+// and the compiler enumerates those. A site that builds its own SQL with
+// fmt.Sprintf and %q never calls quoteIdentifier, so changing this signature
+// cannot reach it and the compiler says nothing. fixture_integration_test.go
+// does exactly that for role and database names. Those inputs are generated
+// test identifiers, so it is not a live injection path -- but "a new DDL path
+// cannot skip validation" is FALSE as stated, and the true claim is narrower:
+// a new path that uses this package's identifier RENDERER cannot skip it.
+//
+// Worth knowing if that fixture is ever fed a name it did not generate: Go's
+// %q is Go string-literal quoting, not PostgreSQL identifier quoting. It
+// escapes an embedded quote as \" where PostgreSQL expects it doubled, so %q
+// is not a substitute for this function even where it looks like one.
 //
 // KNOWN LIMIT, stated because a guarantee whose boundary is unstated is a
 // worse guarantee: inside THIS package a caller can still write

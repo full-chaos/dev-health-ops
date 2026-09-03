@@ -288,6 +288,20 @@ func (row stubRow) ScanStruct(any) error { return errStubExhausted }
 // Found in peer review (3092). The comment was the load-bearing part: it told
 // the next reader the constructors were covered, which is exactly why nobody
 // would look again.
+//
+// # ONE MUTANT THIS TEST DOES NOT CATCH, AND WHAT DOES
+//
+// Deleting the nowOrRefuse() call from ComputePartition entirely leaves this
+// test GREEN: the run still reaches the stub's first unanswered query, which
+// is all assertPartitionReachesPastTheClock requires. The mutant is caught by
+// TestDORAComputePartitionRefusesAnUninjectedClock instead -- a literal with
+// no clock would then hit a raw call, and mustNotPanic converts the panic into
+// a named failure.
+//
+// So the guard is covered by the SUITE, not by any single test. That is worth
+// stating here rather than on the refusal test, because this is the one with
+// the gap: whoever moves or deletes the refusal test needs to know this test
+// was leaning on it, and a reader of the refusal test already has the cover.
 func TestTheRealConstructorsAssignAWorkingClock(t *testing.T) {
 	// Resolved from the environment rather than assumed, so the stub agrees
 	// with whatever contract this process is configured for.

@@ -112,27 +112,46 @@ type OutboxEvent struct {
 // token is transaction control, so the state is never committed and
 // "all three or none" stays true rather than becoming a boundary to explain.
 //
-// THE RESIDUE, one sentence, and it is about the BACKSTOP rather than this
-// check: if a statement ends the transaction without saying so in its first
-// token, Commit's TxStatus check detects it and refuses, but the state that
-// mutation already committed is durable and cannot be undone.
+// TWO RESIDUES, both stated so neither is read as closed. Dynamic SQL the
+// lexer cannot see -- a statement assembled at runtime whose first token is
+// computed -- still reaches the server; Commit”'s TxStatus check DETECTS that
+// before reporting success, but the state such a mutation already committed is
+// durable and cannot be undone. Multi-statement strings are handled by the
+// protocol rather than the lexer: every forward carries QueryExecModeExec, so
+// the server refuses them.
 //
 // Retention past the callback remains possible and remains characterised
 // rather than prevented, by TestRetainedTxOpsIsUnusableAfterCommit.
 type TxOps struct{ tx pgx.Tx }
 
+// EVERY forward carries pgx.QueryExecModeExec, and that is a second control
+// rather than a performance choice.
+//
+// A first-token scan sees the FIRST statement. Under the simple protocol
+// `INSERT ...; COMMIT;` is one round trip carrying two commands, so the scan
+// reads INSERT, passes it, and the COMMIT executes anyway. Forcing the extended
+// protocol makes the server refuse a multi-statement string outright -- "cannot
+// insert multiple commands into a prepared statement" -- so the lexer's blind
+// spot is closed by the wire protocol instead of by a smarter lexer.
+//
+// It goes first in args because pgx reads exec-mode options from the leading
+// arguments.
 func (t TxOps) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if err := refuseTransactionControl(sql); err != nil {
 		return pgconn.CommandTag{}, err
 	}
-	return t.tx.Exec(ctx, sql, args...)
+	return t.tx.Exec(ctx, sql, prependExecMode(args)...)
 }
 
 func (t TxOps) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	if err := refuseTransactionControl(sql); err != nil {
 		return nil, err
 	}
-	return t.tx.Query(ctx, sql, args...)
+	return t.tx.Query(ctx, sql, prependExecMode(args)...)
+}
+
+func prependExecMode(args []any) []any {
+	return append([]any{pgx.QueryExecModeExec}, args...)
 }
 
 // QueryRow cannot return an error, so a refused statement is carried as a Row
@@ -141,7 +160,7 @@ func (t TxOps) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	if err := refuseTransactionControl(sql); err != nil {
 		return errRow{err}
 	}
-	return t.tx.QueryRow(ctx, sql, args...)
+	return t.tx.QueryRow(ctx, sql, prependExecMode(args)...)
 }
 
 type errRow struct{ err error }

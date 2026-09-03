@@ -402,7 +402,25 @@ mkdir -p "$RGOMODCACHE" || die "cannot create review GOMODCACHE $RGOMODCACHE"
 # Resolve the bounds ONCE, into variables, so the warn line below reports
 # exactly what is applied. The first version re-evaluated the defaults inside
 # the warn string, which could drift from the values actually exported.
-RGOFLAGS="${GOFLAGS:+$GOFLAGS }${CODEX_REVIEW_GOFLAGS:--p=2}"
+#
+# A caller-supplied -p=<n> in GOFLAGS is STRIPPED before appending the
+# wrapper's own bound, rather than left to sit alongside it. Go itself
+# honours the LAST occurrence of a repeated flag, so `-p=4 -p=2` and `-p=2`
+# behave identically today -- this is not a correctness fix. It exists
+# because lane-structure-memory's round logged the literal duplicate
+# (`GOFLAGS=-p=2 -p=2` when the caller had already set one), which reads as
+# a bug in the wrapper's own bookkeeping even though the value was correct.
+# Every other caller flag is kept, in its original order.
+GOFLAGS_STRIPPED=""
+if [ -n "${GOFLAGS:-}" ]; then
+  for gf_tok in $GOFLAGS; do
+    case "$gf_tok" in
+      -p=*) ;;  # dropped -- the wrapper's own -p bound (below) replaces it
+      *) GOFLAGS_STRIPPED="${GOFLAGS_STRIPPED:+$GOFLAGS_STRIPPED }$gf_tok" ;;
+    esac
+  done
+fi
+RGOFLAGS="${GOFLAGS_STRIPPED:+$GOFLAGS_STRIPPED }${CODEX_REVIEW_GOFLAGS:--p=2}"
 RGOMAXPROCS="${CODEX_REVIEW_GOMAXPROCS:-4}"
 
 # Sandbox mode. read-only is the historical default and stays the default on
@@ -703,8 +721,9 @@ RC=0
 # but it is the second line of defence, not the first.
 #
 # GOFLAGS is APPENDED, not replaced: an inherited `-mod=readonly` or similar
-# must survive. Go honours the LAST occurrence of a repeated flag, so -p=2 wins
-# regardless of what precedes it.
+# must survive. A caller-supplied -p=<n> is the one exception -- stripped
+# above before this wrapper's own -p bound is appended, so RGOFLAGS never
+# carries two -p= tokens (v4.8.2; see the comment where RGOFLAGS is built).
 #
 # Exported into codex's environment ONLY. `env` on this one command cannot
 # touch the caller's shell, which matters because lanes source this script's

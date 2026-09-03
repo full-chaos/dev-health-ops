@@ -55,17 +55,136 @@ _GHCR_IMAGE = re.compile(
 #    meaningless path, and silently treating it as covered (or
 #    uncovered) either way would be exactly the kind of guess this whole
 #    guard exists to replace with a verified fact.
+#
+# CHAOS-4949 (#2162), codex round 8 P1/P2 (bigboy, THREE MORE real gaps
+# in the tokenizer itself, found the round after "stop enumerating
+# shapes" -- ruling this time: stop trying to PARSE SHELL, not "parse it
+# better"):
+#
+# (a) A backslash-newline shell line continuation split one real
+#     reference across two whitespace-split words with neither half
+#     matching -- `_join_line_continuations` joins those back into one
+#     logical line, mirroring exactly what bash itself does, BEFORE any
+#     tokenizing happens.
+# (b) A `$(...)`/`${...}` substitution's own INTERNAL whitespace (e.g.
+#     `ci/$(dirname "$x")/preflight.sh`) can split what should be one
+#     path across several words -- no single word then contains both
+#     "ci/" and ".sh", so the OLD per-token `${`/`$(` refusal in
+#     `_normalize_ci_script_path` never even got a token to refuse.
+#     Genuinely fixing this by finding the true boundaries of a shell
+#     word is parsing shell, which is exactly what round 7 already
+#     ruled out. Instead: `_ci_reference_windows` finds every `ci/`
+#     occurrence on the (joined) logical line and looks ONLY as far as
+#     THAT occurrence's own next `.sh`/`.py` -- if `$(`, `${`, or a
+#     backtick appears anywhere in that window, the path itself is
+#     built from a substitution and the whole extraction refuses,
+#     naming the exact window, before any word-splitting happens at
+#     all. This is scoped to each reference's own span on purpose, not
+#     "does this line contain a substitution anywhere": the real,
+#     existing `eval "$(bash ci/python_base_ref.sh ... | awk ...)"` has
+#     a `$(` on the same line, but it wraps the whole command for
+#     OUTPUT CAPTURE -- the path between `ci/` and `.sh` is a static
+#     literal with nothing dynamic in it, and a line-wide check would
+#     have wrongly refused this real, already-covered invocation.
+# (c) `text.split()` alone cannot tell a real invocation
+#     (`bash ci/x.sh`) apart from the SAME text appearing as a quoted
+#     diagnostic argument (`echo "... ci/x.sh"`) or inside a `#`
+#     comment -- both contain "ci/" and end in ".sh". A candidate word
+#     now only counts as an invocation when it is in COMMAND POSITION:
+#     the first word on its logical line, immediately after one of
+#     `;`, `&&`, `||`, `|`, immediately after an interpreter keyword
+#     (`bash`, `sh`, `python`, `python3`, or the two-word `uv run`), or
+#     it starts with `./`. Anything else -- an `echo` argument, `#`
+#     comment prose, a `-f` file-existence test's operand -- is ignored.
+#
+# Any OTHER shell quoting/substitution shape is explicitly out of
+# scope: authors write plain invocations, or the guard refuses rather
+# than guess.
+_CI_SCRIPT_LINE_CONTINUATION = re.compile(r"\\[ \t]*\n")
+_CI_SCRIPT_INTERPRETERS = frozenset({"bash", "sh", "python", "python3"})
+_CI_SCRIPT_OPERATORS = frozenset({";", "&&", "||", "|"})
+# Broader than the punctuation stripped from a candidate token's own
+# stored text below -- a real interpreter word can arrive glued to an
+# opening substitution, e.g. `"$(bash` for `eval "$(bash
+# ci/python_base_ref.sh ...`. Stripping only trims the EDGES, so it
+# cannot turn an unrelated word into a false match.
+_CI_SCRIPT_CLASSIFY_STRIP = "\"'`(){}$"
+_CI_SCRIPT_TOKEN_STRIP = "\"'`();,"
+
+
+def _join_line_continuations(text: str) -> str:
+    """Bash joins a backslash immediately followed by a newline into the
+    PREVIOUS line -- mirror that here, structurally, before any
+    tokenizing (see the module-level comment above, item (a))."""
+    return _CI_SCRIPT_LINE_CONTINUATION.sub("", text)
+
+
+def _ci_reference_windows(line: str) -> list[tuple[int, int]]:
+    """Every (start, end) span on this LOGICAL line running from one
+    `ci/` occurrence to ITS OWN nearest following `.sh`/`.py` --
+    independent of word-splitting, since a `$(...)`/`${...}`
+    substitution's internal whitespace is exactly what defeats a
+    token-based scan (see item (b) above). Multiple `ci/` occurrences on
+    one line each get their own window, so a line can carry both a
+    static and a dynamic reference and each is judged on its own span."""
+    windows: list[tuple[int, int]] = []
+    for match in re.finditer(r"ci/", line):
+        start = match.start()
+        suffix = re.search(r"\.(?:sh|py)\b", line[start:])
+        if suffix is None:
+            continue
+        windows.append((start, start + suffix.end()))
+    return windows
+
+
+def _ci_script_classify(word: str) -> str:
+    """Strip shell-grouping/substitution punctuation from a word's edges
+    for classifying it as an interpreter keyword or control operator --
+    see `_CI_SCRIPT_CLASSIFY_STRIP` above for why this is broader than
+    `_CI_SCRIPT_TOKEN_STRIP`."""
+    return word.strip(_CI_SCRIPT_CLASSIFY_STRIP)
+
+
 def _extract_ci_script_tokens(text: str) -> list[str]:
     """Loosely tokenize `run:` text for anything shaped like a `ci/`
-    script reference. Whitespace-split, strip quoting/grouping
-    punctuation from each token's edges, keep tokens containing "ci/"
-    and ending in ".sh" or ".py" -- deliberately not a character-class
-    regex (see the module-level comment above for why)."""
+    script INVOCATION -- not shell-aware parsing (see the module-level
+    comment above for the full design and why). Raises `AssertionError`
+    if any `ci/`-to-`.sh`/`.py` window on a logical line contains a
+    shell substitution."""
+    text = _join_line_continuations(text)
     tokens: list[str] = []
-    for raw in text.split():
-        word = raw.strip("\"'`();,")
-        if "ci/" in word and (word.endswith(".sh") or word.endswith(".py")):
-            tokens.append(word)
+    for line in text.splitlines():
+        if "ci/" not in line:
+            continue
+        for start, end in _ci_reference_windows(line):
+            window = line[start:end]
+            if "$(" in window or "${" in window or "`" in window:
+                raise AssertionError(
+                    "build job references a ci/ script path built from a "
+                    "shell substitution, which cannot be statically "
+                    f"resolved: {window!r} (line: {line!r}) -- the "
+                    "changes filter's coverage of this path cannot be "
+                    "verified from source alone. Name it as a literal "
+                    "path, or if it must stay variable-built, add "
+                    "explicit filter coverage by hand and explain why "
+                    "here."
+                )
+        words = line.split()
+        for i, raw in enumerate(words):
+            word = raw.strip(_CI_SCRIPT_TOKEN_STRIP)
+            if not ("ci/" in word and (word.endswith(".sh") or word.endswith(".py"))):
+                continue
+            prev = _ci_script_classify(words[i - 1]) if i > 0 else ""
+            prev2 = _ci_script_classify(words[i - 2]) if i > 1 else ""
+            in_command_position = (
+                i == 0
+                or prev in _CI_SCRIPT_OPERATORS
+                or prev in _CI_SCRIPT_INTERPRETERS
+                or (prev == "run" and prev2 == "uv")
+                or word.startswith("./")
+            )
+            if in_command_position:
+                tokens.append(word)
     return tokens
 
 
@@ -234,6 +353,25 @@ def test_build_job_ci_script_references_are_covered_by_the_changes_filter() -> N
             "ci/python_base_ref.sh",
             id="flat-existing",
         ),
+        pytest.param(
+            'bash ci/helpers/\\\npreflight.sh "$OWNER"',
+            "ci/helpers/preflight.sh",
+            id="line-continuation",
+        ),
+        pytest.param(
+            # Verbatim from .github/workflows/docker-images.yml:480-481 --
+            # the real, existing, currently-covered invocation. It has a
+            # `$(` on the same logical line (wrapping the whole command
+            # for OUTPUT CAPTURE), which is exactly why the windowed
+            # refusal below is scoped to each `ci/` reference's own span
+            # rather than "does this line contain a substitution
+            # anywhere" -- a line-wide check would wrongly refuse this.
+            'eval "$(bash ci/python_base_ref.sh "${{ github.repository_owner }}" \\\n'
+            '                  | awk \'$1 == "ghcr" { print "ref=" $2 } '
+            '$1 == "upstream" { print "upstream=" $2 }\')"',
+            "ci/python_base_ref.sh",
+            id="real-eval-capture-not-refused",
+        ),
     ],
 )
 def test_ci_script_token_extraction_and_normalization(
@@ -251,14 +389,23 @@ def test_ci_script_token_extraction_and_normalization(
 
     Each row here is a real shape a prior round's fix still missed
     (nested/flat are the two rounds 5-6 already covered; doubled-slash,
-    leading `./`, and an embedded `./` segment are the round-7 additions)
-    -- proving extraction is genuinely shape-agnostic, not just wider by
-    one more enumerated case. Verified RED against round-6's
-    `_CI_SCRIPT_REF` regex (raw-string comparison, no normalization) for
-    the doubled-slash case specifically: it extracted
-    `ci/helpers//preflight.sh` as a literal string, which then compared
-    UNEQUAL to the filter's `ci/helpers/preflight.sh` entry -- reported
-    uncovered even when the filter genuinely already named the file."""
+    leading `./`, and an embedded `./` segment are the round-7 additions;
+    line-continuation and the real eval-capture line are the round-8
+    additions) -- proving extraction is genuinely shape-agnostic, not
+    just wider by one more enumerated case.
+
+    CORRECTED (codex round 8, P3): an earlier version of this docstring
+    claimed round-6's `_CI_SCRIPT_REF` regex extracted
+    `ci/helpers//preflight.sh` as a literal string for the doubled-slash
+    case, which then compared unequal to the filter's normalized entry
+    and was reported uncovered. That claim was never actually run and is
+    wrong -- the regex returns NO MATCH AT ALL against
+    `ci/helpers//preflight.sh` (verified:
+    ``re.compile(r"\\bci/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\\.(?:sh|py)\\b").findall(...)``
+    → `[]`). The regex's actual round-6-era failure mode for this input
+    was silently extracting NOTHING, not a false "uncovered" report --
+    the test's coverage of this shape is still real, only its stated
+    red-first mechanism was misdescribed."""
     tokens = _extract_ci_script_tokens(run_text)
     assert tokens, f"no ci/ script token extracted from {run_text!r}"
     normalized = {_normalize_ci_script_path(t) for t in tokens}
@@ -289,19 +436,83 @@ def test_ci_script_variable_built_path_refuses_rather_than_guesses() -> None:
 def test_build_job_ci_script_references_propagates_a_variable_built_path() -> None:
     """End-to-end version of the row above: a build-job `run:` step that
     references a ci/ script via an unresolved shell variable must make
-    `_build_job_ci_script_references()` itself fail loud, not silently
-    drop the unresolvable token and report a false-clean coverage
-    result."""
+    the pipeline fail loud, not silently drop the unresolvable reference
+    and report a false-clean coverage result.
+
+    UPDATED (codex round 8): the refusal now fires at EXTRACTION time
+    (the windowed scan in `_extract_ci_script_tokens` itself, item (b)
+    in the module comment), not only later inside
+    `_normalize_ci_script_path` -- a `${`/`$(` substitution INSIDE the
+    path can defeat word-splitting entirely (round 8 P1), so waiting
+    until normalize-time to catch it would be too late: there might be
+    no matching token to normalize at all. First asserts the real
+    workflow's own run text extracts cleanly with no refusal (the
+    positive control this test needs to be meaningful), then that
+    appending one variable-built reference makes extraction itself
+    raise."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     real_run_text = "\n".join(
         step.get("run", "") for step in workflow["jobs"]["build"]["steps"]
     )
-    # Same shape as _build_job_ci_script_references, but scanning
-    # synthetic text with one variable-built reference appended, to
-    # prove the refusal reaches all the way through the real pipeline.
-    tokens: list[str] = []
-    for step_text in (real_run_text, 'bash ci/${dir}/preflight.sh "$OWNER"'):
-        tokens.extend(_extract_ci_script_tokens(step_text))
+    _extract_ci_script_tokens(real_run_text)  # positive control: no refusal today
     with pytest.raises(AssertionError, match=re.escape("ci/${dir}/preflight.sh")):
-        for token in tokens:
-            _normalize_ci_script_path(token)
+        _extract_ci_script_tokens(
+            real_run_text + '\nbash ci/${dir}/preflight.sh "$OWNER"'
+        )
+
+
+def test_ci_script_dynamic_path_refuses_via_windowed_scan() -> None:
+    """CHAOS-4949 (#2162), codex round 8 (bigboy) P1, sub-case (b),
+    reproduced: `_extract_ci_script_tokens` splits `run:` text on
+    whitespace, so `ci/$(dirname "$x")/preflight.sh` -- a real,
+    executable shell form -- lands the substitution's own internal
+    whitespace across TWO separate words, and neither one alone
+    contains both "ci/" and ".sh". Before the windowed scan, extraction
+    silently returned zero tokens for this input -- a real script
+    reference invisible to the guard entirely, not even reaching the
+    old per-token `${`/`$(` refusal in `_normalize_ci_script_path`
+    (nothing to refuse if no token was ever produced). Verified this
+    row goes RED (returns `[]` instead of raising) against a version of
+    `_extract_ci_script_tokens` with the windowed-refusal loop removed,
+    before trusting it."""
+    with pytest.raises(AssertionError, match=re.escape('$(dirname "$x")')):
+        _extract_ci_script_tokens('bash ci/$(dirname "$x")/preflight.sh')
+
+
+def test_ci_script_two_references_one_dynamic_still_refuses() -> None:
+    """CHAOS-4949 (#2162), codex round 8 ruling: the windowed scan judges
+    EACH `ci/` occurrence on a logical line by its own span, not the
+    line as a whole -- so a line naming one static, already-covered
+    script and one dynamically-built script must still refuse on the
+    second, rather than the first occurrence's clean window somehow
+    vouching for the whole line."""
+    with pytest.raises(AssertionError, match=re.escape('$(dirname "$x")')):
+        _extract_ci_script_tokens(
+            'bash ci/python_base_ref.sh; bash ci/$(dirname "$x")/preflight.sh'
+        )
+
+
+def test_ci_script_ignores_comment_and_echo_references() -> None:
+    """CHAOS-4949 (#2162), codex round 8 (bigboy) P2, reproduced: a
+    quoted diagnostic argument to `echo`, or a `#` comment, can contain
+    text shaped exactly like a real `ci/` script reference (contains
+    "ci/", ends in ".sh"/".py") without the build job ever invoking it.
+    Before the command-position filter, `_extract_ci_script_tokens`
+    could not tell these apart from a real invocation and reported a
+    never-run script as uncovered -- a false positive that would block
+    the workflow on a file nothing actually calls. Verified this row
+    goes RED (both non-invocation references extracted) against a
+    version of `_extract_ci_script_tokens` with the command-position
+    check removed (`in_command_position` hardcoded `True`), before
+    trusting it."""
+    text = (
+        "bash ci/python_base_ref.sh\n"
+        "# see ci/helpers/notes.sh for background\n"
+        'echo "diagnostic ci/helpers/not-invoked.sh"'
+    )
+    tokens = set(_extract_ci_script_tokens(text))
+    assert tokens == {"ci/python_base_ref.sh"}, (
+        f"expected only the real invocation to be extracted, got {tokens!r} "
+        "-- a comment or echo argument shaped like a ci/ script reference "
+        "must be ignored, not reported as an uncovered invocation"
+    )

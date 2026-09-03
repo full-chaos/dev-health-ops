@@ -114,36 +114,69 @@ def test_fallback_leg_also_depends_on_the_dind_smoke_test() -> None:
     )
 
 
-def test_fallback_leg_is_gated_by_go_builds_own_eligibility_condition() -> None:
-    # codex round 1 (#2180, CHAOS-4906), P2: `if: always()` alone made this
-    # job run on every event pick-runner's own gate allows (kill switch +
-    # non-fork only), with no regard for go-build's own eligibility
-    # condition -- a merge_group event or a docs-only PR would reach this
-    # job and build+push a real digest go-merge never even consumes,
-    # changing this workflow's behavior on those events relative to before
-    # this PR. Fixed by ANDing go-build's own condition into this job's
-    # `if:`, while keeping `always()` so a skipped/failed pick-runner or
-    # dind-smoke-test still doesn't block this job from running when it IS
-    # eligible.
+def test_fallback_leg_requires_changes_job_to_have_succeeded() -> None:
+    # codex round 2 (#2180, CHAOS-4906), P2: `always()` bypasses GitHub's
+    # implicit success() check for EVERY dependency, including `changes` --
+    # a genuine `changes` job FAILURE no longer blocked this job the way it
+    # blocks go-build (which has no always() and so keeps the implicit
+    # check). On a push to main, go-build's own unconditional branch still
+    # got SKIPPED by that implicit check while this job's always() bypassed
+    # it and proceeded to build+push a digest go-merge (needs go-build, no
+    # always()) then never consumed. Fixed by ANDing an explicit
+    # `needs.changes.result == 'success'` check alongside `always()`.
     condition = str(_job(_FALLBACK_JOB).get("if", ""))
-    go_build_condition = str(_job("go-build").get("if", ""))
-    assert "always(" in condition, (
-        f"{WORKFLOW_PATH.name}: job {_FALLBACK_JOB!r}'s `if:` no longer "
-        "contains always() -- without it, a skipped or failed pick-runner/"
-        "dind-smoke-test would block this job entirely, defeating its own "
-        "purpose as the sole source of truth for the required check"
+    assert "needs.changes.result == 'success'" in condition, (
+        f"{WORKFLOW_PATH.name}: job {_FALLBACK_JOB!r}'s `if:` ({condition!r}) "
+        "no longer explicitly checks needs.changes.result -- always() alone "
+        "would let a genuine `changes` job FAILURE (not skip) fail to block "
+        "this job the way it blocks go-build"
     )
-    # Compare on the underlying boolean structure, not exact text -- both
-    # are written as `expr1 || expr2 || ...`, so every OR-branch of
-    # go-build's own condition must appear verbatim in the fallback's.
-    go_build_branches = [b.strip() for b in go_build_condition.split("||")]
-    for branch in go_build_branches:
-        assert branch in condition, (
-            f"{WORKFLOW_PATH.name}: job {_FALLBACK_JOB!r}'s `if:` is "
-            f"missing go-build's own eligibility branch {branch!r} -- "
-            f"fallback={condition!r} go-build={go_build_condition!r}. "
-            "Without every branch, this job can run on an event go-build "
-            "itself would have skipped."
+
+
+# codex round 2 (#2180, CHAOS-4906), P2, the guard's own false-negative: the
+# round-1 version of this check only proved every go-build OR-branch appears
+# SOMEWHERE in the dependent job's `if:` (a substring/inclusion check) -- it
+# never proved the two conditions are EQUIVALENT, so appending an EXTRA
+# branch (e.g. `|| github.event_name == 'merge_group'`) to a dependent job's
+# `if:` still satisfied every assertion while reintroducing the exact bug
+# being guarded against. Fixed by comparing the PARSED (already YAML-folded
+# to one line by the time `yaml.safe_load` returns it) condition strings for
+# EXACT equality after stripping each job's own known, literal prefix --
+# this is a stronger claim than substring inclusion in both directions: it
+# also catches a MISSING branch, not just an added one. The production YAML
+# is deliberately written so each condition folds to a clean single-line
+# string (every continuation line at the same indentation as the first, no
+# extra visual-alignment spaces) specifically so this comparison works
+# without normalizing embedded newlines.
+_ELIGIBILITY_GATED_JOBS: tuple[tuple[str, str], ...] = (
+    (_DIND_JOB, "needs.pick-runner.outputs.try_self_hosted == 'true' && ("),
+    (_SELF_HOSTED_JOB, "needs.pick-runner.outputs.try_self_hosted == 'true' && ("),
+    (_FALLBACK_JOB, "always() && needs.changes.result == 'success' && ("),
+)
+
+
+def test_eligibility_gated_jobs_match_go_builds_condition_exactly() -> None:
+    # codex round 1 (#2180, CHAOS-4906), P2: these jobs ran on every event
+    # pick-runner's own gate allowed (kill switch + non-fork only), with no
+    # regard for go-build's own eligibility condition -- a merge_group event
+    # or a docs-only PR would reach them and (for the attempt/fallback) build
+    # +push a real digest no merge job ever consumes, or (for dind) perform a
+    # real Docker build+run for nothing. Fixed by ANDing go-build's own
+    # condition, verbatim, into each job's `if:`.
+    go_build_condition = str(_job("go-build").get("if", ""))
+    for job_name, prefix in _ELIGIBILITY_GATED_JOBS:
+        condition = str(_job(job_name).get("if", ""))
+        expected = f"{prefix}{go_build_condition})"
+        assert condition == expected, (
+            f"{WORKFLOW_PATH.name}: job {job_name!r}'s `if:` does not "
+            "exactly match go-build's own eligibility condition (wrapped "
+            f"in this job's own prefix) -- expected {expected!r}, got "
+            f"{condition!r}. An exact mismatch means either a MISSING "
+            "branch (this job can be more restrictive than go-build, "
+            "skipping something go-build itself would run) or an EXTRA "
+            "one (this job can run on an event go-build itself would "
+            "have skipped) -- either is a bug, not just the added one "
+            "this test was originally written to catch."
         )
 
 
@@ -301,6 +334,46 @@ def test_both_legs_build_step_with_maps_are_identical() -> None:
         f"fallback={fallback_with!r}. Either leg can be the one that "
         "actually does the real work; a divergence here means WHICH leg "
         "ran silently changes what gets built and pushed"
+    )
+
+
+def _step_by_id(job_name: str, step_id: str) -> dict[str, object]:
+    steps_raw = _job(job_name).get("steps") or []
+    assert isinstance(steps_raw, list)
+    matches = [s for s in steps_raw if isinstance(s, dict) and s.get("id") == step_id]
+    assert len(matches) == 1, (
+        f"{WORKFLOW_PATH.name}: job {job_name!r} must have exactly one step "
+        f"with id {step_id!r} (found {len(matches)})"
+    )
+    return matches[0]
+
+
+def test_both_legs_versioning_step_scripts_are_identical() -> None:
+    # codex round 2 (#2180, CHAOS-4906), P2 guard false-negative: the
+    # `with:`-map equality test above compares the BUILD step's own
+    # literal inputs, which reference `${{ steps.versioning.outputs.
+    # source_date_epoch }}` identically on both legs -- but that
+    # equality is blind to the UPSTREAM `versioning` step itself. A
+    # fallback-only edit to `versioning`'s own script (e.g. hardcoding
+    # `EPOCH=0` instead of `git log -1 --pretty=%ct`) would leave the
+    # `with:` block's literal text unchanged and pass that guard while
+    # silently changing what the selected leg actually builds. Pinning
+    # the `versioning` step's own `run:` script equal, in addition to
+    # the `with:` block, closes this one level up the same dependency
+    # chain.
+    attempt_script = _step_by_id(_SELF_HOSTED_JOB, "versioning").get("run")
+    fallback_script = _step_by_id(_FALLBACK_JOB, "versioning").get("run")
+    assert isinstance(attempt_script, str) and isinstance(fallback_script, str), (
+        f"{WORKFLOW_PATH.name}: one of the two legs' 'versioning' step has "
+        "no `run:` script to compare"
+    )
+    assert attempt_script == fallback_script, (
+        f"{WORKFLOW_PATH.name}: the two legs' 'versioning' steps have "
+        f"diverged -- attempt={attempt_script!r} fallback={fallback_script!r}. "
+        "This step's OUTPUTS feed the build step's `with:` block by "
+        "reference (`${{ steps.versioning.outputs.* }}`), so a divergence "
+        "here changes what gets built without changing the with:-map "
+        "equality test's own literal text at all"
     )
 
 

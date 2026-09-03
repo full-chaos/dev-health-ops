@@ -160,9 +160,27 @@ jobs:
   # info` proves the daemon is reachable at all, and a `hello-world`-shaped
   # build+run proves it can actually execute a container, not just answer
   # a socket ping.
+  # codex round 2 (#2180, CHAOS-4906), P2, the flagged sibling gap closed:
+  # this job and go-build-worker-arm64-self-hosted below gated ONLY on
+  # pick-runner's own condition (the kill switch + non-fork check), never on
+  # go-build's own eligibility (event type + paths filter) -- on an enabled-
+  # pool `merge_group` event, this job performed a real Docker build+run and
+  # the self-hosted attempt built+pushed a real digest that no merge job ever
+  # consumed. Both now additionally require go-build's own eligibility
+  # condition, the SAME expression go-build itself uses (kept byte-identical
+  # on purpose -- see test_docker_build_worker_arm64_pilot.py's eligibility
+  # guard, which checks this by exact string comparison after stripping the
+  # known pick-runner-check prefix, not by inclusion, precisely because
+  # inclusion checking is what let a superset bypass slip through undetected
+  # here in the first place).
   dind-smoke-test:
-    needs: pick-runner
-    if: needs.pick-runner.outputs.try_self_hosted == 'true'
+    needs: [pick-runner, changes]
+    if: >-
+      needs.pick-runner.outputs.try_self_hosted == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.changes.outputs.code == 'true')
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 5
     steps:
@@ -615,8 +633,16 @@ jobs:
   # own steps exactly, hardcoded to this one (target, platform) pair
   # instead of reading them from a matrix.
   go-build-worker-arm64-self-hosted:
-    needs: [pick-runner, dind-smoke-test]
-    if: needs.pick-runner.outputs.try_self_hosted == 'true'
+    # codex round 2 (#2180, CHAOS-4906), P2, sibling gap: see dind-smoke-test's
+    # own comment above -- same fix, same reasoning, same go-build eligibility
+    # condition kept byte-identical on purpose.
+    needs: [pick-runner, dind-smoke-test, changes]
+    if: >-
+      needs.pick-runner.outputs.try_self_hosted == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.changes.outputs.code == 'true')
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     steps:
@@ -733,13 +759,27 @@ jobs:
     # `changes` as a direct dependency to read its output, hence its
     # addition to `needs:` below -- it is a fast paths-filter job, not a
     # meaningful delay to this job's own start.
+    # codex round 2 (#2180, CHAOS-4906), P2: `always()` alone bypasses GitHub's
+    # implicit success() check for EVERY dependency, including `changes` --
+    # a genuine `changes` job FAILURE (not skip: a real checkout/paths-filter
+    # error) no longer blocks this job the way it blocks go-build. On a push
+    # to main specifically, go-build's OWN unconditional "always builds on
+    # push to main" branch still gets SKIPPED by GitHub's implicit
+    # needs-success check (go-build has no always()), while this job's
+    # always() bypasses that same check and proceeds -- building+pushing a
+    # digest that go-merge (needs go-build, no always()) then never consumes,
+    # since go-build itself was skipped. Fixed by ANDing an EXPLICIT
+    # `needs.changes.result == 'success'` check alongside `always()` --
+    # `changes` has no job-level `if:` of its own (it always runs), so this
+    # adds no new restriction on any legitimate event, only closes the
+    # failure-path gap.
     needs: [pick-runner, dind-smoke-test, changes]
     if: >-
-      always() &&
+      always() && needs.changes.result == 'success' &&
       (github.event_name == 'workflow_dispatch' ||
-       github.event_name == 'release' ||
-       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-       needs.changes.outputs.code == 'true')
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.changes.outputs.code == 'true')
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 20
     permissions:

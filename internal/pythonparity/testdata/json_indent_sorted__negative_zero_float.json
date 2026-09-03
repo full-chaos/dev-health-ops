@@ -1,0 +1,13 @@
+{
+  "case": "negative_zero_float",
+  "input": {
+    "type": "map",
+    "value": {
+      "share": {
+        "type": "float",
+        "value": -0.0
+      }
+    }
+  },
+  "output": "{\n  \"share\": -0.0\n}"
+}

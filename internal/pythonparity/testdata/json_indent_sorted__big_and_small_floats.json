@@ -1,0 +1,21 @@
+{
+  "case": "big_and_small_floats",
+  "input": {
+    "type": "map",
+    "value": {
+      "big": {
+        "type": "float",
+        "value": 10000000000.0
+      },
+      "neg": {
+        "type": "float",
+        "value": -42.5
+      },
+      "small": {
+        "type": "float",
+        "value": 1e-10
+      }
+    }
+  },
+  "output": "{\n  \"big\": 10000000000.0,\n  \"neg\": -42.5,\n  \"small\": 1e-10\n}"
+}

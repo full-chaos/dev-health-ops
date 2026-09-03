@@ -1,0 +1,25 @@
+{
+  "case": "unsorted_input_keys",
+  "input": {
+    "type": "map",
+    "value": {
+      "Mu": {
+        "type": "int",
+        "value": 3
+      },
+      "alpha": {
+        "type": "int",
+        "value": 2
+      },
+      "beta": {
+        "type": "int",
+        "value": 4
+      },
+      "zeta": {
+        "type": "int",
+        "value": 1
+      }
+    }
+  },
+  "output": "{\n  \"Mu\": 3,\n  \"alpha\": 2,\n  \"beta\": 4,\n  \"zeta\": 1\n}"
+}

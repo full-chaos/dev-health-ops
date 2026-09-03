@@ -60,7 +60,9 @@ executes, which is the same error in a new place.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 
@@ -75,6 +77,58 @@ PACKAGE = re.compile(r"(\./[A-Za-z0-9_./-]+)")
 DECLARED_TEST = re.compile(r"^func (Test[A-Za-z0-9_]+)", re.M)
 
 ORACLE_ENV = "DEV_HEALTH_LIVE_PYTHON_ORACLES=1"
+
+
+ASSIGNMENT = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(\((?P<arr>[^)]*)\)|'(?P<sq>[^']*)'|\"(?P<dq>[^\"]*)\"|(?P<bare>\S+))",
+    re.M,
+)
+UNRESOLVED = re.compile(r"\$\{?[A-Za-z_]")
+
+
+def _shell_values(source: str) -> dict[str, str]:
+    """Scalar and array assignments, so the checks see what the SHELL sees.
+
+    Round 2 broke the previous version three times and every break was the same
+    thing: the script says `$ORACLE_SELECTOR` or `"${ORACLE_ENV[@]}"` and a
+    literal-text scan reads the variable NAME. The value is right there in the
+    file; not resolving it was the bug.
+
+    Only the simple forms this script actually uses are resolved. Anything left
+    unresolved is REPORTED, not skipped -- see
+    test_no_go_test_command_is_unresolvable. A parser that cannot be complete
+    must at least refuse to be silently incomplete.
+    """
+    values: dict[str, str] = {}
+    for match in ASSIGNMENT.finditer(source):
+        name = match.group(1)
+        raw = (
+            match.group("arr")
+            or match.group("sq")
+            or match.group("dq")
+            or match.group("bare")
+            or ""
+        )
+        values[name] = " ".join(raw.split())
+    return values
+
+
+def _expand(block: str, values: dict[str, str]) -> str:
+    """Substitute known variables until it stops changing."""
+    for _ in range(5):
+        before = block
+        for name, value in values.items():
+            block = (
+                block.replace(f'"${{{name}[@]}}"', value)
+                .replace(f"${{{name}[@]}}", value)
+                .replace(f'"${{{name}}}"', value)
+                .replace(f"${{{name}}}", value)
+                .replace(f'"${name}"', value)
+                .replace(f"${name}", value)
+            )
+        if block == before:
+            break
+    return block
 
 
 def _invocations() -> list[tuple[str | None, list[str]]]:
@@ -100,7 +154,8 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
     # duplicate this file exists to prevent lived entirely in the oracle
     # section, where the variable IS set and the test really ran three times.
     """
-    lines = CHECK_GO.read_text(encoding="utf-8").splitlines()
+    raw_source = CHECK_GO.read_text(encoding="utf-8")
+    lines = raw_source.splitlines()
     found: list[tuple[str | None, list[str]]] = []
     for index, line in enumerate(lines):
         if not GO_TEST.search(line):
@@ -114,7 +169,7 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
         end = index
         while lines[end].rstrip().endswith("\\") and end + 1 < len(lines):
             end += 1
-        block = "\n".join(lines[start : end + 1])
+        block = _expand("\n".join(lines[start : end + 1]), _shell_values(raw_source))
         packages = PACKAGE.findall(block)
         if not packages or ORACLE_ENV not in block:
             continue
@@ -236,130 +291,207 @@ ORACLE_ENV_LITERAL = '"DEV_HEALTH_LIVE_PYTHON_ORACLES"'
 DECLARATION_WINDOW = 1500
 
 
-def _oracle_env_identifiers(package_dir: Path) -> set[str]:
-    """Every identifier in this package whose value IS the oracle env var.
-
-    DERIVED, not listed. Three different spellings exist in the tree --
-    `livePythonOraclesEnv`, `fmaLivePythonOraclesEnv`, and the bare literal --
-    and a fourth will appear the moment someone adds a package. Enumerating the
-    names is the mistake this whole file is about: an earlier version of this
-    very check listed two of them, reported five gated tests as ungated, and
-    would have reported a sixth spelling as a real finding.
-
-    So instead: find the constants in the package that are DEFINED as the
-    literal, and accept a gate that reads any of them.
-    """
-    identifiers = {ORACLE_ENV_LITERAL.strip('"')}
-    assignment = re.compile(
-        r"(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*" + re.escape(ORACLE_ENV_LITERAL)
-    )
-    for source in package_dir.rglob("*.go"):
-        identifiers.update(
-            assignment.findall(source.read_text(encoding="utf-8", errors="ignore"))
-        )
-    return identifiers
-
-
-def _gating_functions(package_dir: Path, gates: set[str]) -> set[str]:
-    """Functions in this package that themselves perform the skip.
-
-    A test may not read the variable at all: four in
-    internal/jobs/metrics/testops call `runPythonOracle(t, ...)`, and the skip
-    lives inside that helper. Gating one hop away is still gating.
-
-    Derived the same way as the identifiers -- find the functions whose body
-    reads a gate and calls t.Skip, rather than naming `runPythonOracle` here and
-    waiting for the next helper to be written.
-    """
-    found: set[str] = set()
-    declaration = re.compile(r"^func ([A-Za-z_][A-Za-z0-9_]*)\(", re.M)
-    for source in package_dir.rglob("*.go"):
-        text = source.read_text(encoding="utf-8", errors="ignore")
-        matches = list(declaration.finditer(text))
-        for index, match in enumerate(matches):
-            stop = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            body = text[match.start() : stop]
-            if "t.Skip(" not in body:
-                continue
-            if any(
-                f"os.Getenv({gate})" in body or f'os.Getenv("{gate}")' in body
-                for gate in gates
-            ):
-                found.add(match.group(1))
-    return found
-
-
 def test_every_oracle_named_test_skips_without_the_env_var() -> None:
-    """The property that makes the scoping above SOUND rather than convenient.
+    """RUN them. Do not pattern-match the source for something skip-shaped.
 
-    This file only counts invocations that set DEV_HEALTH_LIVE_PYTHON_ORACLES,
-    on the reasoning that `check_test` and `check_race` run `go test ./...`
-    across every package and therefore reach these tests too -- but do not
-    EXECUTE them, because each one skips without the variable.
+    This assertion is what makes the oracle-scoping SOUND: `check_test` and
+    `check_race` sweep every package with `go test ./...`, so these tests are
+    REACHED there -- and only skip because the variable is unset. If one did not
+    skip, the sweep would execute it for real and this file's central claim
+    would be false while every check here stayed green.
 
-    That reasoning is load-bearing and was, until now, only stated. If a named
-    oracle test were not gated, the `./...` sweeps would run it for real and
-    this file's central claim -- that only oracle-scoped invocations can
-    duplicate an oracle run -- would be false while every test here stayed
-    green.
-
-    The gate identifier is DERIVED from the package rather than listed: three
-    spellings exist (`livePythonOraclesEnv`, `fmaLivePythonOraclesEnv`, the bare
-    literal) and the first version of this check listed two, reporting five
-    gated tests as ungated and one real spelling as a finding. Constants are
-    resolved to their value instead.
-
-    Note what is NOT asserted: that every `-run` name anywhere in the script is
-    gated this way. `TestExplicitQueueMultiReplicaClaimDrainRestart` is named in
-    `check_multi_replica_workers`, which sets no oracle variable and passes
-    `-tags=integration`; a plain `./...` sweep does not compile it in at all.
-    Gating by build tag is a different mechanism and this check has no opinion
-    on it -- which is why the population here is the oracle-scoped invocations,
-    not every selector in the file.
+    # WHY THIS EXECUTES INSTEAD OF READING THE SOURCE
+    #
+    # Two independent reviewers broke the source-reading version, and both
+    # breaks were things no pattern can see:
+    #
+    #   lane-ci-flakes  inverting `!=` to `==` -- ONE CHARACTER -- leaves a gate
+    #                   that reads the variable and calls t.Skip, so every
+    #                   pattern still matches, while the test now runs under the
+    #                   sweep and skips in the oracle block. Coverage moves to
+    #                   the machine without Python configured.
+    #
+    #   codex round 2   `if false { if os.Getenv(env) == "" { t.Skip(...) } }`
+    #                   satisfies a substring scan over the declaration and is
+    #                   unreachable.
+    #
+    # Both are answered by the same move, and it is the move this whole file is
+    # about: stop asking what the source LOOKS LIKE and ask what the code DOES.
+    # A skip that does not fire is not a gate, however it is spelled.
     """
-    named: set[str] = set()
-    for selector, _ in _invocations():
-        if selector is not None:
-            named.update(re.findall(r"Test[A-Za-z0-9_]+", selector))
+    by_package: dict[str, set[str]] = defaultdict(set)
+    for selector, packages in _invocations():
+        if selector is None:
+            continue
+        names = re.findall(r"Test[A-Za-z0-9_]+", selector)
+        for package in packages:
+            for name in names:
+                by_package[package].add(name)
 
-    assert named, "no oracle-scoped test names resolved; the parse has broken"
+    assert by_package, "no oracle-scoped test names resolved; the parse has broken"
 
-    ungated: list[str] = []
-    for name in sorted(named):
-        declaration = re.compile(rf"^func {re.escape(name)}\(", re.M)
-        located = False
-        for source in REPO_ROOT.rglob("*_test.go"):
-            text = source.read_text(encoding="utf-8", errors="ignore")
-            match = declaration.search(text)
-            if not match:
-                continue
-            located = True
-            window = text[match.start() : match.start() + DECLARATION_WINDOW]
-            gates = _oracle_env_identifiers(source.parent)
-            reads_gate = (
-                any(
-                    f"os.Getenv({gate})" in window or f'os.Getenv("{gate}")' in window
-                    for gate in gates
+    environment = dict(os.environ)
+    environment.pop("DEV_HEALTH_LIVE_PYTHON_ORACLES", None)
+    environment["GOFLAGS"] = "-p=2"
+    environment["GOMAXPROCS"] = "4"
+
+    not_skipped: list[str] = []
+    checked = 0
+    for package, package_names in sorted(by_package.items()):
+        pattern = "^(" + "|".join(sorted(package_names)) + ")$"
+        completed = subprocess.run(
+            ["go", "test", "-mod=readonly", "-count=1", "-run", pattern, "-v", package],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        for name in sorted(package_names):
+            checked += 1
+            # `--- SKIP: Name` is the only proof the gate fired. A test that did
+            # not run at all (build failure, wrong package) is reported too --
+            # absence of a PASS is not evidence of a SKIP.
+            if f"--- SKIP: {name}" not in completed.stdout:
+                ran = (
+                    f"--- PASS: {name}" in completed.stdout
+                    or f"--- FAIL: {name}" in completed.stdout
                 )
-                and "t.Skip(" in window
-            )
-            calls_gate = any(
-                f"{helper}(" in window
-                for helper in _gating_functions(source.parent, gates)
-            )
-            if not (reads_gate or calls_gate):
-                ungated.append(f"{name}  ({source.relative_to(REPO_ROOT)})")
-            break
-        if not located:
-            ungated.append(f"{name}  (DECLARATION NOT FOUND)")
+                not_skipped.append(
+                    f"{name} ({package}): {'EXECUTED' if ran else 'no SKIP and no result'}"
+                )
 
-    assert not ungated, (
-        "these tests are named in a live-oracle `-run` but do not skip when "
-        "DEV_HEALTH_LIVE_PYTHON_ORACLES is unset:\n  "
-        + "\n  ".join(ungated)
-        + "\n\nThat breaks this file's scoping argument. `check_test` and "
-        "`check_race` run `go test ./...` across every package, so an ungated "
-        "oracle test is executed there as well as by its named invocation -- a "
-        "duplicate run that the scoped check above deliberately does not look "
-        "for, because it assumes this property holds."
+    assert not not_skipped, (
+        f"of {checked} oracle-named tests, these did not SKIP with "
+        "DEV_HEALTH_LIVE_PYTHON_ORACLES unset:\n  "
+        + "\n  ".join(not_skipped)
+        + "\n\nThe `./...` sweeps in check_test and check_race reach these "
+        "tests, so one that does not skip is executed there -- on a runner with "
+        "no live interpreter configured -- as well as by its named invocation."
     )
+
+
+def test_no_go_test_command_is_unresolvable() -> None:
+    """Anything the checks cannot model must be REPORTED, never skipped.
+
+    The scope filter and the selector resolver both work on expanded text. If a
+    command still contains an unexpanded `$NAME` after substitution, then this
+    file cannot tell whether it is an oracle run, nor which tests it executes --
+    and the previous version handled exactly that case by silently ignoring the
+    command, which is how round 2 slipped two duplicates past it.
+
+    Failing loudly is the only honest option: the alternative is a checker that
+    quietly narrows its own scope whenever the script uses a construct it does
+    not parse.
+    """
+    raw_source = CHECK_GO.read_text(encoding="utf-8")
+    values = _shell_values(raw_source)
+    lines = raw_source.splitlines()
+
+    unresolvable: list[str] = []
+    for index, line in enumerate(lines):
+        if (
+            not GO_TEST.search(line)
+            or line.lstrip().startswith("#")
+            or "printf" in line
+        ):
+            continue
+        start = index
+        while start > 0 and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\") and end + 1 < len(lines):
+            end += 1
+        block = _expand("\n".join(lines[start : end + 1]), values)
+        if not PACKAGE.findall(block):
+            continue
+        # Only the positions that decide WHAT RUNS matter. `${PYTHON:-python3}`
+        # and `${PYTHONPATH:+...}` are parameter expansions with defaults: they
+        # choose an interpreter and a path, not a test set, and flagging them
+        # would make this check fire on legitimate structure -- which is how a
+        # guard gets weakened by the next person who meets it.
+        #
+        # What DOES matter: an unresolved selector (we cannot tell which tests
+        # run) and an unresolved array expansion in the environment prefix (we
+        # cannot tell whether this is an oracle run at all). Those are exactly
+        # the two constructions that slipped duplicates past round 2.
+        # An unresolved selector only matters if this IS an oracle run. The
+        # providersync integration shards build `-run "${test_regex}"` at
+        # runtime from their shard assignment, and that is fine: no oracle
+        # variable is set, so the command is classified as non-oracle without
+        # needing to know which tests it names.
+        selector = SELECTOR.search(block)
+        if (
+            ORACLE_ENV in block
+            and selector
+            and UNRESOLVED.search(selector.group(1) or selector.group(2) or "")
+        ):
+            unresolvable.append(
+                f"line {index + 1}: unresolved `-run` selector in a live-oracle command"
+            )
+        for expansion in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}", block):
+            unresolvable.append(
+                f"line {index + 1}: unresolved array ${{{expansion}[@]}} in the "
+                "environment prefix"
+            )
+
+    assert not unresolvable, (
+        "these `go test` commands in ci/check_go.sh contain a variable this "
+        "checker could not resolve:\n  "
+        + "\n  ".join(unresolvable)
+        + "\n\nIt therefore cannot tell whether they are live-oracle runs, nor "
+        "which tests they execute, so it cannot report them as duplicates. "
+        "Either use a literal, or teach _shell_values the assignment form -- do "
+        "not leave the checker silently ignoring a command it cannot read."
+    )
+
+
+def test_the_build_tag_boundary_is_asserted_not_described() -> None:
+    """The one claim this file makes about a mechanism it does not model.
+
+    `TestExplicitQueueMultiReplicaClaimDrainRestart` is named in a `-run` but is
+    deliberately outside the oracle population: its invocation sets no oracle
+    variable and passes `-tags=integration`, so a plain `./...` sweep does not
+    compile it in and cannot double-run it.
+
+    That reasoning was stated in a docstring and nothing enforced it. Drop the
+    flag from the invocation, or the tag from the file, and the test runs in
+    both places -- via a mechanism this file has explicitly declined to model,
+    so nothing else here would notice. lane-ci-flakes pointed out that this is
+    the same "stated, not asserted" defect I had just finished fixing one level
+    down, and they were right.
+    """
+    source = CHECK_GO.read_text(encoding="utf-8")
+    marker = "TestExplicitQueueMultiReplicaClaimDrainRestart"
+    if marker not in source:
+        return  # the invocation is gone; nothing to protect
+
+    index = source.index(marker)
+    block_start = source.rfind("go test", 0, index)
+    assert block_start != -1, f"{marker} is named outside any `go test` command"
+    block = source[block_start:index]
+    assert "-tags=integration" in block, (
+        f"the invocation naming {marker} no longer passes `-tags=integration`. "
+        "That tag is the only reason a `./...` sweep does not also run it -- "
+        "without it the test executes twice, through a mechanism the duplicate "
+        "check above deliberately does not model."
+    )
+
+    declaring = [
+        path
+        for path in (REPO_ROOT / "cmd/dev-health-worker").rglob("*_test.go")
+        if re.search(
+            rf"^func {marker}\(",
+            path.read_text(encoding="utf-8", errors="ignore"),
+            re.M,
+        )
+    ]
+    assert declaring, (
+        f"{marker} is invoked but not declared under cmd/dev-health-worker"
+    )
+    for path in declaring:
+        head = path.read_text(encoding="utf-8", errors="ignore")[:400]
+        assert "//go:build integration" in head or "+build integration" in head, (
+            f"{path.relative_to(REPO_ROOT)} declares {marker} but carries no "
+            "integration build tag, so a plain `./...` sweep compiles and runs it"
+        )

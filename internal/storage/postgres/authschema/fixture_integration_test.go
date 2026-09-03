@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -164,4 +165,52 @@ func fixtureDSN(t *testing.T, adminURI, role string) string {
 	}
 	parsed.User = url.UserPassword(role, fixturePassword)
 	return parsed.String()
+}
+
+// migrationOnlyFixture is a container with the schema and version table
+// created but NO migrations applied, holding one raw connection.
+//
+// The stepwise additive suite needs to drive applyOne itself, so it cannot use
+// newAuthFixture (which applies the whole lineage and grants). Kept beside it
+// rather than in that file so the two setups are visibly different things.
+type migrationOnlyFixture struct {
+	conn    *pgx.Conn
+	schema  string
+	options Options
+}
+
+func newAuthMigrationOnly(t *testing.T, ctx context.Context) *migrationOnlyFixture {
+	t.Helper()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+
+	conn, err := pgx.Connect(ctx, instance.URI)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+
+	runtimeRole, err := containers.RoleName("auth_add_runtime", instance)
+	if err != nil {
+		t.Fatalf("derive runtime role: %v", err)
+	}
+	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE ROLE %q", runtimeRole)); err != nil {
+		t.Fatalf("create runtime role: %v", err)
+	}
+
+	options := Options{Schema: "auth", RuntimeRole: runtimeRole}
+	if err := ensureSchemaAndVersionTable(ctx, conn, options); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	return &migrationOnlyFixture{conn: conn, schema: options.Schema, options: options}
 }

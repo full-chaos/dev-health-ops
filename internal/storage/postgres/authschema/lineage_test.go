@@ -89,101 +89,28 @@ func TestLoadMigrationsRejectsMalformedLineages(t *testing.T) {
 	}
 }
 
-// destructiveStatement matches DDL and DML this lineage must not contain.
+// The text-derived additive-only guard that used to live here is RETIRED,
+// along with the dynamic-SQL refusal that was bolted onto it.
 //
-// CHAOS-4882's scope is "additive-only schema/migrations (no existing row
-// moves, no writer changes)". That is a property of the SQL text, so it is
-// checked against the SQL text rather than asserted in a PR body — the same
-// reasoning that put the secret-column rule below into a test.
-var destructiveStatement = regexp.MustCompile(
-	`(?is)\b(DROP\s+(TABLE|SCHEMA|COLUMN|INDEX|CONSTRAINT|TYPE)|TRUNCATE|DELETE\s+FROM|UPDATE\s+\w+\s+SET|ALTER\s+TABLE\s+\S+\s+DROP)\b`,
-)
-
-// dynamicSQL matches the constructs that make a migration UNANALYSABLE by any
-// static rule: a DO block, an EXECUTE, or a dollar-quoted body.
+// It scanned migration SQL with a regexp and was walked through six times
+// across two review rounds. The two that settle the argument: a `DO $$ BEGIN
+// EXECUTE 'DROP ' || 'TABLE ...'; END $$;` block drops a table while
+// containing no contiguous destructive token, and `ALTER COLUMN x DROP NOT
+// NULL` followed by `ALTER COLUMN x TYPE text USING NULL::text` erases every
+// value in a column while adding no keyword the pattern looked for. Both are
+// legal SQL that means something the scanner could not compute, and no pattern
+// over concatenated string fragments can be made to.
 //
-// Codex round 1 (P1) showed why this is a separate, unconditional refusal
-// rather than a smarter destructiveStatement: a migration containing
+// The property is now measured where it is actually true or false: the lineage
+// is applied ONE MIGRATION AT A TIME against a real PostgreSQL, the catalog is
+// snapshotted around each step, and every step must only add -- nothing
+// disappears, nothing loses NOT NULL, nothing changes type. See
+// TestEveryMigrationStepIsAdditive in additive_integration_test.go, whose
+// control replays five destructive migrations (including both evasions above)
+// as real DDL and asserts each is caught.
 //
-//	DO $$ BEGIN EXECUTE 'DROP ' || 'TABLE auth.probe'; END $$;
-//
-// drops a table while containing no contiguous destructive token at all, and
-// the executed repro confirmed both halves — the table was gone and the regexp
-// produced no match. No pattern over concatenated string fragments can be made
-// reliable, so the guard refuses the CLASS it cannot reason about instead of
-// pretending to analyse it. This lineage contains no dynamic SQL; a future
-// migration that genuinely needs a function body has to remove this refusal
-// deliberately, which is the point.
-var dynamicSQL = regexp.MustCompile(`(?is)(\bDO\s*\$|\bEXECUTE\b|\$\$)`)
-
-func TestLineageIsAdditiveOnly(t *testing.T) {
-	migrations, err := Migrations()
-	if err != nil {
-		t.Fatalf("Migrations: %v", err)
-	}
-	for _, migration := range migrations {
-		body := stripComments(migration.SQL)
-		if match := dynamicSQL.FindString(body); match != "" {
-			t.Errorf(
-				"migration %04d_%s uses dynamic SQL (%q). No static guard can tell whether a "+
-					"constructed statement is additive, so this lineage refuses the construct outright.",
-				migration.Version, migration.Name, strings.TrimSpace(match),
-			)
-		}
-		for _, statement := range splitStatements(migration.SQL) {
-			if match := destructiveStatement.FindString(statement); match != "" {
-				t.Errorf(
-					"migration %04d_%s contains a destructive statement (%q); Wave 1 is additive only:\n%s",
-					migration.Version, migration.Name, strings.TrimSpace(match), strings.TrimSpace(statement),
-				)
-			}
-		}
-	}
-}
-
-// TestAdditiveGuardCatchesADestructiveStatement is the positive control for
-// the guard above. Without it, a regexp that matched nothing at all would
-// report every lineage as clean.
-func TestAdditiveGuardCatchesADestructiveStatement(t *testing.T) {
-	forbidden := []string{
-		"DROP TABLE principals;",
-		"drop table if exists sessions;",
-		"TRUNCATE security_audit_events;",
-		"DELETE FROM users WHERE id = 1;",
-		"ALTER TABLE users DROP COLUMN email;",
-		"UPDATE principals SET kind = 'user';",
-	}
-	for _, statement := range forbidden {
-		if !destructiveStatement.MatchString(statement) {
-			t.Errorf("the additive-only guard does not catch %q", statement)
-		}
-	}
-	// The evasions codex round 1 executed against this guard. Each is a real
-	// destructive migration that the pre-fix guard accepted.
-	for _, evasion := range []string{
-		"DO $$ BEGIN EXECUTE 'DROP ' || 'TABLE auth.probe'; END $$;",
-		"DO $do$ BEGIN EXECUTE format('TRUNCATE %I', 'security_audit_events'); END $do$;",
-		"EXECUTE 'DELETE FROM users';",
-	} {
-		if !dynamicSQL.MatchString(evasion) {
-			t.Errorf("the dynamic-SQL refusal does not catch %q", evasion)
-		}
-	}
-
-	// And it must not fire on the statements this lineage legitimately uses.
-	for _, statement := range []string{
-		"CREATE TABLE principals (id uuid PRIMARY KEY);",
-		"CREATE UNIQUE INDEX users_email_lower_key ON users (email_lower);",
-		"CREATE INDEX sessions_live_idx ON sessions (principal_id) WHERE revoked_at IS NULL;",
-	} {
-		if destructiveStatement.MatchString(statement) {
-			t.Errorf("the additive-only guard falsely rejects %q", statement)
-		}
-		if dynamicSQL.MatchString(statement) {
-			t.Errorf("the dynamic-SQL refusal falsely rejects %q", statement)
-		}
-	}
-}
+// A shape read from the catalog cannot be evaded by how a statement was
+// spelled, because it is measured AFTER the statement ran.
 
 // secretRoot names the substrings that make a column name suspicious.
 var secretRoot = regexp.MustCompile(`(?i)(password|secret|token|credential|private|key)`)

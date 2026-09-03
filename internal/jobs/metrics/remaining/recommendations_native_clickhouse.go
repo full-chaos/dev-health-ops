@@ -1,0 +1,240 @@
+package remaining
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+// discoverTeamIDsSQL mirrors _discover_team_ids
+// (workers/recommendations_tasks.py:319-324).
+//
+// Sourced from work_item_metrics_daily -- the same table that feeds the
+// snapshot signals -- so only teams that actually have data are evaluated. FINAL
+// is the reference's, and is kept: without it the DISTINCT sees every
+// unmerged ReplacingMergeTree version and can return a team whose only rows
+// were superseded.
+//
+// The 30-day recency bound is deliberately WIDER than the evaluation window. A
+// team that fired last week but has been quiet since must still be evaluated,
+// because that is precisely the team owed a fired=false tombstone to clear its
+// stale guidance. Narrowing this to the window would silently strand exactly
+// the teams the tombstones exist for.
+const discoverTeamIDsSQL = `
+    SELECT DISTINCT team_id
+    FROM work_item_metrics_daily FINAL
+    WHERE day >= today() - 30
+      AND team_id != ''`
+
+// DiscoverTeamIDs returns the teams with recent activity for an org.
+//
+// The org predicate is appended only for a real org, matching the reference:
+// "default" is the single-tenant sentinel and is not a value present in
+// org_id, so filtering on it would return no teams and silently evaluate
+// nothing at all.
+func (executor *RecommendationsExecutor) DiscoverTeamIDs(
+	ctx context.Context, orgID string,
+) ([]string, error) {
+	if executor == nil || executor.conn == nil {
+		return nil, errRecommendationsUnavailable
+	}
+
+	query := discoverTeamIDsSQL
+	arguments := []any{}
+	if orgID != "" && orgID != "default" {
+		query += "\n      AND org_id = ?"
+		arguments = append(arguments, orgID)
+	}
+
+	rows, err := executor.conn.Query(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("discover recommendation team ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var teamIDs []string
+	for rows.Next() {
+		var teamID string
+		if err := rows.Scan(&teamID); err != nil {
+			return nil, fmt.Errorf("scan recommendation team id: %w", err)
+		}
+		if teamID != "" {
+			teamIDs = append(teamIDs, teamID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recommendation team ids: %w", err)
+	}
+
+	// SELECT DISTINCT has no inherent order. Sorting makes a run's team
+	// sequence reproducible, which is what lets a failed-team list be compared
+	// between runs and keeps the batch's row order stable for diffing.
+	sort.Strings(teamIDs)
+	return teamIDs, nil
+}
+
+// TeamEvaluationFailure names the teams whose evaluation raised.
+//
+// A per-team error is NOT swallowed. A team that fails to evaluate writes no
+// fired=false tombstone, so its stale fired guidance lingers while the job
+// reports success and neither monitoring nor retries see anything wrong
+// (CHAOS-2373 round 2). The reference raises for exactly this reason and so
+// does this port.
+type TeamEvaluationFailure struct {
+	OrgID       string
+	FailedTeams []string
+	TotalTeams  int
+}
+
+func (failure *TeamEvaluationFailure) Error() string {
+	return fmt.Sprintf(
+		"recommendations: %d of %d teams failed to evaluate for org %s: %s",
+		len(failure.FailedTeams), failure.TotalTeams, failure.OrgID,
+		strings.Join(failure.FailedTeams, ", "))
+}
+
+// OrgOutcome reports what one org's run did, whether or not it then failed.
+type OrgOutcome struct {
+	Teams       int
+	FailedTeams int
+	FiredRows   int
+	RowsWritten int
+}
+
+// ComputeOrg evaluates every team in an org and writes the batch.
+//
+// # THE ORDER OF THE LAST TWO STEPS IS THE CONTRACT
+//
+// Records are PERSISTED BEFORE any per-team failure is surfaced, matching the
+// reference. The teams that evaluated cleanly get their fresh tombstones this
+// run even though the run as a whole then fails; returning early on the first
+// bad team would withhold good state from every team, turning one team's
+// loader fault into an org-wide stale-guidance incident.
+func (executor *RecommendationsExecutor) ComputeOrg(
+	ctx context.Context,
+	orgID string,
+	now time.Time,
+	windowDays int,
+	ruleVersion string,
+	teamID string,
+) (OrgOutcome, error) {
+	if executor == nil || executor.conn == nil {
+		return OrgOutcome{}, errRecommendationsUnavailable
+	}
+
+	teamIDs := []string{teamID}
+	if strings.TrimSpace(teamID) == "" {
+		discovered, err := executor.DiscoverTeamIDs(ctx, orgID)
+		if err != nil {
+			return OrgOutcome{}, err
+		}
+		teamIDs = discovered
+	}
+	if len(teamIDs) == 0 {
+		// Not an error: an org with no recent activity has nothing to say.
+		return OrgOutcome{}, nil
+	}
+
+	outcome := OrgOutcome{Teams: len(teamIDs)}
+	var records []RecommendationRecord
+	var failedTeams []string
+
+	for _, currentTeam := range teamIDs {
+		teamRecords, err := executor.ComputeTeam(
+			ctx, currentTeam, orgID, now, windowDays, ruleVersion)
+		if err != nil {
+			// A context cancellation is the run being torn down, not this
+			// team failing; continuing would loop through every remaining
+			// team producing the same error and report them all as faulty.
+			if ctx.Err() != nil {
+				return outcome, ctx.Err()
+			}
+			failedTeams = append(failedTeams, currentTeam)
+			continue
+		}
+		records = append(records, teamRecords...)
+		for _, record := range teamRecords {
+			if record.Fired {
+				outcome.FiredRows++
+			}
+		}
+	}
+	outcome.FailedTeams = len(failedTeams)
+
+	written, err := executor.writeRecommendations(ctx, records, executor.nowUTC())
+	if err != nil {
+		return outcome, err
+	}
+	outcome.RowsWritten = written
+
+	if len(failedTeams) > 0 {
+		return outcome, &TeamEvaluationFailure{
+			OrgID:       orgID,
+			FailedTeams: failedTeams,
+			TotalTeams:  len(teamIDs),
+		}
+	}
+	return outcome, nil
+}
+
+// writeRecommendations stamps and inserts the batch.
+//
+// # WHY computed_at IS OVERWRITTEN HERE (CHAOS-2398)
+//
+// The engine derives BOTH window_end and computed_at from `now`, and on the
+// as_of path `now` is as_of_day + 1 -- a CONSTANT across re-runs of the same
+// finalized day. Two runs would then write rows with an identical computed_at,
+// and neither the read side's argMax(fired, computed_at) nor
+// ReplacingMergeTree(computed_at) could deterministically pick the later one,
+// so a recovered signal might never clear.
+//
+// A single monotonic write timestamp per run makes the most recent write always
+// win, while window_end stays a pure function of as_of. True retries rewrite
+// identical content under a newer stamp: idempotent in effect, deterministic in
+// winner.
+//
+// The stamp is taken ONCE for the whole batch, not per row. Per-row stamps
+// would split one internally-consistent replacement across several argMax
+// generations, so a reader could observe one rule's new state beside another's
+// old one -- the torn read the single-batch design exists to prevent.
+func (executor *RecommendationsExecutor) writeRecommendations(
+	ctx context.Context, records []RecommendationRecord, writeTime time.Time,
+) (int, error) {
+	if len(records) == 0 {
+		return 0, nil
+	}
+
+	// Column order and NAMES follow the Python sink's list exactly
+	// (metrics/sinks/clickhouse/recommendations.py:45-58). ClickHouse binds by
+	// POSITION, so two same-typed columns swapped here would not fail -- they
+	// would write silently crossed values, and title/rationale/severity are all
+	// strings sitting next to each other.
+	batch, err := executor.conn.PrepareBatch(ctx, `
+        INSERT INTO recommendations_daily (
+            team_id, org_id, rule_id, rule_version,
+            window_start, window_end, fired, severity,
+            title, rationale, success_criterion, evidence_json, computed_at
+        )`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare recommendations batch: %w", err)
+	}
+	for _, record := range records {
+		if err := batch.Append(
+			record.TeamID, record.OrgID, record.RuleID, record.RuleVersion,
+			record.WindowStart, record.WindowEnd,
+			boolToUInt8(record.Fired), record.Severity,
+			record.Title, record.Rationale, record.SuccessCriterion,
+			record.EvidenceJSON,
+			// The write stamp, NOT record.ComputedAt -- see above.
+			writeTime,
+		); err != nil {
+			return 0, fmt.Errorf("append recommendation row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, fmt.Errorf("send recommendations batch: %w", err)
+	}
+	return len(records), nil
+}

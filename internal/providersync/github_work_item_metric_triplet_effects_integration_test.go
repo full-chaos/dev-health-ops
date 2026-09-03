@@ -131,6 +131,20 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		}
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a freshly written row was not recognized")
+		// Idempotent re-write: a recovering worker replays the same effect.
+		//
+		// THIS STEP IS THE DEDUP DETECTOR (CHAOS-4950). Without it the sequence
+		// Absent -> Exact -> Conflict passes identically whether or not the read
+		// deduplicates, because no key ever carries two rows. The replay puts a
+		// second row on the same key, so a read that lost its FINAL returns two
+		// and inspect reports conflict where this asserts exact. Measured: the
+		// sibling subtest that has this line kills the FINAL-removal mutation;
+		// the two that lacked it both survived it.
+		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatal(err)
+		}
+		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
+			"a replayed write stopped being recognized")
 
 		newer := row
 		newer.ComputedAt = row.ComputedAt.Add(time.Hour)
@@ -170,6 +184,20 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		}
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a freshly written row was not recognized")
+		// Idempotent re-write: a recovering worker replays the same effect.
+		//
+		// THIS STEP IS THE DEDUP DETECTOR (CHAOS-4950). Without it the sequence
+		// Absent -> Exact -> Conflict passes identically whether or not the read
+		// deduplicates, because no key ever carries two rows. The replay puts a
+		// second row on the same key, so a read that lost its FINAL returns two
+		// and inspect reports conflict where this asserts exact. Measured: the
+		// sibling subtest that has this line kills the FINAL-removal mutation;
+		// the two that lacked it both survived it.
+		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatal(err)
+		}
+		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
+			"a replayed write stopped being recognized")
 
 		// The three flow columns exist on the table and are NOT part of the
 		// persisted projection. Python leaves them at DEFAULT 0; so must Go, or

@@ -173,3 +173,57 @@ func TestStaleEnumerationIsReported(t *testing.T) {
 	}
 	t.Fatalf("a stale divergence entry was not reported; got %d disagreements", len(found))
 }
+
+// TestEnumerationCannotHideASuccessfulButWrongWindow pins the hole the CHAOS-4815
+// review found: the allowlist is documented to excuse only the adapter REFUSING a
+// scope the reference runs. It must not excuse the adapter SUCCEEDING with the
+// wrong window.
+//
+// Before the fix, an enumerated RUNS case short-circuited to staleEntry and
+// `continue`d before windowDiffers ever ran -- so a one-second window skew was
+// reported as "the adapter now agrees with the reference", which is not merely a
+// missed finding but an actively FALSE message pointing the reader away from a
+// live divergence.
+//
+// TestStaleEnumerationIsReported cannot catch this: it uses the faithful adapter,
+// for which the case genuinely does agree.
+func TestEnumerationCannotHideASuccessfulButWrongWindow(t *testing.T) {
+	loaded := corpus(t)
+	faithful := faithfulAdapter(t, loaded)
+
+	var target string
+	for _, testCase := range loaded.Cases {
+		if testCase.Verdict == "RUNS" {
+			target = compact(testCase.Scope)
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("corpus has no RUNS case, so this test would assert nothing")
+	}
+
+	// Faithful everywhere EXCEPT the target, whose window is skewed by one
+	// second -- a successful return carrying the wrong answer.
+	skewed := Adapter(func(scope json.RawMessage) (Resolved, error) {
+		resolved, err := faithful(scope)
+		if err != nil || compact(scope) != target {
+			return resolved, err
+		}
+		resolved.To = resolved.To.Add(time.Second)
+		return resolved, nil
+	})
+
+	found := Compare(loaded, skewed, map[string]string{target: "excused refusal"})
+
+	var sawWindowDiffers bool
+	for _, disagreement := range found {
+		if disagreement.Scope == target && disagreement.Kind == KindWindowDiffers {
+			sawWindowDiffers = true
+		}
+	}
+	if !sawWindowDiffers {
+		t.Fatalf("an enumerated entry hid a successful-but-wrong window: "+
+			"KindWindowDiffers was not reported for %s; got %d disagreements",
+			target, len(found))
+	}
+}

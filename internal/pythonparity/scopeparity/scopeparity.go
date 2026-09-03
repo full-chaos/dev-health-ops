@@ -150,14 +150,36 @@ func Compare(corpus Corpus, adapter Adapter, enumerated map[string]string) []Dis
 				})
 			}
 		default:
-			if isEnumerated {
-				out = append(out, staleEntry(key, reason))
+			// The window comparison runs FIRST, and an enumerated entry does not
+			// suppress it.
+			//
+			// This branch previously short-circuited to staleEntry and `continue`d
+			// whenever an entry existed, so an adapter that SUCCEEDED with the
+			// wrong window was reported as "the adapter now agrees with the
+			// reference". That message is not merely a missed finding: it is
+			// FALSE, and it points the reader at a bookkeeping chore while a live
+			// divergence goes unreported.
+			//
+			// Enumeration cannot excuse it either. The contract above is that an
+			// entry "suppresses ONLY a fail-closed divergence" -- the adapter
+			// REFUSING a scope the reference runs, which is the `err != nil` arm.
+			// A differing window is not fail-closed: a window skewed wider writes
+			// rows the reference never derives, which is the dangerous direction
+			// wearing different clothes. Suppressing it here would let an entry
+			// reach that direction through a second door.
+			//
+			// Enumerated is still recorded so a reader can see an entry exists.
+			detail, differs := windowDiffers(testCase.Window, resolved)
+			if differs {
+				out = append(out, Disagreement{
+					Scope: key, Kind: KindWindowDiffers, Enumerable: true,
+					Enumerated: isEnumerated, Detail: detail,
+				})
 				continue
 			}
-			if detail, differs := windowDiffers(testCase.Window, resolved); differs {
-				out = append(out, Disagreement{
-					Scope: key, Kind: KindWindowDiffers, Enumerable: true, Detail: detail,
-				})
+			// Only now is agreement established, so only now can an entry be stale.
+			if isEnumerated {
+				out = append(out, staleEntry(key, reason))
 			}
 		}
 	}

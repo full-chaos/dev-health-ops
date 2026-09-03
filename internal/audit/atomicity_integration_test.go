@@ -174,6 +174,58 @@ func newAuditFixture(t *testing.T, ctx context.Context) *auditFixture {
 	return &auditFixture{pool: pool, schema: schema}
 }
 
+// TestMultiStatementIsRefusedByTheProtocol closes the first-token scan's blind
+// spot, and it is the part of the fix a porter would skip.
+//
+// The lexer reads the FIRST statement. Under PostgreSQL's simple protocol
+// `INSERT ...; COMMIT;` is one round trip carrying two commands, so the scan
+// sees INSERT, passes it, and the COMMIT runs anyway -- the state commits and
+// the helper never learns. auth-contracts put it on the residue list and
+// team-lead ruled the answer: forward pgx.QueryExecModeExec on every call, so
+// the server refuses a multi-statement string rather than the lexer having to
+// see through it.
+//
+// This asserts the refusal AND that nothing was written, because a refusal that
+// still commits the first statement would be worse than no check.
+func TestMultiStatementIsRefusedByTheProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+
+	count := func(table string) int {
+		t.Helper()
+		var n int
+		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.`+table).Scan(&n); err != nil {
+			t.Fatalf("counting %s: %v", table, err)
+		}
+		return n
+	}
+	before := [3]int{count("organizations"), count("auth_outbox_events"), count("security_audit_events")}
+
+	err := Commit(ctx, env.pool, env.schema, Mutation{
+		Apply: func(ctx context.Context, tx TxOps) error {
+			// One string, two commands. The first token is INSERT, so the
+			// lexer passes it; the protocol is what refuses.
+			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
+				VALUES (gen_random_uuid(), 'multi', 'multi'); COMMIT;`)
+			return err
+		},
+		Audit: AuditEvent{EventType: "multi.statement", Outcome: OutcomeAllowed},
+		Event: OutboxEvent{
+			AggregateType: "probe", AggregateID: "multi",
+			EventType: "multi.statement", IdempotencyKey: "multi-1",
+		},
+	})
+	if err == nil {
+		t.Fatal("a multi-statement string carrying COMMIT was accepted")
+	}
+	t.Logf("refused: %v", err)
+
+	if after := [3]int{count("organizations"), count("auth_outbox_events"), count("security_audit_events")}; after != before {
+		t.Errorf("rows survived a refused multi-statement mutation: before=%v after=%v", before, after)
+	}
+}
+
 // TestRetainedTxOpsIsUnusableAfterCommit pins the one escape the TYPE cannot
 // close.
 //

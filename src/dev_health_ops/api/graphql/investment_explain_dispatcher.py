@@ -220,14 +220,29 @@ async def maybe_dispatch_investment_explain_to_go(
     )
 
     client = _build_http_client()
-    upstream_request = client.build_request(
-        "POST",
-        outbound_url,
-        content=body,
-        params=outbound_params,
-        headers=outbound_headers,
-        timeout=timeout,
-    )
+    try:
+        upstream_request = client.build_request(
+            "POST",
+            outbound_url,
+            content=body,
+            params=outbound_params,
+            headers=outbound_headers,
+            timeout=timeout,
+        )
+    except httpx.InvalidURL:
+        # A malformed GO_API_QUERY_API_URL (operator misconfiguration,
+        # not per-request attacker-controlled input) must still fall back
+        # to Python rather than crash every request -- build_request was
+        # previously OUTSIDE any try/except here, so this exception
+        # escaped uncaught. httpx.InvalidURL is a bare Exception subclass,
+        # NOT an httpx.HTTPError subclass (confirmed via
+        # httpx.InvalidURL.__mro__ on a live install, not assumed from
+        # the name) -- catching httpx.HTTPError alone, matching the
+        # pattern below, would NOT have caught this. Caught by codex
+        # round 2.
+        await client.aclose()
+        _fallback("build_request_error")
+        return None
     try:
         upstream = await client.send(upstream_request, stream=True)
     except httpx.TimeoutException:

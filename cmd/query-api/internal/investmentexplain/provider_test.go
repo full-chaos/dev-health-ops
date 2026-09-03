@@ -54,3 +54,37 @@ func TestCompleteInvestmentMixExplanationMockProviderEndToEnd(t *testing.T) {
 		t.Fatalf("expected the mock provider's response to fail strict parsing with status %q, got %q -- if this now passes, the mock provider's shape changed and this test's own documentation is stale", ParseStatusInvalidLLMOutput, parseStatus)
 	}
 }
+
+// TestResolveUnsupportedProviderKindCoversFullPythonKnownSet regresses
+// codex round 2 (P1): Python's _KNOWN_PROVIDERS
+// (llm/providers/__init__.py:37-48) has 11 names, not the 9
+// categorize.ProviderKind constants -- "qwen-local" and "qwen-lmstudio"
+// are real, distinct provider name strings Python resolves and
+// constructs (llm/providers/__init__.py:369/376) with no typed constant
+// anywhere in this repo. A request for either one must ALSO get the
+// pre-stream 501, not the silent llm_unavailable regression #5's fix was
+// meant to close entirely.
+func TestResolveUnsupportedProviderKindCoversFullPythonKnownSet(t *testing.T) {
+	for _, requested := range []string{
+		"anthropic", "gemini", "qwen", "ollama", "lmstudio",
+		"qwen-local", "qwen-lmstudio",
+	} {
+		t.Run(requested, func(t *testing.T) {
+			_, unsupported := ResolveUnsupportedProviderKind(requested)
+			if !unsupported {
+				t.Fatalf("ResolveUnsupportedProviderKind(%q) = unsupported=false, want true", requested)
+			}
+		})
+	}
+
+	// The discriminating half: a kind this port DOES implement must NOT
+	// be flagged unsupported.
+	for _, requested := range []string{"openai", "local", "mock", "none"} {
+		t.Run(requested, func(t *testing.T) {
+			_, unsupported := ResolveUnsupportedProviderKind(requested)
+			if unsupported {
+				t.Fatalf("ResolveUnsupportedProviderKind(%q) = unsupported=true, want false (this port implements it)", requested)
+			}
+		})
+	}
+}

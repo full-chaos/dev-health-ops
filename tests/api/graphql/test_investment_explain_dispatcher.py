@@ -162,6 +162,28 @@ class _FakeClient:
         self.closed = True
 
 
+class _InvalidURLClient:
+    """A client whose build_request raises httpx.InvalidURL, matching a
+    malformed GO_API_QUERY_API_URL -- confirmed on a live httpx install
+    that InvalidURL is a bare Exception subclass, NOT an httpx.HTTPError
+    subclass, so a fix that only widened the existing `except
+    httpx.HTTPError` around client.send would not have caught this."""
+
+    def __init__(self):
+        self.closed = False
+
+    def build_request(
+        self, method, url, *, content=None, params=None, headers=None, timeout=None
+    ):
+        raise httpx.InvalidURL("malformed target URL")
+
+    async def send(self, request, *, stream: bool = False):
+        raise AssertionError("send should never be reached when build_request raises")
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 # ---------------------------------------------------------------------------
 # off
 # ---------------------------------------------------------------------------
@@ -247,6 +269,27 @@ async def test_envelope_signing_error_falls_back(
         force_refresh=False,
     )
     assert result is None
+
+
+async def test_build_request_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regresses codex round 2 (P2): client.build_request(...) used to be
+    OUTSIDE the try/except around client.send(...), so a malformed
+    GO_API_QUERY_API_URL (an operator misconfiguration, not per-request
+    input) escaped uncaught instead of falling back to Python."""
+    _enable(monkeypatch)
+    _patch_envelope_inputs_ok(monkeypatch)
+
+    fake_client = _InvalidURLClient()
+    monkeypatch.setattr(dispatcher_mod, "_build_http_client", lambda: fake_client)
+
+    result = await maybe_dispatch_investment_explain_to_go(
+        _make_request(),
+        current_user=_sample_user(),
+        llm_provider="auto",
+        force_refresh=False,
+    )
+    assert result is None
+    assert fake_client.closed
 
 
 async def test_go_timeout_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:

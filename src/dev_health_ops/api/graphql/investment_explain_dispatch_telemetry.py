@@ -13,6 +13,10 @@ dispatcher's ``fallback_reason`` set.
     for ``current_user.org_id``.
 ``envelope_signing_error`` -- ``issue_effective_principal_envelope``
     raised.
+``build_request_error`` -- ``httpx.Client.build_request`` raised (e.g. a
+    malformed ``GO_API_QUERY_API_URL``, an operator misconfiguration
+    rather than per-request input) before any network call was even
+    attempted.
 ``go_timeout`` / ``go_connection_error`` -- the outbound call to
     query-api itself failed before headers arrived.
 ``go_non_200`` -- query-api answered with a non-200 status (query-api

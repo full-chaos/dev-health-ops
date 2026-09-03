@@ -142,12 +142,30 @@ func providerHasRequiredConfig(kind categorize.ProviderKind) bool {
 // goImplementedProviderKinds (providerkind.go) before assuming this set
 // is still accurate; it is NOT derived from that map automatically on
 // purpose, so a future Ollama port must touch both.
+// qwen-local/qwen-lmstudio are two MORE provider name strings Python's
+// _KNOWN_PROVIDERS carries (llm/providers/__init__.py:37-48) beyond the
+// nine categorize.ProviderKind constants -- they have no typed constant
+// in the categorize package at all (a pre-existing gap in that package,
+// not introduced here), so they're named as raw string literals rather
+// than invented as new categorize.ProviderKind constants this package
+// doesn't own. Missing them here reproduces exactly the same silent
+// llm_unavailable regression as the five typed kinds above, just for two
+// string values `categorize.ResolveProviderKind` still resolves and
+// returns verbatim for an explicit (non-"auto") request. Caught by codex
+// round 2.
+const (
+	providerKindQwenLocal    categorize.ProviderKind = "qwen-local"
+	providerKindQwenLMStudio categorize.ProviderKind = "qwen-lmstudio"
+)
+
 var goUnsupportedButPythonKnownProviderKinds = map[categorize.ProviderKind]struct{}{
 	categorize.ProviderKindAnthropic: {},
 	categorize.ProviderKindGemini:    {},
 	categorize.ProviderKindQwen:      {},
 	categorize.ProviderKindOllama:    {},
 	categorize.ProviderKindLMStudio:  {},
+	providerKindQwenLocal:            {},
+	providerKindQwenLMStudio:         {},
 }
 
 // ResolveUnsupportedProviderKind resolves requestedProvider the same way

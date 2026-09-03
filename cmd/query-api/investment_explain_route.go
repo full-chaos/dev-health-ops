@@ -363,16 +363,25 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		llmModel = *body.LLMModel
 	}
 
-	// A request whose JSON body omits "filters" entirely leaves
-	// body.Filters nil -- Pydantic materializes MetricFilter's own
-	// default_factory in that case (a real, fully-populated object), not
-	// null, so the cache key must be computed against THAT value, not a
-	// bare `null`. A first draft passed body.Filters straight through,
-	// silently hashing null for the omitted-filters request shape and
-	// missing every cache entry Python would have hit -- caught by codex
-	// round 1 (P1).
+	// A request whose JSON body omits "filters" entirely, OR sends it as
+	// an explicit empty object ("filters": {}), leaves body.Filters nil
+	// or empty respectively -- Pydantic materializes MetricFilter's own
+	// default_factory on EVERY nested field in both cases (a real,
+	// fully-populated object, not a bare `{}`), so the cache key must be
+	// computed against THAT value, not the raw request shape. A first
+	// draft handled only the omitted-key (nil) case and still hashed a
+	// literal `{}` for the explicit-empty-object request, missing every
+	// cache entry Python would have hit for THAT shape -- caught by codex
+	// round 1 (nil case, P1) and round 2 (empty-object case, P1).
+	//
+	// This does NOT extend to a PARTIALLY populated filters object (e.g.
+	// {"scope": {"level": "team"}} with every other field omitted) --
+	// that would need a full per-field default merge matching Pydantic's
+	// own nested default_factory behavior field by field, which this
+	// route does not attempt (see this file's own documented "narrower
+	// than full Pydantic validation" scope boundary).
 	filtersForCacheKey := any(body.Filters)
-	if body.Filters == nil {
+	if len(body.Filters) == 0 {
 		filtersForCacheKey = investmentexplain.DefaultMetricFilterForCacheKey()
 	}
 

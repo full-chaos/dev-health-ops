@@ -138,6 +138,50 @@ func TestBuildExplainOptionsDefaultsFiltersForCacheKeyWhenOmitted(t *testing.T) 
 	}
 }
 
+// TestBuildExplainOptionsDefaultsFiltersForCacheKeyWhenExplicitlyEmpty
+// regresses codex round 2's P1: a request that sends "filters" as an
+// EXPLICIT empty object ({"filters": {}}, body.Filters a non-nil empty
+// map) must ALSO hash against Python's fully-materialized default, not
+// the literal `{}` -- Pydantic's default_factory fires on every nested
+// field regardless of whether the outer "filters" key was present-but-
+// empty or absent entirely. The round 1 fix only checked
+// body.Filters == nil, which is false for this shape.
+func TestBuildExplainOptionsDefaultsFiltersForCacheKeyWhenExplicitlyEmpty(t *testing.T) {
+	reader, err := investmentexplain.NewReader(unusedQueryClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	opts, err := buildExplainOptions(context.Background(), reader, "org-1", investmentExplainRequestBody{Filters: map[string]any{}}, "auto", false)
+	if err != nil {
+		t.Fatalf("buildExplainOptions: %v", err)
+	}
+
+	gotKey, err := investmentexplain.ComputeCacheKey(investmentexplain.CacheKeyInput{Filters: opts.FiltersForCacheKey, OrgID: "org-1"})
+	if err != nil {
+		t.Fatalf("compute cache key (got): %v", err)
+	}
+	wantKey, err := investmentexplain.ComputeCacheKey(investmentexplain.CacheKeyInput{
+		Filters: investmentexplain.DefaultMetricFilterForCacheKey(), OrgID: "org-1",
+	})
+	if err != nil {
+		t.Fatalf("compute cache key (want): %v", err)
+	}
+	if gotKey != wantKey {
+		t.Fatalf("cache key for explicit-empty filters = %s, want %s (DefaultMetricFilterForCacheKey)", gotKey, wantKey)
+	}
+
+	// The literal {} (the pre-fix behavior for this shape) must NOT
+	// match -- the discriminating half of the proof.
+	literalEmptyKey, err := investmentexplain.ComputeCacheKey(investmentexplain.CacheKeyInput{Filters: map[string]any{}, OrgID: "org-1"})
+	if err != nil {
+		t.Fatalf("compute cache key (literal empty): %v", err)
+	}
+	if gotKey == literalEmptyKey {
+		t.Fatalf("cache key for explicit-empty filters unexpectedly matches the literal-{} key -- the fix is not discriminating")
+	}
+}
+
 // TestWriteKeepAliveJSONErrorBodyMatchesPythonByteForByte regresses
 // codex round 1's P1: Go's error-path JSON bodies must match Python's
 // exact `json.dumps({"error": ..., "detail": ...})` bytes -- key order

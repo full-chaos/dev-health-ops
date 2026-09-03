@@ -3,6 +3,7 @@ package investmentexplain
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -71,8 +72,20 @@ func (m *BandMix) UnmarshalJSON(data []byte) error {
 	}
 	delim, ok := token.(json.Delim)
 	if !ok || delim != '{' {
-		*m = nil
-		return nil
+		// A non-object band_mix (e.g. a malformed cached row's "[]" or
+		// "null") must be a decode ERROR, not a silent empty BandMix --
+		// Python's InvestmentMixExplanation(**cached_data) is a Pydantic
+		// model with band_mix: dict[str, int]
+		// (api/models/schemas.py:266) and RAISES on exactly this shape,
+		// which explain_investment_mix's cache-read catches and falls
+		// through to recompute (investment_mix_explain.py:229/233).
+		// DecodeInvestmentMixExplanation's caller (explain.go's cache-read
+		// branch) already treats any decode error as a cache miss, so
+		// returning an error here reproduces that same fall-through --
+		// the previous silent-nil behavior instead served corrupted cache
+		// data as if it were a valid empty band_mix. Caught by codex
+		// round 2.
+		return fmt.Errorf("investmentexplain: band_mix must be a JSON object, got %v", token)
 	}
 	var out BandMix
 	for decoder.More() {

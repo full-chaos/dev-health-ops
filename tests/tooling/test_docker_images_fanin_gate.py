@@ -533,18 +533,36 @@ fi
 exit 0
 """
 
-# A `git` shim that records whether it was ever invoked. For `git log`
-# (the digest-walk fallback) it returns NOTHING (empty history) --
-# reaching the fallback at all is itself the observable the empty/unknown/
-# absent scenarios check, independent of what the (real, unrelated)
-# checkout this test runs inside happens to contain for a nonsense
-# BUILT_SHA. For `git merge-base --is-ancestor` (the labelled scenario's
-# actual ancestry decision) it answers per $MERGE_BASE_IS_ANCESTOR: exit 0
-# (is an ancestor / descendant) or exit 1 (is not) -- this is the real
-# decision CHAOS-4947 exists to make, and no other scenario reaches it.
+# A `git` shim with TWO SEPARATE marker files, one per subcommand this
+# step can call -- not one shared "was git called at all" flag.
+#
+# ci-flakes review (delta on ace5d86a): a single shared marker only fails
+# to conflate `git log` (digest-walk fallback) with `git merge-base
+# --is-ancestor` (labelled-ancestry check) BECAUSE the three scenarios
+# that assert on it today (absent/unknown/empty_success) all `continue`
+# before the script can reach either call -- a property of the CODE
+# UNDER TEST's current control flow, not of the marker itself. If a
+# guard ever moves later, or a future scenario reaches the label code
+# while still checking the old marker, the two meanings silently merge
+# and nothing goes red. Two markers make that structurally impossible
+# instead of merely coincidentally absent -- "coincidental correctness
+# is a defect with good luck" (ci-flakes, this same review thread).
+#
+# For `git log` (the digest-walk fallback) this shim returns NOTHING
+# (empty history) after marking it called -- reaching the fallback at
+# all is itself the observable the empty/unknown/absent scenarios check,
+# independent of what the (real, unrelated) checkout this test runs
+# inside happens to contain for a nonsense BUILT_SHA. For `git
+# merge-base --is-ancestor` (the labelled scenario's actual ancestry
+# decision) it answers per $MERGE_BASE_IS_ANCESTOR: exit 0 (is an
+# ancestor / descendant) or exit 1 (is not).
 _GIT_SHIM = r"""#!/usr/bin/env bash
-touch "${GIT_CALLED_FILE}"
+if [ "$1" = "log" ]; then
+  touch "${GIT_LOG_CALLED_FILE}"
+  exit 0
+fi
 if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
+  touch "${GIT_MERGE_BASE_CALLED_FILE}"
   if [ "${MERGE_BASE_IS_ANCESTOR}" = "true" ]; then
     exit 0
   else
@@ -557,15 +575,18 @@ exit 0
 
 def _run_latest_tag_step(
     scenario: str, merge_base_is_ancestor: bool = True
-) -> tuple[str, bool, str]:
+) -> tuple[str, bool, bool, str]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
-    `git` shimmed to record whether it was invoked and (for the
-    `labelled` scenario only) answer `merge-base --is-ancestor` per
-    `merge_base_is_ancestor`. Returns (recorded `imagetools create`
-    invocations, whether git was called, captured stdout). `IS_MAIN_REF=
-    true` and a source-tag probe that always "finds" its ref, so every
-    family reaches the :latest check under test."""
+    `git` shimmed to record `log` and `merge-base --is-ancestor`
+    invocations SEPARATELY (see `_GIT_SHIM`'s comment for why one shared
+    marker isn't good enough), and to answer `merge-base --is-ancestor`
+    per `merge_base_is_ancestor` for the `labelled` scenario. Returns
+    (recorded `imagetools create` invocations, whether `git log` was
+    called, whether `git merge-base --is-ancestor` was called, captured
+    stdout). `IS_MAIN_REF=true` and a source-tag probe that always
+    "finds" its ref, so every family reaches the :latest check under
+    test."""
     script = _latest_tag_step_script()
     with tempfile.TemporaryDirectory() as tmp:
         bin_dir = Path(tmp) / "bin"
@@ -582,7 +603,8 @@ def _run_latest_tag_step(
 
         record_file = Path(tmp) / "record.txt"
         record_file.write_text("", encoding="utf-8")
-        git_called_file = Path(tmp) / "git_called.txt"
+        git_log_called_file = Path(tmp) / "git_log_called.txt"
+        git_merge_base_called_file = Path(tmp) / "git_merge_base_called.txt"
 
         env = dict(os.environ)
         env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
@@ -596,7 +618,8 @@ def _run_latest_tag_step(
                 "BRANCH_TAG": "",
                 "SCENARIO": scenario,
                 "RECORD_FILE": str(record_file),
-                "GIT_CALLED_FILE": str(git_called_file),
+                "GIT_LOG_CALLED_FILE": str(git_log_called_file),
+                "GIT_MERGE_BASE_CALLED_FILE": str(git_merge_base_called_file),
                 "LABELLED_REVISION": _LABELLED_REVISION,
                 "MERGE_BASE_IS_ANCESTOR": "true" if merge_base_is_ancestor else "false",
             }
@@ -615,7 +638,8 @@ def _run_latest_tag_step(
         )
         return (
             record_file.read_text(encoding="utf-8"),
-            git_called_file.exists(),
+            git_log_called_file.exists(),
+            git_merge_base_called_file.exists(),
             result.stdout,
         )
 
@@ -639,25 +663,31 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     the assertion can't pass by shadowing a neighbouring branch. Also
     asserts the negative control: a genuinely present (found) read
     emits no `::error::`)."""
-    absent_record, absent_git_called, _absent_stdout = _run_latest_tag_step("absent")
+    absent_record, absent_log_called, absent_mb_called, _absent_stdout = _run_latest_tag_step(
+        "absent"
+    )
     assert "imagetools create" in absent_record and ":latest" in absent_record, (
         "CONFIRMED ABSENT did not record a bootstrap `imagetools create "
         "...:latest` call -- the classifier's rc==1 branch must "
         f"unconditionally tag latest+main, got: {absent_record!r}"
     )
-    assert not absent_git_called, (
-        "CONFIRMED ABSENT reached the digest-walk fallback (git was "
-        "invoked) instead of short-circuiting straight to bootstrap"
+    assert not absent_log_called and not absent_mb_called, (
+        "CONFIRMED ABSENT reached the digest-walk fallback or the "
+        "merge-base ancestry check (git was invoked) instead of "
+        "short-circuiting straight to bootstrap"
     )
 
-    unknown_record, unknown_git_called, _unknown_stdout = _run_latest_tag_step("unknown")
+    unknown_record, unknown_log_called, unknown_mb_called, _unknown_stdout = (
+        _run_latest_tag_step("unknown")
+    )
     assert unknown_record == "", (
         "UNKNOWN registry failure recorded an `imagetools create` call -- "
         f"it must decline and tag nothing, got: {unknown_record!r}"
     )
-    assert not unknown_git_called, (
-        "UNKNOWN registry failure reached the digest-walk fallback (git "
-        "was invoked) instead of declining immediately"
+    assert not unknown_log_called and not unknown_mb_called, (
+        "UNKNOWN registry failure reached the digest-walk fallback or the "
+        "merge-base ancestry check (git was invoked) instead of declining "
+        "immediately"
     )
 
     # ci-flakes review (delta on fa119b2d), P3: rc==0 only means the
@@ -672,17 +702,20 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # "wandered into the fallback and got lucky" -- verified by removing
     # the guard and confirming this specific assertion goes red while
     # the create-count assertion alone stays green.
-    empty_record, empty_git_called, empty_stdout = _run_latest_tag_step("empty_success")
+    empty_record, empty_log_called, empty_mb_called, empty_stdout = _run_latest_tag_step(
+        "empty_success"
+    )
     assert empty_record == "", (
         "a reported-success (exit 0) but empty :latest read recorded an "
         "`imagetools create` call -- an empty read must fail closed the "
         f"same as UNKNOWN, got: {empty_record!r}"
     )
-    assert not empty_git_called, (
+    assert not empty_log_called and not empty_mb_called, (
         "a reported-success (exit 0) but empty :latest read reached the "
-        "digest-walk fallback instead of declining immediately -- this "
-        "must be handled as an explicit UNKNOWN case, not left to whatever "
-        "the downstream label/digest logic happens to do with empty input"
+        "digest-walk fallback or the merge-base ancestry check instead of "
+        "declining immediately -- this must be handled as an explicit "
+        "UNKNOWN case, not left to whatever the downstream label/digest "
+        "logic happens to do with empty input"
     )
     # team-lead ruling (following ci-flakes' review of the first version
     # of this test): a source-text check for `::error::` only proves the
@@ -706,7 +739,14 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # the old name implied) must emit no `::error::` at all -- if it did,
     # the annotation would be noise on a routine fallback instead of a
     # signal on the genuinely surprising empty-read case.
-    _found_record, _found_git_called, found_stdout = _run_latest_tag_step("unlabelled")
+    _found_record, found_log_called, found_mb_called, found_stdout = _run_latest_tag_step(
+        "unlabelled"
+    )
+    assert found_log_called and not found_mb_called, (
+        "the unlabelled scenario should reach the digest-walk fallback "
+        "(git log) but never the merge-base ancestry check -- got "
+        f"log_called={found_log_called}, merge_base_called={found_mb_called}"
+    )
     assert "::error::" not in found_stdout, (
         "a genuinely present (unlabelled) :latest read emitted a "
         f"`::error::` annotation -- it should only fire on the empty-read "
@@ -733,8 +773,14 @@ def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
     must decline. Verified this test goes red against a mutation that
     inverts the `git merge-base --is-ancestor` exit-code check (flipped
     the if/else bodies) before trusting it."""
-    descendant_record, _git_called, _stdout = _run_latest_tag_step(
-        "labelled", merge_base_is_ancestor=True
+    descendant_record, descendant_log_called, descendant_mb_called, _stdout = (
+        _run_latest_tag_step("labelled", merge_base_is_ancestor=True)
+    )
+    assert descendant_mb_called and not descendant_log_called, (
+        "the labelled/descendant scenario should reach the merge-base "
+        "ancestry check but never the digest-walk fallback -- got "
+        f"log_called={descendant_log_called}, "
+        f"merge_base_called={descendant_mb_called}"
     )
     assert "imagetools create" in descendant_record and ":latest" in descendant_record, (
         "a labelled :latest whose recorded revision IS an ancestor of the "
@@ -742,8 +788,13 @@ def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
         f"call -- a true descendant must be tagged, got: {descendant_record!r}"
     )
 
-    non_descendant_record, _git_called2, _stdout2 = _run_latest_tag_step(
-        "labelled", merge_base_is_ancestor=False
+    non_descendant_record, non_desc_log_called, non_desc_mb_called, _stdout2 = (
+        _run_latest_tag_step("labelled", merge_base_is_ancestor=False)
+    )
+    assert non_desc_mb_called and not non_desc_log_called, (
+        "the labelled/non-descendant scenario should reach the merge-base "
+        "ancestry check but never the digest-walk fallback -- got "
+        f"log_called={non_desc_log_called}, merge_base_called={non_desc_mb_called}"
     )
     assert non_descendant_record == "", (
         "a labelled :latest whose recorded revision is NOT an ancestor of "

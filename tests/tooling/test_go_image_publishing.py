@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import shlex
 from pathlib import Path
 
 import pytest
@@ -97,94 +98,232 @@ _GHCR_IMAGE = re.compile(
 #     it starts with `./`. Anything else -- an `echo` argument, `#`
 #     comment prose, a `-f` file-existence test's operand -- is ignored.
 #
-# Any OTHER shell quoting/substitution shape is explicitly out of
-# scope: authors write plain invocations, or the guard refuses rather
-# than guess.
+# CHAOS-4949 (#2162), codex round 9 (peer read, lane-runner-fallback):
+# THREE more real gaps in round 8's raw-text-window design, all in the
+# same shape round 8 itself warned about ("any other shell quoting/
+# substitution shape is explicitly out of scope") -- but these three are
+# common enough to close, not exotic:
+#
+# (d) `text.split()` never treated `;` as its own boundary, so
+#     `echo hi;bash ci/real.sh` (no space around the `;`) left "hi;bash"
+#     as one glued word -- "bash" was never its own token, so the real
+#     invocation right after it was invisible to the command-position
+#     check.
+# (e) A quoted diagnostic argument whose LAST word happened to be
+#     `ci/foo.sh` (e.g. `echo "please run bash ci/foo.sh now"`) put
+#     "bash" and "ci/foo.sh" as ADJACENT raw-split words even though
+#     they are both inside the SAME quoted string -- round 8's
+#     command-position check has no concept of quoting, so it read this
+#     as a real `bash`-invokes-`ci/foo.sh` shape.
+# (f) `_ci_reference_windows`' "scan to the next `.sh`/`.py` anywhere
+#     later on the line" could overshoot PAST an unrelated, non-script
+#     `ci/` mention (`ci/notes`, no `.sh` suffix of its own) all the way
+#     to a SEPARATE, later, genuinely static `ci/real.sh` invocation --
+#     if anything dynamic (even something unrelated, like a `$(date)`
+#     substitution) sat between the two, the window spanned both and
+#     refused the real invocation for no reason.
+#
+# Round 7 already ruled out fixing (d)/(e)/(f) by trying to parse shell.
+# The fix here still isn't a shell parser -- it's `shlex`, configured to
+# do exactly two things: split on real statement separators (`;`, `&`,
+# `&&`, `|`, `||`) as their own tokens, and treat a quoted string as ONE
+# opaque token with the quote characters stripped (posix mode). That
+# alone closes (d) and (e) structurally: a real `;` is never glued to an
+# adjacent word again, and a quoted argument can never be split apart
+# into "the interpreter word" and "the path word" the way naive
+# whitespace-splitting could.
+#
+# `shlex` alone does NOT solve `$(...)`'s own internal whitespace (that
+# was round 8's actual, still-real motivation for windowing) -- feeding
+# `ci/$(dirname "$x")/preflight.sh` straight to `shlex` still splits it
+# into multiple tokens at the space inside the substitution, same as a
+# bare `text.split()` would. So `$(...)` regions are found and MASKED
+# first (`_mask_dollar_paren_regions`, the same balanced-paren tracking
+# round 8 used, now applied BEFORE tokenizing, not as a raw-text scan
+# after): the region's own content is pulled out and tokenized
+# separately (so a REAL invocation living inside a `$(...)` capture,
+# like the production `eval "$(bash ci/python_base_ref.sh ... | awk
+# ...)"` line, is still found), and the OUTER text gets the whole region
+# replaced with a fixed, whitespace-free placeholder (`$()`) -- so
+# `ci/$(dirname "$x")/preflight.sh` becomes the outer token
+# `ci/$()/preflight.sh`, which (a) never gets split by the internal
+# whitespace that used to defeat detection, and (b) still visibly
+# contains a `$(` marker, so the per-token dynamic-substitution check
+# below still catches it. This is what closes (f) too: because the
+# check is now PER SHLEX TOKEN (never "scan raw text to the next `.sh`
+# anywhere"), a static `ci/notes` mention and a separate static
+# `ci/real.sh` invocation are simply two different tokens, never one
+# window spanning both.
+#
+# Nested `$(...)` (a substitution inside a substitution, or inside
+# `$((...))` arithmetic) is masked up to 2 levels deep -- deeper nesting
+# is the same "explicitly out of scope" residual round 8 already
+# accepted, not a new limit.
 _CI_SCRIPT_LINE_CONTINUATION = re.compile(r"\\[ \t]*\n")
 _CI_SCRIPT_INTERPRETERS = frozenset({"bash", "sh", "python", "python3"})
-_CI_SCRIPT_OPERATORS = frozenset({";", "&&", "||", "|"})
-# Broader than the punctuation stripped from a candidate token's own
-# stored text below -- a real interpreter word can arrive glued to an
-# opening substitution, e.g. `"$(bash` for `eval "$(bash
-# ci/python_base_ref.sh ...`. Stripping only trims the EDGES, so it
-# cannot turn an unrelated word into a false match.
-_CI_SCRIPT_CLASSIFY_STRIP = "\"'`(){}$"
-_CI_SCRIPT_TOKEN_STRIP = "\"'`();,"
+_CI_SCRIPT_OPERATORS = frozenset({";", "&", "&&", "|", "||"})
+_CI_SCRIPT_DYNAMIC_MARKERS = ("$(", "${", "`")
+_CI_SCRIPT_MASK_MAX_DEPTH = 2
 
 
 def _join_line_continuations(text: str) -> str:
     """Bash joins a backslash immediately followed by a newline into the
     PREVIOUS line -- mirror that here, structurally, before any
-    tokenizing (see the module-level comment above, item (a))."""
+    tokenizing (unchanged from round 8)."""
     return _CI_SCRIPT_LINE_CONTINUATION.sub("", text)
 
 
-def _ci_reference_windows(line: str) -> list[tuple[int, int]]:
-    """Every (start, end) span on this LOGICAL line running from one
-    `ci/` occurrence to ITS OWN nearest following `.sh`/`.py` --
-    independent of word-splitting, since a `$(...)`/`${...}`
-    substitution's internal whitespace is exactly what defeats a
-    token-based scan (see item (b) above). Multiple `ci/` occurrences on
-    one line each get their own window, so a line can carry both a
-    static and a dynamic reference and each is judged on its own span."""
-    windows: list[tuple[int, int]] = []
-    for match in re.finditer(r"ci/", line):
-        start = match.start()
-        suffix = re.search(r"\.(?:sh|py)\b", line[start:])
-        if suffix is None:
+def _mask_dollar_paren_regions(line: str, _depth: int = 0) -> tuple[str, list[str]]:
+    """Find every top-level `$(...)` on `line` by balanced-paren
+    tracking (any `(` increases depth, not just another `$(`, so nested
+    arithmetic like `$(( $(date -u +%s) + N ))` doesn't close early on
+    the first inner `)`) -- same mechanism round 8 used, applied BEFORE
+    tokenizing this time. Returns `(masked_line, region_bodies)`: in
+    `masked_line`, each region's CONTENT is replaced with the fixed,
+    whitespace-free placeholder `$()` (the `$(`/`)` markers survive, so
+    a dynamic-marker check on the outer text still fires; nothing inside
+    the parens can reintroduce whitespace into an otherwise-clean outer
+    word). `region_bodies` holds each region's own original content, so
+    it can be tokenized separately -- a real invocation can live INSIDE
+    a `$(...)` capture (the production `eval "$(bash
+    ci/python_base_ref.sh ...)"` line), not just outside one. Recurses
+    into each region's own body up to `_CI_SCRIPT_MASK_MAX_DEPTH` levels,
+    so a nested substitution's own `ci/` references (if any) are found
+    too."""
+    regions: list[str] = []
+    out: list[str] = []
+    i, n = 0, len(line)
+    while i < n:
+        if line[i : i + 2] == "$(":
+            depth = 1
+            start = i + 2
+            j = start
+            while j < n and depth > 0:
+                if line[j] == "(":
+                    depth += 1
+                elif line[j] == ")":
+                    depth -= 1
+                j += 1
+            if depth == 0:
+                regions.append(line[start : j - 1])
+                out.append("$()")
+                i = j
+                continue
+        out.append(line[i])
+        i += 1
+    masked = "".join(out)
+    all_regions = list(regions)
+    if _depth < _CI_SCRIPT_MASK_MAX_DEPTH:
+        for region in regions:
+            _, nested = _mask_dollar_paren_regions(region, _depth + 1)
+            all_regions.extend(nested)
+    return masked, all_regions
+
+
+def _shell_tokenize(text: str) -> list[str]:
+    """Quote-aware, statement-separator-aware tokenization: a quoted
+    string becomes ONE token with its quote characters stripped (posix
+    mode), and `;`/`&`/`&&`/`|`/`||` are each their own token instead of
+    being glued to an adjacent word. Not a shell parser -- `$(...)`
+    handling is the caller's job (`_mask_dollar_paren_regions`), and
+    unbalanced/unparseable quoting returns an empty token list rather
+    than raising, since a `run:` script can contain lines this guard
+    doesn't need to understand (comments, unrelated shell) alongside the
+    ones it does."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        return []
+
+
+def _ci_script_tokens_from_words(words: list[str]) -> list[str]:
+    """Given an already-tokenized word list (from `_shell_tokenize`),
+    find every `ci/` reference in COMMAND POSITION: the first word, or
+    immediately after one of `;`/`&`/`&&`/`|`/`||`, immediately after an
+    interpreter keyword (`bash`/`sh`/`python`/`python3`, or the
+    two-word `uv run`), or a word starting with `./`. Anything else --
+    a quoted `echo` argument, `#` comment prose (never its own token
+    once split off from `#`, so its `#`-prefixed first word never
+    matches an interpreter/operator), a `-f` file-existence test's
+    operand -- is ignored, same design as round 8's command-position
+    filter, just fed clean tokens instead of raw-split ones. Raises
+    `AssertionError` on any word containing "ci/" AND a dynamic
+    substitution marker (`$(`, `${`, or a backtick), regardless of
+    command position -- a path built from a shell variable cannot be
+    statically resolved no matter where it appears."""
+    tokens: list[str] = []
+    for i, word in enumerate(words):
+        if word in _CI_SCRIPT_OPERATORS:
             continue
-        windows.append((start, start + suffix.end()))
-    return windows
-
-
-def _ci_script_classify(word: str) -> str:
-    """Strip shell-grouping/substitution punctuation from a word's edges
-    for classifying it as an interpreter keyword or control operator --
-    see `_CI_SCRIPT_CLASSIFY_STRIP` above for why this is broader than
-    `_CI_SCRIPT_TOKEN_STRIP`."""
-    return word.strip(_CI_SCRIPT_CLASSIFY_STRIP)
+        if "ci/" not in word:
+            continue
+        # Candidate SHAPE first (a static ".sh"/".py" suffix visible in
+        # the word), dynamic-marker check second -- checking the marker
+        # first would flag ANY word merely containing both "ci/" and an
+        # unrelated "${...}"/"$(...)" elsewhere in the same word, e.g. a
+        # multi-clause echo string that mentions "ci/python_base_ref.sh"
+        # as prose and separately references "${MIRROR_LANDED}" later in
+        # the SAME quoted argument -- a real false positive this exact
+        # ordering produced against this repo's own real workflow text
+        # before being caught. A dynamic path built with no static
+        # ".sh"/".py" suffix visible anywhere (the whole filename itself
+        # computed at runtime) is a categorically different, effectively
+        # unguardable case from source alone -- out of scope, same as
+        # round 8's other documented residuals, not something this
+        # ordering is meant to catch.
+        if not (word.endswith(".sh") or word.endswith(".py")):
+            continue
+        if any(marker in word for marker in _CI_SCRIPT_DYNAMIC_MARKERS):
+            raise AssertionError(
+                "build job references a ci/ script path built from a "
+                "shell substitution, which cannot be statically "
+                f"resolved: {word!r} -- the changes filter's coverage of "
+                "this path cannot be verified from source alone. Name "
+                "it as a literal path, or if it must stay "
+                "variable-built, add explicit filter coverage by hand "
+                "and explain why here."
+            )
+        prev = words[i - 1] if i > 0 else ""
+        prev2 = words[i - 2] if i > 1 else ""
+        in_command_position = (
+            i == 0
+            or prev in _CI_SCRIPT_OPERATORS
+            or prev in _CI_SCRIPT_INTERPRETERS
+            or (prev == "run" and prev2 == "uv")
+            or word.startswith("./")
+        )
+        if in_command_position:
+            tokens.append(word)
+    return tokens
 
 
 def _extract_ci_script_tokens(text: str) -> list[str]:
-    """Loosely tokenize `run:` text for anything shaped like a `ci/`
-    script INVOCATION -- not shell-aware parsing (see the module-level
-    comment above for the full design and why). Raises `AssertionError`
-    if any `ci/`-to-`.sh`/`.py` window on a logical line contains a
-    shell substitution."""
+    """Every `ci/*.sh`/`ci/*.py` script INVOCATION in `run:` text -- see
+    the module-level comment above for the full design (join line
+    continuations, mask `$(...)` regions, shlex-tokenize the masked
+    outer text and each region's own content separately, filter to
+    command position). Raises `AssertionError` if any resulting word
+    contains "ci/" alongside a shell substitution marker -- re-raised
+    with the ORIGINAL (unmasked) logical line appended, since the raised
+    word itself may show the `$()` placeholder rather than the real
+    dynamic text a human needs to see to fix it."""
     text = _join_line_continuations(text)
     tokens: list[str] = []
     for line in text.splitlines():
         if "ci/" not in line:
             continue
-        for start, end in _ci_reference_windows(line):
-            window = line[start:end]
-            if "$(" in window or "${" in window or "`" in window:
-                raise AssertionError(
-                    "build job references a ci/ script path built from a "
-                    "shell substitution, which cannot be statically "
-                    f"resolved: {window!r} (line: {line!r}) -- the "
-                    "changes filter's coverage of this path cannot be "
-                    "verified from source alone. Name it as a literal "
-                    "path, or if it must stay variable-built, add "
-                    "explicit filter coverage by hand and explain why "
-                    "here."
-                )
-        words = line.split()
-        for i, raw in enumerate(words):
-            word = raw.strip(_CI_SCRIPT_TOKEN_STRIP)
-            if not ("ci/" in word and (word.endswith(".sh") or word.endswith(".py"))):
+        masked, regions = _mask_dollar_paren_regions(line)
+        for candidate_text in (masked, *regions):
+            if "ci/" not in candidate_text:
                 continue
-            prev = _ci_script_classify(words[i - 1]) if i > 0 else ""
-            prev2 = _ci_script_classify(words[i - 2]) if i > 1 else ""
-            in_command_position = (
-                i == 0
-                or prev in _CI_SCRIPT_OPERATORS
-                or prev in _CI_SCRIPT_INTERPRETERS
-                or (prev == "run" and prev2 == "uv")
-                or word.startswith("./")
-            )
-            if in_command_position:
-                tokens.append(word)
+            try:
+                tokens.extend(
+                    _ci_script_tokens_from_words(_shell_tokenize(candidate_text))
+                )
+            except AssertionError as exc:
+                raise AssertionError(f"{exc} (line: {line!r})") from exc
     return tokens
 
 
@@ -515,4 +654,72 @@ def test_ci_script_ignores_comment_and_echo_references() -> None:
         f"expected only the real invocation to be extracted, got {tokens!r} "
         "-- a comment or echo argument shaped like a ci/ script reference "
         "must be ignored, not reported as an uncovered invocation"
+    )
+
+
+def test_ci_script_semicolon_boundary_is_a_real_command_position() -> None:
+    """CHAOS-4949 (#2162), codex round 9 (peer read, lane-runner-fallback)
+    P1, reproduced: `echo hi;bash ci/real-invocation.sh` (no space around
+    the `;`) left "hi;bash" as one glued word under raw `text.split()`
+    -- "bash" was never its own token, so the real invocation right
+    after it never satisfied the old command-position check and was
+    silently invisible. `shlex` (configured with `;` as a punctuation
+    character) splits a real statement separator into its own token
+    regardless of surrounding whitespace, closing this structurally.
+    Verified this row goes RED (empty token list) against a version of
+    `_shell_tokenize` reverted to plain `text.split()`, before trusting
+    it."""
+    tokens = _extract_ci_script_tokens("echo hi;bash ci/real-invocation.sh")
+    assert tokens == ["ci/real-invocation.sh"], (
+        f"expected the real invocation right after the ';' to be "
+        f"extracted, got {tokens!r}"
+    )
+
+
+def test_ci_script_ignores_a_quoted_argument_ending_in_dot_sh() -> None:
+    """CHAOS-4949 (#2162), codex round 9 (peer read) P2, reproduced: a
+    quoted `echo` argument whose text happens to contain "bash" directly
+    followed by a `ci/...sh` reference (`echo "please run bash
+    ci/foo.sh now"`) put "bash" and "ci/foo.sh" as ADJACENT raw-split
+    words under the round-8 design, even though both are inside the SAME
+    quoted string -- round 8's command-position check has no concept of
+    quoting, so this satisfied it as if `bash` were really invoking
+    `ci/foo.sh`. `shlex` (posix mode) keeps the whole quoted string as
+    ONE token, so "bash" is never adjacent to "ci/foo.sh" as separate
+    words when they're both inside the same quotes. Verified this row
+    goes RED (the decoy reference wrongly extracted) against a version
+    of `_shell_tokenize` reverted to plain `text.split()`, before
+    trusting it."""
+    tokens = _extract_ci_script_tokens(
+        'bash ci/python_base_ref.sh\necho "please run bash ci/foo.sh now"'
+    )
+    assert tokens == ["ci/python_base_ref.sh"], (
+        f"expected only the real invocation to be extracted, got {tokens!r} "
+        "-- a ci/...sh-shaped reference inside a quoted echo argument "
+        "must be ignored even when it directly follows the word 'bash' "
+        "inside the same quotes"
+    )
+
+
+def test_ci_script_windowed_refusal_does_not_overreach_past_an_operator() -> None:
+    """CHAOS-4949 (#2162), codex round 9 (peer read) P3, reproduced:
+    round 8's raw-text "scan to the next .sh/.py anywhere later on the
+    line" could overshoot PAST an unrelated, non-script `ci/` mention
+    (`ci/notes`, no `.sh` suffix of its own) all the way to a SEPARATE,
+    later, genuinely static `ci/real.sh` invocation -- with an unrelated
+    `$(date)` substitution sitting between the two, the old window
+    spanned both and refused the real, static invocation for no reason.
+    Masking `$(...)` regions and checking per SHLEX TOKEN (never
+    "raw-scan to the next suffix anywhere") means `ci/notes` and
+    `ci/real.sh` are simply two different tokens, never one window.
+    Verified this row goes RED (wrongly raises) against a version of
+    `_ci_script_tokens_from_words` that reverts to round 8's
+    `_ci_reference_windows` raw-text scan, before trusting it."""
+    tokens = _extract_ci_script_tokens(
+        'echo "see ci/notes" && x=$(date) && bash ci/real.sh'
+    )
+    assert tokens == ["ci/real.sh"], (
+        f"expected the real, static invocation after the unrelated "
+        f"$(date) substitution to be extracted without a false refusal, "
+        f"got {tokens!r}"
     )

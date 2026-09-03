@@ -1,0 +1,63 @@
+{
+  "cache_key": "9b993f50e4686b64d9bd2655dc2c819f",
+  "case": "typical_filters",
+  "input": {
+    "filters": {
+      "type": "map",
+      "value": {
+        "limit": {
+          "type": "int",
+          "value": 200
+        },
+        "scope": {
+          "type": "map",
+          "value": {
+            "ids": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "r1"
+                },
+                {
+                  "type": "string",
+                  "value": "r2"
+                }
+              ]
+            },
+            "level": {
+              "type": "string",
+              "value": "repo"
+            }
+          }
+        },
+        "why": {
+          "type": "map",
+          "value": {
+            "work_category": {
+              "type": "list",
+              "value": [
+                {
+                  "type": "string",
+                  "value": "velocity"
+                },
+                {
+                  "type": "string",
+                  "value": "quality.bugfix"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "org_id": "org-golden-4977",
+    "subcategory": {
+      "type": "null"
+    },
+    "theme": {
+      "type": "string",
+      "value": "velocity"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "cache_key": "e34b58b7c4acd8749c397aec4c5616b1",
+  "case": "different_org_same_filters",
+  "input": {
+    "filters": {
+      "type": "map",
+      "value": {
+        "scope": {
+          "type": "map",
+          "value": {
+            "ids": {
+              "type": "list",
+              "value": []
+            },
+            "level": {
+              "type": "string",
+              "value": "org"
+            }
+          }
+        }
+      }
+    },
+    "org_id": "org-other-4977",
+    "subcategory": {
+      "type": "null"
+    },
+    "theme": {
+      "type": "null"
+    }
+  }
+}

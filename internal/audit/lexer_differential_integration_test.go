@@ -68,7 +68,40 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	// had just miscounted a diff by including its `+++` header. The figures
 	// above come from the enumeration itself, which reports its own dimensions.
 	payloads, aliases, tails := grammar()
-	total := len(payloads) * len(aliases) * len(tails)
+
+	// ALL THREE DIMENSIONS PINNED AT ONE SITE, not just the alias axis.
+	//
+	// The previous version pinned the alias classes with literals but computed
+	// the multiplier as `len(payloads) * len(tails)`. That made every class
+	// expectation LITERAL x DERIVED, so deleting a payload or a tail shrank both
+	// sides of the comparison together and every assertion stayed green --
+	// executed, not argued: -1 payload gave 4290 statements with dollar 2288 =
+	// want 2288 and bare 1144 = want 1144, and -1 tail gave 4050 with 2160 and
+	// 1080, both PASS.
+	//
+	// lane-auth-contracts found it, and the interesting part is how: they had
+	// given me the rule (an expectation must not be computed from the code it
+	// checks), I applied it to the alias axis because that was the axis in their
+	// finding, and I never asked which OTHER expectation in the same statement
+	// was derived. The answer was the multiplier, three tokens along. Fixing the
+	// instance is not fixing the class, and applying a rule once feels from the
+	// inside exactly like having applied it.
+	const (
+		requiredPayloads            = 27
+		requiredAliases             = 15
+		requiredTails               = 11
+		requiredDollarAliases       = 8 // "$$;$$", a$$, ab$$, a$1, a$b, ü$$, ü$b, aü$$
+		requiredBareNonASCIIAliases = 4 // ü$$, ü$b, ünïcode, aü$$ -- the >=0x80 branches
+	)
+	if len(payloads) != requiredPayloads || len(aliases) != requiredAliases || len(tails) != requiredTails {
+		t.Fatalf("grammar is %dx%dx%d (payloads x aliases x tails), require %dx%dx%d. "+
+			"Every class expectation below is a multiple of these literals, so a grammar that "+
+			"shrinks silently would shrink both sides of each comparison together. If you changed "+
+			"the grammar on purpose, change the literals on purpose",
+			len(payloads), len(aliases), len(tails),
+			requiredPayloads, requiredAliases, requiredTails)
+	}
+	total := requiredPayloads * requiredAliases * requiredTails
 	t.Logf("enumerating the whole grammar: %d payloads x %d aliases x %d tails = %d statements",
 		len(payloads), len(aliases), len(tails), total)
 
@@ -200,11 +233,7 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	// deliberately when the grammar changes -- and an expectation that cannot
 	// follow the generator down. The existence check comes free: a literal 4
 	// cannot quietly become 0.
-	const (
-		requiredDollarAliases       = 8 // "$$;$$", a$$, ab$$, a$1, a$b, ü$$, ü$b, aü$$
-		requiredBareNonASCIIAliases = 4 // ü$$, ü$b, ünïcode, aü$$ -- the >=0x80 branches
-	)
-	per := len(payloads) * len(tails)
+	per := requiredPayloads * requiredTails
 	if want := requiredDollarAliases * per; dollarIdents != want {
 		t.Errorf("%d statements carried a $-bearing identifier, require exactly %d "+
 			"(%d aliases x %d payload/tail pairs). If the grammar changed on purpose, change the "+

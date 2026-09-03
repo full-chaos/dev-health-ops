@@ -168,7 +168,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	var cancelled error
 
 	for _, currentTeam := range teamIDs {
-		teamRecords, err := executor.computeTeam(
+		teamRecords, err := executor.ComputeTeam(
 			ctx, currentTeam, orgID, now, windowDays, ruleVersion)
 		if err != nil {
 			// A context cancellation is the run being torn down, not this
@@ -270,19 +270,6 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		}
 	}
 	return outcome, nil
-}
-
-// computeTeam dispatches to the test double when one is installed.
-//
-// Nil in production, so this is ComputeTeam by another name there.
-func (executor *RecommendationsExecutor) computeTeam(
-	ctx context.Context, teamID, orgID string, now time.Time,
-	windowDays int, ruleVersion string,
-) ([]RecommendationRecord, error) {
-	if executor.computeTeamForTest != nil {
-		return executor.computeTeamForTest(teamID)
-	}
-	return executor.ComputeTeam(ctx, teamID, orgID, now, windowDays, ruleVersion)
 }
 
 // writeRecommendations stamps and inserts the batch.

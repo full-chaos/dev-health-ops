@@ -101,12 +101,6 @@ type RecommendationsExecutor struct {
 	// So the seam sits at the only per-team boundary that exists, is
 	// unexported, is nil in production, and is guarded at its single call site.
 	afterTeamHook func()
-
-	// computeTeamForTest replaces the per-team evaluation. Nil in production,
-	// and for the same reason as afterTeamHook: reaching the final-team
-	// cancellation boundary needs a team that SUCCEEDS, which a stubbed conn
-	// cannot produce because the loader would have to return a real snapshot.
-	computeTeamForTest func(teamID string) ([]RecommendationRecord, error)
 }
 
 // NewRecommendationsExecutor refuses at construction rather than per partition.

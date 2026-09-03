@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // Jira's canonical work-item job has nine schema-backed computed destinations.
@@ -103,9 +104,9 @@ type JiraWorkItemDeriver struct {
 
 // StoredEdgeMergeObservation reports the stored-edge union this deriver has
 // observed so far on its unit (CHAOS-3978).
-func (deriver *JiraWorkItemDeriver) StoredEdgeMergeObservation() githubWorkItemStoredEdgeMergeObservation {
+func (deriver *JiraWorkItemDeriver) StoredEdgeMergeObservation() teamattribution.GithubWorkItemStoredEdgeMergeObservation {
 	if deriver == nil {
-		return githubWorkItemStoredEdgeMergeObservation{}
+		return teamattribution.GithubWorkItemStoredEdgeMergeObservation{}
 	}
 	return deriver.observations.storedEdgeMergeSnapshot()
 }
@@ -121,48 +122,49 @@ type jiraWorkItemClickHouseDerivationContextSource struct {
 func (source jiraWorkItemClickHouseDerivationContextSource) Load(
 	ctx context.Context,
 	claim Claim,
-	request githubWorkItemDerivationLoadRequest,
-) (githubWorkItemDerivationFacts, error) {
+	request teamattribution.GithubWorkItemDerivationLoadRequest,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
 	delegate := source.delegate
 	if ctx == nil || delegate.Conn == nil || delegate.Lease == nil ||
 		claim.Validate() != nil || claim.Provider != "jira" ||
 		claim.Dataset != "work-items" || request.AsOf.IsZero() {
-		return githubWorkItemDerivationFacts{}, ErrInvalidConfiguration
+		return teamattribution.GithubWorkItemDerivationFacts{}, ErrInvalidConfiguration
 	}
 	if err := delegate.Lease.Assert(ctx); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	facts := githubWorkItemDerivationFacts{}
+	loader := teamattribution.ClickHouseFactSource{Conn: delegate.Conn, Lease: delegate.Lease}
+	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
-	if facts.Teams, err = delegate.loadTeams(ctx, claim.OrgID); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+	if facts.Teams, err = loader.LoadTeams(ctx, claim.OrgID); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	if facts.Projects, err = delegate.loadProjects(ctx, claim.OrgID, request.AsOf); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+	if facts.Projects, err = loader.LoadProjects(ctx, claim.OrgID, request.AsOf); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	if facts.Repos, err = delegate.loadRepos(ctx, claim.OrgID, request.AsOf); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+	if facts.Repos, err = loader.LoadRepos(ctx, claim.OrgID, request.AsOf); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	var providerTaggedRosterMembers []githubWorkItemDerivationMemberFact
-	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, providerTaggedRosterMembers, err = delegate.loadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+	var providerTaggedRosterMembers []teamattribution.GithubWorkItemDerivationMemberFact
+	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, providerTaggedRosterMembers, err = loader.LoadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	if facts.ProviderMembers, err = delegate.loadProviderMembers(ctx, claim.OrgID, request.AsOf); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+	if facts.ProviderMembers, err = loader.LoadProviderMembers(ctx, claim.OrgID, request.AsOf); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
 	// CHAOS-4321 round 3 (team-lead ruling, 2026-08-26): see the shared
 	// Load()'s identical comment -- provider-tagged teams.members facets
 	// join the SAME ProviderMembers pool real team_memberships rows
 	// populate.
 	facts.ProviderMembers = append(facts.ProviderMembers, providerTaggedRosterMembers...)
-	if facts.ManualFallbacks, err = delegate.loadManualFallbacks(ctx, claim.OrgID, request.AsOf); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+	if facts.ManualFallbacks, err = loader.LoadManualFallbacks(ctx, claim.OrgID, request.AsOf); err != nil {
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
 	if facts.DonorItems, err = delegate.loadDonors(ctx, claim.OrgID, request); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
 	if err := delegate.Lease.Assert(ctx); err != nil {
-		return githubWorkItemDerivationFacts{}, err
+		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
 	return facts, nil
 }
@@ -245,7 +247,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 	if err != nil {
 		return JiraWorkItemDerivedRows{}, err
 	}
-	deriver.observations.recordStoredEdgeMerge(contextFacts.storedEdgeMerge)
+	deriver.observations.recordStoredEdgeMerge(contextFacts.StoredEdgeMerge)
 	result := JiraWorkItemDerivedRows{
 		EstimateCoverageMetricsDaily:   []JiraEstimateCoverageMetricsDailyRow{},
 		InvestmentClassificationsDaily: []JiraInvestmentClassificationDailyRow{},

@@ -66,10 +66,19 @@ func loadDailyRepositoryPartitionSize() int {
 
 var dailyRunNamespace = uuid.MustParse("db1556db-28a7-58f6-982d-fc6f54dc7240")
 
-const scheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
+// ScheduledFanoutGenerationPrefix identifies a scheduled daily-metrics fan-out
+// run's generation.
+//
+// EXPORTED because a second reader needs it: the recommendations readiness gate
+// selects the latest fan-out run for an org/day and must use the SAME prefix
+// this producer writes. Re-declaring the literal there would let the two drift
+// silently -- the gate would find no run, read that as "no evidence of partial
+// data", and proceed on exactly the partial tables it exists to avoid.
+// TestScheduledFanoutPrefixIsThePythonGatePrefix pins it to Python's copy.
+const ScheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
 
 // postSyncGenerationPrefix identifies a daily-metrics run created per
-// completed sync (CHAOS-4263). Distinct from scheduledFanoutGenerationPrefix,
+// completed sync (CHAOS-4263). Distinct from ScheduledFanoutGenerationPrefix,
 // whose exact value is a cross-language contract with Python's
 // recommendations readiness gate (CHAOS-4066, see isScheduledFanoutGeneration)
 // and must not be widened or reused for this.
@@ -404,7 +413,7 @@ func newRun(organizationID string, targetDay time.Time, generation string) Run {
 }
 
 func isScheduledFanoutGeneration(generation string) bool {
-	return strings.HasPrefix(generation, scheduledFanoutGenerationPrefix) && len(generation) <= 64
+	return strings.HasPrefix(generation, ScheduledFanoutGenerationPrefix) && len(generation) <= 64
 }
 
 // isPostSyncGeneration reports whether a generation belongs to a post-sync

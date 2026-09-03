@@ -121,7 +121,7 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 		t.Fatalf("clickhouse dsn: %v", err)
 	}
 	conn := openLoaderClickHouse(t, ctx, dsn)
-	seedLoaderFixture(t, ctx, conn)
+	defer seedLoaderFixture(t, ctx, conn)()
 
 	loader, err := NewRecommendationsLoader(conn, loaderOrgID)
 	if err != nil {
@@ -318,7 +318,7 @@ func mustDate(t *testing.T, text string) time.Time {
 // wrong value -- so a Go query that dropped an argMax would read the wrong
 // number and fail against Python rather than passing on a fixture where every
 // key has exactly one row.
-func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
+func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (restoreMergesFn func()) {
 	t.Helper()
 	exec := func(query string, args ...any) {
 		if err := conn.Exec(ctx, query, args...); err != nil {
@@ -340,7 +340,58 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	// matters BETWEEN insert and merge, which is exactly the window production
 	// reads in, and it is the window a fixture has to preserve deliberately
 	// because the test's own inserts are small enough to merge immediately.
-	exec("SYSTEM STOP MERGES")
+	//
+	// SCOPED PER TABLE, and restarted. The bare `SYSTEM STOP MERGES` this used
+	// to issue is SERVER-WIDE, not per-table (CHAOS-4952), so one fixture
+	// silently disabled merges for every table in the instance and never turned
+	// them back on. On a shared or reused server that leaks into other tests as
+	// a condition none of them declared -- and a test that depends on a global
+	// another test happens to have set is not a test, it is a coincidence.
+	//
+	// recommendations_daily is in this list even though the fixture never seeds
+	// it: it is the WRITE target and is ReplacingMergeTree(computed_at).
+	//
+	// It earns its place for ONE assertion, not the two I first claimed. The
+	// two-run supersession test writes the SAME ORDER BY keys twice, differing
+	// only in computed_at -- precisely what an RMT collapses -- so a merge there
+	// turns two generations into one and destroys the property. The single-run
+	// row count does NOT need this: its keys are all distinct, so no merge can
+	// change it either way (established by mutation; see the FINAL comment in
+	// the round-trip test).
+	//
+	// Note what that means for anyone tempted to narrow this list further:
+	// dropping recommendations_daily does not fail the suite deterministically.
+	// Merges are opportunistic, so the two-run test would pass most of the time
+	// and fail occasionally -- a latent flake rather than a visible break, which
+	// is the worse outcome and the reason this entry is explicit.
+	mergeStopped := []string{
+		"work_item_metrics_daily", "repo_metrics_daily", "user_metrics_daily",
+		"team_metrics_daily", "repo_complexity_daily", "file_hotspot_daily",
+		"compounding_risk_daily", "recommendations_daily",
+	}
+	for _, table := range mergeStopped {
+		exec("SYSTEM STOP MERGES " + table)
+	}
+	// The caller DEFERS the returned restore. Not t.Cleanup: cleanups run after
+	// every deferred call in the test, so a t.Cleanup restart would fire after
+	// conn.Close() and after the container teardown -- too late to restart
+	// anything, and silently so (4752-go, who nearly shipped that inversion by
+	// copying a precedent's form without its teardown lifecycle).
+	//
+	// The restart uses a FRESH context: the test's own is usually cancelled by
+	// the time defers run, and a restart on a cancelled context is a no-op that
+	// looks like a restart.
+	restoreMerges := func() {
+		restartCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		for _, table := range mergeStopped {
+			if err := conn.Exec(restartCtx, "SYSTEM START MERGES "+table); err != nil {
+				// Errorf, not Fatalf: FailNow from a deferred function does not
+				// stop the remaining tables from being restarted.
+				t.Errorf("restart merges on %s: %v", table, err)
+			}
+		}
+	}
 
 	repoAlpha := "11111111-1111-1111-1111-111111111111"
 	repoBeta := "22222222-2222-2222-2222-222222222222"
@@ -662,6 +713,8 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 		VALUES (?, ?, 'team', ?, ?, 'elevated', 0, 0, 0, 0, ?)`,
 		loaderOrgID, mustDate(t, "2026-08-20"), loaderTeamA, 0.62,
 		mustTimestamp(t, "2026-08-21 00:00:00"))
+
+	return restoreMerges
 }
 
 func mustTimestamp(t *testing.T, text string) time.Time {

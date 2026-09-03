@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -226,7 +227,7 @@ func buildGitHubWorkItemEngineOracleRows(
 	if err != nil {
 		t.Fatal(err)
 	}
-	var facts githubWorkItemDerivationFacts
+	var facts teamattribution.GithubWorkItemDerivationFacts
 	if err := json.Unmarshal(encodedFacts, &facts); err != nil {
 		t.Fatal(err)
 	}

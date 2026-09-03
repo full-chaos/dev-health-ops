@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // githubWorkItemEngineTestDestinations is the engine-dependent set exercised by
@@ -367,7 +368,7 @@ func (engine *githubWorkItemRecordingEngine) Derive(
 	_ githubWorkItemRows,
 	day time.Time,
 	_ time.Time,
-	_ githubWorkItemDerivationContext,
+	_ teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	engine.days = append(engine.days, day)
 	produced := make(map[string][]json.RawMessage, len(githubWorkItemEngineTestDestinations))
@@ -538,10 +539,10 @@ type countingGitHubWorkItemDerivationContextSource struct {
 }
 
 func (source *countingGitHubWorkItemDerivationContextSource) Load(
-	context.Context, Claim, githubWorkItemDerivationLoadRequest,
-) (githubWorkItemDerivationFacts, error) {
+	context.Context, Claim, teamattribution.GithubWorkItemDerivationLoadRequest,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
 	source.loads++
-	return githubWorkItemDerivationFacts{}, nil
+	return teamattribution.GithubWorkItemDerivationFacts{}, nil
 }
 
 func (source *countingGitHubWorkItemDerivationContextSource) LoadStoredInheritableEdges(
@@ -561,7 +562,7 @@ func (engine githubWorkItemStubEngine) Derive(
 	_ githubWorkItemRows,
 	day time.Time,
 	_ time.Time,
-	_ githubWorkItemDerivationContext,
+	_ teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	if engine.err != nil {
 		return nil, engine.err
@@ -693,7 +694,7 @@ func (engine githubWorkItemOverreachingEngine) Derive(
 	_ githubWorkItemRows,
 	_ time.Time,
 	_ time.Time,
-	_ githubWorkItemDerivationContext,
+	_ teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	produced := map[string][]json.RawMessage{
 		engine.destination: {},
@@ -781,7 +782,7 @@ func (engine githubWorkItemSilentEngine) Derive(
 	_ githubWorkItemRows,
 	_ time.Time,
 	_ time.Time,
-	_ githubWorkItemDerivationContext,
+	_ teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
 	return engine.rows, nil
 }

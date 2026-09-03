@@ -84,14 +84,15 @@ func TestPayloadComparisonIgnoresProvenanceAndCatchesData(t *testing.T) {
 // accidentally deleted `distinct_input_values`, and the guard caught it on the
 // first run rather than at review.
 func TestShippedFixturesExposeThePayloadFieldsTheGuardsCompare(t *testing.T) {
-	for _, testCase := range []struct {
-		fixture string
-		fields  []string
-	}{
-		{"evidence_json_repr_band_python_golden.json", []string{"cases", "distinct_input_values"}},
-		{"evidence_json_edge_shapes_python_golden.json", []string{"cases"}},
-		{"python_json_insertion_order_python_golden.json", []string{"cases"}},
-	} {
+	// Iterates the SAME registry the guards call comparePayload with, rather than
+	// a second copy of the list. When this test carried its own table, a guard
+	// that changed its compared fields left this asserting the OLD ones -- green,
+	// and describing a comparison that no longer happened.
+	if len(allPayloadGuards) == 0 {
+		t.Fatal("the guard registry is empty; this test would pass by iterating " +
+			"nothing, which is the vacuous-green shape it exists to prevent")
+	}
+	for _, testCase := range allPayloadGuards {
 		t.Run(testCase.fixture, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Clean(
 				filepath.Join("../../tests/fixtures", testCase.fixture)))

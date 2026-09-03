@@ -6,6 +6,49 @@ import (
 	"fmt"
 )
 
+// payloadGuard names one shipped fixture and the payload fields its rot guard
+// compares. It is the SINGLE SOURCE for both.
+//
+// Both facts used to be written twice: as string literals at the guard's
+// comparePayload call site, and again in TestShippedFixturesExposeThePayload-
+// FieldsTheGuardsCompare's table. That test asserts each fixture carries the
+// fields its guard names -- but it read its own copy of the list, so a guard
+// that changed which fields it compares would leave the test asserting the OLD
+// ones: green, while describing a comparison that no longer happened. That is
+// the failure mode the test was written to prevent, one level up.
+//
+// With one list the drift is not detected, it is impossible: the guard and the
+// test cannot disagree about which fields matter because they read the same
+// variable. TestEveryRotGuardUsesTheRegistry fails a guard that passes literals
+// instead, so the registry cannot be bypassed by a future call site.
+type payloadGuard struct {
+	fixture string
+	fields  []string
+}
+
+var (
+	reprBandGuard = payloadGuard{
+		fixture: "evidence_json_repr_band_python_golden.json",
+		// distinct_input_values is payload, not provenance: it is derived from
+		// the corpus, so a change means the corpus changed.
+		fields: []string{"cases", "distinct_input_values"},
+	}
+	edgeShapesGuard = payloadGuard{
+		fixture: "evidence_json_edge_shapes_python_golden.json",
+		fields:  []string{"cases"},
+	}
+	insertionOrderGuard = payloadGuard{
+		fixture: "python_json_insertion_order_python_golden.json",
+		fields:  []string{"cases"},
+	}
+
+	// allPayloadGuards is what the shipped-fixture test iterates. A guard absent
+	// from this slice is not covered by it -- which is why
+	// TestEveryRotGuardUsesTheRegistry checks the call sites rather than trusting
+	// this list to be complete.
+	allPayloadGuards = []payloadGuard{reprBandGuard, edgeShapesGuard, insertionOrderGuard}
+)
+
 // comparePayload reports whether the frozen and freshly-rendered documents agree
 // on the fields that carry DATA, ignoring everything else in the document.
 //

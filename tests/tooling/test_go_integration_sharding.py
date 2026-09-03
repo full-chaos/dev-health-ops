@@ -2393,6 +2393,10 @@ _IMAGE_PULLING_ACTION_DEBT = {
     ("docker-images.yml", "merge", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+    # CHAOS-4947: fan-in-latest applies moving tags via `docker buildx
+    # imagetools create`, which -- like merge/go-merge above -- needs the
+    # docker-container buildx driver, not the default one.
+    ("docker-images.yml", "fan-in-latest", "docker/setup-buildx-action"),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

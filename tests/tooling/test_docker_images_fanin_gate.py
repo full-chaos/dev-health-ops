@@ -433,6 +433,17 @@ def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
         "an unrecognized registry failure must fail closed (decline), "
         "never fall through to the bootstrap/overwrite path"
     )
+    # team-lead ruling: a reported-success-but-empty :latest read is a
+    # genuinely surprising outcome, not a routine per-family decline --
+    # it must surface as a `::error::` GitHub Actions annotation, not
+    # blend into the wall of ordinary per-family log lines. (Outside the
+    # 1200-char `tail` window above -- checked against the full run
+    # text, since it's the only `::error::` this step should ever emit.)
+    assert "::error::" in run_text, (
+        "the rc==0-yet-empty-stdout guard doesn't emit a `::error::` "
+        "GitHub Actions annotation -- this surprising outcome must be "
+        "visible as an annotation, not just a plain log line"
+    )
 
 
 def _latest_tag_step_script() -> str:

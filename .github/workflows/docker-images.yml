@@ -989,7 +989,12 @@ jobs:
             # empty read on a reported-success exit as UNKNOWN too, same
             # as any other unclassifiable outcome, and fail closed.
             if [ -z "${latest_json}" ]; then
-              echo "WARNING: ${family}: :latest inspect reported success but returned no data -- treating as unknown, declining rather than risk overwriting"
+              # team-lead ruling: this is a genuinely surprising outcome
+              # (a reported success with no data), not a routine decline
+              # -- ::error:: surfaces it as a GitHub Actions annotation
+              # instead of a plain log line, so it doesn't silently blend
+              # into a wall of ordinary per-family output.
+              echo "::error::${family}: :latest inspect reported success but returned no data -- treating as unknown, declining rather than risk overwriting"
               continue
             fi
 

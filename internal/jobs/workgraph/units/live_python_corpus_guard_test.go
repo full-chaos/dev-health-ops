@@ -182,6 +182,13 @@ var excludedGenerators = map[string]struct {
 	// The generator keeps its --stdout flag, its corpus-aligned --count default
 	// and its explicitCorpusPaths entry, so the moment `limits` joins the closure
 	// this entry is deleted and the corpus is guarded with no other change.
+	// NEITHER THIS ENTRY NOR ITS explicitCorpusPaths TWIN IS STALE, and a reader
+	// finding both will reasonably wonder which one to delete. They answer
+	// different questions: the explicitCorpusPaths entry is the WIRING (where the
+	// corpus lives, proven correct by mutation), and this one is the ENVIRONMENT
+	// (whether the generator can run in CI at all). The wiring is right today;
+	// the environment is not. When `limits` lands this entry goes and the corpus
+	// becomes guarded with no other change (CHAOS-4945).
 	"generate_scope_grammar_corpus.py": {
 		reason: "imports dev_health_ops.api.internal.worker_workgraph for the " +
 			"bridge's own scope admission; that package's __init__ imports " +

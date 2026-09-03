@@ -552,9 +552,32 @@ func TestCancellationAfterTheLastTeamStillPersistsOnAContainer(t *testing.T) {
 		t.Errorf("returned %v, want context.Canceled — a run cancelled after its "+
 			"final team is still an interrupted run", err)
 	}
+	// TWO CAUSES, TWO MESSAGES. `evaluated` counts only teams that SUCCEEDED --
+	// a failing team hits `continue` before the hook runs -- so this guard fires
+	// for a plain team failure as well as for a mistimed cancellation. As the
+	// last line a reader sees, one message naming only the timing would send
+	// them hunting a problem that is not there (4752-go's peer read; same class
+	// as a citation asserting a cause it has not established).
+	//
+	// Fixture drift is the likelier cause a year from now, so it is named first
+	// and separately.
+	if outcome.FailedTeams > 0 {
+		t.Fatalf("%d team(s) FAILED to evaluate, so this test never reached the "+
+			"final-team boundary -- the cancellation timing is not implicated. "+
+			"Look at the loader or the fixture, not at the hook", outcome.FailedTeams)
+	}
+	// Every team succeeded, so a short count can only mean the hook stopped
+	// firing or the cancellation landed mid-loop.
+	//
+	// The comparison assumes both numbers describe the same set: ComputeOrg
+	// discovers through the same DiscoverTeamIDs this test called, and the ""
+	// team filter narrows nothing between them. That symmetry breaks the day
+	// ComputeOrg grows a filter path or a second discovery route, and this
+	// guard would then over-count and fire spuriously.
 	if evaluated != len(teamIDs) {
-		t.Fatalf("only %d of %d teams evaluated; the cancellation landed mid-loop "+
-			"and this test has degenerated into the sibling case", evaluated, len(teamIDs))
+		t.Fatalf("all teams succeeded but only %d of %d were counted; the "+
+			"cancellation landed mid-loop and this test has degenerated into "+
+			"the sibling case", evaluated, len(teamIDs))
 	}
 
 	var persisted uint64

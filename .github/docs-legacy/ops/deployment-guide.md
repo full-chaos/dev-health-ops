@@ -271,6 +271,20 @@ the real compose config and fails if the script's plan ever stops naming
 one of them, or if the script's own `--profile go-workers` invocations
 ever go bare (no service names) again.
 
+**Scope**: `deploy-prod.sh` covers exactly the `go-workers` profile --
+every Go/River worker service in this repo carries that profile TODAY,
+but a future service added under a *different* profile name would not be
+covered by this script, and would not be caught by the coverage test
+above either (both only ever look at `--profile go-workers`). A separate
+guard row in the same test file enumerates every distinct profile name
+actually present in the compose files and fails loud if one appears that
+isn't in its explicit accepted-list -- see
+`_ACCEPTED_PROFILES` there for the current list and the reasoning per
+profile (`pooler` is accepted-but-not-covered, deliberately, because
+it's opt-in and off in prod today). `deploy-prod.sh` also does not read
+`compose.override.yml` (below) -- a service introduced only through an
+override file is out of scope for this script.
+
 ### Customization
 
 Override specific services:

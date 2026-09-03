@@ -46,22 +46,47 @@ for arg in "$@"; do
   esac
 done
 
-# The exact set of services that ONLY exist because of `--profile
-# go-workers` -- base_services minus profile_services -- recomputed every
-# run from the real, live-interpolated compose config, never a
-# hand-maintained list. `docker compose config --services` is pure
-# client-side parsing; it does not need a reachable daemon and does not
-# start or touch any container.
-base_services="$(docker compose "${COMPOSE_ARGS[@]}" config --services 2>/dev/null | sort)"
-profile_services="$(docker compose "${COMPOSE_ARGS[@]}" --profile "${PROFILE}" config --services 2>/dev/null | sort)"
+# `docker compose config --services` is pure client-side parsing; it
+# does not need a reachable daemon and does not start or touch any
+# container. It DOES fail (nonzero exit) if either -f file is missing,
+# unreadable, or fails to parse -- under this script's `set -euo
+# pipefail`, calling it directly inside a bare `var="$(...)"` assignment
+# would kill the script right there, on set -e's own generic message,
+# before ever reaching the friendly ::error:: below (round-1 peer read
+# P2, lane-4441, reproduced: zero output, exit 1, no diagnostic at all).
+# Wrapping the call in a function and testing IT in an `if !` condition
+# is what keeps it working: commands tested by `if` are exempt from
+# `set -e`, so a failure here is caught explicitly and reported, never
+# silently escaped to the shell's own uninformative exit.
+_compose_services() {
+  # "$@": extra compose args for this query, e.g. `--profile go-workers`
+  # (may be empty for the base/default-profile query).
+  docker compose "${COMPOSE_ARGS[@]}" "$@" config --services 2>/dev/null | sort
+}
 
+if ! base_services="$(_compose_services)"; then
+  echo "::error::'docker compose config --services' failed for the base (default-profile) service set -- compose.production.yml or compose.go-workers.yml may be missing, unreadable, or fail to parse. Re-run this to see the underlying error:" >&2
+  echo "    docker compose ${COMPOSE_ARGS[*]} config --services" >&2
+  exit 1
+fi
+
+if ! profile_services="$(_compose_services --profile "${PROFILE}")"; then
+  echo "::error::'docker compose config --services' failed for the --profile ${PROFILE} service set -- compose.production.yml or compose.go-workers.yml may be missing, unreadable, or fail to parse. Re-run this to see the underlying error:" >&2
+  echo "    docker compose ${COMPOSE_ARGS[*]} --profile ${PROFILE} config --services" >&2
+  exit 1
+fi
+
+# The exact set of services that ONLY exist because of `--profile
+# go-workers` -- base_services minus profile_services -- recomputed
+# every run from the config just queried above, never a hand-maintained
+# list.
 go_workers_only=()
 while IFS= read -r svc; do
   [ -n "${svc}" ] && go_workers_only+=("${svc}")
 done < <(comm -13 <(printf '%s\n' "${base_services}") <(printf '%s\n' "${profile_services}"))
 
 if [ "${#go_workers_only[@]}" -eq 0 ]; then
-  echo "::error::no service resolved under --profile ${PROFILE} -- compose.go-workers.yml may be missing or unreadable, or every profiled service vanished from it. Refusing to proceed with an empty second pass: an empty pass would exit 0 having pulled and started nothing, exactly the silent-skip shape CHAOS-4976 exists to close." >&2
+  echo "::error::both compose config queries above succeeded, but no service resolved under --profile ${PROFILE} -- every profiled service was removed from compose.go-workers.yml (the file itself parses fine; a missing/unreadable/unparseable file is caught earlier, above). Refusing to proceed with an empty second pass: an empty pass would exit 0 having pulled and started nothing, exactly the silent-skip shape CHAOS-4976 exists to close." >&2
   exit 1
 fi
 

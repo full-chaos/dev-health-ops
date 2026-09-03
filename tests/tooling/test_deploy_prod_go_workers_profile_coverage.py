@@ -25,9 +25,11 @@ WHAT THIS ASSERTS
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -245,3 +247,44 @@ def test_every_compose_profile_is_covered_or_explicitly_accepted() -> None:
         "'pooler' -- either way, update _ACCEPTED_PROFILES with the "
         "reason, don't let a new profile go uncovered silently"
     )
+
+
+def test_missing_compose_file_fails_loud_instead_of_dying_under_set_e() -> None:
+    """codex round 1 (bigboy) peer read P2 (lane-4441), reproduced: under
+    this script's `set -euo pipefail`, the ORIGINAL
+    `base_services="$(docker compose ... config --services | sort)"`
+    form died right there when compose.go-workers.yml was missing --
+    `set -e` killed the script on ITS OWN generic message, before ever
+    reaching the friendly `::error::` this test checks for. Reproduced
+    exactly as the reviewer described: a scratch copy of deploy-prod.sh
+    + compose.production.yml WITHOUT compose.go-workers.yml exited 1
+    with zero stdout/stderr from the script itself.
+
+    Fixed by wrapping the query in a function and testing it with
+    `if !` -- commands tested by `if` are exempt from `set -e`, so the
+    failure is caught explicitly and reported instead of silently
+    escaping to the shell's own uninformative exit."""
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp)
+        shutil.copy(DEPLOY_SCRIPT, scratch / DEPLOY_SCRIPT.name)
+        shutil.copy(PROD_COMPOSE, scratch / PROD_COMPOSE.name)
+        # compose.go-workers.yml deliberately NOT copied.
+
+        result = subprocess.run(
+            ["bash", str(scratch / DEPLOY_SCRIPT.name), "--dry-run"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            env={**os.environ, **_DUMMY_ENV},
+        )
+        assert result.returncode == 1, (
+            "expected deploy-prod.sh to fail loud (exit 1) when "
+            f"compose.go-workers.yml is missing, got returncode="
+            f"{result.returncode} -- stdout:\n{result.stdout}\nstderr:\n"
+            f"{result.stderr}"
+        )
+        assert "::error::" in result.stderr and "may be missing" in result.stderr, (
+            "expected a ::error:: diagnostic naming the missing/unreadable "
+            f"compose file case, got stderr:\n{result.stderr!r}"
+        )

@@ -382,23 +382,32 @@ func schemaAndDatabaseViolations(ctx context.Context, conn *pgx.Conn, options Op
 	return violations, nil
 }
 
-// defaultACLViolations reports ALTER DEFAULT PRIVILEGES entries that would
-// grant the runtime role anything on objects created LATER.
+// defaultACLViolations reports any ALTER DEFAULT PRIVILEGES entry affecting
+// the auth schema.
 //
-// This is the check that makes a point-in-time posture meaningful. Without it,
-// a default ACL sits dormant, the posture verifies clean, and the next
-// migration silently creates objects the runtime already has rights on. It is
-// also the argument that no route-enumeration could ever have worked: the
-// grant attaches to objects that do not exist when the check runs.
+// This is the check that makes a point-in-time posture meaningful, and the
+// reason a route-enumeration could never have worked. A default ACL grants on
+// objects created LATER, so it is not a gap in a list of current grants — it
+// is a statement in a different TENSE, and no enumeration of what is granted
+// today can see it (lane-auth-contracts put it that way and it is the sharper
+// framing). A rule sits dormant, the posture verifies clean because nothing
+// has been created under it yet, and the escalation materialises on the next
+// migration.
 func defaultACLViolations(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
+	// The invariant is EMPTY, not "contains only the expected entries"
+	// (lane-auth-contracts). A manifest of expected default ACLs would itself
+	// become a fourth hand-written list standing beside a source of truth --
+	// the exact defect this file exists to remove -- and "empty" is both
+	// stronger and trivially defensible: this lineage sets no default
+	// privileges, so any entry touching the auth schema arrived from outside
+	// and is a statement about objects that do not exist yet.
 	rows, err := conn.Query(ctx, `
 		SELECT coalesce(n.nspname, '<all schemas>'), d.defaclobjtype, a.grantee::regrole::text, a.privilege_type
 		FROM pg_default_acl d
 		LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
 		CROSS JOIN LATERAL aclexplode(d.defaclacl) AS a
-		WHERE a.grantee = (SELECT oid FROM pg_roles WHERE rolname = $1)
-		   OR a.grantee = 0`,
-		options.RuntimeRole,
+		WHERE n.nspname = $1 OR n.nspname IS NULL`,
+		options.Schema,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading default privileges", ErrMigrationFailed)

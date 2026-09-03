@@ -4,6 +4,8 @@ package authschema
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -128,4 +130,70 @@ func TestCatalogSecretRuleCatchesWhatTheTextScannerMissed(t *testing.T) {
 		}
 	}
 	t.Logf("catalog rule flagged all four shapes the retired text scanner accepted")
+}
+
+// TestDefaultPrivilegesAreRefused covers the one check in posture.go that had
+// no test and, predictably, shipped a bug in its first draft (an unreferenced
+// query parameter, caught only because the whole suite went red).
+//
+// It is also the check that answers the tense problem: ALTER DEFAULT
+// PRIVILEGES grants on objects created LATER, so a rule can sit in the catalog
+// while every current-grant check passes, and the escalation appears on the
+// next migration. The invariant is EMPTY for the auth schema rather than
+// "contains only the expected entries", because a manifest of expected ACLs
+// would be another hand-written list beside a source of truth.
+func TestDefaultPrivilegesAreRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	env := newAuthFixture(t, ctx)
+
+	// Clean first: the fixture just applied, so the posture must be clean, or
+	// the assertion below could pass for an unrelated reason.
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
+
+	before, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	if err != nil {
+		t.Fatalf("VerifyRuntimePosture: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("posture is not clean before the mutation: %v", before)
+	}
+
+	// A rule that grants NOTHING today: the auth schema already has all its
+	// tables, so this changes only what a FUTURE table would carry.
+	if _, err := env.migration.Exec(ctx, fmt.Sprintf(
+		`ALTER DEFAULT PRIVILEGES FOR ROLE %q IN SCHEMA %s GRANT SELECT ON TABLES TO %q`,
+		env.migrationRole, env.schema, env.runtimeRole,
+	)); err != nil {
+		t.Fatalf("set default privileges: %v", err)
+	}
+
+	after, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	if err != nil {
+		t.Fatalf("VerifyRuntimePosture after: %v", err)
+	}
+	var sawDefaultACL bool
+	for _, violation := range after {
+		if violation.Kind == "default_acl" {
+			sawDefaultACL = true
+			t.Logf("detected: %s", violation)
+		}
+	}
+	if !sawDefaultACL {
+		t.Fatal(
+			"a default-privileges rule for the auth schema was not reported. " +
+				"It grants nothing today, which is exactly why a current-grant check misses it.",
+		)
+	}
+
+	// And Apply must refuse, not merely report.
+	if _, err := Apply(ctx, env.migration, options); !errors.Is(err, ErrRuntimeRoleCanEscalate) {
+		t.Fatalf("Apply = %v, want ErrRuntimeRoleCanEscalate", err)
+	}
 }

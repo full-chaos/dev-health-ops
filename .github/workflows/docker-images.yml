@@ -899,6 +899,7 @@ jobs:
           family_total=0
           for _ in $families; do family_total=$((family_total + 1)); done
           source_unknown_count=0
+          source_present_count=0
           for family in $families; do
             image="ghcr.io/${OWNER}/${family}"
             source_ref="${image}:sha-${short_sha}"
@@ -931,6 +932,11 @@ jobs:
               source_unknown_count=$((source_unknown_count + 1))
               continue
             fi
+            # codex round 4, P2: reached only when source_rc==0 (the
+            # source tag was actually found) -- tracked separately from
+            # source_unknown_count because "all UNKNOWN" was too narrow a
+            # trigger for the post-loop failure below (see there).
+            source_present_count=$((source_present_count + 1))
 
             if [ "${IS_RELEASE}" = "true" ]; then
               echo "RELEASE ${family}: tagging latest unconditionally"
@@ -1135,16 +1141,28 @@ jobs:
             fi
           done
 
-          # codex round 3, P2: if EVERY family's source-tag read came back
-          # UNKNOWN, nothing in this run reached any of the decisions
-          # above -- no tags moved, nine `::error::` annotations were
-          # printed, and the step would otherwise still exit 0. That
-          # specific shape (every family, the shared registry-error class,
-          # not the routine "this one family has no label yet") means the
-          # registry read itself is broken for this run, not that nine
-          # families independently have nothing to do -- fail loudly so CI
-          # goes red instead of a silent no-op green.
-          if [ "${source_unknown_count}" -eq "${family_total}" ]; then
-            echo "::error::all ${family_total} families failed the source-tag registry read with an unrecognized error this run -- likely a registry outage, not nine unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
+          # codex round 3, P2, WIDENED by codex round 4, P2: the original
+          # check only fired when EVERY family's source-tag read was
+          # UNKNOWN (source_unknown_count == family_total). A MIXED run --
+          # some UNKNOWN, the rest CONFIRMED ABSENT, zero actually FOUND --
+          # still reaches this point having applied no tags and printed no
+          # loud signal, because the round-3 check's equality test never
+          # matches when even one family declines via the "absent" branch
+          # instead of "unknown". Reproduced: 8 UNKNOWN + 1 CONFIRMED
+          # ABSENT (`family_total`=9, `source_unknown_count`=8) recorded
+          # zero `imagetools create` calls, rc=0, no annotation naming the
+          # failure as job-level.
+          #
+          # Correct condition: fail when NOTHING was actually found
+          # (source_present_count == 0) AND AT LEAST ONE read was
+          # genuinely ambiguous (source_unknown_count > 0) -- not "all
+          # UNKNOWN". An all-CONFIRMED-ABSENT run (source_present_count=0,
+          # source_unknown_count=0, e.g. a fresh org with nothing
+          # published yet) is still a legitimate steady state and must
+          # NOT trip this; any run where at least one family was actually
+          # found (source_present_count>=1) already did real work this
+          # run, even if others declined, so it's excluded too.
+          if [ "${source_present_count}" -eq 0 ] && [ "${source_unknown_count}" -gt 0 ]; then
+            echo "::error::0 of ${family_total} families had a confirmed-present source tag this run, and ${source_unknown_count} failed with an unrecognized registry error -- likely a registry outage, not unrelated per-family gaps. Failing so this doesn't read as a successful, tag-less no-op."
             exit 1
           fi

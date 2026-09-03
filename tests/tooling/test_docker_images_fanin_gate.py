@@ -83,7 +83,9 @@ def test_merge_matrices_no_longer_decide_moving_tags_per_leg() -> None:
         job = jobs.get(job_name)
         assert job is not None, f"expected a {job_name!r} job in docker-images.yml"
         names = _step_names(job)
-        assert not any("main's current head" in n or "mainhead" in n.lower() for n in names), (
+        assert not any(
+            "main's current head" in n or "mainhead" in n.lower() for n in names
+        ), (
             f"{job_name}: still has a per-leg main-head decision step "
             f"({names}) -- CHAOS-4947 moves this to the fan-in job"
         )
@@ -191,9 +193,7 @@ def test_platform_label_agreement_does_not_fall_back_to_whichever_exists() -> No
         "present, which is guessing, not agreement. Both platform labels must "
         "be required present (and equal) before trusting either."
     )
-    assert (
-        '[ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]' in combined_run_text
-    ), (
+    assert '[ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]' in combined_run_text, (
         "no explicit both-platforms-present guard found before the base_sha "
         "assignment -- a family with exactly one platform labeled must not "
         "be treated as agreeing"
@@ -253,7 +253,9 @@ def test_dockerfiles_label_the_revision_the_fan_in_job_reads() -> None:
         assert build_steps, f"{job_name}: no step with id: build found"
         with_block = build_steps[0].get("with") or {}
 
-        assert "org.opencontainers.image.revision=" not in str(with_block.get("labels", "")), (
+        assert "org.opencontainers.image.revision=" not in str(
+            with_block.get("labels", "")
+        ), (
             f"{job_name}'s build step sets a `labels:` input containing "
             "org.opencontainers.image.revision -- that's a second mechanism "
             "alongside the Dockerfile LABEL, not a replacement for it; the two "
@@ -307,7 +309,7 @@ def test_branch_tag_sanitizer_satisfies_the_full_docker_grammar() -> None:
         "no leading-character guard found after the sanitizer -- a branch "
         "like +foo or @work sanitizes to an invalid leading '-' without it"
     )
-    assert ':0:128' in run_text, (
+    assert ":0:128" in run_text, (
         "no 128-character length cap found on the sanitized branch tag -- "
         "Docker's tag grammar caps total length at 128 characters and a "
         "long branch name (or one padded by the leading-character guard) "
@@ -316,7 +318,7 @@ def test_branch_tag_sanitizer_satisfies_the_full_docker_grammar() -> None:
     # The cap must come after the prefix, not before -- assert the
     # truncation slice appears after the case-guard's prefixing line in
     # the source text (a real ordering bug, not just presence).
-    prefix_pos = run_text.index("safe_branch_tag=\"x${safe_branch_tag}\"")
+    prefix_pos = run_text.index('safe_branch_tag="x${safe_branch_tag}"')
     cap_pos = run_text.index(":0:128")
     assert cap_pos > prefix_pos, (
         "the 128-char truncation appears before the leading-character "
@@ -423,7 +425,7 @@ def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
     # The :latest call site must branch on all three outcomes: found (0),
     # confirmed absent (1, bootstrap), unknown (2, fail closed/decline).
     latest_call_pos = run_text.index('_inspect_retry_classify "${image}:latest"')
-    tail = run_text[latest_call_pos:latest_call_pos + 1200]
+    tail = run_text[latest_call_pos : latest_call_pos + 1200]
     assert '"${latest_rc}" -eq 1' in tail, (
         "no branch on rc==1 (CONFIRMED ABSENT) found near the :latest call "
         "site -- the three-way outcome must be handled explicitly"
@@ -549,8 +551,24 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
       # short-sha (never a digest-walk candidate's, which uses a
       # different, unrelated sha) -- everything else keeps the prior
       # unconditional-success behaviour.
-      if [ -n "${SOURCE_TAG_SCENARIO:-}" ] && [ "${candidate_short}" = "deadbee" ]; then
-        case "${SOURCE_TAG_SCENARIO}" in
+      # codex round 4, P2: a MIXED run (some families UNKNOWN, others
+      # CONFIRMED ABSENT, none actually found) needed its own per-family
+      # override to construct -- $SOURCE_TAG_SCENARIO alone answers the
+      # SAME way for every family (they share one short_sha). When
+      # $SOURCE_TAG_OVERRIDE_FAMILY is set and this ref's image name
+      # matches it, $SOURCE_TAG_OVERRIDE_SCENARIO wins for THIS family
+      # only; every other family still gets the uniform
+      # $SOURCE_TAG_SCENARIO.
+      family_scenario="${SOURCE_TAG_SCENARIO:-}"
+      if [ -n "${SOURCE_TAG_OVERRIDE_FAMILY:-}" ]; then
+        case "${ref}" in
+          *"/${SOURCE_TAG_OVERRIDE_FAMILY}:sha-"*)
+            family_scenario="${SOURCE_TAG_OVERRIDE_SCENARIO:-}"
+            ;;
+        esac
+      fi
+      if [ -n "${family_scenario}" ] && [ "${candidate_short}" = "deadbee" ]; then
+        case "${family_scenario}" in
           absent)
             echo "ERROR: ${ref}: not found" >&2
             exit 1
@@ -560,7 +578,7 @@ if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
             exit 1
             ;;
           *)
-            echo "unrecognized SOURCE_TAG_SCENARIO: ${SOURCE_TAG_SCENARIO}" >&2
+            echo "unrecognized source-tag scenario: ${family_scenario}" >&2
             exit 99
             ;;
         esac
@@ -635,6 +653,8 @@ def _run_latest_tag_step(
     digest_walk_match_short: str = "",
     source_tag_scenario: str = "",
     assert_success: bool = True,
+    source_tag_override_family: str = "",
+    source_tag_override_scenario: str = "",
 ) -> tuple[str, bool, bool, str, int]:
     """Run the fan-in job's ACTUAL tag-application script under bash, with
     `docker` shimmed to answer deterministically per `scenario` and
@@ -671,10 +691,14 @@ def _run_latest_tag_step(
         bin_dir.mkdir()
         docker_shim = bin_dir / "docker"
         docker_shim.write_text(_DOCKER_SHIM, encoding="utf-8")
-        docker_shim.chmod(docker_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        docker_shim.chmod(
+            docker_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
+        )
         git_shim = bin_dir / "git"
         git_shim.write_text(_GIT_SHIM, encoding="utf-8")
-        git_shim.chmod(git_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        git_shim.chmod(
+            git_shim.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
+        )
 
         script_path = Path(tmp) / "fanin.sh"
         script_path.write_text(script, encoding="utf-8")
@@ -703,6 +727,8 @@ def _run_latest_tag_step(
                 "DIGEST_WALK_CANDIDATES": "\n".join(digest_walk_candidates or []),
                 "DIGEST_WALK_MATCH_SHORT": digest_walk_match_short,
                 "SOURCE_TAG_SCENARIO": source_tag_scenario,
+                "SOURCE_TAG_OVERRIDE_FAMILY": source_tag_override_family,
+                "SOURCE_TAG_OVERRIDE_SCENARIO": source_tag_override_scenario,
             }
         )
         result = subprocess.run(
@@ -754,8 +780,8 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     the assertion can't pass by shadowing a neighbouring branch. Also
     asserts the negative control: a genuinely present (found) read
     emits no `::error::`)."""
-    absent_record, absent_log_called, absent_mb_called, _absent_stdout, _absent_rc = _run_latest_tag_step(
-        "absent"
+    absent_record, absent_log_called, absent_mb_called, _absent_stdout, _absent_rc = (
+        _run_latest_tag_step("absent")
     )
     assert "imagetools create" in absent_record and ":latest" in absent_record, (
         "CONFIRMED ABSENT did not record a bootstrap `imagetools create "
@@ -768,9 +794,13 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         "short-circuiting straight to bootstrap"
     )
 
-    unknown_record, unknown_log_called, unknown_mb_called, _unknown_stdout, _unknown_rc = (
-        _run_latest_tag_step("unknown")
-    )
+    (
+        unknown_record,
+        unknown_log_called,
+        unknown_mb_called,
+        _unknown_stdout,
+        _unknown_rc,
+    ) = _run_latest_tag_step("unknown")
     assert unknown_record == "", (
         "UNKNOWN registry failure recorded an `imagetools create` call -- "
         f"it must decline and tag nothing, got: {unknown_record!r}"
@@ -793,8 +823,8 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # "wandered into the fallback and got lucky" -- verified by removing
     # the guard and confirming this specific assertion goes red while
     # the create-count assertion alone stays green.
-    empty_record, empty_log_called, empty_mb_called, empty_stdout, _empty_rc = _run_latest_tag_step(
-        "empty_success"
+    empty_record, empty_log_called, empty_mb_called, empty_stdout, _empty_rc = (
+        _run_latest_tag_step("empty_success")
     )
     assert empty_record == "", (
         "a reported-success (exit 0) but empty :latest read recorded an "
@@ -830,8 +860,8 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # the old name implied) must emit no `::error::` at all -- if it did,
     # the annotation would be noise on a routine fallback instead of a
     # signal on the genuinely surprising empty-read case.
-    _found_record, found_log_called, found_mb_called, found_stdout, _found_rc = _run_latest_tag_step(
-        "unlabelled"
+    _found_record, found_log_called, found_mb_called, found_stdout, _found_rc = (
+        _run_latest_tag_step("unlabelled")
     )
     assert found_log_called and not found_mb_called, (
         "the unlabelled scenario should reach the digest-walk fallback "
@@ -873,7 +903,9 @@ def test_latest_check_behaviourally_tags_only_true_descendants() -> None:
         f"log_called={descendant_log_called}, "
         f"merge_base_called={descendant_mb_called}"
     )
-    assert "imagetools create" in descendant_record and ":latest" in descendant_record, (
+    assert (
+        "imagetools create" in descendant_record and ":latest" in descendant_record
+    ), (
         "a labelled :latest whose recorded revision IS an ancestor of the "
         "built commit did not record an `imagetools create ...:latest` "
         f"call -- a true descendant must be tagged, got: {descendant_record!r}"
@@ -962,12 +994,14 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
     outputs differ. Verified this test goes red against the mutation
     lane-runner-fallback described (rc==2's branch replaced with the same
     silent-SKIP text as rc==1) before trusting it."""
-    absent_record, absent_log, absent_mb, absent_stdout, _absent_rc = _run_latest_tag_step(
-        # The :latest scenario value is irrelevant here -- source_rc==1
-        # `continue`s the loop long before the :latest probe is ever
-        # reached for any family.
-        "labelled",
-        source_tag_scenario="absent",
+    absent_record, absent_log, absent_mb, absent_stdout, _absent_rc = (
+        _run_latest_tag_step(
+            # The :latest scenario value is irrelevant here -- source_rc==1
+            # `continue`s the loop long before the :latest probe is ever
+            # reached for any family.
+            "labelled",
+            source_tag_scenario="absent",
+        )
     )
     assert absent_record == "", (
         "CONFIRMED ABSENT on the source tag still recorded an "
@@ -995,10 +1029,12 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
     # below for the dedicated row on that mechanism). assert_success=False
     # here because this row's own point is the PER-FAMILY message shape
     # (SKIP vs `::error::`), not the job-level exit code.
-    unknown_record, unknown_log, unknown_mb, unknown_stdout, unknown_rc = _run_latest_tag_step(
-        "labelled",
-        source_tag_scenario="unknown",
-        assert_success=False,
+    unknown_record, unknown_log, unknown_mb, unknown_stdout, unknown_rc = (
+        _run_latest_tag_step(
+            "labelled",
+            source_tag_scenario="unknown",
+            assert_success=False,
+        )
     )
     assert unknown_rc != 0, (
         "all nine families hitting source_rc==2 should now fail the step "
@@ -1014,7 +1050,9 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
         "digest-walk fallback or the merge-base ancestry check (git was "
         "invoked) instead of declining immediately"
     )
-    assert "::error::" in unknown_stdout and "could not confirm whether" in unknown_stdout, (
+    assert (
+        "::error::" in unknown_stdout and "could not confirm whether" in unknown_stdout
+    ), (
         "UNKNOWN registry failure on the source tag must emit a "
         f"`::error::` annotation, got stdout: {unknown_stdout!r}"
     )
@@ -1039,17 +1077,19 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
     fix, that produced nine `::error::` annotations, an EMPTY create
     record (no tags moved for anyone), and a ZERO-EXIT step: a full
     publish no-op that reads as a green job unless someone actually reads
-    the log for the annotations. docker-images.yml now counts
-    `source_unknown_count` against `family_total` after the loop and
-    fails the step when they're equal.
+    the log for the annotations. docker-images.yml now fails the step
+    when `source_present_count == 0` and `source_unknown_count > 0`
+    (codex round 4, P2: widened from the original "all UNKNOWN" equality
+    test, which missed a MIXED all-UNKNOWN/all-ABSENT run with zero
+    actual finds -- see test_source_tag_mixed_unknown_and_absent_still_
+    fails_the_job below for that scenario specifically).
 
     Negative control: `test_source_tag_check_distinguishes_confirmed_absent_from_unknown`'s
     own "absent" call (all nine hit source_rc==1, not 2) uses the
     DEFAULT `assert_success=True` and passes -- proving this check is
-    keyed on the UNKNOWN class specifically, not "every family declined
-    for any reason" (an all-CONFIRMED-ABSENT run, e.g. a fresh org with
-    nothing published yet, is a legitimate steady state and must not
-    fail the job)."""
+    keyed on "nothing found," not "every family declined for any reason"
+    (an all-CONFIRMED-ABSENT run, e.g. a fresh org with nothing published
+    yet, is a legitimate steady state and must not fail the job)."""
     record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
         "labelled",
         source_tag_scenario="unknown",
@@ -1067,7 +1107,55 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "all 9 families failed the source-tag registry read" in stdout, (
-        "expected the job-level failure annotation naming all 9 families, "
-        f"got stdout:\n{stdout}"
+    assert "0 of 9 families had a confirmed-present source tag" in stdout, (
+        "expected the job-level failure annotation naming the present/"
+        f"total counts, got stdout:\n{stdout}"
+    )
+
+
+def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
+    """codex round 4, P2 (reproduced): the round-3 fix only fired when
+    EVERY family's source-tag read was UNKNOWN (source_unknown_count ==
+    family_total). A MIXED run -- 8 families UNKNOWN, 1 CONFIRMED ABSENT,
+    zero families actually FOUND -- reached this exact silent-no-op shape
+    too, because the round-3 equality test never matches when even one
+    family declines via "absent" instead of "unknown": 8 != 9. Reviewer's
+    own repro (matching the scenario here almost exactly, one family --
+    dev-health-go-migrate -- forced to "not found" via a docker-shim
+    monkeypatch) recorded rc=0, zero creates, no job-level annotation.
+
+    Uses $SOURCE_TAG_OVERRIDE_FAMILY/$SOURCE_TAG_OVERRIDE_SCENARIO
+    (source_tag_override_family/scenario) to give ONE family ("absent")
+    a different outcome than the other eight ("unknown") -- constructing
+    the exact mixed shape without a docker-shim monkeypatch. Verified
+    this row goes RED against the round-3-only check (`source_unknown_
+    count == family_total`, reverted from the round-4 `source_present_
+    count == 0 and source_unknown_count > 0` form) before trusting it:
+    8 != 9, so the reverted check never fires and the run exits 0."""
+    record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
+        "labelled",
+        source_tag_scenario="unknown",
+        source_tag_override_family="dev-health-go-migrate",
+        source_tag_override_scenario="absent",
+        assert_success=False,
+    )
+    assert returncode == 1, (
+        f"expected the mixed UNKNOWN/ABSENT scenario (0 found) to exit 1, "
+        f"got returncode={returncode}, stdout:\n{stdout}"
+    )
+    assert record == "", (
+        f"the failing mixed run still recorded an `imagetools create` call: {record!r}"
+    )
+    assert not log_called and not mb_called, (
+        "the failing mixed run reached the digest-walk fallback or the "
+        "merge-base ancestry check instead of failing immediately after "
+        "the per-family loop"
+    )
+    assert "0 of 9 families had a confirmed-present source tag" in stdout, (
+        "expected the job-level failure annotation naming the present/"
+        f"total counts, got stdout:\n{stdout}"
+    )
+    assert "SKIP dev-health-go-migrate" in stdout, (
+        "expected the one overridden-absent family to still get its own "
+        f"silent SKIP line, got stdout:\n{stdout}"
     )

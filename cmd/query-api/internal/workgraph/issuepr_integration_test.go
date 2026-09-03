@@ -149,9 +149,26 @@ func TestFetchLinkedIssueRowsFastPathMatchesFinal(t *testing.T) {
 // this exact scenario -- it deliberately cannot, per fetchLinkedIssueRowsFastPath's
 // own doc comment: matching FINAL's physical insertion-order tie-break under
 // an exact value tie would require paying for FINAL, defeating the point of
-// this reader. What IS asserted, and IS achievable: the result must be one of
-// the two candidate rows' full (confidence, evidence) pairs, in full,
-// never a mix of the two.
+// this reader. What IS asserted, and IS achievable: the result's full
+// (confidence, provenance, evidence) triple must equal one of the candidates'
+// full triples EXACTLY, checked as one unit -- never a mix of two candidates.
+//
+// FIXED (codex round 2 on #2183, P3): the original version anchored on
+// `evidence` alone, then checked `provenance` and `confidence` against that
+// anchor SEPARATELY -- a false-green construction. round 2 proved it: a
+// hybrid tuple (0.95, "manual", "same") passes that chained check whenever
+// "same" happens to be the evidence for BOTH candidates and the confidence
+// map is keyed by evidence alone, because each separate check only sees a
+// PARTIAL slice of the row, never the row as one unit. It also warned that
+// with only 2 candidates, a reverted (pre-fix) three-separate-argMax query
+// can pass this test by COINCIDENCE if ClickHouse's independent tie-breaks
+// happen to agree across all three columns -- which the fixed query-shape
+// test below (TestFetchLinkedIssueRowsFastPathQueryIsOneTupledArgMax) now
+// guards independently of runtime coincidence. Fixed here by keying
+// candidates on the FULL (confidence, provenance, evidence) triple as one
+// map key -- a hybrid combining fields from two different real rows cannot
+// equal any single candidate's full triple, structurally, regardless of
+// which fields happen to collide between the two real candidates.
 func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -182,9 +199,19 @@ func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) 
 	)
 	tiedLastSynced := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
 
-	candidates := map[[2]string]struct{}{
-		{"native", "batch-token-a"}: {},
-		{"native", "batch-token-b"}: {},
+	// candidateTriple is the FULL (confidence, provenance, evidence) set for
+	// one physical row, checked as ONE unit -- see the test's doc comment for
+	// why a chained per-field check (anchor on one field, verify the others
+	// against it) is unsound: it can accept a hybrid whenever two candidates
+	// happen to share a value on the anchor field.
+	type candidateTriple struct {
+		confidence float64
+		provenance string
+		evidence   string
+	}
+	candidates := map[candidateTriple]struct{}{
+		{0.70, "native", "batch-token-a"}: {},
+		{0.95, "native", "batch-token-b"}: {},
 	}
 	batch, err := admin.PrepareBatch(ctx, `
         INSERT INTO work_graph_issue_pr (
@@ -194,13 +221,11 @@ func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepare work_graph_issue_pr batch: %v", err)
 	}
-	confidences := map[string]float32{"batch-token-a": 0.70, "batch-token-b": 0.95}
-	for pair := range candidates {
-		provenance, evidence := pair[0], pair[1]
+	for triple := range candidates {
 		if err := batch.Append(
-			orgID, repoID, workItemID, prNumber, confidences[evidence], provenance, evidence, tiedLastSynced,
+			orgID, repoID, workItemID, prNumber, float32(triple.confidence), triple.provenance, triple.evidence, tiedLastSynced,
 		); err != nil {
-			t.Fatalf("append tied row (provenance=%q evidence=%q): %v", provenance, evidence, err)
+			t.Fatalf("append tied row %+v: %v", triple, err)
 		}
 	}
 	if err := batch.Send(); err != nil {
@@ -224,21 +249,8 @@ func TestFetchLinkedIssueRowsFastPathNeverInventsAHybridRowOnATie(t *testing.T) 
 	if got.workItemID != workItemID {
 		t.Fatalf("work_item_id = %q, want %q", got.workItemID, workItemID)
 	}
-	// Anchor on evidence -- the one field that unambiguously names which of
-	// the two candidate rows this result claims to be -- then verify
-	// provenance AND confidence match THAT SAME row's real values. A hybrid
-	// (evidence from one physical row, confidence or provenance from the
-	// other) fails here even though each field individually looks valid.
-	wantConfidence, isKnownEvidence := confidences[got.evidence]
-	if !isKnownEvidence {
-		t.Fatalf("evidence %q matches neither candidate row: %+v", got.evidence, got)
-	}
-	if _, ok := candidates[[2]string{got.provenance, got.evidence}]; !ok {
-		t.Fatalf("HYBRID row: provenance %q does not belong with evidence %q in either candidate: %+v",
-			got.provenance, got.evidence, got)
-	}
-	if got.confidence != float64(wantConfidence) {
-		t.Fatalf("HYBRID row: evidence %q implies confidence %v, got %v: %+v",
-			got.evidence, wantConfidence, got.confidence, got)
+	gotTriple := candidateTriple{got.confidence, got.provenance, got.evidence}
+	if _, ok := candidates[gotTriple]; !ok {
+		t.Fatalf("HYBRID row: %+v matches neither candidate's full triple whole -- candidates: %v", gotTriple, candidates)
 	}
 }

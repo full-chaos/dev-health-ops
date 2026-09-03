@@ -3,11 +3,14 @@ package remaining
 import (
 	"context"
 	"errors"
-	"fmt"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
 // The readiness gate, ported from _daily_metrics_ready
@@ -132,7 +135,7 @@ func DailyMetricsReady(
 		return true
 	default:
 		if observer != nil {
-			observer.RecommendationsReadinessFailOpen(errorTypeLabel(err))
+			observer.RecommendationsReadinessFailOpen(classifyReadinessError(err))
 		}
 		if logger != nil {
 			// ERROR, not WARN. Proceeding is a policy choice about what the
@@ -171,17 +174,78 @@ func DailyMetricsReady(
 
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 
-// errorTypeLabel keeps the fail-open counter's label bounded.
+// classifyReadinessError maps a gate read failure onto the CLOSED class set in
+// jobruntime, splitting by REMEDY rather than by type name.
 //
-// Python labels by exception CLASS name, which is a small closed set. Go error
-// values are not, so the label is derived from the concrete type rather than
-// the message -- a message would carry org ids and query text straight into
-// label cardinality.
-func errorTypeLabel(err error) string {
-	if err == nil {
-		return "none"
+// Python labels by exception CLASS name (recommendations_tasks.py:265), which
+// is safe there because Python exception classes are a small closed set. Go's
+// equivalent is not: `%T` on an error value yields a fresh series for every
+// wrapped or driver-specific type, so a literal port of the label would import
+// a cardinality bug the reference does not have -- and, worse, would make the
+// series impossible to emit at zero, which is the property that lets an alert
+// bind BEFORE the first failure rather than after it.
+//
+// Order matters. A cancelled context wrapped by the driver still reports as a
+// context error, so the context checks come first; pgconn's own connect error
+// is checked before the generic server error because a dial failure carries no
+// SQLSTATE and would otherwise fall through to "query" and read as a migration
+// fault.
+func classifyReadinessError(err error) string {
+	switch {
+	case err == nil:
+		return jobruntime.RecommendationsReadinessFailOpenOther
+	case errors.Is(err, context.DeadlineExceeded):
+		return jobruntime.RecommendationsReadinessFailOpenTimeout
+	case errors.Is(err, context.Canceled):
+		return jobruntime.RecommendationsReadinessFailOpenCanceled
 	}
-	return fmt.Sprintf("%T", err)
+
+	var connectError *pgconn.ConnectError
+	if errors.As(err, &connectError) {
+		return jobruntime.RecommendationsReadinessFailOpenConnection
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) {
+		// A SQLSTATE means the server answered and rejected the query --
+		// a missing table or column, i.e. an unfinished migration.
+		return jobruntime.RecommendationsReadinessFailOpenQuery
+	}
+	var netError net.Error
+	if errors.As(err, &netError) {
+		return jobruntime.RecommendationsReadinessFailOpenConnection
+	}
+	return jobruntime.RecommendationsReadinessFailOpenOther
+}
+
+// CollectorReadinessObserver adapts the metrics collector to the gate's
+// observer, so the gate itself stays free of the telemetry package's shape.
+type CollectorReadinessObserver struct {
+	Collector *jobruntime.MetricsCollector
+}
+
+// RecommendationsReadinessFailOpen forwards a classified fail-open.
+//
+// The collector REJECTS an unknown class, and that error is deliberately not
+// swallowed here: an unclassified label is a bug in classifyReadinessError, and
+// silently dropping it would leave the fail-open uncounted -- the exact silence
+// this counter exists to remove.
+func (observer CollectorReadinessObserver) RecommendationsReadinessFailOpen(class string) {
+	if observer.Collector == nil {
+		return
+	}
+	if err := observer.Collector.ObserveRecommendationsReadinessFailOpen(class); err != nil {
+		// Fall back to the catch-all rather than losing the observation.
+		_ = observer.Collector.ObserveRecommendationsReadinessFailOpen(
+			jobruntime.RecommendationsReadinessFailOpenOther)
+	}
+}
+
+// RecommendationsReadinessSkipped forwards a withheld org/day.
+func (observer CollectorReadinessObserver) RecommendationsReadinessSkipped() {
+	if observer.Collector == nil {
+		return
+	}
+	observer.Collector.ObserveRecommendationsReadinessSkipped()
 }
 
 // ScheduledFanoutGenerationPrefixForTest exposes the gate's prefix to the

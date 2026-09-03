@@ -1058,6 +1058,17 @@ type MetricsCollector struct {
 	// tripped a rule -- which is a perfectly ordinary outcome for this family.
 	recommendationsRefusals map[string]uint64
 
+	// recommendationsReadinessFailOpen counts readiness-gate reads that FAILED
+	// and were treated as ready anyway, by bounded error class.
+	//
+	// recommendationsReadinessSkipped counts org/days deliberately skipped
+	// because the daily run was demonstrably unfinished. Both are silent by
+	// default: a skipped org writes no rows, and no rows is indistinguishable
+	// from a day on which no team tripped a rule -- an ordinary result for this
+	// family. They are the positive statement an operator can bind to.
+	recommendationsReadinessFailOpen map[string]uint64
+	recommendationsReadinessSkipped  uint64
+
 	// Report-domain dedup guard (CHAOS-4140). The weekly-report engine
 	// (internal/jobs/report) reads several append-only daily rollup tables
 	// through a latest-generation subquery (dedupFromSource) because a
@@ -2335,6 +2346,78 @@ func (collector *MetricsCollector) ObserveRecommendationsRefused(reason string) 
 	return nil
 }
 
+// Readiness-gate fail-open error classes. A CLOSED set, and DELIBERATELY NOT a
+// transliteration of the reference's label.
+//
+// Python labels by `type(exc).__name__`
+// (workers/recommendations_tasks.py:265), which is safe there because Python
+// exception CLASSES are a small closed set. Go's equivalent -- `%T` on an error
+// value -- is not: every wrapped or driver-specific type is a fresh Prometheus
+// series, so porting the label literally would import a cardinality bug the
+// reference does not have, and would make the series unemittable at zero.
+//
+// The classes below are split by REMEDY, not by type name: a timeout is
+// transient, a cancellation is usually an orderly shutdown, a connection fault
+// is infrastructure, and a query fault is a migration. Anything unclassified
+// lands in `other` rather than creating a series no dashboard selects.
+const (
+	// RecommendationsReadinessFailOpenTimeout is a context deadline exceeded.
+	RecommendationsReadinessFailOpenTimeout = "timeout"
+	// RecommendationsReadinessFailOpenCanceled is a cancelled context, which
+	// is ordinarily worker shutdown rather than a fault.
+	RecommendationsReadinessFailOpenCanceled = "canceled"
+	// RecommendationsReadinessFailOpenConnection is a pool or dial failure.
+	RecommendationsReadinessFailOpenConnection = "connection"
+	// RecommendationsReadinessFailOpenQuery is a server-side error -- a
+	// missing table or column, i.e. an unfinished migration.
+	RecommendationsReadinessFailOpenQuery = "query"
+	// RecommendationsReadinessFailOpenOther keeps the set closed.
+	RecommendationsReadinessFailOpenOther = "other"
+)
+
+var recommendationsReadinessFailOpenClasses = []string{
+	RecommendationsReadinessFailOpenTimeout,
+	RecommendationsReadinessFailOpenCanceled,
+	RecommendationsReadinessFailOpenConnection,
+	RecommendationsReadinessFailOpenQuery,
+	RecommendationsReadinessFailOpenOther,
+}
+
+// ObserveRecommendationsReadinessFailOpen records a gate read that failed and
+// was treated as ready anyway.
+//
+// Fail-open is an owner ruling (CHAOS-4073 item 2), not a judgement that the
+// error is benign: fail-closed would wire an unknown gate-error rate straight
+// to an org-wide recommendations wedge with no tombstones, which is the
+// CHAOS-2373 outcome the gate exists to prevent. So every occurrence must be
+// countable here, not merely logged.
+func (collector *MetricsCollector) ObserveRecommendationsReadinessFailOpen(class string) error {
+	if !slices.Contains(recommendationsReadinessFailOpenClasses, class) {
+		return fmt.Errorf("unknown recommendations readiness fail-open class %q", class)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.recommendationsReadinessFailOpen == nil {
+		collector.recommendationsReadinessFailOpen = map[string]uint64{}
+	}
+	collector.recommendationsReadinessFailOpen[class]++
+	return nil
+}
+
+// ObserveRecommendationsReadinessSkipped records an org/day the gate withheld
+// because the daily-metrics run was demonstrably unfinished.
+//
+// NOT PRESENT IN THE REFERENCE -- Python logs the skip at INFO
+// (workers/recommendations_tasks.py:365) and counts nothing. It is added here
+// because a withheld org is otherwise indistinguishable from a healthy quiet
+// one: both write zero rows. Recorded so a future parity reviewer does not
+// hunt for a Python counterpart that does not exist.
+func (collector *MetricsCollector) ObserveRecommendationsReadinessSkipped() {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.recommendationsReadinessSkipped++
+}
+
 // ObserveDORARefused records that the native DORA executor refused to build.
 //
 // The dora kind is then not registered, while the other remaining kinds are.
@@ -3255,6 +3338,17 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 		writeUintSample(output, "worker_recommendations_native_refused_total",
 			[]metricLabel{{"reason", reason}}, collector.recommendationsRefusals[reason])
 	}
+
+	// Emitted for EVERY class, including zeros -- same reasoning as the dora
+	// and recommendations refusal counters above, and the reason the class set
+	// had to be closed rather than derived from Go error types.
+	writeMetadata(output, "worker_recommendations_readiness_fail_open_total", "Readiness-gate reads that failed and were treated as ready anyway, by error class.", "counter")
+	for _, class := range recommendationsReadinessFailOpenClasses {
+		writeUintSample(output, "worker_recommendations_readiness_fail_open_total",
+			[]metricLabel{{"class", class}}, collector.recommendationsReadinessFailOpen[class])
+	}
+	writeMetadata(output, "worker_recommendations_readiness_skipped_total", "Org/days the readiness gate withheld because the daily-metrics run was unfinished.", "counter")
+	writeUintSample(output, "worker_recommendations_readiness_skipped_total", nil, collector.recommendationsReadinessSkipped)
 
 	writeMetadata(output, "worker_capacity_native_partitions_total", "Partitions computed by the native Go capacity executor.", "counter")
 	writeUintSample(output, "worker_capacity_native_partitions_total", nil, collector.capacityPartitions)

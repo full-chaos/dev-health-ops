@@ -75,20 +75,7 @@ func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
-	var command *exec.Cmd
-	switch filepath.Base(python) {
-	case "python":
-		command = exec.CommandContext(ctx, "python", "-c", applyScript, dsn)
-	case "python3":
-		command = exec.CommandContext(ctx, "python3", "-c", applyScript, dsn)
-	default:
-		t.Fatalf("chschema: unsupported Python executable %q", python)
-	}
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PATH="+filepath.Dir(python)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"),
-	)
+	command := pythonCommand(ctx, python, dsn, root)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("chschema: applying the real migration chain failed: %v\n%s", err, output)
@@ -120,6 +107,50 @@ func repoRoot() (string, error) {
 		}
 		directory = parent
 	}
+}
+
+// pythonCommand builds the migration-runner command from an ALREADY-RESOLVED
+// interpreter path.
+//
+// It passes `python` itself rather than a bare "python"/"python3" literal, and
+// that distinction is the whole point. exec.CommandContext resolves a bare name
+// with LookPath against the PARENT process's PATH, at construction time.
+// Setting command.Env afterwards changes the CHILD's environment and cannot
+// affect how the executable is found -- so the PATH entry below was never able
+// to make a bare name resolvable, and the previous code worked only on hosts
+// where `python` already happened to be on PATH.
+//
+// It is not on PATH on Ubuntu, which ships `python3` only. Every chschema-based
+// integration test there died with
+//
+//	chschema: applying the real migration chain failed:
+//	exec: "python": executable file not found in $PATH
+//
+// while pythonBinary had already resolved a perfectly good absolute path one
+// line earlier and the switch discarded it.
+//
+// The basename switch is gone with it. It only ever validated the NAME, and it
+// rejected every interpreter not called exactly `python` or `python3` -- so
+// DEV_HEALTH_PYTHON, which pythonBinary honours, was accepted there and then
+// refused here for anything like `python3.12`, a uv-managed interpreter, or a
+// wrapper script. An override the code accepts and then rejects is worse than
+// one it does not offer.
+//
+// The PATH entry is KEPT because it is still correct for the child process
+// itself (anything the migration runner shells out to), and is now guarded so a
+// bare-name override cannot prepend "." to the child's PATH.
+func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
+	command := exec.CommandContext(ctx, python, "-c", applyScript, dsn)
+	command.Dir = root
+	environment := os.Environ()
+	if filepath.IsAbs(python) {
+		environment = append(environment,
+			"PATH="+filepath.Dir(python)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+	environment = append(environment,
+		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"))
+	command.Env = environment
+	return command
 }
 
 // pythonBinary prefers the checked-out virtualenv, which is what the live

@@ -213,6 +213,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # CHAOS-4922: the base must exist BEFORE this job reads the Dockerfile.
+      #
+      # mirror-test-images.yml is a SIBLING workflow on the same event -- neither
+      # waits for the other, so on a first landing (or any base bump) this build
+      # can reach a ghcr ref nothing has created yet. Measured while writing
+      # this: the package 404'd, and a manual dispatch of the mirror was
+      # CANCELLED by the single-pending-run-per-group rule before it could copy
+      # anything. Depending on a sibling workflow's timing is not a guarantee.
+      #
+      # So the build ensures its own input. Idempotent: an inspect that succeeds
+      # is a no-op, and at worst this reads ONE anonymous Hub manifest -- no Hub
+      # credentials, which is the whole point of the mirror. The mirror workflow
+      # remains the scheduled/bulk path; this is the ordering floor.
+      #
+      # Runs after the ghcr login above, because creating the tag writes to ghcr.
+      - name: Ensure the Python base image is mirrored
+        run: |
+          set -euo pipefail
+          # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).
+          # Two validators for one property diverged; the gap was the silent
+          # failure set. ci/python_base_ref.sh is now the only definition.
+          eval "$(bash ci/python_base_ref.sh "${{ github.repository_owner }}" \
+                  | awk '$1 == "ghcr" { print "ref=" $2 } $1 == "upstream" { print "upstream=" $2 }')"
+          tag="${ref%@*}"
+          digest="${ref##*@}"
+          repo="${upstream%%:*}"
+          if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
+            echo "base already mirrored, no action: ${ref}"
+          else
+            echo "base absent from ghcr, copying from Docker Hub: ${ref}"
+            # Digest-addressed on BOTH sides, so this copies exactly the image
+            # the Dockerfile names -- never whatever the tag points at today.
+            docker buildx imagetools create --tag "${tag}" "docker.io/library/${repo}@${digest}"
+            # Verify by DIGEST rather than trusting the create's exit code: the
+            # thing the build depends on is the image being resolvable at this
+            # ref, not the command having returned zero.
+            docker buildx imagetools inspect "${ref}" >/dev/null
+            echo "base created and verified: ${ref}"
+          fi
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0

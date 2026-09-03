@@ -49,15 +49,19 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	rng := rand.New(rand.NewSource(seed))
 	t.Logf("seed %d — rerun with the same seed to reproduce any disagreement", seed)
 
-	var checked, skipped, multi, boundary, dollarIdents int
+	var checked, skipped, multi, boundary, dollarIdents, bareNonASCII int
 	skipReasons := map[string]int{}
 	var skipExamples []string
 	var firstDisagreement string
 
 	for i := 0; i < 3000; i++ {
-		stmt, dollarIdent := generateStatement(rng)
-		if dollarIdent {
+		g := generateStatement(rng)
+		stmt := g.sql
+		if g.dollarIdent {
 			dollarIdents++
+		}
+		if g.bareNonASCII {
+			bareNonASCII++
 		}
 
 		lexerRefuses := refuseMultipleStatements(stmt) != nil
@@ -105,7 +109,8 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 
 	t.Logf("checked %d, skipped %d (invalid SQL, by SQLSTATE: %v), server called %d multi-statement, %d single-with-semicolon",
 		checked, skipped, skipReasons, multi, boundary)
-	t.Logf("of those, %d carried a $-bearing identifier", dollarIdents)
+	t.Logf("of those, %d carried a $-bearing identifier, %d a BARE non-ASCII identifier",
+		dollarIdents, bareNonASCII)
 	for _, ex := range skipExamples {
 		t.Logf("SKIPPED: %s", ex)
 	}
@@ -135,6 +140,10 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 
 	// The class contracts asked for must actually be present, or a green run
 	// says nothing about it.
+	if bareNonASCII < 100 {
+		t.Errorf("only %d statements carried a bare non-ASCII identifier; the >=0x80 branches "+
+			"in identChar and continuesIdentifier are not being exercised", bareNonASCII)
+	}
 	if dollarIdents < 100 {
 		t.Errorf("only %d statements carried a $-bearing identifier; that axis is not being exercised", dollarIdents)
 	}
@@ -163,7 +172,7 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 // when the query actually carries a bind argument -- the parameterless path
 // never builds a prepared statement, which is the measurement that moved this
 // rule out of the protocol and into the lexer.
-func generateStatement(rng *rand.Rand) (string, bool) {
+func generateStatement(rng *rand.Rand) generated {
 	payloads := []string{
 		`'a'`,
 		`'it''s'`,
@@ -217,6 +226,24 @@ func generateStatement(rng *rand.Rand) (string, bool) {
 		` AS a$1`,
 		` AS a$b`,
 		` AS plain`,
+
+		// NON-ASCII BARE IDENTIFIERS. PostgreSQL's lexer is byte-based: any
+		// byte >= 0x80 is an identifier character, start or continuation,
+		// regardless of Unicode class. txcontrol.go relies on that in two
+		// places -- identChar's `b >= 0x80` and continuesIdentifier's
+		// `first >= 0x80` -- and until now the generator emitted no non-ASCII
+		// identifier byte at all: the only non-ASCII alias was DOUBLE-QUOTED,
+		// so the bare path never saw one and neither branch was ever exercised
+		// by the oracle. Correct by construction, unverified against the
+		// runtime, invisible to this harness.
+		//
+		// Written as \u escapes, not literals. lane-auth-contracts lost a
+		// U+212A in transit and the row silently tested ASCII twice, printing a
+		// clean agree; escapes survive a trip that literals do not.
+		" AS \u00fc$$",          // non-ASCII FIRST byte, then the $$ shape
+		" AS \u00fc$b",          // non-ASCII first byte, single $
+		" AS \u00fcn\u00efcode", // non-ASCII, no $ at all
+		" AS a\u00fc$$",         // ASCII start, non-ASCII CONTINUATION byte
 	}
 	tails := []string{
 		``,
@@ -242,8 +269,27 @@ func generateStatement(rng *rand.Rand) (string, bool) {
 		`; COMMIT; SELECT $$;$$`,
 	}
 	alias := aliases[rng.Intn(len(aliases))]
-	return fmt.Sprintf("SELECT %s, $1::int%s%s",
-		payloads[rng.Intn(len(payloads))],
-		alias,
-		tails[rng.Intn(len(tails))]), strings.Contains(alias, "$")
+	return generated{
+		sql: fmt.Sprintf("SELECT %s, $1::int%s%s",
+			payloads[rng.Intn(len(payloads))],
+			alias,
+			tails[rng.Intn(len(tails))]),
+		dollarIdent:  strings.Contains(alias, "$"),
+		bareNonASCII: !strings.Contains(alias, `"`) && hasNonASCII(alias),
+	}
+}
+
+type generated struct {
+	sql          string
+	dollarIdent  bool
+	bareNonASCII bool
+}
+
+func hasNonASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return true
+		}
+	}
+	return false
 }

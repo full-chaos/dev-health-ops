@@ -99,6 +99,37 @@ func TestOpenAIProviderPerFormatMaxOutputTokensFloor(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderFallsBackToJSONObjectWhenSchemaIsNil(t *testing.T) {
+	// A CompletionRequest with no JSONSchema (neither constructor used) --
+	// matches openai.py's own non-schema-prompt branch, which sends a
+	// plain {"type": "json_object"} instead of a strict schema. No
+	// production caller sends this today; this is a structural
+	// completeness test for a general Provider.
+	var seenFormat openAITextFormat
+	provider, calls := newTestOpenAIProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		req := decodeOpenAIRequest(t, r)
+		seenFormat = req.Text.Format
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{OutputText: `{"ok": true}`})
+	})
+
+	if _, err := provider.Complete(context.Background(), CompletionRequest{
+		Prompt:        "prompt",
+		SystemMessage: "explain this",
+	}); err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if *calls != 1 {
+		t.Fatalf("calls = %d, want 1", *calls)
+	}
+	if seenFormat.Type != "json_object" {
+		t.Errorf("text.format.type = %q, want json_object", seenFormat.Type)
+	}
+	if seenFormat.Name != "" || seenFormat.Strict || seenFormat.Schema != nil {
+		t.Errorf("text.format should carry no name/strict/schema in json_object mode, got %+v", seenFormat)
+	}
+}
+
 func TestOpenAIProviderCompleteSuccessViaOutputText(t *testing.T) {
 	provider, calls := newTestOpenAIProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		req := decodeOpenAIRequest(t, r)

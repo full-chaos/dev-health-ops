@@ -52,6 +52,33 @@ func TestLocalProviderDefaults(t *testing.T) {
 	}
 }
 
+func TestLocalProviderFallsBackToNoResponseFormatWhenSchemaIsNil(t *testing.T) {
+	// A CompletionRequest with no JSONSchema -- matches local.py's own
+	// non-schema-prompt branch, which omits response_format entirely
+	// rather than requesting a schema. No production caller sends this
+	// today; structural completeness test for a general Provider.
+	provider, calls := newTestLocalProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		req := decodeLocalRequest(t, r)
+		if req.ResponseFormat != nil {
+			t.Errorf("response_format = %+v, want nil (omitted) when JSONSchema is nil", req.ResponseFormat)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(localChatResponse{
+			Choices: []localChatChoice{{Message: localChatMessage{Content: `{"ok": true}`}}},
+		})
+	})
+
+	if _, err := provider.Complete(context.Background(), CompletionRequest{
+		Prompt:        "prompt",
+		SystemMessage: "explain this",
+	}); err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if *calls != 1 {
+		t.Fatalf("calls = %d, want 1", *calls)
+	}
+}
+
 func TestLocalProviderCompleteSuccess(t *testing.T) {
 	provider, calls := newTestLocalProvider(t, func(w http.ResponseWriter, r *http.Request) {
 		req := decodeLocalRequest(t, r)

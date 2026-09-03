@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 const (
@@ -165,7 +167,7 @@ func buildGitHubWorkItemMetricTriplet(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemMetricTriplet, error) {
 	return buildWorkItemMetricTripletForProvider(
 		"github", claim, rows, day, computedAt, derived,
@@ -182,7 +184,7 @@ func buildWorkItemMetricTripletForProvider(
 	rows githubWorkItemRows,
 	day time.Time,
 	computedAt time.Time,
-	derived githubWorkItemDerivationContext,
+	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemMetricTriplet, error) {
 	if claim.Validate() != nil || claim.Provider != provider ||
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
@@ -224,8 +226,8 @@ func buildWorkItemMetricTripletForProvider(
 			continue
 		}
 
-		scope := workItemDerivationScope(githubWorkItemDerivationSubjectFromRow(item))
-		teamID, teamName, _ := derived.resolve(githubWorkItemDerivationSubjectFromRow(item))
+		scope := teamattribution.WorkItemDerivationScope(githubWorkItemDerivationSubjectFromRow(item))
+		teamID, teamName, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
 		teamIDValue := normalizeGitHubWorkItemMetricTeamID(teamID)
 		teamNameValue := normalizeGitHubWorkItemMetricTeamName(teamName)
 		groupKey := githubWorkItemMetricGroupKey{item.Provider, scope, teamIDValue}

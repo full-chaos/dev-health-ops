@@ -44,6 +44,11 @@ EXPECTED_PACKAGES = {
     "internal/jobroute",
     "internal/jobruntime",
     "internal/jobs/investment/chquery",
+    # CHAOS-4441: the ClickHouse writer for investment.materialize's three
+    # ReplacingMergeTree tables. Its correctness claims (dedup-before-filter,
+    # sub-millisecond version distinctness, org-scoping) are properties of the
+    # real engine, so a fake connection cannot prove them.
+    "internal/jobs/investment/chwrite",
     "internal/jobs/metrics/daily",
     "internal/jobs/metrics/remaining",
     "internal/jobs/pagerduty",
@@ -333,10 +338,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
     # Two packages landed independently, each written as 37 -> 38 on its own
     # branch: CHAOS-4882's internal/storage/postgres/authschema and
-    # CHAOS-4769's internal/jobs/workgraph/issueprlinks. The merged total is
-    # 39, and the shard plan carries both.
-    assert "39 package(s) discovered, 0 denylisted, 39 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 39 package(s)" in result.stdout
+    # CHAOS-4769's internal/jobs/workgraph/issueprlinks. The merged total was
+    # 39. CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
+    assert "40 package(s) discovered, 0 denylisted, 40 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 40 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -370,7 +375,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # internal/storage/postgres/authschema and
     # internal/jobs/workgraph/issueprlinks, each written as 37 -> 38 on its
     # own branch. FLATTENED includes the providersync shard-1 package.
-    assert len(flattened) == len(set(flattened)) == 39
+    # CHAOS-4441: 40, not 39 -- internal/jobs/investment/chwrite added.
+    assert len(flattened) == len(set(flattened)) == 40
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1673,7 +1679,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4882 and CHAOS-4769: 38, not 36 -- both packages added
     # (39 discovered - 1 for the providersync shard-1 package = 38 across
     # the packages shards).
-    assert len(selected_packages) == len(set(selected_packages)) == 38
+    # CHAOS-4441: 39, not 38 -- internal/jobs/investment/chwrite added
+    # (40 discovered - 1 for the providersync shard-1 package = 39).
+    assert len(selected_packages) == len(set(selected_packages)) == 39
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -2387,12 +2395,22 @@ _UNMIRRORED_IMAGE_DEBT: set[tuple[str, str, str, str]] = set()
 # Actions that pull an image themselves. `docker/setup-buildx-action` pulls
 # `moby/buildkit:buildx-stable-1` from Docker Hub before any login runs -- the
 # reason it was removed from the mirror workflow, where it deadlocked against
-# the very quota that workflow exists to escape. These four are ticketed debt.
+# the very quota that workflow exists to escape. These six are ticketed debt.
 _IMAGE_PULLING_ACTION_DEBT = {
     ("docker-images.yml", "build", "docker/setup-buildx-action"),
     ("docker-images.yml", "merge", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+    # CHAOS-4947: fan-in-latest applies moving tags via `docker buildx
+    # imagetools create`, which -- like merge/go-merge above -- needs the
+    # docker-container buildx driver, not the default one.
+    ("docker-images.yml", "fan-in-latest", "docker/setup-buildx-action"),
+    # CHAOS-4906: arc-runner-image.yml (PR #2154) needs a docker-container
+    # buildx driver for cache-to: type=gha and for push+load together in one
+    # build, neither of which the default docker-driven builder supports --
+    # same tradeoff docker-images.yml already carries as debt above, not a
+    # new one.
+    ("arc-runner-image.yml", "build", "docker/setup-buildx-action"),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

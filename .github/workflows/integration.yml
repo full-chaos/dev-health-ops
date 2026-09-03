@@ -9,7 +9,17 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  # CHAOS-4906 fleet audit (09-03): this workflow's own triggers today are
+  # `push` (main only) and `workflow_dispatch` -- no `pull_request` at all
+  # -- so `github.event.pull_request.number` in the group key above is
+  # currently always empty and this fix is a no-op in practice, not a live
+  # queue-inflation fix (unlike codeql-analysis.yml's identical-looking
+  # `false`, which DOES fire on `pull_request` today). Fixed anyway, both
+  # for consistency with the pattern used elsewhere and so this doesn't
+  # silently become a live gap the moment a `pull_request` trigger is
+  # added here later. Scoped to `pull_request` only -- a push to main must
+  # never cancel another.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

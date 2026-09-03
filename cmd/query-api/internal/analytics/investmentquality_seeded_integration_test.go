@@ -18,27 +18,36 @@
 // prove, since a fake row-scanner double never parses or executes SQL at
 // all.
 //
-// SCHEMA: only the three tables compileInvestmentQualityStats's generated
+// SCHEMA: only the four tables compileInvestmentQualityStats's generated
 // SQL actually references (verified by reading investment.go/
-// investmentmembershipscope.go's Source functions, not guessed) --
-// work_unit_investments (017_investment_materialize_tables.sql +
-// 019_work_unit_investment_labels.sql's work_unit_type/work_unit_name +
-// 024_add_org_id.sql's org_id), work_unit_membership_runs
-// (047_work_unit_membership_run_id.sql), and work_unit_membership
-// (046_work_unit_membership.sql + 047's run_id column) -- no `repos` table,
-// since this test never exercises repo-scope filtering.
+// investmentmembershipscope.go/investmentsupersessions.go's Source
+// functions, not guessed) -- work_unit_investments
+// (017_investment_materialize_tables.sql + 019_work_unit_investment_labels.sql's
+// work_unit_type/work_unit_name + 024_add_org_id.sql's org_id),
+// work_unit_membership_runs (047_work_unit_membership_run_id.sql),
+// work_unit_membership (046_work_unit_membership.sql + 047's run_id
+// column), and work_unit_supersessions (085_work_unit_supersessions.sql)
+// -- no `repos` table, since this test never exercises repo-scope
+// filtering.
 //
-// MEMBERSHIP SCOPE LEFT EMPTY, DELIBERATELY: work_unit_membership_runs and
-// work_unit_membership are created but never seeded. latestCompleteMembershipRunSource's
-// marker_count is then 0 for every org, so investmentMembershipScopeStateSource's
-// scope_enabled evaluates to 0 (scope_mode="unscoped_no_marker") and
+// MEMBERSHIP SCOPE AND SUPERSESSIONS LEFT EMPTY, DELIBERATELY:
+// work_unit_membership_runs, work_unit_membership and
+// work_unit_supersessions are created but never seeded.
+// latestCompleteMembershipRunSource's marker_count is then 0 for every
+// org, so investmentMembershipScopeStateSource's scope_enabled evaluates
+// to 0 (scope_mode="unscoped_no_marker") and
 // investmentMembershipScopeFilter's `(SELECT scope_enabled ...) = 0 OR ...`
 // passes every row through regardless of membership_scoped_work_unit_ids'
-// (empty) contents -- the query still touches all three tables (ClickHouse
-// resolves every referenced table at parse time even on the short-circuited
-// side of an OR), so they must exist, but seeding rows into the two
-// membership tables is unnecessary to prove this file's claim: the
-// evidence-quality aggregate SQL itself is correct.
+// (empty) contents; supersededWorkUnitIDsFilter's `NOT IN (SELECT ...
+// FROM work_unit_supersessions ...)` is vacuously true against an empty
+// table. The query still touches all four tables (ClickHouse resolves
+// every referenced table at parse time even on the short-circuited side
+// of an OR, or against an empty subquery), so they must exist, but
+// seeding rows into the three non-investments tables is unnecessary to
+// prove this file's claim: the evidence-quality aggregate SQL itself is
+// correct. TestSupersededWorkUnitsAreExcludedFromInvestmentQuality
+// (investmentsupersessions_seeded_integration_test.go) is where
+// work_unit_supersessions actually gets seeded and its exclusion proven.
 package analytics
 
 import (
@@ -119,6 +128,14 @@ CREATE TABLE work_unit_membership (
     run_id String DEFAULT ''
 ) ENGINE = ReplacingMergeTree(computed_at)
 ORDER BY (org_id, node_type, node_id, category_kind, category);
+
+CREATE TABLE work_unit_supersessions (
+    org_id String,
+    superseded_work_unit_id String,
+    superseded_by_run_id String,
+    superseded_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(superseded_at)
+ORDER BY (org_id, superseded_work_unit_id);
 `
 
 // seededQualityRow is one seeded work_unit_investments row -- only the

@@ -132,7 +132,10 @@ func (executor *CapacityExecutor) ComputePartition(
 			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
 	}
 
-	today := executor.nowUTC()
+	today, err := executor.nowOrRefuse()
+	if err != nil {
+		return CompatibilityOutcome{}, err
+	}
 	scopes, err := executor.resolveScopes(ctx, run.OrganizationID, scope)
 	if err != nil {
 		return CompatibilityOutcome{}, err

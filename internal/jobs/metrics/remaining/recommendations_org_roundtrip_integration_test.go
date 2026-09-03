@@ -1,0 +1,602 @@
+//go:build integration
+
+package remaining
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+)
+
+// TestOneOrgSurvivesDiscoveryComputeAndWrite exercises the whole org-level path
+// against a real ClickHouse: discover the teams, evaluate every rule for each,
+// write the batch, and read it back.
+//
+// The loader parity test upstream proves the SNAPSHOT matches Python. This
+// proves the three steps built on top of it -- discovery, the per-team loop and
+// the stamped write -- which the snapshot comparison cannot see at all: a
+// correct snapshot that is then written under the wrong stamp, or for only one
+// of two teams, passes every assertion in that test.
+func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	defer seedLoaderFixture(t, ctx, conn)()
+
+	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+
+	// Discovery first, on its own, because a silently empty result would make
+	// every later assertion vacuous -- ComputeOrg treats "no teams" as a
+	// successful no-op, so a broken query reads as a healthy quiet org.
+	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID)
+	if err != nil {
+		t.Fatalf("discover teams: %v", err)
+	}
+	if len(teamIDs) == 0 {
+		t.Fatal("discovery returned no teams for a seeded org — every assertion " +
+			"below would then pass against an empty run")
+	}
+	foundAlpha, foundBeta := false, false
+	for _, teamID := range teamIDs {
+		switch teamID {
+		case loaderTeamA:
+			foundAlpha = true
+		case loaderTeamB:
+			foundBeta = true
+		}
+	}
+	if !foundAlpha || !foundBeta {
+		t.Fatalf("discovery returned %v, missing one of the two seeded teams "+
+			"(%s, %s)", teamIDs, loaderTeamA, loaderTeamB)
+	}
+
+	// The as_of path: `now` is a pure function of the finalized day, so this
+	// exact value would be written as computed_at on every re-run if the sink
+	// did not re-stamp it.
+	asOf := mustDate(t, "2026-08-31")
+	now, _ := EvaluationInstant(&asOf, nil)
+
+	before := time.Now().UTC().Add(-time.Second)
+	outcome, err := executor.ComputeOrg(ctx, loaderOrgID, now, 30, "v1", "")
+	if err != nil {
+		t.Fatalf("compute org: %v", err)
+	}
+	after := time.Now().UTC().Add(time.Second)
+
+	if outcome.FailedTeams != 0 {
+		t.Errorf("%d team(s) failed against a clean fixture", outcome.FailedTeams)
+	}
+	if outcome.RowsWritten == 0 {
+		t.Fatal("no rows written — a run that evaluates every rule for two teams " +
+			"must emit tombstones even when nothing fires")
+	}
+	if outcome.Teams != len(teamIDs) {
+		t.Errorf("outcome reports %d teams, discovery found %d",
+			outcome.Teams, len(teamIDs))
+	}
+
+	// Read back what actually landed, rather than trusting the returned count.
+	// EVERY column, not the five the assertions below happen to need. Reading a
+	// subset makes this test blind to exactly the corruption it is best placed
+	// to catch: five of the thirteen columns are adjacent strings, so a
+	// crossed title/rationale is invisible unless the text itself comes back.
+	rows, err := conn.Query(ctx, `
+        SELECT team_id, org_id, rule_id, rule_version,
+               window_start, window_end, fired, severity,
+               title, rationale, success_criterion, evidence_json, computed_at
+        FROM recommendations_daily FINAL
+        WHERE org_id = ?`, loaderOrgID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	stamps := map[time.Time]int{}
+	windowEnds := map[time.Time]int{}
+	perTeam := map[string]int{}
+	tombstonesChecked := 0
+	total := 0
+	for rows.Next() {
+		var teamID, orgID, ruleID, ruleVersion string
+		var severity, title, rationale, successCriterion, evidenceJSON string
+		var fired bool
+		var windowStart, windowEnd, computedAt time.Time
+		if err := rows.Scan(
+			&teamID, &orgID, &ruleID, &ruleVersion,
+			&windowStart, &windowEnd, &fired, &severity,
+			&title, &rationale, &successCriterion, &evidenceJSON, &computedAt,
+		); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		// Cross-column corruption is silent by construction: ClickHouse binds
+		// by position, and these five are all String. The registry is the
+		// oracle -- a row must carry ITS OWN rule's text, not a neighbour's.
+		if definition, ok := expectedTombstoneText(ruleID); ok && !fired {
+			tombstonesChecked++
+			if title != definition.title {
+				t.Errorf("tombstone for %s came back with title %q, want %q — a "+
+					"crossed append writes another column's text with no error",
+					ruleID, title, definition.title)
+			}
+			if severity != definition.severity {
+				t.Errorf("tombstone for %s came back with severity %q, want %q",
+					ruleID, severity, definition.severity)
+			}
+			if successCriterion != definition.successCriterion {
+				t.Errorf("tombstone for %s came back with success_criterion %q, want %q",
+					ruleID, successCriterion, definition.successCriterion)
+			}
+			if title == rationale || title == successCriterion {
+				t.Errorf("tombstone for %s has identical text in two columns "+
+					"(title=%q rationale=%q success_criterion=%q) — the signature "+
+					"of a swapped append among the adjacent strings",
+					ruleID, title, rationale, successCriterion)
+			}
+		}
+		if orgID != loaderOrgID {
+			t.Errorf("row carries org_id %q, want %q", orgID, loaderOrgID)
+		}
+		if evidenceJSON == "" {
+			t.Errorf("rule %s wrote an empty evidence_json; a tombstone writes "+
+				"\"[]\", never the empty string", ruleID)
+		}
+		if !windowStart.Before(windowEnd) {
+			t.Errorf("window_start %s is not before window_end %s",
+				windowStart, windowEnd)
+		}
+
+		stamps[computedAt]++
+		windowEnds[windowEnd]++
+		perTeam[teamID]++
+		total++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	// The tombstone assertions above are guarded by !fired, so a writer that
+	// hard-coded fired=true would skip every one of them and leave this test
+	// green having checked nothing. Requiring at least one observed tombstone
+	// is what makes the guard's own satisfaction an assertion.
+	if tombstonesChecked == 0 {
+		t.Error("no tombstone rows were observed, so the registry-text assertions " +
+			"never ran — a writer that always reports fired=true would pass this " +
+			"test having checked nothing")
+	}
+
+	if total != outcome.RowsWritten {
+		t.Errorf("read back %d rows, the run reported writing %d", total, outcome.RowsWritten)
+	}
+	if len(perTeam) != len(teamIDs) {
+		t.Errorf("rows landed for %d teams, want %d — a per-team failure that is "+
+			"tolerated must still be visible as missing rows", len(perTeam), len(teamIDs))
+	}
+
+	// ONE generation for the whole run. Per-row stamps would let a reader doing
+	// argMax per rule observe one rule's new state beside another's old one.
+	if len(stamps) != 1 {
+		t.Errorf("the run wrote %d distinct computed_at values; a scheduled run "+
+			"must replace the org's rule state as a single generation", len(stamps))
+	}
+
+	// And that generation is the WRITE time, not the engine instant. This is
+	// the assertion the loader parity test structurally cannot make.
+	for stamp := range stamps {
+		if stamp.Equal(now) {
+			t.Errorf("computed_at is the engine instant %s. On the as_of path that "+
+				"value is constant across re-runs of the same finalized day, so two "+
+				"runs would be indistinguishable to argMax(fired, computed_at) and "+
+				"to ReplacingMergeTree(computed_at) — a recovered signal might never "+
+				"clear (CHAOS-2398)", now)
+		}
+		if stamp.Before(before) || stamp.After(after) {
+			t.Errorf("computed_at %s is outside the run's wall-clock window [%s, %s]",
+				stamp, before, after)
+		}
+	}
+
+	// window_end, by contrast, MUST stay a pure function of as_of — it is the
+	// key readers group by, and a wall-clock value there would scatter one
+	// day's state across several windows.
+	if len(windowEnds) != 1 {
+		t.Errorf("the run wrote %d distinct window_end values; it must be one "+
+			"function of as_of", len(windowEnds))
+	}
+	for windowEnd := range windowEnds {
+		if !windowEnd.Equal(now) {
+			t.Errorf("window_end is %s, want the anchored instant %s", windowEnd, now)
+		}
+	}
+}
+
+// TestASecondRunSupersedesTheFirstOnUnchangedData is the property CHAOS-2398
+// exists for, and it cannot be observed in a single run.
+//
+// Two runs of the SAME finalized day carry an identical engine instant. If that
+// value were persisted, the two generations would be indistinguishable and the
+// winner undefined. Running twice and requiring the second to be strictly newer
+// is the only assertion that reaches it.
+func TestASecondRunSupersedesTheFirstOnUnchangedData(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	defer seedLoaderFixture(t, ctx, conn)()
+
+	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+
+	asOf := mustDate(t, "2026-08-31")
+	now, _ := EvaluationInstant(&asOf, nil)
+
+	if _, err := executor.ComputeOrg(ctx, loaderOrgID, now, 30, "v1", ""); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	firstStamps := distinctStamps(t, ctx, conn)
+	if len(firstStamps) != 1 {
+		t.Fatalf("first run wrote %d generations, want 1", len(firstStamps))
+	}
+
+	// CORRECTION: an earlier version of this comment said ClickHouse DateTime is
+	// second-granular. The column is DateTime64(3, 'UTC') (migration 039), i.e.
+	// MILLISECOND. The sleep is still needed and still far larger than it has to
+	// be, but the reason matters: anyone trimming it to "just over a second"
+	// would be reasoning from the wrong unit.
+	//
+	// AND THE LIMIT THIS TEST DOES NOT REACH: at millisecond resolution, two
+	// retries inside the same millisecond store EQUAL versions, and neither
+	// argMax(fired, computed_at) nor ReplacingMergeTree(computed_at) can then
+	// pick the later one. So "the most recent write always wins" holds only for
+	// runs separated by >=1ms. That limit is INHERITED FROM THE REFERENCE, which
+	// stamps the same way, so it is not a parity defect and is not fixed here --
+	// but this test deliberately steps over it rather than probing it, and
+	// saying so is the difference between a known limit and an unnoticed one.
+	time.Sleep(2 * time.Second)
+
+	if _, err := executor.ComputeOrg(ctx, loaderOrgID, now, 30, "v1", ""); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	secondStamps := distinctStamps(t, ctx, conn)
+	if len(secondStamps) != 2 {
+		t.Fatalf("after two runs the table holds %d distinct computed_at values, "+
+			"want 2 — identical stamps leave the winner undefined for both "+
+			"argMax and ReplacingMergeTree", len(secondStamps))
+	}
+
+	// The later run must be strictly newer, so "most recent write wins" is
+	// decidable rather than arbitrary.
+	if !secondStamps[1].After(secondStamps[0]) {
+		t.Errorf("the second run's generation %s is not strictly newer than the "+
+			"first's %s", secondStamps[1], secondStamps[0])
+	}
+}
+
+// distinctStamps returns every computed_at generation currently in the table,
+// ascending. Sorted server-side so "the later run" is a fact about the data
+// rather than about row arrival order.
+func distinctStamps(t *testing.T, ctx context.Context, conn driver.Conn) []time.Time {
+	t.Helper()
+	rows, err := conn.Query(ctx, `
+        SELECT DISTINCT computed_at
+        FROM recommendations_daily
+        WHERE org_id = ?
+        ORDER BY computed_at ASC`, loaderOrgID)
+	if err != nil {
+		t.Fatalf("read generations: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stamps []time.Time
+	for rows.Next() {
+		var stamp time.Time
+		if err := rows.Scan(&stamp); err != nil {
+			t.Fatalf("scan generation: %v", err)
+		}
+		stamps = append(stamps, stamp)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate generations: %v", err)
+	}
+	return stamps
+}
+
+// expectedTombstoneText reads the REGISTRY rather than restating its strings.
+//
+// Restating them would create a second copy free to drift from the one under
+// test, and a test that agrees with its own copy of the answer proves nothing.
+//
+// Only fired=false rows are checked here. That is the tombstone asymmetry, not
+// an omission: a tombstone takes title/severity/success_criterion from the
+// registry, while a FIRED row takes them from the evaluator, which carries
+// different strings by design.
+func expectedTombstoneText(ruleID string) (ruleDefinition, bool) {
+	definition, ok := ruleRegistry[ruleID]
+	return definition, ok
+}
+
+// TestCancellationMidRunStillPersistsTheTeamsThatFinished closes the gap the
+// unit-level cancellation test could not reach.
+//
+// # WHY THIS NEEDS A CONTAINER
+//
+// The property is "rows computed before the interruption are still written".
+// Observing it requires a team that SUCCEEDS — which requires a real loader
+// against real data — followed by a cancellation. With a stubbed loader every
+// team fails, so there are no records, so the write returns early in both the
+// fixed and the broken world and the fixture never enters the distinguishing
+// state. That unit test was mutation-verified and its mutant SURVIVED; this is
+// the test that can actually fail.
+//
+// # WHY THE PATH DESERVES ITS OWN TEST
+//
+// This branch's worst defect (the round-3 P1) was introduced INTO this exact
+// branch of code while fixing it: `cancelled = ctx.Err(); break` swallowed
+// ordinary per-team failures because ctx.Err() is nil on a live context. A path
+// that has already produced a silent failure once, and whose write half nothing
+// could observe, is the last place to accept an untested assertion.
+func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	defer seedLoaderFixture(t, ctx, conn)()
+
+	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+
+	// Cancel AFTER the first team's evaluation and BEFORE the second's, so the
+	// run carries real records when the interruption arrives. A context
+	// cancelled up front would produce no records and reproduce the unit
+	// test's vacuity on a container.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	evaluated := 0
+	cancelAfterFirstTeam := func() {
+		evaluated++
+		if evaluated == 1 {
+			cancelRun()
+		}
+	}
+	executor.afterTeamHook = cancelAfterFirstTeam
+	t.Cleanup(func() { executor.afterTeamHook = nil })
+
+	asOf := mustDate(t, "2026-08-31")
+	now, _ := EvaluationInstant(&asOf, nil)
+
+	outcome, err := executor.ComputeOrg(runCtx, loaderOrgID, now, 30, "v1", "")
+
+	// HALF ONE: the interruption is reported, not disguised as a team failure.
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("returned %v, want context.Canceled — an interrupted run's team "+
+			"list is incomplete, so a TeamEvaluationFailure would understate "+
+			"what went unevaluated", err)
+	}
+
+	// HALF TWO, the one no unit fixture can reach: the finished team's rows are
+	// ON DISK. Without the detached write context the insert cannot execute at
+	// all, and those tombstones are lost exactly when the run is torn down.
+	var persisted uint64
+	// FINAL here is DEFENCE, NOT THE LOAD-BEARING PART, and the difference was
+	// established by mutation rather than by reasoning.
+	//
+	// Peer review predicted this count would go flaky once the fixture's merge
+	// stop was narrowed per-table. It does not, and the reason is the key:
+	// recommendations_daily is ReplacingMergeTree ORDER BY
+	// (org_id, team_id, rule_id, window_end), and an RMT collapses only rows
+	// that SHARE a key. One run writes one row per (team, rule) for a single
+	// window, so every key is distinct and no merge can change count() with or
+	// without FINAL. The mutation that should have caught it -- narrow the stop
+	// AND drop FINAL -- PASSED, which is what showed the premise was wrong.
+	//
+	// FINAL stays because it costs nothing and it is correct the moment a
+	// future test writes two rows under one key. But it is not what protects
+	// this assertion, and a comment claiming otherwise would send the next
+	// reader to defend the wrong thing.
+	//
+	// THE REAL MERGE EXPOSURE IS THE TWO-RUN TEST BELOW, where two runs write
+	// the SAME keys differing only in computed_at -- exactly what an RMT
+	// collapses. That test is protected by recommendations_daily being in the
+	// fixture's stop list, and it must NOT use FINAL: FINAL would collapse the
+	// two generations to one and destroy the property it asserts.
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM recommendations_daily FINAL WHERE org_id = ?`, loaderOrgID,
+	).Scan(&persisted); err != nil {
+		t.Fatalf("count persisted rows: %v", err)
+	}
+	if persisted == 0 {
+		t.Error("PERSISTED ROWS: the run was interrupted after a team had already " +
+			"evaluated, and nothing was written — the teams that finished lose " +
+			"their fresh tombstones and keep stale fired guidance")
+	}
+	if outcome.RowsWritten == 0 {
+		t.Error("PERSISTED ROWS: the outcome reports zero rows written despite a " +
+			"completed team")
+	}
+	if uint64(outcome.RowsWritten) != persisted {
+		t.Errorf("PERSISTED ROWS: the outcome claims %d rows, the table holds %d",
+			outcome.RowsWritten, persisted)
+	}
+}
+
+// TestCancellationAfterTheLastTeamStillPersistsOnAContainer is the container
+// proof for the boundary the sibling test above is structurally one team short
+// of reaching.
+//
+// That test cancels after the FIRST of two teams, so the second team observes
+// the cancellation through its own erroring load. The loop therefore learns of
+// the cancellation the only way it originally could -- from a failing team --
+// and the final-team boundary is never exercised.
+//
+// Here the hook fires after the LAST team instead. The loop then exits
+// normally with no team having errored, which is exactly the case where the
+// pre-fix code left `cancelled` nil and ran the write on a cancelled context,
+// losing rows that had already been computed.
+//
+// The unit-level version of this cannot substitute: its stub had to be taught
+// to honour cancellation before it could fail at all, and a stub that models
+// the behaviour under test is weaker evidence than a driver that has it.
+func TestCancellationAfterTheLastTeamStillPersistsOnAContainer(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	defer seedLoaderFixture(t, ctx, conn)()
+
+	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+
+	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID)
+	if err != nil {
+		t.Fatalf("discover teams: %v", err)
+	}
+	if len(teamIDs) < 2 {
+		t.Fatalf("discovery returned %d team(s); this test needs at least two so "+
+			"the cancellation lands after the LAST one rather than mid-loop",
+			len(teamIDs))
+	}
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	evaluated := 0
+	executor.afterTeamHook = func() {
+		evaluated++
+		// AFTER THE LAST TEAM, not the first. Every team has succeeded, so the
+		// loop exits without any error to carry the cancellation.
+		if evaluated == len(teamIDs) {
+			cancelRun()
+		}
+	}
+	t.Cleanup(func() { executor.afterTeamHook = nil })
+
+	asOf := mustDate(t, "2026-08-31")
+	now, _ := EvaluationInstant(&asOf, nil)
+
+	outcome, err := executor.ComputeOrg(runCtx, loaderOrgID, now, 30, "v1", "")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("returned %v, want context.Canceled — a run cancelled after its "+
+			"final team is still an interrupted run", err)
+	}
+	// TWO CAUSES, TWO MESSAGES. `evaluated` counts only teams that SUCCEEDED --
+	// a failing team hits `continue` before the hook runs -- so this guard fires
+	// for a plain team failure as well as for a mistimed cancellation. As the
+	// last line a reader sees, one message naming only the timing would send
+	// them hunting a problem that is not there (4752-go's peer read; same class
+	// as a citation asserting a cause it has not established).
+	//
+	// Fixture drift is the likelier cause a year from now, so it is named first
+	// and separately.
+	if outcome.FailedTeams > 0 {
+		t.Fatalf("%d team(s) FAILED to evaluate, so this test never reached the "+
+			"final-team boundary -- the cancellation timing is not implicated. "+
+			"Look at the loader or the fixture, not at the hook", outcome.FailedTeams)
+	}
+	// Every team succeeded, so a short count can only mean the hook stopped
+	// firing or the cancellation landed mid-loop.
+	//
+	// The comparison assumes both numbers describe the same set: ComputeOrg
+	// discovers through the same DiscoverTeamIDs this test called, and the ""
+	// team filter narrows nothing between them. That symmetry breaks the day
+	// ComputeOrg grows a filter path or a second discovery route, and this
+	// guard would then over-count and fire spuriously.
+	if evaluated != len(teamIDs) {
+		t.Fatalf("all teams succeeded but only %d of %d were counted; the "+
+			"cancellation landed mid-loop and this test has degenerated into "+
+			"the sibling case", evaluated, len(teamIDs))
+	}
+
+	var persisted uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM recommendations_daily FINAL WHERE org_id = ?`, loaderOrgID,
+	).Scan(&persisted); err != nil {
+		t.Fatalf("count persisted rows: %v", err)
+	}
+	if persisted == 0 {
+		t.Error("PERSISTED ROWS: every team completed and then the run was " +
+			"cancelled, and nothing was written — the rows the detached write " +
+			"exists to keep were lost at the final-team boundary")
+	}
+	if outcome.RowsWritten == 0 {
+		t.Error("PERSISTED ROWS: the outcome reports zero rows written despite " +
+			"every team completing")
+	}
+	if uint64(outcome.RowsWritten) != persisted {
+		t.Errorf("PERSISTED ROWS: the outcome claims %d rows, the table holds %d",
+			outcome.RowsWritten, persisted)
+	}
+}

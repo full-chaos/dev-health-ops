@@ -35,6 +35,7 @@ import sys
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -74,7 +75,9 @@ class FakeLoader:
 
 
 def snapshot(**overrides) -> MetricsSnapshot:
-    base = dict(
+    # Annotated so the ** unpack below reaches MetricsSnapshot's typed fields.
+    # Without it mypy infers dict[str, object] and rejects every field.
+    base: dict[str, Any] = dict(
         team_id="t",
         org_id="o",
         window_start=date(2026, 8, 1),
@@ -95,7 +98,9 @@ def snapshot(**overrides) -> MetricsSnapshot:
     return MetricsSnapshot(**base)
 
 
-FIRE = {
+# Each rule's firing overrides. Annotated because the values are heterogeneous
+# per rule, so mypy widens them to object and .items() below becomes unreachable.
+FIRE: dict[str, dict[str, Any]] = {
     "saturation": dict(wip_by_day=RISING, throughput_by_cycle=[5.0, 3.0]),
     "review-concentration": dict(review_latency_p75_hours=30.0, reviewer_gini=0.75),
     "thrash": dict(rework_churn_ratio=0.5, throughput_by_cycle=[5.0, 3.0]),
@@ -110,7 +115,7 @@ def build_cases():
     cases = [
         ("none-fire-all-tombstones", snapshot()),
     ]
-    everything = {}
+    everything: dict[str, Any] = {}
     for spec in FIRE.values():
         for key, value in spec.items():
             if key == "throughput_by_cycle" and key in everything:
@@ -126,7 +131,7 @@ def build_cases():
     # fired rows -- the inverse, and the one that catches a tombstone built
     # from the evaluator's fields instead of the registry's.
     for rule in FIRE:
-        subset = {}
+        subset: dict[str, Any] = {}
         for other, spec in FIRE.items():
             if other == rule:
                 continue

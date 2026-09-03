@@ -476,3 +476,104 @@ func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
 			outcome.RowsWritten, persisted)
 	}
 }
+
+// TestCancellationAfterTheLastTeamStillPersistsOnAContainer is the container
+// proof for the boundary the sibling test above is structurally one team short
+// of reaching.
+//
+// That test cancels after the FIRST of two teams, so the second team observes
+// the cancellation through its own erroring load. The loop therefore learns of
+// the cancellation the only way it originally could -- from a failing team --
+// and the final-team boundary is never exercised.
+//
+// Here the hook fires after the LAST team instead. The loop then exits
+// normally with no team having errored, which is exactly the case where the
+// pre-fix code left `cancelled` nil and ran the write on a cancelled context,
+// losing rows that had already been computed.
+//
+// The unit-level version of this cannot substitute: its stub had to be taught
+// to honour cancellation before it could fail at all, and a stub that models
+// the behaviour under test is weaker evidence than a driver that has it.
+func TestCancellationAfterTheLastTeamStillPersistsOnAContainer(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
+	if err != nil {
+		t.Fatalf("clickhouse dsn: %v", err)
+	}
+	conn := openLoaderClickHouse(t, ctx, dsn)
+	defer seedLoaderFixture(t, ctx, conn)()
+
+	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	if err != nil {
+		t.Fatalf("construct executor: %v", err)
+	}
+
+	teamIDs, err := executor.DiscoverTeamIDs(ctx, loaderOrgID)
+	if err != nil {
+		t.Fatalf("discover teams: %v", err)
+	}
+	if len(teamIDs) < 2 {
+		t.Fatalf("discovery returned %d team(s); this test needs at least two so "+
+			"the cancellation lands after the LAST one rather than mid-loop",
+			len(teamIDs))
+	}
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	evaluated := 0
+	executor.afterTeamHook = func() {
+		evaluated++
+		// AFTER THE LAST TEAM, not the first. Every team has succeeded, so the
+		// loop exits without any error to carry the cancellation.
+		if evaluated == len(teamIDs) {
+			cancelRun()
+		}
+	}
+	t.Cleanup(func() { executor.afterTeamHook = nil })
+
+	asOf := mustDate(t, "2026-08-31")
+	now, _ := EvaluationInstant(&asOf, nil)
+
+	outcome, err := executor.ComputeOrg(runCtx, loaderOrgID, now, 30, "v1", "")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("returned %v, want context.Canceled — a run cancelled after its "+
+			"final team is still an interrupted run", err)
+	}
+	if evaluated != len(teamIDs) {
+		t.Fatalf("only %d of %d teams evaluated; the cancellation landed mid-loop "+
+			"and this test has degenerated into the sibling case", evaluated, len(teamIDs))
+	}
+
+	var persisted uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM recommendations_daily FINAL WHERE org_id = ?`, loaderOrgID,
+	).Scan(&persisted); err != nil {
+		t.Fatalf("count persisted rows: %v", err)
+	}
+	if persisted == 0 {
+		t.Error("PERSISTED ROWS: every team completed and then the run was " +
+			"cancelled, and nothing was written — the rows the detached write " +
+			"exists to keep were lost at the final-team boundary")
+	}
+	if outcome.RowsWritten == 0 {
+		t.Error("PERSISTED ROWS: the outcome reports zero rows written despite " +
+			"every team completing")
+	}
+	if uint64(outcome.RowsWritten) != persisted {
+		t.Errorf("PERSISTED ROWS: the outcome claims %d rows, the table holds %d",
+			outcome.RowsWritten, persisted)
+	}
+}

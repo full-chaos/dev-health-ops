@@ -71,9 +71,21 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 		return nil, fmt.Errorf("iterate recommendation team ids: %w", err)
 	}
 
-	// SELECT DISTINCT has no inherent order. Sorting makes a run's team
-	// sequence reproducible, which is what lets a failed-team list be compared
-	// between runs and keeps the batch's row order stable for diffing.
+	// A DELIBERATE, OBSERVABLE DIVERGENCE FROM THE ORACLE. Ruled, and listed as
+	// such -- an earlier comment here said this "only stabilizes order", which
+	// understated it and is what let it go unlisted (round 4 P2).
+	//
+	// Python iterates ClickHouse's result order (recommendations_tasks.py:313,
+	// :374). This sorts. The divergence is observable in two places: WHICH
+	// teams have completed when a run is interrupted, and the order of the team
+	// names in a TeamEvaluationFailure.
+	//
+	// Kept anyway, because `SELECT DISTINCT` has NO DEFINED ORDER -- the
+	// reference's sequence is arbitrary per run, so there is no oracle order to
+	// preserve and "matching" it would mean reproducing a nondeterminism. A
+	// reproducible failed-team list is worth more than mirroring that: it can
+	// be compared between runs, which is what makes a repeated failure legible
+	// as the same failure.
 	sort.Strings(teamIDs)
 	return teamIDs, nil
 }

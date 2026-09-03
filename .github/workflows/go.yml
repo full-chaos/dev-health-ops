@@ -500,6 +500,27 @@ jobs:
             exit 0
           }
 
+          # CF acr round 2: a self-hosted runner can be LOST mid-run --
+          # GitHub moves the job back from `in_progress` to `queued` (or
+          # another non-started state) rather than leaving it stuck. The
+          # ORIGINAL phase 2 only recognised `completed` as a reason to
+          # stop polling, so a lost runner just sat there as an unrecognised
+          # status until the whole budget was exhausted, reporting a
+          # misleading claimed-failure -- reds the required check for a
+          # job nobody is running anymore, when the honest, immediate
+          # answer is "the self-hosted attempt is no longer active, claim
+          # the work here right now" rather than waiting out the clock for
+          # nothing. `job_lost_runner`: true when the attempt has left
+          # `in_progress` for anything OTHER than `completed` -- i.e. it
+          # regressed from started back to a non-started state.
+          job_lost_runner() {
+            case "${status}" in
+              completed) return 1 ;;
+              in_progress) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+
           deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
           total_polls=0
           api_error_polls=0
@@ -515,6 +536,11 @@ jobs:
             if [ "${status}" = "completed" ]; then
               report_terminal_conclusion
             fi
+            if job_lost_runner; then
+              echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of waiting out the remaining budget"
+              echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
             sleep 15
           done
 
@@ -529,6 +555,10 @@ jobs:
             api_error_polls=$((api_error_polls + 1))
           elif [ "${status}" = "completed" ]; then
             report_terminal_conclusion
+          elif job_lost_runner; then
+            echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of reporting a failure"
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
           fi
 
           # Distinguish "the attempt genuinely never finished" from "we

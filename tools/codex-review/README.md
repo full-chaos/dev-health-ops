@@ -23,8 +23,12 @@ Canonical v4.8.1 hashes:
 
 - `codex-review.sh`:
   `7eab082c157a48f3eb0960d729d6569b039ee671491a196fa0581e5c59db4cfb`
-- `verify-round-repros.py`:
+- `verify-round-repros.py` (installed on bigboy):
   `4572dd0b5d8ae3cbd0e5054c50f69a75cdeec8f6a3f593258614fbb9c39e31c0`
+
+The in-repo `verify-round-repros.py` is ruff-formatted (AST-identical to
+the installed copy above; installed sha `4572dd0b...`), so its committed
+bytes differ from that hash — that is expected.
 
 ## Sandbox by OS
 

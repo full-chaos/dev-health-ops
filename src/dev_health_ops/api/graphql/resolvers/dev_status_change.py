@@ -1,8 +1,7 @@
 """GraphQL adapters for the shared Ask Dev status/change services.
 
-Rule and fixture versions are recorded in
-``.github/ask-dev/status-change-rule-manifest.md``. GraphQL only projects the
-application-service result; it never owns completion or change semantics.
+GraphQL only projects the application-service result; it never owns
+completion or change semantics.
 """
 
 from __future__ import annotations

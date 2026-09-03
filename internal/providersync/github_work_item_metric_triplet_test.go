@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 var (
@@ -58,7 +59,7 @@ func TestBuildGitHubWorkItemMetricTripletFailsClosedOnUnusableInput(t *testing.T
 	// The baseline must SUCCEED, otherwise every rejection below would pass for
 	// the wrong reason.
 	claim, rows, day, computedAt := baseline()
-	accepted, err := buildGitHubWorkItemMetricTriplet(claim, rows, day, computedAt, githubWorkItemDerivationContext{})
+	accepted, err := buildGitHubWorkItemMetricTriplet(claim, rows, day, computedAt, teamattribution.GithubWorkItemDerivationContext{})
 	if err != nil || len(accepted.MetricsDaily) != 1 || len(accepted.CycleTimes) != 1 {
 		t.Fatalf("baseline must be accepted: groups=%d cycles=%d error=%v",
 			len(accepted.MetricsDaily), len(accepted.CycleTimes), err)
@@ -101,7 +102,7 @@ func TestBuildGitHubWorkItemMetricTripletFailsClosedOnUnusableInput(t *testing.T
 			claim, rows, day, computedAt := baseline()
 			test.mutate(&claim, &rows, &day, &computedAt)
 			triplet, err := buildGitHubWorkItemMetricTriplet(
-				claim, rows, day, computedAt, githubWorkItemDerivationContext{})
+				claim, rows, day, computedAt, teamattribution.GithubWorkItemDerivationContext{})
 			if !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("error=%v", err)
 			}
@@ -164,7 +165,7 @@ func TestBuildGitHubWorkItemMetricTripletWindowIsUTCAndHalfOpen(t *testing.T) {
 				triplet, err := buildGitHubWorkItemMetricTriplet(
 					githubWorkItemMetricTestClaim(), githubWorkItemRows{
 						WorkItems: []githubWorkItemRow{item},
-					}, day, githubWorkItemMetricTestNow, githubWorkItemDerivationContext{})
+					}, day, githubWorkItemMetricTestNow, teamattribution.GithubWorkItemDerivationContext{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -218,7 +219,7 @@ func TestGitHubWorkItemMetricTripletDerivedRowsCoverItsDestinations(t *testing.T
 		githubWorkItemMetricTestClaim(),
 		githubWorkItemRows{WorkItems: []githubWorkItemRow{item}},
 		githubWorkItemMetricTestDay, githubWorkItemMetricTestNow,
-		githubWorkItemDerivationContext{},
+		teamattribution.GithubWorkItemDerivationContext{},
 	)
 	if err != nil {
 		t.Fatal(err)

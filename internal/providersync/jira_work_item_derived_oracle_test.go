@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 func jiraDerivedOracleCases(cases []oracleCase) []oracleCase {
@@ -51,7 +52,7 @@ func jiraDerivedOracleValue(value any) any {
 func jiraDerivedOracleRows(
 	t *testing.T,
 	input map[string]any,
-) (Claim, githubWorkItemRows, githubWorkItemDerivationContext) {
+) (Claim, githubWorkItemRows, teamattribution.GithubWorkItemDerivationContext) {
 	t.Helper()
 	_, rows, derived := gitlabWorkItemOracleRows(t, input)
 	claim := nativeTestClaim("jira", "work-items")
@@ -158,7 +159,7 @@ func TestJiraEngineDestinationsMatchLivePythonProduction(t *testing.T) {
 func jiraEngineOracleResult(t *testing.T, input map[string]any) JiraWorkItemDerivedRows {
 	t.Helper()
 	claim, rows, _ := jiraDerivedOracleRows(t, input)
-	facts := githubWorkItemDerivationFacts{}
+	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	encoded, err := json.Marshal(input["Facts"])
 	if err != nil {
 		t.Fatal(err)

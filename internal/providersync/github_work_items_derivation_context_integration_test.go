@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -56,9 +57,9 @@ func TestGitHubWorkItemDerivationContextScansClickHouseNativeIntegerWidths(t *te
 		}
 	}
 
-	source := githubWorkItemClickHouseDerivationContextSource{Conn: conn}
+	source := teamattribution.ClickHouseFactSource{Conn: conn}
 
-	projects, err := source.loadProjects(context.Background(), orgID, asOf)
+	projects, err := source.LoadProjects(context.Background(), orgID, asOf)
 	if err != nil {
 		t.Fatalf("load projects: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestGitHubWorkItemDerivationContextScansClickHouseNativeIntegerWidths(t *te
 		t.Fatalf("project numeric fields = %+v", projects)
 	}
 
-	repos, err := source.loadRepos(context.Background(), orgID, asOf)
+	repos, err := source.LoadRepos(context.Background(), orgID, asOf)
 	if err != nil {
 		t.Fatalf("load repos: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestGitHubWorkItemDerivationContextScansClickHouseNativeIntegerWidths(t *te
 	// The native-integer-width scan this test exists to prove now applies
 	// to loadProviderMembers (the restored team_memberships fallback
 	// layer), which is exactly what was seeded above.
-	providerMembers, err := source.loadProviderMembers(context.Background(), orgID, asOf)
+	providerMembers, err := source.LoadProviderMembers(context.Background(), orgID, asOf)
 	if err != nil {
 		t.Fatalf("load provider members: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestGitHubWorkItemDerivationContextScansClickHouseNativeIntegerWidths(t *te
 		t.Fatalf("provider member numeric fields = %+v", providerMembers)
 	}
 
-	manual, err := source.loadManualFallbacks(context.Background(), orgID, asOf)
+	manual, err := source.LoadManualFallbacks(context.Background(), orgID, asOf)
 	if err != nil {
 		t.Fatalf("load manual fallbacks: %v", err)
 	}

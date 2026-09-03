@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 func TestNewGitHubWorkItemEngineDeriverRejectsPartialEngines(t *testing.T) {
@@ -464,7 +465,7 @@ func TestGitHubWorkItemEngineUnassignedInvestmentMetricUsesEmptyTeam(t *testing.
 
 func githubWorkItemEngineFixture(
 	t *testing.T,
-) (Claim, githubWorkItemRows, time.Time, time.Time, githubWorkItemDerivationContext) {
+) (Claim, githubWorkItemRows, time.Time, time.Time, teamattribution.GithubWorkItemDerivationContext) {
 	t.Helper()
 	claim := githubWorkItemOracleClaim()
 	claim.OrgID = "org-acme"
@@ -512,8 +513,8 @@ func githubWorkItemEngineFixture(
 	prior.CompletedAt = timeValue(time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 
 	repoIDString := repoID.String()
-	derived := newGitHubWorkItemDerivationContext(githubWorkItemDerivationFacts{
-		Repos: []githubWorkItemDerivationRepoFact{{
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
+		Repos: []teamattribution.GithubWorkItemDerivationRepoFact{{
 			Provider: "github", TeamID: "payments", TeamName: "Payments",
 			RepoID: &repoIDString, RepoFullName: "acme/api", IsPrimary: 1,
 			Specificity: 100, Priority: 10,

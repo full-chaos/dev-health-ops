@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
 
@@ -768,11 +769,11 @@ func buildGitHubDerivedOracleSurfaces(
 	if err != nil {
 		t.Fatal(err)
 	}
-	var facts githubWorkItemDerivationFacts
+	var facts teamattribution.GithubWorkItemDerivationFacts
 	if err := json.Unmarshal(encodedFacts, &facts); err != nil {
 		t.Fatal(err)
 	}
-	derived := newGitHubWorkItemDerivationContext(facts)
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
 	// The linked-issue index is built here, not left nil, because production
 	// builds it too (loadGitHubWorkItemDerivationContext). Leaving it nil made
 	// the donor arm dead on the Go side while the Python pair wired a live
@@ -787,7 +788,7 @@ func buildGitHubDerivedOracleSurfaces(
 	// requires `created_at`, a field the Go facts-side subject type does not
 	// even carry.
 	subjects := make(
-		map[string]githubWorkItemDerivationSubject,
+		map[string]teamattribution.GithubWorkItemDerivationSubject,
 		len(rows.WorkItems)+len(githubDerivedOracleList(input, "Donors")),
 	)
 	for _, raw := range githubDerivedOracleList(input, "Donors") {
@@ -805,8 +806,8 @@ func buildGitHubDerivedOracleSurfaces(
 	// (CHAOS-3978), deliberately placed where it cannot change what the
 	// resolver does with a given edge set -- which is what keeps every case in
 	// this file valid across that fix.
-	derived.linkedIssue, _, _ = derived.buildLinkedIssueIndex(
-		provider, subjects, rows.Dependencies, nil,
+	derived.LinkedIssue, _, _ = derived.BuildLinkedIssueIndex(
+		provider, subjects, toDerivationDependencyEdges(rows.Dependencies), nil,
 	)
 	surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 		provider, claim, rows, day, computedAt, derived,

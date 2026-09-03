@@ -117,14 +117,16 @@ func ResolveProviderKind(requested string) (ProviderKind, error) {
 // goImplementedProviderKinds are the kinds NewProviderFromEnv can actually
 // construct a working client for, as opposed to an explicit-refusal stub.
 var goImplementedProviderKinds = map[ProviderKind]struct{}{
-	ProviderKindOpenAI: {},
-	ProviderKindLocal:  {},
-	ProviderKindMock:   {},
-	ProviderKindNone:   {},
+	ProviderKindOpenAI:   {},
+	ProviderKindLocal:    {},
+	ProviderKindOllama:   {},
+	ProviderKindLMStudio: {},
+	ProviderKindMock:     {},
+	ProviderKindNone:     {},
 }
 
 // IsProviderKindImplemented reports whether kind has a real Go client
-// (openai, local, mock, none) as opposed to a BYO stub.
+// (openai, local, ollama, lmstudio, mock, none) as opposed to a BYO stub.
 func IsProviderKindImplemented(kind ProviderKind) bool {
 	_, ok := goImplementedProviderKinds[kind]
 	return ok
@@ -134,16 +136,16 @@ func IsProviderKindImplemented(kind ProviderKind) bool {
 // this port does not yet -- so a caller resolving "any of the six" always
 // gets a Provider value back, with the refusal happening explicitly at the
 // first real call rather than the factory failing before a Provider even
-// exists. This is the shape a future Anthropic/Gemini/Qwen/Ollama/LMStudio
-// port fills in: implement Provider, register it in NewProviderFromEnv,
-// delete the corresponding entry below.
+// exists. This is the shape a future Anthropic/Gemini/Qwen port fills in:
+// implement Provider, register it in NewProviderFromEnv, delete the
+// corresponding entry below.
 type unimplementedProvider struct {
 	kind ProviderKind
 }
 
 func (p unimplementedProvider) Complete(_ context.Context, _ CompletionRequest) (CompletionResult, error) {
 	return CompletionResult{}, fmt.Errorf(
-		"LLM provider kind %q is not yet implemented in Go -- implemented kinds: openai, local, mock, none",
+		"LLM provider kind %q is not yet implemented in Go -- implemented kinds: openai, local, ollama, lmstudio, mock, none",
 		p.kind,
 	)
 }
@@ -189,13 +191,37 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
+	case ProviderKindOllama:
+		// Native /api/chat client (ollamaprovider.go) -- distinct from
+		// ProviderKindLocal, which speaks Ollama's OpenAI-compatible /v1
+		// endpoint instead. Env names mirror credentials.py's
+		// _API_KEY_ENV_BY_PROVIDER/_BASE_URL_ENV_BY_PROVIDER["ollama"]
+		// tables; OLLAMA_MODEL is local.py's OllamaProvider's own model env.
+		return NewOllamaProvider(OllamaProviderConfig{
+			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
+			Model:   firstNonEmptyEnv("LLM_MODEL_OLLAMA", "OLLAMA_MODEL", "LLM_MODEL"),
+			APIKey:  firstNonEmptyEnv("OLLAMA_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+		}), nil
+
+	case ProviderKindLMStudio:
+		// Native /api/v0/chat/completions client (lmstudioprovider.go) --
+		// distinct from ProviderKindLocal, which speaks LM Studio's
+		// OpenAI-compatible /v1 endpoint instead. Env names mirror
+		// credentials.py's _API_KEY_ENV_BY_PROVIDER/
+		// _BASE_URL_ENV_BY_PROVIDER["lmstudio"] tables; LMSTUDIO_MODEL is
+		// local.py's LMStudioProvider's own model env, defaulting to
+		// DEFAULT_MODEL_BY_PROVIDER["lmstudio"] ("local-model") -- chris's
+		// actual gemma tag is an open question logged on CHAOS-4978, not
+		// guessed here.
+		return NewLMStudioProvider(LMStudioProviderConfig{
+			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LMSTUDIO_BASE_URL"),
+			Model:   firstNonEmptyEnv("LLM_MODEL_LMSTUDIO", "LMSTUDIO_MODEL", "LLM_MODEL"),
+			APIKey:  firstNonEmptyEnv("LMSTUDIO_API_KEY", "LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+		}), nil
+
 	// BYO LLM stubs: Python has a real client for each of these; this port
-	// does not yet. Chris runs a local gemma model through LM Studio's
-	// OpenAI-compatible endpoint today, which is ProviderKindLocal above
-	// (LOCAL_LLM_BASE_URL) -- LMStudio/Ollama's own NATIVE provider names
-	// (with their own env tables: LMSTUDIO_BASE_URL/OLLAMA_BASE_URL) are a
-	// distinct, thinner variant with no Go port, ticketed separately.
-	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen, ProviderKindOllama, ProviderKindLMStudio:
+	// does not yet.
+	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
 
 	default:

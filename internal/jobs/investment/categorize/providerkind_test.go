@@ -216,10 +216,81 @@ func TestNewProviderFromEnvLocalReadsEnv(t *testing.T) {
 	}
 }
 
+func TestNewProviderFromEnvOllamaReadsEnv(t *testing.T) {
+	clearProviderEnv(t)
+	t.Setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+	t.Setenv("OLLAMA_MODEL", "gemma3:4b")
+
+	provider, err := NewProviderFromEnv(ProviderKindOllama)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ollamaProvider, ok := provider.(*OllamaProvider)
+	if !ok {
+		t.Fatalf("provider = %T, want *OllamaProvider", provider)
+	}
+	if ollamaProvider.cfg.BaseURL != "http://127.0.0.1:11434" {
+		t.Errorf("BaseURL = %q, want value from OLLAMA_BASE_URL", ollamaProvider.cfg.BaseURL)
+	}
+	if ollamaProvider.cfg.Model != "gemma3:4b" {
+		t.Errorf("Model = %q, want value from OLLAMA_MODEL", ollamaProvider.cfg.Model)
+	}
+}
+
+func TestNewProviderFromEnvOllamaFallsBackToDefaultWithNoEnv(t *testing.T) {
+	clearProviderEnv(t)
+	provider, err := NewProviderFromEnv(ProviderKindOllama)
+	if err != nil {
+		t.Fatalf("unexpected error: local must fall back to defaults, not require env: %v", err)
+	}
+	ollamaProvider := provider.(*OllamaProvider)
+	if ollamaProvider.cfg.BaseURL != defaultOllamaBaseURL {
+		t.Errorf("BaseURL = %q, want the package default %q", ollamaProvider.cfg.BaseURL, defaultOllamaBaseURL)
+	}
+	if ollamaProvider.cfg.Model != defaultOllamaModel {
+		t.Errorf("Model = %q, want DEFAULT_MODEL_BY_PROVIDER[\"ollama\"] %q", ollamaProvider.cfg.Model, defaultOllamaModel)
+	}
+}
+
+func TestNewProviderFromEnvLMStudioReadsEnv(t *testing.T) {
+	clearProviderEnv(t)
+	t.Setenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234")
+	t.Setenv("LMSTUDIO_MODEL", "gemma-3-4b")
+
+	provider, err := NewProviderFromEnv(ProviderKindLMStudio)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	lmStudioProvider, ok := provider.(*LMStudioProvider)
+	if !ok {
+		t.Fatalf("provider = %T, want *LMStudioProvider", provider)
+	}
+	if lmStudioProvider.cfg.BaseURL != "http://127.0.0.1:1234" {
+		t.Errorf("BaseURL = %q, want value from LMSTUDIO_BASE_URL", lmStudioProvider.cfg.BaseURL)
+	}
+	if lmStudioProvider.cfg.Model != "gemma-3-4b" {
+		t.Errorf("Model = %q, want value from LMSTUDIO_MODEL", lmStudioProvider.cfg.Model)
+	}
+}
+
+func TestNewProviderFromEnvLMStudioFallsBackToDefaultWithNoEnv(t *testing.T) {
+	clearProviderEnv(t)
+	provider, err := NewProviderFromEnv(ProviderKindLMStudio)
+	if err != nil {
+		t.Fatalf("unexpected error: lmstudio must fall back to defaults, not require env: %v", err)
+	}
+	lmStudioProvider := provider.(*LMStudioProvider)
+	if lmStudioProvider.cfg.BaseURL != defaultLMStudioBaseURL {
+		t.Errorf("BaseURL = %q, want the package default %q", lmStudioProvider.cfg.BaseURL, defaultLMStudioBaseURL)
+	}
+	if lmStudioProvider.cfg.Model != defaultLMStudioModel {
+		t.Errorf("Model = %q, want DEFAULT_MODEL_BY_PROVIDER[\"lmstudio\"] %q", lmStudioProvider.cfg.Model, defaultLMStudioModel)
+	}
+}
+
 func TestNewProviderFromEnvUnimplementedKindsRefuseExplicitly(t *testing.T) {
 	for _, kind := range []ProviderKind{
 		ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen,
-		ProviderKindOllama, ProviderKindLMStudio,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			provider, err := NewProviderFromEnv(kind)

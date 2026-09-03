@@ -56,6 +56,10 @@ EXPECTED_PACKAGES = {
     "internal/scheduler/fixed",
     "internal/scheduler/sync",
     "internal/storage/postgres",
+    # CHAOS-4882: the auth-owned schema's migration lineage. Its suite starts
+    # a real PostgreSQL and connects AS the runtime role to prove DDL and
+    # cross-schema access are refused, so it is integration-tagged.
+    "internal/storage/postgres/authschema",
     "internal/storage/river",
     "internal/streamhandlers",
     "internal/streamrunner",
@@ -326,8 +330,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 37 package(s)" in result.stdout
+    # CHAOS-4882 added internal/storage/postgres/authschema (37 -> 38
+    # discovered, 37 -> 38 will run): the auth-owned schema's live-PostgreSQL
+    # posture suite.
+    assert "38 package(s) discovered, 0 denylisted, 38 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 38 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -357,7 +364,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is the FLATTENED set across all shards, so unlike the selected-package
     # count above it INCLUDES the providersync shard-1 package.
     # CHAOS-4766: 37, not 36 -- internal/jobs/workgraph/edges added.
-    assert len(flattened) == len(set(flattened)) == 37
+    # CHAOS-4882: 38, not 37 -- internal/storage/postgres/authschema added.
+    assert len(flattened) == len(set(flattened)) == 38
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1657,7 +1665,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4766: 36, not 35 -- internal/jobs/workgraph/edges added
     # (37 discovered - 1 for the providersync shard-1 package = 36 across
     # shards 2/3).
-    assert len(selected_packages) == len(set(selected_packages)) == 36
+    # CHAOS-4882: 37, not 36 -- internal/storage/postgres/authschema added
+    # (38 discovered - 1 for the providersync shard-1 package = 37 across
+    # the packages shards).
+    assert len(selected_packages) == len(set(selected_packages)) == 37
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

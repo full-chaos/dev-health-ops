@@ -242,25 +242,25 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, er
 	// and the escalation is a pre-existing cluster-level condition this tool
 	// deliberately does not rewrite (see EscalationPath's doc comment). What
 	// fails is the RUN, with the offending grant and its remedy named.
-	paths, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	violations, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
 	if err != nil {
 		return result, err
 	}
-	if len(paths) > 0 {
+	if len(violations) > 0 {
 		logger.ErrorContext(
 			ctx, "runtime role can escalate beyond its declared posture",
 			"schema", options.Schema, "runtime_role", options.RuntimeRole,
-			"paths", len(paths),
+			"violations", len(violations),
 		)
 		return result, fmt.Errorf(
 			"%w (schema %q, role %q):\n%s",
-			ErrRuntimeRoleCanEscalate, options.Schema, options.RuntimeRole, describeEscalation(paths),
+			ErrRuntimeRoleCanEscalate, options.Schema, options.RuntimeRole, describeViolations(violations),
 		)
 	}
 	logger.InfoContext(
 		ctx, "verified auth runtime posture",
 		"schema", options.Schema, "runtime_role", options.RuntimeRole,
-		"escalation_paths", 0,
+		"extra_privileges", 0,
 	)
 	return result, nil
 }

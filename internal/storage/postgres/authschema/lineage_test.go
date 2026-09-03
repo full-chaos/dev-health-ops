@@ -220,101 +220,24 @@ var approvedSecretSuffixes = []string{"_hash", "_digest", "_ref", "_kind", "_pre
 // extra candidates (a CONSTRAINT line, say) simply do not trip secretRoot.
 var columnDefinition = regexp.MustCompile(`(?m)^\s+([a-z_][a-z0-9_]*)\s+`)
 
-// TestNoPlaintextCredentialColumn enforces CHAOS-4882's acceptance criterion
-// "No plaintext credential/secret column is added anywhere in the new schema".
+// The text-derived secret-column guard that used to live here is RETIRED.
 //
-// It reads the criterion as a property of column NAMES, which is what can be
-// checked mechanically. A column called `secret_hash` holding a plaintext
-// secret would pass; that is a writer's discipline and no schema test can
-// reach it. What this does catch is the far likelier failure: someone adding
-// `api_token` or `client_secret` because it was convenient.
-func TestNoPlaintextCredentialColumn(t *testing.T) {
-	migrations, err := Migrations()
-	if err != nil {
-		t.Fatalf("Migrations: %v", err)
-	}
-	checked := 0
-	for _, migration := range migrations {
-		for _, match := range columnDefinition.FindAllStringSubmatch(migration.SQL, -1) {
-			column := match[1]
-			if !secretRoot.MatchString(column) {
-				continue
-			}
-			checked++
-			if _, approved := approvedSecretColumns[column]; approved {
-				continue
-			}
-			if hasApprovedSuffix(column) {
-				continue
-			}
-			t.Errorf(
-				"migration %04d_%s declares column %q, whose name suggests credential material.\n"+
-					"Store a hash or a reference instead, or add it to approvedSecretColumns with the reason it is safe.",
-				migration.Version, migration.Name, column,
-			)
-		}
-	}
-	// A guard that inspected zero candidate columns would pass silently while
-	// covering nothing — the same vacuous-pass shape CHAOS-4881's body-bound
-	// test had.
-	if checked == 0 {
-		t.Fatal("the secret-column guard examined no candidate columns; its extraction is broken, not the schema clean")
-	}
-	t.Logf("examined %d candidate column(s) against the secret-name rule", checked)
-}
-
-// TestExtractorsCatchTheRoundOneEvasions is the control for three regexp
-// repairs. Each pattern below is a construction codex round 1 executed against
-// the pre-fix guards, proving the property they name did not hold. A repair
-// that is not shown to catch the exact input that defeated it is a repair
-// nobody has tested.
-func TestExtractorsCatchTheRoundOneEvasions(t *testing.T) {
-	t.Run("quoted table names reach the posture check", func(t *testing.T) {
-		for _, statement := range []string{
-			`CREATE TABLE "unpostured_probe" (id integer);`,
-			`CREATE TABLE IF NOT EXISTS "quoted_probe" (id integer);`,
-		} {
-			match := createTableStatement.FindStringSubmatch(statement)
-			if match == nil {
-				t.Fatalf("createTableStatement missed %q", statement)
-			}
-			if strings.Contains(match[1], `"`) {
-				t.Fatalf("captured name %q still carries quotes", match[1])
-			}
-		}
-		// The unquoted form must keep working.
-		if match := createTableStatement.FindStringSubmatch(`CREATE TABLE principals (id uuid);`); match == nil || match[1] != "principals" {
-			t.Fatalf("createTableStatement broke on the unquoted form: %v", match)
-		}
-	})
-
-	t.Run("any indentation reaches the secret-name rule", func(t *testing.T) {
-		cases := map[string]string{
-			"two spaces":  "CREATE TABLE t (\n  api_token text NOT NULL\n);",
-			"tab":         "CREATE TABLE t (\n\tclient_secret text NOT NULL\n);",
-			"four spaces": "CREATE TABLE t (\n    password_plain text NOT NULL\n);",
-			"eight":       "CREATE TABLE t (\n        secret_value text NOT NULL\n);",
-		}
-		for name, body := range cases {
-			found := columnDefinition.FindAllStringSubmatch(body, -1)
-			if len(found) == 0 {
-				t.Errorf("%s indentation: columnDefinition found no column in %q", name, body)
-				continue
-			}
-			var sawSuspicious bool
-			for _, match := range found {
-				if secretRoot.MatchString(match[1]) && !hasApprovedSuffix(match[1]) {
-					if _, approved := approvedSecretColumns[match[1]]; !approved {
-						sawSuspicious = true
-					}
-				}
-			}
-			if !sawSuspicious {
-				t.Errorf("%s indentation: the secret-name rule would not have flagged %q", name, body)
-			}
-		}
-	})
-}
+// It scanned migration SQL with a regexp and was walked through four times
+// across two review rounds: a quoted table name, an exactly-four-spaces
+// indentation rule, a one-line `CREATE TABLE t (api_token text NOT NULL);`,
+// and `CREATE UNLOGGED TABLE`. Each was a legal way to write a real column
+// that the scanner did not see, and its `checked > 0` vacuity proxy could not
+// notice, because other tables kept the global count positive.
+//
+// The property is now checked against the CATALOG of the database the
+// migrations actually built -- see TestNoPlaintextCredentialColumnInTheApplied
+// Schema in catalog_integration_test.go, with a control that replays all four
+// evasions as real DDL and asserts every one is flagged. A column in
+// information_schema is a column however it was written, so the evasion class
+// is gone rather than enumerated one instance at a time.
+//
+// secretRoot, approvedSecretColumns and hasApprovedSuffix survive here because
+// the RULE is still the right rule; only the thing it reads has changed.
 
 func hasApprovedSuffix(column string) bool {
 	for _, suffix := range approvedSecretSuffixes {

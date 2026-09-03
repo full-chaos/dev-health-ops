@@ -94,7 +94,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    assert "37 package(s) discovered, 0 denylisted, 37 will run" in result.stdout
+    # CHAOS-4882 added internal/storage/postgres/authschema (37 -> 38
+    # discovered, 37 -> 38 will run): the auth-owned schema's migration
+    # lineage got a live-PostgreSQL posture suite, which connects AS the
+    # runtime role to prove DDL and cross-schema access are refused.
+    assert "38 package(s) discovered, 0 denylisted, 38 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

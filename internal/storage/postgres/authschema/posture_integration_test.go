@@ -393,7 +393,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 					t.Fatalf("grant membership: %v", err)
 				}
 			},
-			wantKind: "role_membership",
+			wantKind: "role_membership", // reported as context alongside the inherited privileges
 		},
 		{
 			name: "CREATE on the database",
@@ -402,7 +402,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 					t.Fatalf("grant database CREATE: %v", err)
 				}
 			},
-			wantKind: "database_privilege",
+			wantKind: "database: CREATE",
 		},
 	}
 

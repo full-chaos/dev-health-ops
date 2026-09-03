@@ -172,6 +172,18 @@ func TestDeriveRejectsRawKindPointingAtTheWrongIDSpace(t *testing.T) {
 	assertSingleRejection(t, Derive(inputs), ReasonNotAdmissible)
 }
 
+// TestDeriveRejectsGithubClosingReferenceRawKindPointingAtTheWrongIDSpace is
+// the github_closing_reference counterpart to the linear_attachment case
+// above (codex round 1 on #2174, P3: the wrong-id-space test existed for
+// linear_attachment only). A github_closing_reference row whose target is a
+// Linear id is malformed the same way, in the other direction.
+func TestDeriveRejectsGithubClosingReferenceRawKindPointingAtTheWrongIDSpace(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+	inputs.Dependencies[0].TargetWorkItemID = testLinear
+	assertSingleRejection(t, Derive(inputs), ReasonNotAdmissible)
+}
+
 // TestDeriveIsFirstWinsOnDuplicateIdentity pins Python's first-wins behaviour
 // (builder.py:764-767). Two dependency rows reaching the same
 // (work_item, repo, pr) identity must produce ONE row, and it must be the

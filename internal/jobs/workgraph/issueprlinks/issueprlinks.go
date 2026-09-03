@@ -157,6 +157,40 @@ type Admission struct {
 	// TargetPrefix the dependency's target_work_item_id must start with, so a
 	// raw kind cannot admit a row pointing at the wrong id space.
 	TargetPrefix string
+	// TargetValidator, when non-nil, is an ADDITIONAL grammar check beyond
+	// TargetPrefix. nil for an admission whose id space has no narrower shape
+	// to enforce here -- linear_attachment matches Python's own gate exactly
+	// (prefix only), so it stays nil deliberately, not by oversight.
+	//
+	// github_closing_reference sets this (codex round 1 on #2174, P2): a
+	// prefix-only check admits ANY "gh:..." string that happens to exist in
+	// work_items, including one the real writer
+	// (github_work_items_rows.go:779-780, node.Number < 1 skipped) could never
+	// produce -- e.g. "gh:owner/repo#0". Without this, admission relies
+	// entirely on an invariant (every "gh:"-prefixed work_items row is
+	// well-formed) holding across every writer of that table forever, not
+	// just this one. Confirmed reachable, not merely argued: Derive(inputs)
+	// with a seeded gh:owner/repo#0 work_items row wrote a native link before
+	// this fix.
+	TargetValidator func(target string) bool
+}
+
+// isWellFormedGithubIssueTarget mirrors the grammar the real writer enforces
+// (github_work_items_rows.go:779-780): gh:<owner>/<repo>#<positive-int>. The
+// repo slug may itself contain "#" (same LAST-separator reasoning as
+// ParsePRSource), so this splits on the LAST "#", not the first.
+func isWellFormedGithubIssueTarget(target string) bool {
+	body := strings.TrimPrefix(target, "gh:")
+	index := strings.LastIndex(body, "#")
+	if index < 0 {
+		return false
+	}
+	repoSlug, number := body[:index], body[index+1:]
+	if repoSlug == "" || number == "" {
+		return false
+	}
+	parsed, err := strconv.ParseUint(number, 10, 64)
+	return err == nil && parsed > 0
 }
 
 // DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer
@@ -193,7 +227,7 @@ type Admission struct {
 // jira_dev_status stays reserved -- see ReservedAdmissions.
 var DefaultAdmissions = []Admission{
 	{RelationshipTypeRaw: "linear_attachment", TargetPrefix: "linear:"},
-	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:"},
+	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:", TargetValidator: isWellFormedGithubIssueTarget},
 }
 
 // ReservedAdmissions are the raw kinds whose shape is FROZEN and implemented
@@ -539,10 +573,16 @@ func Derive(inputs Inputs) Result {
 // raw kind can never admit a target in another provider's id space.
 func admit(admissions []Admission, dependency DependencyRow) (Admission, bool) {
 	for _, admission := range admissions {
-		if dependency.RelationshipTypeRaw == admission.RelationshipTypeRaw &&
-			strings.HasPrefix(dependency.TargetWorkItemID, admission.TargetPrefix) {
-			return admission, true
+		if dependency.RelationshipTypeRaw != admission.RelationshipTypeRaw {
+			continue
 		}
+		if !strings.HasPrefix(dependency.TargetWorkItemID, admission.TargetPrefix) {
+			continue
+		}
+		if admission.TargetValidator != nil && !admission.TargetValidator(dependency.TargetWorkItemID) {
+			continue
+		}
+		return admission, true
 	}
 	return Admission{}, false
 }

@@ -37,10 +37,13 @@ type WorkUnitEvidenceOutput struct {
 }
 
 // InvestmentBreakdownOutput ports api/models/schemas.py's
-// InvestmentBreakdown.
+// InvestmentBreakdown. Themes/Subcategories preserve JSON-decode order
+// (see parseDistributionOrdered's doc comment) rather than using a plain
+// Go map -- _dominant_subcategory's tie-break (investment_mix_explain.py:
+// 124-132) depends on it.
 type InvestmentBreakdownOutput struct {
-	Themes        map[string]float64
-	Subcategories map[string]float64
+	Themes        []keyValue
+	Subcategories []keyValue
 }
 
 // WorkUnitInvestment ports api/models/schemas.py's WorkUnitInvestment.
@@ -212,8 +215,8 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		if toTS.IsZero() {
 			toTS = opts.EndTS.UTC()
 		}
-		themeDistribution := parseDistribution(derefString(row.ThemeDistributionJSON))
-		subcategoryDistribution := parseDistribution(derefString(row.SubcategoryDistributionJSON))
+		themeDistribution := parseDistributionOrdered(derefString(row.ThemeDistributionJSON))
+		subcategoryDistribution := parseDistributionOrdered(derefString(row.SubcategoryDistributionJSON))
 		metric := effortMetric(derefString(row.EffortMetric))
 		var effortValue float64
 		if row.EffortValue != nil {

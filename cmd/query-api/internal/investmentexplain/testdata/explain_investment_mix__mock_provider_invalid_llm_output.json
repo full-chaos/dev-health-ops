@@ -1,0 +1,54 @@
+{
+  "case": "mock_provider_invalid_llm_output",
+  "llm_provider": "mock",
+  "result": {
+    "anti_claims": [
+      "This does not measure individual productivity.",
+      "This does not assign intent or correctness to any work."
+    ],
+    "confidence": {
+      "band_mix": {
+        "high": 1,
+        "low": 1
+      },
+      "drivers": [],
+      "level": "moderate",
+      "quality_mean": 0.55,
+      "quality_stddev": 0.25
+    },
+    "status": "invalid_llm_output",
+    "summary": "This mix suggests effort leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
+    "top_findings": [
+      {
+        "evidence": {
+          "delta_pct_points": null,
+          "evidence_quality_band": null,
+          "evidence_quality_mean": 0.55,
+          "share_pct": 80.0,
+          "subcategory": null,
+          "theme": "velocity"
+        },
+        "finding": "Effort appears concentrated in velocity (~80% of total)."
+      },
+      {
+        "evidence": {
+          "delta_pct_points": null,
+          "evidence_quality_band": null,
+          "evidence_quality_mean": 0.55,
+          "share_pct": 20.0,
+          "subcategory": null,
+          "theme": "quality"
+        },
+        "finding": "Effort appears concentrated in quality (~20% of total)."
+      }
+    ],
+    "what_to_check_next": [
+      {
+        "action": "Review the largest subcategories",
+        "where": "Subcategory breakdown panel",
+        "why": "They drive the overall theme distribution"
+      }
+    ]
+  },
+  "written_cache_record": null
+}

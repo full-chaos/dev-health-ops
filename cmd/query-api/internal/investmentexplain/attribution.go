@@ -103,6 +103,56 @@ func parseDistribution(raw string) map[string]float64 {
 	return out
 }
 
+// parseDistributionOrdered is parseDistribution's order-preserving
+// sibling: _dominant_subcategory (investment_mix_explain.py:124-132)
+// iterates `subcategories.items()` and keeps the FIRST value that is
+// STRICTLY greater than the running best (`v > best_value`, not `>=`),
+// so on a tie the FIRST-encountered key wins -- and "first" means JSON
+// object key order, which map[string]float64 (Go map iteration is
+// randomized) cannot reproduce. json.Decoder's token stream is used
+// directly rather than json.Unmarshal for exactly this reason: it is the
+// one decode path in encoding/json that surfaces object keys in their
+// original document order.
+func parseDistributionOrdered(raw string) []keyValue {
+	if raw == "" {
+		return nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+
+	token, err := decoder.Token()
+	if err != nil {
+		return nil
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return nil
+	}
+
+	var items []keyValue
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil
+		}
+		valueToken, err := decoder.Token()
+		if err != nil {
+			return nil
+		}
+		number, ok := valueToken.(json.Number)
+		var numeric float64
+		if ok {
+			numeric, _ = number.Float64()
+		}
+		items = append(items, keyValue{Key: key, Value: numeric})
+	}
+	return items
+}
+
 // parseStructuralPayload ports work_units.py's _parse_structural_payload
 // (work_units.py:100-111), specialized to string input for the same reason
 // parseDistribution is.

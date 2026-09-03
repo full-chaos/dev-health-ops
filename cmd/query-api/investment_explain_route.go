@@ -5,7 +5,7 @@
 // operation, since this endpoint is a REST POST with an LLM call chain
 // and a streaming keep-alive body, not resolver-shaped.
 //
-// SCOPE, deliberately narrower than the full Python endpoint in three
+// SCOPE, deliberately narrower than the full Python endpoint in two
 // documented ways (each independently reversible without an interface
 // change elsewhere):
 //
@@ -14,22 +14,19 @@
 //     mechanism anywhere yet (grepped cmd/query-api -- none). Building a
 //     generic limiter is a separate task from wiring this one handler;
 //     the route stays unreachable by default via routeswitch regardless.
-//  2. resolve_repo_filter_ids (api/services/filtering.py:95-110) is NOT
-//     ported -- same boundary as investmentexplain's own readers
-//     (BreakdownFilters.RepoIDs, reader.go doc comment): it needs its
-//     own ClickHouse (repo slug/UUID resolution) and Postgres
-//     (team->repo resolution) reads this route doesn't otherwise make.
-//     filters.scope.level == "team" is refused with 400 rather than
-//     silently ignored; "org" (the default) and "repo" (using
-//     filters.scope.ids/filters.what.repos directly, matching the
-//     non-team branches of resolve_repo_filter_ids' own body) both work.
-//  3. The written investment_explanations/llm_token_usage rows use a
+//  2. The written investment_explanations/llm_token_usage rows use a
 //     SEPARATE, narrow write connection (internal/storage/clickhouse,
 //     the same helper the worker binaries use) rather than the
 //     read-only analytics.QueryClient this service otherwise uses
 //     everywhere -- see cachewrite.go's own package doc comment for why
 //     (dev-health-go's Client hard-rejects non-SELECT statements; this
 //     repo doesn't control that module).
+//
+// resolve_repo_filter_ids (api/services/filtering.py:95-110), INCLUDING
+// its team-scope branch, IS ported (investmentexplain/repofilter.go's
+// (*Reader).ResolveRepoFilterIDs) -- team-lead ruling, CHAOS-4977: "team
+// scope is the attribution use case, a 400 on scope.level='team' is a
+// parity break." scopeRepoIDs below is now a thin adapter over it.
 package main
 
 import (
@@ -299,7 +296,7 @@ func newInvestmentExplainWorkHandler(
 		}
 		forceRefresh, _ := strconv.ParseBool(r.URL.Query().Get("force_refresh"))
 
-		opts, buildErr := buildExplainOptions(claims.OrgID, reqBody, llmProvider, forceRefresh)
+		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {
 			http.Error(w, buildErr.Error(), http.StatusBadRequest)
 			return
@@ -321,11 +318,10 @@ func newInvestmentExplainWorkHandler(
 
 // buildExplainOptions ports explain_investment_mix's request-to-options
 // translation, including time_window's own math
-// (api/services/filtering.py:78-92) verbatim. See this file's package
-// doc comment for the scope.level == "team" gap.
-func buildExplainOptions(orgID string, body investmentExplainRequestBody, llmProvider string, forceRefresh bool) (investmentexplain.ExplainInvestmentMixOptions, error) {
+// (api/services/filtering.py:78-92) verbatim.
+func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, orgID string, body investmentExplainRequestBody, llmProvider string, forceRefresh bool) (investmentexplain.ExplainInvestmentMixOptions, error) {
 	startTS, endTS := timeWindow(body.Filters)
-	repoIDs, err := scopeRepoIDs(body.Filters)
+	repoIDs, err := scopeRepoIDs(ctx, reader, body.Filters, orgID)
 	if err != nil {
 		return investmentexplain.ExplainInvestmentMixOptions{}, err
 	}
@@ -395,31 +391,21 @@ func timeWindow(filters map[string]any) (startTS, endTS time.Time) {
 	return startDay, endDay
 }
 
-// scopeRepoIDs ports resolve_repo_filter_ids' non-team branches
-// (api/services/filtering.py:95-110) exactly: filters.scope.ids when
-// scope.level == "repo", plus filters.what.repos unconditionally. The
-// "team" branch (resolve_repo_ids_for_teams) and the final
-// resolve_repo_ids slug-to-UUID resolution pass are NOT ported -- see
-// this file's package doc comment. scope.level == "team" is refused
-// with an error (400) rather than silently returning an empty/wrong
-// scope.
-func scopeRepoIDs(filters map[string]any) ([]string, error) {
+// scopeRepoIDs reads filters.scope.level/ids and filters.what.repos out
+// of the raw request body and hands them to
+// (*investmentexplain.Reader).ResolveRepoFilterIDs, which ports
+// resolve_repo_filter_ids (api/services/filtering.py:95-110) in full,
+// team-scope branch included.
+func scopeRepoIDs(ctx context.Context, reader *investmentexplain.Reader, filters map[string]any, orgID string) ([]string, error) {
 	scope, _ := filters["scope"].(map[string]any)
 	level, _ := scope["level"].(string)
 	if level == "" {
 		level = "org"
 	}
-	if level == "team" {
-		return nil, fmt.Errorf("investment/explain: scope.level %q is not yet supported by this route", level)
-	}
-
-	var repoIDs []string
-	if level == "repo" {
-		repoIDs = append(repoIDs, stringsFromAny(scope["ids"])...)
-	}
+	scopeIDs := stringsFromAny(scope["ids"])
 	what, _ := filters["what"].(map[string]any)
-	repoIDs = append(repoIDs, stringsFromAny(what["repos"])...)
-	return repoIDs, nil
+	whatRepos := stringsFromAny(what["repos"])
+	return reader.ResolveRepoFilterIDs(ctx, level, scopeIDs, whatRepos, orgID)
 }
 
 // workCategoryFromFilters reads filters.why.work_category verbatim --

@@ -216,10 +216,10 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.membership_backfill": {
         "producer": "`internal/scheduler/fixed/inventory.go:176` (membership_backfill_daily_fanout)",
         "trigger": "schedule (DailyAt 03:30 UTC, safety net) + event-driven post-sync materializer (primary)",
-        "gate": "schema check in `NewMembershipExecutor` (`internal/jobs/metrics/remaining/membership_native.go:91`); no readiness gate of its own -- the scheduler-level RequiresGraphBuild prerequisite (`internal/scheduler/fixed/producers.go`) already withholds the partition until the org's work-graph build has durably completed",
-        "writer": "Go `internal/jobs/metrics/remaining/membership_native_clickhouse.go:86`",
+        "gate": "schema check in `NewMembershipExecutor` (`internal/jobs/metrics/remaining/membership_native.go:99`); no readiness gate of its own -- the scheduler-level RequiresGraphBuild prerequisite (`internal/scheduler/fixed/producers.go`) already withholds the partition until the org's work-graph build has durably completed",
+        "writer": "Go `internal/jobs/metrics/remaining/membership_native_clickhouse.go:101` (`ComputeOrg`)",
         "tables": "`work_unit_membership`, `work_unit_membership_runs`, `work_unit_membership_scoped_runs`",
-        "evidence": "argued — wired `daily.go:389-436,469-478`",
+        "evidence": "argued — wired `daily.go:420-460,497-506` (round-3 codex finding, #2177: prior citation pointed at unrelated capacity-family lines and drifted line numbers after the round-2 fix)",
         "state": "native",
         "ticket": "CHAOS-4282 -- Python `backfill_memberships` (`work_graph/investment/backfill.py:176`) retired to the cutover",
     },

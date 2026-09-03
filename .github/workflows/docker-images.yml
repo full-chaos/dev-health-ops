@@ -256,6 +256,48 @@ jobs:
       - name: Ensure the Python base image is mirrored
         run: |
           set -euo pipefail
+          # CHAOS-4949: this step comes from the MERGE REF, the tree comes from
+          # the PR HEAD, and on a pull_request those are different commits.
+          #
+          #   on: pull_request  -> GitHub evaluates the workflow from the merge
+          #                        ref (branch + main), so this step exists as
+          #                        soon as it is on main;
+          #   checkout ref:     -> github.event.pull_request.head.sha, i.e. the
+          #                        PR branch tree, which may predate it.
+          #
+          # So a branch opened before #2152 gets this step against a tree with no
+          # ci/python_base_ref.sh, and the step dies on a missing file. Measured
+          # (identical tree state, the only variable being run creation time
+          # relative to #2152 merging at 07:53:11Z):
+          #
+          #   run 33726620458  created 07:08  step ABSENT from the job  PASSED
+          #   run 33732034142  created 08:11  step PRESENT              FAILED
+          #
+          # The absence is MEANINGFUL, not an error to swallow: a tree without
+          # the derivation script also has a Dockerfile that pulls its base
+          # directly from Docker Hub, so there is no mirrored image for this step
+          # to ensure. Verified on b854c646 and 1c448f2e5 -- both `FROM
+          # python:3.14-slim`.
+          #
+          # A bare `[ -f ... ] || exit 0` is deliberately NOT used. That would
+          # also pass silently on a tree that DOES consume the mirrored base
+          # while missing its derivation -- a genuinely broken state, and exactly
+          # the shape (a step that succeeds having done nothing) this workflow
+          # has been bitten by repeatedly. So the absent branch ASSERTS the
+          # condition that makes skipping correct, and fails loudly otherwise.
+          if [ ! -f ci/python_base_ref.sh ]; then
+            if grep -q "ghcr.io/${{ github.repository_owner }}/python" docker/Dockerfile; then
+              echo "::error::docker/Dockerfile consumes the mirrored Python base" \
+                   "but ci/python_base_ref.sh is absent from this tree -- the ref" \
+                   "cannot be derived, so the base cannot be ensured. This tree is" \
+                   "inconsistent; it is not the pre-mirror case." >&2
+              exit 1
+            fi
+            echo "ci/python_base_ref.sh absent and docker/Dockerfile does not" \
+                 "reference the mirrored base: this tree predates CHAOS-4922 and" \
+                 "pulls its Python base directly. Nothing to ensure; skipping."
+            exit 0
+          fi
           # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).
           # Two validators for one property diverged; the gap was the silent
           # failure set. ci/python_base_ref.sh is now the only definition.

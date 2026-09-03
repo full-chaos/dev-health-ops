@@ -216,19 +216,14 @@ func EvaluationInstant(asOf *time.Time, wallClock func() time.Time) (now, asOfDa
 	return current, time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, time.UTC)
 }
 
-// wallClock never returns nil.
-//
-// EvaluationInstant and the write stamp both CALL the function they are given,
-// so a zero-valued executor -- constructible in-package, and what a test writes
-// when it does not care about time -- panicked with a nil dereference. A panic
-// is not a refusal: the partition handler cannot classify it, and the stack
-// points at the instant resolver rather than at the missing construction.
-func (executor *RecommendationsExecutor) wallClock() func() time.Time {
-	if executor.nowUTC != nil {
-		return executor.nowUTC
-	}
-	return func() time.Time { return time.Now().UTC() }
-}
+// nowOrRefuse is defined in executor_clock.go, alongside DORA's and
+// Capacity's -- the write stamp calls it directly (recommendations_native_clickhouse.go)
+// rather than through a nil-safe wallClock() accessor. See executor_clock.go's
+// doc comment for why a refusal, not a time.Now() fallback, is correct here:
+// a zero-valued executor is constructible in-package (what a test writes when
+// it does not care about time), and NewRecommendationsExecutor sets nowUTC
+// unconditionally on its only non-nil-returning path, so the field cannot be
+// nil in production.
 
 // ComputeTeam loads one team's window, evaluates every rule, and returns the
 // full state -- fired rows and tombstones alike.

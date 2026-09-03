@@ -141,26 +141,50 @@ func isNowOrRefuseAccessor(decl ast.Decl) bool {
 // findNowUTCReferences walks every top-level declaration in every file,
 // classifying each `nowUTC` selector reference by DECLARATION
 // (isNowOrRefuseAccessor), not by file. Shared by the live package guard
-// above and the isolated fixture test below, so both exercise the identical
-// classification logic rather than two implementations that could drift
-// apart.
+// above and the isolated fixture tests below, so all three exercise the
+// identical classification logic rather than implementations that could
+// drift apart.
+//
+// A nested `*ast.FuncLit` (closure) is walked SEPARATELY, with the exemption
+// forced off, regardless of what encloses it (codex round 3's P2): the
+// original walk applied `inAccessor` uniformly to a decl's WHOLE subtree, so
+// a closure defined INSIDE a nowOrRefuse accessor -- reading
+// executor.nowUTC() directly instead of through the parameter the accessor's
+// own design routes it through -- inherited the exemption meant only for the
+// accessor's own two selectors. TestClockGuardCatchesAClosureInsideTheAccessor
+// is the negative fixture proving this.
 func findNowUTCReferences(fset *token.FileSet, files map[string]*ast.File) (violations []string, legitimate int) {
+	var walk func(root ast.Node, inAccessor bool)
+	walk = func(root ast.Node, inAccessor bool) {
+		ast.Inspect(root, func(node ast.Node) bool {
+			// The root of THIS walk call is never reclassified as a nested
+			// closure, even when root itself is a *ast.FuncLit (the recursive
+			// call below) -- ast.Inspect's first callback is always for root.
+			// Without this check, that first callback would match the type
+			// assertion below and recurse on itself forever.
+			if node == root {
+				return true
+			}
+			if funcLit, ok := node.(*ast.FuncLit); ok {
+				walk(funcLit, false)
+				return false // the recursive call above already covers it.
+			}
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "nowUTC" {
+				return true
+			}
+			if inAccessor {
+				legitimate++
+				return true
+			}
+			violations = append(violations,
+				fset.Position(selector.Pos()).String())
+			return true
+		})
+	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
-			inAccessor := isNowOrRefuseAccessor(decl)
-			ast.Inspect(decl, func(node ast.Node) bool {
-				selector, ok := node.(*ast.SelectorExpr)
-				if !ok || selector.Sel.Name != "nowUTC" {
-					return true
-				}
-				if inAccessor {
-					legitimate++
-					return true
-				}
-				violations = append(violations,
-					fset.Position(selector.Pos()).String())
-				return true
-			})
+			walk(decl, isNowOrRefuseAccessor(decl))
 		}
 	}
 	return violations, legitimate
@@ -213,5 +237,53 @@ func rogueHelper(executor *DORAExecutor) time.Time {
 	if len(violations) != 1 {
 		t.Fatalf("violations = %v, want exactly 1 (rogueHelper) -- a new helper "+
 			"added to the accessor's own file was not caught", violations)
+	}
+}
+
+// TestClockGuardCatchesAClosureInsideTheAccessor is codex round 3's P2 on
+// this guard, closed: reproduces the shape the finding warned about -- a
+// closure DEFINED INSIDE a nowOrRefuse accessor that reads
+// executor.nowUTC() directly, bypassing the clockOrRefuse parameter the
+// accessor's own design routes it through -- and proves findNowUTCReferences
+// no longer lets it inherit its enclosing accessor's exemption.
+//
+// Isolated synthetic source, same reasoning as the sibling fixture above:
+// this test's job is to prove the WALKER's classification logic, not
+// today's file.
+func TestClockGuardCatchesAClosureInsideTheAccessor(t *testing.T) {
+	const source = `package remaining
+
+import "time"
+
+func (executor *DORAExecutor) nowOrRefuse() (time.Time, error) {
+	// rogueClosure is the shape round 3's P2 warned about: a closure defined
+	// INSIDE this accessor, reading nowUTC directly instead of through the
+	// clockOrRefuse parameter below.
+	rogueClosure := func() time.Time {
+		return executor.nowUTC()
+	}
+	_ = rogueClosure
+	return clockOrRefuse("DORAExecutor", executor.nowUTC)
+}
+
+func (executor *CapacityExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("CapacityExecutor", executor.nowUTC)
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "executor_clock.go", source, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+
+	violations, legitimate := findNowUTCReferences(fset, map[string]*ast.File{"executor_clock.go": file})
+
+	if legitimate != 2 {
+		t.Fatalf("legitimate = %d, want 2 (the two real nowOrRefuse selectors, NOT the "+
+			"closure's) -- the fixture no longer matches the production shape it is modelling", legitimate)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("violations = %v, want exactly 1 (the closure's nowUTC reference) -- "+
+			"a closure inside the accessor was not caught", violations)
 	}
 }

@@ -417,3 +417,205 @@ func TestPrivilegedPredefinedRoleMembershipIsReported(t *testing.T) {
 		t.Fatalf("Apply = %v, want ErrRuntimeRoleCanEscalate", err)
 	}
 }
+
+// TestPredefinedRoleReachableThroughAnIntermediaryIsDetected is the executed
+// proof for lane-auth-contracts' P1: a predefined role reached through an
+// OPERATOR-CREATED intermediary conferred COPY TO PROGRAM while
+// VerifyRuntimePosture reported CLEAN, because roleMemberships enumerated
+// DIRECT memberships only.
+//
+// The fix is REACHABILITY rather than recursion depth. A two-hop chain would
+// evade one level of recursion exactly as one hop evaded a direct-membership
+// query, so depth is the wrong knob.
+//
+// The three rows below decide the PREDICATE by execution rather than by
+// argument, which matters because the obvious repair over-reaches. PostgreSQL
+// 16 separated a membership's INHERIT option from its SET option, so on the
+// pinned PostgreSQL 18 image there are three states, not two:
+//
+//   - default grant             -> inherits, may SET ROLE  -> reachable
+//   - WITH INHERIT FALSE        -> no inherit, may SET ROLE -> reachable in
+//     TWO statements, which is why 'USAGE' alone is not enough
+//   - WITH INHERIT FALSE, SET FALSE -> neither              -> NOT reachable
+//
+// The third row is the accepting row. `pg_has_role(..., 'MEMBER')` is true for
+// it -- MEMBER describes the membership edge, not what the edge confers -- so
+// a switch to 'MEMBER' would fix row 2 and BREAK row 3. This file has already
+// over-corrected four times; the assertion below is what stops the fifth.
+func TestPredefinedRoleReachableThroughAnIntermediaryIsDetected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	env := newAuthFixture(t, ctx)
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
+
+	const predefined = "pg_execute_server_program"
+
+	reports := func(t *testing.T) bool {
+		t.Helper()
+		violations, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+		if err != nil {
+			t.Fatalf("VerifyRuntimePosture: %v", err)
+		}
+		for _, violation := range violations {
+			if violation.Kind == "role_membership" && violation.Object == predefined && violation.SystemRole {
+				t.Logf("reported: %s", violation)
+				return true
+			}
+		}
+		return false
+	}
+
+	// canSetRole proves the capability is or is not reachable, as the runtime
+	// role itself, rather than inferring it from the catalog.
+	canSetRole := func(t *testing.T, intermediary string) bool {
+		t.Helper()
+		runtimeConn, err := env.runtime.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire runtime: %v", err)
+		}
+		defer runtimeConn.Release()
+		_, err = runtimeConn.Exec(ctx, fmt.Sprintf("SET ROLE %q", intermediary))
+		if err != nil {
+			t.Logf("SET ROLE %s refused: %v", intermediary, err)
+			return false
+		}
+		if _, resetErr := runtimeConn.Exec(ctx, "RESET ROLE"); resetErr != nil {
+			t.Fatalf("RESET ROLE: %v", resetErr)
+		}
+		return true
+	}
+
+	// probePredicates measures the three candidate predicates instead of
+	// reasoning about them. lane-auth-contracts argued 'MEMBER' would be true
+	// even for the unreachable row and flagged the claim as unexecuted; this
+	// turns it into a measurement, and the measurement is what selects the
+	// predicate the fix ships with.
+	probePredicates := func(t *testing.T) (usage, set, member bool) {
+		t.Helper()
+		err := conn.Conn().QueryRow(ctx, `
+			SELECT pg_has_role($1, $2, 'USAGE'),
+			       pg_has_role($1, $2, 'SET'),
+			       pg_has_role($1, $2, 'MEMBER')`,
+			env.runtimeRole, predefined).Scan(&usage, &set, &member)
+		if err != nil {
+			t.Fatalf("probe pg_has_role: %v", err)
+		}
+		return usage, set, member
+	}
+
+	if reports(t) {
+		t.Fatalf("baseline already reports %s; the fixture is not clean", predefined)
+	}
+
+	cases := []struct {
+		name           string
+		grantOptions   string
+		wantReported   bool
+		wantCanSetRole bool
+	}{
+		{name: "default grant", grantOptions: "", wantReported: true, wantCanSetRole: true},
+		{name: "inherit false", grantOptions: " WITH INHERIT FALSE", wantReported: true, wantCanSetRole: true},
+		{name: "inherit false set false", grantOptions: " WITH INHERIT FALSE, SET FALSE", wantReported: false, wantCanSetRole: false},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			intermediary, err := containers.RoleName("auth_ops_helper", env.instance)
+			if err != nil {
+				t.Fatalf("derive role: %v", err)
+			}
+			for _, statement := range []string{
+				fmt.Sprintf("CREATE ROLE %q", intermediary),
+				fmt.Sprintf("GRANT %s TO %q", predefined, intermediary),
+				fmt.Sprintf("GRANT %q TO %q%s", intermediary, env.runtimeRole, testCase.grantOptions),
+			} {
+				if _, err := env.admin.Exec(ctx, statement); err != nil {
+					t.Fatalf("setup %q: %v", statement, err)
+				}
+			}
+			t.Cleanup(func() {
+				if _, err := env.admin.Exec(ctx, fmt.Sprintf("REVOKE %q FROM %q", intermediary, env.runtimeRole)); err != nil {
+					t.Errorf("revoke intermediary: %v", err)
+				}
+				containers.DropRole(env.admin, intermediary, t.Logf)
+			})
+
+			if got := canSetRole(t, intermediary); got != testCase.wantCanSetRole {
+				t.Errorf("SET ROLE reachable = %v, want %v", got, testCase.wantCanSetRole)
+			}
+
+			usage, set, member := probePredicates(t)
+			t.Logf("pg_has_role(%s) -> USAGE=%v SET=%v MEMBER=%v", predefined, usage, set, member)
+			if got := usage || set; got != testCase.wantReported {
+				t.Errorf("USAGE-or-SET = %v, want %v: the shipped predicate disagrees with reachability", got, testCase.wantReported)
+			}
+			if !member {
+				t.Errorf("MEMBER = false; the argument for NOT shipping 'MEMBER' rests on it being true here")
+			}
+			if got := reports(t); got != testCase.wantReported {
+				t.Errorf("posture reports %s = %v, want %v", predefined, got, testCase.wantReported)
+			}
+		})
+	}
+}
+
+// TestSuperuserRuntimeRoleIsReportedAsSuperuserNotAsFifteenMemberships pins the
+// shape of the report, not just its contents. `pg_has_role` is true for a
+// superuser against EVERY predefined role, so the reachability fix above would
+// otherwise turn one catastrophic finding into fifteen membership lines that
+// bury it. A superuser runtime is a distinct and worse posture and gets one
+// clear line, ahead of everything else.
+func TestSuperuserRuntimeRoleIsReportedAsSuperuserNotAsFifteenMemberships(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	env := newAuthFixture(t, ctx)
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
+
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %q SUPERUSER", env.runtimeRole)); err != nil {
+		t.Fatalf("grant superuser: %v", err)
+	}
+	t.Cleanup(func() {
+		// A fresh context: the test's own is cancelled by its defer before
+		// cleanups run, which turned this into a spurious "context canceled".
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelCleanup()
+		if _, err := env.admin.Exec(cleanupCtx, fmt.Sprintf("ALTER ROLE %q NOSUPERUSER", env.runtimeRole)); err != nil {
+			t.Errorf("revoke superuser: %v", err)
+		}
+	})
+
+	violations, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	if err != nil {
+		t.Fatalf("VerifyRuntimePosture: %v", err)
+	}
+	if len(violations) == 0 {
+		t.Fatal("a superuser runtime role produced no violations")
+	}
+	if violations[0].Kind != "role_attribute" || violations[0].Privilege != "SUPERUSER" {
+		t.Errorf("first violation = %s, want the SUPERUSER attribute line", violations[0])
+	}
+	t.Logf("reported first: %s", violations[0])
+
+	var memberships int
+	for _, violation := range violations {
+		if violation.Kind == "role_membership" && violation.SystemRole {
+			memberships++
+			t.Logf("membership line: %s", violation)
+		}
+	}
+	if memberships != 0 {
+		t.Errorf("superuser produced %d predefined-role membership lines; want 0, the SUPERUSER line subsumes them", memberships)
+	}
+}

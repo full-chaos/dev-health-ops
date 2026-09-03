@@ -35,7 +35,7 @@ import (
 // grants reaching the role through an inheritable membership, so all three
 // stop being separate cases that have to be thought of.
 type Violation struct {
-	Kind      string // relation | sequence | function | schema | database | default_acl | ownership | role_membership
+	Kind      string // relation | sequence | function | schema | database | default_acl | ownership | role_membership | role_attribute
 	Schema    string
 	Object    string
 	Privilege string
@@ -175,7 +175,13 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 	// fixed by PostgreSQL itself, not a list of attack routes I invented and
 	// must keep complete. Membership in any OTHER role stays context-only,
 	// because its effects are visible to the effective-privilege checks.
-	memberships, err := roleMemberships(ctx, conn, options)
+	attributes, superuser, err := runtimeRoleAttributes(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	violations = append(violations, attributes...)
+
+	memberships, err := roleMemberships(ctx, conn, options, superuser)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +202,19 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 	}
 
+	// A role ATTRIBUTE leads the report. Alphabetical ordering would file
+	// "role_attribute" between "ownership" and "role_membership", putting the
+	// finding that subsumes every other one in the middle of the list.
+	rank := func(v Violation) int {
+		if v.Kind == "role_attribute" {
+			return 0
+		}
+		return 1
+	}
 	sort.Slice(violations, func(i, j int) bool {
+		if rank(violations[i]) != rank(violations[j]) {
+			return rank(violations[i]) < rank(violations[j])
+		}
 		if violations[i].Kind != violations[j].Kind {
 			return violations[i].Kind < violations[j].Kind
 		}
@@ -588,15 +606,84 @@ func ownershipViolations(ctx context.Context, conn *pgx.Conn, options Options) (
 	return violations, nil
 }
 
+// runtimeRoleAttributes reports role ATTRIBUTES that confer capability by
+// themselves, independent of any grant or membership.
+//
+// SUPERUSER is its own category of finding: it is not a privilege the
+// effective-privilege checks can observe (they return true for everything),
+// and it is not a membership (nothing appears in pg_auth_members). It is also
+// strictly worse than anything else this file reports, so it leads the report
+// rather than sorting alphabetically into the middle of it.
+//
+// Deliberately NOT extended to CREATEROLE, CREATEDB or BYPASSRLS. Each is
+// arguably a route, and adding them on argument alone is exactly the
+// open-world enumeration this file exists to replace; they are recorded in the
+// PR's RISK-NOTES instead of guessed at here.
+func runtimeRoleAttributes(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, bool, error) {
+	var superuser bool
+	err := conn.QueryRow(ctx,
+		`SELECT rolsuper FROM pg_roles WHERE rolname = $1`, options.RuntimeRole).Scan(&superuser)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: reading runtime role attributes", ErrMigrationFailed)
+	}
+	if !superuser {
+		return nil, false, nil
+	}
+	return []Violation{{
+		Kind: "role_attribute", Object: options.RuntimeRole, Privilege: "SUPERUSER",
+		Detail: "the runtime role is a SUPERUSER: it bypasses every privilege check, " +
+			"so nothing else in this report constrains it; remedy: ALTER ROLE " + options.RuntimeRole + " NOSUPERUSER",
+	}}, true, nil
+}
+
 // roleMemberships reports the roles the runtime role belongs to, as context
 // for a failure the effective-privilege checks already found.
-func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
+func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, superuser bool) ([]Violation, error) {
+	if superuser {
+		// pg_has_role is true for a superuser against every predefined role,
+		// so enumerating them here would bury the one finding that matters
+		// under fifteen that are merely its consequences. The SUPERUSER line
+		// from runtimeRoleAttributes says it once.
+		return nil, nil
+	}
+	// REACHABILITY, not direct membership. A predefined role reached through
+	// an operator-created intermediary -- runtime -> ops_helper ->
+	// pg_execute_server_program -- conferred COPY TO PROGRAM while a
+	// direct-membership scan reported CLEAN. Recursing one level would not fix
+	// it either: two hops evade one level exactly as one hop evaded zero, so
+	// depth is the wrong knob and reachability is the right one.
+	//
+	// The predicate is USAGE **or** SET, and each half was chosen by
+	// measurement on the pinned PostgreSQL 18 image rather than by argument:
+	//
+	//	grant                        USAGE  SET   MEMBER  reachable
+	//	default                      true   true  true    yes
+	//	WITH INHERIT FALSE           false  true  true    yes, via SET ROLE
+	//	WITH INHERIT FALSE,SET FALSE false  false true    NO (SET ROLE denied)
+	//
+	// USAGE alone misses row 2, where the capability costs one extra
+	// statement. MEMBER is true even in row 3, where PostgreSQL 16's SET
+	// option has genuinely removed the capability -- shipping MEMBER would
+	// have been this file's fifth over-correction, caused by the fix for its
+	// fourth. TestPredefinedRoleReachableThroughAnIntermediaryIsDetected
+	// executes all three rows, including the SET ROLE refusal.
+	//
+	// Memberships in ORDINARY roles are still read directly: they are context,
+	// not detectors, and their effects are already visible to the
+	// effective-privilege checks above.
 	rows, err := conn.Query(ctx, `
-		SELECT r.rolname, (r.oid < $2) AS system_role
+		SELECT r.rolname, true AS system_role
+		FROM pg_roles r
+		WHERE r.oid < $2
+		  AND r.rolname <> $1
+		  AND (pg_has_role($1, r.oid, 'USAGE') OR pg_has_role($1, r.oid, 'SET'))
+		UNION ALL
+		SELECT r.rolname, false
 		FROM pg_auth_members m
 		JOIN pg_roles r ON r.oid = m.roleid
 		WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = $1)
-		ORDER BY r.rolname`, options.RuntimeRole, int32(systemRoleOIDBoundary))
+		  AND r.oid >= $2
+		ORDER BY 2 DESC, 1`, options.RuntimeRole, int32(systemRoleOIDBoundary))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading role memberships", ErrMigrationFailed)
 	}

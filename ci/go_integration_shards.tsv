@@ -38,12 +38,14 @@
 # per test rather than to whatever an earlier test left behind, so the weight
 # scales with the TEST COUNT in that file, not with the assertions in them.
 # Re-time it if that file grows.
-# internal/storage/postgres/authschema (CHAOS-4882): weight 30s. MEASURED, not
-# estimated -- a local run of all four Testcontainers-backed tests together
-# took 11.404s package time, each starting its own PostgreSQL container.
-# (An earlier revision of this note said 2.752s for two tests; codex round 1
-# added two more, so the derivation was re-measured rather than left to
-# describe a run that no longer exists.) PostgreSQL starts far faster than the
+# internal/storage/postgres/authschema (CHAOS-4882): weight 60s. MEASURED, not
+# estimated -- a local run of all 15 Testcontainers-backed tests together took
+# 22.832s package time, each starting its own PostgreSQL container.
+# (Two earlier revisions of this note said 2.752s for two tests and 11.404s for
+# four. Each was re-measured rather than left describing a run that no longer
+# existed: the note below says to re-time when tests are added, and a stale
+# derivation standing beside a number nobody re-derived is the exact defect
+# this ticket's review rounds kept finding.) PostgreSQL starts far faster than the
 # ClickHouse-backed packages above, which is why this is still an order of
 # magnitude cheaper than internal/streamhandlers.
 # Rounded UP to 30 for CI headroom: the local run had a warm image, and the
@@ -80,7 +82,7 @@ internal/providersync	1166
 internal/scheduler/fixed	143
 internal/scheduler/sync	32
 internal/storage/postgres	91
-internal/storage/postgres/authschema	30
+internal/storage/postgres/authschema	60
 internal/storage/river	9
 internal/streamhandlers	113
 internal/streamrunner	2

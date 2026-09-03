@@ -27,6 +27,7 @@ fix, which is precisely why the bug reached production.
 from __future__ import annotations
 
 import fnmatch
+import os
 import subprocess
 import sys
 import sysconfig
@@ -148,7 +149,12 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
     probe = textwrap.dedent(
         """
         import pathlib, sysconfig
+        import dev_health_ops
         from dev_health_ops import contract_artifacts
+
+        # Reported so the parent can assert this probe imported the checkout
+        # under test rather than whatever an editable .pth points at.
+        print("IMPORTED_FROM", pathlib.Path(dev_health_ops.__file__).resolve())
 
         # Simulate site-packages: an anchor with no contracts/ beneath it.
         contract_artifacts._CHECKOUT_ROOT = pathlib.Path("/nonexistent-checkout-root")
@@ -160,16 +166,59 @@ def test_loaders_resolve_from_the_installed_layout() -> None:
         print(dispatch_routes.default_transport_routes_path())
         """
     )
+    # PYTHONPATH is pinned to THIS checkout's src/ for two independent reasons,
+    # and the test was wrong in both directions without it.
+    #
+    # 1. WITHOUT IT THE PROBE CANNOT RUN AT ALL under a venv built with
+    #    `uv sync --no-install-project` -- the documented CHAOS-4181/4407
+    #    setuptools_scm-hang workaround. The parent process imports
+    #    dev_health_ops fine (pytest resolves it), but a subprocess inherits no
+    #    such path, so the probe exits with ModuleNotFoundError and this test
+    #    reports "installed-layout probe failed" -- an environment difference
+    #    presented as a packaging defect.
+    #
+    # 2. WITH AN EDITABLE INSTALL IT RESOLVED THE WRONG CHECKOUT. The .pth file
+    #    points at whichever tree was installed, so a probe launched from a
+    #    worktree imported the MAIN checkout's package and asserted against code
+    #    the branch had not changed. Measured: from a worktree, the child
+    #    resolved to <main>/src/dev_health_ops/__init__.py. A green here meant
+    #    "somebody's package is correctly laid out", not this one's.
+    #
+    # PYTHONPATH is processed before site-packages, so it beats the .pth -- which
+    # `sys.path.insert` inside the child would NOT do.
+    probe_environment = dict(os.environ)
+    probe_environment["PYTHONPATH"] = os.pathsep.join(
+        [str(ROOT / "src"), os.environ.get("PYTHONPATH", "")]
+    ).rstrip(os.pathsep)
     completed = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
         cwd=ROOT,
+        env=probe_environment,
         check=False,
     )
     assert completed.returncode == 0, (
         f"installed-layout probe failed:\nstdout={completed.stdout}\nstderr={completed.stderr}"
     )
+    # The probe must have imported THIS checkout. An editable install resolves
+    # dev_health_ops to whichever tree was installed, so without this a probe
+    # launched from a worktree asserts against the main checkout's code and
+    # passes while the branch's own package is never exercised.
+    imported = [
+        line.split(" ", 1)[1]
+        for line in completed.stdout.splitlines()
+        if line.startswith("IMPORTED_FROM ")
+    ]
+    assert len(imported) == 1, (
+        f"probe did not report which checkout it imported: {completed.stdout!r}"
+    )
+    assert Path(imported[0]).is_relative_to(ROOT), (
+        f"the probe imported dev_health_ops from {imported[0]}, which is OUTSIDE "
+        f"this checkout ({ROOT}). An editable install pointed it at another tree, "
+        "so this test would have asserted against code the branch never changed."
+    )
+
     printed = [line for line in completed.stdout.splitlines() if line.startswith("/")]
     assert len(printed) == 2, f"probe printed {printed!r}, expected two paths"
 

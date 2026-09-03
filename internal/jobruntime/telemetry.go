@@ -1051,6 +1051,23 @@ type MetricsCollector struct {
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
 
+	// workItemAttributionRefusals counts native work item attribution
+	// backstop construction refusals BY REASON, for the same reason
+	// doraRefusals exists: absence is not a signal.
+	workItemAttributionRefusals map[string]uint64
+	// workItemAttributionRuns and its sub-counters track one completed
+	// run each: orgWide/scoped/noop are mutually exclusive per run (see
+	// ObserveWorkItemAttributionRun's doc comment); repo/project scopes and
+	// items/rows are cumulative totals across every run.
+	workItemAttributionRuns          uint64
+	workItemAttributionOrgWideRuns   uint64
+	workItemAttributionScopedRuns    uint64
+	workItemAttributionNoopRuns      uint64
+	workItemAttributionRepoScopes    uint64
+	workItemAttributionProjectScopes uint64
+	workItemAttributionItemsSeen     uint64
+	workItemAttributionRowsWritten   uint64
+
 	// recommendationsRefusals counts native recommendations construction
 	// refusals BY REASON, for the same reason doraRefusals exists: absence is
 	// not a signal. A recommendations kind that never registered writes no
@@ -2436,6 +2453,76 @@ func (collector *MetricsCollector) ObserveDORARefused(reason string) error {
 		collector.doraRefusals = map[string]uint64{}
 	}
 	collector.doraRefusals[reason]++
+	return nil
+}
+
+// Work item attribution backstop refusal reasons (CHAOS-3092 PR-B). Closed
+// set, bounded label cardinality, same discipline as
+// doraRefusalReasons/membershipRefusalReasons. clickhouse_unavailable and
+// writer_unavailable are reachable independently for the same reason
+// membership_backfill's are: this kind's ClickHouse connection and its
+// writer are separate wiring parameters (daily.go's construction block).
+const (
+	WorkItemAttributionRefusedUnavailable        = "clickhouse_unavailable"
+	WorkItemAttributionRefusedWriterUnavailable  = "writer_unavailable"
+	WorkItemAttributionRefusedSchemaIncompatible = "schema_incompatible"
+	WorkItemAttributionRefusedInspectFailed      = "inspect_failed"
+)
+
+var workItemAttributionRefusalReasons = []string{
+	WorkItemAttributionRefusedUnavailable,
+	WorkItemAttributionRefusedWriterUnavailable,
+	WorkItemAttributionRefusedSchemaIncompatible,
+	WorkItemAttributionRefusedInspectFailed,
+}
+
+// ObserveWorkItemAttributionRefused records that the native work item
+// attribution backstop refused to build, by reason -- the positive signal an
+// alert can bind to, since a family whose job is a staleness-window
+// safety-net can otherwise go quiet for a long time before anyone notices it
+// stopped running at all (same reasoning as membership_backfill's identical
+// counter).
+func (collector *MetricsCollector) ObserveWorkItemAttributionRefused(reason string) error {
+	if !slices.Contains(workItemAttributionRefusalReasons, reason) {
+		return fmt.Errorf("unknown work item attribution refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.workItemAttributionRefusals == nil {
+		collector.workItemAttributionRefusals = map[string]uint64{}
+	}
+	collector.workItemAttributionRefusals[reason]++
+	return nil
+}
+
+// ObserveWorkItemAttributionRun records one completed native work item
+// attribution backstop run (one org). orgWide and the two scope counts are
+// mutually exclusive by construction (ComputeOrg's scoping rule): an
+// org-wide run has zero repo/project scopes, a scoped run is never org-wide.
+// noop is a genuine no-op run (nothing changed, nothing written, no marker
+// published) -- counted separately so it never looks like a failure to a
+// dashboard: a quiet backstop on a quiet org is the expected steady state.
+func (collector *MetricsCollector) ObserveWorkItemAttributionRun(
+	orgWide bool, repoScopes, projectScopes, itemsSeen, rowsWritten int, noop bool,
+) error {
+	if repoScopes < 0 || projectScopes < 0 || itemsSeen < 0 || rowsWritten < 0 {
+		return errors.New("work item attribution run counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.workItemAttributionRuns++
+	switch {
+	case noop:
+		collector.workItemAttributionNoopRuns++
+	case orgWide:
+		collector.workItemAttributionOrgWideRuns++
+	default:
+		collector.workItemAttributionScopedRuns++
+	}
+	collector.workItemAttributionRepoScopes += uint64(repoScopes)
+	collector.workItemAttributionProjectScopes += uint64(projectScopes)
+	collector.workItemAttributionItemsSeen += uint64(itemsSeen)
+	collector.workItemAttributionRowsWritten += uint64(rowsWritten)
 	return nil
 }
 

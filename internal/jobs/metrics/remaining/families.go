@@ -21,6 +21,7 @@ var expectedFamilies = []string{
 	"membership_backfill",
 	"recommendations",
 	"release_impact",
+	"work_item_attribution",
 }
 
 type Inventory struct {

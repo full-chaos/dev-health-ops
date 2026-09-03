@@ -45,8 +45,18 @@ func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 			t.Fatalf("%s shares rollback key with %s", family.Name, previous)
 		}
 		routeKeys[family.RouteKey] = family.Name
-		if family.Route != "river" || family.RollbackRoute != "celery" || !family.Executable() {
+		// "none" is a legitimate rollback route ONLY for a family with no
+		// Celery predecessor to fall back to -- work_item_attribution is the
+		// first "remaining" family born native (CHAOS-3092 PR-B), matching
+		// the same "none" shape sync.team_repo_ownership_derivation already
+		// uses for the identical reason. Every other family keeps "celery",
+		// unchanged.
+		if family.Route != "river" || !family.Executable() ||
+			(family.RollbackRoute != "celery" && family.RollbackRoute != "none") {
 			t.Fatalf("%s is not independently executable: route=%s rollback=%s", family.Name, family.Route, family.RollbackRoute)
+		}
+		if family.RollbackRoute == "none" && family.Name != "work_item_attribution" {
+			t.Fatalf("%s: \"none\" rollback is reserved for families with no Celery predecessor", family.Name)
 		}
 	}
 }

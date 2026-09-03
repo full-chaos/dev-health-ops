@@ -13,10 +13,13 @@ type CompletionResult struct {
 
 // Provider is the Go equivalent of llm/providers/base.py's LLMProvider
 // Protocol -- the narrow capability materialize's categorization step
-// needs from any LLM backend. No real provider client lands in this PR
-// (plan.md 5a-adjacent scoping, chris's Q1 follow-up: day-one providers
-// are prod-configured + mock, prod provider still pending); MockProvider
-// below is the only implementation so far.
+// needs from any LLM backend, deliberately small enough that any of
+// Python's six providers (openai/anthropic/gemini/qwen/local/mock) could
+// implement it. Day-one implementations: MockProvider (dev/test),
+// OpenAIProvider (openaiprovider.go, GPT-5 family via the Responses API), and
+// LocalProvider (localprovider.go, an OpenAI-compatible endpoint such as
+// Ollama). Anthropic/gemini/qwen have no Go port yet -- add one by
+// implementing this same interface, not by widening it.
 type Provider interface {
 	Complete(ctx context.Context, prompt string) (CompletionResult, error)
 	Close() error

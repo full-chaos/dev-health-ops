@@ -20,6 +20,24 @@
 -- Partial rather than total, mirroring the predicate: the unpublished rows are
 -- already served by auth_outbox_events_pending_idx, and excluding them keeps
 -- this index proportional to the reclaimable backlog instead of the table.
+--
+-- AND TODAY IT IS FREE, NOT MERELY PROPORTIONAL, WHICH IS A STRONGER PROPERTY
+-- THAN THE PARAGRAPH ABOVE CLAIMS. Rows are inserted with published_at unset --
+-- audit.Commit's INSERT names only (aggregate_type, aggregate_id, event_type,
+-- payload, idempotency_key) and the column carries no DEFAULT -- so every row
+-- enters NULL and NO ROW EVER ENTERS THIS INDEX. Until a publisher exists and
+-- begins setting published_at, this index costs nothing on the write path: no
+-- maintenance on insert, no entries, no bloat. A TOTAL index would have charged
+-- every outbox insert for a read benefit that cannot exist yet.
+--
+-- SO AN EMPTY INDEX HERE IS THE EXPECTED STATE, NOT DEAD WEIGHT. There is no
+-- publisher on the auth side yet: nothing outside tests sets published_at, and
+-- audit.Reap has no non-test caller (CHAOS-4960). Someone finding this index
+-- empty and concluding it is unused would be reading a correct state as a
+-- defect, and dropping it would remove the only index that can serve the reap
+-- predicate the moment a publisher starts writing.
+--
+-- Observed by lane-auth-contracts while reading #2166.
 -- WHEN THIS CAN BE APPLIED, which is not visible from the statement below.
 --
 -- This is a plain CREATE INDEX, so it holds a lock that blocks INSERT, UPDATE

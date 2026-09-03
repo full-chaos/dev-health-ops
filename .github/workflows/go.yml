@@ -308,6 +308,22 @@ jobs:
             exit 1
           fi
 
+  # CHAOS-4906: self-hosted-runner fallback, shared by both pilots added in
+  # this PR (the storage-integration shards below, and go-container-
+  # reproducibility further down) -- same kill-switch-gated shape as
+  # go-arm64-numeric-parity's own pick-runner (#2145, not yet merged at
+  # this PR's own base commit). Fork PRs excluded even when the switch is
+  # on, matching that precedent.
+  pick-runner:
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      try_self_hosted: ${{ steps.decide.outputs.try_self_hosted }}
+    steps:
+      - id: decide
+        run: echo "try_self_hosted=true" >> "${GITHUB_OUTPUT}"
+
   go-storage-integration-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -326,20 +342,25 @@ jobs:
         id: plan
         run: bash ci/check_go.sh integration-shard-plan
 
-  go-storage-integration-shard:
-    name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
-    needs: go-storage-integration-plan
-    runs-on: ubuntu-latest
+  # CHAOS-4906: self-hosted-runner fallback for the storage-integration
+  # shards -- same pick-runner/attempt/fallback/aggregator shape as
+  # go-arm64-numeric-parity (#2145), generalised to a MATRIX job: this leg
+  # and its fallback below share the IDENTICAL matrix source
+  # (`fromJSON(needs.go-storage-integration-plan.outputs.matrix)`), so each
+  # shard gets its own attempt and its own fallback, one poll per shard
+  # rather than one poll for the whole matrix. The fallback's poll script
+  # matches its OWN shard's attempt job by the templated job `name:` below
+  # (`${{ matrix.target }}-${{ matrix.shard }}`), never another shard's.
+  go-storage-integration-shard-self-hosted:
+    name: go-storage-integration-shard-self-hosted-${{ matrix.target }}-${{ matrix.shard }}
+    needs: [pick-runner, go-storage-integration-plan]
+    if: needs.pick-runner.outputs.try_self_hosted == 'true'
+    runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
     env:
-      # Redirect every registry-less Docker Hub pull -- the harness images AND
-      # testcontainers-go's own hardcoded reaper -- at the ghcr mirror. Job-level
-      # on purpose: the pre-pull warms the ref, and testcontainers resolves it
-      # again when a test starts a container, so both need the same value.
-      # The pins stay literal; the mirrored digests are identical to upstream.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -350,13 +371,6 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
-      # The derived work-item integration tests migrate their throwaway
-      # ClickHouse container with the project's REAL migration chain
-      # (internal/testsupport/chschema), which shells out to Python. This job
-      # previously installed no Python dependencies at all, so that helper died
-      # with ModuleNotFoundError. The closure is pinned and installed with
-      # --no-deps for the same reason go-quality's is: an undeclared dependency
-      # must fail loudly rather than drift to latest.
       - name: Set up Python 3.14 for the ClickHouse migration chain
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -365,16 +379,6 @@ jobs:
       - name: Install locked ClickHouse migration dependencies
         run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
 
-      # Authenticated Docker Hub pulls. Anonymous pulls are rate limited per IP,
-      # and a hosted runner shares that IP with everyone else on it -- which is
-      # how run 33572737859 got `unauthorized: authentication required` while
-      # creating a container (CHAOS-4778). The pre-pull step below turns a
-      # transient rejection into three visible attempts; this step is what stops
-      # the rejection happening in the first place.
-      #
-      # Skipped on fork pull requests, where `secrets.*` are empty by design:
-      # those runs fall back to anonymous pulls plus the bounded retry rather
-      # than failing at login.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -386,7 +390,247 @@ jobs:
         run: bash ci/check_go.sh integration-prepull
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
-        run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
+        # timeout 22m: the DOUBLE-BOUND lesson from acr's own self-hosted
+        # sibling (CF, 09-03) and #2145's go test -timeout -- a job
+        # cancelled by its own outer timeout-minutes (25 here) reads as an
+        # ambiguous claimed-failure through this same poll contract,
+        # indistinguishable from a real defect. 22m leaves 3m headroom
+        # under the 25m cap for checkout/setup-go/setup-python/pip
+        # install/docker login/pre-pull, ahead of the shard test itself
+        # (measured 9.1-17.6m per shard, run 33764964602/33757500905).
+        run: timeout 22m bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
+
+  go-storage-integration-shard-fallback:
+    name: go-storage-integration-shard-fallback-${{ matrix.target }}-${{ matrix.shard }}
+    needs: [pick-runner, go-storage-integration-plan]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 32
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Determine this shard's self-hosted attempt outcome, or that it never left the queue
+        id: wait
+        if: needs.pick-runner.outputs.try_self_hosted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_TIMEOUT_MINUTES: 5
+          ATTEMPT_TIMEOUT_MINUTES: 22
+          TARGET_JOB_NAME: go-storage-integration-shard-self-hosted-${{ matrix.target }}-${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          # Byte-identical poll contract to go-arm64-numeric-parity-fallback
+          # (#2145) -- job_status/fail_if_ambiguous/fail_if_too_many_jobs/
+          # job_left_queue/job_lost_runner, the F2 same-run exemption, the F3
+          # deadline-blind-spot closer, the F4 positive-status whitelist.
+          # ONLY the job-name filter differs (this shard's own templated
+          # name, via TARGET_JOB_NAME, instead of a fixed string), since
+          # this is one poll per matrix leg, not a workflow-wide singleton.
+          job_status() {
+            local raw attempt job_count
+            for attempt in 1 2 3; do
+              if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" 2>/dev/null)"; then
+                job_count="$(printf '%s' "${raw}" | jq '.jobs | length')"
+                if [ "${job_count}" -ge 100 ]; then
+                  echo "too_many_jobs null"
+                  return 0
+                fi
+                printf '%s' "${raw}" | jq -r --arg name "${TARGET_JOB_NAME}" '
+                  [.jobs[] | select(.name==$name)] as $matches
+                  | if ($matches | length) > 1 then "ambiguous null"
+                    elif ($matches | length) == 0 then "not_created null"
+                    else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
+                    end'
+                return 0
+              fi
+              sleep 5
+            done
+            printf 'api_error null\n'
+          }
+          fail_if_ambiguous() {
+            if [ "${status}" = "ambiguous" ]; then
+              echo "FATAL: more than one job named ${TARGET_JOB_NAME} in this run's job list -- refusing to guess which is the real attempt rather than silently picking one" >&2
+              exit 1
+            fi
+          }
+          fail_if_too_many_jobs() {
+            if [ "${status}" = "too_many_jobs" ]; then
+              echo "FATAL: this run reports >=100 jobs on a single per_page=100 page -- job_status can no longer see every job without real pagination" >&2
+              exit 1
+            fi
+          }
+          job_left_queue() {
+            case "${status}" in
+              in_progress|completed) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
+          left_queue="false"
+          status="queued"
+          phase1_total_polls=0
+          phase1_api_error_polls=0
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            phase1_total_polls=$((phase1_total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+              sleep 15
+              continue
+            fi
+            if job_left_queue; then
+              left_queue="true"
+              break
+            fi
+            sleep 15
+          done
+
+          if [ "${left_queue}" != "true" ]; then
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            phase1_total_polls=$((phase1_total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+            elif job_left_queue; then
+              left_queue="true"
+            fi
+          fi
+
+          if [ "${left_queue}" != "true" ]; then
+            if [ "${phase1_api_error_polls}" -eq "${phase1_total_polls}" ] && [ "${phase1_total_polls}" -gt 0 ]; then
+              echo "self-hosted attempt's queue status could not be observed at all in ${phase1_total_polls} attempts (gh api kept failing) -- claiming the work here as the safe default, but this does NOT confirm the pool was actually saturated"
+            else
+              echo "self-hosted attempt still queued after ${QUEUE_TIMEOUT_MINUTES}m (${phase1_api_error_polls}/${phase1_total_polls} polls were api_error) -- claiming the work here"
+            fi
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          report_terminal_conclusion() {
+            echo "self-hosted attempt completed with conclusion: ${conclusion}"
+            if [ "${conclusion}" = "success" ]; then
+              echo "outcome=claimed-success" >> "${GITHUB_OUTPUT}"
+            else
+              echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          }
+
+          job_lost_runner() {
+            case "${status}" in
+              completed) return 1 ;;
+              in_progress) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+
+          deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
+          total_polls=0
+          api_error_polls=0
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            total_polls=$((total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              api_error_polls=$((api_error_polls + 1))
+              sleep 15
+              continue
+            fi
+            if [ "${status}" = "completed" ]; then
+              report_terminal_conclusion
+            fi
+            if job_lost_runner; then
+              echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of waiting out the remaining budget"
+              echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 15
+          done
+
+          read -r status conclusion <<<"$(job_status)"
+          fail_if_ambiguous
+          fail_if_too_many_jobs
+          total_polls=$((total_polls + 1))
+          if [ "${status}" = "api_error" ]; then
+            api_error_polls=$((api_error_polls + 1))
+          elif [ "${status}" = "completed" ]; then
+            report_terminal_conclusion
+          elif job_lost_runner; then
+            echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of reporting a failure"
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [ "${api_error_polls}" -eq "${total_polls}" ] && [ "${total_polls}" -gt 0 ]; then
+            echo "self-hosted attempt's status could not be observed at all in ${total_polls} attempts (gh api kept failing) -- NOT claiming this reflects the attempt's own outcome; treating as a failure rather than reporting a silent pass" >&2
+          else
+            echo "self-hosted attempt left the queue but never reached a terminal state within $((ATTEMPT_TIMEOUT_MINUTES + 3))m (${api_error_polls}/${total_polls} polls were api_error) -- its own timeout-minutes should have ended it by now; treating this as a failure rather than reporting a silent pass" >&2
+          fi
+          echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+
+      - name: Determine whether this leg owns the real work
+        id: own
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.pick-runner.outputs.try_self_hosted }}" != "true" ] || [ "${{ steps.wait.outputs.outcome }}" = "unclaimed" ]; then
+            echo "run_here=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run_here=false" >> "${GITHUB_OUTPUT}"
+            echo "self-hosted attempt already reached a terminal state (${{ steps.wait.outputs.outcome }}); skipping the fallback's own real-work steps"
+          fi
+
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "self-hosted attempt (go-storage-integration-shard-self-hosted-${{ matrix.target }}-${{ matrix.shard }}) did not succeed; failing this leg so the required check reflects it" >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.own.outputs.run_here == 'true'
+
+      - name: Set up Go
+        if: steps.own.outputs.run_here == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Set up Python 3.14 for the ClickHouse migration chain
+        if: steps.own.outputs.run_here == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Install locked ClickHouse migration dependencies
+        if: steps.own.outputs.run_here == 'true'
+        run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
+
+      - name: Log in to GitHub Container Registry
+        if: steps.own.outputs.run_here == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        if: steps.own.outputs.run_here == 'true'
+        run: bash ci/check_go.sh integration-prepull
+
+      - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
+        if: steps.own.outputs.run_here == 'true'
+        run: timeout 22m bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
   # Preserve the existing required-check contract while the implementation
   # fans out behind it. fail-fast is disabled above, so this job observes the
@@ -394,14 +638,23 @@ jobs:
   go-storage-integration:
     name: go-storage-integration
     if: ${{ always() }}
+    # CHAOS-4906: needs ONLY the fallback matrix, never the self-hosted
+    # attempt matrix directly -- same reasoning as go-arm64-numeric-parity's
+    # own aggregator (#2145): a self-hosted attempt stuck permanently
+    # `queued` never reaches a terminal state, and a `needs:` on it
+    # directly would block this aggregator for up to GitHub's 24h
+    # self-hosted backstop instead of the fallback matrix's own bounded
+    # poll. GitHub's own `needs.<matrix-job>.result` is "success" only if
+    # EVERY matrix leg of that job succeeded, so this one check still
+    # covers all 6 shards, unchanged from before this PR.
     needs:
       - go-storage-integration-plan
-      - go-storage-integration-shard
+      - go-storage-integration-shard-fallback
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
-      SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
+      SHARD_RESULT: ${{ needs.go-storage-integration-shard-fallback.result }}
     steps:
       - name: Require the plan and every integration shard to pass
         run: |
@@ -470,14 +723,241 @@ jobs:
           exit-code: '1'
           version: v0.70.0
 
-  go-container-reproducibility:
-    runs-on: ubuntu-latest
+  # CHAOS-4906: self-hosted-runner fallback for the reproducibility check --
+  # same pick-runner/attempt/fallback/aggregator shape as
+  # go-arm64-numeric-parity (#2145), a single (non-matrix) job, closest to
+  # that original pilot's own shape of the two added by this PR.
+  go-container-reproducibility-self-hosted:
+    needs: pick-runner
+    if: needs.pick-runner.outputs.try_self_hosted == 'true'
+    runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Verify reproducible Go images
-        run: bash ci/check_go_containers.sh reproducible
+        # timeout 20m: same double-bound reasoning as the storage-shard
+        # leg above -- 5m headroom under the 25m outer cap ahead of the
+        # check itself (measured 13.7-14.4min, run 33764964602/33757500905).
+        run: timeout 20m bash ci/check_go_containers.sh reproducible
+
+  go-container-reproducibility-fallback:
+    needs: pick-runner
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 32
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Determine the self-hosted attempt's outcome, or that it never left the queue
+        id: wait
+        if: needs.pick-runner.outputs.try_self_hosted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_TIMEOUT_MINUTES: 5
+          ATTEMPT_TIMEOUT_MINUTES: 22
+        run: |
+          set -euo pipefail
+          # Byte-identical poll contract to go-arm64-numeric-parity-fallback
+          # (#2145) -- job_status/fail_if_ambiguous/fail_if_too_many_jobs/
+          # job_left_queue/job_lost_runner, the F2 same-run exemption, the
+          # F3 deadline-blind-spot closer, the F4 positive-status
+          # whitelist. Only the target job NAME differs (a fixed string,
+          # this job has no matrix).
+          job_status() {
+            local raw attempt job_count
+            for attempt in 1 2 3; do
+              if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" 2>/dev/null)"; then
+                job_count="$(printf '%s' "${raw}" | jq '.jobs | length')"
+                if [ "${job_count}" -ge 100 ]; then
+                  echo "too_many_jobs null"
+                  return 0
+                fi
+                printf '%s' "${raw}" | jq -r '
+                  [.jobs[] | select(.name=="go-container-reproducibility-self-hosted")] as $matches
+                  | if ($matches | length) > 1 then "ambiguous null"
+                    elif ($matches | length) == 0 then "not_created null"
+                    else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
+                    end'
+                return 0
+              fi
+              sleep 5
+            done
+            printf 'api_error null\n'
+          }
+          fail_if_ambiguous() {
+            if [ "${status}" = "ambiguous" ]; then
+              echo "FATAL: more than one job named go-container-reproducibility-self-hosted in this run's job list -- refusing to guess which is the real attempt rather than silently picking one" >&2
+              exit 1
+            fi
+          }
+          fail_if_too_many_jobs() {
+            if [ "${status}" = "too_many_jobs" ]; then
+              echo "FATAL: this run reports >=100 jobs on a single per_page=100 page -- job_status can no longer see every job without real pagination" >&2
+              exit 1
+            fi
+          }
+          job_left_queue() {
+            case "${status}" in
+              in_progress|completed) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
+          left_queue="false"
+          status="queued"
+          phase1_total_polls=0
+          phase1_api_error_polls=0
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            phase1_total_polls=$((phase1_total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+              sleep 15
+              continue
+            fi
+            if job_left_queue; then
+              left_queue="true"
+              break
+            fi
+            sleep 15
+          done
+
+          if [ "${left_queue}" != "true" ]; then
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            phase1_total_polls=$((phase1_total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              phase1_api_error_polls=$((phase1_api_error_polls + 1))
+            elif job_left_queue; then
+              left_queue="true"
+            fi
+          fi
+
+          if [ "${left_queue}" != "true" ]; then
+            if [ "${phase1_api_error_polls}" -eq "${phase1_total_polls}" ] && [ "${phase1_total_polls}" -gt 0 ]; then
+              echo "self-hosted attempt's queue status could not be observed at all in ${phase1_total_polls} attempts (gh api kept failing) -- claiming the work here as the safe default, but this does NOT confirm the pool was actually saturated"
+            else
+              echo "self-hosted attempt still queued after ${QUEUE_TIMEOUT_MINUTES}m (${phase1_api_error_polls}/${phase1_total_polls} polls were api_error) -- claiming the work here"
+            fi
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          report_terminal_conclusion() {
+            echo "self-hosted attempt completed with conclusion: ${conclusion}"
+            if [ "${conclusion}" = "success" ]; then
+              echo "outcome=claimed-success" >> "${GITHUB_OUTPUT}"
+            else
+              echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+            fi
+            exit 0
+          }
+
+          job_lost_runner() {
+            case "${status}" in
+              completed) return 1 ;;
+              in_progress) return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+
+          deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
+          total_polls=0
+          api_error_polls=0
+          while [ "$(date -u +%s)" -lt "${deadline}" ]; do
+            read -r status conclusion <<<"$(job_status)"
+            fail_if_ambiguous
+            fail_if_too_many_jobs
+            total_polls=$((total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              api_error_polls=$((api_error_polls + 1))
+              sleep 15
+              continue
+            fi
+            if [ "${status}" = "completed" ]; then
+              report_terminal_conclusion
+            fi
+            if job_lost_runner; then
+              echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of waiting out the remaining budget"
+              echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            sleep 15
+          done
+
+          read -r status conclusion <<<"$(job_status)"
+          fail_if_ambiguous
+          fail_if_too_many_jobs
+          total_polls=$((total_polls + 1))
+          if [ "${status}" = "api_error" ]; then
+            api_error_polls=$((api_error_polls + 1))
+          elif [ "${status}" = "completed" ]; then
+            report_terminal_conclusion
+          elif job_lost_runner; then
+            echo "self-hosted attempt is no longer in a started state (now: ${status}) -- the runner was likely lost; claiming the work here instead of reporting a failure"
+            echo "outcome=unclaimed" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [ "${api_error_polls}" -eq "${total_polls}" ] && [ "${total_polls}" -gt 0 ]; then
+            echo "self-hosted attempt's status could not be observed at all in ${total_polls} attempts (gh api kept failing) -- NOT claiming this reflects the attempt's own outcome; treating as a failure rather than reporting a silent pass" >&2
+          else
+            echo "self-hosted attempt left the queue but never reached a terminal state within $((ATTEMPT_TIMEOUT_MINUTES + 3))m (${api_error_polls}/${total_polls} polls were api_error) -- its own timeout-minutes should have ended it by now; treating this as a failure rather than reporting a silent pass" >&2
+          fi
+          echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
+
+      - name: Determine whether this leg owns the real work
+        id: own
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.pick-runner.outputs.try_self_hosted }}" != "true" ] || [ "${{ steps.wait.outputs.outcome }}" = "unclaimed" ]; then
+            echo "run_here=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run_here=false" >> "${GITHUB_OUTPUT}"
+            echo "self-hosted attempt already reached a terminal state (${{ steps.wait.outputs.outcome }}); skipping the fallback's own real-work steps"
+          fi
+
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "self-hosted attempt (go-container-reproducibility-self-hosted) did not succeed; failing this leg so the required check reflects it" >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.own.outputs.run_here == 'true'
+
+      - name: Verify reproducible Go images
+        if: steps.own.outputs.run_here == 'true'
+        run: timeout 20m bash ci/check_go_containers.sh reproducible
+
+  go-container-reproducibility:
+    name: go-container-reproducibility
+    if: always()
+    # CHAOS-4906: needs ONLY the fallback leg, never the self-hosted
+    # attempt directly -- same reasoning as go-arm64-numeric-parity's own
+    # aggregator (#2145).
+    needs:
+      - go-container-reproducibility-fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FALLBACK_RESULT: ${{ needs.go-container-reproducibility-fallback.result }}
+    steps:
+      - name: Require the fallback leg to have succeeded
+        run: |
+          set -euo pipefail
+          if [ "${FALLBACK_RESULT}" = "success" ]; then
+            echo "container reproducibility passed (fallback leg result: ${FALLBACK_RESULT})"
+            exit 0
+          fi
+          echo "fallback leg result: ${FALLBACK_RESULT}" >&2
+          exit 1
 
   river-compatibility:
     runs-on: ubuntu-latest

@@ -72,7 +72,7 @@ func TestVariantCSurvivesOnlyWhenThisWriterGoesLast(t *testing.T) {
 	// test seeds in one statement. The per-table form is where the
 	// storage-versus-name hazard bites after EXCHANGE TABLES, and is not needed
 	// here.
-	if err := conn.Exec(ctx, `SYSTEM STOP MERGES`); err != nil {
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES work_graph_edges`); err != nil {
 		t.Fatal(err)
 	}
 	// Restart them on the way out. The stop above is SERVER-WIDE, and
@@ -83,9 +83,17 @@ func TestVariantCSurvivesOnlyWhenThisWriterGoesLast(t *testing.T) {
 	// test on that server. CI uses containers and would not notice; a lane pointed
 	// at a shared ClickHouse would.
 	//
-	// BARE, matching the stop. The storage-versus-name hazard that makes a
-	// per-table restart risky after EXCHANGE TABLES is about restarting BY NAME;
-	// the bare form carries no name and cannot mis-target.
+	// PER-TABLE, matching the stop. The bare form would be server-wide, which
+	// MITIGATES the leak; naming the table REMOVES it -- nothing outside this
+	// fixture's own table is ever touched.
+	//
+	// Per-table is only wrong when the path under test EXCHANGEs or RENAMEs the
+	// table, because the stop binds to STORAGE while a restart-by-name resolves
+	// the name afresh. Checked, and it does not: the edges writer and the
+	// ClickHouse store contain no EXCHANGE or RENAME, and the complete set of
+	// statements this test issues after the stop is the INSERT below and the
+	// TRUNCATE in truncate(). Migration 027 does exchange work_graph_edges, but
+	// inside chschema.Apply, before the stop.
 	//
 	// `defer`, NOT t.Cleanup, and the difference is load-bearing HERE even though
 	// the restart precedents use t.Cleanup. Those files run their whole teardown
@@ -106,7 +114,7 @@ func TestVariantCSurvivesOnlyWhenThisWriterGoesLast(t *testing.T) {
 	defer func() {
 		resumeCtx, cancelResume := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancelResume()
-		if err := conn.Exec(resumeCtx, `SYSTEM START MERGES`); err != nil {
+		if err := conn.Exec(resumeCtx, `SYSTEM START MERGES work_graph_edges`); err != nil {
 			t.Errorf("resume merges: %v", err)
 		}
 	}()

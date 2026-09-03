@@ -36,6 +36,19 @@ var permittedWriters = map[string]string{
 // TestNothingOutsideThisPackageWritesTheGuardedTables scans RAW SOURCE rather
 // than the Go AST.
 //
+// IT COVERS INSERT ONLY, and that is a deliberate boundary rather than an
+// oversight -- a guard whose name says "writes" while it checks one verb is
+// the false-enforcement shape this lane has spent the day finding. DELETE and
+// UPDATE are real runtime capabilities on auth_outbox_events (see
+// authschema/grants.go:105), and PR 2's delivery worker will legitimately
+// DELETE published rows. So the verb set widens when that lands, and it widens
+// HERE, in the guard -- not by adding the reaper to permittedWriters, which
+// would be permanent permission granted for a temporary reason.
+//
+// Also uncovered, from codex round 1: CopyFrom with a pgx.Identifier, a table
+// name built by concatenation, and SQL in a non-Go file. Each is a real way to
+// write these tables that this scan does not see.
+//
 // The table name travels inside a SQL string literal, so an AST walk keyed on
 // call expressions sees `tx.Exec(ctx, someString)` and learns nothing. The
 // string is what carries the table name and the string is what must be read.

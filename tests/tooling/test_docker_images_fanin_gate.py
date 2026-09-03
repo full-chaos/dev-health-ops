@@ -359,7 +359,8 @@ def test_latest_check_fails_closed_on_unknown_registry_errors() -> None:
     collapsed into a single "doesn't exist" outcome (that's the P1 this
     item exists to close -- a transient failure on an EXISTING `:latest`
     would otherwise trigger an unconditional overwrite). Live-verified on
-    bigboy (docker buildx 29.7.2 against ghcr.io, 2026-09-03): a
+    bigboy (docker/buildx v0.37.0, Docker Engine 29.7.2, against ghcr.io,
+    2026-09-03): a
     genuinely absent tag exits 1 with stderr exactly `ERROR: <ref>: not
     found`; a present tag exits 0 with empty stderr. Only that verified
     substring may be trusted as CONFIRMED ABSENT -- this test asserts on

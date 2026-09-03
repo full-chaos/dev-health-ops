@@ -771,8 +771,9 @@ jobs:
           #
           # STRUCTURAL FIX (team-lead ruling: a documented-but-unimplemented
           # gap was rejected here; this was verified live, not guessed).
-          # Live probe on bigboy, docker buildx 29.7.2 against ghcr.io,
-          # 2026-09-03: `imagetools inspect` on a genuinely absent tag
+          # Live probe on bigboy, docker/buildx v0.37.0 (Docker Engine
+          # 29.7.2) against ghcr.io, 2026-09-03: `imagetools inspect` on a
+          # genuinely absent tag
           # exits 1 with stderr exactly `ERROR: <ref>: not found`; a
           # present tag exits 0 with empty stderr and valid JSON on
           # stdout. `_inspect_classify` below matches ONLY that verified

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -297,4 +298,94 @@ func TestTheDetectorInspectsRealGuardFiles(t *testing.T) {
 			"files, so TestEveryRotGuardUsesTheRegistry proves nothing about them.",
 			real)
 	}
+}
+
+// callersOfTheUnvalidatedCore returns the files in this package that call
+// comparePayloadFields, which skips registry validation.
+var comparePayloadFieldsAllowed = map[string]bool{
+	// Defines it, and calls it from comparePayload after validating.
+	"goldenpayload_test.go": true,
+	// Exercises the comparison logic itself against hand-written documents,
+	// which is the whole reason an unvalidated core exists.
+	"goldenpayload_behaviour_test.go": true,
+}
+
+// TestTheUnvalidatedCoreIsCalledOnlyWhereItIsTested closes codex round 3's
+// helper bypass, and it is the third place I have had to move the boundary.
+//
+// TestEveryRotGuardUsesTheRegistry inspects only files matching
+// *_rot_guard_test.go, and only DIRECT comparePayloadFields calls. So the most
+// ordinary refactor in the world walks around it -- extract a helper into any
+// other file in the package:
+//
+//	func compareOnlyCases(a, b []byte) error {
+//	    return comparePayloadFields(a, b, []string{"cases"})
+//	}
+//
+// and have the guard call that. Reproduced: every registry control passed while
+// the guard silently compared only "cases". That is drift by a well-meaning
+// editor, not a hostile author -- "extract the duplicated call into a helper" is
+// what a careful person does on a Tuesday.
+//
+// Chasing call PATHS through the AST would be the direct answer and the wrong
+// one: it is unbounded, and each new indirection is another shape to enumerate,
+// which is the mistake this file has now made three times. This asks a bounded
+// question instead -- WHICH FILES may reach the unvalidated core at all -- and
+// answers it over the whole package rather than one glob. A helper anywhere else
+// is itself a call site in a file that is not allowed, wherever it hides.
+func TestTheUnvalidatedCoreIsCalledOnlyWhereItIsTested(t *testing.T) {
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) == 0 {
+		t.Fatal("no .go files found; this test would pass by examining nothing")
+	}
+
+	inspected, callSites := 0, 0
+	for _, path := range sources {
+		fileSet := token.NewFileSet()
+		parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		inspected++
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name, ok := call.Fun.(*ast.Ident)
+			if !ok || name.Name != "comparePayloadFields" {
+				return true
+			}
+			callSites++
+			if comparePayloadFieldsAllowed[filepath.Base(path)] {
+				return true
+			}
+			t.Errorf("%s:%d calls comparePayloadFields, which skips registry "+
+				"validation. Only %v may. A helper here lets a rot guard compare "+
+				"an arbitrary field set while every registry control still passes "+
+				"-- silent drift, reachable by an ordinary extract-a-helper "+
+				"refactor. Call comparePayload with a registry entry instead.",
+				path, fileSet.Position(call.Pos()).Line,
+				sortedAllowedFiles())
+			return true
+		})
+	}
+
+	if inspected < 2 || callSites == 0 {
+		t.Errorf("inspected %d file(s) and found %d comparePayloadFields call "+
+			"site(s); a scan that finds nothing reports exactly what a clean "+
+			"package reports", inspected, callSites)
+	}
+}
+
+func sortedAllowedFiles() []string {
+	names := make([]string, 0, len(comparePayloadFieldsAllowed))
+	for name := range comparePayloadFieldsAllowed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

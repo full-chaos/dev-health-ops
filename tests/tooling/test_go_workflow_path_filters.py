@@ -266,12 +266,18 @@ def _tracked_paths(anchor: Path) -> tuple[Path, ...]:
     # "git answered about another checkout" into a loud failure rather than a
     # quietly smaller file set -- the shape that let 401 fixtures become 309
     # with every test still green.
-    missing = [path for path in paths[:200] if not path.exists()]
+    # EVERY path, not a sample. codex round 3: the check read paths[:200] while
+    # returning all of them, so in a repo of 201 indexed files with only the
+    # lexically last one deleted, the missing path was returned and accepted.
+    # A sample validates the sample; the function returns the whole list, and a
+    # sparse or partial checkout puts the absent entries wherever it likes.
+    missing = [path for path in paths if not path.exists()]
     assert not missing, (
         f"git listed {len(missing)} tracked path(s) under {anchor} that do not "
-        f"exist there, e.g. {missing[0]}. The index being read is not this "
-        "checkout's -- an inherited GIT_DIR or a misdirected -C, either of which "
-        "silently shrinks every oracle in this file"
+        f"exist there, e.g. {missing[0]}. Either the index being read is not this "
+        "checkout's -- an inherited GIT_DIR or a misdirected -C -- or this is a "
+        "sparse/partial checkout, which this oracle does not support because it "
+        "cannot tell an intentionally-absent file from a missing one"
     )
     return paths
 

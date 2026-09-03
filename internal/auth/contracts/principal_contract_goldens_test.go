@@ -563,3 +563,79 @@ func TestRevisionRangeAgreesWithPython(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryAcceptedFixtureSurvivesAGoRoundTrip exercises the WRITE path, which
+// no golden fixture reaches.
+//
+// Every other test in this package feeds hand-written text through the READ
+// path. That is exactly how the schema's six-digit fractional-second cap
+// shipped with the reader fixed and the writer broken: encoding/json renders a
+// time.Time with RFC3339Nano, so a service stamping time.Now() emitted nine
+// digits and produced a document this package's own schema rejects. A contract
+// whose reference client cannot produce a conforming document is not a
+// contract anybody can implement.
+//
+// Re-marshalling each accepted fixture and re-validating the bytes is the
+// cheapest thing that covers the direction the corpus structurally cannot.
+func TestEveryAcceptedFixtureSurvivesAGoRoundTrip(t *testing.T) {
+	root := testRoot(t)
+	for _, entry := range loadManifest(t).Accept {
+		t.Run(entry.File, func(t *testing.T) {
+			principal, err := PrincipalFromWire(root, loadFixture(t, entry.File))
+			if err != nil {
+				t.Fatalf("reading: %v", err)
+			}
+			encoded, err := json.Marshal(principal)
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			var document any
+			if err := json.Unmarshal(encoded, &document); err != nil {
+				t.Fatalf("re-decoding what we emitted: %v", err)
+			}
+			if err := Validate(root, PrincipalSurface, document); err != nil {
+				t.Fatalf("this client emitted a document its own schema rejects: %v\n%s",
+					err, encoded)
+			}
+		})
+	}
+}
+
+// TestSubMicrosecondPrecisionIsTruncatedOnTheWire pins the writer at the
+// contract's declared resolution.
+//
+// time.Now() carries nanoseconds. Without the Timestamp type this emits nine
+// fractional digits and fails the schema; with it, the value is truncated to
+// microseconds — a declared lossy narrowing, not a silent repair, because the
+// contract states microsecond resolution and refusing would fail every caller
+// that stamps the current time. Truncation rather than rounding, so an instant
+// never moves FORWARD past an expiry it was already checked against.
+func TestSubMicrosecondPrecisionIsTruncatedOnTheWire(t *testing.T) {
+	root := testRoot(t)
+	principal, err := PrincipalFromWire(root, loadFixture(t, "valid-human-minimal.json"))
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	principal.IssuedAt = Timestamp{time.Date(2026, 9, 2, 23, 15, 0, 123456789, time.UTC)}
+	principal.ExpiresAt = Timestamp{time.Date(2026, 9, 2, 23, 25, 0, 500, time.UTC)}
+
+	encoded, err := json.Marshal(principal)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("re-decoding: %v", err)
+	}
+	if got := document["issued_at"]; got != "2026-09-02T23:15:00.123456Z" {
+		t.Errorf("issued_at = %v, want the nanoseconds truncated to six digits", got)
+	}
+	// 500ns is below microsecond resolution and truncates to nothing, which
+	// RFC3339Nano then omits entirely.
+	if got := document["expires_at"]; got != "2026-09-02T23:25:00Z" {
+		t.Errorf("expires_at = %v, want the sub-microsecond part truncated away", got)
+	}
+	if err := Validate(root, PrincipalSurface, document); err != nil {
+		t.Fatalf("truncated output still fails the schema: %v", err)
+	}
+}

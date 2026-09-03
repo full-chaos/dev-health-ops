@@ -130,6 +130,51 @@ func (r *Revision) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Timestamp is an RFC 3339 instant that MARSHALS within the contract.
+//
+// The schema caps fractional seconds at six digits, because Python's datetime
+// holds microseconds and Go's time.Time holds nanoseconds, and a value past
+// six digits means different instants in the two clients. Capping the schema
+// fixed the READER and left the WRITER broken: encoding/json renders a
+// time.Time with RFC3339Nano, so a service stamping time.Now() emitted nine
+// digits and produced a document THIS PACKAGE'S OWN SCHEMA REJECTS. Measured
+// before the fix:
+//
+//	Go emitted issued_at  = 2026-09-02T23:15:00.123456789Z   -> pattern violation
+//	Go emitted expires_at = 2026-09-02T23:25:00.0000005Z     -> pattern violation
+//
+// A contract whose reference client cannot produce a conforming document is
+// not a contract anybody can implement, and no golden fixture would have
+// caught it: every fixture is hand-written text that goes only through the
+// READ path. The round trip is the only place the write path is exercised.
+//
+// Marshalling TRUNCATES to microsecond resolution rather than refusing. That
+// is a deliberate lossy narrowing at a declared boundary, not a silent repair:
+// the contract states microsecond resolution, so precision below it is data
+// the wire format cannot carry, and refusing would fail every caller that
+// stamps time.Now(). Truncation rather than rounding, so a timestamp never
+// moves forward past an expiry it was checked against.
+type Timestamp struct{ time.Time }
+
+// MarshalJSON emits at most six fractional digits.
+func (t Timestamp) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.Time.Truncate(time.Microsecond).Format(time.RFC3339Nano))
+}
+
+// UnmarshalJSON accepts what the schema accepts; the schema is the gate.
+func (t *Timestamp) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return fmt.Errorf("timestamp %q is not RFC 3339: %w", raw, err)
+	}
+	t.Time = parsed
+	return nil
+}
+
 // Credential is the credential that authenticated a principal.
 //
 // Present because TRD section 2 principle 1 makes credential class part of
@@ -167,7 +212,7 @@ type Authentication struct {
 	// NOT Principal.IssuedAt: one authentication event can produce many
 	// resolved principal documents, and a step-up decision needs the age of
 	// the authentication rather than the age of this document.
-	AuthenticatedAt time.Time `json:"authenticated_at"`
+	AuthenticatedAt Timestamp `json:"authenticated_at"`
 	// Assurance is a NIST SP 800-63B level: aal1, aal2 or aal3.
 	Assurance string `json:"assurance"`
 }
@@ -184,8 +229,8 @@ type Delegation struct {
 	ActorPrincipalID string    `json:"actor_principal_id"`
 	DelegationID     string    `json:"delegation_id"`
 	Reason           string    `json:"reason"`
-	StartedAt        time.Time `json:"started_at"`
-	ExpiresAt        time.Time `json:"expires_at"`
+	StartedAt        Timestamp `json:"started_at"`
+	ExpiresAt        Timestamp `json:"expires_at"`
 	// PermittedActions is the bounded set this delegation may exercise.
 	// Empty means the delegation authorizes nothing by itself -- a real
 	// state, never "unrestricted".
@@ -239,11 +284,11 @@ type Principal struct {
 	PolicyRevision      Revision  `json:"policy_revision"`
 	GrantRevision       Revision  `json:"grant_revision"`
 	EntitlementRevision Revision  `json:"entitlement_revision"`
-	IssuedAt            time.Time `json:"issued_at"`
+	IssuedAt            Timestamp `json:"issued_at"`
 	// ExpiresAt is enforced by the relying party. ACP-ADR-03 removes the
 	// envelope's per-call TTL override outright: a security bound any call
 	// site may widen is not a bound.
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt Timestamp `json:"expires_at"`
 }
 
 // MaxDelegationDuration is ACP-ADR-03's bound on a delegated/impersonation
@@ -280,7 +325,7 @@ func checkDelegationBounds(chain []Delegation) error {
 		// it does not survive being silently relabelled.
 		if index > 0 {
 			previous := chain[index-1]
-			if hop.StartedAt.Before(previous.StartedAt) {
+			if hop.StartedAt.Before(previous.StartedAt.Time) {
 				return fmt.Errorf(
 					"%s: /actor_chain/%d starts at %s, before the preceding hop's %s; the "+
 						"chain is append-only and index zero is read as the originating "+
@@ -288,7 +333,7 @@ func checkDelegationBounds(chain []Delegation) error {
 					PrincipalSurface, index, hop.StartedAt.Format(time.RFC3339),
 					previous.StartedAt.Format(time.RFC3339))
 			}
-			if hop.ExpiresAt.After(previous.ExpiresAt) {
+			if hop.ExpiresAt.After(previous.ExpiresAt.Time) {
 				return fmt.Errorf(
 					"%s: /actor_chain/%d expires at %s, after the delegation it descends "+
 						"from (%s); a sub-delegation that outlives its parent is not bounded "+
@@ -297,13 +342,13 @@ func checkDelegationBounds(chain []Delegation) error {
 					previous.ExpiresAt.Format(time.RFC3339))
 			}
 		}
-		if !hop.ExpiresAt.After(hop.StartedAt) {
+		if !hop.ExpiresAt.After(hop.StartedAt.Time) {
 			return fmt.Errorf(
 				"%s: /actor_chain/%d expires_at (%s) is not after started_at (%s); a delegated "+
 					"session that ends before it begins is not a bounded session",
 				PrincipalSurface, index, hop.ExpiresAt.Format(time.RFC3339), hop.StartedAt.Format(time.RFC3339))
 		}
-		if duration := hop.ExpiresAt.Sub(hop.StartedAt); duration > MaxDelegationDuration {
+		if duration := hop.ExpiresAt.Sub(hop.StartedAt.Time); duration > MaxDelegationDuration {
 			return fmt.Errorf(
 				"%s: /actor_chain/%d lasts %s, exceeding the %s bound ACP-ADR-03 sets for a "+
 					"delegated session (G-52 also requires it shorter than the base session). "+
@@ -364,10 +409,10 @@ func (p *Principal) RealActorPrincipalID() string {
 // delegated session be strictly shorter than the base session: a bound that
 // relies on an invariant it does not check is only a bound while the
 // invariant holds.
-func (p *Principal) EffectiveDeadline() time.Time {
+func (p *Principal) EffectiveDeadline() Timestamp {
 	deadline := p.ExpiresAt
 	for _, hop := range p.ActorChain {
-		if hop.ExpiresAt.Before(deadline) {
+		if hop.ExpiresAt.Before(deadline.Time) {
 			deadline = hop.ExpiresAt
 		}
 	}

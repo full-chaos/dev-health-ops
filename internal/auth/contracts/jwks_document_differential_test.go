@@ -479,10 +479,53 @@ func generateJWKSDocuments(t *testing.T, count int) []jwksDifferentialCase {
 	return cases
 }
 
+// independentlyDerivedLowercaseFolds returns every spelling of a declared name
+// that is ENTIRELY LOWERCASE and still folds to it, walking unicode.SimpleFold
+// directly.
+//
+// Directly, and not via foldVariantsOf or lowercaseFoldVariantsOf, because this
+// is the expectation the generator's coverage is measured against: an
+// expectation computed from the code it checks cannot fail, and an earlier
+// version of this floor was exactly that.
+//
+// The population is {keyſ, uſe} and cannot grow -- U+212A never contributes,
+// being uppercase. See the note at the floor.
+func independentlyDerivedLowercaseFolds() []string {
+	var out []string
+	for _, declared := range declaredMemberNames {
+		runes := []rune(declared)
+		for i, r := range runes {
+			for _, f := range foldCycle(r) {
+				candidate := make([]rune, len(runes))
+				copy(candidate, runes)
+				candidate[i] = f
+				if v := string(candidate); v == strings.ToLower(v) && v != declared {
+					out = append(out, v)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T) {
 	root := testRoot(t)
 	dir := t.TempDir()
 	cases := generateJWKSDocuments(t, 2000)
+
+	// Derived BEFORE the loop because the coverage counter is gated on it, and
+	// derived from unicode.SimpleFold rather than from the generator's helpers
+	// so the gate cannot move with the code it measures.
+	expectedSpellings := independentlyDerivedLowercaseFolds()
+	if len(expectedSpellings) == 0 {
+		t.Fatal("no lowercase fold spelling exists for any declared name; the fold axis has " +
+			"collapsed and every per-spelling assertion below is vacuous")
+	}
+	expectedSet := map[string]bool{}
+	for _, sp := range expectedSpellings {
+		expectedSet[sp] = true
+	}
 
 	var (
 		agree             int
@@ -518,8 +561,22 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 
 		// Per-SPELLING coverage, so the fold axis cannot decay one spelling at
 		// a time behind an aggregate that stays healthy.
+		// GATED ON THE INDEPENDENTLY DERIVED SET, NOT ON THE PREDICATE.
+		//
+		// This counter measures GENERATION, and its floor's message blames the
+		// generator. Gating it on foldsToADeclaredName -- the predicate under
+		// test -- made that message a lie in the one case it matters: revert the
+		// predicate and both spellings report "appeared 0 times ... stops being
+		// generated", when they were generated and the predicate stopped
+		// recognising them. Right failure, wrong component named, and a reader
+		// chasing round 3's recurrence would open the generator instead of the
+		// predicate.
+		//
+		// Found by lane-auth-wave1 applying this lane's own rule to this lane's
+		// own counter. Nothing was masked -- the undeclared-narrowing assertion
+		// fires too -- so this is diagnosis rather than coverage.
 		anyMemberName(c.document, func(name string) bool {
-			if name == strings.ToLower(name) && foldsToADeclaredName(name) {
+			if expectedSet[name] {
 				byFoldSpelling[name]++
 			}
 			return false
@@ -668,24 +725,6 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 	// break anywhere in foldVariantsOf or lowercaseFoldVariantsOf leaves this
 	// list intact and the floor fires.
 	const perSpellingFloor = 5
-	var expectedSpellings []string
-	for _, declared := range declaredMemberNames {
-		runes := []rune(declared)
-		for i, r := range runes {
-			for _, f := range foldCycle(r) {
-				candidate := make([]rune, len(runes))
-				copy(candidate, runes)
-				candidate[i] = f
-				if v := string(candidate); v == strings.ToLower(v) && v != declared {
-					expectedSpellings = append(expectedSpellings, v)
-				}
-			}
-		}
-	}
-	if len(expectedSpellings) == 0 {
-		t.Fatal("no lowercase fold spellings exist for the declared names; the fold axis has " +
-			"collapsed and every assertion about it below is vacuous")
-	}
 	for _, spelling := range expectedSpellings {
 		if byFoldSpelling[spelling] < perSpellingFloor {
 			t.Errorf("fold spelling %q appeared %d times, want at least %d. A spelling that stops "+

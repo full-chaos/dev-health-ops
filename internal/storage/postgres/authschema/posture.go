@@ -35,11 +35,16 @@ import (
 // grants reaching the role through an inheritable membership, so all three
 // stop being separate cases that have to be thought of.
 type Violation struct {
-	Kind      string // relation | sequence | function | schema | database | default_acl | ownership
+	Kind      string // relation | sequence | function | schema | database | default_acl | ownership | role_membership
 	Schema    string
 	Object    string
 	Privilege string
 	Detail    string
+	// SystemRole marks a membership in a role the SERVER defines (OID below
+	// systemRoleOIDBoundary). Those are detectors rather than context, because
+	// they confer capability outside the object-privilege model that no
+	// has_*_privilege check can observe.
+	SystemRole bool
 }
 
 func (v Violation) String() string {
@@ -61,25 +66,24 @@ var ErrRuntimeRoleCanEscalate = fmt.Errorf(
 	"%w: the runtime role holds privileges the manifest does not declare", ErrMigrationFailed,
 )
 
-// privilegedPredefinedRoles is PostgreSQL's own set of roles that confer
-// capabilities OUTSIDE the object-privilege model — filesystem and program
-// execution, and unrestricted reads. `has_*_privilege` cannot see any of them,
-// so membership is the only observable.
+// systemRoleOIDBoundary is PostgreSQL's own dividing line: every object with an
+// OID below FirstNormalObjectId was created by initdb, so every ROLE below it
+// is one the server defines rather than one an operator created.
 //
-// This is a CLOSED set defined by PostgreSQL, which is what makes enumerating
-// it legitimate here when enumerating attack routes was not: the list cannot
-// silently grow behind our backs the way "ways to reach DDL" could. A future
-// PostgreSQL adding one is a version upgrade, visible in release notes.
-var privilegedPredefinedRoles = map[string]struct{}{
-	"pg_execute_server_program": {},
-	"pg_read_server_files":      {},
-	"pg_write_server_files":     {},
-	"pg_read_all_data":          {},
-	"pg_write_all_data":         {},
-	"pg_maintain":               {},
-}
+// This replaces a hand-written list of six predefined role names. That list was
+// the same defect this whole package exists to remove — a hand-written list
+// standing beside a source of truth — and it would have silently missed
+// `pg_signal_backend`, `pg_monitor`, `pg_checkpoint`, and whatever a future
+// PostgreSQL adds. Asking the catalog which roles the SERVER defines is the
+// closed-world form, and it cannot go stale on a version upgrade.
+//
+// Membership in any of them is a DETECTOR, not context: predefined roles
+// confer capability outside the object-privilege model, so no has_*_privilege
+// check can see the effect (codex round 3 executed `COPY ... TO PROGRAM`
+// through `pg_execute_server_program` while the posture reported nothing).
+const systemRoleOIDBoundary = 16384
 
-// systemSchemaFilter excludes the catalogs, which every role can read and
+// systemSchemaFilter excludes the catalogs// systemSchemaFilter excludes the catalogs, which every role can read and
 // which no manifest describes.
 const systemSchemaFilter = `n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'`
 
@@ -176,7 +180,7 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 		return nil, err
 	}
 	for _, membership := range memberships {
-		if _, privileged := privilegedPredefinedRoles[membership.Object]; privileged {
+		if membership.SystemRole {
 			violations = append(violations, membership)
 		}
 	}
@@ -186,7 +190,7 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 		// privileges does not tell an operator WHY, and "REVOKE the
 		// membership" is one statement where revoking ninety grants is not.
 		for _, membership := range memberships {
-			if _, privileged := privilegedPredefinedRoles[membership.Object]; !privileged {
+			if !membership.SystemRole {
 				violations = append(violations, membership)
 			}
 		}
@@ -588,11 +592,11 @@ func ownershipViolations(ctx context.Context, conn *pgx.Conn, options Options) (
 // for a failure the effective-privilege checks already found.
 func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
 	rows, err := conn.Query(ctx, `
-		SELECT r.rolname
+		SELECT r.rolname, (r.oid < $2) AS system_role
 		FROM pg_auth_members m
 		JOIN pg_roles r ON r.oid = m.roleid
 		WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = $1)
-		ORDER BY r.rolname`, options.RuntimeRole)
+		ORDER BY r.rolname`, options.RuntimeRole, int32(systemRoleOIDBoundary))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading role memberships", ErrMigrationFailed)
 	}
@@ -601,24 +605,26 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options) ([]Vi
 	var context []Violation
 	for rows.Next() {
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		var systemRole bool
+		if err := rows.Scan(&name, &systemRole); err != nil {
 			return nil, fmt.Errorf("%w: reading a role membership", ErrMigrationFailed)
 		}
 		detail := fmt.Sprintf(
 			"likely cause of the privileges above; remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
 		)
-		if _, privileged := privilegedPredefinedRoles[name]; privileged {
+		if systemRole {
 			// Not "the cause of the privileges above" — there are none. That
 			// is the whole point: a predefined role confers capability
 			// OUTSIDE the object-privilege model, so nothing else in this
 			// report will mention it.
 			detail = fmt.Sprintf(
-				"privileged predefined role: confers capability no object-privilege check can see; "+
+				"server-defined role: confers capability no object-privilege check can see; "+
 					"remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
 			)
 		}
 		context = append(context, Violation{
-			Kind: "role_membership", Object: name, Privilege: "MEMBER", Detail: detail,
+			Kind: "role_membership", Object: name, Privilege: "MEMBER",
+			Detail: detail, SystemRole: systemRole,
 		})
 	}
 	if err := rows.Err(); err != nil {

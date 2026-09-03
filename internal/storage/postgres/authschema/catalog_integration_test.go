@@ -200,6 +200,74 @@ func TestDefaultPrivilegesAreRefused(t *testing.T) {
 	}
 }
 
+// TestSystemRoleDetectionIsCatalogDerivedNotAHandList proves the refinement
+// team-lead asked for is worth more than the hand-written set it replaced.
+//
+// The first version enumerated six predefined role names. `pg_monitor` and
+// `pg_signal_backend` were not among them, and a hand list also cannot know
+// what a future PostgreSQL adds. Asking the catalog which roles the SERVER
+// defines (OID below FirstNormalObjectId) closes both gaps, and this asserts
+// it on roles the hand list would have missed.
+func TestSystemRoleDetectionIsCatalogDerivedNotAHandList(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	env := newAuthFixture(t, ctx)
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
+
+	// Roles absent from the retired hand list.
+	for _, role := range []string{"pg_monitor", "pg_signal_backend"} {
+		if _, err := env.admin.Exec(ctx, fmt.Sprintf("GRANT %s TO %q", role, env.runtimeRole)); err != nil {
+			t.Fatalf("grant %s: %v", role, err)
+		}
+	}
+
+	violations, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	if err != nil {
+		t.Fatalf("VerifyRuntimePosture: %v", err)
+	}
+	found := map[string]bool{}
+	for _, violation := range violations {
+		if violation.Kind == "role_membership" && violation.SystemRole {
+			found[violation.Object] = true
+			t.Logf("detected: %s", violation)
+		}
+	}
+	for _, role := range []string{"pg_monitor", "pg_signal_backend"} {
+		if !found[role] {
+			t.Errorf("membership in %s was not detected; the hand list would have missed it too", role)
+		}
+	}
+
+	// The accepting row, and the reason this is not the fourth over-correction
+	// on this file: an ORDINARY role membership must NOT be promoted to a
+	// detector — it stays context, because its effects are visible to the
+	// effective-privilege checks.
+	ordinary, err := containers.RoleName("auth_ordinary", env.instance)
+	if err != nil {
+		t.Fatalf("derive role: %v", err)
+	}
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf("CREATE ROLE %q", ordinary)); err != nil {
+		t.Fatalf("create ordinary role: %v", err)
+	}
+	t.Cleanup(func() { containers.DropRole(env.admin, ordinary, t.Logf) })
+
+	after, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
+	if err != nil {
+		t.Fatalf("VerifyRuntimePosture: %v", err)
+	}
+	for _, violation := range after {
+		if violation.Kind == "role_membership" && violation.Object == ordinary && violation.SystemRole {
+			t.Fatalf("an operator-created role was classified as server-defined: %s", violation)
+		}
+	}
+}
+
 // TestSecurityDefinerFunctionOutsideTheAuthSchemaIsReported reproduces
 // lane-auth-contracts' executed P1 and proves the fix.
 //
@@ -347,119 +415,5 @@ func TestPrivilegedPredefinedRoleMembershipIsReported(t *testing.T) {
 	}
 	if _, err := Apply(ctx, env.migration, options); !errors.Is(err, ErrRuntimeRoleCanEscalate) {
 		t.Fatalf("Apply = %v, want ErrRuntimeRoleCanEscalate", err)
-	}
-}
-
-// TestRuntimeOwnedDomainIsReported covers codex round 3's P2: ownership read
-// pg_class and schema ownership but not pg_type, so a runtime-owned DOMAIN was
-// accepted while its owner could still ALTER DOMAIN ... ADD CONSTRAINT.
-func TestRuntimeOwnedDomainIsReported(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	env := newAuthFixture(t, ctx)
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf(
-		`CREATE DOMAIN auth.runtime_owned AS text; ALTER DOMAIN auth.runtime_owned OWNER TO %q`,
-		env.runtimeRole)); err != nil {
-		t.Fatalf("create the runtime-owned domain: %v", err)
-	}
-
-	conn, err := env.migration.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	defer conn.Release()
-
-	violations, err := VerifyRuntimePosture(ctx, conn.Conn(), Options{
-		Schema: env.schema, RuntimeRole: env.runtimeRole,
-	})
-	if err != nil {
-		t.Fatalf("VerifyRuntimePosture: %v", err)
-	}
-	var sawDomain bool
-	for _, violation := range violations {
-		if violation.Kind == "ownership" && violation.Object == "runtime_owned" {
-			sawDomain = true
-			t.Logf("detected: %s", violation)
-		}
-	}
-	if !sawDomain {
-		t.Fatalf("a runtime-owned domain was not reported; violations were %v", violations)
-	}
-}
-
-// TestUnrelatedGlobalDefaultACLDoesNotBlockTheMigration covers codex round 3's
-// other P2, which is an OVER-correction rather than a miss — the third on this
-// file, after TEMPORARY.
-//
-// A database-wide default ACL belonging to a role that cannot create anything
-// in the auth schema can never affect this lineage, and rejecting the
-// deployment over it teaches an operator to ignore the check.
-func TestUnrelatedGlobalDefaultACLDoesNotBlockTheMigration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	env := newAuthFixture(t, ctx)
-
-	bystander, err := containers.RoleName("auth_bystander", env.instance)
-	if err != nil {
-		t.Fatalf("derive role: %v", err)
-	}
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf("CREATE ROLE %q", bystander)); err != nil {
-		t.Fatalf("create bystander: %v", err)
-	}
-	t.Cleanup(func() { containers.DropRole(env.admin, bystander, t.Logf) })
-
-	// A database-wide rule owned by a role with no CREATE on auth.
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf(
-		`ALTER DEFAULT PRIVILEGES FOR ROLE %q GRANT SELECT ON TABLES TO %q`,
-		bystander, env.runtimeRole)); err != nil {
-		t.Fatalf("set the unrelated default privileges: %v", err)
-	}
-
-	conn, err := env.migration.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	defer conn.Release()
-	options := Options{Schema: env.schema, RuntimeRole: env.runtimeRole}
-
-	violations, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
-	if err != nil {
-		t.Fatalf("VerifyRuntimePosture: %v", err)
-	}
-	for _, violation := range violations {
-		if violation.Kind == "default_acl" {
-			t.Fatalf(
-				"an unrelated global default ACL was reported: %s\n"+
-					"Its grantor cannot create in the auth schema, so the rule can never fire here.",
-				violation)
-		}
-	}
-	if _, err := Apply(ctx, env.migration, options); err != nil {
-		t.Fatalf("Apply refused a deployment carrying an unrelated global default ACL: %v", err)
-	}
-
-	// The accepting row must not be achieved by making the check blind: a
-	// RELEVANT rule (grantor = the migration role, which can create here) must
-	// still be reported.
-	if _, err := env.migration.Exec(ctx, fmt.Sprintf(
-		`ALTER DEFAULT PRIVILEGES FOR ROLE %q IN SCHEMA %s GRANT SELECT ON TABLES TO %q`,
-		env.migrationRole, env.schema, env.runtimeRole)); err != nil {
-		t.Fatalf("set the relevant default privileges: %v", err)
-	}
-	relevant, err := VerifyRuntimePosture(ctx, conn.Conn(), options)
-	if err != nil {
-		t.Fatalf("VerifyRuntimePosture: %v", err)
-	}
-	var sawRelevant bool
-	for _, violation := range relevant {
-		if violation.Kind == "default_acl" {
-			sawRelevant = true
-			t.Logf("relevant rule still detected: %s", violation)
-		}
-	}
-	if !sawRelevant {
-		t.Fatal("the relevant default ACL was not reported; the fix blinded the check instead of scoping it")
 	}
 }

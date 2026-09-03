@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"time"
 )
 
@@ -169,17 +172,200 @@ func TestDORALoadIncidentsRefusesAnUninjectedClock(t *testing.T) {
 	}
 }
 
-func TestConstructedExecutorsNeverTripTheClockGuard(t *testing.T) {
-	// The guard must be unreachable for a properly constructed executor,
-	// otherwise it would refuse real work. Both constructors set nowUTC on the
-	// only path returning a non-nil executor; this pins that directly rather
-	// than trusting the reading.
-	dora := &DORAExecutor{nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
-	if _, err := dora.nowOrRefuse(); err != nil {
-		t.Errorf("DORA with an injected clock refused: %v", err)
+// constructorConn answers exactly the two schema probes the constructors make
+// and returns a sentinel error for anything else.
+//
+// It does NOT embed the panicking driverConnStub's behaviour for Query and
+// QueryRow, because here reaching a later query is EXPECTED: the point is to
+// get a real executor past construction and then past the clock, and a panic
+// on the next query would be indistinguishable from the clock guard firing.
+type constructorConn struct {
+	driverConnStub
+	sortingKey string
+}
+
+var errStubExhausted = errors.New("stub: no canned answer for this query")
+
+func (conn constructorConn) Query(
+	_ context.Context, query string, _ ...any,
+) (chdriver.Rows, error) {
+	if strings.Contains(query, "system.columns") {
+		return &stubColumnRows{names: allCapacityRequiredColumns()}, nil
 	}
-	capacity := &CapacityExecutor{nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
-	if _, err := capacity.nowOrRefuse(); err != nil {
-		t.Errorf("capacity with an injected clock refused: %v", err)
+	return nil, errStubExhausted
+}
+
+func (conn constructorConn) QueryRow(
+	_ context.Context, query string, _ ...any,
+) chdriver.Row {
+	// Two DIFFERENT probes hit system.tables: DORA reads sorting_key to
+	// classify the ordering contract, capacity reads engine to confirm FINAL
+	// collapses anything. Answering both with one value made the capacity
+	// constructor refuse with the sorting key in the engine's place.
+	switch {
+	case strings.Contains(query, "sorting_key"):
+		return stubRow{value: conn.sortingKey}
+	case strings.Contains(query, "SELECT engine"):
+		// From the constant, so a marker change cannot leave this stub
+		// satisfying a check the production code no longer makes.
+		return stubRow{value: capacityReplacingEngineMarker + "(computed_at)"}
+	}
+	return stubRow{err: errStubExhausted}
+}
+
+// allCapacityRequiredColumns is derived from capacityTableRequirements rather
+// than hardcoded, so adding a required column cannot make this stub silently
+// stop satisfying the constructor it exists to get past.
+func allCapacityRequiredColumns() []string {
+	var names []string
+	for _, requirement := range capacityTableRequirements {
+		names = append(names, requirement.columns...)
+	}
+	return names
+}
+
+type stubColumnRows struct {
+	names []string
+	index int
+}
+
+func (rows *stubColumnRows) Next() bool { rows.index++; return rows.index <= len(rows.names) }
+func (rows *stubColumnRows) Scan(dest ...any) error {
+	target, ok := dest[0].(*string)
+	if !ok {
+		return errStubExhausted
+	}
+	*target = rows.names[rows.index-1]
+	return nil
+}
+func (rows *stubColumnRows) ScanStruct(any) error               { return errStubExhausted }
+func (rows *stubColumnRows) ColumnTypes() []chdriver.ColumnType { return nil }
+func (rows *stubColumnRows) Totals(...any) error                { return nil }
+func (rows *stubColumnRows) Columns() []string                  { return []string{"name"} }
+func (rows *stubColumnRows) Close() error                       { return nil }
+func (rows *stubColumnRows) Err() error                         { return nil }
+func (rows *stubColumnRows) HasData() bool                      { return len(rows.names) > 0 }
+
+type stubRow struct {
+	value string
+	err   error
+}
+
+func (row stubRow) Err() error { return row.err }
+func (row stubRow) Scan(dest ...any) error {
+	if row.err != nil {
+		return row.err
+	}
+	target, ok := dest[0].(*string)
+	if !ok {
+		return errStubExhausted
+	}
+	*target = row.value
+	return nil
+}
+func (row stubRow) ScanStruct(any) error { return errStubExhausted }
+
+// TestTheRealConstructorsAssignAWorkingClock pins what the CONSTRUCTORS do.
+//
+// # WHY THIS REPLACED A TEST THAT LOOKED LIKE IT ALREADY DID
+//
+// The previous version built composite literals with nowUTC set by hand and
+// claimed in its comment to pin the constructors. It did not: it pinned that
+// nowOrRefuse returns the field when the field is set, which is the accessor's
+// behaviour. Nothing else covered the constructors either -- the refusal tests
+// build literals, and the two unit tests that DO call a constructor pass a nil
+// conn to assert refusal, so they return (nil, err) and never yield an
+// executor whose clock could be inspected. Every call that built a real
+// executor was behind //go:build integration.
+//
+// The consequence was specific and worse than the gap it left. Deleting
+// `nowUTC:` from either constructor's struct literal left the whole unit suite
+// green while production refused EVERY partition of that kind -- the refusal
+// this file adds converts a latent nil-panic into a total outage, and no unit
+// test could see it. Making a failure mode more severe while removing nothing
+// from its blast radius is the one outcome a guard must not have.
+//
+// Found in peer review (3092). The comment was the load-bearing part: it told
+// the next reader the constructors were covered, which is exactly why nobody
+// would look again.
+func TestTheRealConstructorsAssignAWorkingClock(t *testing.T) {
+	// Resolved from the environment rather than assumed, so the stub agrees
+	// with whatever contract this process is configured for.
+	contract, err := ConfiguredOperationalOrderingContract()
+	if err != nil {
+		t.Fatalf("resolve ordering contract: %v", err)
+	}
+	sortingKey := legacySortingKey
+	if contract == OperationalOrderingRevision {
+		sortingKey = revisionSortingKey
+	}
+	conn := constructorConn{sortingKey: sortingKey}
+	ctx := context.Background()
+
+	t.Run("DORA", func(t *testing.T) {
+		executor, err := NewDORAExecutor(ctx, conn, nil)
+		if err != nil {
+			t.Fatalf("construct: %v", err)
+		}
+		if _, err := executor.nowOrRefuse(); err != nil {
+			t.Fatalf("the constructor did not assign a clock: %v", err)
+		}
+		assertPartitionReachesPastTheClock(t, func() error {
+			scope, marshalErr := json.Marshal(map[string]any{
+				"version": 1, "day": "2026-08-22", "backfill_days": 1,
+				"sink": "clickhouse", "interval": "daily",
+			})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			_, err := executor.ComputePartition(ctx,
+				Run{ID: "r", OrganizationID: "org", Family: "dora"},
+				Partition{ID: "p", RunID: "r", Scope: scope})
+			return err
+		})
+	})
+
+	t.Run("Capacity", func(t *testing.T) {
+		executor, err := NewCapacityExecutor(ctx, conn, nil)
+		if err != nil {
+			t.Fatalf("construct: %v", err)
+		}
+		if _, err := executor.nowOrRefuse(); err != nil {
+			t.Fatalf("the constructor did not assign a clock: %v", err)
+		}
+		seed := int64(7)
+		assertPartitionReachesPastTheClock(t, func() error {
+			scope, marshalErr := json.Marshal(map[string]any{
+				"version": 1, "history_days": 90, "simulations": 200,
+			})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			_, err := executor.ComputePartition(ctx,
+				Run{ID: "r", OrganizationID: "org", Family: "capacity", Seed: &seed},
+				Partition{ID: "p", RunID: "r", Scope: scope})
+			return err
+		})
+	})
+}
+
+// assertPartitionReachesPastTheClock drives a real partition and requires that
+// whatever stopped it was NOT the clock guard.
+//
+// Asserting only that nowOrRefuse succeeds would leave the end-to-end path
+// unpinned: a constructor could assign the clock while some later edit made
+// ComputePartition consult a different, unset one. The run is expected to fail
+// at the stub's first unanswered query -- that is the proof it got past the
+// clock, since the clock guard returns an error rather than reaching a query.
+func assertPartitionReachesPastTheClock(t *testing.T, run func() error) {
+	t.Helper()
+	err := mustNotPanic(t, run)
+	if errors.Is(err, errExecutorClockUnset) {
+		t.Fatalf("a CONSTRUCTED executor refused its own clock: %v", err)
+	}
+	if !errors.Is(err, errStubExhausted) {
+		t.Fatalf("expected the run to reach the stub's first unanswered query, "+
+			"got %v -- if this is nil the partition somehow completed, and the "+
+			"test is no longer proving the clock was reached", err)
 	}
 }

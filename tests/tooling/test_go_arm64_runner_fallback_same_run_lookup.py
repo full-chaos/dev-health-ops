@@ -77,6 +77,17 @@ def _wait_step_script() -> str:
     return script
 
 
+# Anchors that mean "a new shell command starts right here": the physical
+# start of the line (optionally indented), or right after one of the real
+# command separators `;`, `&`, `|`, a backtick opening old-style command
+# substitution, or -- checked as its own two-character token, not a bare
+# `(` -- `$(` opening a MODERN command substitution. A bare `(` is
+# deliberately EXCLUDED: this script's own prose uses it for plain English
+# parentheticals (`"...(gh api kept failing)..."` inside an echo string),
+# which a bare-`(` anchor would wrongly count as a subshell open.
+_GH_API_INVOCATION = re.compile(r"(?:\A\s*|[;&|`]\s*|\$\(\s*)gh\s+api\b")
+
+
 def _the_gh_api_line(script: str) -> str:
     """The one physical line that actually performs the API request.
 
@@ -91,28 +102,43 @@ def _the_gh_api_line(script: str) -> str:
     go.yml/runs -f "${field_name}=${GITHUB_SHA}"` call (a genuine cross-run
     search, `field_name` holding the literal text `head_sha` only through a
     variable, so it never appears as the substring `head_sha=`) satisfied
-    all three of the old whole-script checks. Scoping every check to the
-    single line that actually invokes `gh api` closes this: a same-run
-    string not on that line no longer counts, and the real request's own
-    URL is what gets checked, not a decoy elsewhere in the script.
+    all three of the old whole-script checks. Round 1's OWN fix (a regex
+    requiring `gh api` followed by `"` or `--`) was ITSELF found wrong in
+    round 2: it matched an `echo 'gh api "..."'` DECOY (the quoted text
+    happens to match the regex as a bare substring) while missing the real
+    `gh api -X GET ...` call entirely (`-X` matches neither `"` nor `--`) --
+    the exact same class of bug one level in.
 
-    Matches on `gh api` followed by a quote or a `--` flag (how every real
-    invocation is shaped: `gh api "repos/...` or `gh api --method GET
-    "repos/...`) rather than a bare substring search -- this script's own
-    COMMENTS mention "gh api" repeatedly (documenting past incidents), and
-    its error messages mention "(gh api kept failing)" in prose, both of
-    which would otherwise inflate the match count and mask the one real
-    invocation entirely. Verified against this exact script: a bare
-    substring search matches 10 lines (comments + prose); this pattern
-    matches exactly the 1 real invocation.
+    Tried `shlex`-based command-position tokenization next (the same fix
+    that works for the inner-timeout guard's `go test` line) -- it FAILS on
+    THIS script's actual production line, `if raw="$(gh api "repos/..."
+    2>/dev/null)"; then`: the nested double-quotes around the command
+    substitution's own argument are not valid POSIX quoting `shlex`
+    understands (bash reopens quoting context inside `$(...)`; `shlex` has
+    no such concept), so it merges `gh`, `api`, and everything after into
+    ONE token attached to `raw=$(...`, and word-position 0/1 are never
+    `["gh", "api"]` at all. A real script's own idiom broke the
+    "more correct" fix, so tokenization was abandoned for an ANCHORED
+    regex instead: `gh api` counts only when the two words are immediately
+    preceded (module leading whitespace) by a genuine command-starting
+    context (line start, `;`, `&`, `|`, backtick, or `$(`) -- never a bare
+    `(` (this script's own prose uses plain parentheses,
+    `"...(gh api kept failing)..."`, which must NOT count) and never a
+    quote character (the `echo` decoy's opening `'`). Comment lines
+    (`#...`) are excluded outright first, since this script's own
+    documentation-style backtick-quoting (`` `gh api` ``) would otherwise
+    satisfy the backtick anchor on prose, not code.
 
     Does NOT handle a `gh api` invocation split across a line continuation
     (`\\` at end of line) -- the production script has exactly one `gh api`
     call, on one physical line, today; a future multi-line form would need
     this widened, not silently miscounted.
     """
-    invocation_pattern = re.compile(r'gh api\s+(?:"|--)')
-    matches = [line for line in script.splitlines() if invocation_pattern.search(line)]
+    matches = [
+        line
+        for line in script.splitlines()
+        if not line.strip().startswith("#") and _GH_API_INVOCATION.search(line)
+    ]
     assert len(matches) == 1, (
         f"{WORKFLOW_PATH.name}: job {JOB_NAME!r} step {STEP_ID!r} has "
         f"{len(matches)} lines containing 'gh api', expected exactly 1 -- "
@@ -189,6 +215,31 @@ def test_guard_rejects_a_dead_decoy_beside_a_real_cross_run_call() -> None:
         "field_name=head_sha\n"
         'raw=$(gh api --method GET "repos/${GITHUB_REPOSITORY}'
         '/actions/workflows/go.yml/runs" -f "${field_name}=${GITHUB_SHA}")\n'
+    )
+    with pytest.raises(AssertionError, match="not a same-run"):
+        _assert_same_run_shaped(decoy_script)
+
+
+def test_guard_rejects_an_echo_decoy_beside_a_real_dash_x_invocation() -> None:
+    """codex round 2 (#2145, CHAOS-4906), reproduced as a permanent
+    regression: round 1's own fix (a regex requiring `gh api` followed by
+    `"` or `--`) was fooled by an `echo 'gh api "..."'` DECOY -- the
+    quoted text happens to satisfy the regex as a bare substring, even
+    though `echo` never invokes `gh api` at all -- while the REAL call,
+    shaped `gh api -X GET ...` (a flag the regex did not anticipate), went
+    completely undetected. The old regex matched exactly 1 line (the
+    decoy) and reported ITS same-run-shaped text as if it were the real
+    query, silently hiding that the actual request is the cross-run
+    `actions/runs?...` search below it.
+
+    The command-position fix tokenizes with `shlex.split`: `echo`'s quoted
+    argument is one opaque token, never `gh` in word position 0, so the
+    decoy is correctly never counted -- and the real `-X GET` call is
+    correctly counted regardless of which flag follows `api`."""
+    decoy_script = (
+        "echo 'gh api \"actions/runs/${GITHUB_RUN_ID}/jobs\" is what we call'\n"
+        'raw=$(gh api -X GET "repos/${GITHUB_REPOSITORY}'
+        '/actions/runs?head_sha=${GITHUB_SHA}")\n'
     )
     with pytest.raises(AssertionError, match="not a same-run"):
         _assert_same_run_shaped(decoy_script)

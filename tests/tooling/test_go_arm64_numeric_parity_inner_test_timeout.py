@@ -35,6 +35,7 @@ actually sits inside both outer caps.
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,48 @@ _STEP_NAME = "Run FMA bit-pattern goldens on real arm64"
 _GO_TEST_TIMEOUT = re.compile(r"go test\b[^\n]*?-timeout[ =](\S+)")
 
 
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _strip_line_continuation(line: str) -> str:
+    """Drop a trailing shell line-continuation backslash (an ODD number of
+    trailing backslashes means the last one escapes the newline; an EVEN
+    number means they escape each other and the line ends "clean") so
+    `shlex.split` doesn't raise on a real, multi-line "go test ... \\" /
+    "-run ... \\" / "| tee ..." invocation -- this repo's own go.yml wraps
+    its go test line exactly this way. `shlex.split` in posix mode treats a
+    trailing lone backslash as "escape the next character", and there is
+    none, which is a ValueError, not a token -- silently returning None for
+    every real multi-line invocation would be worse than stripping the
+    continuation marker for THIS line's own word-position check (the words
+    that matter -- `go`, `test`, an env-assignment prefix -- are never split
+    across the continuation)."""
+    stripped = line.rstrip()
+    trailing_backslashes = len(stripped) - len(stripped.rstrip("\\"))
+    if trailing_backslashes % 2 == 1:
+        return stripped[:-1]
+    return stripped
+
+
+def _leading_command_words(line: str, count: int) -> list[str] | None:
+    """The first `count` REAL command words on `line` (skipping leading
+    `KEY=value` env-var assignments), or None if the line does not
+    tokenize as shell (a comment, or something the shim doesn't need to
+    understand) or has fewer than `count` real words. Shared reasoning
+    with the F2 same-run guard's identical helper -- see
+    test_go_arm64_runner_fallback_same_run_lookup.py.
+    """
+    try:
+        tokens = shlex.split(_strip_line_continuation(line), comments=True)
+    except ValueError:
+        return None
+    while tokens and _ENV_ASSIGNMENT.match(tokens[0]):
+        tokens = tokens[1:]
+    if len(tokens) < count:
+        return None
+    return tokens[:count]
+
+
 def _the_go_test_line(script: str, job_name: str) -> str:
     """The one physical line that actually INVOKES `go test`.
 
@@ -65,20 +108,34 @@ def _the_go_test_line(script: str, job_name: str) -> str:
     invocation. Reproduced: a script whose only ACTUAL `go test` command has
     no `-timeout` at all, preceded by a comment line quoting the required
     form, made the old regex match the comment and report a value that was
-    never really there. Restricting the search to the line that is itself
-    an executable `go test` invocation (starts with `go test`, once leading
-    whitespace is stripped -- not `#...`, not `echo "...go test..."`)
-    closes this: a comment can say anything, it is never mistaken for code.
+    never really there. Round 1's fix (line stripped of leading whitespace
+    must literally start with the text "go test") was ITSELF found wrong in
+    round 2: an env-var-prefixed real invocation (`CI_STAGE=arm64 go test
+    ...`) does not start with "go test" and was MISSED, while a dead `if
+    false; then` branch's own `go test -timeout 8m ...` line (a physical
+    line that, on its own, does start with "go test") was WRONGLY accepted
+    as "the" real invocation -- the exact bug this helper exists to prevent,
+    one level in. Fixed by tokenizing with `shlex.split` and checking
+    COMMAND POSITION (word 0 literally `go`, word 1 literally `test`, after
+    stripping any leading env-var assignment) instead of a raw-text prefix
+    check. This also fixes what happens when BOTH a dead branch's `go test`
+    line and a real env-prefixed one are present: both now tokenize as
+    candidates, so the existing "assert exactly 1 match" below reports an
+    honest ambiguity instead of silently picking the wrong one -- a safe
+    loud failure, not a silent misdetection.
     """
     matches = [
-        line for line in script.splitlines() if line.strip().startswith("go test")
+        line
+        for line in script.splitlines()
+        if _leading_command_words(line, 2) == ["go", "test"]
     ]
     assert len(matches) == 1, (
         f"{WORKFLOW_PATH.name}: job {job_name!r} step {_STEP_NAME!r} has "
         f"{len(matches)} lines that are themselves a `go test` invocation "
-        "(stripped-leading-whitespace start), expected exactly 1 -- this "
-        "guard scopes its checks to THE line that actually runs the test; "
-        "update it (and this test) if the step now runs more than one"
+        "(command-position match, env-assignment prefix stripped), expected "
+        "exactly 1 -- this guard scopes its checks to THE line that "
+        "actually runs the test; update it (and this test) if the step now "
+        "runs more than one, or disambiguate a dead-branch decoy"
     )
     return matches[0]
 
@@ -177,4 +234,29 @@ def test_guard_rejects_a_timeout_mentioned_only_in_a_comment() -> None:
         "go test -mod=readonly -count=1 -json ./internal/jobs/... -run pattern\n"
     )
     with pytest.raises(AssertionError, match="has no `-timeout` flag"):
+        _assert_inner_timeout_shorter_than_cap(decoy_script, "fake-job", 10)
+
+
+def test_guard_rejects_a_timeout_decoy_inside_a_dead_branch() -> None:
+    """codex round 2 (#2145, CHAOS-4906), reproduced as a permanent
+    regression: round 1's own fix (a stripped-leading-whitespace
+    `startswith("go test")` check) was fooled by a dead `if false; then`
+    branch whose OWN `go test -timeout 8m ...` line, taken alone, still
+    starts with "go test" -- while the REAL invocation, prefixed with an
+    env-var assignment (`CI_STAGE=arm64 go test ...`), does NOT start with
+    "go test" and was silently missed entirely. `_the_go_test_line` picked
+    the dead branch's line as "the" one real invocation and reported ITS
+    timeout value, which was never actually enforced (the code never runs).
+
+    The command-position fix does not try to guess which of the two is
+    "real" -- it correctly recognizes BOTH as `go test` invocations
+    (env-assignment stripped, or none to strip) and therefore raises an
+    honest ambiguity error instead of silently picking the wrong one."""
+    decoy_script = (
+        "if false; then\n"
+        "  go test -timeout 8m ./internal/jobs/... -run pattern\n"
+        "fi\n"
+        "CI_STAGE=arm64 go test -timeout 8m ./internal/jobs/... -run pattern\n"
+    )
+    with pytest.raises(AssertionError, match="expected exactly 1"):
         _assert_inner_timeout_shorter_than_cap(decoy_script, "fake-job", 10)

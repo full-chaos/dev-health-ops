@@ -307,6 +307,34 @@ async def test_go_non_200_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fake_client.closed
 
 
+async def test_go_501_unsupported_provider_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the CHAOS-4977 codex round 1 #5 fix (Go side:
+    investment_explain_route.go's pre-stream 501 for a provider Python
+    supports but this Go port does not): the forwarder's existing
+    non-200 fallback must route this specific status/body combination
+    to Python exactly like any other non-200 -- no special-casing
+    needed on this side, and this test is the proof of that, not an
+    assumption."""
+    _enable(monkeypatch)
+    _patch_envelope_inputs_ok(monkeypatch)
+
+    async def _send(request):
+        return _FakeUpstream(501, [b'{"error": "unsupported_provider"}'])
+
+    fake_client = _FakeClient(_send)
+    monkeypatch.setattr(dispatcher_mod, "_build_http_client", lambda: fake_client)
+    result = await maybe_dispatch_investment_explain_to_go(
+        _make_request(),
+        current_user=_sample_user(),
+        llm_provider="anthropic",
+        force_refresh=False,
+    )
+    assert result is None
+    assert fake_client.closed
+
+
 # ---------------------------------------------------------------------------
 # streaming (the successful path)
 # ---------------------------------------------------------------------------

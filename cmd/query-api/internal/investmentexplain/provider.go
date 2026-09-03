@@ -124,6 +124,51 @@ func providerHasRequiredConfig(kind categorize.ProviderKind) bool {
 	}
 }
 
+// goUnsupportedButPythonKnownProviderKinds are provider kinds Python's
+// providers/__init__.py genuinely knows and can SERVE (a real, configured
+// credential completes a real request) but this Go port has no client
+// for at all -- goImplementedProviderKinds's complement within Python's
+// real known-provider set, MOCK/NONE excluded (those are legitimately
+// "no completion possible" on both planes, not a Go scope gap).
+//
+// Once this route's routeswitch is live, silently answering
+// "llm_unavailable" for one of these is a parity break, not an
+// acceptable narrower answer: Python would have served the request for
+// real. That is why this is a SEPARATE check from IsLLMAvailable, not a
+// widening of it -- team-lead ruling, CHAOS-4977 codex round 1's #5.
+//
+// #2189 (native Go Ollama support) is the one entry expected to move out
+// of this set once it lands in this branch's base -- re-check
+// goImplementedProviderKinds (providerkind.go) before assuming this set
+// is still accurate; it is NOT derived from that map automatically on
+// purpose, so a future Ollama port must touch both.
+var goUnsupportedButPythonKnownProviderKinds = map[categorize.ProviderKind]struct{}{
+	categorize.ProviderKindAnthropic: {},
+	categorize.ProviderKindGemini:    {},
+	categorize.ProviderKindQwen:      {},
+	categorize.ProviderKindOllama:    {},
+	categorize.ProviderKindLMStudio:  {},
+}
+
+// ResolveUnsupportedProviderKind resolves requestedProvider the same way
+// IsLLMAvailable/CompleteInvestmentMixExplanation do
+// (categorize.ResolveProviderKind) and reports whether the resolution is
+// a kind Python can genuinely serve but this port cannot. The caller (the
+// route handler) must answer with a distinct non-200 BEFORE any
+// streaming begins in that case, so the Python REST forwarder's own
+// non-200 fallback (investment_explain_dispatcher.py) routes the request
+// to Python's real completion instead of a wrong Go llm_unavailable
+// answer. A resolution error (nothing configured at all) is NOT this
+// case -- that is the ordinary llm_unavailable path, unchanged.
+func ResolveUnsupportedProviderKind(requestedProvider string) (categorize.ProviderKind, bool) {
+	kind, err := categorize.ResolveProviderKind(requestedProvider)
+	if err != nil {
+		return "", false
+	}
+	_, unsupported := goUnsupportedButPythonKnownProviderKinds[kind]
+	return kind, unsupported
+}
+
 // CompleteInvestmentMixExplanation resolves a provider for
 // requestedProvider/requestedModel and calls Complete with the
 // investment-mix-explanation request/response format

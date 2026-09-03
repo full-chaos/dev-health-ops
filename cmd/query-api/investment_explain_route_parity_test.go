@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 )
 
@@ -19,6 +22,24 @@ type unusedQueryClient struct{}
 
 func (unusedQueryClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	panic("unusedQueryClient.Query: no ClickHouse call expected for this request shape")
+}
+
+// emptyRowScanner and emptyRowsQueryClient answer every ClickHouse query
+// with zero rows -- used where a request shape genuinely does reach the
+// full ExplainInvestmentMix flow (unlike unusedQueryClient's request
+// shapes above) but this test only cares about the CODE PATH taken, not
+// the resulting data.
+type emptyRowScanner struct{}
+
+func (emptyRowScanner) Next() bool        { return false }
+func (emptyRowScanner) Scan(...any) error { return nil }
+func (emptyRowScanner) Err() error        { return nil }
+func (emptyRowScanner) Close() error      { return nil }
+
+type emptyRowsQueryClient struct{}
+
+func (emptyRowsQueryClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	return emptyRowScanner{}, nil
 }
 
 // TestIntFromAnyAcceptsNumericString regresses codex round 1's P1: a
@@ -143,3 +164,62 @@ type boomError struct{}
 func (boomError) Error() string { return "boom" }
 
 var errBoom = boomError{}
+
+// TestInvestmentExplainWorkHandlerRejectsUnsupportedProviderPreStream
+// regresses codex round 1's #5, ruled by team-lead as a required fix, not
+// a RISK-NOTES-only item: a request for a provider Python genuinely
+// supports (anthropic/gemini/qwen/ollama/lmstudio) but this Go port
+// cannot construct a client for must get a plain 501 BEFORE any
+// streaming begins -- not the normal streamed llm_unavailable body --
+// so the Python REST forwarder's own non-200 fallback routes the
+// request to Python's real completion instead of a wrong Go answer.
+func TestInvestmentExplainWorkHandlerRejectsUnsupportedProviderPreStream(t *testing.T) {
+	reader, err := investmentexplain.NewReader(unusedQueryClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=anthropic", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
+	}
+	body, _ := io.ReadAll(rec.Body)
+	want := `{"error": "unsupported_provider"}`
+	if string(body) != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+// TestInvestmentExplainWorkHandlerSupportedProviderStillStreams proves
+// the discriminating half: a provider this port DOES implement (or an
+// unresolvable one, which is the ordinary llm_unavailable case, not this
+// one) must NOT hit the pre-stream 501 -- it falls through to the normal
+// streaming path. Uses the mock provider, which resolves and streams
+// fast enough that no ClickHouse call ever fires before the LLM-
+// availability gate inside ExplainInvestmentMix short-circuits.
+func TestInvestmentExplainWorkHandlerSupportedProviderStillStreams(t *testing.T) {
+	reader, err := investmentexplain.NewReader(emptyRowsQueryClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code == http.StatusNotImplemented {
+		t.Fatalf("mock provider incorrectly hit the pre-stream 501 path")
+	}
+}

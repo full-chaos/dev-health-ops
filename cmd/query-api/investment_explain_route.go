@@ -308,6 +308,21 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
+		// A provider Python genuinely supports but this Go port cannot
+		// construct a client for (investmentexplain.
+		// ResolveUnsupportedProviderKind's own doc comment) must answer
+		// BEFORE any streaming begins -- a plain 501, not the normal
+		// streamed llm_unavailable body -- so the Python REST forwarder's
+		// non-200 fallback routes the request to Python's real completion
+		// instead of a wrong Go answer. Team-lead ruling, CHAOS-4977 codex
+		// round 1's #5.
+		if _, unsupported := investmentexplain.ResolveUnsupportedProviderKind(llmProvider); unsupported {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error": "unsupported_provider"}`))
+			return
+		}
+
 		writeKeepAliveJSON(r.Context(), w, func(ctx context.Context) ([]byte, error) {
 			explanation, err := reader.ExplainInvestmentMix(ctx, writer, investmentexplain.CompleteInvestmentMixExplanation, opts)
 			if err != nil {

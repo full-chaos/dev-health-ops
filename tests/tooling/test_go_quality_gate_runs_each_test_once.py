@@ -287,10 +287,6 @@ def test_the_parser_reads_the_whole_continuation_chain() -> None:
     )
 
 
-ORACLE_ENV_LITERAL = '"DEV_HEALTH_LIVE_PYTHON_ORACLES"'
-DECLARATION_WINDOW = 1500
-
-
 # Go prints a TOP-LEVEL result at column 0 and indents subtests beneath it:
 #
 #     --- PASS: TestOracle (0.00s)

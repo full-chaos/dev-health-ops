@@ -171,8 +171,23 @@ func Compare(corpus Corpus, adapter Adapter, enumerated map[string]string) []Dis
 			// Enumerated is still recorded so a reader can see an entry exists.
 			detail, differs := windowDiffers(testCase.Window, resolved)
 			if differs {
+				// Enumerable is FALSE: enumeration no longer suppresses this
+				// kind, and a field claiming suppressibility that nothing
+				// honours is a claim without enforcement.
+				//
+				// KNOWN LIMITATION, deliberately not fixed here. Suppressibility
+				// for a window difference really depends on its DIRECTION, which
+				// this Kind cannot express: a NARROWER window writes fewer rows
+				// than the reference (fail-closed, legitimately excusable), a
+				// WIDER one writes rows the reference never derives (the
+				// dangerous direction). windowDiffers returns on the first
+				// unequal bound and carries no notion of which way, so both
+				// arrive as the same Kind. Treating all of them as
+				// non-suppressible fails toward REPORTING, which is the safe
+				// default; distinguishing them needs the corpus to say whether
+				// narrower windows occur at all, and is its own change.
 				out = append(out, Disagreement{
-					Scope: key, Kind: KindWindowDiffers, Enumerable: true,
+					Scope: key, Kind: KindWindowDiffers, Enumerable: false,
 					Enumerated: isEnumerated, Detail: detail,
 				})
 				continue

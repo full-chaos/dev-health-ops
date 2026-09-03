@@ -99,6 +99,16 @@ var explicitCorpusPaths = map[string]string{
 	// /tmp/build_scope_parity_table.json, so no repo-relative constant exists to
 	// match -- but it takes --stdout and its corpus is committed beside it.
 	"generate_build_scope_parity_table.py": "build_scope_parity_table.json",
+	// Its corpus is a GO PACKAGE's testdata, so it lives beside the package that
+	// loads it rather than in tests/fixtures/ -- ordinary Go layout, and not
+	// something to bend for this guard. No Path(__file__)-relative declaration can
+	// name it, because the file is not beside the generator.
+	//
+	// Naming it here makes it GUARDED rather than excused: the ratchet's surface
+	// shrinks by one instead of the corpus being permitted to rot. The generator
+	// runs fine and takes --stdout, so excludedGenerators would be the wrong map
+	// (its self-check demands a missingModule).
+	"generate_scope_grammar_corpus.py": "../../internal/pythonparity/scopeparity/testdata/corpus_seed1.json",
 }
 
 func declaredOutputPath(source []byte) (string, bool) {
@@ -158,6 +168,28 @@ var excludedGenerators = map[string]struct {
 			"pins httpx==0.28.1 but not httpx2, so this raises ModuleNotFoundError",
 		missingModule: "httpx2",
 		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
+	},
+	// Runs fine against a full venv and fails in CI, which is the whole reason
+	// this map takes a missingModule rather than a bare name: the claim
+	// "cannot run" is only checkable against the closure it cannot run in.
+	//
+	// It imports the bridge's own `_scope_arguments` DELIBERATELY -- the corpus
+	// records what the reference admits, so reimplementing admission here would
+	// make the corpus agree with a copy of the bridge rather than the bridge.
+	// That import executes api/internal/__init__.py, which does
+	// `from .acr import router`, and acr.py:7 does `from limits import parse`.
+	//
+	// The generator keeps its --stdout flag, its corpus-aligned --count default
+	// and its explicitCorpusPaths entry, so the moment `limits` joins the closure
+	// this entry is deleted and the corpus is guarded with no other change.
+	"generate_scope_grammar_corpus.py": {
+		reason: "imports dev_health_ops.api.internal.worker_workgraph for the " +
+			"bridge's own scope admission; that package's __init__ imports " +
+			"api/internal/acr.py, which imports `limits`. The CI oracle closure " +
+			"is installed --no-deps and does not carry it, so this raises " +
+			"ModuleNotFoundError",
+		missingModule: "limits",
+		removeWhen:    "limits is added to ci/requirements-live-python-oracles.txt",
 	},
 }
 

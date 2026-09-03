@@ -9,8 +9,40 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # CHAOS-4946. `github.ref` as the non-PR fallback put EVERY main push in one
+  # group (they all resolve `refs/heads/main`), and `cancel-in-progress: true`
+  # then cancelled the running one. On a busy merge day that systematically
+  # cancels the INTRODUCING commit's own post-merge check.
+  #
+  # Measured by lane-3092 while verifying #2157 (run ids on the ticket):
+  # 025fc2241 (#2142's own push -- the commit that introduced the typecheck
+  # break), 81ec1a65b, and 71ff737ac (the FIX for that break) all had their
+  # Typecheck runs cancelled. A `workflow_dispatch` fired specifically to get a
+  # clean main read was cancelled by the same group, so the group defeated its
+  # own manual workaround.
+  #
+  # Combined with the paths filter below, the introducing PR was invisible
+  # TWICE: its PR run skipped the job, and its push run was cancelled. The break
+  # then surfaced on a later, unrelated PR -- so bisecting by "whose run went red
+  # first" blames the wrong author. That is how #2142's break was attributed.
+  #
+  # Same fix as #2149 applied to docker-images.yml: fall back to `github.sha`, so
+  # every distinct commit gets its OWN group and no two commits' checks can
+  # cancel each other; and scope `cancel-in-progress` to `pull_request`, where
+  # superseding a stale run is the behaviour we actually want. Post-merge
+  # verification of main is never superseded, because there is nothing newer
+  # that verifies THAT commit.
+  #
+  # NOT identical to #2149's key: that one has `github.event.inputs.ref ||`
+  # ahead of the sha, because docker-images.yml's workflow_dispatch DEFINES a
+  # `ref` input, so two dispatches from the same tip can build different refs
+  # and need separate groups. THIS workflow's workflow_dispatch defines no
+  # inputs at all, so `github.event.inputs.ref` is undefined here -- actionlint
+  # flags it as `property "ref" is not defined in object type {}`, and it would
+  # silently evaluate empty. Copying the sibling's key verbatim looked like
+  # consistency and was cargo-culting; the shapes differ because the triggers do.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

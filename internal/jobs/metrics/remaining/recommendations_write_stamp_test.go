@@ -518,3 +518,109 @@ func TestCancellationReportsTheInterruptionRatherThanATeamFailure(t *testing.T) 
 		t.Errorf("outcome reports %d teams, want 1", outcome.Teams)
 	}
 }
+
+// emptyRows is a valid, empty result set: no rows, no error.
+//
+// That is enough for the loader to build a zero-valued snapshot, which is
+// enough for the engine to emit a tombstone per rule -- so ComputeTeam SUCCEEDS
+// and the run carries records without needing a test seam to fabricate them.
+// The seam that used to do this was removed rather than guarded, because
+// guarding it meant importing `testing` into a package shipped in the worker
+// binary.
+type emptyRows struct{}
+
+func (emptyRows) Next() bool                         { return false }
+func (emptyRows) Scan(...any) error                  { return nil }
+func (emptyRows) ScanStruct(any) error               { return nil }
+func (emptyRows) ColumnTypes() []chdriver.ColumnType { return nil }
+func (emptyRows) Totals(...any) error                { return nil }
+func (emptyRows) Columns() []string                  { return nil }
+func (emptyRows) Close() error                       { return nil }
+func (emptyRows) Err() error                         { return nil }
+func (emptyRows) HasData() bool                      { return false }
+
+// loadingConn answers every loader query with an empty result and records the
+// context the WRITE was attempted on.
+type loadingConn struct {
+	driverConnStub
+	batch    *recordingBatch
+	prepared bool
+	// errAtCall is ctx.Err() sampled AT THE MOMENT of the call, not the
+	// context itself. ComputeOrg cancels its own bounded write context via
+	// stopWrite() as soon as the write returns, so a context stored here and
+	// inspected afterwards is cancelled either way -- and the test would fail
+	// against correct code. Sampling at the call is the only reading that
+	// answers "was the write executable when it was attempted".
+	errAtCall error
+}
+
+func (conn *loadingConn) Query(
+	_ context.Context, _ string, _ ...any,
+) (chdriver.Rows, error) {
+	return emptyRows{}, nil
+}
+
+func (conn *loadingConn) PrepareBatch(
+	ctx context.Context, query string, _ ...chdriver.PrepareBatchOption,
+) (chdriver.Batch, error) {
+	// Sampled at the call, not stored -- see errAtCall.
+	conn.errAtCall = ctx.Err()
+	conn.prepared = true
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return conn.batch, nil
+}
+
+// TestTheWriteContextIsDetachedFromCancellation pins the WithoutCancel decision
+// itself, rather than the rows it protects.
+//
+// # WHY THIS EXISTS AT UNIT LEVEL AT ALL
+//
+// The container test proves the end-to-end property: rows computed before an
+// interruption still land. This one is narrower and cheaper -- it asserts only
+// that the write is ATTEMPTED on a live context when the run was cancelled --
+// and it exists because the alternative was a production seam. Removing that
+// seam left every PERSISTED ROWS assertion behind `//go:build integration`, so
+// `go test ./...` stayed green with the detach removed. CI runs the integration
+// tag, so that was lost LOCAL feedback rather than a CI hole; this restores it
+// without putting `testing` into shipped code.
+//
+// No seam is needed because a valid EMPTY result set is enough: the loader
+// builds a zero snapshot, the engine emits a tombstone per rule, and the run
+// therefore carries records into the write with every team having succeeded.
+func TestTheWriteContextIsDetachedFromCancellation(t *testing.T) {
+	batch := &recordingBatch{}
+	conn := &loadingConn{batch: batch}
+	loader, err := NewRecommendationsLoader(conn, "org-1")
+	if err != nil {
+		t.Fatalf("new loader: %v", err)
+	}
+	executor := &RecommendationsExecutor{conn: conn, loader: loader}
+
+	// Cancelled BEFORE the run, so the write is guaranteed to be reached with
+	// the run in a cancelled state -- no timing, no hook, no successful-team
+	// choreography.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	outcome, err := executor.ComputeOrg(ctx, "org-1", time.Now().UTC(), 30, "1.0.0", "team-a")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("returned %v, want context.Canceled", err)
+	}
+	if !conn.prepared {
+		t.Fatal("the write was never ATTEMPTED — a cancelled run must still try " +
+			"to persist what it computed, on a context detached from the " +
+			"cancellation")
+	}
+	if conn.errAtCall != nil {
+		t.Errorf("the write was attempted on an ALREADY-CANCELLED context (%v); "+
+			"WithoutCancel is what makes the insert executable at all, so "+
+			"without it the rows are lost exactly when the run is torn down",
+			conn.errAtCall)
+	}
+	if outcome.RowsWritten == 0 {
+		t.Error("no rows written despite the team completing")
+	}
+}

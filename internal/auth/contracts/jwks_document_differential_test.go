@@ -242,8 +242,30 @@ const goodX = "ExamplePublicKeyForContractFixturesOnlyAAAA"
 // comment in the same statement) that neither of us would have hand-written.
 // Every known narrowing here is single-axis, so the pair that bites next is
 // likely a combination.
+// foldCursor drives the round-robin. Package-level and reset per generation so
+// a run is reproducible without a seed at all -- the fold axis is enumerated,
+// so there is nothing left for a seed to decide about it.
+var foldCursor int
+
+// lowercaseFoldVariantsOf keeps only spellings that remain entirely lowercase.
+//
+// These are the ONLY spellings that distinguish a correct Unicode-fold
+// predicate from an ASCII-case one, because a spelling containing an uppercase
+// or Kelvin character is caught by both. Round 3's first fix missed this and
+// its mutation stayed green.
+func lowercaseFoldVariantsOf(name string) []string {
+	var out []string
+	for _, v := range foldVariantsOf(name) {
+		if v == strings.ToLower(v) && v != name {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func generateJWKSDocuments(t *testing.T, count int) []jwksDifferentialCase {
 	t.Helper()
+	foldCursor = 0
 	rng := rand.New(rand.NewSource(0x4930))
 
 	// MUTATE A VALID BASELINE rather than sampling every field independently.
@@ -388,42 +410,40 @@ func generateJWKSDocuments(t *testing.T, count int) []jwksDifferentialCase {
 		}},
 		{"upper-case-names", func(d map[string]any) map[string]any { return rename(d, strings.ToUpper) }},
 		{"unicode-folded-names-single-substitution", func(d map[string]any) map[string]any {
-			// ONE letter replaced by a fold-equivalent, chosen from the set
-			// unicode.SimpleFold actually defines rather than from code points
-			// anyone named. See jwks_fold_alphabet_test.go: the hand-picked
-			// U+017F/U+212A pair happened to be complete for these letters, and
-			// being right by luck is not a property that survives a Unicode
-			// table update.
+			// DETERMINISTIC ROUND-ROBIN, not a random draw.
 			//
-			// SINGLE substitution is its own row because a MIXED one hides the
-			// case that matters. Round 3's first fix folded every letter at
-			// once, producing names carrying a Kelvin K -- which is not
-			// lowercase, so the wrong ASCII-case predicate still matched them
-			// and the mutation stayed green. The distinguishing shape is a name
-			// left otherwise lowercase.
+			// Sampling a space smaller than the sample is a waste that costs
+			// coverage: lane-auth-wave1 measured their own grammar at 3267
+			// distinct statements sampled 3000 times WITH REPLACEMENT, covering
+			// 60% per run with the missing 40% chosen by the seed. The fold
+			// spellings here are a handful, so they are enumerated rather than
+			// drawn, and each one is emitted a bounded-below number of times.
+			//
+			// This also fixes the thin-coverage limit reported after the
+			// alphabet was derived: a random draw made lowercase-only spellings
+			// rare enough that the differential distinguished the correct
+			// predicate from the ASCII-case one by only 2 documents, and could
+			// have decayed to 0 silently. Round-robin makes that count a
+			// function of the corpus size rather than of luck.
 			return rename(d, func(name string) string {
-				variants := foldVariantsOf(name)
-				lowercaseOnly := variants[:0]
-				for _, v := range variants {
-					if v == strings.ToLower(v) && v != name {
-						lowercaseOnly = append(lowercaseOnly, v)
-					}
+				variants := lowercaseFoldVariantsOf(name)
+				if len(variants) == 0 {
+					return name
 				}
-				if len(lowercaseOnly) > 0 {
-					return lowercaseOnly[rng.Intn(len(lowercaseOnly))]
-				}
-				if len(variants) > 0 {
-					return variants[rng.Intn(len(variants))]
-				}
-				return name
+				v := variants[foldCursor%len(variants)]
+				foldCursor++
+				return v
 			})
 		}},
 		{"unicode-folded-names-any-variant", func(d map[string]any) map[string]any {
 			return rename(d, func(name string) string {
-				if v := foldVariantsOf(name); len(v) > 0 {
-					return v[rng.Intn(len(v))]
+				variants := foldVariantsOf(name)
+				if len(variants) == 0 {
+					return name
 				}
-				return name
+				v := variants[foldCursor%len(variants)]
+				foldCursor++
+				return v
 			})
 		}},
 		{"title-case-names", func(d map[string]any) map[string]any {
@@ -471,6 +491,7 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 		undeclaredCount   int
 		schemaLooserCount int
 		byPredicate       = map[string]int{}
+		byFoldSpelling    = map[string]int{}
 		schemaAccepts     int
 		consumerAccepts   int
 		undeclared        []string
@@ -494,6 +515,15 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 		schemaRefuses := Validate(root, JWKSSurface, decoded) != nil
 		_, consumerErr := authverify.NewEd25519JWKSVerifier(path).Keys()
 		consumerRefuses := consumerErr != nil
+
+		// Per-SPELLING coverage, so the fold axis cannot decay one spelling at
+		// a time behind an aggregate that stays healthy.
+		anyMemberName(c.document, func(name string) bool {
+			if name == strings.ToLower(name) && foldsToADeclaredName(name) {
+				byFoldSpelling[name]++
+			}
+			return false
+		})
 
 		if !schemaRefuses {
 			schemaAccepts++
@@ -606,6 +636,65 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 		if byPredicate[p.name] == 0 {
 			t.Errorf("no generated document exercised the client-enforced rule %q", p.name)
 		}
+	}
+
+	// EVERY LOWERCASE FOLD SPELLING MUST APPEAR, and appear more than once.
+	//
+	// The aggregate narrowing count cannot see a single spelling disappearing:
+	// with round-robin selection the others absorb it and the total barely
+	// moves. This is the same aggregate-versus-per-class distinction that
+	// produced round 2's finding, applied one level down -- there it was per
+	// predicate, here it is per spelling within one predicate.
+	//
+	// The floor is set from the measured distribution rather than chosen: with
+	// deterministic round-robin every spelling appears a similar number of
+	// times, so a spelling falling far below its peers means the enumeration
+	// stopped being exhaustive.
+	// THE EXPECTATION IS DERIVED INDEPENDENTLY OF THE GENERATOR'S HELPER.
+	//
+	// The first version built this list by calling lowercaseFoldVariantsOf --
+	// the very function the generator uses. A mutation that made that helper
+	// stop producing a spelling ALSO removed it from the expectation, so the
+	// assertion moved with the thing it was policing and the mutation stayed
+	// green. An expectation computed from the code under test cannot fail.
+	//
+	// This walks unicode.SimpleFold directly, the lowest-level primitive, so a
+	// break anywhere in foldVariantsOf or lowercaseFoldVariantsOf leaves this
+	// list intact and the floor fires.
+	const perSpellingFloor = 5
+	var expectedSpellings []string
+	for _, declared := range declaredMemberNames {
+		runes := []rune(declared)
+		for i, r := range runes {
+			for _, f := range foldCycle(r) {
+				candidate := make([]rune, len(runes))
+				copy(candidate, runes)
+				candidate[i] = f
+				if v := string(candidate); v == strings.ToLower(v) && v != declared {
+					expectedSpellings = append(expectedSpellings, v)
+				}
+			}
+		}
+	}
+	if len(expectedSpellings) == 0 {
+		t.Fatal("no lowercase fold spellings exist for the declared names; the fold axis has " +
+			"collapsed and every assertion about it below is vacuous")
+	}
+	for _, spelling := range expectedSpellings {
+		if byFoldSpelling[spelling] < perSpellingFloor {
+			t.Errorf("fold spelling %q appeared %d times, want at least %d. A spelling that stops "+
+				"being generated takes its coverage with it while the aggregate narrowing count "+
+				"barely moves",
+				spelling, byFoldSpelling[spelling], perSpellingFloor)
+		}
+	}
+	spellings := make([]string, 0, len(byFoldSpelling))
+	for k := range byFoldSpelling {
+		spellings = append(spellings, k)
+	}
+	sort.Strings(spellings)
+	for _, sp := range spellings {
+		t.Logf("  fold spelling %-10q emitted %4d times", sp, byFoldSpelling[sp])
 	}
 
 	names := make([]string, 0, len(byPredicate))

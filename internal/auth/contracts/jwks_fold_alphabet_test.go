@@ -123,6 +123,47 @@ func theFoldPredicateAsTheHarnessUsesIt(t *testing.T) func(map[string]any) bool 
 	return nil
 }
 
+// nonASCIIFoldsOf returns the non-ASCII code points that a fold spelling of
+// name can carry, derived from the SimpleFold walk itself so a floor built on
+// it cannot drift from the alphabet the generator uses.
+func nonASCIIFoldsOf(name string) []rune {
+	seen := map[rune]bool{}
+	var out []rune
+	for _, r := range name {
+		for _, f := range foldCycle(r) {
+			if f > unicode.MaxASCII && !seen[f] {
+				seen[f] = true
+				out = append(out, f)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// discriminatingFoldsOf returns spellings of name that are ENTIRELY LOWERCASE
+// and still fold to it.
+//
+// These are the only spellings that tell a correct Unicode-fold predicate apart
+// from round 3's ASCII-case one: any spelling containing an uppercase or Kelvin
+// character is matched by BOTH, so a floor satisfied by those protects nothing.
+//
+// U+212A KELVIN SIGN produces NONE of these -- it is not lowercase -- so the
+// discriminating subset is a property of U+017F alone here. A per-code-point
+// floor over this subset must therefore range over the code points that CAN
+// produce one, not over every non-ASCII fold, or it would demand the
+// impossible of Kelvin and fail permanently.
+func discriminatingFoldsOf(name string) []string {
+	var out []string
+	for _, v := range foldVariantsOf(name) {
+		if v == strings.ToLower(v) && v != name {
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing.T) {
 	// THE CHECK ROUND 3 SHOWED WAS MISSING, and the reason it was missing is
 	// worth more than the check.
@@ -142,6 +183,9 @@ func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing
 
 	var checked, folded int
 	byClass := map[string]int{}
+	// F2: what reached the RUNTIME COMPARISON, not what was generated.
+	comparedCodePoint := map[rune]int{}
+	comparedDiscriminating := map[string]int{}
 
 	for _, declared := range declaredMemberNames {
 		for _, variant := range foldVariantsOf(declared) {
@@ -162,6 +206,14 @@ func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing
 						variant, predicate, runtime)
 				}
 				folded++
+				for _, r := range variant {
+					if r > unicode.MaxASCII {
+						comparedCodePoint[r]++
+					}
+				}
+				if variant == strings.ToLower(variant) {
+					comparedDiscriminating[variant]++
+				}
 			} else if !predicateHolds(map[string]any{"keys": []any{map[string]any{variant: "v"}}}) {
 				t.Errorf("%q folds to the declared name %q and the predicate does not recognise it",
 					variant, declared)
@@ -188,22 +240,43 @@ func TestTheFoldPredicateIsVerifiedAgainstTheRuntimeNotItsDescription(t *testing
 		t.Fatal("no NON-ASCII fold code point appeared in any variant; the alphabet has " +
 			"collapsed to ASCII case and the class round 3 found is untested")
 	}
-	names := make([]string, 0, len(byClass))
-	for k := range byClass {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		if byClass[n] == 0 {
-			t.Errorf("fold code point %s generated zero variants", n)
+	// F1 WAS A TAUTOLOGY AND THIS REPLACES IT. The previous loop ranged over
+	// byClass's OWN KEYS and asserted each was non-zero -- but byClass is only
+	// ever written by `++`, which creates a key with value 1, so no key can
+	// hold zero and the loop could not fire. It read exactly like the
+	// per-code-point floor it was supposed to be. An expectation taken from the
+	// data it is checking asserts nothing; the expectation has to come from
+	// somewhere else.
+	//
+	// F2 IS WHAT THIS NOW ASSERTS. The floors below are on what reached the
+	// RUNTIME COMPARISON, not on what was generated. Without that, the two
+	// non-ASCII `keys` spellings could stop being produced while `checked`,
+	// `folded` and `byClass` all stayed green on the strength of ASCII variants
+	// and of OTHER declared names -- leaving the comparison running against
+	// ASCII case variants only, which is exactly the comparison that cannot
+	// tell EqualFold from round 3's ToLower.
+	for _, want := range nonASCIIFoldsOf("keys") {
+		if comparedCodePoint[want] == 0 {
+			t.Errorf("no `keys` spelling carrying U+%04X reached the runtime comparison; the "+
+				"check would be running on ASCII case variants alone, which cannot distinguish "+
+				"a Unicode-fold predicate from an ASCII-case one", want)
 		}
 	}
-	t.Logf("%d fold variants checked, %d compared against the runtime; non-ASCII classes: %v",
-		checked, folded, func() []string {
-			out := make([]string, 0, len(names))
-			for _, n := range names {
-				out = append(out, fmt.Sprintf("%s x%d", n, byClass[n]))
-			}
-			return out
-		}())
+	for _, want := range discriminatingFoldsOf("keys") {
+		if comparedDiscriminating[want] == 0 {
+			t.Errorf("the discriminating spelling %q never reached the runtime comparison; it is "+
+				"the only kind that tells the two predicates apart", want)
+		}
+	}
+	if len(discriminatingFoldsOf("keys")) == 0 {
+		t.Fatal("no discriminating spelling exists for `keys`; the alphabet has collapsed and " +
+			"the two floors above are vacuous")
+	}
+	t.Logf("%d fold variants checked, %d compared against the runtime", checked, folded)
+	for _, cp := range nonASCIIFoldsOf("keys") {
+		t.Logf("  U+%04X reached the comparison %d time(s)", cp, comparedCodePoint[cp])
+	}
+	for _, d := range discriminatingFoldsOf("keys") {
+		t.Logf("  discriminating %q reached the comparison %d time(s)", d, comparedDiscriminating[d])
+	}
 }

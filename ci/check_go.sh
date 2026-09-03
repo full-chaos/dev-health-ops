@@ -841,7 +841,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestPythonJSONGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
+        -run '^(TestPythonJSONGoldenMatchesLivePython|TestPythonJSONInsertionOrderGoldenMatchesLivePython|TestReprBandGoldenMatchesLivePython|TestEdgeShapesGoldenMatchesLivePython|TestWhitespaceGoldenMatchesLivePython|TestClickHouseStringDecodeGoldenMatchesLivePython|TestSumGoldenMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -857,6 +857,42 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/python-json-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: python json.dumps golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker again. It shares the band golden's producer but guards a
+  # DIFFERENT axis: string and token spellings rather than float rendering.
+  # Someone "fixing" the column with ensure_ascii=False or allow_nan=False would
+  # leave the band golden green, so a shared marker would let that through.
+  proof_file="${proof_dir}/evidence-json-edge-shapes-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json edge-shapes golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the only fixture here whose producer is the REAL
+  # APPLICATION PATH rather than a direct library call: it builds a
+  # Recommendation and calls recommendation_to_record, so its bytes come out of
+  # loader.py:448 itself. That makes it sensitive to a key added to or reordered
+  # in the evidence dict literal, a changed rounding depth at a `value=` site,
+  # or an EvidenceRef rename -- none of which the direct-json guards can see.
+  proof_file="${proof_dir}/evidence-json-repr-band-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: evidence_json repr-band golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for a producer that is neither a computation nor a
+  # dependency but a set of DEFAULT ARGUMENTS. json.dumps(value) with no
+  # sort_keys is a DIFFERENT reference from json.dumps(value, sort_keys=True)
+  # guarded above, and the two emit different bytes for the same data --
+  # recommendations/loader.py:448 writes the evidence_json column with the
+  # bare form. This marker is separate because a shared one would be satisfied
+  # by the sort_keys guard while this one was filtered out of -run, which is
+  # exactly the substitution that makes the two look interchangeable.
+  proof_file="${proof_dir}/python-json-insertion-order-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: python json.dumps insertion-order golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

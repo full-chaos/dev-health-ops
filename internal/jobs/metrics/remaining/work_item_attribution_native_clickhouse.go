@@ -136,7 +136,7 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	// org-wide: an org-wide run is already a superset of any closure it
 	// could compute.
 	if !scope.orgWide {
-		closureIDs, closureKeys, promoted, reason, err := executor.evaluateClosurePromotion(
+		closureSubjects, promoted, reason, err := executor.evaluateClosurePromotion(
 			ctx, orgID, affectedIDs, subjects, dependencies)
 		if err != nil {
 			return outcome, err
@@ -161,22 +161,15 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 			}
 			outcome.OrgWide, outcome.RepoIDs, outcome.ProjectKeys = true, nil, nil
 			outcome.ItemsSeen = len(subjects)
-		case len(closureIDs) > 0 || len(closureKeys) > 0:
-			// Below the promotion bound: the closure is still owed a
-			// rederive, so its subjects are loaded and merged into BOTH
-			// subjects (for LinkedIssue context) and affectedIDs (so
-			// BuildWorkItemAttributionRows actually WRITES them) -- a
-			// closure item is no longer treated the same as a donor pulled
-			// in only for context (see the affectedIDs doc comment above,
-			// which predates this ruling).
-			closureIDList := make([]string, 0, len(closureIDs))
-			for id := range closureIDs {
-				closureIDList = append(closureIDList, id)
-			}
-			closureSubjects, err := executor.loadDonorSubjects(ctx, orgID, closureIDList, closureKeys)
-			if err != nil {
-				return outcome, err
-			}
+		case len(closureSubjects) > 0:
+			// Below the promotion bound: the RESOLVED closure (already
+			// loaded by evaluateClosurePromotion, to size the promotion
+			// decision correctly -- see its doc comment) is still owed a
+			// rederive, so it's merged into BOTH subjects (for LinkedIssue
+			// context) and affectedIDs (so BuildWorkItemAttributionRows
+			// actually WRITES it) -- a closure item is no longer treated
+			// the same as a donor pulled in only for context (see the
+			// affectedIDs doc comment above, which predates this ruling).
 			for id, subject := range closureSubjects {
 				subjects[id] = subject
 				affectedIDs[id] = struct{}{}
@@ -831,32 +824,48 @@ func (executor *WorkItemAttributionExecutor) evaluateClosurePromotion(
 	affectedIDs map[string]struct{},
 	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
 	forwardDependencies []teamattribution.GithubWorkItemDerivationDependencyEdge,
-) (closureIDs map[string]struct{}, closureKeys []string, promoted bool, reason string, err error) {
+) (closureSubjects map[string]teamattribution.GithubWorkItemDerivationSubject, promoted bool, reason string, err error) {
 	forwardDonorIDs, forwardDonorKeys := workItemAttributionDonorTargets(forwardDependencies, subjects)
 	reverseSourceIDs, err := executor.loadInheritableDependencySourcesTargeting(ctx, orgID, affectedIDs)
 	if err != nil {
-		return nil, nil, false, "", err
+		return nil, false, "", err
 	}
 
-	closureIDs = make(map[string]struct{}, len(forwardDonorIDs)+len(reverseSourceIDs))
-	for _, id := range forwardDonorIDs {
-		closureIDs[id] = struct{}{}
-	}
-	for _, id := range reverseSourceIDs {
-		closureIDs[id] = struct{}{}
-	}
-	closureKeys = forwardDonorKeys
-	closureSize := len(closureIDs) + len(closureKeys)
+	closureIDList := make([]string, 0, len(forwardDonorIDs)+len(reverseSourceIDs))
+	closureIDList = append(closureIDList, forwardDonorIDs...)
+	closureIDList = append(closureIDList, reverseSourceIDs...)
 
+	if len(closureIDList) == 0 && len(forwardDonorKeys) == 0 {
+		return nil, false, "", nil
+	}
+
+	// Resolve BEFORE sizing: closureIDList/forwardDonorKeys are RAW
+	// candidates, not a proven closure -- an extkey with no matching synced
+	// item resolves to nothing (a dangling cross-provider reference must
+	// not inflate the count), and an ID and an extkey that both resolve to
+	// the SAME work item must not be double-counted. loadDonorSubjects'
+	// return is a map keyed by resolved work_item_id, so both cases
+	// collapse correctly by construction -- sizing on len(closureSubjects)
+	// (the actually-resolved set) rather than len(closureIDList)+len(forwardDonorKeys)
+	// (the raw candidate count) is what makes that collapse count for
+	// anything. Codex round 3's P2 finding: sizing on the raw counts let a
+	// single dangling extkey push a 4-item org over the 25% bound with a
+	// real closure of zero.
+	closureSubjects, err = executor.loadDonorSubjects(ctx, orgID, closureIDList, forwardDonorKeys)
+	if err != nil {
+		return nil, false, "", err
+	}
+	closureSize := len(closureSubjects)
 	if closureSize == 0 {
-		return closureIDs, closureKeys, false, "", nil
+		return closureSubjects, false, "", nil
 	}
+
 	total, err := executor.orgItemCount(ctx, orgID)
 	if err != nil {
-		return nil, nil, false, "", err
+		return nil, false, "", err
 	}
 	promoted, reason = workItemAttributionPromotionDecision(len(affectedIDs), closureSize, total)
-	return closureIDs, closureKeys, promoted, reason, nil
+	return closureSubjects, promoted, reason, nil
 }
 
 // workItemAttributionPromotionDecision is the PURE arithmetic half of

@@ -276,6 +276,74 @@ func TestWorkItemAttributionBelowThresholdReverseClosureUsesDonorEdge(t *testing
 	}
 }
 
+// TestWorkItemAttributionDanglingExtkeyDoesNotFalselyPromote is codex round
+// r3's P2 fix: a forward-hop closure candidate that is an UNRESOLVED
+// extkey (a cross-provider linked-issue reference with no matching synced
+// item -- a dangling reference) used to be counted as "+1" toward the
+// closure size before it was ever resolved, so a single dangling extkey
+// could push a small org over the 25% promotion bound even though the
+// REAL closure (the set of items that actually exist) was empty. Fixed by
+// sizing the promotion decision on the RESOLVED closure subject count
+// (evaluateClosurePromotion now calls loadDonorSubjects itself, before
+// deciding promotion, not after).
+//
+// Fixture: 4 items total (matching codex's own minimal repro exactly). A
+// is repo-owned (the only ownership change). A --relates_to--> extkey:MISSING-1,
+// a Linear/Jira-shaped cross-provider reference nothing in the org
+// actually has. With the bug, closureSize=1 (the raw key) against
+// affected=1/total=4 promotes (ratio 0.50); the real, resolved closure is
+// empty, so this must stay SCOPED.
+func TestWorkItemAttributionDanglingExtkeyDoesNotFalselyPromote(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionMigratedClickHouse(t, ctx)
+
+	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	executor, err := NewWorkItemAttributionExecutor(ctx, conn, writer)
+	if err != nil {
+		t.Fatalf("new executor: %v", err)
+	}
+
+	orgID := "org-danglingextkey-" + uuid.NewString()
+	repoX := uuid.New()
+	now := time.Now().UTC()
+
+	seedWorkItemAttributionItem(t, ctx, conn, orgID, "A", repoX, now)
+	seedWorkItemAttributionItem(t, ctx, conn, orgID, "C", uuid.Nil, now)
+	seedWorkItemAttributionItem(t, ctx, conn, orgID, "D", uuid.Nil, now)
+	seedWorkItemAttributionRepoOwnership(t, ctx, conn, orgID, repoX, "team-infra", now)
+	// A -> a cross-provider issue key nothing in the org actually has.
+	seedWorkItemAttributionDependency(t, ctx, conn, orgID, "A", "extkey:MISSING-1", "relates_to", now)
+
+	waitForWorkItemAttributionRepoFactVisible(t, ctx, conn, orgID)
+
+	outcome, err := executor.ComputeOrg(ctx, orgID)
+	if err != nil {
+		t.Fatalf("ComputeOrg: %v", err)
+	}
+	if outcome.OrgWide {
+		t.Fatalf("outcome.OrgWide = true, want a SCOPED run: the ONLY closure candidate is a "+
+			"dangling extkey with no matching item, so the REAL (resolved) closure is empty -- "+
+			"this is codex round r3's P2 finding, sizing the promotion decision on the raw "+
+			"unresolved candidate count instead of the resolved subject count (outcome=%+v)", outcome)
+	}
+
+	rows := queryWorkItemAttributionRows(t, ctx, conn, orgID)
+	written := map[string]bool{}
+	for _, row := range rows {
+		written[row.workItemID] = true
+	}
+	if !written["A"] {
+		t.Error("no attribution row for A, the originally affected item")
+	}
+	if written["C"] || written["D"] {
+		t.Error("C or D was written -- this should still be a SCOPED run, not org-wide, " +
+			"since the real closure is empty")
+	}
+}
+
 // TestDetectScopeCatchesFutureTeamMembershipActivation is codex round r2's
 // P1 fix: detectScope's org-wide trigger for team_memberships used to
 // compare only updated_at, the same future-activation gap the repo/project

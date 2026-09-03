@@ -54,7 +54,19 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 	// remote-DSN path has no such reaper, so this call is load-bearing
 	// there specifically. CHAOS-4902 r2 finding: this helper is called
 	// twice (once per test) and neither call was ever closed.
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	//
+	// The error IS checked (CHAOS-4902 r3 finding): a discarded `_ =` here
+	// would let a failed remote DROP DATABASE (remote.go's own "ORPHANED,
+	// drop failed" log line) pass silently -- logged under -v, but nothing
+	// fails the test, so an orphaned scratch database coexists with a
+	// green run. t.Error, not t.Fatal: cleanup runs after the test body
+	// has already determined its own pass/fail, so there is nothing left
+	// to abort into.
+	t.Cleanup(func() {
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close clickhouse instance: %v", err)
+		}
+	})
 	Apply(ctx, t, instance)
 
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)

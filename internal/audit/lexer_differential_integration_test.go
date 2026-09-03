@@ -138,6 +138,19 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	if dollarIdents < 100 {
 		t.Errorf("only %d statements carried a $-bearing identifier; that axis is not being exercised", dollarIdents)
 	}
+	// A SEVERITY PAIR WITH THE SKIP ASSERTION ABOVE, not a redundant copy of it.
+	// checked is 3000 minus skipped, so this fires only past ~2500 skips: the
+	// one above says SOMETHING was exempted and points at the generator row,
+	// this one says so little reached the oracle that no number in the run
+	// means anything. Different next actions.
+	//
+	// The two are COUPLED THROUGH THE SEVERITY OF THE FIRST, and that coupling
+	// is invisible at both sites. t.Errorf does not stop the test, so execution
+	// reaches here even when the skip assertion has already failed. Rewrite
+	// that one as t.Fatalf and this one becomes genuinely unreachable. I read
+	// this pair as already-dead while auditing it, on exactly that unchecked
+	// assumption; lane-auth-contracts caught it and t.Errorf's behaviour was
+	// then confirmed by execution.
 	if checked < 500 {
 		t.Errorf("only %d cases reached the oracle; too many were skipped to conclude anything", checked)
 	}

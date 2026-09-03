@@ -118,6 +118,7 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	stamps := map[time.Time]int{}
 	windowEnds := map[time.Time]int{}
 	perTeam := map[string]int{}
+	tombstonesChecked := 0
 	total := 0
 	for rows.Next() {
 		var teamID, orgID, ruleID, ruleVersion string
@@ -136,6 +137,7 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 		// by position, and these five are all String. The registry is the
 		// oracle -- a row must carry ITS OWN rule's text, not a neighbour's.
 		if definition, ok := expectedTombstoneText(ruleID); ok && !fired {
+			tombstonesChecked++
 			if title != definition.title {
 				t.Errorf("tombstone for %s came back with title %q, want %q — a "+
 					"crossed append writes another column's text with no error",
@@ -175,6 +177,16 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate: %v", err)
+	}
+
+	// The tombstone assertions above are guarded by !fired, so a writer that
+	// hard-coded fired=true would skip every one of them and leave this test
+	// green having checked nothing. Requiring at least one observed tombstone
+	// is what makes the guard's own satisfaction an assertion.
+	if tombstonesChecked == 0 {
+		t.Error("no tombstone rows were observed, so the registry-text assertions " +
+			"never ran — a writer that always reports fired=true would pass this " +
+			"test having checked nothing")
 	}
 
 	if total != outcome.RowsWritten {
@@ -267,9 +279,20 @@ func TestASecondRunSupersedesTheFirstOnUnchangedData(t *testing.T) {
 		t.Fatalf("first run wrote %d generations, want 1", len(firstStamps))
 	}
 
-	// A real re-drive is not instantaneous, and ClickHouse DateTime is
-	// second-granular: without this the two runs can share a stamp for reasons
-	// that have nothing to do with the bug under test.
+	// CORRECTION: an earlier version of this comment said ClickHouse DateTime is
+	// second-granular. The column is DateTime64(3, 'UTC') (migration 039), i.e.
+	// MILLISECOND. The sleep is still needed and still far larger than it has to
+	// be, but the reason matters: anyone trimming it to "just over a second"
+	// would be reasoning from the wrong unit.
+	//
+	// AND THE LIMIT THIS TEST DOES NOT REACH: at millisecond resolution, two
+	// retries inside the same millisecond store EQUAL versions, and neither
+	// argMax(fired, computed_at) nor ReplacingMergeTree(computed_at) can then
+	// pick the later one. So "the most recent write always wins" holds only for
+	// runs separated by >=1ms. That limit is INHERITED FROM THE REFERENCE, which
+	// stamps the same way, so it is not a parity defect and is not fixed here --
+	// but this test deliberately steps over it rather than probing it, and
+	// saying so is the difference between a known limit and an unnoticed one.
 	time.Sleep(2 * time.Second)
 
 	if _, err := executor.ComputeOrg(ctx, loaderOrgID, now, 30, "v1", ""); err != nil {

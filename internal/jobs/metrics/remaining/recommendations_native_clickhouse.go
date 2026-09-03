@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// recommendationsDetachedWriteTimeout bounds the post-cancellation write.
+const recommendationsDetachedWriteTimeout = 15 * time.Second
+
 // discoverTeamIDsSQL mirrors _discover_team_ids
 // (workers/recommendations_tasks.py:319-324).
 //
@@ -128,8 +131,14 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		return OrgOutcome{}, errRecommendationsUnavailable
 	}
 
+	// `teamID == ""`, NOT TrimSpace. Python branches on ordinary truthiness
+	// (`[team_id] if team_id else discover(...)`), so a whitespace-only id is
+	// EXPLICIT there and scopes the run to that one team. Trimming would send a
+	// malformed team-scoped payload down the discovery path instead and persist
+	// recommendations for every team in the org -- a scope widening, from a
+	// defensive-looking normalisation.
 	teamIDs := []string{teamID}
-	if strings.TrimSpace(teamID) == "" {
+	if teamID == "" {
 		discovered, err := executor.DiscoverTeamIDs(ctx, orgID)
 		if err != nil {
 			return OrgOutcome{}, err
@@ -144,6 +153,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	outcome := OrgOutcome{Teams: len(teamIDs)}
 	var records []RecommendationRecord
 	var failedTeams []string
+	var cancelled error
 
 	for _, currentTeam := range teamIDs {
 		teamRecords, err := executor.ComputeTeam(
@@ -152,11 +162,15 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 			// A context cancellation is the run being torn down, not this
 			// team failing; continuing would loop through every remaining
 			// team producing the same error and report them all as faulty.
-			if ctx.Err() != nil {
-				return outcome, ctx.Err()
-			}
-			failedTeams = append(failedTeams, currentTeam)
-			continue
+			//
+			// But it must not DISCARD what earlier clean teams already
+			// produced. The reference has no cancellation concept and always
+			// reaches its write; returning here would lose those rows and
+			// report cancellation instead of the per-team failure, so the
+			// teams that evaluated cleanly would keep their stale fired
+			// guidance -- the CHAOS-2373 outcome, reached by a Go-only path.
+			cancelled = ctx.Err()
+			break
 		}
 		records = append(records, teamRecords...)
 		for _, record := range teamRecords {
@@ -167,11 +181,30 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	}
 	outcome.FailedTeams = len(failedTeams)
 
-	written, err := executor.writeRecommendations(ctx, records, executor.nowUTC())
+	// The write context is DETACHED from cancellation, and bounded. A cancelled
+	// context cannot execute the insert at all, so without this the rows are
+	// lost exactly when the run is being torn down -- which is when a partial
+	// result is most worth keeping. The bound is what stops a detached context
+	// from outliving the shutdown it was detached from.
+	writeCtx := ctx
+	var stopWrite context.CancelFunc = func() {}
+	if cancelled != nil {
+		writeCtx, stopWrite = context.WithTimeout(
+			context.WithoutCancel(ctx), recommendationsDetachedWriteTimeout)
+	}
+	written, err := executor.writeRecommendations(writeCtx, records, executor.nowUTC())
+	stopWrite()
 	if err != nil {
 		return outcome, err
 	}
 	outcome.RowsWritten = written
+
+	// Cancellation is reported AFTER the write, and takes precedence over a
+	// per-team failure: the run did not finish, so its team list is incomplete
+	// and a TeamEvaluationFailure would understate what went unevaluated.
+	if cancelled != nil {
+		return outcome, cancelled
+	}
 
 	if len(failedTeams) > 0 {
 		return outcome, &TeamEvaluationFailure{

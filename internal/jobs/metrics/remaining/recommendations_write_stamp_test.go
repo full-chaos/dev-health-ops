@@ -2,6 +2,8 @@ package remaining
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,6 +258,20 @@ func TestAppendedGoTypesMatchTheColumnTypes(t *testing.T) {
 // Value, then type, then identity. Each of the first two reads like it covers
 // the third, and neither does. Distinct sentinels are what close it.
 func TestEveryAppendedValueComesFromItsOwnField(t *testing.T) {
+	// BOTH boolean values. A single Fired:true record compares true against
+	// true, so a writer that appended a literal `true` instead of record.Fired
+	// would satisfy it -- the sentinel technique closes identity for the
+	// STRINGS and silently reopens it for the bool, which has only two
+	// inhabitants and therefore cannot be given a unique sentinel.
+	for _, fired := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fired=%v", fired), func(t *testing.T) {
+			assertAppendedValuesMatchTheirFields(t, fired)
+		})
+	}
+}
+
+func assertAppendedValuesMatchTheirFields(t *testing.T, fired bool) {
+	t.Helper()
 	batch := &recordingBatch{}
 	executor := &RecommendationsExecutor{conn: &batchingConn{batch: batch}}
 
@@ -267,7 +283,7 @@ func TestEveryAppendedValueComesFromItsOwnField(t *testing.T) {
 		RuleVersion:      "sentinel-rule-version",
 		WindowStart:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 		WindowEnd:        time.Date(2026, 3, 4, 0, 0, 0, 0, time.UTC),
-		Fired:            true,
+		Fired:            fired,
 		Severity:         "sentinel-severity",
 		Title:            "sentinel-title",
 		Rationale:        "sentinel-rationale",
@@ -315,4 +331,56 @@ func indexAfter(haystack, needle string, from int) int {
 		}
 	}
 	return -1
+}
+
+// queryRecordingConn records every query issued, so a test can assert on the
+// path TAKEN rather than only on the value returned.
+type queryRecordingConn struct {
+	driverConnStub
+	queries []string
+}
+
+func (conn *queryRecordingConn) Query(
+	_ context.Context, query string, _ ...any,
+) (chdriver.Rows, error) {
+	conn.queries = append(conn.queries, query)
+	return nil, errRecommendationsUnavailable
+}
+
+// TestAWhitespaceTeamIDStaysScopedToThatTeam pins a parity divergence found in
+// review, and the reason it is dangerous is the direction it fails in.
+//
+// Python branches on ordinary truthiness (`[team_id] if team_id else discover`),
+// so " " is an EXPLICIT team there. Go had `strings.TrimSpace(teamID) == ""`,
+// which sends the same payload down the DISCOVERY path -- so a malformed
+// team-scoped request would silently persist recommendations for every team in
+// the org instead of the one asked for. A normalisation that looks defensive,
+// widening a scope.
+func TestAWhitespaceTeamIDStaysScopedToThatTeam(t *testing.T) {
+	for _, teamID := range []string{" ", "\t", "  "} {
+		t.Run(fmt.Sprintf("teamID=%q", teamID), func(t *testing.T) {
+			conn := &queryRecordingConn{}
+			executor := &RecommendationsExecutor{conn: conn}
+
+			// Both routes fail downstream on this stub -- the explicit route
+			// reaches an unimplemented method and PANICS. That is recovered on
+			// purpose: the assertion is on the query issued BEFORE the failure,
+			// not on how the call ends. Recovering rather than implementing the
+			// whole loader keeps the test aimed at the branch it is about.
+			func() {
+				defer func() { _ = recover() }()
+				_, _ = executor.ComputeOrg(
+					context.Background(), "org-1", time.Now().UTC(), 30, "1.0.0", teamID)
+			}()
+
+			for _, query := range conn.queries {
+				if strings.Contains(query, "SELECT DISTINCT team_id") {
+					t.Fatalf("a whitespace-only team id reached team DISCOVERY; the "+
+						"reference treats it as an explicit team, so this widens a "+
+						"malformed team-scoped request to the whole org. query: %s",
+						query)
+				}
+			}
+		})
+	}
 }

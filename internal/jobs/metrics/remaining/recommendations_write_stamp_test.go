@@ -243,6 +243,71 @@ func TestAppendedGoTypesMatchTheColumnTypes(t *testing.T) {
 	}
 }
 
+// TestEveryAppendedValueComesFromItsOwnField is the assertion the other tests
+// in this file only APPEAR to make.
+//
+// TestTheInsertNamesEveryColumnTheSinkDoes pins the SQL text and the value
+// COUNT; TestAppendedGoTypesMatchTheColumnTypes pins each value's Go TYPE.
+// Neither pins IDENTITY, and five of the thirteen columns are adjacent strings
+// -- so swapping record.Title with record.Rationale in the append changes
+// nothing either can see, and persists crossed user-facing text under a
+// perfectly green suite. Verified: that exact swap passes the whole package.
+//
+// Value, then type, then identity. Each of the first two reads like it covers
+// the third, and neither does. Distinct sentinels are what close it.
+func TestEveryAppendedValueComesFromItsOwnField(t *testing.T) {
+	batch := &recordingBatch{}
+	executor := &RecommendationsExecutor{conn: &batchingConn{batch: batch}}
+
+	// Every field gets a value that could only have come from that field.
+	record := RecommendationRecord{
+		TeamID:           "sentinel-team-id",
+		OrgID:            "sentinel-org-id",
+		RuleID:           "sentinel-rule-id",
+		RuleVersion:      "sentinel-rule-version",
+		WindowStart:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		WindowEnd:        time.Date(2026, 3, 4, 0, 0, 0, 0, time.UTC),
+		Fired:            true,
+		Severity:         "sentinel-severity",
+		Title:            "sentinel-title",
+		Rationale:        "sentinel-rationale",
+		SuccessCriterion: "sentinel-success-criterion",
+		EvidenceJSON:     "sentinel-evidence-json",
+	}
+	writeTime := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+
+	if _, err := executor.writeRecommendations(
+		context.Background(), []RecommendationRecord{record}, writeTime); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	want := []any{
+		record.TeamID, record.OrgID, record.RuleID, record.RuleVersion,
+		record.WindowStart, record.WindowEnd, record.Fired, record.Severity,
+		record.Title, record.Rationale, record.SuccessCriterion,
+		record.EvidenceJSON,
+		// computed_at is the WRITE stamp, never the record's own field.
+		writeTime,
+	}
+	columns := []string{
+		"team_id", "org_id", "rule_id", "rule_version",
+		"window_start", "window_end", "fired", "severity",
+		"title", "rationale", "success_criterion", "evidence_json", "computed_at",
+	}
+
+	got := batch.rows[0]
+	if len(got) != len(want) {
+		t.Fatalf("appended %d values, want %d", len(got), len(want))
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Errorf("column %d (%s) was appended as %v, want %v — ClickHouse binds "+
+				"by position, so a value from the wrong field is written silently",
+				index, columns[index], got[index], want[index])
+		}
+	}
+}
+
 func indexAfter(haystack, needle string, from int) int {
 	for index := from; index+len(needle) <= len(haystack); index++ {
 		if haystack[index:index+len(needle)] == needle {

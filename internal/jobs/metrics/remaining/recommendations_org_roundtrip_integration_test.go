@@ -100,8 +100,14 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	}
 
 	// Read back what actually landed, rather than trusting the returned count.
+	// EVERY column, not the five the assertions below happen to need. Reading a
+	// subset makes this test blind to exactly the corruption it is best placed
+	// to catch: five of the thirteen columns are adjacent strings, so a
+	// crossed title/rationale is invisible unless the text itself comes back.
 	rows, err := conn.Query(ctx, `
-        SELECT team_id, rule_id, fired, window_end, computed_at
+        SELECT team_id, org_id, rule_id, rule_version,
+               window_start, window_end, fired, severity,
+               title, rationale, success_criterion, evidence_json, computed_at
         FROM recommendations_daily
         WHERE org_id = ?`, loaderOrgID)
 	if err != nil {
@@ -114,12 +120,54 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	perTeam := map[string]int{}
 	total := 0
 	for rows.Next() {
-		var teamID, ruleID string
+		var teamID, orgID, ruleID, ruleVersion string
+		var severity, title, rationale, successCriterion, evidenceJSON string
 		var fired bool
-		var windowEnd, computedAt time.Time
-		if err := rows.Scan(&teamID, &ruleID, &fired, &windowEnd, &computedAt); err != nil {
+		var windowStart, windowEnd, computedAt time.Time
+		if err := rows.Scan(
+			&teamID, &orgID, &ruleID, &ruleVersion,
+			&windowStart, &windowEnd, &fired, &severity,
+			&title, &rationale, &successCriterion, &evidenceJSON, &computedAt,
+		); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
+
+		// Cross-column corruption is silent by construction: ClickHouse binds
+		// by position, and these five are all String. The registry is the
+		// oracle -- a row must carry ITS OWN rule's text, not a neighbour's.
+		if definition, ok := expectedTombstoneText(ruleID); ok && !fired {
+			if title != definition.title {
+				t.Errorf("tombstone for %s came back with title %q, want %q — a "+
+					"crossed append writes another column's text with no error",
+					ruleID, title, definition.title)
+			}
+			if severity != definition.severity {
+				t.Errorf("tombstone for %s came back with severity %q, want %q",
+					ruleID, severity, definition.severity)
+			}
+			if successCriterion != definition.successCriterion {
+				t.Errorf("tombstone for %s came back with success_criterion %q, want %q",
+					ruleID, successCriterion, definition.successCriterion)
+			}
+			if title == rationale || title == successCriterion {
+				t.Errorf("tombstone for %s has identical text in two columns "+
+					"(title=%q rationale=%q success_criterion=%q) — the signature "+
+					"of a swapped append among the adjacent strings",
+					ruleID, title, rationale, successCriterion)
+			}
+		}
+		if orgID != loaderOrgID {
+			t.Errorf("row carries org_id %q, want %q", orgID, loaderOrgID)
+		}
+		if evidenceJSON == "" {
+			t.Errorf("rule %s wrote an empty evidence_json; a tombstone writes "+
+				"\"[]\", never the empty string", ruleID)
+		}
+		if !windowStart.Before(windowEnd) {
+			t.Errorf("window_start %s is not before window_end %s",
+				windowStart, windowEnd)
+		}
+
 		stamps[computedAt]++
 		windowEnds[windowEnd]++
 		perTeam[teamID]++
@@ -269,4 +317,18 @@ func distinctStamps(t *testing.T, ctx context.Context, conn driver.Conn) []time.
 		t.Fatalf("iterate generations: %v", err)
 	}
 	return stamps
+}
+
+// expectedTombstoneText reads the REGISTRY rather than restating its strings.
+//
+// Restating them would create a second copy free to drift from the one under
+// test, and a test that agrees with its own copy of the answer proves nothing.
+//
+// Only fired=false rows are checked here. That is the tombstone asymmetry, not
+// an omission: a tombstone takes title/severity/success_criterion from the
+// registry, while a FIRED row takes them from the evaluator, which carries
+// different strings by design.
+func expectedTombstoneText(ruleID string) (ruleDefinition, bool) {
+	definition, ok := ruleRegistry[ruleID]
+	return definition, ok
 }

@@ -69,4 +69,17 @@ echo "diff range: ${range}" >&2
 # sequence of each path, whatever it contains, with no quoting logic to have
 # a gap in. ci/typecheck_relevance.py's stdin reading was changed to match
 # (NUL-split, not line-split) in the same commit; the two must move together.
-git diff --name-only -z "${range}"
+# `--no-renames` (CHAOS-4843, round 3 of #2169's peer review, P2): git's
+# default rename detection collapses a rename into ONLY the post-rename
+# path -- a file renamed from a RELEVANT path to an UNRELATED one (e.g.
+# `src/a.py` -> `docs/a.md`) reports just `docs/a.md`, which matches
+# nothing in ci/typecheck_relevance.py's patterns, so a change that
+# effectively REMOVED a `src/**` file from the tree reads as irrelevant.
+# `--no-renames` reports the rename as a plain delete+add pair instead --
+# both the old and new path appear as separate entries, so either one
+# matching a relevant pattern is enough to mark the change relevant, same
+# as if the move had been done as two unrelated commits. This costs
+# nothing here: nothing downstream of this script's output cares whether
+# two paths were "one rename" or "a delete and an add", only whether any
+# path in the list matches a pattern.
+git diff --no-renames --name-only -z "${range}"

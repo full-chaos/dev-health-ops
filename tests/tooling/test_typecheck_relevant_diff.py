@@ -287,3 +287,46 @@ def test_control_character_filename_survives_the_full_producer_to_matcher_pipe(
         f"a real .py file under src/** was reported irrelevant through the "
         f"full producer-to-matcher pipe: {stdout!r}"
     )
+
+
+def test_a_rename_out_of_a_relevant_path_stays_relevant(tmp_path: Path) -> None:
+    # CHAOS-4843, round 3 of #2169's peer review, P2. Before `--no-renames`,
+    # git's default rename detection collapsed a rename into ONLY the
+    # post-rename path: `src/a.py` renamed to `docs/a.md` reported just
+    # `docs/a.md` from `git diff --name-only -z`, which matches nothing in
+    # ci/typecheck_relevance.py's patterns -- so a change that effectively
+    # REMOVED a src/** file from the tree read as typecheck-irrelevant.
+    # Verified this test goes red against a `-z`-only (no `--no-renames`)
+    # mutation of the script before trusting it.
+    r = tmp_path / "rename-out-scratch"
+    r.mkdir()
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@example.com")
+    _git(r, "config", "user.name", "test")
+    (r / "src").mkdir()
+    (r / "docs").mkdir()
+    base = _commit(r, "src/a.py", "x = 1\n")
+    _git(r, "mv", "src/a.py", "docs/a.md")
+    _git(r, "commit", "-q", "-m", "rename out of src")
+
+    RELEVANCE_SCRIPT = ROOT / "ci" / "typecheck_relevance.py"
+    diff_proc = subprocess.run(
+        ["bash", str(SCRIPT)],
+        cwd=r,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "BASE_SHA": base},
+    )
+    assert diff_proc.returncode == 0, diff_proc.stderr
+    relevance_proc = subprocess.run(
+        ["python3", str(RELEVANCE_SCRIPT)],
+        input=diff_proc.stdout,
+        capture_output=True,
+        text=False,
+    )
+    assert relevance_proc.returncode == 0
+    stdout = relevance_proc.stdout.decode("utf-8")
+    assert "relevant=true" in stdout, (
+        f"a file renamed OUT of src/** (to a path matching nothing) was "
+        f"reported irrelevant -- rename collapse lost the fact that a "
+        f"src/** file was removed: {stdout!r}"
+    )

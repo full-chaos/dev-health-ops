@@ -624,3 +624,59 @@ func TestTheWriteContextIsDetachedFromCancellation(t *testing.T) {
 		t.Error("no rows written despite the team completing")
 	}
 }
+
+// TestTheWriteContextClosesTheGapAfterTheCancellationSample pins round 5's fix
+// (CHAOS-4935 gate review): the write context must be detached and bounded
+// UNCONDITIONALLY, not only when the post-loop `cancelled` sample happened to
+// observe a cancellation.
+//
+// TestTheWriteContextIsDetachedFromCancellation above cancels BEFORE the run
+// starts, so the sample reads non-nil and the (then-conditional) detach fired
+// -- it cannot reach this gap. This test cancels from beforeWriteHook, which
+// runs strictly AFTER that sample has already read ctx.Err() == nil and
+// strictly BEFORE the write context is chosen: exactly the interval a real
+// shutdown can land in between one team succeeding and the batch actually
+// being prepared, which round 4's fix left open. Reproduced first against the
+// pre-fix code (conditional detach, gated on `cancelled != nil`): this test
+// failed both on the returned error and on RowsWritten before the fix landed.
+func TestTheWriteContextClosesTheGapAfterTheCancellationSample(t *testing.T) {
+	batch := &recordingBatch{}
+	conn := &loadingConn{batch: batch}
+	loader, err := NewRecommendationsLoader(conn, "org-1")
+	if err != nil {
+		t.Fatalf("new loader: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	executor := &RecommendationsExecutor{
+		conn:   conn,
+		loader: loader,
+		beforeWriteHook: func() {
+			// Fires after the post-loop sample already read ctx.Err() == nil
+			// (the team loop had exactly one team, which succeeded) and
+			// before the write context is chosen -- the TOCTOU gap itself.
+			cancel()
+		},
+	}
+
+	outcome, err := executor.ComputeOrg(ctx, "org-1", time.Now().UTC(), 30, "1.0.0", "team-a")
+
+	if err != nil {
+		t.Fatalf("returned %v, want nil — a cancellation landing strictly "+
+			"AFTER the post-loop sample must not be allowed to fail the "+
+			"write of rows a team already completed", err)
+	}
+	if !conn.prepared {
+		t.Fatal("the write was never ATTEMPTED")
+	}
+	if conn.errAtCall != nil {
+		t.Errorf("the write was attempted on a context already cancelled at "+
+			"call time (%v) — the write context must be detached "+
+			"UNCONDITIONALLY, not only when the earlier sample happened to "+
+			"observe cancellation", conn.errAtCall)
+	}
+	if outcome.RowsWritten == 0 {
+		t.Error("no rows written despite the team completing before the " +
+			"gap cancellation")
+	}
+}

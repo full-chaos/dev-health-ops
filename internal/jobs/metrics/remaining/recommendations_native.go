@@ -101,6 +101,19 @@ type RecommendationsExecutor struct {
 	// So the seam sits at the only per-team boundary that exists, is
 	// unexported, is nil in production, and is guarded at its single call site.
 	afterTeamHook func()
+
+	// beforeWriteHook runs once, after the loop's post-loop cancellation
+	// sample and before the write context is chosen, and is nil in production.
+	//
+	// It exists for one race (round 5/CHAOS-4935 review): the sample can read
+	// ctx.Err() == nil, and a real cancellation can still land in the gap
+	// between that read and the write. `afterTeamHook` cannot reach this
+	// window -- it only fires INSIDE the loop, before the post-loop sample
+	// even runs -- so it is a different seam for a different interval, not a
+	// duplicate of it. A timer-based goroutine has the same flakiness problem
+	// documented on afterTeamHook above, for the same reason: how long the
+	// loop takes to finish is not something a test should have to race.
+	beforeWriteHook func()
 }
 
 // NewRecommendationsExecutor refuses at construction rather than per partition.

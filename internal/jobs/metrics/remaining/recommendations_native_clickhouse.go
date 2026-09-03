@@ -225,17 +225,31 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		cancelled = ctx.Err()
 	}
 
-	// The write context is DETACHED from cancellation, and bounded. A cancelled
-	// context cannot execute the insert at all, so without this the rows are
-	// lost exactly when the run is being torn down -- which is when a partial
-	// result is most worth keeping. The bound is what stops a detached context
-	// from outliving the shutdown it was detached from.
-	writeCtx := ctx
-	var stopWrite context.CancelFunc = func() {}
-	if cancelled != nil {
-		writeCtx, stopWrite = context.WithTimeout(
-			context.WithoutCancel(ctx), recommendationsDetachedWriteTimeout)
+	// Nil in production. See the field's comment: this is the only
+	// deterministic point a test can schedule cancellation to land in the gap
+	// between the sample above and the write context decision below.
+	if executor.beforeWriteHook != nil {
+		executor.beforeWriteHook()
 	}
+
+	// The write context is ALWAYS detached from cancellation, and bounded --
+	// chosen fresh here, unconditionally, rather than gated on the `cancelled`
+	// sample above.
+	//
+	// ROUND 5 (CHAOS-4935) FIX. The earlier version only built this detached
+	// context when `cancelled != nil`, otherwise reusing the raw `ctx`
+	// straight through to the write. That reintroduced the exact race this
+	// mechanism exists to close: the sample above can observe "not yet
+	// cancelled" and a real cancellation can still land in the gap between
+	// that read and PrepareBatch actually running -- at which point the raw
+	// `ctx` IS cancelled, the insert fails, and every already-computed team's
+	// tombstone is lost. Building the detached, bounded context unconditionally
+	// removes the dependency on timing the sample against the cancellation
+	// altogether: the insert always runs on its own context, whether or not
+	// `cancelled` turned out non-nil. The bound is what stops that detached
+	// context from outliving the shutdown it was detached from.
+	writeCtx, stopWrite := context.WithTimeout(
+		context.WithoutCancel(ctx), recommendationsDetachedWriteTimeout)
 	written, err := executor.writeRecommendations(writeCtx, records, executor.wallClock()())
 	stopWrite()
 	if err != nil {

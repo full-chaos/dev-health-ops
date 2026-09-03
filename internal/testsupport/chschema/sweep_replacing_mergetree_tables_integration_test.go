@@ -45,6 +45,16 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 	if err != nil {
 		t.Fatalf("start clickhouse: %v", err)
 	}
+	// A remote-DSN instance (containers.remoteDSN) sets Instance.cleanup to
+	// drop the scratch database it created -- the only thing standing
+	// between a shared server and an unbounded pile of abandoned databases
+	// (harness.go's own doc comment on Instance.cleanup). A container
+	// instance's cleanup is a plain Terminate, already reaped by
+	// testcontainers' ryuk on process exit even without this -- but the
+	// remote-DSN path has no such reaper, so this call is load-bearing
+	// there specifically. CHAOS-4902 r2 finding: this helper is called
+	// twice (once per test) and neither call was ever closed.
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	Apply(ctx, t, instance)
 
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)

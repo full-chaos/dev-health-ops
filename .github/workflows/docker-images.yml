@@ -320,8 +320,12 @@ jobs:
           # ci/python_base_ref.sh has 6fbd7dc8d as a non-ancestor, so ancestry
           # alone says "pre-mirror" and skips -- while the tree consumes a
           # mirrored base. Round 4 reproduced that topology and got
-          # `Nothing to ensure; skipping.`, which is a confident FALSE
-          # statement in the log.
+          # `Nothing to ensure, skipping.`, which is a confident FALSE
+          # statement in the log. (Comma, not semicolon -- see the
+          # no-semicolon note beside the echo itself; 084-prod caught this
+          # comment still quoting the old form after the message changed,
+          # which would have sent the next reader grepping for a string the
+          # code no longer emits.)
           #
           # Severity checked rather than assumed: docker/Dockerfile:17 holds
           # `ARG PYTHON_BASE_IMAGE="ghcr.io/<owner>/python:...@sha256:..."` and

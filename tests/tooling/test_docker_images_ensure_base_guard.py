@@ -677,3 +677,40 @@ def test_other_ghcr_image_is_not_the_mirrored_base(tmp_path: Path) -> None:
     )
     assert SKIP_MARKER in out, f"the skip must say why\n{out}"
     assert not calls, f"a skip must not invoke docker: {calls!r}"
+
+
+def test_ensure_base_run_block_parses_under_the_tooling_shell_splitter() -> None:
+    """The run block must survive tests/tooling's own shell splitter.
+
+    A `;` inside a quoted message turned the Tests workflow RED on 145fbd68.
+    `_run_pulled_images` splits a run block on `[\\n;]|&&|\\|\\|` BEFORE
+    tokenising and without respecting quotes, so `"Nothing to ensure; skipping."`
+    became `echo "Nothing to ensure` plus ` skipping."`, the tail lost its
+    opening quote, and `shlex.split` raised "No closing quotation". The step is
+    scanned at all only because the word `docker` appears in the prose -- so a
+    COMMENT can break that suite.
+
+    The fix on this branch is a workaround (comma for semicolon); the parser
+    itself is CHAOS-4963. Until that lands, "no semicolons in this run block" is
+    a real constraint, and prose cannot enforce it -- three peer reads and four
+    codex rounds all missed the original because every one of them ran only this
+    file, and the guard that observes it lives in another.
+
+    IMPORTED, NOT COPIED, deliberately. A local copy of the splitter would keep
+    passing after CHAOS-4963 fixes the real one, and would then be asserting a
+    rule that no longer exists -- a test outliving the behaviour it describes.
+    Importing means this row relaxes automatically when the parser is fixed.
+    """
+    from tests.tooling.test_go_integration_sharding import (  # noqa: PLC0415
+        _run_pulled_images,
+    )
+
+    run_block = _guard_script()
+    _images, unknown = _run_pulled_images(run_block)
+    assert unknown == [], (
+        "the ensure-base run block is unparseable to tests/tooling's shell "
+        "splitter, which fails test_run_steps_do_not_pull_from_unapproved_"
+        f"registries in a DIFFERENT file that this suite never runs: {unknown!r}\n"
+        "Most likely cause: a `;` (or an unbalanced quote) inside a quoted "
+        "message. See CHAOS-4963."
+    )

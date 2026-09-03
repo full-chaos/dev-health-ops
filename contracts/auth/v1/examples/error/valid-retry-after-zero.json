@@ -1,0 +1,8 @@
+{
+  "occurred_at": "2026-09-03T05:00:00Z",
+  "reason_code": "rate_limited",
+  "request_id": "req_EXAMPLE0000000000000000001",
+  "retry_after_seconds": 0,
+  "schema_version": "error.v1",
+  "status": 429
+}

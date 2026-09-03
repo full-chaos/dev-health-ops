@@ -63,28 +63,63 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # Single boolean, computed once, referenced everywhere below instead of
+      # repeating this event-type expression on every step. team-lead +
+      # ci-flakes (round 3): the prior two-build shape meant the checked
+      # image (loaded locally) and the published image (a later, separate
+      # build) were not provably the same bytes -- apt layers are not
+      # reproducible across two builds on a cache miss. Fix is one build for
+      # the whole run, not two conditionally-skipped ones.
+      - name: Determine whether to publish
+        id: publish
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ] \
+             && { [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ "${{ github.event.inputs.push_image }}" = "true" ]; }; then
+            echo "should_publish=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "should_publish=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: steps.publish.outputs.should_publish == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build once, LOADED into the local daemon (not pushed) so it can
-      # actually be run for the CGO check below, on every event type
-      # including PRs. Cached via GHA cache so the second build further
-      # down (the one that publishes) is a near-instant cache hit, not a
-      # second real build.
-      - name: Build (local, for check)
+      # OCI labels (org.opencontainers.image.revision/source/created/...) are
+      # derived from the git context, not from the tag/latest decision, so
+      # they can be computed now -- before the mainhead check -- and applied
+      # to the one build below. Only human-readable TAGS need to wait for
+      # that check; see the later "Docker meta" step for those.
+      - name: Docker labels
+        if: steps.publish.outputs.should_publish == 'true'
+        id: labels
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/full-chaos/arc-runner
+
+      # THE build -- exactly one, every event type. On a push (or a
+      # push_image=true dispatch) it goes straight to ghcr.io BY DIGEST
+      # ONLY: no tags decided yet, so nothing downstream depends on the
+      # main-head check to have already run, and there is no second build
+      # later to diverge from this one. The CGO check below and the eventual
+      # published image are therefore the exact same bytes, not
+      # same-Dockerfile-different-build stand-ins. On a PR (or a dry-run
+      # dispatch) there's no registry login, so it stays local: loaded, not
+      # pushed.
+      - name: Build
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/arc-runner/Dockerfile
           platforms: linux/arm64
-          tags: arc-runner:check
-          load: true
+          tags: ${{ steps.publish.outputs.should_publish == 'true' && 'ghcr.io/full-chaos/arc-runner' || 'arc-runner:check' }}
+          labels: ${{ steps.labels.outputs.labels }}
+          outputs: ${{ steps.publish.outputs.should_publish == 'true' && 'type=image,push-by-digest=true,name-canonical=true,push=true' || 'type=docker' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -92,10 +127,12 @@ jobs:
       # `-race requires cgo; CGO_ENABLED=1`). Go itself is not part of this
       # image -- a real job gets it from actions/setup-go, same as here --
       # so this step borrows THIS job's own setup-go binary and runs it
-      # inside the just-built image, over its GOROOT mounted read-only.
-      # That isolates what's actually being checked to what the image
-      # itself provides (gcc, libc6-dev, i.e. CGO_ENABLED/CC detection),
-      # not anything about the Go toolchain.
+      # inside the image just built above, over its GOROOT mounted
+      # read-only. That isolates what's actually being checked to what the
+      # image itself provides (gcc, libc6-dev, i.e. CGO_ENABLED/CC
+      # detection), not anything about the Go toolchain. When publishing,
+      # this pulls the just-pushed digest from ghcr rather than a local
+      # tag -- the same bytes that will end up tagged `latest`/`sha-...`.
       - name: Set up Go (for the in-image CGO check only)
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
@@ -104,51 +141,18 @@ jobs:
       - name: Check CGO toolchain inside the built image
         run: |
           set -euo pipefail
+          image="arc-runner:check"
+          if [ "${{ steps.publish.outputs.should_publish }}" = "true" ]; then
+            image="ghcr.io/full-chaos/arc-runner@${{ steps.build.outputs.digest }}"
+          fi
           docker run --rm --platform linux/arm64 \
             -v "$(go env GOROOT)":/usr/local/go:ro \
             -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            arc-runner:check \
+            "$image" \
             sh -c 'echo "gcc: $(command -v gcc)"; go env CGO_ENABLED CC'
 
-      # OCI labels (org.opencontainers.image.revision/source/created/...) are
-      # derived from the git context, not from the tag/latest decision, so
-      # they can be computed now -- before the mainhead check -- and applied
-      # to the digest push below. Only human-readable TAGS need to wait for
-      # that check; see the later "Docker meta" step for those.
-      - name: Docker labels
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
-        id: labels
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/full-chaos/arc-runner
-
-      # A SECOND build, not a reuse of the first: pushed by DIGEST ONLY, no
-      # human tags decided yet. cache-from reuses the first build's GHA
-      # cache -- USUALLY a fast cache hit, but ci-flakes' round-2 delta read
-      # correctly flagged that "usually" is exactly the gap: GHA cache is
-      # evictable and cold on a first run, so this step's own duration is
-      # not guaranteed short. Fixed structurally, not just observed: the
-      # main-head check below runs AFTER this step finishes (however long
-      # that took), and the ONLY thing after the check is a manifest-tag
-      # operation (next step), never another build. So the gap between
-      # "check main's head" and "the action that depends on it" is always
-      # just that tiny manifest op, regardless of whether THIS step was a
-      # cache hit or a real rebuild.
-      - name: Build and push by digest
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
-        id: push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: docker/arc-runner/Dockerfile
-          platforms: linux/arm64
-          tags: ghcr.io/full-chaos/arc-runner
-          labels: ${{ steps.labels.outputs.labels }}
-          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha
-
       - name: Determine whether this build is main's current head
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
+        if: steps.publish.outputs.should_publish == 'true'
         id: mainhead
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -163,7 +167,7 @@ jobs:
           fi
 
       - name: Docker meta
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
+        if: steps.publish.outputs.should_publish == 'true'
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
@@ -178,7 +182,8 @@ jobs:
       # (#2149) accepts as an intentional exception, sidestepped here rather
       # than repeated.
       - name: Tag and push
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
+        if: steps.publish.outputs.should_publish == 'true'
+        id: tag
         run: |
           set -euo pipefail
           args=()
@@ -186,7 +191,7 @@ jobs:
             [ -n "$t" ] && args+=(-t "$t")
           done <<< "${{ steps.meta.outputs.tags }}"
           docker buildx imagetools create "${args[@]}" \
-            "ghcr.io/full-chaos/arc-runner@${{ steps.push.outputs.digest }}"
+            "ghcr.io/full-chaos/arc-runner@${{ steps.build.outputs.digest }}"
 
       # Job-level summary line. Note: I found no existing "ensure"-named job
       # or script anywhere in this repo's .github/ or ci/ to match a
@@ -197,8 +202,8 @@ jobs:
         if: always()
         run: |
           {
-            if [ "${{ steps.push.outcome }}" = "success" ]; then
-              echo "✅ arc-runner image published: \`${{ steps.push.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags }}\`"
+            if [ "${{ steps.tag.outcome }}" = "success" ]; then
+              echo "✅ arc-runner image published: \`${{ steps.build.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags }}\`"
             elif [ "${{ steps.build.outcome }}" = "success" ]; then
               echo "✅ arc-runner image build (not published, PR/dry-run): \`${{ steps.build.outputs.digest }}\`"
             else

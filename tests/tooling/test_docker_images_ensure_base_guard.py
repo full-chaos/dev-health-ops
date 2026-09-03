@@ -73,6 +73,23 @@ MIRRORED_VIA_ARGS = (
     'ARG PYTHON_BASE_IMAGE="${REGISTRY}/${OWNER}/python:3.14-slim@sha256:aa"'
 )
 UNMIRRORED = "FROM python:3.14-slim"
+# A tree that RENAMES the ARG. This row documents an ACCEPTED LIMIT, not a
+# protection: `grep PYTHON_BASE_IMAGE` finds nothing, exits 1, and 1 is the
+# "readable file, positively lacks the ARG" case the skip path is defined on --
+# so it SKIPS. There is no fourth branch for it to land in.
+#
+# UN-INDIRECTABLE IS NOT UN-RENAMEABLE. The ARG-name probe closes ASSEMBLY (a base
+# built from ${REGISTRY}/${OWNER}/... cannot hide the ARG's own name, which was
+# the HIGH and is real) and cannot close RENAMING. No single-token probe can.
+#
+# Deliberately NOT fixed: reaching it needs a triply inconsistent tree -- script
+# absent, ARG renamed, mirrored base still consumed. The row exists so the next
+# reader meets the limit as a recorded fact rather than discovering it as a defect
+# and widening the discriminator to chase it.
+#
+# Two reviewers asserted in prose that this case "fails loudly". Both were wrong.
+# Written as a row, it would have failed on its first run.
+RENAMED_ARG = 'ARG PY_BASE="ghcr.io/full-chaos/python:3.14-slim@sha256:aa"'
 # The marker a stubbed derivation script prints. Seeing it is the ONLY proof that
 # control reached the real work rather than merely declining to skip.
 DERIVATION_MARKER = "DERIVATION-REACHED"
@@ -189,6 +206,15 @@ def _run_guard(
             True,
             False,
             "docker/Dockerfile missing entirely: unreadable is not pre-mirror",
+        ),
+        # ACCEPTED LIMIT, asserted as true behaviour rather than as protection.
+        (
+            RENAMED_ARG,
+            False,
+            True,
+            False,
+            False,
+            "renamed ARG: grep exits 1 = pre-mirror branch, so it SKIPS (known limit)",
         ),
         (
             MIRRORED,

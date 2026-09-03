@@ -230,3 +230,136 @@ def test_the_parser_reads_the_whole_continuation_chain() -> None:
         "no unfiltered invocation was found; the gate has several, and missing "
         "them is the blind spot that let a duplicate through before"
     )
+
+
+ORACLE_ENV_LITERAL = '"DEV_HEALTH_LIVE_PYTHON_ORACLES"'
+DECLARATION_WINDOW = 1500
+
+
+def _oracle_env_identifiers(package_dir: Path) -> set[str]:
+    """Every identifier in this package whose value IS the oracle env var.
+
+    DERIVED, not listed. Three different spellings exist in the tree --
+    `livePythonOraclesEnv`, `fmaLivePythonOraclesEnv`, and the bare literal --
+    and a fourth will appear the moment someone adds a package. Enumerating the
+    names is the mistake this whole file is about: an earlier version of this
+    very check listed two of them, reported five gated tests as ungated, and
+    would have reported a sixth spelling as a real finding.
+
+    So instead: find the constants in the package that are DEFINED as the
+    literal, and accept a gate that reads any of them.
+    """
+    identifiers = {ORACLE_ENV_LITERAL.strip('"')}
+    assignment = re.compile(
+        r"(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*" + re.escape(ORACLE_ENV_LITERAL)
+    )
+    for source in package_dir.rglob("*.go"):
+        identifiers.update(
+            assignment.findall(source.read_text(encoding="utf-8", errors="ignore"))
+        )
+    return identifiers
+
+
+def _gating_functions(package_dir: Path, gates: set[str]) -> set[str]:
+    """Functions in this package that themselves perform the skip.
+
+    A test may not read the variable at all: four in
+    internal/jobs/metrics/testops call `runPythonOracle(t, ...)`, and the skip
+    lives inside that helper. Gating one hop away is still gating.
+
+    Derived the same way as the identifiers -- find the functions whose body
+    reads a gate and calls t.Skip, rather than naming `runPythonOracle` here and
+    waiting for the next helper to be written.
+    """
+    found: set[str] = set()
+    declaration = re.compile(r"^func ([A-Za-z_][A-Za-z0-9_]*)\(", re.M)
+    for source in package_dir.rglob("*.go"):
+        text = source.read_text(encoding="utf-8", errors="ignore")
+        matches = list(declaration.finditer(text))
+        for index, match in enumerate(matches):
+            stop = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            body = text[match.start() : stop]
+            if "t.Skip(" not in body:
+                continue
+            if any(
+                f"os.Getenv({gate})" in body or f'os.Getenv("{gate}")' in body
+                for gate in gates
+            ):
+                found.add(match.group(1))
+    return found
+
+
+def test_every_oracle_named_test_skips_without_the_env_var() -> None:
+    """The property that makes the scoping above SOUND rather than convenient.
+
+    This file only counts invocations that set DEV_HEALTH_LIVE_PYTHON_ORACLES,
+    on the reasoning that `check_test` and `check_race` run `go test ./...`
+    across every package and therefore reach these tests too -- but do not
+    EXECUTE them, because each one skips without the variable.
+
+    That reasoning is load-bearing and was, until now, only stated. If a named
+    oracle test were not gated, the `./...` sweeps would run it for real and
+    this file's central claim -- that only oracle-scoped invocations can
+    duplicate an oracle run -- would be false while every test here stayed
+    green.
+
+    The gate identifier is DERIVED from the package rather than listed: three
+    spellings exist (`livePythonOraclesEnv`, `fmaLivePythonOraclesEnv`, the bare
+    literal) and the first version of this check listed two, reporting five
+    gated tests as ungated and one real spelling as a finding. Constants are
+    resolved to their value instead.
+
+    Note what is NOT asserted: that every `-run` name anywhere in the script is
+    gated this way. `TestExplicitQueueMultiReplicaClaimDrainRestart` is named in
+    `check_multi_replica_workers`, which sets no oracle variable and passes
+    `-tags=integration`; a plain `./...` sweep does not compile it in at all.
+    Gating by build tag is a different mechanism and this check has no opinion
+    on it -- which is why the population here is the oracle-scoped invocations,
+    not every selector in the file.
+    """
+    named: set[str] = set()
+    for selector, _ in _invocations():
+        if selector is not None:
+            named.update(re.findall(r"Test[A-Za-z0-9_]+", selector))
+
+    assert named, "no oracle-scoped test names resolved; the parse has broken"
+
+    ungated: list[str] = []
+    for name in sorted(named):
+        declaration = re.compile(rf"^func {re.escape(name)}\(", re.M)
+        located = False
+        for source in REPO_ROOT.rglob("*_test.go"):
+            text = source.read_text(encoding="utf-8", errors="ignore")
+            match = declaration.search(text)
+            if not match:
+                continue
+            located = True
+            window = text[match.start() : match.start() + DECLARATION_WINDOW]
+            gates = _oracle_env_identifiers(source.parent)
+            reads_gate = (
+                any(
+                    f"os.Getenv({gate})" in window or f'os.Getenv("{gate}")' in window
+                    for gate in gates
+                )
+                and "t.Skip(" in window
+            )
+            calls_gate = any(
+                f"{helper}(" in window
+                for helper in _gating_functions(source.parent, gates)
+            )
+            if not (reads_gate or calls_gate):
+                ungated.append(f"{name}  ({source.relative_to(REPO_ROOT)})")
+            break
+        if not located:
+            ungated.append(f"{name}  (DECLARATION NOT FOUND)")
+
+    assert not ungated, (
+        "these tests are named in a live-oracle `-run` but do not skip when "
+        "DEV_HEALTH_LIVE_PYTHON_ORACLES is unset:\n  "
+        + "\n  ".join(ungated)
+        + "\n\nThat breaks this file's scoping argument. `check_test` and "
+        "`check_race` run `go test ./...` across every package, so an ungated "
+        "oracle test is executed there as well as by its named invocation -- a "
+        "duplicate run that the scoped check above deliberately does not look "
+        "for, because it assumes this property holds."
+    )

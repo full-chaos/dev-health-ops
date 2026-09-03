@@ -337,11 +337,13 @@ func TestReservedKindsAreNotActive(t *testing.T) {
 	// admission set, so the active set is no longer required to equal Python's
 	// live gate exactly -- see DefaultAdmissions's doc. What this asserts
 	// instead: the active set is EXACTLY what has been deliberately activated
-	// (linear_attachment always; github_closing_reference since CHAOS-4757/
-	// CHAOS-4769), so a silent widening still fails loudly here.
+	// (linear_attachment always; github_closing_reference and jira_dev_status
+	// since CHAOS-4757/CHAOS-4769), so a silent widening still fails loudly
+	// here.
 	wantActive := map[string]struct{}{
 		"linear_attachment":        {},
 		"github_closing_reference": {},
+		"jira_dev_status":          {},
 	}
 	if len(DefaultAdmissions) != len(wantActive) {
 		t.Fatalf("active admissions are %+v, want exactly %v", DefaultAdmissions, wantActive)
@@ -364,9 +366,10 @@ func TestReservedKindsAreNotActive(t *testing.T) {
 // graduated from it.
 func TestReservedKindIsSeenButNotAdmitted(t *testing.T) {
 	inputs := baseInputs()
-	inputs.Dependencies[0].RelationshipTypeRaw = "jira_dev_status"
-	inputs.Dependencies[0].TargetWorkItemID = "jira:OPS-5"
-	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "jira:OPS-5"}}
+	inputs.Dependencies[0].RelationshipTypeRaw = testReservedKind
+	inputs.Dependencies[0].TargetWorkItemID = "test-reserved:OPS-5"
+	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "test-reserved:OPS-5"}}
+	inputs.ReservedAdmissions = testReservedAdmissions()
 
 	result := Derive(inputs)
 	if result.Written() != 0 {
@@ -375,8 +378,8 @@ func TestReservedKindIsSeenButNotAdmitted(t *testing.T) {
 	if got := result.Rejected[ReasonNotAdmissible]; got != 1 {
 		t.Errorf("rejected[not_admissible] = %d, want 1", got)
 	}
-	if got := result.ReservedSeenByRawKind["jira_dev_status"]; got != 1 {
-		t.Errorf("reserved_seen[jira_dev_status] = %d, want 1", got)
+	if got := result.ReservedSeenByRawKind[testReservedKind]; got != 1 {
+		t.Errorf("reserved_seen[%s] = %d, want 1", testReservedKind, got)
 	}
 	if !result.Balanced() {
 		t.Fatalf("accounting does not balance: %+v", result)
@@ -426,6 +429,50 @@ func TestGithubClosingReferenceIsAdmittedAndWrittenAsNative(t *testing.T) {
 	if !result.Balanced() {
 		t.Fatalf("accounting does not balance: %+v", result)
 	}
+}
+
+// TestJiraDevStatusIsAdmittedAndWrittenAsNative is the PR6 activation proof,
+// mirroring TestGithubClosingReferenceIsAdmittedAndWrittenAsNative above.
+func TestJiraDevStatusIsAdmittedAndWrittenAsNative(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "jira_dev_status"
+	inputs.Dependencies[0].TargetWorkItemID = "jira:OPS-5"
+	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "jira:OPS-5"}}
+
+	result := Derive(inputs)
+	if result.Written() != 1 {
+		t.Fatalf("wrote %d links, want 1 (rejections %v)", result.Written(), result.Rejected)
+	}
+	if got := result.Rejected[ReasonNotAdmissible]; got != 0 {
+		t.Errorf("rejected[not_admissible] = %d, want 0 -- this kind is now active", got)
+	}
+	if got := result.AdmittedByRawKind["jira_dev_status"]; got != 1 {
+		t.Errorf("admitted[jira_dev_status] = %d, want 1", got)
+	}
+	if got := result.ReservedSeenByRawKind["jira_dev_status"]; got != 0 {
+		t.Errorf("reserved_seen[jira_dev_status] = %d, want 0 -- it is no longer reserved", got)
+	}
+	link := result.Links[0]
+	if link.Provenance != ProvenanceNative {
+		t.Errorf("provenance = %q, want %q -- this is the tier the CHAOS-4769 version_rank fix ranks highest", link.Provenance, ProvenanceNative)
+	}
+	if link.Evidence != "jira_dev_status" {
+		t.Errorf("evidence = %q, want %q", link.Evidence, "jira_dev_status")
+	}
+	if !result.Balanced() {
+		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}
+
+// TestDeriveRejectsJiraDevStatusRawKindPointingAtTheWrongIDSpace is the
+// jira_dev_status counterpart to the linear_attachment and
+// github_closing_reference wrong-id-space tests.
+func TestDeriveRejectsJiraDevStatusRawKindPointingAtTheWrongIDSpace(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "jira_dev_status"
+	inputs.Dependencies[0].TargetWorkItemID = "gh:owner/repo#5"
+	inputs.WorkItems = []WorkItemRow{{OrgID: testOrg, WorkItemID: "gh:owner/repo#5"}}
+	assertSingleRejection(t, Derive(inputs), ReasonNotAdmissible)
 }
 
 // TestGithubClosingReferenceRejectsMalformedIssueNumber is codex round 1's P2
@@ -497,17 +544,18 @@ func repositoryRootPath(t *testing.T) string {
 // TestReservedKindIsSeenButNotAdmitted's doc for why.
 func TestReservedKindIsSeenEvenWhenMalformed(t *testing.T) {
 	inputs := baseInputs()
-	inputs.Dependencies[0].RelationshipTypeRaw = "jira_dev_status"
+	inputs.Dependencies[0].RelationshipTypeRaw = testReservedKind
 	inputs.Dependencies[0].TargetWorkItemID = testLinear // wrong id space for this kind
+	inputs.ReservedAdmissions = testReservedAdmissions()
 
 	result := Derive(inputs)
 	if result.Written() != 0 {
 		t.Fatalf("wrote %d links for a malformed reserved row", result.Written())
 	}
-	if got := result.ReservedSeenByRawKind["jira_dev_status"]; got != 1 {
+	if got := result.ReservedSeenByRawKind[testReservedKind]; got != 1 {
 		t.Errorf(
-			"reserved_seen[jira_dev_status] = %d, want 1: a malformed row is still "+
-				"evidence the provider has started writing this kind", got,
+			"reserved_seen[%s] = %d, want 1: a malformed row is still "+
+				"evidence the provider has started writing this kind", testReservedKind, got,
 		)
 	}
 	if got := result.Rejected[ReasonNotAdmissible]; got != 1 {
@@ -515,5 +563,24 @@ func TestReservedKindIsSeenEvenWhenMalformed(t *testing.T) {
 	}
 	if !result.Balanced() {
 		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}
+
+// TestReservedAdmissionsIsCurrentlyEmpty documents the production state
+// explicitly (PR6, jira_dev_status activation): both prior reserved kinds
+// (github_closing_reference, jira_dev_status) are now in DefaultAdmissions.
+// A future addition to ReservedAdmissions must therefore update this
+// assertion too -- a deliberate act, not silent drift the reserved-kind
+// mechanism tests above could mask (they use an injected synthetic kind now,
+// see testReservedAdmissions, precisely so they keep exercising the
+// mechanism regardless of what the real table holds).
+func TestReservedAdmissionsIsCurrentlyEmpty(t *testing.T) {
+	if len(ReservedAdmissions) != 0 {
+		t.Errorf(
+			"ReservedAdmissions = %+v, want empty -- if a new reserved kind was "+
+				"added deliberately, update this test's expectation; if not, "+
+				"something is admitting a kind that should still be withheld",
+			ReservedAdmissions,
+		)
 	}
 }

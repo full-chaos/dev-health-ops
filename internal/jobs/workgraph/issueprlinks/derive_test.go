@@ -65,6 +65,13 @@ func TestParsePRSource(t *testing.T) {
 const (
 	testOrg  = "org-1"
 	testSlug = "owner/repo"
+
+	// testReservedKind is a raw kind that has NEVER been, and never will be, a
+	// real Admission -- so tests using it (via testReservedAdmissions) keep
+	// exercising the "reserved but not admitted" mechanism regardless of what
+	// the real, empty-today ReservedAdmissions holds (PR6, jira_dev_status
+	// activation). Deliberately not shaped like a real provider's prefix.
+	testReservedKind = "test-reserved-kind"
 )
 
 var (
@@ -73,6 +80,14 @@ var (
 	testLinear  = "linear:CHAOS-1"
 	testGHPRRef = "ghpr:" + testSlug + "#12"
 )
+
+// testReservedAdmissions is the injected reserved-kind table the "reserved
+// but not admitted" tests use in place of the real (empty, since PR6)
+// ReservedAdmissions -- see Inputs.ReservedAdmissions's doc for the seam this
+// relies on.
+func testReservedAdmissions() []Admission {
+	return []Admission{{RelationshipTypeRaw: testReservedKind, TargetPrefix: "test-reserved:"}}
+}
 
 // baseInputs is one admissible dependency with every lookup satisfied, so each
 // test below can knock out exactly one gate and see exactly one rejection.

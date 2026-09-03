@@ -224,31 +224,40 @@ func isWellFormedGithubIssueTarget(target string) bool {
 // kind, github_closing_reference included, so no kind-specific collision test
 // is needed on top of it.
 //
-// jira_dev_status stays reserved -- see ReservedAdmissions.
+// jira_dev_status (CHAOS-4757 slice B, PR6) is activated here too. Same
+// precondition as github_closing_reference above (migration 084 is generic
+// over provenance, not per-kind) and a Go writer already existed
+// (`extractJiraDevStatusDependencies`, internal/providersync/jira_dev_status.go)
+// before this move, same shape as github_closing_reference before its own
+// activation PR.
+//
+// No TargetValidator here, deliberately: the target this writer emits is not
+// CONSTRUCTED from a raw external number the way github_closing_reference's
+// is (`"gh:" + repoFullName + "#" + strconv.Itoa(node.Number)`, where a
+// malformed API response could yield "#0"). jira_dev_status's target is
+// `item.WorkItemID` -- the SAME WorkItemID this Jira issue's own `work_items`
+// row already uses (jira_atlassian_route.go:274-277) -- so there is no
+// separate parsing/construction step that could diverge from what
+// `work_items` actually holds; the two are the identical value by
+// construction, not merely expected to agree.
 var DefaultAdmissions = []Admission{
 	{RelationshipTypeRaw: "linear_attachment", TargetPrefix: "linear:"},
 	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:", TargetValidator: isWellFormedGithubIssueTarget},
+	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
 }
 
 // ReservedAdmissions are the raw kinds whose shape is FROZEN and implemented
 // but which this producer must not admit yet. Promoting one is a one-line move
 // into DefaultAdmissions -- no other code changes.
 //
-//   - `jira_dev_status` (CHAOS-4757 slice B). A Go writer already exists
-//     (`extractJiraDevStatusDependencies`, internal/providersync/jira_dev_status.go)
-//     and stamps this raw kind today, same shape as github_closing_reference
-//     before this PR -- so the CHAOS-4769 precondition this admission needs is
-//     ALSO already satisfied (migration 084 is generic over provenance, not
-//     per-kind). Left reserved here only because activating it was not part of
-//     this PR's scope; it did not require new engineering to become ready and
-//     is worth its own one-line-move PR, flagged separately rather than bundled
-//     in silently.
-//
-// Declaring it here rather than leaving it undeclared is the point: the shape
-// is agreed and tested, so activation is a decision, not an implementation.
-var ReservedAdmissions = []Admission{
-	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
-}
+// Empty today: both prior entries (github_closing_reference, jira_dev_status)
+// are activated above. Declared as an empty slice rather than removed, so a
+// future reserved kind has a place to land and this comment survives to
+// explain the promotion mechanism -- see TestReservedAdmissionsIsCurrentlyEmpty,
+// which documents this state explicitly rather than letting it be implicit
+// (a future addition here is then a deliberate act that test must be updated
+// for, not a silent drift).
+var ReservedAdmissions = []Admission{}
 
 // DependencyRow is one `work_item_dependencies` row, trimmed to the columns the
 // derivation reads.
@@ -309,6 +318,19 @@ type Inputs struct {
 
 	// Admissions defaults to DefaultAdmissions when empty.
 	Admissions []Admission
+
+	// ReservedAdmissions defaults to the package-level ReservedAdmissions when
+	// nil. TEST-ONLY override seam: production callers never set this --
+	// ReservedAdmissions is empty today (PR6), and the "reserved kind is seen
+	// but not admitted" mechanism (ReservedSeenByRawKind, the
+	// not-yet-activated path) has no real kind left to exercise it against.
+	// Tests inject a synthetic entry here to keep that mechanism covered for
+	// whatever the NEXT reserved kind turns out to be, without touching the
+	// real (empty) table. Explicitly nil-vs-empty: nil defers to the package
+	// var; an explicitly EMPTY non-nil slice would mean "no reserved kinds for
+	// this call," which no real or test caller currently needs but the
+	// distinction is kept available.
+	ReservedAdmissions []Admission
 }
 
 // RejectionReason names why a candidate dependency row produced no link. The
@@ -425,6 +447,12 @@ func Derive(inputs Inputs) Result {
 	if len(admissions) == 0 {
 		admissions = DefaultAdmissions
 	}
+	// nil (not just empty) is the defer-to-package-default signal -- see
+	// Inputs.ReservedAdmissions's doc for why the distinction is kept.
+	reservedAdmissions := ReservedAdmissions
+	if inputs.ReservedAdmissions != nil {
+		reservedAdmissions = inputs.ReservedAdmissions
+	}
 
 	result := Result{
 		AdmittedByRawKind:     make(map[string]int),
@@ -499,7 +527,7 @@ func Derive(inputs Inputs) Result {
 	for _, dependency := range inputs.Dependencies {
 		admission, admissible := admit(admissions, dependency)
 		if !admissible {
-			if kind, ok := reservedRawKind(dependency.RelationshipTypeRaw); ok {
+			if kind, ok := reservedRawKind(reservedAdmissions, dependency.RelationshipTypeRaw); ok {
 				result.ReservedSeenByRawKind[kind]++
 			}
 			result.Rejected[ReasonNotAdmissible]++
@@ -603,8 +631,8 @@ func admit(admissions []Admission, dependency DependencyRow) (Admission, bool) {
 // finding"; recording the disagreement rather than deferring, because the
 // counter exists precisely to make the activation decision evidence-based and a
 // silent zero is the one answer it must never give wrongly.
-func reservedRawKind(relationshipTypeRaw string) (string, bool) {
-	for _, reserved := range ReservedAdmissions {
+func reservedRawKind(reservedAdmissions []Admission, relationshipTypeRaw string) (string, bool) {
+	for _, reserved := range reservedAdmissions {
 		if relationshipTypeRaw == reserved.RelationshipTypeRaw {
 			return reserved.RelationshipTypeRaw, true
 		}

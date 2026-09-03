@@ -25,18 +25,36 @@ on:
         type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # CHAOS-4921: unconditional cancel-in-progress meant every push (or
-  # workflow_dispatch) targeting main shared one concurrency group with
-  # every other main-targeting event, so a fast-follow push cancelled
-  # whatever main build was already in flight -- twice observed live:
-  # run 33706407469 (2d4abbbbb, the commit carrying CH migration 084) was
-  # cancelled by the fe5f540a9 push, whose own run then skipped the image
-  # build on its path filter, so no image containing 084 was ever built;
-  # separately, workflow_dispatch run 33709320991 was cancelled by the
-  # c3b3ff2ae push landing the same second. Main builds must not race each
-  # other out of existence -- only PR runs (which genuinely should cancel
-  # a stale in-flight build when the PR gets a new push) still cancel.
+  # CHAOS-4921: `github.ref` as the non-PR fallback meant every `push`/
+  # `workflow_dispatch` targeting `main` shared ONE group (both resolve
+  # `github.ref` to the literal `refs/heads/main`) -- so a fast-follow
+  # event in that group could cancel whatever main build was already in
+  # flight, twice observed live: run 33706407469 (2d4abbbbb, the commit
+  # carrying CH migration 084) was cancelled by the fe5f540a9 push, whose
+  # own run then skipped the image build on its path filter, so no image
+  # containing 084 was ever built; separately, workflow_dispatch run
+  # 33709320991 was cancelled by the c3b3ff2ae push landing the same
+  # second. (`merge_group` and `release` were never actually part of this
+  # collision -- `github.ref` for those resolves to a distinct synthetic
+  # queue ref and a tag ref respectively, neither of which is
+  # `refs/heads/main`.)
+  #
+  # `cancel-in-progress` scoped to `pull_request` (below) closes the
+  # IN-FLIGHT half of this, but GitHub's own documented concurrency
+  # behavior holds at most one PENDING run per group even with
+  # cancel-in-progress false: a third event arriving in a group with one
+  # running and one already pending cancels that PENDING one. With the
+  # group key still falling back to `github.ref`, two merges landing
+  # close together (well within reach on a busy night with a ~20 min
+  # hosted queue) could still cancel a pending main build outright. Fixed
+  # by falling back to `github.sha` instead of `github.ref`: every
+  # distinct commit now gets its OWN group for a non-PR event, so no two
+  # different commits' builds can ever collide, cancel, or displace each
+  # other, running or pending. PR events keep grouping by
+  # `pull_request.number` (unchanged) so a stale PR build still gets
+  # superseded by a new push to the same PR, which is the cancellation
+  # this mechanism exists to provide.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

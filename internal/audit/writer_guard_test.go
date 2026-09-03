@@ -197,6 +197,33 @@ func mentionsGuardedTable(b []byte) bool {
 	return false
 }
 
+// fallThroughShapes are statement shapes the TABLE pattern does not resolve, so
+// their safety rests ENTIRELY on the fail-closed branch.
+//
+// Both tests that care about them range over THIS list: the offset test records
+// that each falls through, and the verdict table asserts that each is
+// nonetheless caught. Sharing the list is what makes those two facts one fact.
+// Previously the two tests each named the quoted-identifier case independently
+// and merely happened to agree, so a shape added to the fall-through list would
+// have acquired no verdict assertion -- a predicate without a fixture, which is
+// the defect lane-auth-contracts found in their own harness and then found the
+// consequence of in mine.
+//
+// Adding an entry here is a deliberate edit that forces both tests to cover it.
+var fallThroughShapes = []struct {
+	name      string
+	guarded   string
+	unguarded string
+}{
+	{
+		// The UPDATE arm needs whitespace after the table name; a quoted
+		// identifier puts a closing quote there instead.
+		name:      "update quoted table",
+		guarded:   `UPDATE "auth"."auth_outbox_events" AS e SET published_at = now()`,
+		unguarded: `UPDATE "auth"."other_table" AS e SET published_at = now()`,
+	},
+}
+
 // guardFinding is one write the guard objects to, located by byte offset so a
 // caller can name the enclosing function.
 type guardFinding struct {
@@ -494,7 +521,10 @@ func TestVerbAndTablePatternsStartAtTheSameOffset(t *testing.T) {
 	// after the table name and a quoted identifier puts a closing quote there.
 	// The write is still caught -- see the note above -- with a less specific
 	// message.
-	wantTableMisses := []string{"update quoted table"}
+	wantTableMisses := make([]string, 0, len(fallThroughShapes))
+	for _, f := range fallThroughShapes {
+		wantTableMisses = append(wantTableMisses, f.name)
+	}
 	if strings.Join(tableMisses, ",") != strings.Join(wantTableMisses, ",") {
 		t.Errorf("shapes falling through to fail-closed are %v, expected exactly %v. "+
 			"If the table pattern changed on purpose, change this list on purpose",
@@ -560,8 +590,6 @@ func TestTheGuardsVerdictOnStatementShapes(t *testing.T) {
 		sql         string
 		wantFlagged bool
 	}{
-		{"quoted aliased UPDATE, guarded", `UPDATE "auth"."auth_outbox_events" AS e SET published_at = now()`, true},
-		{"quoted aliased UPDATE, not guarded", `UPDATE "auth"."other_table" AS e SET published_at = now()`, false},
 		{"aliased UPDATE, guarded", `UPDATE auth.auth_outbox_events AS e SET published_at = now()`, true},
 		{"aliased UPDATE, not guarded", `UPDATE auth.other_table AS e SET published_at = now()`, false},
 		{"plain UPDATE, guarded", `UPDATE auth.security_audit_events SET outcome = 'x'`, true},
@@ -572,6 +600,28 @@ func TestTheGuardsVerdictOnStatementShapes(t *testing.T) {
 		{"DELETE, not guarded", `DELETE FROM auth.other_table WHERE id = 1`, false},
 		{"SELECT only, guarded table named", `SELECT id FROM auth.auth_outbox_events WHERE id = 1`, false},
 		{"SELECT FOR UPDATE, guarded table named", `SELECT id FROM auth.auth_outbox_events FOR UPDATE SKIP LOCKED`, false},
+	}
+
+	// EVERY FALL-THROUGH SHAPE GETS BOTH ROWS, taken from the shared list rather
+	// than restated, so a shape recorded as relying on fail-closed cannot exist
+	// without an assertion that fail-closed catches it.
+	for _, f := range fallThroughShapes {
+		cases = append(cases,
+			struct {
+				name        string
+				sql         string
+				wantFlagged bool
+			}{f.name + " (fall-through), guarded", f.guarded, true},
+			struct {
+				name        string
+				sql         string
+				wantFlagged bool
+			}{f.name + " (fall-through), not guarded", f.unguarded, false},
+		)
+	}
+	if len(fallThroughShapes) == 0 {
+		t.Fatal("no fall-through shapes declared; if the table pattern now resolves everything, " +
+			"say so deliberately rather than leaving this table asserting nothing about them")
 	}
 
 	var flagged, clean int

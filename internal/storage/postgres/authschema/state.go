@@ -33,13 +33,21 @@ func currentUser(ctx context.Context, pool *pgxpool.Pool) (string, error) {
 // migration role, which makes the migration role their OWNER -- that ownership
 // is what keeps DDL out of the runtime role's reach without needing a REVOKE.
 func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Options) error {
-	schema := quoteIdentifier(options.Schema)
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
+		return err
+	}
+	schema := quoteIdentifier(schemaID)
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
-	// statement as text. ValidateIdentifier (allowlist ^[a-z][a-z0-9_]{0,62}$ plus
-	// reserved-word rejection) runs at apply.go:165, before this call on the Apply
-	// path; quoteIdentifier is belt-and-braces. Evidence:
-	// TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by
-	// team-lead (chris's option A).
+	// statement as text. What makes that safe is no longer an ordering a reader
+	// has to verify: quoteIdentifier accepts ONLY ValidatedIdentifier, and the
+	// only way to obtain one is NewValidatedIdentifier, which applies the
+	// allowlist (^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection). An
+	// unvalidated string cannot reach this statement because it cannot reach
+	// quoteIdentifier -- the compiler rejects it. Evidence:
+	// TestNewValidatedIdentifierRefusesEveryInjectionShape and
+	// TestZeroValueIdentifierCannotReachSQL. Suppression ruled by team-lead
+	// (chris's option A); CHAOS-4917 replaced the ordering argument with the type.
 	//
 	// TWO things about the token below are load-bearing, and BOTH were wrong on a
 	// first attempt that still passed every local check:
@@ -60,11 +68,15 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Op
 		return fmt.Errorf("%w: creating schema", ErrMigrationFailed)
 	}
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
-	// statement as text. ValidateIdentifier (allowlist ^[a-z][a-z0-9_]{0,62}$ plus
-	// reserved-word rejection) runs at apply.go:165, before this call on the Apply
-	// path; quoteIdentifier is belt-and-braces. Evidence:
-	// TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by
-	// team-lead (chris's option A).
+	// statement as text. What makes that safe is no longer an ordering a reader
+	// has to verify: quoteIdentifier accepts ONLY ValidatedIdentifier, and the
+	// only way to obtain one is NewValidatedIdentifier, which applies the
+	// allowlist (^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection). An
+	// unvalidated string cannot reach this statement because it cannot reach
+	// quoteIdentifier -- the compiler rejects it. Evidence:
+	// TestNewValidatedIdentifierRefusesEveryInjectionShape and
+	// TestZeroValueIdentifierCannotReachSQL. Suppression ruled by team-lead
+	// (chris's option A); CHAOS-4917 replaced the ordering argument with the type.
 	//
 	// TWO things about the token below are load-bearing, and BOTH were wrong on a
 	// first attempt that still passed every local check:
@@ -86,7 +98,7 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Op
 			version    integer      PRIMARY KEY,
 			name       text         NOT NULL,
 			applied_at timestamptz  NOT NULL DEFAULT now()
-		)`, schema, quoteIdentifier(versionTable)),
+		)`, schema, quoteIdentifier(versionTableIdentifier)),
 	); err != nil {
 		return fmt.Errorf("%w: creating the version table", ErrMigrationFailed)
 	}
@@ -94,13 +106,17 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn *pgx.Conn, options Op
 }
 
 // appliedVersions reads the lineage positions this database already holds.
-func appliedVersions(ctx context.Context, conn *pgx.Conn, schema string) (map[int]struct{}, error) {
+func appliedVersions(ctx context.Context, conn *pgx.Conn, schema ValidatedIdentifier) (map[int]struct{}, error) {
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
-	// statement as text. ValidateIdentifier (allowlist ^[a-z][a-z0-9_]{0,62}$ plus
-	// reserved-word rejection) runs at apply.go:165, before this call on the Apply
-	// path; quoteIdentifier is belt-and-braces. Evidence:
-	// TestValidateIdentifierRejectsEveryInjectionShape. Ruled a false positive by
-	// team-lead (chris's option A).
+	// statement as text. What makes that safe is no longer an ordering a reader
+	// has to verify: quoteIdentifier accepts ONLY ValidatedIdentifier, and the
+	// only way to obtain one is NewValidatedIdentifier, which applies the
+	// allowlist (^[a-z][a-z0-9_]{0,62}$ plus reserved-word rejection). An
+	// unvalidated string cannot reach this statement because it cannot reach
+	// quoteIdentifier -- the compiler rejects it. Evidence:
+	// TestNewValidatedIdentifierRefusesEveryInjectionShape and
+	// TestZeroValueIdentifierCannotReachSQL. Suppression ruled by team-lead
+	// (chris's option A); CHAOS-4917 replaced the ordering argument with the type.
 	//
 	// TWO things about the token below are load-bearing, and BOTH were wrong on a
 	// first attempt that still passed every local check:
@@ -118,7 +134,7 @@ func appliedVersions(ctx context.Context, conn *pgx.Conn, schema string) (map[in
 	// suppression that works.
 	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
 	rows, err := conn.Query(ctx, fmt.Sprintf(
-		`SELECT version FROM %s.%s`, quoteIdentifier(schema), quoteIdentifier(versionTable),
+		`SELECT version FROM %s.%s`, quoteIdentifier(schema), quoteIdentifier(versionTableIdentifier),
 	))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading applied versions", ErrMigrationFailed)
@@ -151,6 +167,10 @@ var ErrNotCurrent = errors.New("auth schema is not at the embedded lineage head"
 // reported as version 0 and ErrNotCurrent, not silently provisioned, because a
 // check that can mutate is not a check.
 func Check(ctx context.Context, pool *pgxpool.Pool, schema string) (current int, head int, err error) {
+	schemaID, err := NewValidatedIdentifier(schema)
+	if err != nil {
+		return 0, 0, err
+	}
 	if pool == nil {
 		return 0, 0, fmt.Errorf("%w: no connection pool", ErrInvalidOptions)
 	}
@@ -177,7 +197,7 @@ func Check(ctx context.Context, pool *pgxpool.Pool, schema string) (current int,
 
 	if err := pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT coalesce(max(version), 0) FROM %s.%s`,
-		quoteIdentifier(schema), quoteIdentifier(versionTable),
+		quoteIdentifier(schemaID), quoteIdentifier(versionTableIdentifier),
 	)).Scan(&current); err != nil {
 		return 0, head, fmt.Errorf("%w: reading the current version", ErrMigrationFailed)
 	}

@@ -141,14 +141,16 @@ func runtimeSequences() []string {
 // deliberately not rewritten here, and are caught instead by
 // VerifyRuntimePosture, which Apply calls and fails on.
 func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) error {
-	if err := ValidateIdentifier(options.Schema); err != nil {
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
 		return err
 	}
-	if err := ValidateIdentifier(options.RuntimeRole); err != nil {
+	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
+	if err != nil {
 		return err
 	}
-	schema := quoteIdentifier(options.Schema)
-	role := quoteIdentifier(options.RuntimeRole)
+	schema := quoteIdentifier(schemaID)
+	role := quoteIdentifier(roleID)
 
 	statements := []string{
 		// Wipe the slate so the manifest is authoritative in both directions.
@@ -165,7 +167,8 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 	posture := RuntimePosture()
 	sort.Slice(posture, func(i, j int) bool { return posture[i].Table < posture[j].Table })
 	for _, entry := range posture {
-		if err := ValidateIdentifier(entry.Table); err != nil {
+		tableID, err := NewValidatedIdentifier(entry.Table)
+		if err != nil {
 			return err
 		}
 		granted := entry.privileges()
@@ -177,15 +180,16 @@ func ApplyRuntimeGrants(ctx context.Context, conn *pgx.Conn, options Options) er
 		}
 		statements = append(statements, fmt.Sprintf(
 			`GRANT %s ON %s.%s TO %s`,
-			strings.Join(granted, ", "), schema, quoteIdentifier(entry.Table), role,
+			strings.Join(granted, ", "), schema, quoteIdentifier(tableID), role,
 		))
 	}
 	for _, sequence := range runtimeSequences() {
-		if err := ValidateIdentifier(sequence); err != nil {
+		sequenceID, err := NewValidatedIdentifier(sequence)
+		if err != nil {
 			return err
 		}
 		statements = append(statements, fmt.Sprintf(
-			`GRANT USAGE, SELECT ON SEQUENCE %s.%s TO %s`, schema, quoteIdentifier(sequence), role,
+			`GRANT USAGE, SELECT ON SEQUENCE %s.%s TO %s`, schema, quoteIdentifier(sequenceID), role,
 		))
 	}
 

@@ -684,7 +684,7 @@ func TestResolve_Sankey_UnsetUseInvestment_NonInvestmentDimsStillRun(t *testing.
 // TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges is CHAOS-4759
 // codex round-2 P1's regression lock for resolveSankey: a TEAM->THEME
 // sankey with useInvestment omitted at both levels auto-routes its
-// nodes/edges to latestWorkUnitInvestmentsSource (the test above proves
+// nodes/edges to LatestWorkUnitInvestmentsSource (the test above proves
 // this), and RecordArgMaxNullTransitionGuard must fire for it even though
 // resolveSankeyCoverage's OWN useInvestment (the raw three-state flag,
 // deliberately not auto-routed -- see resolveSankey's doc comment) stays

@@ -360,7 +360,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		// here to mirror Python's _execute_sankey_inner, which has no
 		// membership-scope call of its own -- this guard has no Python
 		// call site to mirror. It exists purely to observe a Go-only
-		// divergence latestWorkUnitInvestmentsSource() can produce, so it
+		// divergence LatestWorkUnitInvestmentsSource() can produce, so it
 		// must fire whenever nodes/edges actually read that source,
 		// AUTO-ROUTED or explicit alike -- gated on `useInvestment` (the
 		// value CompileSankey just used), NOT `coverageUseInvestment`
@@ -479,7 +479,7 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 		// flowmatrix.go) and never returns the decision, so this mirrors
 		// that same routing via flowMatrixUsesInvestmentSource -- see its
 		// doc comment. Without this, a THEME/SUBCATEGORY flowMatrix that
-		// auto-routes to latestWorkUnitInvestmentsSource() with the flag
+		// auto-routes to LatestWorkUnitInvestmentsSource() with the flag
 		// omitted would read that source with no guard ever firing.
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 	}
@@ -498,7 +498,7 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 	// therefore structurally UNREACHABLE from any flow-matrix request, for
 	// any dimension, by any path -- unlike RecordArgMaxNullTransitionGuard
 	// above, which DOES apply here (it observes
-	// latestWorkUnitInvestmentsSource() generally, not this specific join).
+	// LatestWorkUnitInvestmentsSource() generally, not this specific join).
 	// Round 1's guard (`resolveUseInvestment(...) && req.Dimension ==
 	// DimensionRepo`) could still evaluate true (e.g. an explicit
 	// flowMatrix.useInvestment=true with dimension=REPO), firing an

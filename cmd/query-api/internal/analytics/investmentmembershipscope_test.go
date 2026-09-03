@@ -24,7 +24,7 @@ import "testing"
 // a fake ClickHouse client that never executes real SQL, so a syntactically
 // invalid-per-analyzer join compiled cleanly and passed every test.
 // investmentMembershipScopeFilter() wires this function's SQL into the
-// WHERE clause of latestWorkUnitInvestmentsSource() -- the foundation of
+// WHERE clause of LatestWorkUnitInvestmentsSource() -- the foundation of
 // nearly every investment-path query -- so every investment-path
 // timeseries/breakdown/sankey/flowMatrix request was live-broken until
 // this fix, regardless of the argMax/tuple-wrap correctness this package's

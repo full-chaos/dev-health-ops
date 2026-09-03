@@ -3,7 +3,7 @@ package analytics
 // CHAOS-4759 transition guard.
 //
 // RULING (chris, 2026-09-01 15:56 PT, "Go is the route"): investment.go's
-// latestWorkUnitInvestmentsSource tuple-wraps argMax over four Nullable
+// LatestWorkUnitInvestmentsSource tuple-wraps argMax over four Nullable
 // columns (repo_id, provider, work_unit_type, work_unit_name) so it
 // reports a work unit's TRUE latest generation, including a NULL, rather
 // than Python's null-skipping argMax(col, computed_at)
@@ -210,7 +210,7 @@ func defaultRecordArgMaxNullTransition(ctx context.Context, orgID string, state 
 // argMaxNullTransitionCheckCooldown bounds how often the guard's own
 // GROUP BY scan over work_unit_investments runs per org ON SUCCESS. That
 // scan is the same aggregate shape and cost as the one
-// latestWorkUnitInvestmentsSource already runs on every investment
+// LatestWorkUnitInvestmentsSource already runs on every investment
 // request for this org, so running it AGAIN on every request would
 // double this package's ClickHouse load for a property that only needs
 // bounded-latency detection -- the ticket asks that a transition be
@@ -315,7 +315,7 @@ func defaultRecordArgMaxNullTransitionFetchFailure(ctx context.Context, orgID st
 // must never be able to break the real query it decorates.
 //
 // CALLED FROM every investment-path entry point that can actually read
-// latestWorkUnitInvestmentsSource: the same four call sites
+// LatestWorkUnitInvestmentsSource: the same four call sites
 // RecordStaleInvestmentMembershipScope uses (resolve.go's
 // resolveOneTimeseries/resolveOneBreakdown, investmentquality.go's
 // resolveEvidenceQualityStats, sankeycoverage.go's resolveSankeyCoverage),

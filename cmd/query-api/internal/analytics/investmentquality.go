@@ -214,7 +214,7 @@ func unitTeamWindowFilter(scopeFilter, categoryFilter string) string {
 // RESTRUCTURING (this package's standing §9 discipline): Python's
 // `WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE} SELECT ... FROM
 // latest_work_unit_investments AS work_unit_investments` becomes `FROM
-// (SELECT ...) AS work_unit_investments` -- latestWorkUnitInvestmentsSource()
+// (SELECT ...) AS work_unit_investments` -- LatestWorkUnitInvestmentsSource()
 // inlined, no WITH, matching every other caller in this package
 // (investmentContextFor's identical non-repo-allocation branch).
 func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.Date, scopeFilter string, scopeBindings []clickhouse.Binding, themes []string, teamScopeIDs []string) compiledQuery {
@@ -229,7 +229,7 @@ func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.
 	var teamBindings []clickhouse.Binding
 	if len(teamScopeIDs) > 0 {
 		unitTeamSQL := buildUnitTeamSubquery(unitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", latestWorkUnitInvestmentsSource()),
+			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
 			Where:          unitTeamWindowFilter("", ""),
 			InnerTeamAlias: "team_label",
 			IncludeTeamID:  true,
@@ -260,7 +260,7 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
 %s
-`, latestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
+`, LatestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},

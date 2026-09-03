@@ -1,0 +1,86 @@
+package workgraph
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestParsePRDetailID(t *testing.T) {
+	const repo = "11111111-1111-1111-1111-111111111111"
+	for _, tc := range []struct {
+		name       string
+		id         string
+		wantRepo   string
+		wantNumber int
+		wantOK     bool
+	}{
+		{"hash-pr separator", repo + "#pr42", repo, 42, true},
+		{"bare hash separator", repo + "#42", repo, 42, true},
+		{"colon separator", repo + ":42", repo, 42, true},
+		{"slash-pr separator", repo + "/pr/42", repo, 42, true},
+		{"upper-cased repo id is lower-cased", strings.ToUpper(repo) + "#pr42", repo, 42, true},
+		{"missing number", repo + "#pr", "", 0, false},
+		{"missing separator", repo + "42", "", 0, false},
+		{"repo id too short", "11111111-1111-1111-1111-11111111111#pr1", "", 0, false},
+		{"non-hex repo id", strings.Repeat("g", 36) + "#pr1", "", 0, false},
+		{"empty string", "", "", 0, false},
+		{"trailing garbage after number", repo + "#pr42x", "", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotRepo, gotNumber, gotOK := ParsePRDetailID(tc.id)
+			if gotOK != tc.wantOK || gotRepo != tc.wantRepo || gotNumber != tc.wantNumber {
+				t.Fatalf("ParsePRDetailID(%q) = (%q, %d, %v), want (%q, %d, %v)",
+					tc.id, gotRepo, gotNumber, gotOK, tc.wantRepo, tc.wantNumber, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestResolveLinkedIssues_DispatchesOnFlagAndMapsRows is the resolver-facing
+// (workgraph-package) half of CHAOS-4980's flag-state coverage: with the
+// native flag on, ResolveLinkedIssues must issue the fast (version_rank)
+// query; with it off (unset), the FINAL oracle query -- and in both cases
+// the returned rows must map 1:1 onto model.PullRequestIssueLink. The
+// graph-package Pr resolver test (pr_resolver_test.go) pins the same two
+// states one layer up, through the actual GraphQL resolver.
+func TestResolveLinkedIssues_DispatchesOnFlagAndMapsRows(t *testing.T) {
+	row := []any{"issue:OPS-9", 0.75, "native", "native-token"}
+
+	for _, tc := range []struct {
+		name        string
+		flagValue   string
+		wantInQuery string
+	}{
+		{"flag on: fast path", "1", "version_rank"},
+		{"flag unset: FINAL oracle", "", "FINAL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.flagValue == "" {
+				t.Setenv(investmentMaterializeNativeEnabledEnv, "")
+			} else {
+				t.Setenv(investmentMaterializeNativeEnabledEnv, tc.flagValue)
+			}
+
+			client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{row}}}}
+			got, err := ResolveLinkedIssues(context.Background(), client, "org1", "11111111-1111-1111-1111-111111111111", 42)
+			if err != nil {
+				t.Fatalf("ResolveLinkedIssues: %v", err)
+			}
+			if client.calls != 1 {
+				t.Fatalf("want exactly 1 query, got %d", client.calls)
+			}
+			if !strings.Contains(client.statements[0], tc.wantInQuery) {
+				t.Fatalf("query does not contain %q:\n%s", tc.wantInQuery, client.statements[0])
+			}
+			if len(got) != 1 {
+				t.Fatalf("got %d linked issues, want 1: %+v", len(got), got)
+			}
+			want := row
+			if got[0].WorkItemID != want[0] || got[0].Confidence != want[1] || got[0].Provenance != want[2] || got[0].Evidence != want[3] {
+				t.Fatalf("mapped row = %+v, want work_item_id=%v confidence=%v provenance=%v evidence=%v",
+					got[0], want[0], want[1], want[2], want[3])
+			}
+		})
+	}
+}

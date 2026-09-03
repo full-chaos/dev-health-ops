@@ -513,6 +513,28 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 			"found -- a policing test whose corpus cannot trip it")
 	}
 
+	// EVERY PREDICATE MUST HAVE BEEN EXERCISED, not merely the aggregate.
+	//
+	// Round 2 caught the context file claiming this was already true when only
+	// `declaredNarrower` and `clientEnforced` were asserted. Those are sums: a
+	// generator regression that stopped producing NUL kids would leave the sum
+	// non-zero on the strength of the other classes, and the NUL narrowing
+	// would quietly stop being tested while everything stayed green. That is
+	// the round-1 defect one level up -- an aggregate that cannot distinguish
+	// "all classes covered" from "some classes covered".
+	for _, p := range narrowingPredicates {
+		if byPredicate[p.name] == 0 {
+			t.Errorf("no generated document exercised the narrowing %q; it is exempted by a "+
+				"predicate and asserted by nothing, so the schema could stop being narrower "+
+				"there and this harness would not notice", p.name)
+		}
+	}
+	for _, p := range clientEnforcedPredicates {
+		if byPredicate[p.name] == 0 {
+			t.Errorf("no generated document exercised the client-enforced rule %q", p.name)
+		}
+	}
+
 	names := make([]string, 0, len(byPredicate))
 	for k := range byPredicate {
 		names = append(names, k)
@@ -536,5 +558,62 @@ func TestTheSchemaAndTheRealConsumerAgreeExceptOnDeclaredNarrowings(t *testing.T
 			"narrower_than_consumer fixture and a predicate -- round 1 blocked this contract for "+
 			"exactly four of these:\n  %s",
 			undeclaredCount, strings.Join(undeclared, "\n  "))
+	}
+}
+
+func TestEveryNarrowingPredicateHasAFixtureAndViceVersa(t *testing.T) {
+	// THE STRUCTURAL FIX FOR THE ROUND-2 BLOCK, which was the round-1 defect
+	// committed inside its own fix.
+	//
+	// A narrowing needs BOTH a predicate and a fixture, and they fail in
+	// opposite ways when one is missing:
+	//
+	//   * a predicate with no fixture is the worse half, and it is what round 2
+	//     found. The predicate EXCUSES the disagreement in the differential, so
+	//     the harness stays green over an asymmetry that nothing asserts. Prose
+	//     alone merely fails to test a narrowing; a lone predicate actively
+	//     hides it.
+	//   * a fixture with no predicate makes the differential fail the moment the
+	//     generator produces that shape, reporting a real narrowing as an
+	//     undeclared one.
+	//
+	// Both are now impossible to introduce without this test going red, which
+	// is the only reason to trust the category is complete. Remembering to add
+	// both is what failed twice.
+	manifest := loadJWKSManifest(t)
+	if len(manifest.NarrowerThanConsumer) == 0 {
+		t.Fatal("no narrowing fixtures; this test would pass vacuously")
+	}
+
+	matched := map[string]bool{}
+	for _, entry := range manifest.NarrowerThanConsumer {
+		document, ok := decodeJWKSFixture(t, entry.File).(map[string]any)
+		if !ok {
+			t.Errorf("%s: not a JSON object", entry.File)
+			continue
+		}
+		hit := ""
+		for _, p := range narrowingPredicates {
+			if p.holds(document) {
+				hit = p.name
+				break
+			}
+		}
+		if hit == "" {
+			t.Errorf("%s is filed as a narrowing but matches NO predicate, so the differential "+
+				"harness would report it as an UNDECLARED narrowing the moment the generator "+
+				"produced its shape", entry.File)
+			continue
+		}
+		matched[hit] = true
+	}
+
+	for _, p := range narrowingPredicates {
+		if !matched[p.name] {
+			t.Errorf("the predicate %q exempts a disagreement in the differential harness and no "+
+				"narrower_than_consumer fixture demonstrates it. A predicate without a fixture "+
+				"EXCUSES an asymmetry that nothing asserts -- this is exactly what round 2 "+
+				"blocked, for `use: \"\"`", p.name)
+		}
 	}
 }

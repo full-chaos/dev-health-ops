@@ -224,11 +224,19 @@ client it describes, that gap needs a fixture in a category of its own —
 accepts it, the schema refuses it.
 
 A prose list cannot be executed, and this one was wrong: it declared two
-narrowings and there were five. The three missing were case-variant member names
-(Go's `encoding/json` matches field names **case-insensitively**, and
-`DisallowUnknownFields` compares *after* that match), `use: null` decoding to the
-zero string, and a `kid` carrying NUL or surrounding spaces — `unicode.IsSpace`
-does not consider NUL a space, so `TrimSpace` leaves it.
+narrowings and there were five. The missing ones were case-variant member names (Go's `encoding/json` matches
+field names **case-insensitively**, and `DisallowUnknownFields` compares *after*
+that match), `use: null` decoding to the zero string, and a `kid` carrying NUL or
+surrounding spaces — `unicode.IsSpace` does not consider NUL a space, so
+`TrimSpace` leaves it.
+
+**Round 2 then blocked it again for a FIFTH**, `use: ""`, which had a predicate
+in the harness and a sentence in the schema and no fixture. A predicate without a
+fixture is worse than prose: prose merely fails to test the narrowing, while a
+predicate actively *excuses* the disagreement, so the differential stays green
+over an asymmetry nothing asserts. The correspondence between predicates and
+fixtures is now asserted in both directions — remembering to add both is what
+failed twice.
 
 **And the test built to catch exactly this passed the whole time.**
 `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` runs every reject

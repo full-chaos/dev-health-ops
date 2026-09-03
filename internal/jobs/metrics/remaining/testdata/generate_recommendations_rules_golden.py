@@ -29,7 +29,7 @@ import random
 import struct
 import sys
 import unicodedata
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -41,9 +41,40 @@ from dev_health_ops.recommendations.snapshot import MetricsSnapshot  # noqa: E40
 
 OUTPUT_PATH = Path(__file__).parent / "recommendations_rules_golden.json"
 
-TEAM_ID = "team-70d529e0"
-ORG_ID = "org-70d529e0"
-WINDOW_START = date(2026, 8, 1)
+# Per-case identity and window, for the same reason `now` is per-case.
+#
+# Round 2 fixed the frozen `computed_at` and stopped there. Every case still
+# shared ONE team_id, org_id, window_start and window_end, so the comparator
+# pinned each field's VALUE against a single literal and not the port's
+# PROPAGATION of it: hard-coding `OrgID: "org-70d529e0"` (or the team, or either
+# window bound) in an evaluator passed all 437 scenarios and all 2185 rule
+# comparisons. Measured, not assumed -- each of the four survived its mutation.
+#
+# The lesson is the one this port keeps re-learning: when a class of defect is
+# fixed, check the FIX for the same class. Varying `now` and leaving four
+# sibling fields constant was fixing one instance of the class, not the class.
+IDENTITY_BASE_TEAM = "team-70d529e0"
+IDENTITY_BASE_ORG = "org-70d529e0"
+WINDOW_BASE_START = date(2026, 8, 1)
+
+
+def identity_for(index: int) -> tuple[str, str, date, date]:
+    """Distinct team, org and window per case.
+
+    The window LENGTH varies too, not just its offset: a mutant that propagated
+    window_start correctly while deriving window_end from a fixed span would
+    survive a fixture where every window is the same width.
+    """
+    team = f"{IDENTITY_BASE_TEAM}-{index:04d}"
+    org = f"{IDENTITY_BASE_ORG}-{index:04d}"
+    start = WINDOW_BASE_START + timedelta(days=index % 29)
+    end = start + timedelta(days=7 + (index % 23))
+    return team, org, start, end
+
+
+TEAM_ID = IDENTITY_BASE_TEAM
+ORG_ID = IDENTITY_BASE_ORG
+WINDOW_START = WINDOW_BASE_START
 WINDOW_END = date(2026, 9, 1)
 # The BASE instant. Each case gets its OWN `now`, derived below.
 #
@@ -443,6 +474,14 @@ def build_document() -> dict:
     entries = []
     for index, (name, snap) in enumerate(cases):
         case_now = now_for(index)
+        team, org, window_start, window_end = identity_for(index)
+        snap = replace(
+            snap,
+            team_id=team,
+            org_id=org,
+            window_start=window_start,
+            window_end=window_end,
+        )
         results = {}
         for rule_id, evaluator in RULE_EVALUATORS.items():
             results[rule_id] = encode_result(evaluator(snap, case_now))

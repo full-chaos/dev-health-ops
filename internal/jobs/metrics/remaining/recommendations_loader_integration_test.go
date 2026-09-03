@@ -370,6 +370,16 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 		{loaderTeamA, "2026-08-02", "jira", "scope-1", 4, 1, 8.25, "2026-08-04 00:00:00"},        // distinct computed_at: no argMax tie under a collapsing mutant
 		{loaderTeamA, "2026-08-05", "github", "scope-1", 7, 2, 14.25, "2026-08-06 00:00:00"},
 		{loaderTeamA, "2026-08-09", "github", "scope-1", 9, 1, 20.0, "2026-08-10 00:00:00"},
+		// THE WINDOW BOUNDARIES. Without a row ON each edge, `day >= {start}`
+		// and `day < {end}` cannot be told from `day > {start}` and
+		// `day <= {end}` -- the fixture's earliest row was Aug 2 and its latest
+		// Aug 9, so both mutations were invisible.
+		//
+		// Aug 1 is the INCLUSIVE start: it must appear. Sep 1 is the EXCLUSIVE
+		// end: it must NOT, and it is seeded precisely so that a `<=` mutant
+		// pulls it in and changes both the list length and its values.
+		{loaderTeamA, "2026-08-01", "github", "scope-1", 2, 3, 9.5, "2026-08-02 12:00:00"},
+		{loaderTeamA, "2026-09-01", "github", "scope-1", 6000, 7000, 6000.0, "2026-09-02 00:00:00"},
 		{loaderTeamB, "2026-08-02", "github", "scope-1", 1, 8, 4.0, "2026-08-03 00:00:00"},
 		{loaderTeamB, "2026-08-06", "github", "scope-1", 2, 9, 5.5, "2026-08-07 00:00:00"},
 	} {
@@ -580,6 +590,13 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 	}{
 		{repoAlpha, "2026-08-02", 4.0, "2026-08-03 00:00:00"}, // first half
 		{repoAlpha, "2026-08-25", 6.0, "2026-08-26 00:00:00"}, // second half
+		// EXACTLY THE MIDPOINT. mid = window_start + max(1, days/2) = Aug 16,
+		// and the reference splits on `day < mid` / `day >= mid`, so this row
+		// belongs to the SECOND half and to that half only. With `day <= mid`
+		// it is counted in BOTH, which moves the first-half average and so the
+		// normalised delta. No row sat on the midpoint before, so the
+		// off-by-one was invisible.
+		{repoAlpha, "2026-08-16", 100.0, "2026-08-17 00:00:00"},
 	} {
 		exec(`INSERT INTO repo_complexity_daily
 			(repo_id, day, cyclomatic_per_kloc, computed_at, org_id)

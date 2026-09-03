@@ -76,7 +76,9 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		return WorkItemAttributionOutcome{}, err
 	}
 	if scope.orgWide == false && len(scope.repoIDs) == 0 && len(scope.projectKeys) == 0 {
-		return WorkItemAttributionOutcome{SkippedNoop: true}, nil
+		outcome := WorkItemAttributionOutcome{SkippedNoop: true}
+		executor.observeRun(orgID, outcome)
+		return outcome, nil
 	}
 
 	subjects, err := executor.loadAffectedSubjects(ctx, orgID, scope)
@@ -96,15 +98,20 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		if err := executor.publishRunMarkers(ctx, orgID, scope, now); err != nil {
 			return outcome, err
 		}
+		executor.observeRun(orgID, outcome)
 		return outcome, nil
 	}
 
-	// affectedIDs pins which work items THIS run was actually asked to
-	// touch, before donors (pulled in only to feed linked_issue inheritance)
-	// are merged into the same lookup map below -- a donor is never itself
-	// written, since writing it would attribute an item nothing in this
-	// run's scope asked to be re-verified, stamped with a computed_at that
-	// makes it look freshly checked when it was not.
+	// affectedIDs pins which work items THIS run rederives and WRITES. It
+	// starts as exactly the originally detected scope; the closure step
+	// below grows it to include the closure (owed a rederive too, per
+	// team-lead's ruling) or replaces it wholesale on promotion. What it
+	// never gains is a donor pulled in ONLY to feed linked_issue inheritance
+	// for OTHER items (the plain donor step further down, unrelated to the
+	// closure) -- that kind of donor is never itself written, since writing
+	// it would attribute an item nothing in this run's scope or closure
+	// ever asked to be re-verified, stamped with a computed_at that makes
+	// it look freshly checked when it was not.
 	affectedIDs := make(map[string]struct{}, len(subjects))
 	for id := range subjects {
 		affectedIDs[id] = struct{}{}
@@ -119,19 +126,23 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		return outcome, err
 	}
 
-	// CLOSURE PROMOTION (team-lead's PR-B ruling): a scoped run also
-	// rederives its linked_issue closure -- never just the originally
-	// detected repo/project set -- and if that closure is big enough to be
-	// "effectively the whole org", the run is promoted to fully org-wide
-	// rather than writing a scoped marker for it. Only evaluated for a run
-	// detectScope did NOT already decide was org-wide: an org-wide run is
-	// already a superset of any closure it could compute.
+	// CLOSURE (team-lead's PR-B ruling): a scoped run ALWAYS rederives its
+	// linked_issue closure too -- donors of affected items, and items whose
+	// donor is affected, one hop each way -- never just the originally
+	// detected repo/project set. If that closure is big enough to be
+	// "effectively the whole org", the run is instead PROMOTED to fully
+	// org-wide rather than writing a scoped marker for a set that size.
+	// Only evaluated for a run detectScope did NOT already decide was
+	// org-wide: an org-wide run is already a superset of any closure it
+	// could compute.
 	if !scope.orgWide {
-		promoted, reason, err := executor.evaluateClosurePromotion(ctx, orgID, affectedIDs, dependencies)
+		closureIDs, closureKeys, promoted, reason, err := executor.evaluateClosurePromotion(
+			ctx, orgID, affectedIDs, subjects, dependencies)
 		if err != nil {
 			return outcome, err
 		}
-		if promoted {
+		switch {
+		case promoted:
 			scope = workItemAttributionScopeDecision{orgWide: true, promotedReason: reason}
 			subjects, err = executor.loadAffectedSubjects(ctx, orgID, scope)
 			if err != nil {
@@ -150,6 +161,27 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 			}
 			outcome.OrgWide, outcome.RepoIDs, outcome.ProjectKeys = true, nil, nil
 			outcome.ItemsSeen = len(subjects)
+		case len(closureIDs) > 0 || len(closureKeys) > 0:
+			// Below the promotion bound: the closure is still owed a
+			// rederive, so its subjects are loaded and merged into BOTH
+			// subjects (for LinkedIssue context) and affectedIDs (so
+			// BuildWorkItemAttributionRows actually WRITES them) -- a
+			// closure item is no longer treated the same as a donor pulled
+			// in only for context (see the affectedIDs doc comment above,
+			// which predates this ruling).
+			closureIDList := make([]string, 0, len(closureIDs))
+			for id := range closureIDs {
+				closureIDList = append(closureIDList, id)
+			}
+			closureSubjects, err := executor.loadDonorSubjects(ctx, orgID, closureIDList, closureKeys)
+			if err != nil {
+				return outcome, err
+			}
+			for id, subject := range closureSubjects {
+				subjects[id] = subject
+				affectedIDs[id] = struct{}{}
+			}
+			outcome.ItemsSeen = len(affectedIDs)
 		}
 	}
 
@@ -178,7 +210,20 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if err := executor.publishRunMarkers(ctx, orgID, scope, now); err != nil {
 		return outcome, err
 	}
+	executor.observeRun(orgID, outcome)
 	return outcome, nil
+}
+
+// observeRun reports a completed run to the optional observer. Nil is
+// tolerated, same discipline as SetObserver's own doc comment -- called on
+// every SUCCESSFUL return path (no-op, empty-scope, and the full write),
+// never on an error return, matching membership_backfill's
+// ObserveMembershipRun call sites.
+func (executor *WorkItemAttributionExecutor) observeRun(orgID string, outcome WorkItemAttributionOutcome) {
+	if executor.observer == nil {
+		return
+	}
+	executor.observer.ObserveWorkItemAttributionRun(orgID, outcome)
 }
 
 // BuildWorkItemAttributionRows maps resolved candidates onto the
@@ -247,10 +292,20 @@ func BuildWorkItemAttributionRows(
 // KNOWN LIMITATION, not yet addressed: repo scoping keys ONLY on
 // team_repo_ownership.repo_id (a non-null UUID); a repo-name-only ownership
 // row (repo_id NULL, repo_full_name set) is invisible to this detector.
-// Project scoping keys ONLY on project_key (non-empty); a project_id-only
-// ownership row is likewise invisible. Both are the same shape as the
-// no-repo/no-project item this backstop already cannot scope by identity --
-// a real gap, not yet sized, left for a fast-follow once this lands.
+// (Project scoping's OWN project_id-only gap is FIXED -- see detectScope's
+// projectIDChanges query -- project scoping now keys on both project_key
+// and project_id, matching Resolve()'s own projectByKey/projectByID
+// matching exactly.) The repo-name case is deliberately NOT fixed the same
+// way: Resolve()'s repo-by-name match (derived.repoByName) keys off
+// subject.ProjectID, the SAME work_items column project-ownership-by-id
+// matching also reads -- that field is overloaded between "this item's
+// project id" and "this item's repo's full name" depending on context this
+// package does not have enough information to disambiguate from the
+// ownership-table side alone. Detecting a repo_full_name ownership change
+// by comparing it against subject.ProjectID would risk firing (or
+// silently NOT firing) on the wrong items, which is worse than the
+// current honest gap. Left for a fast-follow with the fuller context to
+// resolve the overload correctly, not attempted here.
 type workItemAttributionScopeDecision struct {
 	orgWide     bool
 	repoIDs     []string
@@ -262,6 +317,37 @@ type workItemAttributionScopeDecision struct {
 	// identities/teams change). Recorded on the org-wide run marker so a
 	// reader can tell the two apart.
 	promotedReason string
+}
+
+// workItemAttributionEffectiveChangeSignal is the PURE, unit-testable
+// reference for the SQL `greatest(updated_at, if(valid_from <= asOf, ...),
+// ifNull(if(valid_to <= asOf, ...), ...))` expression detectScope's
+// repo/project scope-change queries evaluate server-side (see their query
+// text). It exists to let team-lead's "unit/fake-client tests now" ruling
+// cover the LOGIC before the bigboy container pause lifts and the
+// SQL-executing integration test
+// (TestDetectScopeCatchesFutureOwnershipActivation) can actually run --
+// this function is not itself called by production code, and a
+// discrepancy between it and the live SQL is exactly what that deferred
+// integration test is for.
+//
+// An ownership row's effective "this changed" instant is the LATEST of:
+// updated_at (an edit right now); valid_from, but ONLY once it has already
+// taken effect (asOf >= valid_from) -- a row inserted today with a FUTURE
+// valid_from contributes nothing until the day it actually activates,
+// since nothing else writes to the row at that moment; valid_to, but ONLY
+// once it has already passed (asOf >= valid_to) -- an expired row needs a
+// rederive too, even though it no longer counts as "currently owning"
+// anything.
+func workItemAttributionEffectiveChangeSignal(updatedAt, validFrom time.Time, validTo *time.Time, asOf time.Time) time.Time {
+	signal := updatedAt
+	if !validFrom.After(asOf) && validFrom.After(signal) {
+		signal = validFrom
+	}
+	if validTo != nil && !validTo.After(asOf) && validTo.After(signal) {
+		signal = *validTo
+	}
+	return signal
 }
 
 // detectScope reads the org-wide and scoped watermarks, compares them
@@ -279,6 +365,16 @@ func (executor *WorkItemAttributionExecutor) detectScope(
 		return workItemAttributionScopeDecision{}, err
 	}
 
+	// Org-wide triggers: identities/teams is the ADMIN membership layer
+	// (CHAOS-4321); team_memberships is the PROVIDER FALLBACK layer
+	// loadFacts also consumes (LoadProviderMembers) but detectScope
+	// originally never watched; manual_attribution_fallbacks is the
+	// override layer loadFacts consumes via LoadManualFallbacks. All three
+	// share identities/teams' own reasoning for going org-wide rather than
+	// scoped: a membership/fallback change can retarget an
+	// assignee_membership/author_membership candidate for ANY item that
+	// person (or scope) touches, with no single-repo/project scope to key
+	// on the way ownership-table changes have.
 	identitiesChanged, err := executor.maxUpdatedAt(ctx,
 		"SELECT max(updated_at) FROM identities FINAL WHERE org_id = ?", orgID)
 	if err != nil {
@@ -289,17 +385,73 @@ func (executor *WorkItemAttributionExecutor) detectScope(
 	if err != nil {
 		return workItemAttributionScopeDecision{}, err
 	}
-	if identitiesChanged.After(orgWatermark) || teamsChanged.After(orgWatermark) {
-		return workItemAttributionScopeDecision{orgWide: true}, nil
-	}
-
-	repoChanges, err := executor.scopeChanges(ctx, orgID,
-		"SELECT toString(repo_id), max(updated_at) FROM team_repo_ownership WHERE org_id = ? AND repo_id IS NOT NULL GROUP BY repo_id")
+	membershipsChanged, err := executor.maxUpdatedAt(ctx,
+		"SELECT max(updated_at) FROM team_memberships FINAL WHERE org_id = ?", orgID)
 	if err != nil {
 		return workItemAttributionScopeDecision{}, err
 	}
-	projectChanges, err := executor.scopeChanges(ctx, orgID,
-		"SELECT project_key, max(updated_at) FROM team_project_ownership WHERE org_id = ? AND project_key != '' GROUP BY project_key")
+	manualFallbacksChanged, err := executor.maxUpdatedAt(ctx,
+		"SELECT max(updated_at) FROM manual_attribution_fallbacks FINAL WHERE org_id = ?", orgID)
+	if err != nil {
+		return workItemAttributionScopeDecision{}, err
+	}
+	if identitiesChanged.After(orgWatermark) || teamsChanged.After(orgWatermark) ||
+		membershipsChanged.After(orgWatermark) || manualFallbacksChanged.After(orgWatermark) {
+		return workItemAttributionScopeDecision{orgWide: true}, nil
+	}
+
+	// The changedAt signal is the MAX of three things, not just updated_at:
+	// updated_at (an insert/edit right now), valid_from IF it has already
+	// taken effect (asOf >= valid_from -- an ownership row inserted TODAY
+	// with a FUTURE valid_from stays invisible until the day it actually
+	// activates, since nothing else writes to it at that moment), and
+	// valid_to IF it has already passed (an ownership row that just
+	// EXPIRED needs a rederive too, even though LoadRepos' own asOf filter
+	// now excludes it -- the fact that changed is "this row no longer
+	// applies", not any write to the row). Both guards compare against the
+	// SAME asOf detectScope was called with, matching LoadRepos'/
+	// LoadProjects' own effective-row filter exactly, so a row this query
+	// says "changed as of asOf" is a row whose EFFECT actually changed as
+	// of asOf, not just its storage.
+	repoChanges, err := executor.scopeChanges(ctx, orgID, now, `
+SELECT toString(repo_id), max(greatest(
+    updated_at,
+    if(valid_from <= ?, valid_from, toDateTime64(0, 3)),
+    ifNull(if(valid_to <= ?, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))
+  ))
+FROM team_repo_ownership
+WHERE org_id = ? AND repo_id IS NOT NULL
+GROUP BY repo_id`)
+	if err != nil {
+		return workItemAttributionScopeDecision{}, err
+	}
+	// Two independent queries, not one OR'd WHERE clause: project ownership
+	// is keyed by BOTH project_key and project_id (Resolve() matches
+	// either, see the KNOWN LIMITATION doc below), and a row can carry one
+	// without the other -- project_key is Nullable, project_id is not.
+	// Both feed the SAME projectKeys scope-id space; see
+	// loadAffectedSubjects' matching comment for why that is safe.
+	projectKeyChanges, err := executor.scopeChanges(ctx, orgID, now, `
+SELECT project_key, max(greatest(
+    updated_at,
+    if(valid_from <= ?, valid_from, toDateTime64(0, 3)),
+    ifNull(if(valid_to <= ?, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))
+  ))
+FROM team_project_ownership
+WHERE org_id = ? AND project_key != ''
+GROUP BY project_key`)
+	if err != nil {
+		return workItemAttributionScopeDecision{}, err
+	}
+	projectIDChanges, err := executor.scopeChanges(ctx, orgID, now, `
+SELECT project_id, max(greatest(
+    updated_at,
+    if(valid_from <= ?, valid_from, toDateTime64(0, 3)),
+    ifNull(if(valid_to <= ?, valid_to, toDateTime64(0, 3)), toDateTime64(0, 3))
+  ))
+FROM team_project_ownership
+WHERE org_id = ? AND project_id != ''
+GROUP BY project_id`)
 	if err != nil {
 		return workItemAttributionScopeDecision{}, err
 	}
@@ -314,13 +466,20 @@ func (executor *WorkItemAttributionExecutor) detectScope(
 			decision.repoIDs = append(decision.repoIDs, scopeID)
 		}
 	}
-	for scopeID, changedAt := range projectChanges {
-		floor := orgWatermark
-		if watermark, ok := projectWatermarks[scopeID]; ok && watermark.After(floor) {
-			floor = watermark
-		}
-		if changedAt.After(floor) {
-			decision.projectKeys = append(decision.projectKeys, scopeID)
+	projectSeen := map[string]bool{}
+	for _, changes := range []map[string]time.Time{projectKeyChanges, projectIDChanges} {
+		for scopeID, changedAt := range changes {
+			if projectSeen[scopeID] {
+				continue
+			}
+			floor := orgWatermark
+			if watermark, ok := projectWatermarks[scopeID]; ok && watermark.After(floor) {
+				floor = watermark
+			}
+			if changedAt.After(floor) {
+				decision.projectKeys = append(decision.projectKeys, scopeID)
+				projectSeen[scopeID] = true
+			}
 		}
 	}
 	return decision, nil
@@ -370,9 +529,9 @@ GROUP BY scope_kind, scope_id`, orgID)
 // scopeChanges runs a `SELECT scope_id, max(updated_at) ... GROUP BY
 // scope_id` query and returns the result as a map.
 func (executor *WorkItemAttributionExecutor) scopeChanges(
-	ctx context.Context, orgID string, query string,
+	ctx context.Context, orgID string, asOf time.Time, query string,
 ) (map[string]time.Time, error) {
-	rows, err := executor.conn.Query(ctx, query, orgID)
+	rows, err := executor.conn.Query(ctx, query, asOf, asOf, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("query scope changes: %w", err)
 	}
@@ -430,8 +589,15 @@ WHERE org_id = ?`
 		if len(scope.repoIDs) == 0 && len(scope.projectKeys) == 0 {
 			return map[string]teamattribution.GithubWorkItemDerivationSubject{}, nil
 		}
-		query += " AND (has(?, toString(repo_id)) OR has(?, project_key))"
-		args = append(args, scope.repoIDs, scope.projectKeys)
+		// scope.projectKeys carries BOTH project_key-triggered and
+		// project_id-triggered scope ids in one list (detectScope's doc
+		// comment on the project_id fix explains why) -- matched against
+		// BOTH columns here for the same reason: a subject is affected if
+		// EITHER its project_key or its project_id names a scope that
+		// changed, regardless of which identifier space detectScope used
+		// to notice the change.
+		query += " AND (has(?, toString(repo_id)) OR has(?, project_key) OR has(?, project_id))"
+		args = append(args, scope.repoIDs, scope.projectKeys, scope.projectKeys)
 	}
 	return executor.querySubjects(ctx, query, args...)
 }
@@ -581,41 +747,69 @@ const workItemAttributionClosurePromotionBound = 0.25
 // whole org", not "a slightly bigger scoped set" -- and deciding whether a
 // SECOND hop also needs covering is more expensive than just doing the
 // whole org once the first hop already crossed the line.
+// evaluateClosurePromotion returns the closure ID set REGARDLESS of the
+// promotion decision: a below-bound closure is still owed a rederive
+// (team-lead's ruling: "rederives the affected set PLUS its linked_issue
+// closure"), it just doesn't widen the whole run to org-wide. Only an
+// ABOVE-bound closure promotes -- see ComputeOrg's caller, which merges the
+// returned closureIDs into affectedIDs/subjects when NOT promoted, and
+// discards them (org-wide already covers everything) when promoted.
+//
+// forwardDonorIDs/forwardDonorKeys reuse workItemAttributionDonorTargets --
+// the SAME extkey-aware resolution the LinkedIssue-donor step already uses
+// -- rather than reading forwardDependencies' TargetWorkItemID directly,
+// which for a cross-provider linked issue is an unresolved "extkey:..."
+// string, not a loadable work_item_id.
 func (executor *WorkItemAttributionExecutor) evaluateClosurePromotion(
 	ctx context.Context, orgID string,
 	affectedIDs map[string]struct{},
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
 	forwardDependencies []teamattribution.GithubWorkItemDerivationDependencyEdge,
-) (promoted bool, reason string, err error) {
-	closure := make(map[string]struct{}, len(affectedIDs))
-	for id := range affectedIDs {
-		closure[id] = struct{}{}
-	}
-	for _, edge := range teamattribution.LatestGitHubWorkItemDerivationDependencies(forwardDependencies) {
-		if !teamattribution.GithubWorkItemDerivationInheritableRelationships[edge.RelationshipType] {
-			continue
-		}
-		closure[edge.TargetWorkItemID] = struct{}{}
-	}
-
+) (closureIDs map[string]struct{}, closureKeys []string, promoted bool, reason string, err error) {
+	forwardDonorIDs, forwardDonorKeys := workItemAttributionDonorTargets(forwardDependencies, subjects)
 	reverseSourceIDs, err := executor.loadInheritableDependencySourcesTargeting(ctx, orgID, affectedIDs)
 	if err != nil {
-		return false, "", err
-	}
-	for _, id := range reverseSourceIDs {
-		closure[id] = struct{}{}
+		return nil, nil, false, "", err
 	}
 
+	closureIDs = make(map[string]struct{}, len(forwardDonorIDs)+len(reverseSourceIDs))
+	for _, id := range forwardDonorIDs {
+		closureIDs[id] = struct{}{}
+	}
+	for _, id := range reverseSourceIDs {
+		closureIDs[id] = struct{}{}
+	}
+	closureKeys = forwardDonorKeys
+	closureSize := len(closureIDs) + len(closureKeys)
+
+	if closureSize == 0 {
+		return closureIDs, closureKeys, false, "", nil
+	}
 	total, err := executor.orgItemCount(ctx, orgID)
 	if err != nil {
-		return false, "", err
+		return nil, nil, false, "", err
 	}
-	if total <= 0 || float64(len(closure))/float64(total) <= workItemAttributionClosurePromotionBound {
-		return false, "", nil
+	promoted, reason = workItemAttributionPromotionDecision(len(affectedIDs), closureSize, total)
+	return closureIDs, closureKeys, promoted, reason, nil
+}
+
+// workItemAttributionPromotionDecision is the PURE arithmetic half of
+// evaluateClosurePromotion, split out specifically so it is unit-testable
+// without a live ClickHouse connection (team-lead's PR-B ruling: unit/fake
+// tests now, the live closure-integration proof once the bigboy container
+// pause lifts). affected+closureSize crossing workItemAttributionClosurePromotionBound
+// of total promotes; an unknown total (<=0, e.g. a construction-time
+// refusal never reached this far in practice) never promotes -- there is
+// nothing to divide by, and treating unknown as "definitely small" is the
+// conservative direction (a scoped run, not an unwarranted org-wide one).
+func workItemAttributionPromotionDecision(affected, closureSize, total int) (promoted bool, reason string) {
+	if total <= 0 || float64(affected+closureSize)/float64(total) <= workItemAttributionClosurePromotionBound {
+		return false, ""
 	}
 	return true, fmt.Sprintf(
 		"linked_issue_closure_exceeded_%.0fpct: affected=%d closure=%d org_total=%d",
-		workItemAttributionClosurePromotionBound*100, len(affectedIDs), len(closure), total,
-	), nil
+		workItemAttributionClosurePromotionBound*100, affected, closureSize, total,
+	)
 }
 
 // loadInheritableDependencySourcesTargeting loads the SOURCE work item ids

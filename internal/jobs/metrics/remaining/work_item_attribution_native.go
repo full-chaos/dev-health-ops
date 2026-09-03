@@ -66,7 +66,7 @@ var workItemAttributionTableRequirements = map[string][]string{
 	},
 	"manual_attribution_fallbacks": {
 		"org_id", "provider", "scope_type", "scope_id", "team_id", "team_name", "reason",
-		"priority", "valid_from", "valid_to",
+		"priority", "valid_from", "valid_to", "updated_at",
 	},
 	"work_item_team_attributions": {
 		"org_id", "repo_id", "work_item_id", "provider", "team_id", "team_name", "source",

@@ -31,7 +31,7 @@ func TestTheGateCannotBeSkippedByConstruction(t *testing.T) {
 			t.Fatal("an executor was constructed with no Postgres pool; it would " +
 				"compute and write while never consulting the readiness gate")
 		}
-		if !errors.Is(err, errRecommendationsPostgresUnavailable) {
+		if !errors.Is(err, ErrRecommendationsPostgresUnavailable) {
 			// Not a strict-equality nit: the refusal REASON is what the
 			// registration maps onto a labelled counter, so a refusal that
 			// arrives under the wrong identity is invisible on the dashboard
@@ -62,7 +62,7 @@ func TestTheGateCannotBeSkippedByConstruction(t *testing.T) {
 			t.Fatal("ComputePartition proceeded with no Postgres pool — the gate " +
 				"would never run and partial daily metrics would be evaluated")
 		}
-		if !errors.Is(err, errRecommendationsPostgresUnavailable) {
+		if !errors.Is(err, ErrRecommendationsPostgresUnavailable) {
 			t.Errorf("refused with %v, want the postgres-unavailable reason", err)
 		}
 	})
@@ -132,7 +132,7 @@ func TestAZeroValuedExecutorRefusesRatherThanPanicking(t *testing.T) {
 	}
 	// A REFUSAL, and the right one — not a panic, and not a misattributed
 	// error naming something other than the missing pool.
-	if !errors.Is(err, errRecommendationsPostgresUnavailable) {
+	if !errors.Is(err, ErrRecommendationsPostgresUnavailable) {
 		t.Errorf("refused with %v, want the postgres-unavailable reason", err)
 	}
 }
@@ -148,7 +148,7 @@ func mustNotPanicHere(t *testing.T, call func() error) error {
 	func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				t.Fatalf("PANICKED (%v), want errRecommendationsPostgresUnavailable "+
+				t.Fatalf("PANICKED (%v), want ErrRecommendationsPostgresUnavailable "+
 					"-- an executor with no Postgres pool must REFUSE at the seam, "+
 					"not dereference nil inside the readiness gate", recovered)
 			}

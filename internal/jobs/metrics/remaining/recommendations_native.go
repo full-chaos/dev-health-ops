@@ -27,15 +27,15 @@ const recommendationsRuleVersion = "1.0.0"
 var ErrRecommendationsSchemaIncompatible = errors.New(
 	"recommendations: clickhouse schema incompatible")
 
-// errRecommendationsUnavailable is the nil-connection refusal.
-var errRecommendationsUnavailable = errors.New(
+// ErrRecommendationsUnavailable is the nil-connection refusal.
+var ErrRecommendationsUnavailable = errors.New(
 	"recommendations: clickhouse connection unavailable")
 
-// errRecommendationsPostgresUnavailable is the nil-pool refusal. Distinct from
+// ErrRecommendationsPostgresUnavailable is the nil-pool refusal. Distinct from
 // the ClickHouse one because the remedies differ and the refusal counter is
 // labelled by reason: one is a metrics-store outage, the other means the worker
 // was wired without the store the readiness gate reads.
-var errRecommendationsPostgresUnavailable = errors.New(
+var ErrRecommendationsPostgresUnavailable = errors.New(
 	"recommendations: postgres pool unavailable for the readiness gate")
 
 // recommendationsTableRequirements lists what each table must provide.
@@ -148,10 +148,10 @@ func NewRecommendationsExecutor(
 	ctx context.Context, conn driver.Conn, pool *pgxpool.Pool, orgID string,
 ) (*RecommendationsExecutor, error) {
 	if conn == nil {
-		return nil, errRecommendationsUnavailable
+		return nil, ErrRecommendationsUnavailable
 	}
 	if pool == nil {
-		return nil, errRecommendationsPostgresUnavailable
+		return nil, ErrRecommendationsPostgresUnavailable
 	}
 	if err := verifyRecommendationsSchema(ctx, conn); err != nil {
 		return nil, err
@@ -166,6 +166,20 @@ func NewRecommendationsExecutor(
 		loader: loader,
 		nowUTC: func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+// SetReadinessObserver wires the gate's telemetry. Optional, like the gate
+// itself tolerates (DailyMetricsReady accepts a nil observer) -- a caller that
+// never sets one still computes correctly, it just cannot see a fail-open or a
+// skip happen.
+func (executor *RecommendationsExecutor) SetReadinessObserver(observer ReadinessObserver) {
+	executor.observer = observer
+}
+
+// SetReadinessLogger wires the gate's logging. Optional for the same reason as
+// SetReadinessObserver.
+func (executor *RecommendationsExecutor) SetReadinessLogger(logger ReadinessLogger) {
+	executor.logger = logger
 }
 
 // verifyRecommendationsSchema checks every table the executor reads or writes.
@@ -276,7 +290,7 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	ctx context.Context, teamID, orgID string, now time.Time, windowDays int, ruleVersion string,
 ) ([]RecommendationRecord, error) {
 	if executor == nil || executor.conn == nil {
-		return nil, errRecommendationsUnavailable
+		return nil, ErrRecommendationsUnavailable
 	}
 	// `== ""`, NOT TrimSpace -- the same correction as ComputeOrg's branch, and
 	// round 2's fix missed this second site. Python treats a whitespace team id
@@ -312,7 +326,7 @@ func newClickHouseOnlyExecutor(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) (*RecommendationsExecutor, error) {
 	if conn == nil {
-		return nil, errRecommendationsUnavailable
+		return nil, ErrRecommendationsUnavailable
 	}
 	if err := verifyRecommendationsSchema(ctx, conn); err != nil {
 		return nil, err
@@ -351,7 +365,7 @@ func (executor *RecommendationsExecutor) ComputePartition(
 	ctx context.Context, run Run, partition Partition,
 ) (CompatibilityOutcome, error) {
 	if executor == nil || executor.conn == nil {
-		return CompatibilityOutcome{}, errRecommendationsUnavailable
+		return CompatibilityOutcome{}, ErrRecommendationsUnavailable
 	}
 	if strings.TrimSpace(run.OrganizationID) == "" {
 		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
@@ -395,7 +409,7 @@ func (executor *RecommendationsExecutor) ComputePartition(
 	// because a zero-valued struct is constructible in-package, and the
 	// alternative failure is a nil dereference inside the gate.
 	if executor.pool == nil {
-		return CompatibilityOutcome{}, errRecommendationsPostgresUnavailable
+		return CompatibilityOutcome{}, ErrRecommendationsPostgresUnavailable
 	}
 
 	if !DailyMetricsReady(

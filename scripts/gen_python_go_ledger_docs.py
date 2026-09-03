@@ -226,12 +226,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.recommendations": {
         "producer": "`internal/scheduler/fixed/inventory.go:127` (recommendations_daily_fanout)",
         "trigger": "schedule (DailyAt 02:00 UTC, safety net behind a finalize-gated primary trigger)",
-        "gate": "none",
-        "writer": "Python `_compute_recommendations_for_org` `src/dev_health_ops/workers/recommendations_tasks.py:334`",
+        "gate": "schema check in `NewRecommendationsExecutor` (`internal/jobs/metrics/remaining/recommendations_native.go:147`) + the CHAOS-2373 daily-metrics readiness gate inside `ComputePartition` (`recommendations_native.go:364,415`)",
+        "writer": "Go `internal/jobs/metrics/remaining/recommendations_native_clickhouse.go:134`",
         "tables": "`recommendations_daily`",
-        "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-3092 (metrics families)",
+        "evidence": "argued — wired `daily.go:389-436,474-483`",
+        "state": "native",
+        "ticket": "n/a — Python `_compute_recommendations_for_org` (`workers/recommendations_tasks.py:334`) retired to the cutover, see worker-file dead-code child ticket",
     },
     "metrics.remaining.release_impact": {
         "producer": "`internal/scheduler/fixed/inventory.go:75` (release_impact_daily_fanout)",

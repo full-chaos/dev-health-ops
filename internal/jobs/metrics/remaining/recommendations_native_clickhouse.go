@@ -41,7 +41,7 @@ func (executor *RecommendationsExecutor) DiscoverTeamIDs(
 	ctx context.Context, orgID string,
 ) ([]string, error) {
 	if executor == nil || executor.conn == nil {
-		return nil, errRecommendationsUnavailable
+		return nil, ErrRecommendationsUnavailable
 	}
 
 	query := discoverTeamIDsSQL
@@ -140,7 +140,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 	teamID string,
 ) (OrgOutcome, error) {
 	if executor == nil || executor.conn == nil {
-		return OrgOutcome{}, errRecommendationsUnavailable
+		return OrgOutcome{}, ErrRecommendationsUnavailable
 	}
 
 	// `teamID == ""`, NOT TrimSpace. Python branches on ordinary truthiness

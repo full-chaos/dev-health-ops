@@ -54,6 +54,12 @@ on:
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_river_compat_static.sh'
+      # CHAOS-4915: the pinned linter, its self-test and its negative-control
+      # fixture must trigger the job that validates them. A file that cannot
+      # trigger its own check can be broken by a commit that never runs it.
+      - 'ci/shellcheck_pinned.sh'
+      - 'ci/check_shellcheck_pin.sh'
+      - 'ci/fixtures/shellcheck_unclean_fixture.sh'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'
@@ -105,6 +111,12 @@ on:
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_river_compat_static.sh'
+      # CHAOS-4915: the pinned linter, its self-test and its negative-control
+      # fixture must trigger the job that validates them. A file that cannot
+      # trigger its own check can be broken by a commit that never runs it.
+      - 'ci/shellcheck_pinned.sh'
+      - 'ci/check_shellcheck_pin.sh'
+      - 'ci/fixtures/shellcheck_unclean_fixture.sh'
       - 'ci/evidence/go-worker-migration/**'
       # - 'ci/local_validate.sh'
       - '.dockerignore'

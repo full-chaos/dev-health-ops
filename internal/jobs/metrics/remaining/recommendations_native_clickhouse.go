@@ -169,8 +169,19 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 			// report cancellation instead of the per-team failure, so the
 			// teams that evaluated cleanly would keep their stale fired
 			// guidance -- the CHAOS-2373 outcome, reached by a Go-only path.
-			cancelled = ctx.Err()
-			break
+			// REGRESSION GUARD (round 3 P1). An earlier version of this
+			// block set `cancelled = ctx.Err()` and broke unconditionally.
+			// With a live context that value is NIL, so an ordinary per-team
+			// loader or rule failure recorded NO failed team, skipped every
+			// remaining team, and returned SUCCESS -- a silent failure
+			// introduced while fixing a different one. The two cases must be
+			// distinguished explicitly, not inferred from one call.
+			if contextErr := ctx.Err(); contextErr != nil {
+				cancelled = contextErr
+				break
+			}
+			failedTeams = append(failedTeams, currentTeam)
+			continue
 		}
 		records = append(records, teamRecords...)
 		for _, record := range teamRecords {
@@ -192,7 +203,7 @@ func (executor *RecommendationsExecutor) ComputeOrg(
 		writeCtx, stopWrite = context.WithTimeout(
 			context.WithoutCancel(ctx), recommendationsDetachedWriteTimeout)
 	}
-	written, err := executor.writeRecommendations(writeCtx, records, executor.nowUTC())
+	written, err := executor.writeRecommendations(writeCtx, records, executor.wallClock()())
 	stopWrite()
 	if err != nil {
 		return outcome, err

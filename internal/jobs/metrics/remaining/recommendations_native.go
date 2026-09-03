@@ -170,6 +170,20 @@ func EvaluationInstant(asOf *time.Time, wallClock func() time.Time) (now, asOfDa
 	return current, time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// wallClock never returns nil.
+//
+// EvaluationInstant and the write stamp both CALL the function they are given,
+// so a zero-valued executor -- constructible in-package, and what a test writes
+// when it does not care about time -- panicked with a nil dereference. A panic
+// is not a refusal: the partition handler cannot classify it, and the stack
+// points at the instant resolver rather than at the missing construction.
+func (executor *RecommendationsExecutor) wallClock() func() time.Time {
+	if executor.nowUTC != nil {
+		return executor.nowUTC
+	}
+	return func() time.Time { return time.Now().UTC() }
+}
+
 // ComputeTeam loads one team's window, evaluates every rule, and returns the
 // full state -- fired rows and tombstones alike.
 //
@@ -187,7 +201,12 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	if executor == nil || executor.conn == nil {
 		return nil, errRecommendationsUnavailable
 	}
-	if strings.TrimSpace(teamID) == "" {
+	// `== ""`, NOT TrimSpace -- the same correction as ComputeOrg's branch, and
+	// round 2's fix missed this second site. Python treats a whitespace team id
+	// as truthy and EVALUATES it; rejecting it here made the explicit path fail
+	// before the loader, so the outer fix routed correctly and then errored
+	// anyway. Half a fix reads as a whole one when only the first site is tested.
+	if teamID == "" {
 		return nil, fmt.Errorf("%w: empty team id", ErrInvalidState)
 	}
 	// Both bounds derived ONCE from the caller's instant. Deriving them per

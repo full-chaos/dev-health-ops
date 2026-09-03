@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -35,6 +36,16 @@ type batchingConn struct {
 	driverConnStub
 	batch *recordingBatch
 	query string
+}
+
+// Query errors rather than panicking, so a test can drive a path that loads
+// before it writes. The embedded stub panics on Query, which is right for tests
+// that must never reach it and wrong for tests whose subject is what happens
+// AFTER a load fails.
+func (conn *batchingConn) Query(
+	_ context.Context, _ string, _ ...any,
+) (chdriver.Rows, error) {
+	return nil, errRecommendationsUnavailable
 }
 
 func (conn *batchingConn) PrepareBatch(
@@ -360,7 +371,15 @@ func TestAWhitespaceTeamIDStaysScopedToThatTeam(t *testing.T) {
 	for _, teamID := range []string{" ", "\t", "  "} {
 		t.Run(fmt.Sprintf("teamID=%q", teamID), func(t *testing.T) {
 			conn := &queryRecordingConn{}
-			executor := &RecommendationsExecutor{conn: conn}
+			// A real loader, so the explicit-team route actually reaches a
+			// query. Without one it panics before issuing anything, and the
+			// "no discovery query" assertion would pass because NO query
+			// happened -- which is the exact false pass round 3 found.
+			loader, err := NewRecommendationsLoader(conn, "org-1")
+			if err != nil {
+				t.Fatalf("new loader: %v", err)
+			}
+			executor := &RecommendationsExecutor{conn: conn, loader: loader}
 
 			// Both routes fail downstream on this stub -- the explicit route
 			// reaches an unimplemented method and PANICS. That is recovered on
@@ -381,6 +400,111 @@ func TestAWhitespaceTeamIDStaysScopedToThatTeam(t *testing.T) {
 						query)
 				}
 			}
+
+			// AND IT MUST ACTUALLY EVALUATE THAT TEAM. Round 3 found this
+			// assertion was satisfied by an early rejection deeper in
+			// ComputeTeam: no discovery query was issued because NO query was
+			// issued at all. "Did not take the wrong path" is not "took the
+			// right one", and the negative alone cannot tell them apart.
+			if len(conn.queries) == 0 {
+				t.Error("no query was issued at all — the explicit-team path was " +
+					"rejected before reaching the loader, so this test's " +
+					"no-discovery assertion passed for the wrong reason")
+			}
 		})
+	}
+}
+
+// TestAPerTeamFailureIsReportedRatherThanSwallowed pins the distinction that a
+// round-2 fix erased and round 3 caught.
+//
+// That fix replaced `failedTeams = append(...); continue` with
+// `cancelled = ctx.Err(); break`. On a LIVE context ctx.Err() is nil, so an
+// ordinary loader or rule failure recorded no failed team, skipped every
+// remaining team, and returned SUCCESS. A silent failure introduced while
+// fixing a different silent failure.
+//
+// The test uses a LIVE context on purpose: the cancelled case was the one the
+// author was thinking about, and is exactly the case that hides this.
+func TestAPerTeamFailureIsReportedRatherThanSwallowed(t *testing.T) {
+	conn := &queryRecordingConn{}
+	// A REAL loader over the recording conn: its query returns an error, which
+	// is what makes the team fail. A nil loader would panic instead, and a
+	// panic is not the failure this test is about.
+	loader, err := NewRecommendationsLoader(conn, "org-1")
+	if err != nil {
+		t.Fatalf("new loader: %v", err)
+	}
+	executor := &RecommendationsExecutor{conn: conn, loader: loader}
+
+	// Explicit team, so discovery is skipped and the single team's evaluation
+	// is what fails -- against a live, uncancelled context.
+	outcome, computeErr := executor.ComputeOrg(
+		context.Background(), "org-1", time.Now().UTC(), 30, "1.0.0", "team-a")
+	err = computeErr
+
+	if err == nil {
+		t.Fatal("a failing team produced no error; the run reported success while " +
+			"writing no tombstone for that team, so its stale fired guidance " +
+			"would persist with nothing to alert on")
+	}
+	var failure *TeamEvaluationFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("failed with %v, want a TeamEvaluationFailure naming the team", err)
+	}
+	if len(failure.FailedTeams) != 1 || failure.FailedTeams[0] != "team-a" {
+		t.Errorf("failure names %v, want exactly [team-a]", failure.FailedTeams)
+	}
+	if outcome.FailedTeams != 1 {
+		t.Errorf("outcome reports %d failed teams, want 1", outcome.FailedTeams)
+	}
+}
+
+// TestCancellationReportsTheInterruptionRatherThanATeamFailure covers the part
+// of round 2's cancellation fix this level CAN reach.
+//
+// # WHAT THIS TEST DOES NOT ESTABLISH, STATED BECAUSE IT LOOKS LIKE IT DOES
+//
+// The fix has two halves: report the cancellation (covered here), and STILL
+// WRITE what clean teams already produced (not covered here). Removing the
+// detached-write context does not fail this test — verified by mutation, it
+// SURVIVED.
+//
+// The reason is the fixture, not the assertion: the only team fails, so there
+// are no records, so writeRecommendations returns early in both the fixed and
+// the mutated world. The fixture never enters the state that distinguishes
+// them. Reaching it needs a team that SUCCEEDS and a cancellation after it,
+// which needs a real loader against real data — so the write half belongs to
+// the container suite, and is listed as an open gap rather than left to look
+// covered.
+//
+// Naming this is the point. A test called "still persists" that cannot observe
+// persistence is worse than no test: it occupies the slot where the real check
+// would go.
+func TestCancellationReportsTheInterruptionRatherThanATeamFailure(t *testing.T) {
+	batch := &recordingBatch{}
+	conn := &batchingConn{batch: batch}
+	loader, err := NewRecommendationsLoader(conn, "org-1")
+	if err != nil {
+		t.Fatalf("new loader: %v", err)
+	}
+	executor := &RecommendationsExecutor{conn: conn, loader: loader}
+
+	// Already cancelled before the first team is evaluated: the harshest case,
+	// and the one where a write is most likely to be skipped as pointless.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	outcome, err := executor.ComputeOrg(ctx, "org-1", time.Now().UTC(), 30, "1.0.0", "team-a")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("returned %v, want the cancellation — an interrupted run must "+
+			"report cancellation rather than a per-team failure, whose team list "+
+			"would understate what went unevaluated", err)
+	}
+	// The outcome is still populated on the error path, so a caller can record
+	// what the interrupted run did reach.
+	if outcome.Teams != 1 {
+		t.Errorf("outcome reports %d teams, want 1", outcome.Teams)
 	}
 }

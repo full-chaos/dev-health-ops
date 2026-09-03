@@ -357,13 +357,40 @@ jobs:
           # job's own review culture does not accept on faith -- so the
           # match count is asserted explicitly and more than one match FAILS
           # LOUD ("ambiguous") instead of silently picking one.
+          # codex round 2 (CHAOS-4906, P2): `read -r a b <<<"$(job_status)"`
+          # SUCCEEDS (exit 0) even when `job_status`/`gh api` itself failed --
+          # reading an empty here-string is a successfully-read empty line,
+          # not an error, so `set -e` never fires here. A transient `gh api`
+          # failure (rate limit, 5xx) therefore produced status="" (empty),
+          # which the OLD phase-1 check read as "not queued, not not_created"
+          # -> falsely "left the queue" on the very first API hiccup, then
+          # phase 2 could spend its whole budget failing the same way and
+          # report a misleading "attempt never reached a terminal state"
+          # claimed-failure -- a false RED caused by an API blip, not by the
+          # attempt itself. Fixed at the source: `job_status` now retries a
+          # failing `gh api` call itself (matching this repo's existing
+          # bounded-retry idiom for exactly this class of transient
+          # rejection, e.g. ci/check_go.sh's pre-pull), and reports an
+          # explicit `api_error` sentinel -- distinct from every real job
+          # status -- only after retries are exhausted. Both phases below
+          # treat `api_error` as "learned nothing this poll, try again",
+          # never as "left the queue" or "completed": a poll that observes
+          # nothing is not evidence of anything.
           job_status() {
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate \
-              --jq '[.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
-                    | if ($matches | length) > 1 then "ambiguous null"
-                      elif ($matches | length) == 0 then "not_created null"
-                      else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
-                      end'
+            local raw attempt
+            for attempt in 1 2 3; do
+              if raw="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate \
+                  --jq '[.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")] as $matches
+                        | if ($matches | length) > 1 then "ambiguous null"
+                          elif ($matches | length) == 0 then "not_created null"
+                          else ($matches[0]) as $j | "\($j.status) \($j.conclusion // "null")"
+                          end' 2>/dev/null)"; then
+                printf '%s\n' "${raw}"
+                return 0
+              fi
+              sleep 5
+            done
+            printf 'api_error null\n'
           }
           fail_if_ambiguous() {
             if [ "${status}" = "ambiguous" ]; then
@@ -378,6 +405,13 @@ jobs:
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
             fail_if_ambiguous
+            # A poll that could not observe anything (transient `gh api`
+            # failure, exhausted job_status's own retries) is not evidence
+            # the attempt left the queue -- keep waiting, don't guess.
+            if [ "${status}" = "api_error" ]; then
+              sleep 15
+              continue
+            fi
             # "not_created" counts as still-queued for phase 1's purposes --
             # the attempt has not left the queue if it does not exist yet.
             if [ "${status}" != "queued" ] && [ "${status}" != "not_created" ]; then
@@ -394,9 +428,17 @@ jobs:
           fi
 
           deadline=$(( $(date -u +%s) + (ATTEMPT_TIMEOUT_MINUTES + 3) * 60 ))
+          total_polls=0
+          api_error_polls=0
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
             fail_if_ambiguous
+            total_polls=$((total_polls + 1))
+            if [ "${status}" = "api_error" ]; then
+              api_error_polls=$((api_error_polls + 1))
+              sleep 15
+              continue
+            fi
             if [ "${status}" = "completed" ]; then
               echo "self-hosted attempt completed with conclusion: ${conclusion}"
               if [ "${conclusion}" = "success" ]; then
@@ -409,7 +451,17 @@ jobs:
             sleep 15
           done
 
-          echo "self-hosted attempt left the queue but never reached a terminal state within $((ATTEMPT_TIMEOUT_MINUTES + 3))m -- its own timeout-minutes should have ended it by now; treating this as a failure rather than reporting a silent pass" >&2
+          # Distinguish "the attempt genuinely never finished" from "we
+          # never actually got a good look at it" -- the two have the same
+          # PRACTICAL outcome here (claim nothing, report failure, and let a
+          # human look) but a very different diagnosis, and the old message
+          # named only the first even when every poll in this phase had
+          # failed to observe the attempt at all.
+          if [ "${api_error_polls}" -eq "${total_polls}" ] && [ "${total_polls}" -gt 0 ]; then
+            echo "self-hosted attempt's status could not be observed at all in ${total_polls} attempts (gh api kept failing) -- NOT claiming this reflects the attempt's own outcome; treating as a failure rather than reporting a silent pass" >&2
+          else
+            echo "self-hosted attempt left the queue but never reached a terminal state within $((ATTEMPT_TIMEOUT_MINUTES + 3))m (${api_error_polls}/${total_polls} polls were api_error) -- its own timeout-minutes should have ended it by now; treating this as a failure rather than reporting a silent pass" >&2
+          fi
           echo "outcome=claimed-failure" >> "${GITHUB_OUTPUT}"
 
       - name: Determine whether this leg owns the real work

@@ -335,9 +335,16 @@ jobs:
           ATTEMPT_TIMEOUT_MINUTES: 10
         run: |
           set -euo pipefail
+          # `job_status` must tolerate the attempt job not appearing in the
+          # run's job list YET -- the jobs API can lag briefly behind job
+          # creation, and `[.jobs[] | select(...)][0]` on no match is `null`;
+          # indexing `null.status` would abort `jq` (and, under `pipefail`,
+          # this whole script) on the very first poll. Reported as
+          # "not_created", never a hard error.
           job_status() {
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate \
-              --jq '[.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")][0] | "\(.status) \(.conclusion // "null")"'
+              --jq '([.jobs[] | select(.name=="go-arm64-numeric-parity-self-hosted")][0]) as $j
+                    | if $j == null then "not_created null" else "\($j.status) \($j.conclusion // "null")" end'
           }
 
           deadline=$(( $(date -u +%s) + QUEUE_TIMEOUT_MINUTES * 60 ))
@@ -345,7 +352,9 @@ jobs:
           status="queued"
           while [ "$(date -u +%s)" -lt "${deadline}" ]; do
             read -r status conclusion <<<"$(job_status)"
-            if [ "${status}" != "queued" ]; then
+            # "not_created" counts as still-queued for phase 1's purposes --
+            # the attempt has not left the queue if it does not exist yet.
+            if [ "${status}" != "queued" ] && [ "${status}" != "not_created" ]; then
               left_queue="true"
               break
             fi

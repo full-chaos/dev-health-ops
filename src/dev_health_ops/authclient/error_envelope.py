@@ -177,6 +177,44 @@ def _parse_timestamp(raw: str, field: str) -> datetime:
     return parsed
 
 
+def _utc_instant(moment: datetime, field: str) -> datetime:
+    """Normalise to UTC, refusing an instant the type cannot represent.
+
+    COMPONENT BOUNDS DO NOT BOUND THE COMPOSITION. The schema pattern bounds
+    year 0001-9999 of the LOCAL fields, but the instant is (fields x offset)
+    and the offset can carry it outside the range the fields satisfy::
+
+        0001-01-01T00:00:00+23:59  ->  UTC year 0000
+        9999-12-31T23:59:59-23:59  ->  UTC year 10000
+
+    Both are lexically valid under the pattern, and a regex cannot see it --
+    the composition is arithmetic, not lexical. Found by lane-auth-wave1 while
+    enumerating the class after codex round 3.
+
+    Without this check the low boundary PARSED CLEANLY and then raised
+    ``OverflowError`` on the caller's first ``astimezone`` -- an uncaught
+    stdlib exception on a document this client had accepted, from an ordinary
+    operation. Worse, ``.timestamp()`` succeeded on the same value, so the
+    failure was inconsistent as well as uncaught.
+
+    THIS RUNS BEFORE THE CLOCK-SKEW CHECK, ON PURPOSE. The high boundary is
+    also far-future, so the skew bound would refuse it first -- but that is a
+    COINCIDENCE, not a guard: the skew bound is deliberately one-directional,
+    and anyone who makes it symmetric would silently reopen the 9999 case with
+    no test failing. Ordering the range check first means the boundary fixtures
+    are refused by the rule that is actually about them.
+    """
+    try:
+        return moment.astimezone(timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ContractError(
+            f"{SURFACE}: /{field} {moment.isoformat()} normalises to a UTC "
+            f"instant outside 0001-01-01..9999-12-31. The schema bounds the "
+            f"local fields; the offset carries the instant past that bound, "
+            f"which a pattern cannot express"
+        ) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class ErrorEnvelope:
     """One ``error.v1`` document, validated and parsed."""
@@ -243,6 +281,9 @@ def parse_decoded(
         )
 
     occurred_at = _parse_timestamp(document["occurred_at"], "occurred_at")
+    # Range check BEFORE the skew check -- see _utc_instant on why the order
+    # is load-bearing rather than incidental.
+    _utc_instant(occurred_at, "occurred_at")
     reference = now if now is not None else datetime.now(timezone.utc)
     if occurred_at > reference + MAX_CLOCK_SKEW:
         raise ContractError(

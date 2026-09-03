@@ -129,6 +129,32 @@ false** — which is the harder defect to catch, because a wrong justification
 sitting beside a correct rule reads as settled, and whoever revisits the rule
 inherits the wrong model of why it is there.
 
+**Component bounds do not bound the COMPOSITION, and this is the subtlest one.**
+The pattern bounds year 0001-9999 of the *local* fields, but the instant is
+(fields × offset) and the offset can carry it outside that range:
+`0001-01-01T00:00:00+23:59` normalises to UTC year 0000. A regex cannot see it —
+the composition is arithmetic, not lexical.
+
+Both clients therefore **normalise to UTC at parse and refuse an instant outside
+0001-01-01..9999-12-31**, with `reject_by_client` fixtures at both boundaries.
+Before that check, the low boundary parsed cleanly and then raised
+`OverflowError` on the caller's first `astimezone` — an uncaught stdlib
+exception on an accepted document, while `.timestamp()` succeeded on the same
+value.
+
+**The range check runs BEFORE the clock-skew check, and the order is
+load-bearing.** The high boundary is also far-future, so the skew bound would
+refuse it anyway — but that is a coincidence: the skew bound is deliberately
+one-directional and is about clocks, not representability. Ordering the range
+check first means each boundary fixture is refused by the rule that is actually
+about it, and a future symmetric skew bound cannot quietly become the only thing
+holding the 9999 case. Proven: making the skew bound symmetric leaves that
+fixture refused **by range**.
+
+Go has no such limit — `time.Time` represents both instants happily — and
+mirrors the check anyway, because a wire contract's job is that the two clients
+agree about which documents are acceptable.
+
 **A regex cannot know February has 28 days.** `2026-02-30` satisfies the
 pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a

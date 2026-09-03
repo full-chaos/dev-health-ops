@@ -136,6 +136,44 @@ func scanJSONValue(dec *json.Decoder) error {
 	return nil
 }
 
+// utcInstantInRange refuses a timestamp whose UTC-normalised instant falls
+// outside 0001-01-01..9999-12-31.
+//
+// COMPONENT BOUNDS DO NOT BOUND THE COMPOSITION. The schema pattern bounds year
+// 0001-9999 of the LOCAL fields, but the instant is (fields x offset) and the
+// offset can carry it outside the range the fields satisfy:
+//
+//	0001-01-01T00:00:00+23:59  ->  UTC year 0000
+//	9999-12-31T23:59:59-23:59  ->  UTC year 10000
+//
+// Both are lexically valid under the pattern; a regex cannot see it, because
+// the composition is arithmetic rather than lexical. Found by lane-auth-wave1
+// enumerating the class after codex round 3.
+//
+// GO DOES NOT NEED THIS AND HAS IT ANYWAY. time.Time represents both instants
+// without complaint, so nothing here would fail. Python's datetime cannot, and
+// raised OverflowError on the caller's first astimezone -- an uncaught stdlib
+// exception on a document the client had accepted. This check exists so the two
+// clients agree about which documents are acceptable, which is the whole point
+// of a wire contract: a Go service must not emit an envelope the Python client
+// will choke on, and must not accept one a Python peer would refuse.
+//
+// It runs BEFORE the clock-skew check, matching Python. The high boundary is
+// also far-future, so the skew bound would refuse it first -- but that is a
+// COINCIDENCE: the skew bound is deliberately one-directional, and making it
+// symmetric would silently reopen the 9999 case with no test failing.
+func utcInstantInRange(moment time.Time) error {
+	year := moment.UTC().Year()
+	if year < 1 || year > 9999 {
+		return fmt.Errorf(
+			"%s: occurred_at %s normalises to UTC year %d, outside "+
+				"0001-01-01..9999-12-31. The schema bounds the local fields; the offset "+
+				"carries the instant past that bound, which a pattern cannot express",
+			ErrorSurface, moment.Format(time.RFC3339), year)
+	}
+	return nil
+}
+
 // ParseErrorEnvelope validates and parses an error.v1 document received on an
 // HTTP response whose status line said httpStatus.
 //
@@ -172,6 +210,12 @@ func ParseErrorEnvelope(root string, raw []byte, httpStatus int, now time.Time) 
 				"contradict its own response line, and on a 404 that discloses the existence "+
 				"the status withholds",
 			ErrorSurface, envelope.Status, httpStatus)
+	}
+
+	// Range check BEFORE the skew check -- see utcInstantInRange on why the
+	// order is load-bearing rather than incidental.
+	if err := utcInstantInRange(envelope.OccurredAt.Time); err != nil {
+		return ErrorEnvelope{}, err
 	}
 
 	if now.IsZero() {

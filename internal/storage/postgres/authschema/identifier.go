@@ -87,8 +87,18 @@ func quoteIdentifier(v ValidatedIdentifier) string {
 // identifier quoting, is Go string-literal quoting, and escapes an embedded
 // quote as \" where PostgreSQL wants it doubled.
 //
-// Exported deliberately and narrowly: the TYPE is still the control, so a
-// caller cannot reach this without having passed the allowlist first.
+// Exported deliberately and narrowly. The TYPE carries the control, but the
+// claim this comment first made -- that a caller "cannot reach this without
+// having passed the allowlist" -- is FALSE, and codex round 1 was right to say
+// so. ValidatedIdentifier is an exported struct, so ValidatedIdentifier{} is
+// constructible from any package; only its FIELD is unexported. Verified by
+// compiling authschema.Quote(authschema.ValidatedIdentifier{}) from another
+// package: it builds.
+//
+// What actually holds: the zero value cannot be RENDERED. quoteIdentifier
+// panics on it, so the escape reaches a loud stop rather than emitting `""`
+// into a statement. That is a backstop, not the allowlist, and saying so is
+// the difference between this comment and the one it replaces.
 func Quote(v ValidatedIdentifier) string { return quoteIdentifier(v) }
 
 // mustValidatedIdentifier is for identifiers this package itself defines as

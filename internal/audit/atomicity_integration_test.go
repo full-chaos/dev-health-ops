@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -49,7 +48,7 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 		return c
 	}
 
-	mutation := func(key string, apply func(context.Context, pgx.Tx) error) Mutation {
+	mutation := func(key string, apply func(context.Context, TxOps) error) Mutation {
 		return Mutation{
 			Apply: apply,
 			Audit: AuditEvent{EventType: "organization.created", Outcome: OutcomeAllowed},
@@ -59,8 +58,8 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 			},
 		}
 	}
-	insertOrg := func(name string) func(context.Context, pgx.Tx) error {
-		return func(ctx context.Context, tx pgx.Tx) error {
+	insertOrg := func(name string) func(context.Context, TxOps) error {
+		return func(ctx context.Context, tx TxOps) error {
 			_, err := tx.Exec(ctx,
 				`INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), $1, $2)`,
 				name, name)
@@ -85,7 +84,7 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 	t.Run("state mutation fails: nothing is written", func(t *testing.T) {
 		boom := errors.New("the mutation refused")
 		err := Commit(ctx, env.pool, env.schema, mutation("key-apply-fails",
-			func(ctx context.Context, tx pgx.Tx) error { return boom }))
+			func(ctx context.Context, tx TxOps) error { return boom }))
 		if !errors.Is(err, ErrMutationFailed) {
 			t.Fatalf("Commit err = %v, want ErrMutationFailed", err)
 		}
@@ -173,4 +172,60 @@ func newAuditFixture(t *testing.T, ctx context.Context) *auditFixture {
 		t.Fatalf("schema identifier: %v", err)
 	}
 	return &auditFixture{pool: pool, schema: schema}
+}
+
+// TestRetainedTxOpsIsUnusableAfterCommit pins the one escape the TYPE cannot
+// close.
+//
+// TxOps removes Commit, Rollback and Conn from what a callback can reach, so
+// the class codex round 1 found -- a callback that commits the transaction and
+// leaves state durable without its event -- is gone by construction. What no Go
+// type can express is "only during this call": a callback may keep the value
+// and use it after Commit returns.
+//
+// This does not prevent that. It establishes what happens, so the documented
+// residue is a measured statement rather than a guess: the transaction is
+// finished, and the retained handle fails rather than silently writing outside
+// any transaction. A silent success would be far worse than an error, because
+// it would write to the database with no transaction to roll back.
+func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+
+	var retained TxOps
+	err := Commit(ctx, env.pool, env.schema, Mutation{
+		Apply: func(ctx context.Context, tx TxOps) error {
+			retained = tx // the caller error this test exists to characterise
+			return nil
+		},
+		Audit: AuditEvent{EventType: "retention.probe", Outcome: OutcomeAllowed},
+		Event: OutboxEvent{
+			AggregateType: "probe", AggregateID: "retain",
+			EventType: "retention.probe", IdempotencyKey: "retain-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if retained == nil {
+		t.Fatal("the callback did not run")
+	}
+
+	_, err = retained.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug)
+		VALUES (gen_random_uuid(), 'retained', 'retained')`)
+	if err == nil {
+		t.Fatal("a retained TxOps still wrote after Commit returned — the write landed " +
+			"outside any transaction this helper controls")
+	}
+	t.Logf("retained TxOps refused as expected: %v", err)
+
+	var orgs int
+	if err := env.pool.QueryRow(ctx,
+		`SELECT count(*) FROM auth.organizations WHERE slug = 'retained'`).Scan(&orgs); err != nil {
+		t.Fatalf("counting: %v", err)
+	}
+	if orgs != 0 {
+		t.Errorf("the retained handle wrote %d row(s); it must write none", orgs)
+	}
 }

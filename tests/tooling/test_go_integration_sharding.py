@@ -51,6 +51,7 @@ EXPECTED_PACKAGES = {
     "internal/jobs/system",
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
+    "internal/jobs/workgraph/issueprlinks",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -330,11 +331,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
     # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
-    # CHAOS-4882 added internal/storage/postgres/authschema (37 -> 38
-    # discovered, 37 -> 38 will run): the auth-owned schema's live-PostgreSQL
-    # posture suite.
-    assert "38 package(s) discovered, 0 denylisted, 38 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 38 package(s)" in result.stdout
+    # Two packages landed independently, each written as 37 -> 38 on its own
+    # branch: CHAOS-4882's internal/storage/postgres/authschema and
+    # CHAOS-4769's internal/jobs/workgraph/issueprlinks. The merged total is
+    # 39, and the shard plan carries both.
+    assert "39 package(s) discovered, 0 denylisted, 39 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 39 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -364,8 +366,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is the FLATTENED set across all shards, so unlike the selected-package
     # count above it INCLUDES the providersync shard-1 package.
     # CHAOS-4766: 37, not 36 -- internal/jobs/workgraph/edges added.
-    # CHAOS-4882: 38, not 37 -- internal/storage/postgres/authschema added.
-    assert len(flattened) == len(set(flattened)) == 38
+    # CHAOS-4882 and CHAOS-4769: 39, not 37 -- BOTH landed independently,
+    # internal/storage/postgres/authschema and
+    # internal/jobs/workgraph/issueprlinks, each written as 37 -> 38 on its
+    # own branch. FLATTENED includes the providersync shard-1 package.
+    assert len(flattened) == len(set(flattened)) == 39
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1665,10 +1670,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-4766: 36, not 35 -- internal/jobs/workgraph/edges added
     # (37 discovered - 1 for the providersync shard-1 package = 36 across
     # shards 2/3).
-    # CHAOS-4882: 37, not 36 -- internal/storage/postgres/authschema added
-    # (38 discovered - 1 for the providersync shard-1 package = 37 across
+    # CHAOS-4882 and CHAOS-4769: 38, not 36 -- both packages added
+    # (39 discovered - 1 for the providersync shard-1 package = 38 across
     # the packages shards).
-    assert len(selected_packages) == len(set(selected_packages)) == 37
+    assert len(selected_packages) == len(set(selected_packages)) == 38
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

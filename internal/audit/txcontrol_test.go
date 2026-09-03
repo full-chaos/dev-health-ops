@@ -98,6 +98,21 @@ func TestMultipleStatementsAreRefused(t *testing.T) {
 			`INSERT INTO t SELECT 1 AS "x;!"`, false},
 		{"E-string genuinely escapes, so the quote does not close",
 			`INSERT INTO t VALUES (E'n\'; COMMIT;')`, false},
+		// FOUND BY lane-auth-contracts ON #2161. A keyword ending in E sitting
+		// adjacent to an ordinary literal was read as an E-string, so backslash
+		// escaping was applied where PostgreSQL applies none — the round-3
+		// defect reintroduced by its own fix. The fixture set had no
+		// keyword-adjacent literal, which is why it survived.
+		{"ELSE adjacent to an ordinary literal",
+			`INSERT INTO t SELECT CASE WHEN true THEN 'a' ELSE'n\' END; COMMIT;`, true},
+		{"LIKE adjacent to an ordinary literal",
+			`INSERT INTO t SELECT 1 WHERE 'a' LIKE'a\'; COMMIT;`, true},
+		// The accepting half: a REAL E-string, where the escape is genuine and
+		// the semicolon really is inside the literal.
+		{"a real E-string still escapes",
+			`INSERT INTO t VALUES (E'a\'; COMMIT;')`, false},
+		{"lowercase e-string still escapes",
+			`INSERT INTO t VALUES (e'a\'; COMMIT;')`, false},
 		{"escaped double quote inside an identifier",
 			`INSERT INTO t SELECT 1 AS "a""b;c"`, false},
 	} {

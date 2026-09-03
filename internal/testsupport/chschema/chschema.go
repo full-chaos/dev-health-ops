@@ -140,6 +140,34 @@ func repoRoot() (string, error) {
 // itself (anything the migration runner shells out to), and is now guarded so a
 // bare-name override cannot prepend "." to the child's PATH.
 func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
+	// The interpreter path is non-static BY DESIGN, and making it static is
+	// exactly the bug this function exists to fix: a hard-coded "python" is
+	// unresolvable on any host that ships only python3.
+	//
+	// Why it is not a code-injection path here. `python` comes from
+	// pythonBinary(): the DEV_HEALTH_PYTHON environment variable, else
+	// <root>/.venv/bin/python, else exec.LookPath("python3"). The env var is a
+	// deliberate developer-facing knob for choosing an interpreter, set by
+	// whoever is already running the test binary -- it is not request data, not
+	// file content, and not attacker-reachable. Anyone able to set it can
+	// already run arbitrary code as that user by running `go test` at all.
+	//
+	// There is no shell: exec.CommandContext execs directly, so word splitting
+	// and metacharacter interpretation do not apply. The remaining argv is
+	// fully static apart from the DSN.
+	//
+	// Reachability: this package is test support. Its only non-test importer is
+	// internal/testsupport/oraclecompare, which is also test support; no
+	// production binary links it. (Note this is a WEAKER claim than
+	// internal/testsupport/computeparity makes for the same rule -- that one is
+	// importable only from _test.go files, and its argv comes from checked-in
+	// test code rather than an environment variable. Stating the difference
+	// rather than reusing its wording.)
+	//
+	// The suppression must sit on the line DIRECTLY above the finding --
+	// Semgrep does not scan back through an intervening comment block, which is
+	// why this rationale is above and the pragma is flush against the call.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 	command := exec.CommandContext(ctx, python, "-c", applyScript, dsn)
 	command.Dir = root
 	environment := os.Environ()

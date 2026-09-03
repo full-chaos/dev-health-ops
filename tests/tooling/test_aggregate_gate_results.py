@@ -913,6 +913,17 @@ def _typecheck_relevance_patterns() -> list[str]:
 
 
 def _patterns_of(path: Path) -> list[str]:
+    # For TYPECHECK_PATH this reads ci/typecheck_relevance.py's own list --
+    # comparing that back against ITSELF is a tautology (4752-go's peer read
+    # of #2169), which is why test_typecheck_relevance_script_matches_the_
+    # registered_patterns no longer calls this function; it compares against
+    # a hand-frozen list instead. The three remaining callers that still
+    # reach this branch for typecheck (test_paths_filter_covers_every_file_
+    # the_gated_jobs_install, test_filter_selects_on_the_inputs_that_define_
+    # tool_scope, and the uv.lock coverage assertion) are NOT tautological:
+    # each compares these patterns against a genuinely independent source
+    # (installed files, tool-scope inputs, a literal filename), not against
+    # the module itself. Safe here; re-derive before trusting a new caller.
     if path == TYPECHECK_PATH:
         return _typecheck_relevance_patterns()
     with_block = _filter_step(path)["with"]

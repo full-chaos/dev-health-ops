@@ -153,9 +153,13 @@ jobs:
             echo "::error::derived ${n:-0} PYTHON_BASE_IMAGE refs, expected exactly 1"
             exit 1
           fi
+          # OUR owner specifically, not any ghcr owner (codex round 1): the
+          # mirror publishes under ${{ github.repository_owner }}, so a ref
+          # naming a different owner would be pulled from somewhere this
+          # workflow never writes to.
           case "${ref}" in
-            ghcr.io/*@sha256:*) : ;;
-            *) echo "::error::PYTHON_BASE_IMAGE must be a digest-pinned ghcr ref: ${ref}"; exit 1 ;;
+            ghcr.io/${{ github.repository_owner }}/*@sha256:*) : ;;
+            *) echo "::error::PYTHON_BASE_IMAGE must be digest-pinned under ghcr.io/${{ github.repository_owner }}/: ${ref}"; exit 1 ;;
           esac
           tag="${ref%@*}"
           digest="${ref##*@}"

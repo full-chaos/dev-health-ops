@@ -121,6 +121,8 @@ jobs:
       # parser, so the mirror and the pre-pull cannot drift apart.
       - name: Resolve every image CI pulls from Docker Hub
         id: images
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           # Two sources, both DERIVED so neither can drift from what CI runs:
@@ -215,7 +217,13 @@ jobs:
           #
           # The ref carries its digest, so this mirrors a specific image rather
           # than whatever the tag points at today.
-          python_ref=$(sed -nE 's/^ARG PYTHON_BASE_IMAGE="ghcr\.io\/[^\/]+\/([^"]+)".*$/\1/p' \
+          # The OWNER must be OURS, not merely "some ghcr owner" (codex round 1).
+          # This sed used to accept any owner while the destination below is
+          # rebuilt with ${OWNER} -- so `ghcr.io/other-owner/python:...` passed,
+          # mirrored to ghcr.io/<us>/python:..., and left the build pulling an
+          # owner we never publish to. Anchoring on the real owner makes the
+          # derived ref and the destination the same image by construction.
+          python_ref=$(sed -nE "s|^ARG PYTHON_BASE_IMAGE=\"ghcr\.io/${OWNER}/([^\"]+)\".*$|\1|p" \
             docker/Dockerfile)
           # ASSERT THE OUTCOME, NOT THE INPUT (lane-4441).
           #

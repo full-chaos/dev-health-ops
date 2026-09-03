@@ -303,4 +303,59 @@ func TestWriteSupersessionsRoundTrips(t *testing.T) {
 	}
 }
 
+// TestWriteSupersessionsSubMillisecondWritesStayDistinct pins codex round
+// 1's P2 finding: two supersession writes for the SAME key, 800
+// MICROSECONDS apart, must encode to DISTINCT stored version values -- not
+// collapse into the same millisecond bucket, which would make
+// ReplacingMergeTree's FINAL winner implementation-defined rather than the
+// genuinely later write. This is the precise scenario the migration's
+// 085_work_unit_supersessions.sql column comment documents: at
+// DateTime64(3,'UTC') this assertion FAILS (both writes round to the same
+// millisecond); at the fixed DateTime64(9,'UTC') it passes.
+func TestWriteSupersessionsSubMillisecondWritesStayDistinct(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+
+	firstAt := time.Date(2026, 9, 3, 12, 0, 0, 100000, time.UTC) // .000100
+	secondAt := firstAt.Add(800 * time.Microsecond)              // .000900 -- same millisecond, different microsecond
+	if secondAt.Truncate(time.Millisecond) != firstAt.Truncate(time.Millisecond) {
+		t.Fatal("test construction error: firstAt/secondAt must share the same millisecond")
+	}
+
+	if _, err := writer.WriteSupersessions(ctx, testOrgID, []SupersessionRecord{{
+		SupersededWorkUnitID: "wu-race", SupersededByRunID: "run-1", SupersededAt: firstAt,
+	}}); err != nil {
+		t.Fatalf("WriteSupersessions (first): %v", err)
+	}
+	if _, err := writer.WriteSupersessions(ctx, testOrgID, []SupersessionRecord{{
+		SupersededWorkUnitID: "wu-race", SupersededByRunID: "run-2", SupersededAt: secondAt,
+	}}); err != nil {
+		t.Fatalf("WriteSupersessions (second): %v", err)
+	}
+
+	rows, err := conn.Query(ctx,
+		`SELECT DISTINCT toString(superseded_at) FROM work_unit_supersessions
+		 WHERE org_id = ? AND superseded_work_unit_id = ?`, testOrgID, "wu-race")
+	if err != nil {
+		t.Fatalf("query distinct versions: %v", err)
+	}
+	defer rows.Close()
+	var distinctVersions int
+	for rows.Next() {
+		distinctVersions++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+	if distinctVersions != 2 {
+		t.Fatalf("distinct stored superseded_at values = %d, want 2 (writes 800us apart collapsed into one version bucket -- FINAL's winner is then implementation-defined, not the genuinely later write)", distinctVersions)
+	}
+
+	winningRunID := scanString(t, ctx, conn,
+		`SELECT superseded_by_run_id FROM work_unit_supersessions FINAL
+		 WHERE org_id = ? AND superseded_work_unit_id = ?`, testOrgID, "wu-race")
+	if winningRunID != "run-2" {
+		t.Fatalf("winning superseded_by_run_id = %q, want %q (the later write)", winningRunID, "run-2")
+	}
+}
+
 func strPtr(value string) *string { return &value }

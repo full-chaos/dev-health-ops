@@ -36,10 +36,25 @@
 -- investment_membership_scope.py's scope_enabled gate. Folding it into
 -- that gate's own OR-condition would make the sidecar inherit the exact
 -- bypass window it exists to close.
+--
+-- superseded_at PRECISION (codex round 1, P2, CHAOS-4441): the version
+-- column is DateTime64(9,'UTC') -- nanosecond, not the millisecond every
+-- other work_unit_* table uses -- because two supersession writes for the
+-- SAME (org_id, superseded_work_unit_id) key at millisecond resolution can
+-- land in the same bucket (measured: writes 800us apart still collide
+-- under DateTime64(3)), and ReplacingMergeTree's FINAL resolution for two
+-- rows with an IDENTICAL version is implementation-defined, not
+-- insertion-order -- the wrong lineage row can win. Nanosecond precision
+-- does not make the collision IMPOSSIBLE, only far less likely (the same
+-- class of residual risk `recommendations_tasks.py:407`'s own comment
+-- documents rather than claims eliminated) -- it is chosen because this
+-- table's write pattern is one caller stamping `time.Now()` per
+-- supersession event, and true same-nanosecond writes from a single Go
+-- process are not a realistic occurrence today.
 CREATE TABLE IF NOT EXISTS work_unit_supersessions (
     org_id                  String,
     superseded_work_unit_id String,
     superseded_by_run_id    String,
-    superseded_at           DateTime64(3, 'UTC')
+    superseded_at           DateTime64(9, 'UTC')
 ) ENGINE = ReplacingMergeTree(superseded_at)
 ORDER BY (org_id, superseded_work_unit_id);

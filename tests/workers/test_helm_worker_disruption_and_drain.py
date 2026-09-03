@@ -1,6 +1,6 @@
-"""Chart-level guarantees for draining and rolling the worker family (CHAOS-4428).
+"""Chart-level guarantees for draining and rolling the worker family (CHAOS-4428, CHAOS-4984).
 
-Three separate defects, each caught only by rendering:
+Four separate defects, each caught only by rendering:
 
 1. A `metrics` group whose terminationGracePeriodSeconds is below 7260s is
    SIGKILLed while holding a claimed job. The worker's own diagnosis names the
@@ -12,6 +12,12 @@ Three separate defects, each caught only by rendering:
    a rollout. Kubernetes' 25% default happens to round to maxUnavailable 0 at
    one replica; that is rounding, not a guarantee, and it stops holding at
    replicas: 4.
+4. CHAOS-4984: an autoscaling-enabled group's HorizontalPodAutoscaler
+   minReplicas must be at least 1 -- the stock HPA API rejects 0 (no
+   scale-to-zero feature gate assumed), so the chart's own former default
+   (minReplicas: 0 on every autoscaling-enabled group) failed at INSTALL
+   time, not render time: `helm template` alone never caught it, only an
+   actual `helm install`/`upgrade` against a real API server did.
 """
 
 from __future__ import annotations
@@ -202,11 +208,16 @@ def test_pdb_selector_matches_the_deployment_it_budgets(tmp_path: Path) -> None:
 
 
 _AUTOSCALED = (
-    "{enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, "
+    # CHAOS-4984: minReplicas: 1, not 0 -- the render now refuses 0 (see
+    # section 4 below). These two constants are about `maxReplicas`
+    # (whether the group CAN reach more than one pod), not about
+    # minReplicas at all, so bumping it to the new floor changes nothing
+    # about what either test is actually checking.
+    "{enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, "
     "oldestAgeSeconds: 60, saturationMilli: 800m}"
 )
 _AUTOSCALED_TO_ONE = (
-    "{enabled: true, minReplicas: 0, maxReplicas: 1, queueDepth: 1, "
+    "{enabled: true, minReplicas: 1, maxReplicas: 1, queueDepth: 1, "
     "oldestAgeSeconds: 60, saturationMilli: 800m}"
 )
 
@@ -332,3 +343,81 @@ def test_a_group_without_an_autoscaling_block_is_rejected_chart_wide(
     assert "autoscaling" in completed.stderr, (
         f"the error must name the missing block: {completed.stderr}"
     )
+
+
+# --- 4. the autoscaling minReplicas floor (CHAOS-4984) ---------------------
+
+_MINREPLICAS_AUTOSCALING = (
+    "{{enabled: true, minReplicas: {min_replicas}, maxReplicas: 2, "
+    "queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}}"
+)
+
+
+def test_minreplicas_zero_fails_the_render(tmp_path: Path) -> None:
+    completed = _render(
+        _group(
+            name="heavy",
+            queues=["investment"],
+            replicas=1,
+            grace=60,
+            autoscaling=_MINREPLICAS_AUTOSCALING.format(min_replicas=0),
+        ),
+        tmp_path,
+    )
+    assert completed.returncode != 0, (
+        "an autoscaling-enabled group with minReplicas: 0 must not render"
+    )
+    assert "minReplicas" in completed.stderr and "1" in completed.stderr, (
+        f"the error must name the field and the floor: {completed.stderr}"
+    )
+
+
+def test_minreplicas_one_renders(tmp_path: Path) -> None:
+    completed = _render(
+        _group(
+            name="heavy",
+            queues=["investment"],
+            replicas=1,
+            grace=60,
+            autoscaling=_MINREPLICAS_AUTOSCALING.format(min_replicas=1),
+        ),
+        tmp_path,
+    )
+    assert completed.returncode == 0, (
+        f"1 is the floor itself and must be allowed: {completed.stderr}"
+    )
+
+
+def test_autoscaling_disabled_group_is_not_constrained_by_minreplicas(
+    tmp_path: Path,
+) -> None:
+    """The floor only applies when autoscaling is actually enabled -- a
+    group with autoscaling disabled has no HPA at all, so minReplicas is
+    never read and must not be checked."""
+    completed = _render(
+        _group(
+            name="reconciler",
+            queues=[],
+            replicas=1,
+            grace=60,
+            autoscaling="{enabled: false}",
+        ),
+        tmp_path,
+    )
+    assert completed.returncode == 0, (
+        f"autoscaling: {{enabled: false}} must never trip the minReplicas "
+        f"floor, regardless of what minReplicas would have been: {completed.stderr}"
+    )
+
+
+def test_chart_defaults_satisfy_their_own_minreplicas_floor(tmp_path: Path) -> None:
+    """The shipped defaults must not be a configuration the chart rejects --
+    same discipline as test_chart_defaults_satisfy_their_own_floor above,
+    for the minReplicas guard specifically."""
+    for doc in _docs(None, tmp_path):
+        if doc.get("kind") != "HorizontalPodAutoscaler":
+            continue
+        assert doc["spec"]["minReplicas"] >= 1, (
+            f"{doc['metadata']['name']} ships minReplicas="
+            f"{doc['spec']['minReplicas']}, below the chart's own floor"
+        )

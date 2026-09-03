@@ -286,7 +286,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 7260
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
       # CHAOS-4351: this is the ONLY worker group whose queue set includes
       # `metrics` (confirmed via `rg 'queues='` against every group in this
       # file), i.e. the only one that calls the metrics compatibility
@@ -304,7 +304,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: sync
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [sync]
@@ -312,7 +312,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     # Its own group, like the Celery fleet splits per queue. Fused with sync it
     # cannot start while provider routes are default-off: selected queues must
     # equal constructed queues, and no provider handler is built (CHAOS-3926).
@@ -323,7 +323,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: reconciler
       image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
       replicas: 0

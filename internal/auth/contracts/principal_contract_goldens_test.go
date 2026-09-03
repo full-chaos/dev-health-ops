@@ -508,9 +508,22 @@ func TestPrincipalDecodesAnIntegralDecimalRevision(t *testing.T) {
 	}
 }
 
-// TestRevisionRangeAgreesWithPython pins the int64 boundary in both
-// directions, because the first version of this guard got it wrong in a way
-// no fixture could see.
+// TestRevisionRangeBoundary pins the int64 and 2^53 boundaries for the GO
+// decoder only.
+//
+// RENAMED. It was TestRevisionRangeAgreesWithPython, which claimed a
+// cross-language property it does not check: the table is Go-only and never
+// executes Python. That name is the defect class this branch has spent the
+// day removing from its own files -- a description saying more than the code
+// does -- and it had a consequence rather than being merely untidy. Because
+// the name read as cross-language cover, the Python half of the same guard
+// shipped with NO coverage at all: deleting it outright, or repeating the
+// exact `>=`-to-`>` mistake documented ten lines above it, left pytest green
+// while this table went red. Found by lane-auth-wave1's executed read.
+//
+// The cross-language property is now carried where it can actually be
+// enforced -- two `reject_by_client` corpus fixtures, which every language
+// runner reads. This table keeps only the claim it can support.
 //
 // The schema bounds revisions below at zero and not above -- correct for JSON
 // Schema, wrong for a cross-language contract, since Python's integers are
@@ -519,7 +532,7 @@ func TestPrincipalDecodesAnIntegralDecimalRevision(t *testing.T) {
 // and was SILENTLY CLAMPED to 2^63-1, making two different wire documents
 // produce one revision. A revision is a G-31 cache-key input; two inputs
 // collapsing to one value is the failure that key exists to prevent.
-func TestRevisionRangeAgreesWithPython(t *testing.T) {
+func TestRevisionRangeBoundary(t *testing.T) {
 	for _, testCase := range []struct {
 		raw     string
 		want    Revision

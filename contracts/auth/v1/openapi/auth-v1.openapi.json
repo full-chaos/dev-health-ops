@@ -9,6 +9,9 @@
   "paths": {},
   "components": {
     "schemas": {
+      "Error": {
+        "$ref": "../jsonschema/error.v1.schema.json"
+      },
       "Principal": {
         "$ref": "../jsonschema/principal.v1.schema.json"
       }

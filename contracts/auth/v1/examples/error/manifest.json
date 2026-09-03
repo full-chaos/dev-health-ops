@@ -1,0 +1,378 @@
+{
+  "accept": [
+    {
+      "file": "valid-401-credential-missing.json",
+      "why": "TRD s18: accepted credential class missing. The minimal shape -- five required fields, nothing else."
+    },
+    {
+      "file": "valid-403-grant-absent.json",
+      "why": "Authenticated principal lacks the grant. Distinct from 401 by design: the caller IS authenticated."
+    },
+    {
+      "file": "valid-404-existence-hidden.json",
+      "why": "TRD s18's existence-hiding 404. The reason code is deliberately uninformative -- a more specific code here would answer the question the status exists to refuse."
+    },
+    {
+      "file": "valid-409-conflict.json",
+      "why": "State/lifecycle/idempotency conflict."
+    },
+    {
+      "file": "valid-429-with-retry.json",
+      "why": "Transient by TRD s18, so retry_after_seconds is REQUIRED by the if/then rule. Positive control for the conditional."
+    },
+    {
+      "file": "valid-503-authority-unavailable.json",
+      "why": "Mandatory current-state authority unavailable and no valid unexpired decision. The other half of the conditional's positive control."
+    },
+    {
+      "file": "valid-retry-after-zero.json",
+      "why": "Zero is a legitimate retry hint (retry immediately, the window just rolled). Boundary of `minimum: 0` from the accepting side -- without this an off-by-one to `exclusiveMinimum` would pass every rejection test."
+    },
+    {
+      "file": "valid-retry-after-max.json",
+      "why": "Upper boundary accepted. Pairs with the reject fixture at 86401 so the ceiling is pinned from both sides."
+    },
+    {
+      "file": "valid-occurred-at-microseconds.json",
+      "why": "Six fractional digits, the maximum both Go and Python round-trip. Pairs with the seven-digit rejection."
+    },
+    {
+      "file": "valid-occurred-at-offset.json",
+      "why": "A numeric UTC offset, not Z. Accepting only Z would break every non-UTC producer while passing all rejection tests."
+    },
+    {
+      "file": "valid-reason-code-min-length.json",
+      "why": "Three characters, the `minLength` boundary from the accepting side."
+    },
+    {
+      "file": "valid-reason-code-max-length.json",
+      "why": "Sixty-four characters, the `maxLength` boundary from the accepting side."
+    },
+    {
+      "file": "valid-occurred-at-max-offset.json",
+      "why": "The largest valid RFC 3339 offset, accepted. The accepting side of the bound codex round 2 forced: without it, over-tightening the offset to (say) 0-12 hours would pass every rejection test while breaking every caller east of Perth."
+    },
+    {
+      "file": "valid-occurred-at-earliest-year.json",
+      "why": "Year 0001, the first the bound admits. The accepting side of the year alternation -- without it, an over-tightening to (say) 19xx-20xx would pass every rejection test here while refusing valid input."
+    }
+  ],
+  "conditional_note": "This is the first v1 schema to use `if`/`then`/`else`. It is draft 2020-12 core and all three validators implement it, but the corpus PROVES that rather than assuming it: invalid-429-without-retry-after and invalid-503-without-retry-after fail only if `then` is honoured, and invalid-403-with-retry-after and invalid-404-with-retry-after fail only if `else` is. Deleting either clause turns exactly two fixtures green, which is the mutation that keeps the conditional load-bearing.",
+  "description": "The single fixture inventory for contracts/auth/v1/jsonschema/error.v1.schema.json, read by the Go and Python golden runners and by the ajv-2020 check. ONE manifest, ONE fixture directory, every runner -- three copies of one corpus is the drift G-70 exists to catch, so a runner that maintains its own list is a review defect.\n\n`accept` is a positive control corpus carrying equal weight to `reject`: a validator that is too strict passes every rejection test while breaking every real caller, and that failure is invisible to a suite asserting only rejections. Ten of the twelve accept fixtures exist because a plausible over-tightening would break them -- boundary values at both ends of every bound, a non-UTC offset, and both halves of the transient/non-transient split.\n\nEvery identifier is unmistakably synthetic per G-73 (fixed EXAMPLE bodies, zero-padded counters, no plausible entropy) and the corpus is swept by the shared secret scanner rather than trusted to care -- G-16 forbids a credential value in any golden fixture, and these repos are public.",
+  "format_assertion_note": "Two different things, do not conflate them. (1) CROSS-LANGUAGE FLOOR: every constraint a reject fixture asserts uses a keyword all three validators enforce -- `pattern`, `enum`, `type`, `const`, `required`, `minimum`/`maximum`, `additionalProperties`, and the `if`/`then`/`else` conditional; never `format`, because github.com/google/jsonschema-go records `format` and ignores it during validation. (2) DEFENCE IN DEPTH where available: the Python runner MUST still enable format assertion and MUST FAIL rather than skip if it cannot -- a format check that silently checks nothing while exiting 0 is the defect this contract exists to prevent.",
+  "regex_dialect_note": "Every `pattern` here stays inside the common subset of Go RE2, ECMA-262 and Python `re`. No shorthand class (`\\d`/`\\w`/`\\s` are Unicode in Python and ASCII in the other two), no inline flag group (`(?i)` is a SyntaxError in ECMA-262), no back-reference or lookaround (absent from RE2). The trailing `$` matches before a final newline in Python only, which is why the Python client rewrites it to `\\Z`. Guarded by TestEveryWireSchemaStaysInTheCrossLanguageDialect with positive and negative controls, not by review.",
+  "reject": [
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-message.json",
+      "why": "User-facing text is CALLER-owned. A server-authored human string is the single most common carrier of the disclosures TRD s18 forbids. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-detail.json",
+      "why": "Same class as `message` under a different name -- the omission is of the CONCEPT, not one spelling of it. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-exception.json",
+      "why": "TRD s18 forbids dependency internals by name. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-stack.json",
+      "why": "Dependency internals; also discloses code paths and library versions. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-provider-response.json",
+      "why": "TRD s18 forbids provider responses by name. An OAuth/SAML failure surfaces as a reason code; the provider's words stay server-side. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-policy-source.json",
+      "why": "TRD s18 forbids policy source by name. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-resource-key.json",
+      "why": "TRD s18 forbids repository candidates, and naming the resource defeats the 404 existence rule. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-candidates.json",
+      "why": "Repository candidates by name -- the plural form is the more dangerous one. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-token.json",
+      "why": "No fragment of a presented credential is echoed. TRD s12's display prefix belongs to credential metadata, never to an error. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-received.json",
+      "why": "Untrusted bodies by name; echoing input is also a reflection primitive. Rejected by `additionalProperties: false`, which is what makes the omission enforceable rather than advisory."
+    },
+    {
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "file": "invalid-status-500.json",
+      "why": "500 is deliberately absent from the enum. A shape for an unhandled fault invites populating it from an exception, in a contract that promises to disclose nothing. A fault is a 503 with a reason code, or it is a defect."
+    },
+    {
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "file": "invalid-status-200.json",
+      "why": "A success status in an error envelope. Trivial-looking, but it is the shape a naive error-wrapper produces when it stamps the envelope before the status is decided."
+    },
+    {
+      "expect_instance_location": "/status",
+      "expect_keyword": "type",
+      "file": "invalid-status-as-string.json",
+      "why": "The string \"403\" is not the integer 403. JSON has one number type and three languages disagree about coercion; the type keyword is what stops a stringly-typed producer."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "An unrecognised contract version must be REFUSED, not parsed optimistically (G-26: unknown denies)."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-with-spaces.json",
+      "why": "A space is the first character of prose. The pattern forbids it so a code cannot drift into a sentence."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-with-email.json",
+      "why": "The exact smuggling case the pattern exists to stop: PII riding inside a field documented as safe for audit and metrics, where it would land in logs and dashboards."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-with-path.json",
+      "why": "A resource path inside the code re-introduces the existence disclosure the 404 rule removes."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-uppercase.json",
+      "why": "Case variance makes two spellings of one code, which breaks metric aggregation silently -- the code is stable only if there is one of it."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-too-short.json",
+      "why": "Below minLength. Two characters cannot name a failure. Trips `pattern` and only `pattern`: the redundant minLength/maxLength pair was removed from the schema precisely so this fixture names the same keyword in all three languages."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-too-long.json",
+      "why": "Sixty-five characters, one past the ceiling. Pairs with the accepting 64 fixture. Trips `pattern` and only `pattern`: the redundant minLength/maxLength pair was removed from the schema precisely so this fixture names the same keyword in all three languages."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-leading-digit.json",
+      "why": "Must start with a letter. A leading digit invites encoding the status into the code, duplicating `status` with a second source of truth."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "pattern",
+      "file": "invalid-reason-code-empty.json",
+      "why": "Empty string. A producer that failed to set a code must fail validation, not emit a blank one. Trips `pattern` and only `pattern`: the redundant minLength/maxLength pair was removed from the schema precisely so this fixture names the same keyword in all three languages."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-wrong-prefix.json",
+      "why": "The `req_` prefix is what lets a log search distinguish this identifier class from the dozen others in this system."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-with-newline.json",
+      "why": "A newline in an echoed identifier is a log-injection primitive: it forges a second log line. This is why a caller-supplied request ID must be validated before it is echoed."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-not-rfc3339.json",
+      "why": "A space instead of T. Accepted by several permissive parsers, which is exactly why the pattern and not `format` is the floor -- google/jsonschema-go ignores `format` entirely."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-nanoseconds.json",
+      "why": "Nine fractional digits. Go's time.Time carries nanoseconds and Python's datetime does not, so this is a value one client can emit and the other cannot round-trip. The Go client truncates to microseconds on marshal to make this unreachable from its own producer."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-no-timezone.json",
+      "why": "No zone designator. A naive timestamp is interpreted in the reader's local zone, which makes an audit trail unorderable across hosts."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-429-without-retry-after.json",
+      "why": "A 429 with no retry guidance. This fixture is what makes the if/then conditional load-bearing rather than decorative -- delete the `then` clause and only this and its 503 twin go green."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-503-without-retry-after.json",
+      "why": "The 503 half of the same conditional."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-403-with-retry-after.json",
+      "why": "Retry guidance on a non-transient status, caught by the `else` branch. Telling a caller to retry a 403 sends it into a loop that will fail identically forever."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-404-with-retry-after.json",
+      "why": "Retry guidance on a 404 is a weak existence oracle: a resource worth retrying for is a resource that might appear."
+    },
+    {
+      "expect_instance_location": "/retry_after_seconds",
+      "expect_keyword": "minimum",
+      "file": "invalid-retry-after-negative.json",
+      "why": "A negative wait is meaningless and, cast to an unsigned type by a consumer, becomes an enormous one."
+    },
+    {
+      "expect_instance_location": "/retry_after_seconds",
+      "expect_keyword": "maximum",
+      "file": "invalid-retry-after-past-max.json",
+      "why": "One second past a day. Longer than a day is not transient, and an unbounded value is a denial-of-service against the caller's own scheduler."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-schema-version.json",
+      "why": "`schema_version` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-status.json",
+      "why": "`status` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-reason-code.json",
+      "why": "`reason_code` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-request-id.json",
+      "why": "`request_id` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-occurred-at.json",
+      "why": "`occurred_at` is required. A consumer that tolerates its absence has to invent a default, and every default here is wrong."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-token-shaped.json",
+      "why": "CODEX ROUND 1 P1. The earlier pattern (`req_` + 1-60 chars) accepted this in full, and the field's own description blessed echoing a caller-supplied ID once it passed that lexical check -- so a caller could put a credential fragment in a field documented as safe, and the server would reflect it into a response body. A character class cannot tell an opaque correlation ID from a secret. The producer obligation (server-minted, never echoed) is the real control; the pinned 26-character length is a stated-partial mitigation that makes the common token shapes unrepresentable here. This fixture is the regression test for the length half. The first draft of this fixture used a real GitHub personal-access-token prefix to make the smuggling concrete, and TestNoFixtureCarriesARealLookingSecret REFUSED it -- correctly, and on a fixture written by the person who reads that guard's output. The value here is over-length and synthetic instead: it matches the OLD `{1,60}` pattern, so it demonstrates exactly what used to be accepted, and fails the new 26-character pin. The prefix was illustration; the length and character class are the defect. Naming the prefix in THIS note tripped the scanner a second time -- an explanation of the rule is scanned exactly like a violation of it, which is the right behaviour and the second time it has caught me describing a shape instead of naming it."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-offset-hour-24.json",
+      "why": "CODEX ROUND 2 P1. +24:00 is not a valid RFC 3339 offset and the naive [0-9]{2} accepted it. The consequence is a WRONG INSTANT, not a parse disagreement: Python fromisoformat refuses it, Go time.Parse ACCEPTS it and resolves to 2026-09-02T05:00:00Z -- a full day earlier than the text reads. Go rejects +99:00 as out of range, so the split sits exactly at plus or minus 24. Note `format: date-time` would have caught this in Python and ECMA and NOT in Go, which is why the bound is in the pattern."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-offset-minute-60.json",
+      "why": "The minute half of the same bound. Filed separately because a fix that bounded only the hour would leave this one accepted, and both halves came from one naive [0-9]{2}:[0-9]{2}."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-year-zero.json",
+      "why": "CODEX ROUND 3 P1. Year 0000 does not exist. Go time.Parse ACCEPTS it and Python fromisoformat REFUSES it, so the same document split the two clients. Note the natural fix -- a (?!0000) lookahead -- is NOT available: RE2 has no lookahead, so that spelling would compile in Python and ECMA and fail in Go, reproducing this corpus's own divergence class inside the fix for it. The year is bounded by a four-branch alternation instead."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-hour-24.json",
+      "why": "The split running the OTHER WAY, found by enumerating the class rather than the reported instance: Python fromisoformat ACCEPTS T24:00:00 (ISO 8601 end-of-day) and Go time.Parse REFUSES it. No reviewer reported this one. It is the reason the fix bounds every component at once instead of the one that was named."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-leap-second.json",
+      "why": "A REAL leap second, and RFC 3339 permits it. Rejected deliberately: this wire contract is the intersection of what all three validators accept, and Python's fromisoformat refuses :60 -- so permitting it would manufacture a third cross-language split rather than close one. The server mints these timestamps and never emits :60. Ruled by team-lead; listed for chris as an open question with this default. If that default is ever reversed, this fixture moves to reject_by_client and Python needs a :60-aware parse."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-status-disagrees-with-http.json",
+      "http_status": 401,
+      "why": "The envelope says 403 and the response line said 401. The SCHEMA cannot see this -- it never sees the HTTP frame -- so the client must, and it must refuse rather than pick a winner. Picking the body would let a server downgrade a 401 to a 403 in the eyes of a client that logs the body; picking the frame would make the duplicated field decorative. Refusing is the only answer that keeps both meaningful."
+    },
+    {
+      "file": "client-rejected-status-disagrees-404-vs-403.json",
+      "http_status": 404,
+      "why": "The sharper form of the same split: the frame says 404 (existence hidden) and the body says 403 (authenticated, lacks grant). A client that trusts the body has just learned the resource EXISTS, which is precisely what TRD s18's 404 rule withholds. This one is a disclosure, not a bookkeeping error."
+    },
+    {
+      "file": "client-rejected-occurred-at-far-future.json",
+      "http_status": 403,
+      "why": "Stamped a year ahead. Schema-valid -- the pattern constrains SHAPE, not plausibility -- and no reasonable clock skew explains it. A future timestamp in an audit trail reorders events silently, so the client refuses beyond a bounded tolerance rather than storing it."
+    },
+    {
+      "file": "client-rejected-status-integral-decimal.json",
+      "http_status": 403,
+      "why": "CODEX ROUND 1 P1. JSON Schema `integer` admits a zero-fraction decimal, so the SCHEMA accepts `403.0` in all three languages. Go's client then re-decodes the raw bytes into an `int` field and refuses it; Python kept it as a float and carried on. Same document, opposite outcomes -- the exact cross-language split CHAOS-4884 already found and fixed for principal.v1 revisions, reproduced here in a new surface. Both clients now refuse it, and this fixture is what keeps them agreeing."
+    },
+    {
+      "file": "client-rejected-retry-after-integral-decimal.json",
+      "http_status": 429,
+      "why": "The same split on the other integer field. Filed separately because `retry_after_seconds` reaches the decode through the `if`/`then` branch rather than the base object, and a fix that covered only `status` would leave this one passing in Python and failing in Go."
+    },
+    {
+      "file": "client-rejected-duplicate-reason-code.json",
+      "http_status": 403,
+      "why": "CODEX ROUND 2 P1. Two `reason_code` members. Every parser keeps the LAST, so a validator only ever sees `grant_absent` and reports success -- while the WIRE BYTES carry an address in a field whose pattern exists to make addresses unrepresentable. This is a wire contract, so the guarantee is about bytes, and it was false. Both clients now refuse duplicate members BEFORE decoding, because the decode is what destroys the evidence.\n\nWRITTEN AS RAW TEXT ON PURPOSE, like the 2^53 fixtures: `json.dump` cannot emit a duplicate member at all, so regenerating this file through any serialiser silently deletes the defect it carries. Do not normalise it.\n\nThe first value is spelled with `_at_` and `_dot_` rather than as a real address so the fixture secret scanner does not read the corpus as carrying one -- the point is the DUPLICATE, not the specific string."
+    },
+    {
+      "file": "client-rejected-occurred-at-february-30.json",
+      "http_status": 403,
+      "why": "A REGEX CANNOT KNOW FEBRUARY HAS 28 DAYS. Day 30 in month 02 satisfies the pattern -- and must, because day-per-month is not expressible in the dialect all three validators share. BOTH clients refuse it at parse, so it is genuinely client-enforced, and this fixture exists to say so out loud. Without it the gap looks like an oversight in the pattern rather than a stated boundary, which is the difference between a contract that admits its limits and one that implies it has none."
+    },
+    {
+      "file": "client-rejected-utc-range-underflow.json",
+      "http_status": 403,
+      "why": "COMPONENT BOUNDS DO NOT BOUND THE COMPOSITION. The pattern bounds year 0001-9999 of the LOCAL fields; the instant is (fields x offset), and +23:59 carries this one to UTC year 0000. A regex cannot see it -- the composition is arithmetic, not lexical -- so it is client-enforced by construction rather than by choice.\n\nBefore the fix this PARSED CLEANLY and then raised OverflowError on the caller's first astimezone: an uncaught stdlib exception on a document the client had accepted, from an ordinary operation. `.timestamp()` succeeded on the same value, so the failure was inconsistent as well as uncaught. Found by lane-auth-wave1 enumerating the class after codex round 3."
+    },
+    {
+      "file": "client-rejected-utc-range-overflow.json",
+      "http_status": 403,
+      "why": "The high half of the same composition class: -23:59 carries 9999-12-31 to UTC year 10000.\n\nNAMED FOR THE RANGE CHECK, NOT THE SKEW BOUND, and that naming is the point. This value is also far-future, so the clock-skew bound WOULD refuse it -- but only by coincidence, because the skew bound is deliberately one-directional and is about clocks, not about representability. The range check therefore runs FIRST in both clients, so this fixture is refused by the rule that is actually about it. Anyone who later makes the skew bound symmetric, or relaxes it, must still see this fixture red -- if it ever starts passing for skew reasons, the range check has been lost."
+    }
+  ],
+  "reject_by_client_note": "These documents are VALID against the schema and a client MUST still refuse them. That distinction is the category's whole reason to exist, and it was corrected once already during CHAOS-4884: filing them as `reject` would assert the schema catches something it provably does not, and would fail that category's own must-not-validate half.\n\nEach entry carries `http_status`, the status of the response line the document arrived on. The schema never sees it -- validators are handed a document, not an exchange -- which is exactly why these checks live in the client. Two of the three below are status disagreements, and the 404-versus-403 case is a genuine disclosure rather than bookkeeping: trusting the body would tell the caller a hidden resource exists.\n\nOne entry -- client-rejected-duplicate-reason-code.json -- is RAW TEXT carrying a duplicate object member. It cannot round-trip through a JSON writer and must never be regenerated; see CHAOS-4916, which asks for byte-level assertions on exactly this class of fixture."
+}

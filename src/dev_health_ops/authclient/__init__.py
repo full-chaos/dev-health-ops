@@ -16,6 +16,10 @@ from dev_health_ops.authclient.contracts import (
     validator_for,
     violations,
 )
+from dev_health_ops.authclient.error_envelope import (
+    ErrorEnvelope,
+    parse_bytes,
+)
 from dev_health_ops.authclient.principal import (
     SCHEMA_VERSION,
     Authentication,
@@ -25,6 +29,7 @@ from dev_health_ops.authclient.principal import (
 )
 
 __all__ = [
+    "ErrorEnvelope",
     "SCHEMA_VERSION",
     "Authentication",
     "ContractError",
@@ -33,6 +38,7 @@ __all__ = [
     "Principal",
     "Violation",
     "contracts_dir",
+    "parse_bytes",
     "repo_root",
     "validate",
     "validator_for",

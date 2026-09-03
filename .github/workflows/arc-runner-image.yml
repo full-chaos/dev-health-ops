@@ -110,15 +110,22 @@ jobs:
         with:
           images: ghcr.io/full-chaos/arc-runner
 
-      # THE build -- exactly one, every event type. On a push (or a
-      # push_image=true dispatch) it goes straight to ghcr.io BY DIGEST
-      # ONLY: no tags decided yet, so nothing downstream depends on the
-      # main-head check to have already run, and there is no second build
-      # later to diverge from this one. The CGO check below and the eventual
-      # published image are therefore the exact same bytes, not
-      # same-Dockerfile-different-build stand-ins. On a PR (or a dry-run
-      # dispatch) there's no registry login, so it stays local: loaded, not
-      # pushed.
+      # THE build -- exactly one, every event type. `:check` is a FIXED,
+      # literal tag applied unconditionally, never a shell variable or a
+      # runtime-only ${{ }} value: tests/tooling/test_go_integration_
+      # sharding.py's registry-pull scanner statically parses every `docker
+      # run`/`docker pull` argument in this repo's workflow `run:` text and
+      # REFUSES anything it cannot prove, at YAML-authoring time, resolves to
+      # an approved registry -- github.sha included, since only
+      # github.repository_owner is special-cased. A dynamic digest or tag
+      # reference can never appear in the CGO-check step below as a result;
+      # a fixed literal is the only shape that scanner accepts. On a push
+      # (or a push_image=true dispatch) this SAME build ALSO pushes an
+      # immutable per-commit tag straight to ghcr: sha tags need no ordering
+      # guard, since each is unique to its own commit and so has no "is this
+      # still current" question to ask. Only `latest` is gated on the
+      # main-head check further down, applied afterward against this exact
+      # digest via `imagetools create` -- never a second build.
       - name: Build
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -126,9 +133,12 @@ jobs:
           context: .
           file: docker/arc-runner/Dockerfile
           platforms: linux/arm64
-          tags: ${{ steps.publish.outputs.should_publish == 'true' && 'ghcr.io/full-chaos/arc-runner' || 'arc-runner:check' }}
+          tags: |
+            ghcr.io/full-chaos/arc-runner:check
+            ${{ steps.publish.outputs.should_publish == 'true' && format('ghcr.io/full-chaos/arc-runner:sha-{0}', github.sha) || 'ghcr.io/full-chaos/arc-runner:check' }}
           labels: ${{ steps.labels.outputs.labels }}
-          outputs: ${{ steps.publish.outputs.should_publish == 'true' && 'type=image,push-by-digest=true,name-canonical=true,push=true' || 'type=docker' }}
+          push: ${{ steps.publish.outputs.should_publish == 'true' }}
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -139,26 +149,37 @@ jobs:
       # inside the image just built above, over its GOROOT mounted
       # read-only. That isolates what's actually being checked to what the
       # image itself provides (gcc, libc6-dev, i.e. CGO_ENABLED/CC
-      # detection), not anything about the Go toolchain. When publishing,
-      # this pulls the just-pushed digest from ghcr rather than a local
-      # tag -- the same bytes that will end up tagged `latest`/`sha-...`.
+      # detection), not anything about the Go toolchain. Always runs against
+      # the literal `:check` tag loaded by the Build step -- the exact same
+      # bytes that (when publishing) were also just pushed under the sha tag
+      # in that same build, so there is no separate build to diverge from.
       - name: Set up Go (for the in-image CGO check only)
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: go.mod
 
       - name: Check CGO toolchain inside the built image
+        # Two separate `docker run` invocations, not one `sh -c 'a; b'`:
+        # tests/tooling/test_go_integration_sharding.py's registry scanner
+        # splits run: text on bare ;/&&/|| WITHOUT respecting quoting, so a
+        # `;` embedded inside a single-quoted sh -c argument fragments this
+        # into two unbalanced-quote pieces and gets refused as "unparseable
+        # shell" (fail-closed by that scanner's own design -- an image it
+        # can't determine is never assumed safe). Keeping each docker run a
+        # complete, self-contained statement avoids tripping it, rather than
+        # working around a scanner that is behaving as intended.
         run: |
           set -euo pipefail
-          image="arc-runner:check"
-          if [ "${{ steps.publish.outputs.should_publish }}" = "true" ]; then
-            image="ghcr.io/full-chaos/arc-runner@${{ steps.build.outputs.digest }}"
-          fi
           docker run --rm --platform linux/arm64 \
             -v "$(go env GOROOT)":/usr/local/go:ro \
             -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-            "$image" \
-            sh -c 'echo "gcc: $(command -v gcc)"; go env CGO_ENABLED CC'
+            ghcr.io/full-chaos/arc-runner:check \
+            sh -c 'echo "gcc: $(command -v gcc)"'
+          docker run --rm --platform linux/arm64 \
+            -v "$(go env GOROOT)":/usr/local/go:ro \
+            -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            ghcr.io/full-chaos/arc-runner:check \
+            sh -c 'go env CGO_ENABLED CC'
 
       - name: Determine whether this build is main's current head
         if: steps.publish.outputs.should_publish == 'true'
@@ -177,31 +198,21 @@ jobs:
             echo "is_main_head=false" >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Docker meta
-        if: steps.publish.outputs.should_publish == 'true'
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/full-chaos/arc-runner
-          tags: |
-            type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && steps.mainhead.outputs.is_main_head == 'true' }}
-
-      # Tags the ALREADY-PUSHED digest -- a manifest-copy, not a build, so
-      # this is the actual fast, bounded action the main-head check gates.
-      # Bash array, not jq + word-splitting: same reasoning docker-images.yml
-      # (#2149) accepts as an intentional exception, sidestepped here rather
-      # than repeated.
-      - name: Tag and push
-        if: steps.publish.outputs.should_publish == 'true'
+      # Applies `latest` only when this exact build is main's current head,
+      # checked immediately beforehand: the gap between "checked" and "acted
+      # on" is one `imagetools create` call -- a manifest op, not a build --
+      # so its correctness never depends on build-cache state. The immutable
+      # sha-<commit> tag needs no such guard: it was already pushed directly
+      # by the Build step above and can never go stale.
+      - name: Tag latest
+        if: >-
+          steps.publish.outputs.should_publish == 'true' &&
+          github.ref == 'refs/heads/main' &&
+          steps.mainhead.outputs.is_main_head == 'true'
         id: tag
         run: |
           set -euo pipefail
-          args=()
-          while IFS= read -r t; do
-            [ -n "$t" ] && args+=(-t "$t")
-          done <<< "${{ steps.meta.outputs.tags }}"
-          docker buildx imagetools create "${args[@]}" \
+          docker buildx imagetools create -t ghcr.io/full-chaos/arc-runner:latest \
             "ghcr.io/full-chaos/arc-runner@${{ steps.build.outputs.digest }}"
 
       # Job-level summary line. Note: I found no existing "ensure"-named job
@@ -209,24 +220,31 @@ jobs:
       # specific established convention by that name -- this follows the
       # one $GITHUB_STEP_SUMMARY precedent that does exist here
       # (docs-cloudflare.yml). Flag if a different pattern was intended.
-      # Codex round 2 (024f0e15, P3): a plain `if: <expr>` on mainhead/meta/
-      # tag carries an IMPLICIT `&& success()` -- so if "Check CGO toolchain"
-      # fails on a push after the digest was already pushed, tag/meta are
-      # skipped and this fell through to the "not published, PR/dry-run"
-      # branch, which is false on a push (the digest genuinely landed in the
-      # registry, just never got human tags). Distinguish that case
-      # explicitly rather than inferring it from steps.tag alone.
+      #
+      # "Tag latest" being skipped is NOT itself a failure signal -- it is
+      # the ordinary, expected outcome whenever should_publish is true but
+      # this build isn't main's current head (e.g. a workflow_dispatch with
+      # push_image=true from a feature branch). Report that distinctly from
+      # an actual non-success outcome, rather than treating every skip as
+      # something that needs investigating (codex round 2, 024f0e15, P3:
+      # the previous version conflated "not tagged latest" with "not
+      # published" and could report a false "PR/dry-run" on a real push).
       - name: Summary
         if: always()
         run: |
           {
-            if [ "${{ steps.tag.outcome }}" = "success" ]; then
-              echo "✅ arc-runner image published: \`${{ steps.build.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags }}\`"
-            elif [ "${{ steps.build.outcome }}" = "success" ] && [ "${{ steps.publish.outputs.should_publish }}" != "true" ]; then
-              echo "✅ arc-runner image build (not published, PR/dry-run): \`${{ steps.build.outputs.digest }}\`"
-            elif [ "${{ steps.build.outcome }}" = "success" ]; then
-              echo "⚠️ arc-runner image pushed by digest but NOT tagged -- a later step (CGO check, main-head check, or tag) failed or was skipped: \`${{ steps.build.outputs.digest }}\`"
-            else
+            if [ "${{ steps.build.outcome }}" != "success" ]; then
               echo "❌ arc-runner image build failed (outcome: ${{ steps.build.outcome }})"
+            elif [ "${{ steps.publish.outputs.should_publish }}" != "true" ]; then
+              echo "✅ arc-runner image build (not published, PR/dry-run): \`${{ steps.build.outputs.digest }}\`"
+            else
+              echo "✅ arc-runner image published: \`${{ steps.build.outputs.digest }}\`, tag: \`ghcr.io/full-chaos/arc-runner:sha-${{ github.sha }}\`"
+              if [ "${{ steps.tag.outcome }}" = "success" ]; then
+                echo "   \`latest\` applied (this build is main's current head)"
+              elif [ "${{ steps.tag.outcome }}" = "skipped" ]; then
+                echo "   \`latest\` not applied (not main's current head, or this run doesn't target main)"
+              else
+                echo "   ⚠️ \`latest\`-tag step outcome: ${{ steps.tag.outcome }} -- check the run"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"

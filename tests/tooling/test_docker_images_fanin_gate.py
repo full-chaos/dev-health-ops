@@ -188,23 +188,48 @@ def test_fan_in_job_has_a_bounded_fallback_for_unlabeled_families() -> None:
     )
 
 
-def test_build_jobs_set_the_revision_label_the_fan_in_job_reads() -> None:
+def test_dockerfiles_label_the_revision_the_fan_in_job_reads() -> None:
     """The fan-in job's ancestry check is only as good as the label it
-    reads. If `build`/`go-build` stop setting
-    `org.opencontainers.image.revision` (or never did), every family looks
-    like a permanent bootstrap case -- the fan-in job would tag `latest`
-    unconditionally on every run, which is silently worse than the bug
-    being fixed: no ordering protection at all, dressed up as one."""
+    reads. Both Dockerfiles must set `org.opencontainers.image.revision`
+    via a Dockerfile LABEL (not docker/build-push-action's own `labels:`
+    input -- team-lead review: that would be a SECOND mechanism setting
+    the same key, once go-worker.Dockerfile's own LABEL block is
+    accounted for). If either Dockerfile stops labelling revision, every
+    family it builds looks like a permanent bootstrap case -- the fan-in
+    job would tag `latest` unconditionally on every run, silently worse
+    than the bug being fixed: no ordering protection at all, dressed up
+    as one. And if a `labels:` input ever gets added back onto either
+    build-push-action step, that's the second-mechanism regression this
+    test also has to catch."""
+    dockerfiles = {
+        "build": ROOT / "docker" / "Dockerfile",
+        "go-build": ROOT / "docker" / "go-worker.Dockerfile",
+    }
     jobs = _jobs()
-    for job_name in ("build", "go-build"):
+    for job_name, dockerfile in dockerfiles.items():
         job = jobs.get(job_name)
         assert job is not None, f"expected a {job_name!r} job in docker-images.yml"
         build_steps = [s for s in _steps(job) if s.get("id") == "build"]
         assert build_steps, f"{job_name}: no step with id: build found"
-        labels = str((build_steps[0].get("with") or {}).get("labels", ""))
-        assert "org.opencontainers.image.revision=" in labels, (
-            f"{job_name}'s build step doesn't set the "
-            "org.opencontainers.image.revision label -- the fan-in job's "
-            "ancestry check has nothing to read and would treat every family "
-            "as a permanent bootstrap case"
+        with_block = build_steps[0].get("with") or {}
+
+        assert "org.opencontainers.image.revision=" not in str(with_block.get("labels", "")), (
+            f"{job_name}'s build step sets a `labels:` input containing "
+            "org.opencontainers.image.revision -- that's a second mechanism "
+            "alongside the Dockerfile LABEL, not a replacement for it; the two "
+            "can disagree, and only one should exist"
+        )
+
+        assert dockerfile.exists(), f"expected {dockerfile} to exist"
+        dockerfile_text = dockerfile.read_text(encoding="utf-8")
+        assert "org.opencontainers.image.revision=" in dockerfile_text, (
+            f"{dockerfile} has no org.opencontainers.image.revision LABEL -- "
+            "the fan-in job's ancestry check has nothing to read for this "
+            "family and would treat it as a permanent bootstrap case"
+        )
+
+        build_args = str(with_block.get("build-args", ""))
+        assert "COMMIT=" in build_args, (
+            f"{job_name}'s build-args don't pass COMMIT -- the Dockerfile's "
+            "LABEL references it, but nothing supplies a value at build time"
         )

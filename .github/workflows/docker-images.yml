@@ -197,8 +197,17 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
             PYTHON_VERSION="${{ github.event.release.tag_name }}"
           fi
-          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
-          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          # The commit timestamp, not "now" -- matches go-build's identical
+          # comment/derivation below; CHAOS-4947 needs this to actually set
+          # org.opencontainers.image.created via the Dockerfile LABEL, which
+          # go-worker.Dockerfile's runtime stage already does and this one
+          # now mirrors.
+          EPOCH=$(git log -1 --pretty=%ct)
+          {
+            echo "python_version=${PYTHON_VERSION}"
+            echo "sha=${SHA}"
+            echo "build_time=$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
 
       # CHAOS-4921: dead configuration, flagged by ci-flakes' review of this
       # PR -- `steps.meta.outputs.*` is not referenced anywhere else in this
@@ -277,16 +286,23 @@ jobs:
           file: docker/Dockerfile
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platform }}
+          # CHAOS-4947: VERSION/COMMIT/BUILD_TIME feed docker/Dockerfile's
+          # runtime-stage LABEL block (added for this ticket, mirroring
+          # go-worker.Dockerfile's identical mechanism) -- NOT this action's
+          # own `labels:` input, which would be a second, parallel path
+          # setting the same org.opencontainers.image.revision key. The
+          # fan-in job's ancestry check reads that label off whatever is
+          # CURRENTLY tagged `latest`; it has to be baked in at build time,
+          # on every build regardless of event type, since a later fan-in
+          # run has no other way to know which commit an earlier build came
+          # from without parsing the sha-<7> tag string (explicitly
+          # rejected: a 7-char prefix isn't guaranteed unique).
           build-args: |
             SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.versioning.outputs.python_version }}
+            VERSION=${{ steps.versioning.outputs.python_version }}
+            COMMIT=${{ steps.versioning.outputs.sha }}
+            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
-          # CHAOS-4947: the fan-in job's ancestry check reads this label off
-          # whatever is CURRENTLY tagged `latest` -- it has to be baked in at
-          # build time, on every build regardless of event type, since a
-          # later fan-in run has no other way to know which commit an
-          # earlier build came from without parsing the sha-<7> tag string
-          # (explicitly rejected: a 7-char prefix isn't guaranteed unique).
-          labels: org.opencontainers.image.revision=${{ steps.versioning.outputs.sha }}
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -494,10 +510,14 @@ jobs:
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}
-          # CHAOS-4947: see the identical label on the Python image build
-          # above -- the fan-in job's ancestry check reads this off
-          # whatever is CURRENTLY tagged `latest`.
-          labels: org.opencontainers.image.revision=${{ steps.versioning.outputs.commit }}
+          # No `labels:` input here -- go-worker.Dockerfile's runtime stage
+          # already sets org.opencontainers.image.revision (and friends)
+          # from the COMMIT build-arg above. CHAOS-4947's fan-in job reads
+          # that label off whatever is CURRENTLY tagged `latest`; adding a
+          # `labels:` field here too would be a second, parallel mechanism
+          # setting the same key (team-lead review) -- docker/Dockerfile
+          # (the Python image) was the one actually missing this mechanism,
+          # now fixed to match this file's own pattern instead.
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

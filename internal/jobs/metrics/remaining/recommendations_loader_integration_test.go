@@ -44,7 +44,17 @@ const (
 	// single-org fixture cannot tell a filtered read from an unfiltered one.
 	// That is a cross-tenant data-read regression, so the fixture has to make
 	// the org predicate load-bearing.
-	loaderOtherOrgID  = "org-loader-other-tenant"
+	loaderOtherOrgID = "org-loader-other-tenant"
+	// A THIRD org with NO rows of its own.
+	//
+	// It exists because `total_hotspots` is consumed ONLY as `== 0` -- a
+	// boolean. Adding a foreign hotspot row to a tenant that already has one
+	// moves the count from 1 to 2, which nothing downstream can see, so the org
+	// predicate on file_hotspot_daily is observable ONLY at the zero boundary.
+	// Loading an EMPTY org makes it observable: correct behaviour finds no
+	// hotspots and leaves churn_overlap ABSENT, while a dropped predicate picks
+	// up the other orgs' rows and turns it PRESENT.
+	loaderEmptyOrgID  = "org-loader-empty"
 	loaderTeamA       = "team-alpha"
 	loaderTeamB       = "team-beta"
 	loaderWindowStart = "2026-08-01"
@@ -101,11 +111,12 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 		}
 		snapshots[teamID] = got
 
-		want := runPythonLoader(t, dsn, teamID)
+		want := runPythonLoader(t, dsn, teamID, loaderOrgID)
 		compareSnapshotAgainstPython(t, teamID, got, want)
 	}
 
 	assertCHAOS4897DefectIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
+	assertEmptyOrgSeesNothing(t, ctx, conn, dsn)
 }
 
 // assertCHAOS4897DefectIsPresent executes the defect rather than describing it.
@@ -210,7 +221,7 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 	}
 }
 
-func runPythonLoader(t *testing.T, dsn, teamID string) pythonSnapshot {
+func runPythonLoader(t *testing.T, dsn, teamID, orgID string) pythonSnapshot {
 	t.Helper()
 	root, err := filepath.Abs("../../../..")
 	if err != nil {
@@ -221,7 +232,7 @@ func runPythonLoader(t *testing.T, dsn, teamID string) pythonSnapshot {
 	python := filepath.Join(root, ".venv/bin/python")
 
 	command := exec.Command(python, script,
-		"--dsn", dsn, "--team", teamID, "--org", loaderOrgID,
+		"--dsn", dsn, "--team", teamID, "--org", orgID,
 		"--window-start", loaderWindowStart, "--window-end", loaderWindowEnd)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -407,6 +418,63 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) {
 			mustTimestamp(t, seed.computedAt), loaderOtherOrgID)
 	}
 
+	// The second tenant must reach EVERY table the loader reads, not just two.
+	//
+	// orgClause() has NINE call sites across SEVEN tables. Seeding the other
+	// tenant into only work_item_metrics_daily and repo_metrics_daily makes the
+	// org predicate load-bearing at those sites and NOWHERE ELSE -- removing it
+	// from any of the other seven survives, because there is no foreign row for
+	// it to let through. Deleting the whole helper is caught; weakening one
+	// query is not, and a per-query removal is the more plausible edit.
+	//
+	// Every value below is deliberately extreme, so a leak shows up as an
+	// obviously wrong number rather than a plausible one.
+	for _, seed := range []struct {
+		email      string
+		reviews    int
+		computedAt string
+	}{
+		{"leak-1@other.example", 5000, "2026-08-03 00:00:00"},
+		{"leak-2@other.example", 1, "2026-08-03 00:00:00"},
+	} {
+		exec(`INSERT INTO user_metrics_daily
+			(repo_id, day, author_email, commits_count, team_id, reviews_given,
+			 computed_at, org_id)
+			VALUES (?, ?, ?, 0, ?, ?, ?, ?)`,
+			repoAlpha, mustDate(t, "2026-08-02"), seed.email, loaderTeamA,
+			uint32(seed.reviews), mustTimestamp(t, seed.computedAt), loaderOtherOrgID)
+	}
+	exec(`INSERT INTO team_metrics_daily
+		(day, team_id, repo_id, commits_count, after_hours_commits_count,
+		 computed_at, org_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		mustDate(t, "2026-08-02"), loaderTeamA, repoAlpha, uint32(1000), uint32(1000),
+		// LATER than this tenant's row for the same (day, repo_id). The inner
+		// query dedups on that pair, so with the org predicate gone both
+		// tenants' rows land in ONE group and argMax decides. An equal
+		// computed_at is a TIE, and a tie let this mutation survive: the
+		// original row happened to win. The foreign row must win deterministically.
+		mustTimestamp(t, "2026-08-04 00:00:00"), loaderOtherOrgID)
+	exec(`INSERT INTO repo_complexity_daily
+		(repo_id, day, cyclomatic_per_kloc, computed_at, org_id)
+		VALUES (?, ?, ?, ?, ?)`,
+		"33333333-3333-3333-3333-333333333333", mustDate(t, "2026-08-25"), 900.0,
+		mustTimestamp(t, "2026-08-26 00:00:00"), loaderOtherOrgID)
+	exec(`INSERT INTO file_hotspot_daily
+		(repo_id, day, file_path, risk_score, computed_at, org_id)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"33333333-3333-3333-3333-333333333333", mustDate(t, "2026-08-25"),
+		"other-tenant/leak.py", 0.95, mustTimestamp(t, "2026-08-26 00:00:00"),
+		loaderOtherOrgID)
+	// A LATER computed_at than this tenant's row, so if the org predicate goes
+	// the foreign row WINS the argMax rather than merely joining the pool.
+	exec(`INSERT INTO compounding_risk_daily
+		(org_id, day, scope, scope_id, compounding_risk, severity,
+		 w_churn, w_complexity, w_ownership, w_review, computed_at)
+		VALUES (?, ?, 'team', ?, ?, 'high', 0, 0, 0, 0, ?)`,
+		loaderOtherOrgID, mustDate(t, "2026-08-22"), loaderTeamA, 0.99,
+		mustTimestamp(t, "2026-08-23 00:00:00"))
+
 	// repo_metrics_daily: latency and rework. NO team column -- this is the
 	// CHAOS-4897 surface. Two repos so the org-wide avg is over both.
 	for _, seed := range []struct {
@@ -525,4 +593,48 @@ func mustTimestamp(t *testing.T, text string) time.Time {
 		t.Fatalf("parse timestamp %q: %v", text, err)
 	}
 	return value
+}
+
+// assertEmptyOrgSeesNothing makes the org predicate observable on the queries
+// whose output cannot otherwise reveal it.
+//
+// `total_hotspots` reaches the snapshot only through `totalHotspots == 0`, so a
+// foreign hotspot row added to a tenant that already has one is invisible: the
+// count moves from 1 to 2 and nothing downstream can tell. The predicate is
+// observable ONLY at the zero boundary, which needs an org with no rows.
+//
+// Loading a team in an empty org must therefore return an ABSENT churn_overlap.
+// With the org predicate dropped from the hotspot query, the other orgs' rows
+// are counted, the count becomes non-zero, and churn_overlap turns PRESENT --
+// which is the divergence this asserts.
+//
+// Compared against the Python reference on the same empty org rather than
+// against a hard-coded expectation, so it stays a parity assertion.
+func assertEmptyOrgSeesNothing(t *testing.T, ctx context.Context, conn driver.Conn, dsn string) {
+	t.Helper()
+
+	loader, err := NewRecommendationsLoader(conn, loaderEmptyOrgID)
+	if err != nil {
+		t.Fatalf("new loader (empty org): %v", err)
+	}
+	got, err := loader.LoadTeamMetricsWindow(ctx, loaderTeamA, loaderEmptyOrgID,
+		mustDate(t, loaderWindowStart), mustDate(t, loaderWindowEnd))
+	if err != nil {
+		t.Fatalf("go loader (empty org): %v", err)
+	}
+
+	if got.HotspotChurnOverlapKnown {
+		t.Errorf("empty org: hotspot_churn_overlap is PRESENT (%v); an org with no "+
+			"rows must see no hotspots. The org predicate has probably been dropped "+
+			"from the file_hotspot_daily query -- that count is used only as `== 0`, "+
+			"so this boundary is the only place the predicate is observable.",
+			got.HotspotChurnOverlap)
+	}
+	if len(got.WIPByDay) != 0 {
+		t.Errorf("empty org: %d wip rows, want 0 -- a foreign tenant's rows are "+
+			"reaching an org that has none", len(got.WIPByDay))
+	}
+
+	want := runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID)
+	compareSnapshotAgainstPython(t, "empty-org", got, want)
 }

@@ -49,7 +49,7 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	rng := rand.New(rand.NewSource(seed))
 	t.Logf("seed %d — rerun with the same seed to reproduce any disagreement", seed)
 
-	var checked, skipped, multi int
+	var checked, skipped, multi, boundary int
 	skipReasons := map[string]int{}
 	var firstDisagreement string
 
@@ -81,6 +81,13 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 		checked++
 		if serverRefuses {
 			multi++
+		} else if strings.Contains(stmt, ";") {
+			// A single statement that CONTAINS a semicolon is where this lexer
+			// can actually be wrong. A case count says nothing about how many
+			// of those there were: a corpus of 3000 obviously-multi statements
+			// and 3000 semicolon-free ones would report the same 3000 and
+			// exercise none of the boundary.
+			boundary++
 		}
 		if lexerRefuses != serverRefuses && firstDisagreement == "" {
 			firstDisagreement = fmt.Sprintf(
@@ -88,8 +95,8 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 		}
 	}
 
-	t.Logf("checked %d, skipped %d (invalid SQL, by SQLSTATE: %v), server called %d multi-statement",
-		checked, skipped, skipReasons, multi)
+	t.Logf("checked %d, skipped %d (invalid SQL, by SQLSTATE: %v), server called %d multi-statement, %d single-with-semicolon",
+		checked, skipped, skipReasons, multi, boundary)
 	if firstDisagreement != "" {
 		t.Fatalf("lexer and PostgreSQL disagree:\n%s", firstDisagreement)
 	}
@@ -99,6 +106,11 @@ func TestLexerAgreesWithPostgresOnMultiStatement(t *testing.T) {
 	}
 	if checked-multi == 0 {
 		t.Error("every checked statement was multi-statement: no accepting cases were exercised")
+	}
+	// The population that matters. Without this the run can drift into all-easy
+	// cases and still report three thousand.
+	if boundary < 100 {
+		t.Errorf("only %d single statements contained a semicolon; the corpus is not exercising the boundary, whatever its size", boundary)
 	}
 	if checked < 500 {
 		t.Errorf("only %d cases reached the oracle; too many were skipped to conclude anything", checked)
@@ -133,12 +145,28 @@ func generateStatement(rng *rand.Rand) string {
 		`';'`,
 		`';COMMIT;'`,
 		`'a' || ';' || 'b'`,
+
+		// CONTAINERS WITHIN CONTAINERS. Everything above is ONE container with
+		// a semicolon in it. lane-auth-contracts pointed out that a lexer can
+		// track a single container correctly and still lose the depth, and that
+		// every shape here read as a flat set. These nest two deep.
+		`$$ "a;b" $$`,
+		`$$/* ; */$$`,
+		`$$E'a\;'$$`,
+		`$tag$ $$ ; $$ $tag$`,
+		`/* $$;$$ */ 'x'`,
+		`/* 'a;b' */ 'x'`,
+		`/* a /* 'x;' */ b */ 'y'`,
+		`E'$$;$$'`,
+		`'$$' || ';' || '$$'`,
 	}
 	aliases := []string{
 		``,
 		` AS "x;y"`,
 		` AS "a""b;c"`,
 		` AS "ünïcode;id"`,
+		` AS "$$;$$"`,
+		` AS "/* ; */"`,
 		` AS plain`,
 	}
 	tails := []string{

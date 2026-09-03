@@ -44,8 +44,11 @@
 # never a test command, the one shape where the versions differ. A negative from
 # a sample that excludes the case in question is not evidence about the case.)
 #
-# WHY 0.11.0: it is what every host already runs, so no host needs a downgrade
-# to match CI. And measured, not assumed: all 17 files below produce IDENTICAL
+# WHY 0.11.0: it is what every DEVELOPER host already runs, so nobody has to
+# downgrade locally to match CI. (The runner is the exception and ships 0.9.0 --
+# which is why the CI install step above exists. An earlier draft of this line
+# said "every host", contradicting the runner version stated a few lines up;
+# codex round 3 caught it.) And measured, not assumed: all 17 files below produce IDENTICAL
 # results under 0.9.0 (today's runner) and 0.11.0 (this pin), so adopting the
 # pin changes no verdict on anything it lints. It does ACCEPT upstream's narrowing on
 # the shape above -- a deliberate upstream decision, since with a test before

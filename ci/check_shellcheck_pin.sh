@@ -87,15 +87,34 @@ if [ ! -r "${LEFTHOOK}" ]; then
   printf 'FAIL: lefthook.yml is missing or unreadable: %s\n' "${LEFTHOOK}" >&2
   exit 1
 fi
-pre_push_section="$(awk '/^pre-push:/{f=1;next} /^[a-zA-Z0-9_-]+:/{f=0} f' "${LEFTHOOK}")"
-case "${pre_push_section}" in
-  *check_shellcheck_pin.sh*) printf 'ok: pre-push hook still invokes this self-test\n' ;;
-  *)
-    printf 'FAIL: lefthook.yml pre-push no longer invokes ci/check_shellcheck_pin.sh\n' >&2
-    printf '  CI would stay green while the LOCAL half of the pin silently\n' >&2
-    printf '  disappeared. Restore the pre-push command, or if the hook was\n' >&2
-    printf '  removed deliberately, remove this assertion in the same commit so\n' >&2
-    printf '  the decision is visible in the diff rather than implied by a gap.\n' >&2
-    exit 1
-    ;;
-esac
+# TWO FALSE PASSES lane-4441 found in the first version of this scan -- a
+# wiring assertion certifying "still wired" when it is not, which is the exact
+# failure it exists to prevent. Both reproduced here before fixing:
+#
+#   A1: the terminator was `/^[a-zA-Z0-9_-]+:/` and the match was a substring
+#       search for the script name anywhere in the section. Comment out the
+#       `run:` line -- which is how anyone actually disables a hook -- and the
+#       name still appears, in the comment. PASS.
+#   A4: that terminator does not match a key beginning with a dot, and lefthook
+#       really uses `.templates:`. The section never closed, the scan ran to
+#       EOF, and any later mention of the script anywhere satisfied it. PASS.
+#
+# Both halves are now tighter: ANY column-0 token closes the section, and the
+# match must be a `run:` LINE. A mention is not a wiring.
+#
+# An indented or quoted `pre-push:` still fails this scan. Left deliberately:
+# top-level lefthook keys are unquoted at column 0 by convention, and a text
+# scan that rejects a restructure fails SAFE -- someone reformats, this
+# complains, they look. For a wiring assertion that is the right direction to
+# be wrong in, and it keeps the reason for not parsing YAML intact.
+pre_push_section="$(awk '/^pre-push:/{f=1;next} /^[^[:space:]]/{f=0} f' "${LEFTHOOK}")"
+if printf '%s\n' "${pre_push_section}" | grep -qE '^[[:space:]]*run:.*check_shellcheck_pin\.sh'; then
+  printf 'ok: pre-push hook still invokes this self-test\n'
+else
+  printf 'FAIL: lefthook.yml pre-push has no run: line invoking ci/check_shellcheck_pin.sh\n' >&2
+  printf '  CI would stay green while the LOCAL half of the pin silently\n' >&2
+  printf '  disappeared. Restore the pre-push command, or if the hook was\n' >&2
+  printf '  removed deliberately, remove this assertion in the same commit so\n' >&2
+  printf '  the decision is visible in the diff rather than implied by a gap.\n' >&2
+  exit 1
+fi

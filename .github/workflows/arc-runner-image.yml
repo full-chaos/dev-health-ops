@@ -30,10 +30,12 @@ on:
     paths:
       - docker/arc-runner/Dockerfile
       - .github/workflows/arc-runner-image.yml
+      - go.mod
   pull_request:
     paths:
       - docker/arc-runner/Dockerfile
       - .github/workflows/arc-runner-image.yml
+      - go.mod
   workflow_dispatch:
     inputs:
       push_image:
@@ -198,14 +200,23 @@ jobs:
       # specific established convention by that name -- this follows the
       # one $GITHUB_STEP_SUMMARY precedent that does exist here
       # (docs-cloudflare.yml). Flag if a different pattern was intended.
+      # Codex round 2 (024f0e15, P3): a plain `if: <expr>` on mainhead/meta/
+      # tag carries an IMPLICIT `&& success()` -- so if "Check CGO toolchain"
+      # fails on a push after the digest was already pushed, tag/meta are
+      # skipped and this fell through to the "not published, PR/dry-run"
+      # branch, which is false on a push (the digest genuinely landed in the
+      # registry, just never got human tags). Distinguish that case
+      # explicitly rather than inferring it from steps.tag alone.
       - name: Summary
         if: always()
         run: |
           {
             if [ "${{ steps.tag.outcome }}" = "success" ]; then
               echo "✅ arc-runner image published: \`${{ steps.build.outputs.digest }}\`, tags: \`${{ steps.meta.outputs.tags }}\`"
-            elif [ "${{ steps.build.outcome }}" = "success" ]; then
+            elif [ "${{ steps.build.outcome }}" = "success" ] && [ "${{ steps.publish.outputs.should_publish }}" != "true" ]; then
               echo "✅ arc-runner image build (not published, PR/dry-run): \`${{ steps.build.outputs.digest }}\`"
+            elif [ "${{ steps.build.outcome }}" = "success" ]; then
+              echo "⚠️ arc-runner image pushed by digest but NOT tagged -- a later step (CGO check, main-head check, or tag) failed or was skipped: \`${{ steps.build.outputs.digest }}\`"
             else
               echo "❌ arc-runner image build failed (outcome: ${{ steps.build.outcome }})"
             fi

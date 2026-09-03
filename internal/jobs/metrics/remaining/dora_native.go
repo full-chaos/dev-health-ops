@@ -174,7 +174,10 @@ func (executor *DORAExecutor) ComputePartition(
 	}
 
 	// One stamp for the whole partition, before the day loop -- see (2) above.
-	computedAt := executor.nowUTC()
+	computedAt, err := executor.nowOrRefuse()
+	if err != nil {
+		return CompatibilityOutcome{}, err
+	}
 	wanted := metricFilter(scope.Metrics)
 
 	var rowsWritten, skipped int

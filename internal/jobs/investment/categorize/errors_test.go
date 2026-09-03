@@ -44,6 +44,14 @@ func TestSanitizeMessageRedactsCredentials(t *testing.T) {
 		{"unlabeled token-shaped value", "http 403: rotated_value=AbCdEfGhIjKlMnOpQrStUvWxYz012345", "AbCdEfGhIjKlMnOpQrStUvWxYz012345"},
 		// A known provider key-prefix shape with NO label at all.
 		{"github PAT with no label", "clone failed with github_pat_11ABCDEFG0123456789abcdefghijklmnop", "github_pat_11ABCDEFG0123456789abcdefghijklmnop"},
+		// codex round 1 (#2189, lane-4978) P1: a DSN's userinfo credential
+		// (Postgres/Redis/ClickHouse/an internal gateway URL) carries no
+		// "password"/"secret" label at all and is often too short to hit
+		// (d)'s length-24 opaque-run heuristic -- the '://'+'@' SHAPE is
+		// the only reliable signal. Percent-encoded/special characters in
+		// the password (the round's own repro shape) must not defeat it.
+		{"URI userinfo credential, percent-encoded", "upstream diagnostic: postgres://billing_user:pa%24s%2Fwd!@db.internal", "billing_user:pa%24s%2Fwd!"},
+		{"URI userinfo credential, plain", "dial failed: redis://default:hunter2@cache.internal:6379/0", "default:hunter2"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

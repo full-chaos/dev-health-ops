@@ -78,6 +78,22 @@ var secretPatterns = []*regexp.Regexp{
 	// <redacted>" just redacts it again, a no-op).
 	regexp.MustCompile(`(?i)(authorization[\s:=]+)['"]?[A-Za-z0-9+/_.~-]+=*(?:\s+[A-Za-z0-9+/_.~-]+=*)?`),
 
+	// (b2) URI userinfo credentials -- a `scheme://user:password@host` DSN
+	// (Postgres, Redis, ClickHouse, an internal gateway URL, ...) quoted
+	// verbatim in a raw provider/proxy diagnostic. Neither (a)'s label
+	// match nor (d)'s length-24 opaque-run heuristic reliably catches this:
+	// a real DB password is often short and carries no "password"/"secret"
+	// label at all -- the '://' + '@' SHAPE is the only reliable signal.
+	// Percent-encoded/special-character passwords (found via lane-4978's
+	// codex round 1, CHAOS-4978 #2189 P1) are covered because the userinfo
+	// class excludes only whitespace/'/'/'@', not '%'/'$'/'!'/etc. Go's
+	// RE2 engine has no lookahead, so the trailing '@' is consumed as part
+	// of the match rather than merely asserted -- the redacted output is
+	// `scheme://<redacted>host` (the '@' separator itself is dropped along
+	// with the credential; harmless, since only the credential's secrecy
+	// matters here, not preserving the original delimiter).
+	regexp.MustCompile(`\b([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/@]+@`),
+
 	// (a) Generic credential-label SUBSTRING match -- deliberately not a
 	// whole-word/whole-label match, so "api_key", "x-api-key",
 	// "webhook_secret", "client_secret" all match via the bare keyword

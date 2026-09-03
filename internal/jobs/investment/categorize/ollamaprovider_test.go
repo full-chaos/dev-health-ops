@@ -165,6 +165,33 @@ func TestOllamaProviderTreats200WithEmbeddedErrorAsFailure(t *testing.T) {
 	}
 }
 
+func TestOllamaProviderRejectsIncompleteResponse(t *testing.T) {
+	// codex round 1 (#2189) P2: a 200 response with no `error` field but
+	// `done:false` (Ollama's own signal that generation did not actually
+	// finish -- see https://docs.ollama.com/api/chat) was silently
+	// returned as a successful, complete CompletionResult, letting a
+	// truncated answer flow into downstream processing undetected.
+	provider, _ := newTestOllamaProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(ollamaChatResponse{
+			Message: ollamaChatMessage{Role: "assistant", Content: "partial result"},
+			Done:    false,
+		})
+	})
+
+	result, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
+	if err == nil {
+		t.Fatalf("Complete accepted done=false as success, text = %q", result.Text)
+	}
+	typed, ok := err.(*llmError)
+	if !ok {
+		t.Fatalf("error type = %T, want *llmError", err)
+	}
+	if typed.kind != llmErrorOutput {
+		t.Errorf("kind = %v, want llmErrorOutput", typed.kind)
+	}
+}
+
 func TestOllamaProviderExplicitZeroTemperatureIsSentVerbatim(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,17 +230,50 @@ func TestOllamaProviderRedactsSecretInErrorBody(t *testing.T) {
 	// through sanitizeMessage before it ever reaches a caller/log, and this
 	// provider's own error paths (both the non-2xx httpStatusError and the
 	// 200-with-embedded-Error field one) must not be exempt from that.
+	//
+	// codex round 1 (#2189) P3: this fixture used HTTP 401, which
+	// classifyProviderError maps to the FIXED message "Invalid or missing
+	// LLM API key." regardless of body content -- sanitizeMessage's own
+	// regex-based redaction of the RAW body never actually ran, so this
+	// test passed even with sanitizeMessage reduced to a no-op (proven:
+	// mutating sanitizeMessage to `return message` left this test green
+	// while TestOllamaProviderRedactsSecretInEmbedded200Error correctly
+	// went red). 403 has no special classifyProviderError case, so the
+	// raw (sanitized) body text is what actually reaches the caller --
+	// this is the status code that genuinely exercises the sanitizer.
 	provider, _ := newTestOllamaProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
+		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error": "Authorization: Bearer sk-realsecretvalue1234"}`))
 	})
 
 	_, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
 	if err == nil {
-		t.Fatal("expected an error for a 401 response")
+		t.Fatal("expected an error for a 403 response")
 	}
 	if strings.Contains(err.Error(), "sk-realsecretvalue1234") {
 		t.Fatalf("returned error leaked the raw API key: %v", err)
+	}
+}
+
+func TestOllamaProviderRedactsURICredentialInErrorBody(t *testing.T) {
+	// codex round 1 (#2189) P1: a DSN's userinfo credential (Postgres/
+	// Redis/ClickHouse/an internal gateway URL) quoted verbatim in an
+	// upstream diagnostic leaked through unredacted -- neither the
+	// label-based nor the length-24-opaque-run sanitizer pattern caught
+	// it. Percent-encoded/special characters in the password are the
+	// round's own repro shape.
+	const credential = "billing_user:pa%24s%2Fwd!"
+	provider, _ := newTestOllamaProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error": "upstream diagnostic: postgres://` + credential + `@db.internal"}`))
+	})
+
+	_, err := provider.Complete(context.Background(), CategorizationRequest("prompt"))
+	if err == nil {
+		t.Fatal("expected an error for a 403 response")
+	}
+	if strings.Contains(err.Error(), credential) {
+		t.Fatalf("returned error leaked the raw database-URL credential: %v", err)
 	}
 }
 

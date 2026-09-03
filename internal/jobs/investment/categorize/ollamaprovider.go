@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,7 +159,16 @@ func (p *OllamaProvider) Complete(ctx context.Context, request CompletionRequest
 				format = nil
 				continue
 			}
-			classified := classifyProviderError(err, statusCodeOf(err), headerOf(err), "ollama", p.cfg.Model)
+			// executeChatRequest already returns a fully classified
+			// *llmError for a done=false response (llmErrorOutput) --
+			// re-running it through classifyProviderError would discard
+			// that classification (its text doesn't match any of that
+			// function's patterns, so it would fall through to a plain
+			// llmErrorGeneric, non-retryable) and double-wrap the message.
+			classified := new(llmError)
+			if !errors.As(err, &classified) {
+				classified = classifyProviderError(err, statusCodeOf(err), headerOf(err), "ollama", p.cfg.Model)
+			}
 			if isRetryable(classified) && attempt < ollamaMaxRetries {
 				if !sleepForRetry(ctx, retryDelayFor(classified, attempt)) {
 					return CompletionResult{}, ctx.Err()
@@ -219,6 +229,24 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 	}
 	if decoded.Error != "" {
 		return "", nil, nil, &httpStatusError{statusCode: resp.StatusCode, header: resp.Header, body: decoded.Error}
+	}
+	// Ollama's own /api/chat docs define `done` as whether the response has
+	// actually finished generating. codex round 1 (#2189) P2: this path
+	// ignored `Done` entirely and returned Message.Content as a normal
+	// success even when the server reported `done:false` -- a truncated,
+	// still-in-progress answer (e.g. cut off by a context/token limit
+	// without the server ever finishing) was silently accepted as a
+	// complete CompletionResult. `done:false` should never reach here on a
+	// non-streaming (`stream:false`) request in practice, but the field
+	// exists specifically for this signal, so treat it as authoritative
+	// rather than assuming `stream:false` alone guarantees completion.
+	if !decoded.Done {
+		return "", nil, nil, &llmError{
+			kind:     llmErrorOutput,
+			message:  "ollama response incomplete (done=false)",
+			provider: "ollama",
+			model:    p.cfg.Model,
+		}
 	}
 	return decoded.Message.Content, decoded.PromptEvalCount, decoded.EvalCount, nil
 }

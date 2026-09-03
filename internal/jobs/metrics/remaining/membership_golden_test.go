@@ -102,8 +102,7 @@ func membershipRepoRoot(t *testing.T) string {
 // same "live producer, faked I/O boundary" shape this repo already uses for
 // the capacity forecast golden. Regenerate with:
 //
-//	PYTHONPATH=src python3 tests/fixtures/generate_membership_backfill_golden.py \
-//	  > tests/fixtures/membership_backfill_golden.json
+//	PYTHONPATH=src python3 tests/fixtures/generate_membership_backfill_golden.py
 //
 // and verify staleness first with the script's own --check mode before
 // trusting a manual diff.

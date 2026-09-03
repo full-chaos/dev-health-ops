@@ -29,12 +29,17 @@ sys.executable, platform.platform()/machine(), __file__ paths, timestamps, or
 tempfile paths appear in the payload -- platform.python_version() would be
 fine but is not needed here since nothing in the captured shape is
 interpreter-version-sensitive.
+
+Usage:
+    uv run python tests/fixtures/generate_membership_backfill_golden.py [--stdout]
+    uv run python tests/fixtures/generate_membership_backfill_golden.py --check <path>
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -47,6 +52,8 @@ from dev_health_ops.work_graph.investment.backfill import (
     MembershipBackfillConfig,
     backfill_memberships,
 )
+
+OUTPUT_PATH = Path(__file__).parent / "membership_backfill_golden.json"
 
 ORG_ID = "org-membership-golden"
 
@@ -229,7 +236,8 @@ def build() -> dict[str, Any]:
 def main(argv: list[str]) -> int:
     document = build()
     if len(argv) > 1 and argv[1] == "--check":
-        with open(argv[2], encoding="utf-8") as handle:
+        check_path = argv[2] if len(argv) > 2 else str(OUTPUT_PATH)
+        with open(check_path, encoding="utf-8") as handle:
             existing = json.load(handle)
         payload_keys = (
             "org_id",
@@ -250,7 +258,12 @@ def main(argv: list[str]) -> int:
                 return 1
         sys.stdout.write("MEMBERSHIP_BACKFILL_GOLDEN_CURRENT\n")
         return 0
-    sys.stdout.write(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    rendered = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    if "--stdout" in argv[1:]:
+        sys.stdout.write(rendered)
+        return 0
+    OUTPUT_PATH.write_text(rendered)
+    sys.stdout.write(f"wrote {OUTPUT_PATH}\n")
     return 0
 
 

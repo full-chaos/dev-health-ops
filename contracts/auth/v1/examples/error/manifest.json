@@ -47,6 +47,10 @@
     {
       "file": "valid-reason-code-max-length.json",
       "why": "Sixty-four characters, the `maxLength` boundary from the accepting side."
+    },
+    {
+      "file": "valid-occurred-at-max-offset.json",
+      "why": "The largest valid RFC 3339 offset, accepted. The accepting side of the bound codex round 2 forced: without it, over-tightening the offset to (say) 0-12 hours would pass every rejection test while breaking every caller east of Perth."
     }
   ],
   "conditional_note": "This is the first v1 schema to use `if`/`then`/`else`. It is draft 2020-12 core and all three validators implement it, but the corpus PROVES that rather than assuming it: invalid-429-without-retry-after and invalid-503-without-retry-after fail only if `then` is honoured, and invalid-403-with-retry-after and invalid-404-with-retry-after fail only if `else` is. Deleting either clause turns exactly two fixtures green, which is the mutation that keeps the conditional load-bearing.",
@@ -287,6 +291,18 @@
       "expect_keyword": "pattern",
       "file": "invalid-request-id-token-shaped.json",
       "why": "CODEX ROUND 1 P1. The earlier pattern (`req_` + 1-60 chars) accepted this in full, and the field's own description blessed echoing a caller-supplied ID once it passed that lexical check -- so a caller could put a credential fragment in a field documented as safe, and the server would reflect it into a response body. A character class cannot tell an opaque correlation ID from a secret. The producer obligation (server-minted, never echoed) is the real control; the pinned 26-character length is a stated-partial mitigation that makes the common token shapes unrepresentable here. This fixture is the regression test for the length half. The first draft of this fixture used a real GitHub personal-access-token prefix to make the smuggling concrete, and TestNoFixtureCarriesARealLookingSecret REFUSED it -- correctly, and on a fixture written by the person who reads that guard's output. The value here is over-length and synthetic instead: it matches the OLD `{1,60}` pattern, so it demonstrates exactly what used to be accepted, and fails the new 26-character pin. The prefix was illustration; the length and character class are the defect. Naming the prefix in THIS note tripped the scanner a second time -- an explanation of the rule is scanned exactly like a violation of it, which is the right behaviour and the second time it has caught me describing a shape instead of naming it."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-offset-hour-24.json",
+      "why": "CODEX ROUND 2 P1. +24:00 is not a valid RFC 3339 offset and the naive [0-9]{2} accepted it. The consequence is a WRONG INSTANT, not a parse disagreement: Python fromisoformat refuses it, Go time.Parse ACCEPTS it and resolves to 2026-09-02T05:00:00Z -- a full day earlier than the text reads. Go rejects +99:00 as out of range, so the split sits exactly at plus or minus 24. Note `format: date-time` would have caught this in Python and ECMA and NOT in Go, which is why the bound is in the pattern."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-offset-minute-60.json",
+      "why": "The minute half of the same bound. Filed separately because a fix that bounded only the hour would leave this one accepted, and both halves came from one naive [0-9]{2}:[0-9]{2}."
     }
   ],
   "reject_by_client": [
@@ -314,7 +330,12 @@
       "file": "client-rejected-retry-after-integral-decimal.json",
       "http_status": 429,
       "why": "The same split on the other integer field. Filed separately because `retry_after_seconds` reaches the decode through the `if`/`then` branch rather than the base object, and a fix that covered only `status` would leave this one passing in Python and failing in Go."
+    },
+    {
+      "file": "client-rejected-duplicate-reason-code.json",
+      "http_status": 403,
+      "why": "CODEX ROUND 2 P1. Two `reason_code` members. Every parser keeps the LAST, so a validator only ever sees `grant_absent` and reports success -- while the WIRE BYTES carry an address in a field whose pattern exists to make addresses unrepresentable. This is a wire contract, so the guarantee is about bytes, and it was false. Both clients now refuse duplicate members BEFORE decoding, because the decode is what destroys the evidence.\n\nWRITTEN AS RAW TEXT ON PURPOSE, like the 2^53 fixtures: `json.dump` cannot emit a duplicate member at all, so regenerating this file through any serialiser silently deletes the defect it carries. Do not normalise it.\n\nThe first value is spelled with `_at_` and `_dot_` rather than as a real address so the fixture secret scanner does not read the corpus as carrying one -- the point is the DUPLICATE, not the specific string."
     }
   ],
-  "reject_by_client_note": "These documents are VALID against the schema and a client MUST still refuse them. That distinction is the category's whole reason to exist, and it was corrected once already during CHAOS-4884: filing them as `reject` would assert the schema catches something it provably does not, and would fail that category's own must-not-validate half.\n\nEach entry carries `http_status`, the status of the response line the document arrived on. The schema never sees it -- validators are handed a document, not an exchange -- which is exactly why these checks live in the client. Two of the three below are status disagreements, and the 404-versus-403 case is a genuine disclosure rather than bookkeeping: trusting the body would tell the caller a hidden resource exists."
+  "reject_by_client_note": "These documents are VALID against the schema and a client MUST still refuse them. That distinction is the category's whole reason to exist, and it was corrected once already during CHAOS-4884: filing them as `reject` would assert the schema catches something it provably does not, and would fail that category's own must-not-validate half.\n\nEach entry carries `http_status`, the status of the response line the document arrived on. The schema never sees it -- validators are handed a document, not an exchange -- which is exactly why these checks live in the client. Two of the three below are status disagreements, and the 404-versus-403 case is a genuine disclosure rather than bookkeeping: trusting the body would tell the caller a hidden resource exists.\n\nOne entry -- client-rejected-duplicate-reason-code.json -- is RAW TEXT carrying a duplicate object member. It cannot round-trip through a JSON writer and must never be regenerated; see CHAOS-4916, which asks for byte-level assertions on exactly this class of fixture."
 }

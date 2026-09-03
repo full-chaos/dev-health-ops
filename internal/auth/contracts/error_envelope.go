@@ -1,8 +1,11 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -48,6 +51,91 @@ type ErrorEnvelope struct {
 // conditional were ever relaxed.
 func (e ErrorEnvelope) IsTransient() bool { return transientStatuses[e.Status] }
 
+// refuseDuplicateMembers rejects a document containing the same object member
+// twice, anywhere in the tree.
+//
+// WHY THIS RUNS BEFORE VALIDATION, AND WHY VALIDATION CANNOT DO IT. Every JSON
+// parser collapses duplicate members to one survivor -- Go and Python both keep
+// the LAST -- so by the time a validator is handed a decoded object the earlier
+// value is gone. The schema then validates the survivor and reports success
+// about a document whose bytes contained something else.
+//
+// That defeats the subtractive contract directly. `reason_code`'s pattern makes
+// prose and addresses unrepresentable, but
+//
+//	{"reason_code":"credential_for_bob@example.com","reason_code":"grant_absent"}
+//
+// validates, because only `grant_absent` survives to be checked. The disclosure
+// TRD section 18 forbids is sitting in the response body, and this is a WIRE
+// contract -- the guarantee is about bytes, not about the object they decode to.
+// Found by codex round 2.
+//
+// RFC 8259 permits duplicate names and says behaviour is unpredictable; that is
+// exactly why a security contract refuses them rather than inheriting whichever
+// survivor the parser picked.
+func refuseDuplicateMembers(raw []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := scanJSONValue(dec); err != nil {
+		return err
+	}
+	// Trailing content is not this function's concern, but a second top-level
+	// value means the caller was handed something other than one document.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s: trailing content after the top-level value", ErrorSurface)
+	}
+	return nil
+}
+
+// scanJSONValue consumes exactly one value, recursing so that a duplicate
+// nested inside an array or a sub-object is caught too. Written as a walk
+// rather than a decode because the whole point is to see what a decode would
+// have thrown away.
+func scanJSONValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil // a scalar; nothing to descend into
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)
+			}
+			key, ok := keyTok.(string)
+			if !ok {
+				return fmt.Errorf("%s: object member name is not a string", ErrorSurface)
+			}
+			if seen[key] {
+				return fmt.Errorf(
+					"%s: duplicate object member %q. Parsers keep the last value, so an "+
+						"earlier one would never reach validation -- a document can carry a "+
+						"forbidden value on the wire and still validate",
+					ErrorSurface, key)
+			}
+			seen[key] = true
+			if err := scanJSONValue(dec); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for dec.More() {
+			if err := scanJSONValue(dec); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing delimiter
+		return fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)
+	}
+	return nil
+}
+
 // ParseErrorEnvelope validates and parses an error.v1 document received on an
 // HTTP response whose status line said httpStatus.
 //
@@ -59,6 +147,11 @@ func (e ErrorEnvelope) IsTransient() bool { return transientStatuses[e.Status] }
 // now is injectable so the skew check is testable without mocking a clock.
 // A zero now means time.Now().UTC().
 func ParseErrorEnvelope(root string, raw []byte, httpStatus int, now time.Time) (ErrorEnvelope, error) {
+	// BEFORE decoding: a decode is what destroys the evidence.
+	if err := refuseDuplicateMembers(raw); err != nil {
+		return ErrorEnvelope{}, err
+	}
+
 	var document any
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return ErrorEnvelope{}, fmt.Errorf("%s: document is not valid JSON: %w", ErrorSurface, err)

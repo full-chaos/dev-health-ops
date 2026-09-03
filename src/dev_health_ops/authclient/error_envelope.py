@@ -23,6 +23,7 @@ provably does not.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final
@@ -54,6 +55,67 @@ MAX_CLOCK_SKEW: Final = timedelta(minutes=5)
 #: ``test_transient_statuses_match_the_schema`` asserts the two agree, so this
 #: cannot drift into a second source of truth.
 TRANSIENT_STATUSES: Final = frozenset({429, 503})
+
+
+def _refuse_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``object_pairs_hook`` that rejects a repeated member instead of collapsing it.
+
+    Every JSON parser collapses duplicates to one survivor -- Python and Go both
+    keep the LAST -- so by the time a validator sees a decoded object, the
+    earlier value is gone. The schema then validates the survivor and reports
+    success about a document whose bytes contained something else.
+
+    That defeats the subtractive contract directly. ``reason_code``'s pattern
+    makes prose and addresses unrepresentable, but::
+
+        {"reason_code": "credential_for_bob@example.com",
+         "reason_code": "grant_absent"}
+
+    validates, because only ``grant_absent`` survives to be checked. The
+    disclosure TRD section 18 forbids is sitting in the response body, and this
+    is a WIRE contract -- the guarantee is about bytes, not about the object
+    they decode to. Found by codex round 2.
+
+    RFC 8259 permits duplicate names and calls the behaviour unpredictable,
+    which is precisely why a security contract refuses them rather than
+    inheriting whichever survivor the parser happened to pick.
+    """
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ContractError(
+                f"{SURFACE}: duplicate object member {key!r}. Parsers keep the "
+                f"last value, so an earlier one would never reach validation -- "
+                f"a document can carry a forbidden value on the wire and still "
+                f"validate"
+            )
+        seen.add(key)
+    return dict(pairs)
+
+
+def parse_bytes(
+    raw: bytes | str,
+    http_status: int,
+    *,
+    now: datetime | None = None,
+) -> ErrorEnvelope:
+    """Parse an ``error.v1`` document from the RAW response body.
+
+    **Prefer this over :func:`parse` wherever the bytes are available.** It is
+    the only entry point that can refuse duplicate members, because that check
+    is impossible once the document has been decoded -- the evidence is
+    destroyed by the decode itself.
+
+    :func:`parse` remains for callers holding an already-decoded object, and it
+    is documented there that such a caller has already lost this protection.
+    That is a real boundary rather than an oversight: a function handed a
+    ``dict`` cannot know what the bytes behind it said.
+    """
+    try:
+        document = json.loads(raw, object_pairs_hook=_refuse_duplicate_members)
+    except json.JSONDecodeError as exc:
+        raise ContractError(f"{SURFACE}: document is not valid JSON: {exc}") from exc
+    return parse(document, http_status, now=now)
 
 
 def _require_wire_int(document: Any, field: str) -> int | None:
@@ -153,6 +215,13 @@ def parse(
 
     *now* is injectable so the skew check is testable without sleeping or
     mocking the clock.
+
+    **This entry point CANNOT refuse duplicate object members**, because it is
+    handed an already-decoded object and the decode is what discarded the
+    evidence. Callers holding the raw body should use :func:`parse_bytes`, which
+    can. Stated here rather than left implicit: a caller who reaches this
+    function with a ``dict`` has already lost that protection, and no amount of
+    checking inside this function can recover it.
     """
     validate(SURFACE, document)
 

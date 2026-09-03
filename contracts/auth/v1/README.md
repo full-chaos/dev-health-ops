@@ -48,21 +48,47 @@ belong in `reject_by_client`, not `reject`: the schema genuinely accepts these
 documents, and filing them as `reject` would assert a check that does not exist.
 
 `principal.v1` also carries a `2**53` bound for revision fields, where the
-concern is exact float representability rather than type. Reuse the guard in
-`internal/auth/contracts`; do not re-derive it.
+concern is exact float representability rather than type.
+
+**There is no shared guard yet, and an earlier version of this file told you to
+reuse one.** That instruction was unactionable and worse than silence: a remedy
+that does not exist looks like the problem is solved, so the next author
+searches, finds nothing, re-derives, and does not know they re-derived. That is
+not hypothetical — it is what produced `error.v1`'s integral-decimal P1, in a
+surface written by the author of the note telling them to reuse it.
+
+What actually exists today, to copy from:
+
+| | where | covers |
+| --- | --- | --- |
+| Go | `principal.go` — a function-local `const` inside `Revision.UnmarshalJSON` | 2^53 only, and not callable from outside that method |
+| Python | `error_envelope.py` `_require_wire_int` | zero-fraction decimals, and `bool` before `int` (order matters — `bool` subclasses `int`) |
+| Python | `principal.py` `_parse_revision` | a separate copy, plus the 2^53 bound |
+
+`contracts.py`, the shared module every surface already imports, contains
+neither. **CHAOS-4940 tracks extracting one guard per language**; until it
+lands, copy from the table above and expect to delete your copy afterwards.
 
 ### Constraints live in the cross-language dialect intersection
 
-Five divergences are known. All are enforced by
-`TestEveryWireSchemaStaysInTheCrossLanguageDialect` rather than by review.
+Five divergences are known. **They are enforced by three different mechanisms,
+and one of them is not enforced at all** — an earlier version of this table
+attributed all five to one Go test, which was false for two of them.
 
-| divergence | consequence |
-| --- | --- |
-| `format` is recorded and ignored by `github.com/google/jsonschema-go` | assert with `pattern`, never `format` |
-| `\d` `\w` `\s` are Unicode in Python `re`, ASCII in RE2 and ECMA-262 | no shorthand classes |
-| `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups |
-| a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite |
-| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema |
+| divergence | consequence | actually enforced by |
+| --- | --- | --- |
+| `format` is recorded and ignored by `github.com/google/jsonschema-go` | assert with `pattern`, never `format` | `TestEveryWireSchemaStaysInTheCrossLanguageDialect` |
+| `\d` `\w` `\s` `\b` are Unicode in Python `re`, ASCII in RE2 and ECMA-262 | no shorthand classes | same test |
+| `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups | same test |
+| a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite | **the client, not a schema guard** — `authclient/contracts.py` `strictly_anchored` |
+| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **review only — there is no ajv runner in this repository** |
+
+That last row is a real gap, not a formality. **No committed code or CI job runs
+ajv against these contracts**, so the ECMA-262 leg of every "three languages
+agree" claim rests on a runner the author supplied locally. A schema edit that
+breaks ECMA compatibility passes everything in this repo. Treat the ECMA column
+of any proof table as unreproducible until that changes. **CHAOS-4941 tracks
+committing a runner and wiring it into CI.**
 
 **Redundant keywords are not free.** A `maxLength` beside a pattern that already
 bounds the same range makes Go report `maxLength` (first violation only) and
@@ -110,6 +136,8 @@ shape instead. This is correct behaviour and has caught two authors.
 ## Proof obligation
 
 Every surface ships an executed cross-language run on one tip — Go, Python and
-ajv-2020 validating the same corpus, output pasted, not described (G-70) — and
+ajv-2020 validating the same corpus, output pasted, not described (G-70) — with
+the standing caveat above that **the ajv leg is run from a local runner and is
+not reproducible from this repository** — and
 a mutation table showing the corpus can fail: delete each guard, confirm exactly
 the predicted fixtures go red, restore.

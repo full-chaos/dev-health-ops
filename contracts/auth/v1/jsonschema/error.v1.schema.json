@@ -19,7 +19,14 @@
     },
     "status": {
       "type": "integer",
-      "enum": [401, 403, 404, 409, 429, 503],
+      "enum": [
+        401,
+        403,
+        404,
+        409,
+        429,
+        503
+      ],
       "description": "The HTTP status this envelope accompanies, enumerated EXACTLY as TRD section 18 defines it:\n  401 -- accepted credential class missing, invalid, or expired.\n  403 -- authenticated principal lacks the action, entitlement, or grant.\n  404 -- hiding cross-tenant or resource existence where required.\n  409 -- state, lifecycle, or idempotency conflict.\n  429 -- rate limit, device polling, or abuse control.\n  503 -- mandatory current-state authority unavailable and no valid unexpired decision.\n\nThe enum is CLOSED. A 500 is deliberately absent: an unhandled server fault must not be describable in a contract that promises to disclose nothing, because the shape invites populating it from an exception. A fault surfaces as 503 with a reason code, or it is a defect.\n\nDuplicating the status in the body is not redundant -- it keeps the envelope self-describing once logged or queued, where the HTTP frame is gone. It does create one hazard the schema cannot police: this value MUST equal the HTTP status actually sent. A mismatch is a client-enforced rejection (see the reject_by_client fixtures), not a schema violation, because the schema never sees the response line."
     },
     "reason_code": {
@@ -34,8 +41,8 @@
     },
     "occurred_at": {
       "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$",
-      "description": "When the failure occurred, RFC 3339, microsecond resolution at most.\n\nThe pattern is copied deliberately from principal.v1's timestamp rule rather than reinvented, and the reasoning transfers with it: `format: date-time` is NOT relied upon, because google/jsonschema-go treats `format` as an annotation and ignores it, so a `format`-only constraint is enforced in Python and ECMA and silently absent in Go. The pattern is the floor all three enforce; a `format` assertion may be layered on top where a validator supports it.\n\nSix fractional digits, not nine: Go's `time.Time` carries nanoseconds and Python's `datetime` carries microseconds, so nine digits is a value Python cannot round-trip. The Go client truncates to microseconds on marshal for this reason."
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "When the failure occurred, RFC 3339, microsecond resolution at most.\n\nThe pattern is copied deliberately from principal.v1's timestamp rule rather than reinvented, and the reasoning transfers with it: `format: date-time` is NOT relied upon, because google/jsonschema-go treats `format` as an annotation and ignores it, so a `format`-only constraint is enforced in Python and ECMA and silently absent in Go. The pattern is the floor all three enforce; a `format` assertion may be layered on top where a validator supports it.\n\nOFFSET HOURS ARE BOUNDED 00-23 AND MINUTES 00-59, which a naive [0-9]{2}:[0-9]{2} is not. Codex round 2 found the naive form, and the consequence is not a parse disagreement but a WRONG INSTANT: 2026-09-03T05:00:00+24:00 is not a valid RFC 3339 offset, Python fromisoformat refuses it, and Go time.Parse(time.RFC3339) ACCEPTS it and resolves it to 2026-09-02T05:00:00Z -- a full day earlier than the text reads. Go does reject +99:00 as an out-of-range offset hour, so the split sits exactly at plus or minus 24.\n\nThis is also why `format` is not relied on to catch it. `format: date-time` WOULD refuse +24:00 in Python and ECMA, and google/jsonschema-go ignores `format` entirely -- so a format-only defence is enforced in two languages and absent in the third, which is the divergence this corpus exists to prevent. The bound belongs in the pattern, where all three enforce it.\n\nSix fractional digits, not nine: Go's `time.Time` carries nanoseconds and Python's `datetime` carries microseconds, so nine digits is a value Python cannot round-trip. The Go client truncates to microseconds on marshal for this reason."
     },
     "retry_after_seconds": {
       "type": "integer",
@@ -47,13 +54,20 @@
   "if": {
     "properties": {
       "status": {
-        "enum": [429, 503]
+        "enum": [
+          429,
+          503
+        ]
       }
     },
-    "required": ["status"]
+    "required": [
+      "status"
+    ]
   },
   "then": {
-    "required": ["retry_after_seconds"],
+    "required": [
+      "retry_after_seconds"
+    ],
     "properties": {
       "retry_after_seconds": {
         "$ref": "#/properties/retry_after_seconds"
@@ -63,7 +77,9 @@
   },
   "else": {
     "not": {
-      "required": ["retry_after_seconds"]
+      "required": [
+        "retry_after_seconds"
+      ]
     },
     "description": "Conversely, a non-transient status MUST NOT carry retry guidance. A `retry_after_seconds` on a 401 or 403 tells a caller to retry a request that will fail identically forever, and on a 404 it is a weak existence oracle -- a resource worth retrying for is a resource that might appear. Absence is the correct answer for every status the `if` does not name."
   }

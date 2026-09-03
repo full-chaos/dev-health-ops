@@ -28,6 +28,7 @@ from dev_health_ops.authclient.error_envelope import (
     SURFACE,
     TRANSIENT_STATUSES,
     parse,
+    parse_bytes,
 )
 
 
@@ -127,10 +128,15 @@ def test_client_enforced_fixtures_validate_but_are_refused(
     not catch them, which is what makes the client check load-bearing rather
     than belt-and-braces. The second proves the client does.
     """
+    raw = (_fixture_dir() / entry["file"]).read_text(encoding="utf-8")
     document = _load(entry["file"])
     validate(SURFACE, document)  # must NOT raise
+    # parse_bytes, not parse: one fixture carries a DUPLICATE member, which is
+    # invisible to any caller handed an already-decoded object -- the decode is
+    # what discards it. Using parse() here would pass that fixture for the wrong
+    # reason, or fail to exercise it at all.
     with pytest.raises(ContractError):
-        parse(document, entry["http_status"], now=NOW)
+        parse_bytes(raw, entry["http_status"], now=NOW)
 
 
 def test_transient_statuses_match_the_schema() -> None:
@@ -200,3 +206,26 @@ def test_a_past_timestamp_is_never_refused() -> None:
     document = _load("valid-403-grant-absent.json")
     much_later = NOW + timedelta(days=365)
     parse(document, 403, now=much_later)
+
+
+def test_parse_cannot_see_a_duplicate_member_and_parse_bytes_can() -> None:
+    """The boundary between the two entry points, asserted rather than assumed.
+
+    This is the one place the client's protection depends on WHICH function the
+    caller reached for, so the difference is pinned. If ``parse`` ever grew the
+    ability to detect duplicates this test would fail, which is the correct
+    signal: it would mean the decode boundary had moved.
+    """
+    raw = (_fixture_dir() / "client-rejected-duplicate-reason-code.json").read_text(
+        encoding="utf-8"
+    )
+    assert raw.count('"reason_code"') == 2, "fixture no longer carries a duplicate"
+
+    # Handed an already-decoded object, the duplicate is simply gone.
+    collapsed = json.loads(raw)
+    assert collapsed["reason_code"] == "grant_absent"
+    parse(collapsed, 403, now=NOW)  # accepts -- the evidence was destroyed
+
+    # Handed the bytes, it is refused.
+    with pytest.raises(ContractError, match="duplicate object member"):
+        parse_bytes(raw, 403, now=NOW)

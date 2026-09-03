@@ -379,11 +379,27 @@ def shrink_candidates(document: Any) -> Iterator[Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--count", type=int, default=400)
+    # 500 is the count the COMMITTED corpus was generated with -- it records
+    # "count": 500 in its own header. The default was 400, so a bare run did not
+    # reproduce the committed artifact, and the live-python corpus guard compares
+    # exactly that: `<generator> --stdout` against the frozen bytes. A generator
+    # whose defaults do not reproduce its own corpus cannot be used to detect rot
+    # in it, which is the whole point of freezing it.
+    parser.add_argument("--count", type=int, default=500)
     parser.add_argument(
         "--shrink", help="JSON file of documents a differential disagreed on"
     )
     parser.add_argument("--out")
+    # --stdout renders without writing. The generator already did this whenever
+    # --out was absent, but the live-python corpus guard invokes generators as
+    # `<generator> --stdout` and looks for that literal flag in the source, so an
+    # implicit behaviour it cannot see leaves this corpus UNGUARDED and free to
+    # rot. Naming the flag is what makes the corpus checkable.
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="render the corpus to stdout instead of writing it",
+    )
     args = parser.parse_args()
 
     if args.shrink:
@@ -421,7 +437,7 @@ def main() -> int:
     # rejects with a bare "invalid character 'I'". Failing here names the
     # offending value instead of writing a corpus that silently cannot be read.
     rendered = json.dumps(payload, indent=1, sort_keys=True, allow_nan=False) + "\n"
-    if args.out:
+    if args.out and not args.stdout:
         with open(args.out, "w", encoding="utf-8") as handle:
             handle.write(rendered)
         print(f"written {args.out}: {len(cases)} cases", file=sys.stderr)

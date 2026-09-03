@@ -238,7 +238,25 @@ var (
 // it is meant to police would make the set move with the schema. If the pattern
 // changes, TestTheKidPatternIsWhatThisMirrors fails and a human reconciles them.
 func schemaAcceptsKid(kid string) bool {
-	if len(kid) < 1 || len([]rune(kid)) > 256 {
+	// BOTH BOUNDS IN CODE POINTS, because that is what the schema's `{1,256}`
+	// counts -- a JSON Schema quantifier counts characters, not bytes. The
+	// first version mixed them: `len(kid) < 1` in BYTES against
+	// `len([]rune(kid)) > 256` in runes.
+	//
+	// It produced no wrong answer, because any non-ASCII rune fails the range
+	// loop below regardless, so the two units could only differ on inputs
+	// already rejected. Spotted by lane-4752-go, who called it gratuitous
+	// rather than a defect, and they were right on both counts -- but "correct
+	// because a neighbouring check happens to reject the difference" is the
+	// shape this contract has been bitten by all night, and it costs nothing to
+	// remove.
+	//
+	// Note this is the SCHEMA's unit and NOT the consumer's: the consumer bounds
+	// kid at 256 BYTES. That divergence is the whole reason the pattern is
+	// restricted to one-byte characters, and mirroring the schema here is
+	// correct precisely because this function decides what the SCHEMA accepts.
+	runes := []rune(kid)
+	if len(runes) < 1 || len(runes) > 256 {
 		return false
 	}
 	for _, r := range kid {

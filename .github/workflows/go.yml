@@ -343,6 +343,16 @@ jobs:
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
+    env:
+      # CHAOS-4906 pool module cache (09-03): same warm, persistent
+      # GOMODCACHE/GOCACHE this pool's other setup-go-using self-hosted
+      # jobs restate explicitly (see go-storage-integration-shard-
+      # self-hosted's identical comment) -- helm rev 6, hostPath at
+      # /var/lib/oci-arc-runners/go-cache on bigboy. NEVER run `go clean
+      # -cache`/`go clean -modcache` against this path -- shared,
+      # cross-job, cross-repo; cleanup ownership is the pool's.
+      GOMODCACHE: /mnt/go-cache/mod
+      GOCACHE: /mnt/go-cache/build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -351,6 +361,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # `false`: actions/setup-go's own cache defaults to `true`,
+          # which would restore/save a GitHub Actions cache TARBALL into
+          # the pool's persistent, concurrently-shared hostPath above --
+          # a real corruption risk against other jobs/legs reading and
+          # writing it simultaneously on this single-node pool. Same
+          # reasoning as go-storage-integration-shard-self-hosted's
+          # identical setting.
+          cache: false
 
       - name: Confirm this runner is actually arm64
         run: |

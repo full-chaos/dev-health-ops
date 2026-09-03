@@ -449,6 +449,17 @@ jobs:
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-26.04-arm
+        # CHAOS-4906 (runner contract v1.6): (worker, linux/arm64) is built
+        # by the dedicated go-build-worker-arm64/-self-hosted pair below
+        # instead -- the self-hosted-pool pilot for this workflow (re-added
+        # in v1.6 shape from closed #2180, which used the retired v1.5.1
+        # poller). Excluded here so it is never built twice; go-merge's
+        # digest download (a wildcard glob on the artifact name) picks up
+        # whichever leg produced the real artifact without caring which job
+        # did it.
+        exclude:
+          - target: worker
+            platform: linux/arm64
 
     steps:
       - name: Checkout code
@@ -538,11 +549,271 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
+  # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
+  # lane-4904-acr-runners/contract-v1.6-signed.md). Re-adds closed #2180's
+  # (worker, linux/arm64) self-hosted-pool pilot in the v1.6 shape --
+  # #2180 used the retired v1.5.1 poller (pick-runner/attempt/fallback,
+  # byte-identical to go.yml's own original go-arm64-numeric-parity
+  # design); this ports the same PAYLOAD (build-and-push-by-digest for
+  # this one matrix combination) onto the same complementary-if:/shared-
+  # name: shape go.yml's go-container-reproducibility and go-arm64-
+  # numeric-parity already use. #2180's own measured hosted wall time:
+  # 1m37s (run 33764964734, job "Build Go Image (worker, linux/arm64)").
+  #
+  # PRECONDITION: unlike go-arm64-numeric-parity, this leg needs a
+  # WORKING DOCKER DAEMON inside the ephemeral ARC pod -- same
+  # dind-smoke-test shape as go.yml's own (added by #2194 for the
+  # storage-integration shards and container-reproducibility), a
+  # separate copy here because this workflow file has no cross-file
+  # `needs:`. Proves the daemon is reachable AND can actually build/run
+  # a container, in isolation, before the real build leg risks a
+  # registry write.
+  dind-smoke-test:
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 5
+    steps:
+      - name: Confirm a Docker daemon is reachable
+        run: |
+          set -euo pipefail
+          # CHAOS-4963: this step's own message avoids semicolons inside the
+          # quoted string on purpose -- tests/tooling/test_go_integration_sharding.py's
+          # unapproved-registry scanner splits on `[\n;]|&&|\|\|` and ignores
+          # quoting, so a literal `;` here would break it into unbalanced-quote
+          # fragments and misreport as unparseable shell (#2180's own fix,
+          # ported verbatim).
+          if ! docker info > docker-info.txt 2>&1; then
+            echo "FATAL: docker info failed on this oci-arc-runners pod, no reachable Docker daemon -- see docker-info.txt in the job log for the actual error." >&2
+            cat docker-info.txt >&2
+            exit 1
+          fi
+          echo "docker info succeeded:"
+          cat docker-info.txt
+
+      - name: Confirm the daemon can actually build and run a container
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          trap 'rm -rf -- "${workdir}"' EXIT
+          printf 'FROM busybox\nCMD ["echo", "dind-smoke-test-ok"]\n' > "${workdir}/Dockerfile"
+          if ! docker build -t dind-smoke-test:local "${workdir}"; then
+            echo "FATAL: docker build failed on this oci-arc-runners pod, the daemon answers docker info but cannot build an image." >&2
+            exit 1
+          fi
+          output="$(docker run --rm dind-smoke-test:local)"
+          docker rmi dind-smoke-test:local > /dev/null 2>&1 || true
+          if [ "${output}" != "dind-smoke-test-ok" ]; then
+            echo "FATAL: built the smoke-test image but docker run produced ${output@Q}, expected dind-smoke-test-ok." >&2
+            exit 1
+          fi
+          echo "docker build + run succeeded: ${output}"
+
+  # Runner contract v1.6: exactly one of this job and its self-hosted twin
+  # below runs per workflow run, gated on complementary conditions over the
+  # SAME SELF_HOSTED_RUNNERS variable -- never both, never neither. Both
+  # share the templated `name:` below, so flipping the variable never
+  # leaves a stuck or renamed required check; go-merge's `needs:` names
+  # this job (never the self-hosted twin directly), matching go-build's
+  # own required-check identity.
+  #
+  # ANDs go-build's own eligibility condition (CHAOS-4921's "push to main
+  # always builds" / paths-filter logic) with the v1.6 routing switch --
+  # this leg replaces exactly the matrix combination excluded from
+  # go-build above, so it must behave identically to that combination
+  # when the switch is off, not build unconditionally.
+  go-build-worker-arm64:
+    name: go-build-worker-arm64
+    needs: changes
+    if: >-
+      (vars.SELF_HOSTED_RUNNERS != 'enabled' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.changes.outputs.code == 'true')
+    runs-on: ubuntu-26.04-arm
+    # 15m: measured hosted wall time 1m37s (#2180, run 33764964734) plus
+    # real margin for checkout/buildx-setup/registry-login, per the
+    # contract's "sized from measured pool wall time under load" clause.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Determine build metadata
+        id: versioning
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION="$(echo "${SHA}" | cut -c1-7)"
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+          EPOCH=$(git log -1 --pretty=%ct)
+          {
+            echo "version=${VERSION}"
+            echo "commit=${SHA}"
+            echo "build_time=$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+            echo "source_date_epoch=${EPOCH}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        # timeout-minutes: 8, the double-bound lesson from go.yml's own
+        # pilots (CF, 09-03, acr's near-miss) -- native GitHub Actions
+        # per-step syntax, since this is a `uses:` action with no command
+        # line to wrap a shell `timeout` around. Fires as a clean step
+        # failure well before this job's own 15m outer cap.
+        timeout-minutes: 8
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/go-worker.Dockerfile
+          target: worker
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ steps.versioning.outputs.version }}
+            COMMIT=${{ steps.versioning.outputs.commit }}
+            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
+            SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
+          tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-worker
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digests-go-worker-arm64-hosted
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  go-build-worker-arm64-self-hosted:
+    name: go-build-worker-arm64
+    needs: [changes, dind-smoke-test]
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.changes.outputs.code == 'true')
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Determine build metadata
+        id: versioning
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION="$(echo "${SHA}" | cut -c1-7)"
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+          EPOCH=$(git log -1 --pretty=%ct)
+          {
+            echo "version=${VERSION}"
+            echo "commit=${SHA}"
+            echo "build_time=$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+            echo "source_date_epoch=${EPOCH}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        # timeout-minutes: 8, same double-bound as the hosted leg's
+        # identical step above -- see that step's comment.
+        timeout-minutes: 8
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/go-worker.Dockerfile
+          target: worker
+          platforms: linux/arm64
+          build-args: |
+            VERSION=${{ steps.versioning.outputs.version }}
+            COMMIT=${{ steps.versioning.outputs.commit }}
+            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
+            SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
+          tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-worker
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digests-go-worker-arm64-self-hosted
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
   go-merge:
     name: Merge Go Digests
     runs-on: ubuntu-latest
-    needs: go-build
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    needs: [go-build, go-build-worker-arm64, go-build-worker-arm64-self-hosted]
+    # CHAOS-4906 (runner contract v1.6): needs BOTH v1.6 legs of the
+    # worker/arm64 pilot (never just one) -- exactly one runs per
+    # SELF_HOSTED_RUNNERS, the other reports "skipped", and GitHub's
+    # implicit needs-success check treats a skipped dependency as failing
+    # success() by default (the same trap go.yml's own aggregator already
+    # documents). `always()` bypasses that; the explicit checks below carry
+    # the real gating logic instead: go-build must have succeeded, neither
+    # arm64 leg may have failed or been cancelled, and both legs skipped is
+    # a routing bug, not a passing state.
+    if: >-
+      always() &&
+      needs.go-build.result == 'success' &&
+      needs.go-build-worker-arm64.result != 'failure' &&
+      needs.go-build-worker-arm64.result != 'cancelled' &&
+      needs.go-build-worker-arm64-self-hosted.result != 'failure' &&
+      needs.go-build-worker-arm64-self-hosted.result != 'cancelled' &&
+      !(needs.go-build-worker-arm64.result == 'skipped' && needs.go-build-worker-arm64-self-hosted.result == 'skipped') &&
+      github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     # CHAOS-4947: see the identical output on `merge` above.
     outputs:
       sha: ${{ needs.go-build.outputs.sha }}

@@ -233,16 +233,27 @@ def test_shard_aggregator_needs_both_legs() -> None:
     )
 
 
+def test_no_pick_runner_job_survives_anywhere_in_the_file() -> None:
+    # CHAOS-4906 follow-up (the v1.6 pool-expansion PR, stacked on this
+    # one): go-arm64-numeric-parity converted from the v1.5.1 poller to
+    # v1.6 too, so the whole file is now poller-free -- promoted from the
+    # narrower per-job check below (which this test's own history notes
+    # deliberately did NOT make this file-wide claim, because it wasn't
+    # true yet at that PR's tip).
+    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8")) or {}
+    jobs = document.get("jobs") or {}
+    assert "pick-runner" not in jobs, (
+        f"{WORKFLOW_PATH.name}: a 'pick-runner' job still exists -- the "
+        "v1.5.1 fallback-poller pattern was supposed to be fully retired "
+        "from this file"
+    )
+
+
 def test_neither_self_hosted_job_has_a_poll_step() -> None:
     # Structural confirmation the v1.5.1 fallback-poller pattern (pick-
     # runner, job_status()/gh api polling, steps.own.outputs.run_here) was
     # actually retired for THIS PR's two routed jobs, not left dangling
-    # alongside the new gate. This does not assert the poller is gone from
-    # the whole file: go-arm64-numeric-parity (#2145) still uses it, and its
-    # conversion to v1.6 is an explicit, separately-tracked follow-up (see
-    # the merge-resolution note above go-storage-integration-plan) -- a
-    # file-wide "no pick-runner job anywhere" assertion would be testing a
-    # decision this PR never made.
+    # alongside the new gate.
     for job_name in (_SHARD_SELF_HOSTED, _REPRO_SELF_HOSTED):
         job = _job(job_name)
         needs = _needs(job)

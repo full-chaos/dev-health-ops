@@ -23,11 +23,38 @@
 # outright -- the same root cause with a louder symptom.
 #
 # Resolution order:
+# Resolution is relative to the CURRENT DIRECTORY, not to this script's location:
+# orders 2 and 3 both ask git about `cwd`. For lefthook that is always right --
+# hooks run at the root of the worktree being committed. A hand invocation from
+# somewhere else (`cd /tmp && /path/to/worktree/scripts/run_py_tool.sh mypy`)
+# resolves whatever tree /tmp is in, or none. Both branches have always shared
+# that dependence; neither stated it. (lane-auth-contracts)
+#
 #   1. $VIRTUAL_ENV          -- an explicitly activated env is always intentional.
-#   2. <main worktree>/.venv -- the repo-local env. Resolved via
-#      `git rev-parse --git-common-dir` so this works from a linked worktree,
-#      which has no .venv of its own.
-#   3. PATH                  -- CI installs the project's requirements into the
+#   2. <this worktree>/.venv  -- a linked worktree's OWN env, when it has one.
+#      This is a BEHAVIOUR CHANGE, stated rather than buried: a lane's STALE venv
+#      now outranks a fresh main one. That is deliberate. The failure mode moves
+#      from "the shared env is wrong and I cannot fix it" to "my env is wrong and
+#      I can" -- detectable locally, repairable by the lane, and matching what CI
+#      does, which is install from pyproject at the tip.
+#   3. <main worktree>/.venv  -- the shared repo-local env, via
+#      `git rev-parse --git-common-dir`, for worktrees that do not.
+#
+#      Order 2 was previously absent, and the header claimed a linked worktree
+#      "has no .venv of its own". That stopped being true: the lane brief tells
+#      every lane to create one, precisely so its dependencies are its own.
+#      `--git-common-dir` points at the MAIN checkout from inside a linked
+#      worktree, so the tool resolved to the main checkout's .venv and IGNORED
+#      the one the lane had been told to build. Measured: from a linked worktree
+#      containing .venv/bin/mypy, this script ran the MAIN checkout's mypy.
+#
+#      That is not merely the wrong interpreter, it is the wrong DEPENDENCY SET.
+#      lefthook's mypy then type-checks the lane's source against libraries the
+#      lane did not install -- a missing types-jsonschema in the main checkout
+#      surfaces as errors in files the author never touched, which is the exact
+#      CHAOS-3913 failure this script was written to end, reappearing one level
+#      in.
+#   4. PATH                  -- CI installs the project's requirements into the
 #      job interpreter, so bare mypy is correct there.
 #
 # In case 3 we cannot prove the environment is the project's, so a FAILURE is
@@ -49,8 +76,21 @@ resolve_tool() {
         return 0
     fi
 
-    # --git-common-dir points at the MAIN worktree's .git even when we are
-    # inside a linked worktree, which is exactly how we find the shared .venv.
+    # THIS worktree's own .venv first. A lane that built its own environment
+    # meant to use it; falling through to the shared one silently substitutes a
+    # different dependency set for the one the lane installed.
+    local toplevel
+    if toplevel=$(git rev-parse --show-toplevel 2>/dev/null); then
+        if [ -x "${toplevel}/.venv/bin/${tool}" ]; then
+            TOOL_BIN="${toplevel}/.venv/bin/${tool}"
+            TOOL_ORIGIN="worktree venv"
+            return 0
+        fi
+    fi
+
+    # Then the MAIN worktree's .venv. --git-common-dir points at the main
+    # checkout's .git even from inside a linked worktree, which is how a
+    # worktree WITHOUT its own environment still finds the shared one.
     local common_dir
     local repo_root
     if common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then

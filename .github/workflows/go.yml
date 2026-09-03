@@ -29,6 +29,11 @@ on:
       - 'src/dev_health_ops/metrics/**'
       - 'src/dev_health_ops/metrics/testops*.py'
       - 'src/dev_health_ops/migrations/clickhouse/**'
+      # The auth lineage's SQL is //go:embed-ed into
+      # internal/storage/postgres/authschema, so a change to it changes the
+      # compiled binary and is covered by that package's tests -- but it is
+      # a .sql file, which no other pattern here matches (CHAOS-4882).
+      - 'internal/storage/postgres/authschema/migrations/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -98,6 +103,11 @@ on:
       - 'src/dev_health_ops/metrics/**'
       - 'src/dev_health_ops/metrics/testops*.py'
       - 'src/dev_health_ops/migrations/clickhouse/**'
+      # The auth lineage's SQL is //go:embed-ed into
+      # internal/storage/postgres/authschema, so a change to it changes the
+      # compiled binary and is covered by that package's tests -- but it is
+      # a .sql file, which no other pattern here matches (CHAOS-4882).
+      - 'internal/storage/postgres/authschema/migrations/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'

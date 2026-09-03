@@ -1,0 +1,6786 @@
+{
+  "cases": [
+    {
+      "name": "everything-empty",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "wip-with-nulls",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [
+          "4014000000000000",
+          "0000000000000000",
+          "3ff0000000000000",
+          "0000000000000000"
+        ],
+        "wip_by_day": [
+          "3ff0000000000000",
+          "0000000000000000",
+          "4008000000000000",
+          "0000000000000000"
+        ]
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": [
+            [
+              "2026-08-05",
+              "3ff0000000000000",
+              "4014000000000000"
+            ],
+            [
+              "2026-08-05",
+              null,
+              null
+            ],
+            [
+              "2026-08-05",
+              "4008000000000000",
+              "3ff0000000000000"
+            ],
+            [
+              "2026-08-05",
+              "0000000000000000",
+              "8000000000000000"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "name": "wip-nonfinite",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [
+          "7ff0000000000000",
+          "7ff8000000000000",
+          "4000000000000000"
+        ],
+        "wip_by_day": [
+          "7ff8000000000000",
+          "fff0000000000000",
+          "3ff0000000000000"
+        ]
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": [
+            [
+              "2026-08-05",
+              "7ff8000000000000",
+              "7ff0000000000000"
+            ],
+            [
+              "2026-08-05",
+              "fff0000000000000",
+              "7ff8000000000000"
+            ],
+            [
+              "2026-08-05",
+              "3ff0000000000000",
+              "4000000000000000"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "name": "cycle-time-with-nulls",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [
+          "3ff0000000000000",
+          "4008000000000000"
+        ],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": [
+            [
+              "2026-08-05",
+              "3ff0000000000000"
+            ],
+            [
+              "2026-08-05",
+              null
+            ],
+            [
+              "2026-08-05",
+              "4008000000000000"
+            ],
+            [
+              "2026-08-05",
+              null
+            ]
+          ]
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "cycle-time-all-null",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": [
+            [
+              "2026-08-05",
+              null
+            ],
+            [
+              "2026-08-05",
+              null
+            ]
+          ]
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "cycle-time-nonfinite",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [
+          "7ff0000000000000",
+          "7ff8000000000000",
+          "4000000000000000"
+        ],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": [
+            [
+              "2026-08-05",
+              "7ff0000000000000"
+            ],
+            [
+              "2026-08-05",
+              "7ff8000000000000"
+            ],
+            [
+              "2026-08-05",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "latency-none",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": [
+            [
+              null
+            ]
+          ]
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "rework-none",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": [
+            [
+              null
+            ]
+          ]
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "afterhours-none",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": [
+            [
+              null
+            ]
+          ]
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "latency-zero",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": "0000000000000000",
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": [
+            [
+              "0000000000000000"
+            ]
+          ]
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "rework-zero",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": "0000000000000000",
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": [
+            [
+              "0000000000000000"
+            ]
+          ]
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "afterhours-zero",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": "0000000000000000",
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": [
+            [
+              "0000000000000000"
+            ]
+          ]
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "latency-nan",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": [
+            [
+              "7ff8000000000000"
+            ]
+          ]
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "rework-nan",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": [
+            [
+              "7ff8000000000000"
+            ]
+          ]
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "afterhours-nan",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": [
+            [
+              "7ff8000000000000"
+            ]
+          ]
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "latency-posinf",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": "7ff0000000000000",
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": [
+            [
+              "7ff0000000000000"
+            ]
+          ]
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "rework-posinf",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": "7ff0000000000000",
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": [
+            [
+              "7ff0000000000000"
+            ]
+          ]
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "afterhours-posinf",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": "7ff0000000000000",
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": [
+            [
+              "7ff0000000000000"
+            ]
+          ]
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "latency-neginf",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": "fff0000000000000",
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": [
+            [
+              "fff0000000000000"
+            ]
+          ]
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "rework-neginf",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": "fff0000000000000",
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": [
+            [
+              "fff0000000000000"
+            ]
+          ]
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "afterhours-neginf",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": "fff0000000000000",
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": [
+            [
+              "fff0000000000000"
+            ]
+          ]
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "latency-value",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": "403e800000000000",
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": [
+            [
+              "403e800000000000"
+            ]
+          ]
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "rework-value",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": "403e800000000000",
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": [
+            [
+              "403e800000000000"
+            ]
+          ]
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "afterhours-value",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": "403e800000000000",
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": [
+            [
+              "403e800000000000"
+            ]
+          ]
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-empty",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-single",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              "4014000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-two-equal",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": "0000000000000000",
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              "4014000000000000"
+            ],
+            [
+              "b@x",
+              "4014000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-skewed",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": "3fe2222222222222",
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              "4056800000000000"
+            ],
+            [
+              "b@x",
+              "4014000000000000"
+            ],
+            [
+              "c@x",
+              "4014000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-with-null",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": "3fb99999999999a0",
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              null
+            ],
+            [
+              "b@x",
+              "4010000000000000"
+            ],
+            [
+              "c@x",
+              "4018000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-with-zeros",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              "0000000000000000"
+            ],
+            [
+              "b@x",
+              "0000000000000000"
+            ],
+            [
+              "c@x",
+              "401c000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-all-zero",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              "0000000000000000"
+            ],
+            [
+              "b@x",
+              "0000000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "gini-nonfinite",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": "7ff8000000000000",
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": [
+            [
+              "a@x",
+              "7ff0000000000000"
+            ],
+            [
+              "b@x",
+              "3ff0000000000000"
+            ],
+            [
+              "c@x",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-both-none-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              null,
+              null
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-both-none-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              null,
+              null
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-first-none-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              null,
+              "4014000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-first-none-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              null,
+              "4014000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-second-none-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4014000000000000",
+              null
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-second-none-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4014000000000000",
+              null
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-floor-applies-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "3fd0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "3fd0000000000000",
+              "3fe0000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-floor-applies-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "3fd0000000000000",
+        "hotspot_complexity_delta": "3fd0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "3fd0000000000000",
+              "3fe0000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-floor-exact-one-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "3ff0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "3ff0000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-floor-exact-one-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "3ff0000000000000",
+        "hotspot_complexity_delta": "3ff0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "3ff0000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-above-floor-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "3fe0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4010000000000000",
+              "4018000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-above-floor-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "3fe0000000000000",
+        "hotspot_complexity_delta": "3fe0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4010000000000000",
+              "4018000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-negative-first-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "4010000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "c008000000000000",
+              "3ff0000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-negative-first-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "3ff0000000000000",
+        "hotspot_complexity_delta": "4010000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "c008000000000000",
+              "3ff0000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-zero-first-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "4000000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "0000000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-zero-first-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "3ff0000000000000",
+        "hotspot_complexity_delta": "4000000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "0000000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-falling-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "bfe8000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4020000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-falling-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": "bfe8000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4020000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-flat-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "0000000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4008000000000000",
+              "4008000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-flat-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": "0000000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4008000000000000",
+              "4008000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-nan-first-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "7ff8000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-nan-first-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "7ff8000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-inf-first-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "7ff8000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "7ff0000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-inf-first-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": "7ff8000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "7ff0000000000000",
+              "4000000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-inf-second-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "7ff0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4000000000000000",
+              "7ff0000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-inf-second-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "3ff0000000000000",
+        "hotspot_complexity_delta": "7ff0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "4000000000000000",
+              "7ff0000000000000"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-huge-hotspots0",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": "fff0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              0
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "7fe1ccf385ebc8a0",
+              "ffe1ccf385ebc8a0"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "complexity-huge-hotspots7",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": "0000000000000000",
+        "hotspot_complexity_delta": "fff0000000000000",
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": [
+            [
+              7
+            ]
+          ]
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": [
+            [
+              "7fe1ccf385ebc8a0",
+              "ffe1ccf385ebc8a0"
+            ]
+          ]
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-no-rows",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": []
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-none-none",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              null,
+              null
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-none-empty",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              null,
+              ""
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-score-empty-severity",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": "3feccccccccccccd",
+        "compounding_risk_severity": null,
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "3feccccccccccccd",
+              ""
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-elevated",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": "3fe0000000000000",
+        "compounding_risk_severity": "elevated",
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "3fe0000000000000",
+              "elevated"
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-high",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": "3fee666666666666",
+        "compounding_risk_severity": "high",
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "3fee666666666666",
+              "high"
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-low",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": "3fb999999999999a",
+        "compounding_risk_severity": "low",
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "3fb999999999999a",
+              "low"
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-nan-score",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": null,
+        "compounding_risk_severity": "high",
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "7ff8000000000000",
+              "high"
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-inf-score",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": "7ff0000000000000",
+        "compounding_risk_severity": "elevated",
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "7ff0000000000000",
+              "elevated"
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    },
+    {
+      "name": "composite-negzero-score",
+      "queries_seen": [
+        "wip_throughput",
+        "latency",
+        "user_metrics_daily",
+        "rework",
+        "team_metrics_daily",
+        "cycle_time",
+        "repo_complexity_daily",
+        "file_hotspot_daily",
+        "compounding_risk_daily"
+      ],
+      "snapshot": {
+        "after_hours_ratio": null,
+        "compounding_risk_score": "8000000000000000",
+        "compounding_risk_severity": "elevated",
+        "cycle_time_by_day": [],
+        "hotspot_churn_overlap": null,
+        "hotspot_complexity_delta": null,
+        "review_latency_p75_hours": null,
+        "reviewer_gini": null,
+        "rework_churn_ratio": null,
+        "throughput_by_cycle": [],
+        "wip_by_day": []
+      },
+      "tables": {
+        "compounding_risk_daily": {
+          "columns": [
+            "score",
+            "severity"
+          ],
+          "rows": [
+            [
+              "8000000000000000",
+              "elevated"
+            ]
+          ]
+        },
+        "cycle_time": {
+          "columns": [
+            "day",
+            "avg_ct"
+          ],
+          "rows": []
+        },
+        "file_hotspot_daily": {
+          "columns": [
+            "total"
+          ],
+          "rows": []
+        },
+        "latency": {
+          "columns": [
+            "avg_p75"
+          ],
+          "rows": []
+        },
+        "repo_complexity_daily": {
+          "columns": [
+            "first_half",
+            "second_half"
+          ],
+          "rows": []
+        },
+        "rework": {
+          "columns": [
+            "avg_rework"
+          ],
+          "rows": []
+        },
+        "team_metrics_daily": {
+          "columns": [
+            "avg_ratio"
+          ],
+          "rows": []
+        },
+        "user_metrics_daily": {
+          "columns": [
+            "author_email",
+            "total_reviews"
+          ],
+          "rows": []
+        },
+        "wip_throughput": {
+          "columns": [
+            "day",
+            "wip_total",
+            "tp_total"
+          ],
+          "rows": []
+        }
+      }
+    }
+  ],
+  "environment": {
+    "float_repr_style": "short",
+    "implementation": "CPython",
+    "machine_not_compared": "arm64",
+    "python_version": "3.14.7"
+  },
+  "purpose": "Loader post-processing parity: the real MetricsLoader driven by an injected fake ClickHouse client. Pins null handling, the complexity denominator floor, the absent-vs-zero churn decision, gini and the list builds. Does NOT pin SQL text."
+}

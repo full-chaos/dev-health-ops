@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -153,5 +154,44 @@ func TestEveryClassifiedClassIsAcceptedByTheCollector(t *testing.T) {
 			t.Errorf("the gate produced class %q, which the collector rejects: %v — "+
 				"the two sets must not drift", class, err)
 		}
+	}
+}
+
+// sentinelObserver records what the gate reported, for the one path that must
+// report nothing at all.
+type sentinelObserver struct {
+	failOpen []string
+	skipped  int
+}
+
+func (observer *sentinelObserver) RecommendationsReadinessFailOpen(class string) {
+	observer.failOpen = append(observer.failOpen, class)
+}
+func (observer *sentinelObserver) RecommendationsReadinessSkipped() { observer.skipped++ }
+
+type sentinelLogger struct{}
+
+func (sentinelLogger) Error(string, ...any) {}
+func (sentinelLogger) Warn(string, ...any)  {}
+
+// TestTheSingleTenantSentinelNeverReachesTheQuery pins the short-circuit.
+//
+// daily_metrics_runs.org_id is typed uuid, so "default" is unrepresentable
+// there: the query cannot match, and a CAST of it raises rather than returning
+// no rows. Reaching the database at all would turn every single-tenant
+// evaluation into a fail-open, which is countable but wrong -- the gate would
+// report a permanent error rate for a deployment that has no fault.
+func TestTheSingleTenantSentinelNeverReachesTheQuery(t *testing.T) {
+	observer := &sentinelObserver{}
+
+	// A nil pool: reaching it panics, which is the point. The short-circuit
+	// must happen before any query is attempted.
+	if !DailyMetricsReady(context.Background(), nil, "default",
+		time.Now().UTC(), observer, sentinelLogger{}) {
+		t.Error("the single-tenant sentinel must proceed")
+	}
+	if len(observer.failOpen) != 0 || observer.skipped != 0 {
+		t.Errorf("the sentinel path must observe nothing, got failOpen=%v skipped=%d",
+			observer.failOpen, observer.skipped)
 	}
 }

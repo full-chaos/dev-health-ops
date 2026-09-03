@@ -2,9 +2,12 @@ package workgraph
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 )
@@ -34,6 +37,56 @@ func ParsePRDetailID(id string) (repoID string, number int, ok bool) {
 	return strings.ToLower(m[1]), n, true
 }
 
+// PRCoreRowExists is a cheap existence check against `git_pull_requests` --
+// the same core-row table `_fetch_pr_row` (pr.py:44-56) reads, but asking
+// only "does at least one row exist for this identity", not fetching any
+// of its columns. This is what lets the Pr resolver return nil for an
+// unknown PR/org/repo, exactly like Python's `resolve_pr` does when
+// `_fetch_pr_row` comes back empty (pr.py:223-224), without needing the
+// full core-row port (title/body/state/... -- CHAOS-4980's own follow-up
+// ticket) to do it.
+//
+// Deliberately WITHOUT `FINAL`: `git_pull_requests` is a
+// `ReplacingMergeTree(last_synced)` with no `is_deleted` marker
+// (000_raw_tables.sql) -- it only collapses duplicate physical rows for
+// the same (repo_id, number) by version, it never makes a row that exists
+// stop existing. An unmerged duplicate can change which row FINAL would
+// pick, but never whether at least one row is present -- so a plain
+// (non-FINAL) read answers "does it exist" exactly as correctly as FINAL
+// would, at a fraction of the cost.
+func PRCoreRowExists(ctx context.Context, client QueryClient, orgID, repoID string, number int) (bool, error) {
+	const query = `
+        SELECT number
+        FROM git_pull_requests
+        WHERE org_id = {org_id:String}
+          AND toString(repo_id) = {repo_id:String}
+          AND number = {number:UInt32}
+        LIMIT 1
+    `
+	bindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "repo_id", Value: repoID},
+		{Name: "number", Value: number},
+	}
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("workgraph: pr core-row existence rows: %w", err)
+		}
+		return false, nil
+	}
+	var n uint32
+	if err := rows.Scan(&n); err != nil {
+		return false, fmt.Errorf("workgraph: pr core-row existence scan: %w", err)
+	}
+	return true, nil
+}
+
 // ResolveLinkedIssues builds the `linkedIssues` field of PullRequestDetail
 // via fetchLinkedIssueRows (issuepr.go) -- CHAOS-4924's previously-unwired
 // reader, wired into the query-api Pr resolver by CHAOS-4980.
@@ -48,15 +101,21 @@ func ParsePRDetailID(id string) (repoID string, number int, ok bool) {
 // pr_integration_test.go pins it again at this mapping layer against a
 // real seeded fixture.
 //
-// SCOPE NOTE (CHAOS-4980): this covers only the `linkedIssues` sub-field.
-// The rest of PullRequestDetail -- the PR core row, reviews, and commits
-// (resolve_pr's `_fetch_pr_row`/`_fetch_reviews`/`_fetch_commits` in
-// pr.py) -- has not been ported to Go yet and is out of this ticket's
+// SCOPE NOTE (CHAOS-4980): this, plus PRCoreRowExists above, covers only
+// the "does the PR exist" question and the `linkedIssues` sub-field. The
+// rest of PullRequestDetail -- the PR core row's OWN columns, reviews, and
+// commits (resolve_pr's `_fetch_pr_row`/`_fetch_reviews`/`_fetch_commits`
+// in pr.py) -- has not been ported to Go yet and is out of this ticket's
 // scope. The Pr resolver (schema.resolvers.go) that calls this therefore
 // returns a PARTIAL PullRequestDetail (id/orgId/repoId/number/linkedIssues
-// only) and never returns nil for an unknown PR the way resolve_pr does --
-// there is no core-row fetch yet to detect "unknown". Tracked as a
-// follow-up, not silently dropped; see this ticket's own body.
+// only) for a PR that DOES exist, and nil for one that doesn't -- matching
+// resolve_pr's nil-for-unknown behavior exactly, while every other field
+// stays at its zero value until the follow-up ticket lands. Tracked, not
+// silently dropped; see this ticket's own body and query-api's
+// routeswitch registry (routeswitch.go / query_route.go's
+// digestByOperation), where `pr` has no registered document and therefore
+// cannot serve traffic at all yet regardless of this resolver's
+// completeness -- see pr_operation_not_registered_test.go.
 func ResolveLinkedIssues(ctx context.Context, client QueryClient, orgID, repoID string, number int) ([]model.PullRequestIssueLink, error) {
 	rows, err := fetchLinkedIssueRows(ctx, client, orgID, repoID, number)
 	if err != nil {

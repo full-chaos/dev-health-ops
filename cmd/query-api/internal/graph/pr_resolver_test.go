@@ -42,6 +42,8 @@ func (f *fakePrRowScanner) Scan(dest ...any) error {
 			*ptr = row[i].(string)
 		case *float64:
 			*ptr = row[i].(float64)
+		case *uint32:
+			*ptr = row[i].(uint32)
 		default:
 			return errors.New("pr resolver test: unsupported scan destination")
 		}
@@ -52,22 +54,33 @@ func (f *fakePrRowScanner) Scan(dest ...any) error {
 func (f *fakePrRowScanner) Err() error   { return nil }
 func (f *fakePrRowScanner) Close() error { return nil }
 
-// fakePrCHClient always fails unless a response is queued -- so an
-// unexpected call (e.g. the auth check not firing before the query) shows
-// up as a loud test failure rather than a silently wrong result.
+// emptyPrRowScanner is a zero-row response -- PRCoreRowExists's "not
+// found" case. Distinct from a nil *fakePrRowScanner so fakePrCHClient can
+// tell "no response queued for this call" (test bug -- fail loudly) apart
+// from "queued an intentionally empty result" (a real, expected shape).
+var emptyPrRowScanner = &fakePrRowScanner{rows: nil}
+
+// fakePrCHClient dispatches queued responses by call ORDER (same
+// convention as workgraph_test.go's fakeClient) -- responses[0] answers
+// the Pr resolver's first ClickHouse call (PRCoreRowExists), responses[1]
+// the second (ResolveLinkedIssues, only reached when the first found a
+// row). A call past the end of responses fails loudly -- an unexpected
+// extra query (e.g. the existence check not short-circuiting on "not
+// found") shows up as a test failure, not a silently wrong result.
 type fakePrCHClient struct {
-	response  *fakePrRowScanner
-	called    bool
-	statement string
+	responses  []*fakePrRowScanner
+	calls      int
+	statements []string
 }
 
 func (f *fakePrCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	f.called = true
-	f.statement = statement
-	if f.response == nil {
+	i := f.calls
+	f.calls++
+	f.statements = append(f.statements, statement)
+	if i >= len(f.responses) {
 		return nil, errors.New("fakePrCHClient: no response queued -- unexpected query")
 	}
-	return f.response, nil
+	return f.responses[i], nil
 }
 
 func TestPr_RejectsMissingClaims(t *testing.T) {
@@ -75,7 +88,7 @@ func TestPr_RejectsMissingClaims(t *testing.T) {
 	r := &Resolver{ClickHouse: ch}
 	_, err := r.Query().Pr(context.Background(), "org-1", testRepoID+"#pr1")
 	asAuthorizationError(t, err)
-	if ch.called {
+	if ch.calls != 0 {
 		t.Fatal("ClickHouse must not be reached when claims are missing")
 	}
 }
@@ -86,7 +99,7 @@ func TestPr_RejectsEmptyOrgIDClaim(t *testing.T) {
 	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: ""})
 	_, err := r.Query().Pr(ctx, "org-1", testRepoID+"#pr1")
 	asAuthorizationError(t, err)
-	if ch.called {
+	if ch.calls != 0 {
 		t.Fatal("ClickHouse must not be reached when the OrgID claim is empty")
 	}
 }
@@ -102,8 +115,29 @@ func TestPr_InvalidIDReturnsNilWithoutError(t *testing.T) {
 	if got != nil {
 		t.Fatalf("expected a nil result for an unparsable id, got %+v", got)
 	}
-	if ch.called {
+	if ch.calls != 0 {
 		t.Fatal("ClickHouse must not be reached when the id fails to parse")
+	}
+}
+
+// TestPr_UnknownPRReturnsNilWithoutError is CHAOS-4980's nil-for-unknown
+// coverage (team-lead ruling): PRCoreRowExists finding no row must make
+// the Pr resolver return nil, exactly like Python's resolve_pr does when
+// _fetch_pr_row comes back empty -- and must NOT go on to fetch
+// linkedIssues for a PR that doesn't exist (exactly one ClickHouse call).
+func TestPr_UnknownPRReturnsNilWithoutError(t *testing.T) {
+	ch := &fakePrCHClient{responses: []*fakePrRowScanner{emptyPrRowScanner}}
+	r := &Resolver{ClickHouse: ch}
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+	got, err := r.Query().Pr(ctx, "org-1", testRepoID+"#pr999")
+	if err != nil {
+		t.Fatalf("expected no error for an unknown PR, got %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected a nil result for an unknown PR, got %+v", got)
+	}
+	if ch.calls != 1 {
+		t.Fatalf("expected exactly 1 ClickHouse call (the existence check only), got %d: %v", ch.calls, ch.statements)
 	}
 }
 
@@ -114,7 +148,8 @@ func TestPr_InvalidIDReturnsNilWithoutError(t *testing.T) {
 // linkedIssues list -- the workgraph-package parity tests
 // (pr_test.go/pr_integration_test.go) prove the underlying reader/mapping
 // agree; this test proves the resolver actually reaches that code path in
-// both states, all the way through the GraphQL-facing model.
+// both states, all the way through the GraphQL-facing model, AFTER the
+// existence check (call 0) finds the PR.
 func TestPr_FlagStates(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -127,8 +162,9 @@ func TestPr_FlagStates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("WORKGRAPH_INVESTMENT_MATERIALIZE_NATIVE_ENABLED", tc.flagValue)
 
-			ch := &fakePrCHClient{response: &fakePrRowScanner{
-				rows: [][]any{{"issue:OPS-1", 0.9, "native", "token-a"}},
+			ch := &fakePrCHClient{responses: []*fakePrRowScanner{
+				{rows: [][]any{{uint32(42)}}},                              // call 0: PRCoreRowExists finds the row
+				{rows: [][]any{{"issue:OPS-1", 0.9, "native", "token-a"}}}, // call 1: ResolveLinkedIssues
 			}}
 			r := &Resolver{ClickHouse: ch}
 			ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
@@ -140,11 +176,11 @@ func TestPr_FlagStates(t *testing.T) {
 			if got == nil {
 				t.Fatal("expected a non-nil PullRequestDetail")
 			}
-			if !ch.called {
-				t.Fatal("expected ClickHouse to be reached for a valid id and authorized claims")
+			if ch.calls != 2 {
+				t.Fatalf("expected exactly 2 ClickHouse calls (existence check + linked issues), got %d: %v", ch.calls, ch.statements)
 			}
-			if !strings.Contains(ch.statement, tc.wantInQuery) {
-				t.Fatalf("query does not contain %q:\n%s", tc.wantInQuery, ch.statement)
+			if !strings.Contains(ch.statements[1], tc.wantInQuery) {
+				t.Fatalf("linked-issues query does not contain %q:\n%s", tc.wantInQuery, ch.statements[1])
 			}
 			if got.ID != testRepoID+"#pr42" || got.RepoID != testRepoID || got.Number != 42 || got.OrgID != "org-1" {
 				t.Fatalf("got id/repoId/number/orgId = %q/%q/%d/%q, want %q/%q/42/%q",

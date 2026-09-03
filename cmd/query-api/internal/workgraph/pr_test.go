@@ -37,6 +37,42 @@ func TestParsePRDetailID(t *testing.T) {
 	}
 }
 
+// TestPRCoreRowExists covers CHAOS-4980's nil-for-unknown existence
+// check: a found row reports true, an empty result reports false, and the
+// query text targets git_pull_requests without FINAL (see PRCoreRowExists's
+// own doc comment for why FINAL is unnecessary here).
+func TestPRCoreRowExists(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rows       [][]any
+		wantExists bool
+	}{
+		{"row found", [][]any{{uint32(42)}}, true},
+		{"no row", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeClient{responses: []*fakeRowScanner{{rows: tc.rows}}}
+			got, err := PRCoreRowExists(context.Background(), client, "org1", "11111111-1111-1111-1111-111111111111", 42)
+			if err != nil {
+				t.Fatalf("PRCoreRowExists: %v", err)
+			}
+			if got != tc.wantExists {
+				t.Fatalf("PRCoreRowExists = %v, want %v", got, tc.wantExists)
+			}
+			if client.calls != 1 {
+				t.Fatalf("want exactly 1 query, got %d", client.calls)
+			}
+			sql := client.statements[0]
+			if !strings.Contains(sql, "git_pull_requests") {
+				t.Fatalf("query does not target git_pull_requests:\n%s", sql)
+			}
+			if strings.Contains(sql, "FINAL") {
+				t.Fatalf("existence check should not use FINAL (see PRCoreRowExists's doc comment):\n%s", sql)
+			}
+		})
+	}
+}
+
 // TestResolveLinkedIssues_DispatchesOnFlagAndMapsRows is the resolver-facing
 // (workgraph-package) half of CHAOS-4980's flag-state coverage: with the
 // native flag on, ResolveLinkedIssues must issue the fast (version_rank)

@@ -219,14 +219,21 @@ func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filter
 // ignoring the argument here (rather than rejecting a mismatch, as
 // Analytics does) is the parity-correct choice for this field specifically.
 //
-// SCOPE NOTE, deliberate (see workgraph.ResolveLinkedIssues's doc comment
-// for the full rationale): this wires linkedIssues only. The PR core row,
-// reviews, and commits (Python's _fetch_pr_row/_fetch_reviews/
-// _fetch_commits) are not yet ported to Go, so the object returned here is
-// a PARTIAL PullRequestDetail -- id/orgId/repoId/number/linkedIssues only,
-// every other field left at its zero value -- and, unlike resolve_pr, this
-// never returns nil for an unknown PR (there is no core-row fetch yet to
-// detect "unknown" with). Tracked as a follow-up ticket, not this one.
+// SCOPE NOTE, deliberate (see workgraph.ResolveLinkedIssues's and
+// workgraph.PRCoreRowExists's doc comments for the full rationale): this
+// wires the "does the PR exist" check and linkedIssues only. The PR core
+// row's OWN columns, reviews, and commits (Python's
+// _fetch_pr_row/_fetch_reviews/_fetch_commits) are not yet ported to Go,
+// so a PR that DOES exist gets a PARTIAL PullRequestDetail --
+// id/orgId/repoId/number/linkedIssues only, every other field left at its
+// zero value. An unknown PR/org/repo returns nil, matching resolve_pr's
+// own nil-for-unknown behavior exactly (workgraph.PRCoreRowExists is the
+// cheap existence check that makes this possible without the full
+// core-row port). Tracked as a follow-up ticket, not this one. Separately,
+// and regardless of this resolver's completeness: `pr` has no registered
+// document in query_route.go's digestByOperation, so routeswitch can
+// never make it reachable yet either -- see
+// pr_operation_not_registered_test.go.
 func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model.PullRequestDetail, error) {
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
@@ -241,6 +248,14 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 
 	repoID, number, ok := workgraph.ParsePRDetailID(id)
 	if !ok {
+		return nil, nil
+	}
+
+	exists, err := workgraph.PRCoreRowExists(ctx, r.ClickHouse, claims.OrgID, repoID, number)
+	if err != nil {
+		return nil, fmt.Errorf("pr: %w", err)
+	}
+	if !exists {
 		return nil, nil
 	}
 

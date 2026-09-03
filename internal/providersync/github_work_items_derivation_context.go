@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -420,7 +421,7 @@ func (source githubWorkItemClickHouseDerivationContextSource) LoadStoredInherita
 		}
 		// The cap is a correctness rail, not a transient fault: retrying an
 		// over-limit read just spends another query to fail the same way.
-		if err == ErrEffectRecoveryUnsafe {
+		if errors.Is(err, ErrEffectRecoveryUnsafe) {
 			return nil, err
 		}
 		lastErr = err

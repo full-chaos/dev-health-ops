@@ -36,6 +36,23 @@ type workItemIntegrationGolden struct {
 		ClosedAt      *string  `json:"closed_at"`
 		StoryPoints   *float64 `json:"story_points"`
 	} `json:"items"`
+	PredicateExcludedItems []struct {
+		WorkItemID    string   `json:"work_item_id"`
+		Provider      string   `json:"provider"`
+		Type          string   `json:"type"`
+		Status        string   `json:"status"`
+		WorkScopeID   string   `json:"work_scope_id"`
+		ProjectID     *string  `json:"project_id"`
+		ProjectKey    *string  `json:"project_key"`
+		ProjectName   *string  `json:"project_name"`
+		NativeTeamKey *string  `json:"native_team_key"`
+		Assignees     []string `json:"assignees"`
+		CreatedAt     string   `json:"created_at"`
+		StartedAt     *string  `json:"started_at"`
+		CompletedAt   *string  `json:"completed_at"`
+		ClosedAt      *string  `json:"closed_at"`
+		StoryPoints   *float64 `json:"story_points"`
+	} `json:"predicate_excluded_items"`
 	Transitions []struct {
 		WorkItemID string `json:"work_item_id"`
 		OccurredAt string `json:"occurred_at"`
@@ -88,6 +105,12 @@ func loadWorkItemIntegrationGolden(t *testing.T) workItemIntegrationGolden {
 	}
 	if len(golden.Items) == 0 {
 		t.Fatal("golden fixture has no items")
+	}
+	// Without at least one predicate-excluded row, the widening guard below is
+	// vacuous: a predicate that returns everything would still match the
+	// golden. Assert the axis exists rather than trusting the fixture.
+	if len(golden.PredicateExcludedItems) == 0 {
+		t.Fatal("golden fixture has no predicate_excluded_items -- the loader-widening guard would be vacuous")
 	}
 	return golden
 }
@@ -255,6 +278,32 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 		t.Fatal(err)
 	}
 	for _, item := range golden.Items {
+		if err := itemBatch.Append(
+			repo, item.WorkItemID, item.Provider, item.Status,
+			deref(item.ProjectKey), deref(item.ProjectID),
+			deref(item.NativeTeamKey), deref(item.ProjectName),
+			item.Type, item.Assignees,
+			mustParseIntegrationTime(t, item.CreatedAt),
+			integrationTimeOrNil(t, item.StartedAt),
+			integrationTimeOrNil(t, item.CompletedAt),
+			integrationTimeOrNil(t, item.ClosedAt),
+			item.StoryPoints, orgA, synced,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Rows the LOADER PREDICATE must exclude, seeded into the same repo and
+	// tenant as everything else. They are absent from the golden's compute
+	// input by construction (the generator never passes them to Python), so if
+	// the Go predicate is WIDENED they load, produce output Python never
+	// produced, and the readbacks below diverge.
+	//
+	// This is what gives the oracle authority over the predicate. The Go-to-Go
+	// guard cannot: codex r2 showed it passes when both loaders are NARROWED,
+	// and r3 showed it passes when both are WIDENED. The r2 fix -- an in-scope
+	// gitlab item -- only catches narrowing, because a widened predicate still
+	// returns it.
+	for _, item := range golden.PredicateExcludedItems {
 		if err := itemBatch.Append(
 			repo, item.WorkItemID, item.Provider, item.Status,
 			deref(item.ProjectKey), deref(item.ProjectID),

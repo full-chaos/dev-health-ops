@@ -10,13 +10,17 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
-// unassignedTeamID/unassignedTeamName port UNASSIGNED_TEAM_ID/
-// UNASSIGNED_TEAM_NAME (src/dev_health_ops/providers/teams.py:33-34).
+// unassignedTeamID/unassignedTeamName are package-local names for
+// UNASSIGNED_TEAM_ID/UNASSIGNED_TEAM_NAME (src/dev_health_ops/providers/
+// teams.py:33-34). They ALIAS the workitemmetrics constants rather than
+// restating the literals, so there is exactly one definition of the sentinel
+// that resolveWorkItemPrimaryTeam returns and the golden compares against.
 const (
-	unassignedTeamID   = "unassigned"
-	unassignedTeamName = "Unassigned"
+	unassignedTeamID   = workitemmetrics.UnassignedTeamID
+	unassignedTeamName = workitemmetrics.UnassignedTeamName
 )
 
 // WorkItemStateExecutor is the NATIVE implementation of the work_item_state
@@ -348,20 +352,20 @@ func computeWorkItemStateDurationsForRepo(
 	return rows, missingAttribution
 }
 
-// resolveWorkItemPrimaryTeam ports the normalize_team_id/normalize_team_name
-// defaults (src/dev_health_ops/providers/teams.py:37-48) applied to a
-// LoadWorkItemPrimaryTeamAttributions lookup miss or an empty team_id/name:
-// None/empty -> "unassigned"/"Unassigned".
+// resolveWorkItemPrimaryTeam applies normalize_team_id/normalize_team_name
+// (src/dev_health_ops/providers/teams.py:37-48) to a
+// LoadWorkItemPrimaryTeamAttributions lookup miss or an empty team_id/name.
+//
+// It DELEGATES to workitemmetrics rather than reimplementing the rule. The
+// earlier body here tested only `== ""`, which is half of Python: Python is
+// `if not team_id or not team_id.strip()` and then returns `team_id.strip()`,
+// so it also maps a whitespace-only value to unassigned and STRIPS a padded
+// one. Keeping a second, weaker copy of a normalizer beside the correct one is
+// how the two drift; team_id is a grouping and sorting key, so a drift here
+// splits one team's rows across two key values.
 func resolveWorkItemPrimaryTeam(attribution workItemPrimaryAttribution) (teamID, teamName string) {
-	teamID = attribution.TeamID
-	if teamID == "" {
-		teamID = unassignedTeamID
-	}
-	teamName = attribution.TeamName
-	if teamName == "" {
-		teamName = unassignedTeamName
-	}
-	return teamID, teamName
+	return workitemmetrics.NormalizeTeamID(&attribution.TeamID),
+		workitemmetrics.NormalizeTeamName(&attribution.TeamName)
 }
 
 var _ NativeFamilyExecutor = (*WorkItemStateExecutor)(nil)

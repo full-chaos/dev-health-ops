@@ -123,6 +123,23 @@ type workItemBatchConn interface {
 // Python's behaviour today, in production, and this port mirrors it faithfully
 // rather than quietly changing the write contract (team-lead ruling,
 // CHAOS-4283); see the PR's RISK-NOTES.
+// workItemUInt32s range-checks a row's counters through the package's single
+// checkUint32Range, naming the offending COLUMN in the error rather than just
+// the row. Every UInt32 destination these writers touch goes through here --
+// team-lead's 2026-09-01 ruling on the file-hotspots port was that a fix for
+// this closes the CLASS, not one column at a time.
+func workItemUInt32s(table, subject string, columns []string, values []int) ([]uint32, error) {
+	checked := make([]uint32, len(values))
+	for index := range values {
+		value, err := checkUint32Range(values[index], table, columns[index], subject)
+		if err != nil {
+			return nil, err
+		}
+		checked[index] = value
+	}
+	return checked, nil
+}
+
 func WriteWorkItemMetricsDaily(
 	ctx context.Context, conn workItemBatchConn, organizationID string, day time.Time,
 	rows []workitemmetrics.MetricsDailyRow, computedAt time.Time,
@@ -147,14 +164,31 @@ func WriteWorkItemMetricsDaily(
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
 	for _, row := range rows {
+		counters, err := workItemUInt32s("work_item_metrics_daily",
+			fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
+			[]string{
+				"items_started", "items_completed",
+				"items_started_unassigned", "items_completed_unassigned",
+				"wip_count_end_of_day", "wip_unassigned_end_of_day",
+				"new_bugs_count", "new_items_count",
+			},
+			[]int{
+				row.ItemsStarted, row.ItemsCompleted,
+				row.ItemsStartedUnassigned, row.ItemsCompletedUnassigned,
+				row.WIPCountEndOfDay, row.WIPUnassignedEndOfDay,
+				row.NewBugsCount, row.NewItemsCount,
+			})
+		if err != nil {
+			return 0, err
+		}
 		if err := batch.Append(
 			dayValue, row.Provider, row.WorkScopeID, row.TeamID, row.TeamName,
-			uint32(row.ItemsStarted), uint32(row.ItemsCompleted),
-			uint32(row.ItemsStartedUnassigned), uint32(row.ItemsCompletedUnassigned),
-			uint32(row.WIPCountEndOfDay), uint32(row.WIPUnassignedEndOfDay),
+			counters[0], counters[1],
+			counters[2], counters[3],
+			counters[4], counters[5],
 			row.CycleTimeP50Hours, row.CycleTimeP90Hours, row.LeadTimeP50Hours, row.LeadTimeP90Hours,
 			row.WIPAgeP50Hours, row.WIPAgeP90Hours, row.BugCompletedRatio, row.StoryPointsCompleted,
-			uint32(row.NewBugsCount), uint32(row.NewItemsCount), row.DefectIntroRate,
+			counters[6], counters[7], row.DefectIntroRate,
 			row.WIPCongestionRatio, row.PredictabilityScore, computedAtUTC, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_metrics_daily row: %w", err)
@@ -189,9 +223,16 @@ func WriteWorkItemUserMetricsDaily(
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC()
 	for _, row := range rows {
+		counters, err := workItemUInt32s("work_item_user_metrics_daily",
+			fmt.Sprintf("%s %q user %q", row.Provider, row.WorkScopeID, row.UserIdentity),
+			[]string{"items_started", "items_completed", "wip_count_end_of_day"},
+			[]int{row.ItemsStarted, row.ItemsCompleted, row.WIPCountEndOfDay})
+		if err != nil {
+			return 0, err
+		}
 		if err := batch.Append(
 			dayValue, row.Provider, row.WorkScopeID, row.UserIdentity, row.TeamID, row.TeamName,
-			uint32(row.ItemsStarted), uint32(row.ItemsCompleted), uint32(row.WIPCountEndOfDay),
+			counters[0], counters[1], counters[2],
 			row.CycleTimeP50Hours, row.CycleTimeP90Hours, computedAtUTC, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_user_metrics_daily row: %w", err)
@@ -271,9 +312,16 @@ func WriteEstimateCoverageMetricsDaily(
 	computedAtUTC := computedAt.UTC()
 	for _, row := range rows {
 		teamID, teamName := row.TeamID, row.TeamName
+		counters, err := workItemUInt32s("estimate_coverage_metrics_daily",
+			fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
+			[]string{"estimated_count", "unestimated_count", "backlog_size"},
+			[]int{row.EstimatedCount, row.UnestimatedCount, row.BacklogSize})
+		if err != nil {
+			return 0, err
+		}
 		if err := batch.Append(
 			dayValue, row.Provider, row.WorkScopeID, &teamID, &teamName,
-			uint32(row.EstimatedCount), uint32(row.UnestimatedCount), uint32(row.BacklogSize),
+			counters[0], counters[1], counters[2],
 			row.Ratio, computedAtUTC, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append estimate_coverage_metrics_daily row: %w", err)

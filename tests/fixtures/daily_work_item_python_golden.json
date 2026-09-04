@@ -718,6 +718,25 @@
       "work_scope_id": "acme/boundary"
     },
     {
+      "assignees": [
+        "dave"
+      ],
+      "closed_at": null,
+      "completed_at": "2026-08-24T07:00:00Z",
+      "created_at": "2026-08-20T00:00:00Z",
+      "native_team_key": null,
+      "project_id": "acme/platform",
+      "project_key": null,
+      "project_name": null,
+      "provider": "github",
+      "started_at": "2026-08-24T03:00:00Z",
+      "status": "done",
+      "story_points": null,
+      "type": "task",
+      "work_item_id": "gh:31",
+      "work_scope_id": "acme/platform"
+    },
+    {
       "assignees": [],
       "closed_at": null,
       "completed_at": null,
@@ -786,6 +805,25 @@
       "type": "task",
       "work_item_id": "gh:20",
       "work_scope_id": "acme/platform"
+    }
+  ],
+  "predicate_excluded_items": [
+    {
+      "assignees": [],
+      "closed_at": null,
+      "completed_at": "2026-08-03T00:00:00Z",
+      "created_at": "2026-08-01T00:00:00Z",
+      "native_team_key": null,
+      "project_id": null,
+      "project_key": "STALE",
+      "project_name": null,
+      "provider": "jira",
+      "started_at": "2026-08-02T00:00:00Z",
+      "status": "done",
+      "story_points": null,
+      "type": "task",
+      "work_item_id": "jira:STALE-1",
+      "work_scope_id": "STALE"
     }
   ],
   "primary_attributions": [
@@ -970,6 +1008,12 @@
       "work_item_id": "gitlab:1"
     },
     {
+      "source": "issue_project",
+      "team_id": "team-platform",
+      "team_name": "Platform",
+      "work_item_id": "gh:31"
+    },
+    {
       "source": "unassigned",
       "team_id": null,
       "team_name": null,
@@ -1018,6 +1062,24 @@
       "occurred_at": "2026-08-24T16:00:00Z",
       "to_status": "done",
       "work_item_id": "gh:4"
+    },
+    {
+      "from_status": "backlog",
+      "occurred_at": "2026-08-24T01:00:00Z",
+      "to_status": "todo",
+      "work_item_id": "gh:31"
+    },
+    {
+      "from_status": "todo",
+      "occurred_at": "2026-08-24T05:00:00Z",
+      "to_status": "in_progress",
+      "work_item_id": "gh:31"
+    },
+    {
+      "from_status": "in_progress",
+      "occurred_at": "2026-08-24T07:00:00Z",
+      "to_status": "done",
+      "work_item_id": "gh:31"
     },
     {
       "from_status": "todo",
@@ -1421,6 +1483,27 @@
       "work_scope_id": "acme/boundary"
     },
     {
+      "active_time_hours": 4.0,
+      "assignee": "dave",
+      "completed_at": "2026-08-24T07:00:00Z",
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "created_at": "2026-08-20T00:00:00Z",
+      "cycle_time_hours": 4.0,
+      "day": "2026-08-24",
+      "flow_efficiency": 1.0,
+      "lead_time_hours": 103.0,
+      "org_id": "",
+      "provider": "github",
+      "started_at": "2026-08-24T03:00:00Z",
+      "status": "done",
+      "team_id": "team-platform",
+      "team_name": "Platform",
+      "type": "task",
+      "wait_time_hours": 0.0,
+      "work_item_id": "gh:31",
+      "work_scope_id": "acme/platform"
+    },
+    {
       "active_time_hours": 21.45433819638889,
       "assignee": "bob",
       "completed_at": "2026-08-24T22:41:03.271828Z",
@@ -1640,29 +1723,29 @@
       "work_scope_id": "acme/payments"
     },
     {
-      "bug_completed_ratio": 0.125,
+      "bug_completed_ratio": 0.1111111111111111,
       "computed_at": "2026-08-25T06:30:15.123456Z",
       "cycle_time_p50_hours": 5.0,
-      "cycle_time_p90_hours": 16.693086488388893,
+      "cycle_time_p90_hours": 15.899544537055554,
       "day": "2026-08-24",
       "defect_intro_rate": 0.3333333333333333,
-      "items_completed": 8,
+      "items_completed": 9,
       "items_completed_unassigned": 2,
-      "items_started": 9,
+      "items_started": 10,
       "items_started_unassigned": 2,
-      "lead_time_p50_hours": 70.64638717416666,
-      "lead_time_p90_hours": 123.16851573047221,
+      "lead_time_p50_hours": 84.0,
+      "lead_time_p90_hours": 116.95198338133335,
       "new_bugs_count": 1,
       "new_items_count": 3,
       "org_id": "",
-      "predictability_score": 0.8888888888888888,
+      "predictability_score": 0.9,
       "provider": "github",
       "story_points_completed": 4.75,
       "team_id": "team-platform",
       "team_name": "Platform",
       "wip_age_p50_hours": 21.0,
       "wip_age_p90_hours": 21.0,
-      "wip_congestion_ratio": 0.125,
+      "wip_congestion_ratio": 0.1111111111111111,
       "wip_count_end_of_day": 1,
       "wip_unassigned_end_of_day": 0,
       "work_scope_id": "acme/platform"
@@ -1913,6 +1996,21 @@
       "team_id": "team-platform",
       "team_name": "Platform",
       "user_identity": "bob",
+      "wip_count_end_of_day": 0,
+      "work_scope_id": "acme/platform"
+    },
+    {
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "cycle_time_p50_hours": 4.0,
+      "cycle_time_p90_hours": 4.0,
+      "day": "2026-08-24",
+      "items_completed": 1,
+      "items_started": 1,
+      "org_id": "",
+      "provider": "github",
+      "team_id": "team-platform",
+      "team_name": "Platform",
+      "user_identity": "dave",
       "wip_count_end_of_day": 0,
       "work_scope_id": "acme/platform"
     },

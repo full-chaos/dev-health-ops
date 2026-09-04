@@ -445,6 +445,18 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
             assignees=["oscar"],
             story_points=1.0,
         ),
+        # gh:31 carries the pre-start `todo` seed transition above. It needs a
+        # started_at INSIDE the window so FlowBreakdown has a segment to
+        # attribute, and a completed_at so it produces a cycle-time record --
+        # the flow fields live on that record.
+        _item(
+            "gh:31",
+            status="done",
+            created_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+            started_at=_hour(3),
+            completed_at=_hour(7),
+            assignees=["dave"],
+        ),
         # OPEN items carrying story_points, in their own scope, so estimate
         # coverage produces a real FRACTION (1/3) rather than only the 0.0 and
         # None a corpus of terminal-or-unestimated items can reach.
@@ -486,6 +498,19 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
         _transition("gh:4", _hour(6), "in_progress", "blocked"),
         _transition("gh:4", _hour(11, 5, 30), "blocked", "in_review"),
         _transition("gh:4", _hour(16), "in_review", "done"),
+        # gh:31 is the ONLY case that discriminates the `todo` arm of the
+        # initial-flow-state default (parity.go's
+        # unknown/todo/backlog -> in_progress). Its seed transition lands
+        # BEFORE started_at and leaves current_status == "todo"; the first
+        # in-window segment is then attributed to whatever "todo" resolves to.
+        # With the arm, that is in_progress -> ACTIVE. Without it, "todo" is
+        # itself a WAIT_STATUS, so the same two hours become WAIT. Every other
+        # pre-start transition in this corpus ends in "backlog", which the
+        # neighbouring arm already covers, so deleting the `todo` arm alone was
+        # invisible (codex r3 P3).
+        _transition("gh:31", _hour(1), "backlog", "todo"),
+        _transition("gh:31", _hour(5), "todo", "in_progress"),
+        _transition("gh:31", _hour(7), "in_progress", "done"),
         # a transition BEFORE started_at seeds current_status (and is skipped)
         _transition("gh:20", _hour(0, 30), "todo", "backlog"),
         # ...and one AFTER completed_at, which must be ignored
@@ -519,8 +544,94 @@ def _encode(value: Any) -> Any:
     return value
 
 
+def _encode_item(item: WorkItem) -> dict[str, Any]:
+    """The single JSON shape for a work item row, used by both item lists."""
+    return {
+        "work_item_id": item.work_item_id,
+        "provider": item.provider,
+        "type": item.type,
+        "status": item.status,
+        "work_scope_id": item.work_scope_id,
+        "project_id": item.project_id,
+        "project_key": item.project_key,
+        "project_name": item.project_name,
+        "native_team_key": item.native_team_key,
+        "assignees": list(item.assignees),
+        "created_at": _encode(item.created_at),
+        "started_at": _encode(item.started_at),
+        "completed_at": _encode(item.completed_at),
+        "closed_at": _encode(item.closed_at),
+        "story_points": item.story_points,
+    }
+
+
+def _predicate_excluded_items() -> list[WorkItem]:
+    """Rows that exist in ClickHouse but that the loader predicate must NOT return.
+
+    These are deliberately NOT passed to Python compute. The golden is what
+    Python produces from the rows the loader RETURNS, so a row the predicate
+    excludes must be absent from the compute input too -- otherwise the golden
+    would contain output the correct Go executor can never produce.
+
+    Their whole purpose is to make the ORACLE, rather than a Go-to-Go
+    comparison, the authority on the predicate. Codex r2 showed a guard that
+    only compares the two Go loaders to each other passes when BOTH are
+    narrowed; r3 showed the same guard passes when both are WIDENED, and that
+    the r2 fix (an in-scope gitlab item) can only catch narrowing. Widening
+    needs a row that the predicate excludes and that would CHANGE the output if
+    it were loaded.
+
+    estimate coverage is what makes it change: it creates a group's bucket
+    BEFORE skipping terminal items (compute_work_items.py:1456-1466), so a
+    stale terminal row in a scope of its own emits a spurious
+    backlog_size=0 / ratio=NULL group.
+    """
+    return [
+        # done, completed_at BEFORE the window start, in a scope NOTHING else
+        # uses -- so if `AND (status != 'done' OR completed_at >= ?)` is widened
+        # (e.g. `OR provider != 'github'`), this row loads and an entire extra
+        # estimate-coverage group appears in the readback.
+        #
+        # It is non-github on purpose: that is the exact shape r3's mutation
+        # smuggles through, and no other corpus row has it. Every existing
+        # non-github item is either completed INSIDE the window or not done.
+        _item(
+            "jira:STALE-1",
+            provider="jira",
+            project_id=None,
+            project_key="STALE",
+            status="done",
+            created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            started_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 8, 3, tzinfo=timezone.utc),
+        ),
+    ]
+
+
 def render() -> str:
     items, transitions = _corpus()
+    # A duplicate work_item_id in the corpus is silent, not loud: the Go golden
+    # test resolves attribution through a work_item_id map (mirroring the
+    # production read, which is also id-keyed), so two items sharing an id take
+    # each other's team. Adding the `todo` case as a second "gh:24" did exactly
+    # that -- it moved the project_name-fallback item off `unassigned` and the
+    # failure surfaced three layers away, as an estimate-coverage identity
+    # mismatch on a scope the new item is not even in. Fail here instead.
+    excluded_items = _predicate_excluded_items()
+    all_items = items + excluded_items
+    duplicate_ids = sorted(
+        {item.work_item_id for item in all_items}
+        & {
+            item.work_item_id
+            for index, item in enumerate(all_items)
+            if item.work_item_id in {other.work_item_id for other in all_items[:index]}
+        }
+    )
+    if duplicate_ids:
+        raise SystemExit(
+            f"corpus has duplicate work_item_id(s): {', '.join(duplicate_ids)} -- "
+            "ids must be unique or attribution silently crosses items"
+        )
     resolvers: dict[str, Any] = {
         "team_resolver": None,
         "project_key_resolver": PROJECT_TEAM_RESOLVER,
@@ -550,26 +661,11 @@ def render() -> str:
     payload = {
         "day": DAY.isoformat(),
         "computed_at": _encode(COMPUTED_AT),
-        "items": [
-            {
-                "work_item_id": item.work_item_id,
-                "provider": item.provider,
-                "type": item.type,
-                "status": item.status,
-                "work_scope_id": item.work_scope_id,
-                "project_id": item.project_id,
-                "project_key": item.project_key,
-                "project_name": item.project_name,
-                "native_team_key": item.native_team_key,
-                "assignees": list(item.assignees),
-                "created_at": _encode(item.created_at),
-                "started_at": _encode(item.started_at),
-                "completed_at": _encode(item.completed_at),
-                "closed_at": _encode(item.closed_at),
-                "story_points": item.story_points,
-            }
-            for item in items
-        ],
+        "items": [_encode_item(item) for item in items],
+        # Seeded into work_items by the integration fixture, but NOT part of the
+        # compute input above: the loader predicate must exclude them. Same
+        # encoder as "items" -- one shape, not two that can drift.
+        "predicate_excluded_items": [_encode_item(item) for item in excluded_items],
         "transitions": [
             {
                 "work_item_id": transition.work_item_id,

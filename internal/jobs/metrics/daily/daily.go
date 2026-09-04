@@ -399,6 +399,24 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	if run.ID != runID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
+	// codex review round 3 (P2). This used to run LAST, after the publish loop,
+	// on the reasoning that a visibility mechanism must never affect what the job
+	// had to do. The ordering was right; placing it after the early returns was
+	// not. Every failure path between here and the end -- a publish error, a
+	// DispatchablePartitions error, an invalid partition -- returned before the
+	// reconcile, so the marker sweep silently stopped running for that
+	// organization for as long as those failures lasted.
+	//
+	// The reasoning error was conflating the run being DISPATCHED with the runs
+	// being MARKED. I argued this was benign because a run I would mark has only
+	// terminal partitions, so its publish loop cannot fail. True, and irrelevant:
+	// the reconcile is ORG-scoped, so a DIFFERENT, already-wedged historical run
+	// in the same organization goes unmarked because THIS run's publish failed.
+	//
+	// A defer covers every exit including the panic path, and keeps the
+	// "cannot affect the job's outcome" property: reconcileBlockedRuns is
+	// fail-open and returns nothing.
+	defer handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	if run.RepositoryDiscoveryRequired {
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {
@@ -423,8 +441,6 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 			return jobruntime.Retryable(err)
 		}
 	}
-	// Last, so it can never affect what this job actually had to do.
-	handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	return nil
 }
 

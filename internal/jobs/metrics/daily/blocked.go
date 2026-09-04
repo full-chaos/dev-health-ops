@@ -91,11 +91,20 @@ WITH decided AS (
                WHERE partition.run_id = run.id
                  AND partition.status NOT IN ('succeeded', 'failed_permanent')
                  -- An expired lease does NOT keep the run alive: nothing
-                 -- automatic will ever reclaim it. Same boundary
-                 -- RedriveStrandedPartitions uses, so both agree on "stuck".
+                 -- automatic will ever reclaim it.
+                 --
+                 -- <= not <, per codex review round 3 (P3). classifyLease
+                 -- (postgres.go) returns leaseHeld only when
+                 -- leaseExpiresAt.After(now), so a lease landing exactly ON now
+                 -- is RECLAIMABLE there. With < this predicate called that same
+                 -- instant "live" and left the run unmarked while ClaimPartition
+                 -- would have reclaimed it -- the shared boundary this comment
+                 -- claimed was false at exactly one point. RedriveStrandedPartitions
+                 -- carries the identical <= for the same reason, so all three
+                 -- now agree on the closed interval.
                  AND NOT (
                      partition.status = 'running'
-                     AND partition.lease_expires_at < $2::timestamptz
+                     AND partition.lease_expires_at <= $2::timestamptz
                  )
            ) AS blocked,
            NOT EXISTS (

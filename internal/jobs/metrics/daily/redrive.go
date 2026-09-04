@@ -205,7 +205,7 @@ WHERE run.org_id = $1::uuid
   AND run.status = 'running'
   AND (
     partition.status IN ('pending', 'failed')
-    OR (partition.status = 'running' AND partition.lease_expires_at < $4)
+    OR (partition.status = 'running' AND partition.lease_expires_at <= $4)
   )
 ORDER BY partition.run_id, partition.ordinal`, orgID, from, to, now)
 	if err != nil {

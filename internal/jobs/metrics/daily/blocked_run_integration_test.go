@@ -24,6 +24,10 @@ import (
 const (
 	runningLiveLease    = "running_live_lease"
 	runningExpiredLease = "running_expired_lease"
+	// The boundary itself. classifyLease returns leaseHeld only when
+	// leaseExpiresAt.After(now), so a lease landing EXACTLY on now is
+	// reclaimable there -- which makes it stranded, not live, for the marker.
+	runningExactExpiry = "running_exact_expiry"
 )
 
 type blockedFixture struct {
@@ -54,6 +58,8 @@ func seedBlockedRun(
 			status, lease = "running", now.Add(10*time.Minute)
 		case runningExpiredLease:
 			status, lease = "running", now.Add(-time.Minute)
+		case runningExactExpiry:
+			status, lease = "running", now
 		case "running":
 			t.Fatalf("partition %d: use %q or %q, never a bare \"running\" -- "+
 				"the lease is the whole question", ordinal, runningLiveLease, runningExpiredLease)
@@ -176,6 +182,22 @@ func TestReconcileBlockedRunsMarksOnlyRunsThatCanNeverFinish(t *testing.T) {
 			// which asserts PARTIAL for the same shape plus a succeeded
 			// partition.
 			wantReason: BlockedReasonAllPartitionsPermanent,
+		},
+		{
+			// codex review round 3 (P3). classifyLease treats a lease landing
+			// EXACTLY on now as reclaimable (it returns leaseHeld only when
+			// leaseExpiresAt.After(now)), while this predicate used a strict
+			// `<` and so called that same instant "live". The comment claimed a
+			// boundary shared with RedriveStrandedPartitions; the claim was
+			// false at exactly one point. All three now use the closed interval.
+			//
+			// One instant wide, and worth a case anyway: an invariant that is
+			// false somewhere is not an invariant, and a reader who trusts the
+			// comment would reason wrongly about every lease-adjacent change.
+			name:        "failed_permanent alongside a lease expiring exactly now IS blocked",
+			partitions:  []string{"failed_permanent", runningExactExpiry},
+			wantBlocked: true,
+			wantReason:  BlockedReasonAllPartitionsPermanent,
 		},
 		{
 			name:        "all succeeded is not blocked",

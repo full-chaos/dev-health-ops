@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -18,6 +19,14 @@ type reconcilingStore struct {
 	sawOrg  string
 	outcome BlockedReconcileOutcome
 	err     error
+	// dispatchable overrides the embedded fakeStore, which always returns
+	// nil. Overridden HERE rather than by adding a field to the shared
+	// fakeStore: only this file needs a run with work left to publish.
+	dispatchable []Partition
+}
+
+func (store *reconcilingStore) DispatchablePartitions(context.Context, string) ([]Partition, error) {
+	return store.dispatchable, nil
 }
 
 func (store *reconcilingStore) ReconcileBlockedRuns(
@@ -217,4 +226,55 @@ func TestSupportsBlockedRunReconcileDiscriminates(t *testing.T) {
 	if !SupportsBlockedRunReconcile(production) {
 		t.Fatal("PostgresStore no longer carries the blocked-run reconcile capability")
 	}
+}
+
+// codex review round 3, P2. The reconcile used to sit LAST in Work, after the
+// publish loop, so ANY early return skipped it -- and the reconcile is
+// ORG-scoped, meaning a different, already-wedged historical run in the same
+// organization stayed unmarked because THIS run's publish failed. If the
+// dispatch then exhausted its retries, the marker sweep had simply stopped
+// running for that org, which is the invisibility this whole change exists to
+// end.
+//
+// My original reasoning was that a run I would mark has only terminal
+// partitions, so its own publish loop cannot fail. That is true and it is
+// beside the point: the run being DISPATCHED is not the run being MARKED.
+func TestDispatchStillReconcilesWhenThePublishFails(t *testing.T) {
+	store := &reconcilingStore{
+		fakeStore:    fakeStore{run: runningRun()},
+		dispatchable: []Partition{{ID: testPartitionID, RunID: testRunID}},
+		outcome:      BlockedReconcileOutcome{Marked: 1},
+	}
+	observer := &recordingBlockedObserver{}
+	handler, err := NewDispatcher(store, failingPublisher{}, &fakeRepositoryDiscoverer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetBlockedRunObserver(observer)
+
+	err = handler.Work(context.Background(), blockedDispatchExecution())
+	if err == nil {
+		t.Fatal("Work = nil, want the publish failure surfaced -- the fix must not swallow it")
+	}
+	// The job still fails, and retryably: making the marker visible must not
+	// convert a real dispatch failure into a success.
+	if !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("Work error = %v, want retryable", err)
+	}
+	if store.calls != 1 {
+		t.Fatalf("reconcile calls = %d, want 1 -- a publish failure must not stop the "+
+			"org's marker sweep; an unrelated wedged run stays invisible", store.calls)
+	}
+	if observer.counts["marked"] != 1 {
+		t.Fatalf("observed %+v, want marked=1", observer.counts)
+	}
+}
+
+// failingPublisher fails the partition publish and nothing else. It EMBEDS
+// fakePublisher so it stays a complete Publisher as that interface grows, and
+// so this test discriminates on the early-return path rather than on setup.
+type failingPublisher struct{ fakePublisher }
+
+func (failingPublisher) PublishPartition(context.Context, Run, Partition) error {
+	return errors.New("outbox unavailable")
 }

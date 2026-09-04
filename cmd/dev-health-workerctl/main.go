@@ -1808,22 +1808,63 @@ func manualBackstopTriggerGeneration(family, org, day string) string {
 // manual trigger and that night's real occurrence for the SAME day cannot
 // both dispatch a live ComputeOrg run.
 //
+// day is a DEDUP KEY, not a compute window: WorkItemAttributionExecutor.ComputeOrg
+// (internal/jobs/metrics/remaining/work_item_attribution_native_clickhouse.go)
+// takes only an org id and always recomputes from its own live watermark
+// (work_item_attribution_backstop_runs.completed_at) -- --day only labels
+// which remaining_metric_runs row this trigger becomes/dedupes against, it
+// never scopes or windows what gets recomputed. Two different --day values
+// dispatch the exact same computation; the value only changes which prior
+// run (if any) findManualBackfillBlocker matches against.
+//
 // --day defaults to yesterday UTC, mirroring `start`'s day-scoping caution
 // (main.go's "today itself is ALSO excluded" comment on dispatchMetricsRemaining)
 // without inheriting its hard refusal: work_item_attribution's Scope carries
-// no day-window (manualBackfillDayScope's case), and WorkItemAttributionExecutor.ComputeOrg
-// is watermark-driven and safely re-entrant, so --today (an explicit flag,
+// no day-window (manualBackfillDayScope's case), and ComputeOrg is
+// watermark-driven and safely re-entrant, so --today (an explicit flag,
 // never silently inferred from an operator typing today's date) is
 // supported here where `start` refuses it outright for every family it
 // serves.
+//
+// Manual-vs-schedule interaction, answered precisely (team-lead's review
+// note) -- a manual trigger COEXISTS with the schedule's own 02:30Z
+// occurrence, it never SUPPRESSES it, on EITHER side of a --day match:
+//   - StartRunTx (the automatic path's own call, via
+//     RemainingMetricsFanoutProducer.Produce) has a coverage-merging
+//     advisory-lock block ONLY for family=="dora" (postgres.go); for
+//     work_item_attribution it falls straight through to insertRun's plain
+//     ON CONFLICT DO NOTHING on (org_id, family, generation, scope_key).
+//   - The automatic generation ("fixed-schedule:work_item_attribution_daily_fanout:<time>")
+//     and this command's ("manual-trigger:work_item_attribution:<org>:<day>",
+//     manualBackstopTriggerGeneration below) are NEVER equal, so that
+//     uniqueness constraint never fires between them -- even when --day
+//     happens to equal the UTC calendar date the 02:30Z boundary falls on
+//     (rare: 02:30Z is 19:30 PDT the PRIOR PDT day, so "today" here and
+//     "tonight's" occurrence usually land on DIFFERENT UTC dates already).
+//   - Verified in TestStartManualBackfillRunWorkItemAttributionCoexistsWithASameDayAutomaticOccurrence
+//     (manual_backstop_trigger_integration_test.go): a manual trigger
+//     followed by a same-day simulated automatic StartRunTx call both
+//     succeed as two DISTINCT runs/partitions, neither blocked nor merged.
+//
+// This is safe, not merely permitted: ComputeOrg is watermark-driven, so a
+// second dispatch (whichever runs second) finds nothing changed since the
+// first one's watermark write and either no-ops (SkippedNoop) or writes a
+// benign, redundant completion marker -- it never double-counts or corrupts
+// work_item_team_attributions. The real cost of triggering --today right
+// before the schedule's own occurrence is CONTENTION, not correctness:
+// work_item_attribution's max_concurrency is 1 (families.json), so two
+// independent runs queue behind each other for the family's single worker
+// slot, and whichever one loses that race is delayed, not lost. That
+// tradeoff -- and not a data-safety concern -- is the actual reason --day
+// defaults to yesterday and today needs an explicit ask.
 func dispatchMetricsRemainingTriggerBackstop(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
 	flags := quietFlags("metrics remaining trigger-backstop")
 	family := flags.String("family", "work_item_attribution", "fixed-schedule backstop family to trigger now (work_item_attribution)")
 	org := flags.String("org", "", "organization id (uuid)")
-	day := flags.String("day", "", "target day (YYYY-MM-DD, UTC) -- defaults to yesterday UTC; today requires --today")
-	today := flags.Bool("today", false, "REQUIRED to target today's UTC date -- otherwise --day=today is refused to avoid racing tonight's own 02:30Z occurrence for the same day")
+	day := flags.String("day", "", "dedup key for the run this trigger becomes, NOT a compute window (YYYY-MM-DD, UTC) -- defaults to yesterday UTC; today requires --today")
+	today := flags.Bool("today", false, "REQUIRED to target today's UTC date -- otherwise --day=today is refused; a same-day manual run COEXISTS with (never suppresses) tonight's own 02:30Z occurrence, but both compete for this family's max_concurrency=1 worker slot (families.json), so today should be an explicit choice, not an accident")
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this backstop is being triggered manually (e.g. \"CHAOS-5016 -- chris wants same-day confirmation, not waiting for the 02:30Z schedule\")")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")

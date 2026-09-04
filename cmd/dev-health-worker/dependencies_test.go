@@ -628,15 +628,16 @@ func TestSelectedQueuesComposeMultipleBuilderFamilies(t *testing.T) {
 	// "daily" builder below must report them or queue completeness sees
 	// uncovered registry kinds.
 	dailyKinds := map[string]bool{
-		jobcontract.KindDailyMetricsDispatch:     true,
-		jobcontract.KindDailyMetricsPartition:    true,
-		jobcontract.KindDailyMetricsFinalize:     true,
-		jobcontract.KindRemainingCapacity:        true,
-		jobcontract.KindRemainingComplexity:      true,
-		jobcontract.KindRemainingDORA:            true,
-		jobcontract.KindRemainingMembership:      true,
-		jobcontract.KindRemainingRecommendations: true,
-		jobcontract.KindRemainingReleaseImpact:   true,
+		jobcontract.KindDailyMetricsDispatch:         true,
+		jobcontract.KindDailyMetricsPartition:        true,
+		jobcontract.KindDailyMetricsFinalize:         true,
+		jobcontract.KindRemainingCapacity:            true,
+		jobcontract.KindRemainingComplexity:          true,
+		jobcontract.KindRemainingDORA:                true,
+		jobcontract.KindRemainingMembership:          true,
+		jobcontract.KindRemainingRecommendations:     true,
+		jobcontract.KindRemainingReleaseImpact:       true,
+		jobcontract.KindRemainingWorkItemAttribution: true,
 	}
 	// The real report builder is replaced by a fake here so the composition
 	// rules are tested without a ClickHouse dependency; the production builder
@@ -1744,15 +1745,16 @@ func TestConstructedQueueBudgetMustMatchDeploymentManifest(t *testing.T) {
 	daily := selectSpecs(mustSelectedQueueSpecs(
 		t, runtimeRegistry, "investment", "metrics", "reports", "workgraph",
 	), map[string]bool{
-		jobcontract.KindDailyMetricsDispatch:     true,
-		jobcontract.KindDailyMetricsPartition:    true,
-		jobcontract.KindDailyMetricsFinalize:     true,
-		jobcontract.KindRemainingCapacity:        true,
-		jobcontract.KindRemainingComplexity:      true,
-		jobcontract.KindRemainingDORA:            true,
-		jobcontract.KindRemainingMembership:      true,
-		jobcontract.KindRemainingRecommendations: true,
-		jobcontract.KindRemainingReleaseImpact:   true,
+		jobcontract.KindDailyMetricsDispatch:         true,
+		jobcontract.KindDailyMetricsPartition:        true,
+		jobcontract.KindDailyMetricsFinalize:         true,
+		jobcontract.KindRemainingCapacity:            true,
+		jobcontract.KindRemainingComplexity:          true,
+		jobcontract.KindRemainingDORA:                true,
+		jobcontract.KindRemainingMembership:          true,
+		jobcontract.KindRemainingRecommendations:     true,
+		jobcontract.KindRemainingReleaseImpact:       true,
+		jobcontract.KindRemainingWorkItemAttribution: true,
 	})
 	for _, test := range []struct {
 		name    string

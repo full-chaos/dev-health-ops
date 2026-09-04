@@ -105,6 +105,7 @@
         "metrics.remaining.membership_backfill",
         "metrics.remaining.recommendations",
         "metrics.remaining.release_impact",
+        "metrics.remaining.work_item_attribution",
         "report.execute_on_demand",
         "report.execute_scheduled",
         "workgraph.build"

@@ -14,34 +14,35 @@ const (
 	// MaxEnvelopeBytes bounds River encoded_args before any job-specific decode.
 	MaxEnvelopeBytes = 16 * 1024
 
-	ContractVersionV1               = 1
-	ContractVersionV2               = 2
-	ContractVersionV3               = 3
-	KindBillingNotification         = "operational.billing_notification"
-	KindWebhookDelivery             = "operational.webhook_delivery"
-	KindHeartbeat                   = "system.heartbeat"
-	KindSyncCoverageRefresh         = "system.sync_coverage_refresh"
-	KindRetentionCleanup            = "system.retention_cleanup"
-	KindReportExecuteOnDemand       = "report.execute_on_demand"
-	KindReportExecuteScheduled      = "report.execute_scheduled"
-	KindDailyMetricsDispatch        = "metrics.daily_dispatch"
-	KindDailyMetricsPartition       = "metrics.daily_partition"
-	KindDailyMetricsFinalize        = "metrics.daily_finalize"
-	KindTeamAutoimport              = "sync.team_autoimport"
-	KindTeamRepoOwnershipDerivation = "sync.team_repo_ownership_derivation"
-	KindRemainingCapacity           = "metrics.remaining.capacity"
-	KindRemainingComplexity         = "metrics.remaining.complexity"
-	KindRemainingDORA               = "metrics.remaining.dora"
-	KindRemainingMembership         = "metrics.remaining.membership_backfill"
-	KindRemainingRecommendations    = "metrics.remaining.recommendations"
-	KindRemainingReleaseImpact      = "metrics.remaining.release_impact"
-	KindWorkGraphBuild              = "workgraph.build"
-	KindInvestmentMaterialize       = "investment.materialize"
-	KindInvestmentDispatch          = "investment.dispatch"
-	KindInvestmentChunk             = "investment.chunk"
-	KindInvestmentFinalize          = "investment.finalize"
-	KindSyncProviderUnit            = "sync.provider_unit"
-	RetentionWorkerTerminal         = "worker_job_terminal"
+	ContractVersionV1                = 1
+	ContractVersionV2                = 2
+	ContractVersionV3                = 3
+	KindBillingNotification          = "operational.billing_notification"
+	KindWebhookDelivery              = "operational.webhook_delivery"
+	KindHeartbeat                    = "system.heartbeat"
+	KindSyncCoverageRefresh          = "system.sync_coverage_refresh"
+	KindRetentionCleanup             = "system.retention_cleanup"
+	KindReportExecuteOnDemand        = "report.execute_on_demand"
+	KindReportExecuteScheduled       = "report.execute_scheduled"
+	KindDailyMetricsDispatch         = "metrics.daily_dispatch"
+	KindDailyMetricsPartition        = "metrics.daily_partition"
+	KindDailyMetricsFinalize         = "metrics.daily_finalize"
+	KindTeamAutoimport               = "sync.team_autoimport"
+	KindTeamRepoOwnershipDerivation  = "sync.team_repo_ownership_derivation"
+	KindRemainingCapacity            = "metrics.remaining.capacity"
+	KindRemainingComplexity          = "metrics.remaining.complexity"
+	KindRemainingDORA                = "metrics.remaining.dora"
+	KindRemainingMembership          = "metrics.remaining.membership_backfill"
+	KindRemainingRecommendations     = "metrics.remaining.recommendations"
+	KindRemainingReleaseImpact       = "metrics.remaining.release_impact"
+	KindRemainingWorkItemAttribution = "metrics.remaining.work_item_attribution"
+	KindWorkGraphBuild               = "workgraph.build"
+	KindInvestmentMaterialize        = "investment.materialize"
+	KindInvestmentDispatch           = "investment.dispatch"
+	KindInvestmentChunk              = "investment.chunk"
+	KindInvestmentFinalize           = "investment.finalize"
+	KindSyncProviderUnit             = "sync.provider_unit"
+	RetentionWorkerTerminal          = "worker_job_terminal"
 	// Retention policies are table-scoped. Each one names exactly one
 	// operational table whose owning store is constructed by the ops worker;
 	// widening a policy is a contract change, not a payload change.
@@ -363,17 +364,18 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "sync_run",
 		OrganizationScope: "tenant",
 	},
-	KindWorkGraphBuild:           {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
-	KindInvestmentMaterialize:    {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
-	KindInvestmentDispatch:       {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
-	KindInvestmentChunk:          {Kind: KindInvestmentChunk, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_chunk", OrganizationScope: "tenant"},
-	KindInvestmentFinalize:       {Kind: KindInvestmentFinalize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_run", OrganizationScope: "tenant"},
-	KindRemainingCapacity:        remainingDefinition(KindRemainingCapacity),
-	KindRemainingComplexity:      remainingDefinition(KindRemainingComplexity),
-	KindRemainingDORA:            remainingDefinition(KindRemainingDORA),
-	KindRemainingMembership:      remainingDefinition(KindRemainingMembership),
-	KindRemainingRecommendations: remainingDefinition(KindRemainingRecommendations),
-	KindRemainingReleaseImpact:   remainingDefinition(KindRemainingReleaseImpact),
+	KindWorkGraphBuild:               {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
+	KindInvestmentMaterialize:        {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
+	KindInvestmentDispatch:           {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
+	KindInvestmentChunk:              {Kind: KindInvestmentChunk, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_chunk", OrganizationScope: "tenant"},
+	KindInvestmentFinalize:           {Kind: KindInvestmentFinalize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_run", OrganizationScope: "tenant"},
+	KindRemainingCapacity:            remainingDefinition(KindRemainingCapacity),
+	KindRemainingComplexity:          remainingDefinition(KindRemainingComplexity),
+	KindRemainingDORA:                remainingDefinition(KindRemainingDORA),
+	KindRemainingMembership:          remainingDefinition(KindRemainingMembership),
+	KindRemainingRecommendations:     remainingDefinition(KindRemainingRecommendations),
+	KindRemainingReleaseImpact:       remainingDefinition(KindRemainingReleaseImpact),
+	KindRemainingWorkItemAttribution: remainingDefinition(KindRemainingWorkItemAttribution),
 	KindSyncProviderUnit: {
 		Kind:              KindSyncProviderUnit,
 		CurrentVersion:    ContractVersionV1,
@@ -567,7 +569,8 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		payload = value
 	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
 		KindRemainingMembership,
-		KindRemainingRecommendations, KindRemainingReleaseImpact:
+		KindRemainingRecommendations, KindRemainingReleaseImpact,
+		KindRemainingWorkItemAttribution:
 		var value RemainingMetricsPartitionPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
 			return Envelope{}, fmt.Errorf("decode remaining metrics payload: %w", err)
@@ -845,7 +848,8 @@ func remainingKind(kind string) bool {
 	switch kind {
 	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
 		KindRemainingMembership,
-		KindRemainingRecommendations, KindRemainingReleaseImpact:
+		KindRemainingRecommendations, KindRemainingReleaseImpact,
+		KindRemainingWorkItemAttribution:
 		return true
 	default:
 		return false

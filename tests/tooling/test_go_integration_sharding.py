@@ -1613,7 +1613,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestDriftGuardReadsEveryDeclKindItClaims, red on the old filter (verified by
     # mutation: WiredThing/SomeVar/SomeConst all report "is NOT read"). Parses
     # source only, so the integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1318
+    # CHAOS-3092 PR-B, red-first diagnosis of a live worker crash
+    # (worker_family_composition_failed): TestJobKindForFamilyCoversEveryRegisteredFamily
+    # (internal/jobs/metrics/remaining), the recurrence guard for the missing
+    # familyJobKinds entry that caused it. +1 ordinary test (1318 -> 1319).
+    # The other new test this round, TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse
+    # (cmd/dev-health-worker), is `-tags=integration`, so it does not touch this
+    # count -- the integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1319
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1630,7 +1637,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1318
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1319
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1707,7 +1714,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1318
+    assert len(selected_tests) == len(set(selected_tests)) == 1319
     assert set(selected_tests) == expected_tests
 
 

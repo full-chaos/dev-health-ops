@@ -35,6 +35,7 @@ KIND_REMAINING_DORA = "metrics.remaining.dora"
 KIND_REMAINING_MEMBERSHIP = "metrics.remaining.membership_backfill"
 KIND_REMAINING_RECOMMENDATIONS = "metrics.remaining.recommendations"
 KIND_REMAINING_RELEASE_IMPACT = "metrics.remaining.release_impact"
+KIND_REMAINING_WORK_ITEM_ATTRIBUTION = "metrics.remaining.work_item_attribution"
 KIND_SYNC_PROVIDER_UNIT = "sync.provider_unit"
 RETENTION_WORKER_TERMINAL = "worker_job_terminal"
 # Retention policies are table-scoped: each names exactly one operational
@@ -294,6 +295,15 @@ class RemainingReleaseImpactPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class RemainingWorkItemAttributionPayload:
+    KIND: ClassVar[str] = KIND_REMAINING_WORK_ITEM_ATTRIBUTION
+    CONTRACT_VERSION: ClassVar[int] = CONTRACT_VERSION_V1
+    DOMAIN_TYPE: ClassVar[str] = "remaining_metric_partition"
+
+    partition_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderUnitPayload:
     """ID-only request to execute one authoritative SyncRunUnit."""
 
@@ -328,6 +338,7 @@ JobPayload: TypeAlias = (
     | RemainingMembershipPayload
     | RemainingRecommendationsPayload
     | RemainingReleaseImpactPayload
+    | RemainingWorkItemAttributionPayload
     | ProviderUnitPayload
 )
 

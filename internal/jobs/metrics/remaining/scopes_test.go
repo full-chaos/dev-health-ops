@@ -8,12 +8,13 @@ import (
 
 func TestFamilyScopesCanonicalizeProductionDerivedInputs(t *testing.T) {
 	tests := map[string]string{
-		"capacity":            `{"simulations":10000,"history_days":90,"all_teams":true,"version":1}`,
-		"complexity":          `{"version":1,"day":"2026-07-23","backfill_days":1}`,
-		"dora":                `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","interval":"daily"}`,
-		"release_impact":      `{"version":1,"day":"2026-07-23","backfill_days":1,"recomputation_window_days":7}`,
-		"recommendations":     `{"version":1,"window":14}`,
-		"membership_backfill": `{"version":1,"repo_ids":[]}`,
+		"capacity":              `{"simulations":10000,"history_days":90,"all_teams":true,"version":1}`,
+		"complexity":            `{"version":1,"day":"2026-07-23","backfill_days":1}`,
+		"dora":                  `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","interval":"daily"}`,
+		"release_impact":        `{"version":1,"day":"2026-07-23","backfill_days":1,"recomputation_window_days":7}`,
+		"recommendations":       `{"version":1,"window":14}`,
+		"membership_backfill":   `{"version":1,"repo_ids":[]}`,
+		"work_item_attribution": `{"version":1,"org_wide":true}`,
 	}
 	for family, raw := range tests {
 		t.Run(family, func(t *testing.T) {
@@ -36,6 +37,14 @@ func TestFamilyScopesRejectUnknownFieldsAndBounds(t *testing.T) {
 		{"membership_backfill", `{"version":1,"command":"bad"}`},
 		{"membership_backfill", `{"version":1,"repo_ids":["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]}`},
 		{"membership_backfill", `{"version":1,"repo_ids":["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]}`},
+		// org_wide=true combined with a scoped list is a contradiction --
+		// the two are mutually exclusive by design (a repo/project change
+		// scopes to that repo/project, an identities/teams change is
+		// org-wide, never both in one partition).
+		{"work_item_attribution", `{"version":1,"org_wide":true,"repo_ids":["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]}`},
+		// Neither a scope nor org_wide set: nothing for this partition to do.
+		{"work_item_attribution", `{"version":1}`},
+		{"work_item_attribution", `{"version":1,"repo_ids":["not-a-uuid"]}`},
 	} {
 		if _, err := validateFamilyScope(test.family, json.RawMessage(test.raw)); err == nil {
 			t.Fatalf("%s accepted %s", test.family, test.raw)

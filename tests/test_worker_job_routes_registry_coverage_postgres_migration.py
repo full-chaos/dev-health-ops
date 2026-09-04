@@ -1,7 +1,30 @@
-"""PostgreSQL proof for the active-sync-run terminal-repair index."""
+"""PostgreSQL proof that every registered job kind has a worker_job_routes row.
+
+CHAOS-3092 PR-B regression: metrics.remaining.work_item_attribution was added
+to contracts/jobs/v1/registry.json (and migration-state.json, as
+celery_removed/river/none -- Go-native from birth, no Celery predecessor) but
+never got its own worker_job_routes seed row, unlike every other kind in that
+same shape (system.sync_coverage_refresh via alembic 0094,
+sync.team_repo_ownership_derivation via alembic 0115). internal/jobroute's
+Controller.DeferredKinds iterates every registered kind and queries
+worker_job_routes for each one on every reconciler step (including the
+first, at process startup); a kind with no row there fails the WHOLE step
+instantly with jobroute.ErrUnknownRoute -> joboutbox.ErrUnavailable -- a
+crash with no Postgres-side error to find, because a zero-row SELECT isn't
+one. 0123 fixed this kind; this test is the recurrence guard so the next
+native-from-birth kind fails loudly here instead of live in a reconciler.
+
+Migrations 0064 (baseline seed) and 0066 (River activation) only cover the
+legacy checked-in kind list frozen at their own revision -- deliberately not
+kept in sync with the live registry (test_worker_job_route_baseline_migration.py
+pins that). A kind added after 0066 needs its OWN one-row seed migration,
+same pattern as 0094/0115/0123, and this test is what catches a kind that
+never got one.
+"""
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections.abc import Iterator
@@ -16,8 +39,9 @@ from sqlalchemy.engine import Engine, make_url
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
-_TABLE = "sync_runs"
-_INDEX = "ix_sync_runs_status_id"
+_REGISTRY_PATH = (
+    Path(__file__).parents[1] / "contracts" / "jobs" / "v1" / "registry.json"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +56,7 @@ def _migration_config() -> Config:
 
 
 @pytest.fixture
-def migrated_to_0100(
+def migrated_to_application_schema_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[PostgresMigrationHarness]:
     configured_uri = os.environ.get(_POSTGRES_URI_ENV)
@@ -47,13 +71,14 @@ def migrated_to_0100(
     if configured_url.get_backend_name() != "postgresql":
         pytest.fail(f"{_POSTGRES_URI_ENV} must use PostgreSQL")
 
-    database_name = f"test_chaos_3792_{uuid.uuid4().hex}"
+    database_name = f"test_chaos_3092_worker_job_routes_{uuid.uuid4().hex}"
     admin_engine = sa.create_engine(
         configured_url.set(drivername="postgresql+psycopg2", database="postgres"),
         isolation_level="AUTOCOMMIT",
     )
     database_created = False
     engine: Engine | None = None
+
     try:
         with admin_engine.connect() as connection:
             connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
@@ -68,7 +93,7 @@ def migrated_to_0100(
         )
         monkeypatch.delenv("MIGRATION_DATABASE_URI", raising=False)
         monkeypatch.delenv("MIGRATION_DATABASE_URI_FILE", raising=False)
-        command.upgrade(_migration_config(), "0100")
+        command.upgrade(_migration_config(), "application_schema@head")
 
         engine = sa.create_engine(
             configured_url.set(
@@ -97,43 +122,36 @@ def migrated_to_0100(
         admin_engine.dispose()
 
 
-def _revisions(engine: Engine) -> set[str]:
+def _registry_kinds() -> set[str]:
+    registry = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
+    return {job["kind"] for job in registry["jobs"]}
+
+
+def _seeded_route_kinds(engine: Engine) -> set[str]:
     with engine.connect() as connection:
         return {
             str(row[0])
             for row in connection.execute(
-                sa.text("SELECT version_num FROM alembic_version")
+                sa.text("SELECT job_kind FROM worker_job_routes")
             )
         }
 
 
-def _indexes(engine: Engine) -> dict[str, tuple[str, ...]]:
-    return {
-        str(index["name"]): tuple(str(column) for column in index["column_names"])
-        for index in sa.inspect(engine).get_indexes(_TABLE)
-    }
-
-
-def test_0101_adds_the_deployed_active_sync_run_access_path(
-    migrated_to_0100: PostgresMigrationHarness,
+def test_every_registry_kind_has_a_worker_job_routes_row(
+    migrated_to_application_schema_head: PostgresMigrationHarness,
 ) -> None:
-    assert _INDEX not in _indexes(migrated_to_0100.engine)
+    registry_kinds = _registry_kinds()
+    seeded_kinds = _seeded_route_kinds(migrated_to_application_schema_head.engine)
 
-    command.upgrade(_migration_config(), "0101")
-
-    assert _indexes(migrated_to_0100.engine)[_INDEX] == ("status", "id")
-    assert _revisions(migrated_to_0100.engine) == {"0101"}
-
-
-def test_0101_downgrade_and_application_head_reupgrade_converge(
-    migrated_to_0100: PostgresMigrationHarness,
-) -> None:
-    command.upgrade(_migration_config(), "0101")
-    command.downgrade(_migration_config(), "0100")
-
-    assert _INDEX not in _indexes(migrated_to_0100.engine)
-    assert _revisions(migrated_to_0100.engine) == {"0100"}
-
-    command.upgrade(_migration_config(), "application_schema@head")
-    assert _indexes(migrated_to_0100.engine)[_INDEX] == ("status", "id")
-    assert _revisions(migrated_to_0100.engine) == {"0123"}
+    missing = registry_kinds - seeded_kinds
+    assert not missing, (
+        "contracts/jobs/v1/registry.json kind(s) with no worker_job_routes row "
+        f"after the full application_schema migration chain: {sorted(missing)}. "
+        "internal/jobroute.Controller.DeferredKinds queries this table for every "
+        "registered kind on every reconciler step -- a missing row fails the "
+        "whole step instantly (CHAOS-3092 PR-B's live reconciler crash). Add a "
+        "dedicated one-row seed migration for the missing kind(s), same pattern "
+        "as 0094 (system.sync_coverage_refresh), 0115 "
+        "(sync.team_repo_ownership_derivation), or 0123 "
+        "(metrics.remaining.work_item_attribution)."
+    )

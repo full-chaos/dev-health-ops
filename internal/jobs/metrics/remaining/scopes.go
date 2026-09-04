@@ -61,6 +61,19 @@ type membershipScope struct {
 	RepoIDs []string `json:"repo_ids,omitempty"`
 }
 
+// workItemAttributionScope is the daily backstop's affected set (CHAOS-3092
+// PR-B): a repo-ownership change scopes to that repo's items, a
+// project-ownership change scopes to that project's items -- both may be
+// non-empty together in one partition -- and an identities/teams (admin
+// membership) change is always OrgWide, mutually exclusive with both lists
+// (team = ownership; admin membership has no single-repo/project scope).
+type workItemAttributionScope struct {
+	Version     int      `json:"version"`
+	RepoIDs     []string `json:"repo_ids,omitempty"`
+	ProjectKeys []string `json:"project_keys,omitempty"`
+	OrgWide     bool     `json:"org_wide,omitempty"`
+}
+
 func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, error) {
 	switch family {
 	case "capacity":
@@ -115,6 +128,19 @@ func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, e
 		}
 		if value.Version != ScopeVersion || len(value.RepoIDs) > 256 || !allUUID(value.RepoIDs) {
 			return nil, errors.New("invalid membership scope")
+		}
+		return json.Marshal(value)
+	case "work_item_attribution":
+		var value workItemAttributionScope
+		if err := strictScope(raw, &value); err != nil {
+			return nil, err
+		}
+		if value.Version != ScopeVersion ||
+			(value.OrgWide && (len(value.RepoIDs) > 0 || len(value.ProjectKeys) > 0)) ||
+			(!value.OrgWide && len(value.RepoIDs) == 0 && len(value.ProjectKeys) == 0) ||
+			len(value.RepoIDs) > 256 || !allUUID(value.RepoIDs) ||
+			!boundedStrings(value.ProjectKeys, 256, 256) {
+			return nil, errors.New("invalid work item attribution scope")
 		}
 		return json.Marshal(value)
 	}

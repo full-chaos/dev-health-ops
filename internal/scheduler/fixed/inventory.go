@@ -194,6 +194,31 @@ func checkedInSchedules() []Schedule {
 				"materializer. Cheap enough that catching up a missed night is correct.",
 		},
 		{
+			ID: "work_item_attribution_daily_fanout",
+			// CHAOS-3092 PR-B: the daily backstop for work_item_team_attributions
+			// has no legacy Beat entry (the retired Python sweep ran
+			// unconditionally on every item, every day, with no schedule of its
+			// own beyond the daily metrics dispatch) -- Native with no
+			// LegacyBeatEntry, the same shape as dora_daily_fanout. Without this
+			// schedule the kind is never enqueued in production: it has no
+			// post-sync trigger either (unlike dora/membership_backfill), so a
+			// missing fanout here means the staleness window the sync-time
+			// deriver's incremental watermark leaves open never gets closed.
+			Native:           true,
+			Cadence:          DailyAt(2, 30),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpBounded,
+			UniquenessWindow: 25 * time.Hour,
+			TargetKind:       jobcontract.KindRemainingWorkItemAttribution,
+			ProducerID:       ProducerRemainingMetricsFanout,
+			MaxAttempts:      3,
+			AlertThreshold:   25 * time.Hour,
+			Rationale: "CHAOS-3092 PR-B's only trigger. detectScope's own watermark " +
+				"comparison (not this schedule) decides what actually gets rederived each " +
+				"run, so a missed night just means a wider staleness window next run, not " +
+				"lost data -- the same self-healing shape as its remaining-metrics siblings.",
+		},
+		{
 			ID: "capacity_forecast_weekly_fanout",
 			// CHAOS-4026 (2026-08-21): the legacy Beat entry "run-capacity-forecast"
 			// (and its dispatch_capacity_forecast/run_capacity_forecast_job Celery

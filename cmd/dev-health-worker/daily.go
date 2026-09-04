@@ -36,8 +36,10 @@ const metricsQueue = "metrics"
 // passing every unit test (those construct *jobruntime.MetricsCollector
 // directly, never wrapped). Round-2 codex finding, #2173 (same class, this
 // PR): the recommendations readiness wiring had the identical bare-assertion
-// gap. Extracted here so the resolution logic itself is unit-testable
-// without constructing the rest of buildDailyWorker's dependencies.
+// gap. work_item_attribution (CHAOS-3092 PR-B) uses this helper from the
+// start rather than risk being the third instance found the hard way.
+// Extracted here so the resolution logic itself is unit-testable without
+// constructing the rest of buildDailyWorker's dependencies.
 func metricsCollectorFromObserver(observer jobruntime.Observer) *jobruntime.MetricsCollector {
 	if collector, ok := observer.(*jobruntime.MetricsCollector); ok {
 		return collector
@@ -510,6 +512,57 @@ func buildDailyWorker(
 			}
 		}
 
+		// CHAOS-3092 PR-B: the work_item_attribution backstop kind computes
+		// natively too -- the staleness-window backstop for the sync-time
+		// deriver's incremental watermark, scoped to the affected
+		// repo/project/org (see WorkItemAttributionExecutor.ComputeOrg's doc
+		// comment). Same per-kind refusal discipline as dora/capacity above.
+		var workItemAttributionExecutor *remaining.WorkItemAttributionExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingWorkItemAttribution
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			workItemAttributionWriter, workItemAttributionWriterErr := remaining.NewWorkItemAttributionClickHouseWriter(metricsClickHouse)
+			var executor *remaining.WorkItemAttributionExecutor
+			var executorErr error
+			if workItemAttributionWriterErr != nil {
+				executorErr = workItemAttributionWriterErr
+			} else {
+				executor, executorErr = remaining.NewWorkItemAttributionExecutor(
+					context.Background(), metricsClickHouse, workItemAttributionWriter,
+				)
+			}
+			if executorErr != nil {
+				logger.Error(
+					"work item attribution backstop native executor refused; "+
+						"the kind will not be served and its partitions will "+
+						"accumulate unclaimed. Every other remaining kind is "+
+						"unaffected.",
+					"error", executorErr,
+					"reason", workItemAttributionRefusalReason(executorErr),
+				)
+				if refusalObserver, ok := observer.(workItemAttributionRefusalObserver); ok {
+					_ = refusalObserver.ObserveWorkItemAttributionRefused(
+						workItemAttributionRefusalReason(executorErr))
+				}
+			} else {
+				if collector := metricsCollectorFromObserver(observer); collector != nil {
+					executor.SetObserver(remaining.CollectorWorkItemAttributionObserver{Collector: collector})
+				}
+				executor.SetLogger(logger)
+				workItemAttributionExecutor = executor
+			}
+		}
+
 		for _, spec := range remainingSpecs {
 			family := remainingFamilies[spec.Kind]
 			var registeredSpec jobruntime.HandlerSpec
@@ -569,6 +622,16 @@ func buildDailyWorker(
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
 					workers, registry, spec, store, compatibility, dependencies, family.Name,
 				)
+			case jobcontract.KindRemainingWorkItemAttribution:
+				if workItemAttributionExecutor == nil {
+					// Refused above. Skip rather than register a handler
+					// around a nil executor, which would claim partitions
+					// and fail each one -- same discipline as dora/capacity.
+					continue
+				}
+				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingWorkItemAttributionArgs](
+					workers, registry, spec, store, workItemAttributionExecutor, dependencies, family.Name,
+				)
 			default:
 				registrationErr = errWorkerDependencyUnavailable
 			}
@@ -576,6 +639,7 @@ func buildDailyWorker(
 				if metricsClickHouse != nil {
 					_ = metricsClickHouse.Close()
 				}
+				logger.Error("remaining kind registration failed", "kind", spec.Kind, "error", registrationErr)
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, registeredSpec)
@@ -829,8 +893,11 @@ func addRemainingWorker[T jobruntime.ContractArgs](
 		return jobruntime.HandlerSpec{}, err
 	}
 	adapter, err := jobruntime.NewAdapter[T](registry, spec, handler, dependencies)
-	if err != nil || river.AddWorkerSafely(workers, adapter) != nil {
-		return jobruntime.HandlerSpec{}, errWorkerDependencyUnavailable
+	if err != nil {
+		return jobruntime.HandlerSpec{}, err
+	}
+	if addErr := river.AddWorkerSafely(workers, adapter); addErr != nil {
+		return jobruntime.HandlerSpec{}, addErr
 	}
 	return adapter.Spec(), nil
 }
@@ -880,6 +947,32 @@ func capacityRefusalReason(err error) string {
 		return jobruntime.CapacityRefusedSchemaIncompatible
 	}
 	return jobruntime.CapacityRefusedInspectFailed
+}
+
+// workItemAttributionRefusalObserver is the narrow capability the
+// work_item_attribution backstop cutover needs to make a refusal visible,
+// kept local so a collector without it degrades to log-only rather than
+// failing the build.
+type workItemAttributionRefusalObserver interface {
+	ObserveWorkItemAttributionRefused(reason string) error
+}
+
+// workItemAttributionRefusalReason maps a construction error onto the closed
+// label set. The three are distinguished because they call for different
+// actions: an unavailable ClickHouse connection is transient and self-heals,
+// a missing writer is a wiring bug in THIS file (never a database fault),
+// and an incompatible schema means finish or roll back a migration.
+func workItemAttributionRefusalReason(err error) string {
+	switch {
+	case errors.Is(err, remaining.ErrWorkItemAttributionUnavailable):
+		return jobruntime.WorkItemAttributionRefusedUnavailable
+	case errors.Is(err, remaining.ErrWorkItemAttributionWriterUnavailable):
+		return jobruntime.WorkItemAttributionRefusedWriterUnavailable
+	case errors.Is(err, remaining.ErrWorkItemAttributionSchemaIncompatible):
+		return jobruntime.WorkItemAttributionRefusedSchemaIncompatible
+	default:
+		return jobruntime.WorkItemAttributionRefusedInspectFailed
+	}
 }
 
 // recommendationsRefusalObserver is the narrow capability the recommendations

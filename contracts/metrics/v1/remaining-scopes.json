@@ -73,6 +73,19 @@
         "version": 1
       },
       "canonical": "{\"repo_ids\":[\"55555555-5555-4555-8555-555555555555\",\"66666666-6666-4666-8666-666666666666\"],\"version\":1}"
+    },
+    {
+      "family": "work_item_attribution",
+      "input": {
+        "repo_ids": [
+          "77777777-7777-4777-8777-777777777777"
+        ],
+        "project_keys": [
+          "PROJ-1"
+        ],
+        "version": 1
+      },
+      "canonical": "{\"project_keys\":[\"PROJ-1\"],\"repo_ids\":[\"77777777-7777-4777-8777-777777777777\"],\"version\":1}"
     }
   ]
 }

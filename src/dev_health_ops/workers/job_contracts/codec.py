@@ -56,6 +56,7 @@ from .models import (
     RemainingMembershipPayload,
     RemainingRecommendationsPayload,
     RemainingReleaseImpactPayload,
+    RemainingWorkItemAttributionPayload,
     RetentionCleanupPayload,
     ScheduledReportExecutionPayload,
     SyncCoverageRefreshPayload,
@@ -83,6 +84,7 @@ _REMAINING_PAYLOAD_TYPES = (
     RemainingMembershipPayload,
     RemainingRecommendationsPayload,
     RemainingReleaseImpactPayload,
+    RemainingWorkItemAttributionPayload,
 )
 _REMAINING_PAYLOAD_BY_KIND = {
     payload_type.KIND: payload_type for payload_type in _REMAINING_PAYLOAD_TYPES
@@ -610,6 +612,7 @@ def _decode_remaining_partition(
         | RemainingMembershipPayload
         | RemainingRecommendationsPayload
         | RemainingReleaseImpactPayload
+        | RemainingWorkItemAttributionPayload
     ],
 ) -> JobPayload:
     payload = _expect_object(

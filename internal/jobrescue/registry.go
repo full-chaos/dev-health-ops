@@ -141,6 +141,8 @@ func registerKind(workers *river.Workers, kind string, descriptor jobruntime.Des
 		return add[jobruntime.RemainingRecommendationsArgs](workers, descriptor)
 	case jobcontract.KindRemainingReleaseImpact:
 		return add[jobruntime.RemainingReleaseImpactArgs](workers, descriptor)
+	case jobcontract.KindRemainingWorkItemAttribution:
+		return add[jobruntime.RemainingWorkItemAttributionArgs](workers, descriptor)
 	case jobcontract.KindBillingNotification:
 		return add[jobruntime.BillingNotificationArgs](workers, descriptor)
 	case jobcontract.KindWebhookDelivery:

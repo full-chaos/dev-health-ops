@@ -35,6 +35,38 @@ func testPublisher(t *testing.T) *PostgresPublisher {
 	return &PostgresPublisher{producer: producer, registry: registry}
 }
 
+// TestJobKindForFamilyCoversEveryRegisteredFamily is the CHAOS-4993
+// recurrence guard: familyJobKinds is a fourth hardcoded family->kind table,
+// separate from families.json, registry.json, migration-state.json and the
+// Python job_contracts mirror, and nothing enforced that a new family's entry
+// landed here too. Its absence for "work_item_attribution" made
+// NewPartitionHandler refuse with ErrUnavailable for every partition of that
+// kind, which daily.go's registration loop turned into a full "daily" family
+// composition failure (worker_family_composition_failed) instead of a
+// graceful per-kind skip -- reproduced live against a migrated ClickHouse in
+// TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse. This test
+// needs no database or container: it walks the real families.json inventory
+// and asserts JobKindForFamily resolves every entry to its registered kind.
+func TestJobKindForFamilyCoversEveryRegisteredFamily(t *testing.T) {
+	inventory, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Families) == 0 {
+		t.Fatal("families.json produced no families -- test would pass vacuously")
+	}
+	for _, family := range inventory.Families {
+		kind, ok := JobKindForFamily(family.Name)
+		if !ok {
+			t.Errorf("familyJobKinds has no entry for family %q (route_key %q)", family.Name, family.RouteKey)
+			continue
+		}
+		if kind != family.RouteKey {
+			t.Errorf("familyJobKinds[%q] = %q, want %q (families.json's route_key)", family.Name, kind, family.RouteKey)
+		}
+	}
+}
+
 // TestPublishPartitionTxWrapsNonContractProducerErrorCause is the CHAOS-3905
 // regression test: a producer error that is NOT a contract/policy rejection
 // (e.g. the outbox write itself failing) must still surface its cause,

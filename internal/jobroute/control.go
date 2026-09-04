@@ -6,6 +6,7 @@ package jobroute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -111,7 +112,16 @@ func (controller *Controller) DeferredKinds(ctx context.Context) ([]string, erro
 	for _, descriptor := range descriptors {
 		transport, err := controller.Resolve(ctx, descriptor.Kind)
 		if err != nil {
-			return nil, err
+			// CHAOS-4993: this loop's own iteration is the only place that
+			// knows WHICH kind failed -- joboutbox.Relay.Step collapses
+			// whatever comes back here into its own bare ErrUnavailable
+			// sentinel (a caller checks errors.Is against that, not this
+			// package's own errors), so the kind name has to survive that
+			// collapse via the error text itself or it's gone. A kind with
+			// no worker_job_routes row (a native-from-birth kind whose own
+			// seed migration -- 0094, 0115, 0123 -- was never written) hits
+			// this exact path with ErrUnknownRoute.
+			return nil, fmt.Errorf("resolve route for kind %q: %w", descriptor.Kind, err)
 		}
 		if transport == "celery" {
 			deferred = append(deferred, descriptor.Kind)

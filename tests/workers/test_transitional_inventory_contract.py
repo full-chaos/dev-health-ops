@@ -85,7 +85,12 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # = 100, + 1 added under CHAOS-4365 item 1b: the new
     # sync.team_repo_ownership_derivation registry_kind row (native Go
     # post-sync Fanout writer, no Celery predecessor).
-    assert inventory["row_count"] == 101
+    # = 101, + 1 added under CHAOS-3092 PR-B: the new
+    # metrics.remaining.work_item_attribution registry_kind row (native Go
+    # daily backstop, no Celery predecessor) -- every registry_kind row from
+    # operational.billing_notification onward re-anchored +32 lines to match
+    # the new kind's own object shifting registry.json.
+    assert inventory["row_count"] == 102
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

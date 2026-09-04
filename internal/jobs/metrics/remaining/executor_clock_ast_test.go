@@ -112,10 +112,15 @@ func TestNoRawClockCallSitesOutsideTheAccessor(t *testing.T) {
 // filename alone (`filepath.Base(path) == "executor_clock.go"`), so a THIRD
 // function added to that same file, reading executor.nowUTC() directly,
 // would bypass nowOrRefuse() while the guard stayed green. Narrowing to the
-// two specific method declarations closes that hole, and it also closes the
+// specific method declarations below closes that hole, and it also closes the
 // round's second finding for free: there is no longer a file-level boolean
 // to flip into "classify every file as the accessor" -- that mutation has
 // nothing left to mutate.
+//
+// WorkItemAttributionExecutor (CHAOS-3092 PR-B) added a THIRD exempt type,
+// living in its own file rather than executor_clock.go -- the exemption is
+// keyed on the method's receiver type and name, not on which file declares
+// it, so this needed no change beyond the type list below.
 //
 // TestClockGuardCatchesAHelperAddedToTheAccessorFile is the negative fixture
 // proving this.
@@ -135,7 +140,9 @@ func isNowOrRefuseAccessor(decl ast.Decl) bool {
 	if !ok {
 		return false
 	}
-	return ident.Name == "DORAExecutor" || ident.Name == "CapacityExecutor" || ident.Name == "RecommendationsExecutor" || ident.Name == "MembershipExecutor"
+	return ident.Name == "DORAExecutor" || ident.Name == "CapacityExecutor" ||
+		ident.Name == "WorkItemAttributionExecutor" || ident.Name == "RecommendationsExecutor" ||
+		ident.Name == "MembershipExecutor"
 }
 
 // findNowUTCReferences walks every top-level declaration in every file,

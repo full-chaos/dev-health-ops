@@ -286,6 +286,20 @@ func (args RemainingReleaseImpactArgs) ContractEnvelope() jobcontract.Envelope {
 	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
 }
 
+type RemainingWorkItemAttributionArgs struct {
+	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
+}
+
+func (RemainingWorkItemAttributionArgs) Kind() string {
+	return jobcontract.KindRemainingWorkItemAttribution
+}
+func (RemainingWorkItemAttributionArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+func (args RemainingWorkItemAttributionArgs) ContractEnvelope() jobcontract.Envelope {
+	return remainingEnvelope(args.EnvelopeArgs, args.Kind())
+}
+
 func remainingEnvelope(
 	args EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload],
 	kind string,

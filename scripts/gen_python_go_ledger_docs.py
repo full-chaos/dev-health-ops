@@ -223,6 +223,16 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "state": "native",
         "ticket": "CHAOS-4282 -- Python `backfill_memberships` (`work_graph/investment/backfill.py:176`) retired to the cutover",
     },
+    "metrics.remaining.work_item_attribution": {
+        "producer": "`internal/scheduler/fixed/inventory.go:197` (work_item_attribution_daily_fanout)",
+        "trigger": "schedule (DailyAt 02:30 UTC) -- no post-sync trigger, this schedule is the only one",
+        "gate": "ClickHouse schema check in `NewWorkItemAttributionExecutor` (`internal/jobs/metrics/remaining/work_item_attribution_native.go:111`)",
+        "writer": "Go `internal/jobs/metrics/remaining/work_item_attribution_write.go:130`",
+        "tables": "`work_item_team_attributions`, `work_item_attribution_backstop_runs`, `work_item_attribution_backstop_scoped_runs`",
+        "evidence": "argued — code read; wired `cmd/dev-health-worker/daily.go:415-464,511-538`",
+        "state": "native",
+        "ticket": "CHAOS-3092 PR-B -- Go-native from birth, no Celery predecessor (retired Python daily sweep unconditionally re-derived every item; this is a scoped staleness-window backstop, not a port)",
+    },
     "metrics.remaining.recommendations": {
         "producer": "`internal/scheduler/fixed/inventory.go:127` (recommendations_daily_fanout)",
         "trigger": "schedule (DailyAt 02:00 UTC, safety net behind a finalize-gated primary trigger)",

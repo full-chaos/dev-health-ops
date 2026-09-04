@@ -218,6 +218,7 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
         "sync.provider_unit",
         "system.sync_coverage_refresh",
         "sync.team_repo_ownership_derivation",
+        "metrics.remaining.work_item_attribution",
     }
     assert by_kind["sync.provider_unit"]["state"] == "canary"
     assert by_kind["sync.provider_unit"]["route"] == "river_canary"
@@ -227,3 +228,12 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
     assert by_kind["sync.team_repo_ownership_derivation"]["state"] == "celery_removed"
     assert by_kind["sync.team_repo_ownership_derivation"]["route"] == "river"
     assert by_kind["sync.team_repo_ownership_derivation"]["rollback_route"] == "none"
+    # CHAOS-3092 PR-B: another Go-native-only kind, post-0066, same
+    # celery_removed/river/none shape as the two above.
+    assert (
+        by_kind["metrics.remaining.work_item_attribution"]["state"] == "celery_removed"
+    )
+    assert by_kind["metrics.remaining.work_item_attribution"]["route"] == "river"
+    assert (
+        by_kind["metrics.remaining.work_item_attribution"]["rollback_route"] == "none"
+    )

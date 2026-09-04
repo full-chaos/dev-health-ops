@@ -87,7 +87,7 @@ FROM (
     FROM git_pull_requests
     WHERE repo_id IN {repo_ids:Array(UUID)}
       AND org_id = {org_id:String}
-    GROUP BY repo_id, number
+    GROUP BY org_id, repo_id, number
 )
 WHERE (tupleElement(latest, 3) >= {start:DateTime64(3, 'UTC')} AND tupleElement(latest, 3) < {end:DateTime64(3, 'UTC')})
    OR (tupleElement(latest, 4) IS NOT NULL
@@ -167,7 +167,7 @@ FROM (
     FROM git_pull_request_reviews
     WHERE repo_id IN {repo_ids:Array(UUID)}
       AND org_id = {org_id:String}
-    GROUP BY repo_id, number, review_id
+    GROUP BY org_id, repo_id, number, review_id
 )
 WHERE tupleElement(latest, 2) >= {start:DateTime64(3, 'UTC')}
   AND tupleElement(latest, 2) < {end:DateTime64(3, 'UTC')}

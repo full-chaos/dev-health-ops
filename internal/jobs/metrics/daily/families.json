@@ -11,7 +11,7 @@
     {"name":"work_item_estimate","python":"compute_estimate_coverage_metrics_daily","writes":["estimate_coverage_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"work_item_attribution","python":"compute_work_item_team_attributions","writes":["work_item_team_attributions"],"port":"pending","golden":"required"},
     {"name":"work_item_state","python":"compute_work_item_state_durations_daily","writes":["work_item_state_durations_daily"],"port":"go","golden":"required","phase":"post_bridge","phase_note":"TEMPORARY (CHAOS-4278/CHAOS-4283): reads work_item_team_attributions, written by the still-Python work_item_attribution family in the SAME partition's compatibility-bridge call. Runs after the bridge so it sees this partition's fresh row, not a stale one (codex round-1 P1). Move back to pre_bridge (or omit the field) once CHAOS-4283 ports work_item_attribution to a native Go executor that precedes work_item_state in the pre_bridge phase."},
-    {"name":"review_edges","python":"compute_review_edges_daily","writes":["review_edges_daily"],"port":"pending","golden":"required"},
+    {"name":"review_edges","python":"compute_review_edges_daily","writes":["review_edges_daily"],"port":"go","golden":"required"},
     {"name":"cicd","python":"compute_cicd_metrics_daily","writes":["cicd_metrics_daily"],"port":"go","golden":"required"},
     {"name":"testops_pipeline","python":"compute_pipeline_metrics_daily","writes":["testops_pipeline_metrics_daily"],"port":"pending","golden":"required"},
     {"name":"testops_test","python":"compute_test_metrics_daily","writes":["testops_test_metrics_daily"],"port":"pending","golden":"required"},

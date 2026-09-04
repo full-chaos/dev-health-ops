@@ -1135,9 +1135,9 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294, and
-    ``compounding_risk`` CHAOS-4287); naming any other family here has no
-    effect.
+    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
+    ``compounding_risk`` CHAOS-4287, and ``review_edges`` CHAOS-4279); naming
+    any other family here has no effect.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -1613,11 +1613,23 @@ async def run_daily_metrics_job(
                 )
             )
 
-        review_edges = compute_review_edges_daily(
-            day=d,
-            pull_request_rows=pr_rows,
-            pull_request_review_rows=review_rows,
-            computed_at=computed_at,
+        # CHAOS-4279: review_edges has a native Go executor
+        # (ReviewEdgesExecutor), registered pre_bridge. When the Go dispatcher
+        # names it in skip_families it has already computed and written this
+        # scope, so skip compute entirely rather than only the write --
+        # nothing else in this function reads review_edges before the write
+        # block, which makes this the cicd/team_wellbeing shape rather than
+        # repo_user_commit's write-only skip.
+        skip_review_edges = "review_edges" in skip_families
+        review_edges = (
+            []
+            if skip_review_edges
+            else compute_review_edges_daily(
+                day=d,
+                pull_request_rows=pr_rows,
+                pull_request_review_rows=review_rows,
+                computed_at=computed_at,
+            )
         )
         # CHAOS-4292: cicd has a native Go executor (CICDExecutor). When the
         # Go dispatcher reports it already computed and wrote this scope,
@@ -1901,7 +1913,8 @@ async def run_daily_metrics_job(
                 s.write_work_item_team_attributions(wi_team_attributions)
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
-            s.write_review_edges(review_edges)
+            if not skip_review_edges:
+                s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
             s.write_testops_pipeline_metrics(testops_pipeline_metrics)
             s.write_testops_test_metrics(testops_test_metrics)

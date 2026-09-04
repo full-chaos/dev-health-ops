@@ -20,6 +20,7 @@ in-process reader to keep alive.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -73,9 +74,20 @@ def _neutralize_finalize(monkeypatch: Any, *, sink: Any, calls: dict[str, int]) 
     monkeypatch.setattr(job_daily, "init_team_resolver", _noop_init_team_resolver)
     monkeypatch.setattr(job_daily, "load_team_map", lambda *a, **k: {})
 
+    # Real dataclasses: run_daily_metrics_finalize calls dataclasses.fields()
+    # on both record types before the IC block, so a plain dict raises
+    # TypeError there and the test never reaches the gate it is about.
+    @dataclass
+    class _UserRecord:
+        day: date | None = None
+
+    @dataclass
+    class _WIRecord:
+        day: date | None = None
+
     class _Deps:
-        user_metrics_daily_record = dict
-        work_item_user_metrics_daily_record = dict
+        user_metrics_daily_record = _UserRecord
+        work_item_user_metrics_daily_record = _WIRecord
 
         async def get_global_client(self, *_: Any, **__: Any) -> Any:
             return object()

@@ -82,74 +82,103 @@ func (r edgeRow) identity() identityKey {
 // are identity columns, stable across duplicate versions of one edge, so
 // filtering on them before the GROUP BY is exact (a duplicate version can
 // never change which identity group a row belongs to).
-// (argMax(tuple(repo_id), last_synced)).1 / (argMax(tuple(provider), ...)).1
-// -- NOT the more obvious argMax(repo_id, last_synced): repo_id and
-// provider are Nullable columns, and ClickHouse's argMax SKIPS rows
-// whose value argument is NULL when selecting the max -- confirmed
-// empirically against this exact ClickHouse version (seeded an older
-// row with a real repo_id and a NEWER row with repo_id=NULL for the
-// same identity: plain argMax(repo_id, last_synced) returned the OLDER
-// non-null UUID, not NULL, silently reviving a stale repo assignment a
-// newer version had cleared). Wrapping the argument in a single-element
-// tuple makes the ARGUMENT itself never null (only its element can be),
-// so argMax stops skipping -- confirmed against the same seed: the
-// tuple form correctly returns NULL for the newer row. Found by codex
-// (2026-08-29, delta round, luna); the specific mechanism (skip-on-null,
-// not merely "the newest wins") was verified live, not assumed, before
-// choosing this fix over some other argMax variant.
+// ONE tupled argMax(tuple(repo_id, provider, provenance, confidence,
+// evidence), last_synced), computed ONCE in a subquery, parts extracted in
+// the outer SELECT (CHAOS-4985, mirroring CHAOS-4924/#2183's fix for the
+// identically-shaped work_graph_issue_pr reader) -- NOT five independent
+// argMax(col, last_synced) calls. Two things this closes at once:
 //
-// toFloat64(argMax(confidence, ...)): work_graph_edges.confidence is
-// Float32 (migration 014_work_graph.sql), and argMax() preserves its
-// input's ClickHouse type -- the native Go driver refuses to scan a
-// Float32 result column into *float64 outright ("converting Float32 to
-// *float64 is unsupported. try using *float32"), found LIVE by this
-// port's own dual-run proof (test_go_api_dual_run_work_graph.py) the
-// first time this query actually ran against a real ClickHouse -- a
-// fake-based unit test cannot catch a driver-level type mismatch, only
-// an executed query against the real schema can. Cast at the query,
-// scan into float64 (edgeRow.confidence's Go type, matching
-// model.WorkGraphEdgeResult.Confidence), never widen the Go struct field
-// to float32 -- every sibling operation in this codebase (hotspots,
-// cognitiveload, complexitytimeseries) already standardizes on float64
-// for score-shaped fields.
+//  1. Nullable-skip (found first, codex 2026-08-29 delta round, luna):
+//     repo_id and provider are Nullable columns, and ClickHouse's argMax
+//     SKIPS rows whose value argument is NULL when selecting the max --
+//     confirmed empirically against this exact ClickHouse version (seeded
+//     an older row with a real repo_id and a NEWER row with repo_id=NULL
+//     for the same identity: plain argMax(repo_id, last_synced) returned
+//     the OLDER non-null UUID, not NULL, silently reviving a stale repo
+//     assignment a newer version had cleared). Wrapping the columns in a
+//     tuple makes the ARGUMENT itself never null (only an element can be),
+//     so argMax stops skipping -- confirmed against the same seed.
+//  2. Hybrid-row on a last_synced TIE (found second, codex round 1 on
+//     #2183/CHAOS-4924, same defect class in a sibling reader): two
+//     unmerged rows can share the exact same last_synced to the
+//     millisecond -- e.g. a batch write stamping one captured timestamp
+//     across multiple edges. ClickHouse documents argMax's tie-break as
+//     implementation-defined; FIVE INDEPENDENT argMax calls could each
+//     break that tie differently and return a row that never existed in
+//     any single physical insert (repo_id from one write, confidence from
+//     another). A single five-element tuple picks ONE winning row
+//     atomically -- still not guaranteed to match a hypothetical FINAL's
+//     own physical insertion-order tie-break under an exact tie (this
+//     reader has no FINAL counterpart to diverge from, unlike #2183's,
+//     since Python's own read here is also un-deduped -- see this
+//     function's own doc comment above), but it guarantees the result is
+//     always a row that actually existed.
+//
+// toFloat64(winner.4): work_graph_edges.confidence is Float32 (migration
+// 014_work_graph.sql), and argMax() preserves its input's ClickHouse type
+// -- the native Go driver refuses to scan a Float32 result column into
+// *float64 outright ("converting Float32 to *float64 is unsupported. try
+// using *float32"), found LIVE by this port's own dual-run proof
+// (test_go_api_dual_run_work_graph.py) the first time this query actually
+// ran against a real ClickHouse -- a fake-based unit test cannot catch a
+// driver-level type mismatch, only an executed query against the real
+// schema can. Cast at the query, scan into float64 (edgeRow.confidence's
+// Go type, matching model.WorkGraphEdgeResult.Confidence), never widen the
+// Go struct field to float32 -- every sibling operation in this codebase
+// (hotspots, cognitiveload, complexitytimeseries) already standardizes on
+// float64 for score-shaped fields.
 func fetchDedupedEdgeRows(ctx context.Context, client QueryClient, orgID string, scope *filterScope, limit int) ([]edgeRow, error) {
 	// includeRepoFilter=false: this query argMax-collapses repo_id, so
-	// the repo filter is applied AFTER the GROUP BY (HAVING, below) --
-	// see buildWorkGraphWhere's doc comment for why filtering the raw
-	// pre-collapse repo_id column here would be wrong (codex, 2026-08-29
-	// delta round).
+	// the repo filter is applied AFTER the GROUP BY (in the outer WHERE,
+	// below) -- see buildWorkGraphWhere's doc comment for why filtering
+	// the raw pre-collapse repo_id column here would be wrong (codex,
+	// 2026-08-29 delta round).
 	where := buildWorkGraphWhere(orgID, scope, true, false)
 
-	havingSQL := ""
+	outerFilterSQL := ""
 	if where.repoHavingSQL != "" {
-		// References the SELECT-level `repo_id` alias below, NOT
-		// argMax(repo_id, ...) again -- re-aggregating a raw column in
-		// HAVING raises ClickHouse error 184 ILLEGAL_AGGREGATION (the
-		// same trap work_graph/investment/queries.py's own HAVING
-		// documents).
-		havingSQL = "HAVING " + where.repoHavingSQL
+		// References the OUTER SELECT's `repo_id` alias (extracted from
+		// the tupled winner below), not a raw column or another
+		// aggregate -- the outer query no longer aggregates at all
+		// (CHAOS-4985: the tupled argMax moved the GROUP BY into the
+		// subquery), so this is a plain WHERE, not HAVING.
+		outerFilterSQL = "WHERE " + where.repoHavingSQL
 	}
 
+	// One tupled argMax(tuple(repo_id, provider, provenance, confidence,
+	// evidence), last_synced), computed ONCE in the subquery, parts
+	// extracted in the outer SELECT -- see this function's doc comment
+	// above (CHAOS-4985) for why five independent argMax calls is wrong.
 	query := fmt.Sprintf(`
         SELECT
-            any(edge_id) AS edge_id,
+            edge_id,
             source_type,
             source_id,
             target_type,
             target_id,
             edge_type,
-            ifNull(toString((argMax(tuple(repo_id), last_synced)).1), '') AS repo_id,
-            ifNull((argMax(tuple(provider), last_synced)).1, '') AS provider,
-            argMax(provenance, last_synced) AS provenance,
-            toFloat64(argMax(confidence, last_synced)) AS confidence,
-            argMax(evidence, last_synced) AS evidence
-        FROM work_graph_edges
-        %s
-        GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+            ifNull(toString(winner.1), '') AS repo_id,
+            ifNull(winner.2, '') AS provider,
+            winner.3 AS provenance,
+            toFloat64(winner.4) AS confidence,
+            winner.5 AS evidence
+        FROM (
+            SELECT
+                source_type,
+                source_id,
+                target_type,
+                target_id,
+                edge_type,
+                any(edge_id) AS edge_id,
+                argMax(tuple(repo_id, provider, provenance, confidence, evidence), last_synced) AS winner
+            FROM work_graph_edges
+            %s
+            GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+        )
         %s
         ORDER BY confidence DESC, edge_id ASC
         LIMIT {limit:UInt64}
-    `, where.sql, havingSQL)
+    `, where.sql, outerFilterSQL)
 
 	bindings := append(where.bindings, where.repoBindings...)
 	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: limit})

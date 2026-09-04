@@ -9,8 +9,16 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed):
+  # canonical fleet-wide shape -- group by PR number on pull_request, by
+  # ref on a push to a non-main branch, by commit sha on a push to main or
+  # on merge_group (a commit sha never collides with another commit's, so
+  # main pushes and merge_group entries are never cancelled -- see
+  # go.yml/typecheck.yml/docker-images.yml/arc-runner-image.yml for the
+  # specific incidents this protects). cancel-in-progress cancels a stale
+  # PR re-push and a stale non-main branch push only.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -78,6 +86,18 @@ jobs:
               # (CHAOS-3513 Codex round 2).
               - '.gitignore'
               - '.ignore'
+              # CHAOS-4843, round 2 of #2169's peer review, P2b: this
+              # workflow's own tooling suite carries
+              # test_lefthook_glob_matches_typecheck_relevance_patterns,
+              # which fails loud the moment lefthook.yml's mypy glob
+              # diverges from ci/typecheck_relevance.py's RELEVANT_PATTERNS.
+              # Without this entry, a PR touching ONLY lefthook.yml (e.g.
+              # narrowing that glob, or reverting the mypy command to a bare
+              # `mypy`) got code=false, skipped test-matrix entirely, and
+              # the one guard built to catch exactly that regression never
+              # ran -- the same "the guard's own trigger scope is the gap"
+              # shape as the .gitignore/.ignore entries above.
+              - 'lefthook.yml'
               - 'ruff.toml'
               - '.ruff.toml'
               - 'mypy.ini'

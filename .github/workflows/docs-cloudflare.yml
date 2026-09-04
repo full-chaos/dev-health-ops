@@ -40,8 +40,16 @@ on:
         type: string
 
 concurrency:
-  group: docs-cloudflare-${{ github.event.pull_request.number || github.ref }}-${{ inputs.action || 'preview' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed):
+  # canonical fleet-wide shape -- group by PR number on pull_request, by
+  # ref on a push to a non-main branch, by commit sha on a push to main or
+  # on merge_group (never cancelled -- see go.yml/typecheck.yml/
+  # docker-images.yml/arc-runner-image.yml for the specific incidents this
+  # protects). This workflow has no push trigger today, so only the
+  # pull_request half is reachable; the trailing `inputs.action` segment
+  # (unchanged) keeps preview and build dispatches in separate slots.
+  group: docs-cloudflare-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}-${{ inputs.action || 'preview' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read

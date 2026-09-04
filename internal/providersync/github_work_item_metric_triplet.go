@@ -209,7 +209,7 @@ func buildWorkItemMetricTripletForProvider(
 
 	triplet := workitemmetrics.ComputeDailyTriplet(
 		day, items, transitions,
-		workitemmetrics.AssertAligned(len(rows.WorkItems), len(items), workItemMetricResolver(rows, derived)),
+		workitemmetrics.AssertAligned(workItemMetricSourceIDs(rows), items, workItemMetricResolver(rows, derived)),
 	)
 	return githubWorkItemMetricTriplet{
 		MetricsDaily:     githubWorkItemMetricsDailyRows(triplet.MetricsDaily, computedAt, claim.OrgID),
@@ -240,6 +240,16 @@ func workItemMetricItems(claim Claim, rows githubWorkItemRows) ([]workitemmetric
 		})
 	}
 	return items, nil
+}
+
+// workItemMetricSourceIDs is the source row order AssertAligned checks the
+// projection against, item for item.
+func workItemMetricSourceIDs(rows githubWorkItemRows) []string {
+	ids := make([]string, 0, len(rows.WorkItems))
+	for _, item := range rows.WorkItems {
+		ids = append(ids, item.WorkItemID)
+	}
+	return ids
 }
 
 // workItemMetricResolver runs the live teamattribution cascade LAZILY, once per

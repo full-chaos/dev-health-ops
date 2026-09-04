@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -449,4 +450,51 @@ func checkTimePointer(t *testing.T, label, field string, got, want *time.Time) {
 		return
 	}
 	checkTime(t, label, field, *got, *want)
+}
+
+// TestAssertAlignedRejectsAReorderedProjection is the regression test for
+// codex r1's P2 on the previous version, which compared only cardinality.
+//
+// Equal length is necessary and says nothing about order. A reordered
+// projection resolves each item against another item's attribution -- two real
+// rows, both silently wrong, no error anywhere. This is the exact construction
+// codex supplied.
+func TestAssertAlignedRejectsAReorderedProjection(t *testing.T) {
+	sourceIDs := []string{"A", "B"}
+	reordered := []Item{{WorkItemID: "B"}, {WorkItemID: "A"}}
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal(
+				"AssertAligned accepted a REORDERED projection of equal length. " +
+					"Every resolver answer would attribute one work item using " +
+					"another's ownership -- plausible, non-empty, undetectable output.",
+			)
+		}
+		if message, ok := recovered.(string); ok && !strings.Contains(message, "index 0") {
+			t.Errorf("panic did not name the diverging index: %s", message)
+		}
+	}()
+	AssertAligned(sourceIDs, reordered, func(int) Attribution { return Attribution{} })
+}
+
+// TestAssertAlignedAcceptsAFaithfulProjection is the positive control: without
+// it, a guard that panicked unconditionally would pass the test above and be
+// indistinguishable from a correct one.
+func TestAssertAlignedAcceptsAFaithfulProjection(t *testing.T) {
+	sourceIDs := []string{"A", "B"}
+	faithful := []Item{{WorkItemID: "A"}, {WorkItemID: "B"}}
+	AssertAligned(sourceIDs, faithful, func(int) Attribution { return Attribution{} })
+}
+
+// TestAssertAlignedRejectsALengthMismatch keeps the original cardinality arm
+// covered -- the new identity check must not have replaced it.
+func TestAssertAlignedRejectsALengthMismatch(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("AssertAligned accepted a projection that dropped a row")
+		}
+	}()
+	AssertAligned([]string{"A", "B"}, []Item{{WorkItemID: "A"}}, func(int) Attribution { return Attribution{} })
 }

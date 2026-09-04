@@ -3,8 +3,12 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -250,33 +254,106 @@ func TestWorkItemLoadersShareTheLoadWorkItemsPredicate(t *testing.T) {
 	}
 }
 
-// whereClauseOf extracts the WHERE clause of the single SQL literal inside the
-// named function, normalised to one space-separated line.
+// whereClauseOf extracts the WHERE clause of the SQL actually passed to the
+// query call inside the named function, normalised to one space-separated line.
+//
+// It parses the Go AST and binds extraction to the ARGUMENT of the Query call,
+// rather than scanning the function's source for a raw literal. Codex r1 (P2)
+// showed why the scanning version was not a guard at all: it took the first
+// backtick after the signature, so adding a harmless, used raw-string constant
+// containing the CURRENT correct WHERE clause before the real SQL let the real
+// query regress freely -- the guard would extract the decoy, match, and pass its
+// own fragment checks. A check that can be satisfied by a string that is not the
+// executed query is indistinguishable from no check.
+//
+// Concatenation is handled by folding a BinaryExpr of string literals, since
+// these queries are assembled as `"SELECT " + sharedColumns + " FROM ... WHERE"`.
+// Anything that is not a foldable literal expression fails loudly rather than
+// silently yielding a partial string.
 func whereClauseOf(t *testing.T, fileName, funcName string) string {
 	t.Helper()
-	source, err := os.ReadFile(fileName)
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, fileName, nil, 0)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parse %s: %v", fileName, err)
 	}
-	body := string(source)
-	start := strings.Index(body, "func "+funcName+"(")
-	if start < 0 {
+
+	var target *ast.FuncDecl
+	for _, decl := range parsed.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if ok && function.Name.Name == funcName {
+			target = function
+			break
+		}
+	}
+	if target == nil {
 		t.Fatalf("%s not found in %s", funcName, fileName)
 	}
-	open := strings.Index(body[start:], "`")
-	if open < 0 {
-		t.Fatalf("no raw SQL literal inside %s", funcName)
-	}
-	open += start + 1
-	closing := strings.Index(body[open:], "`")
-	if closing < 0 {
-		t.Fatalf("unterminated SQL literal inside %s", funcName)
-	}
-	query := body[open : open+closing]
 
-	wherePos := strings.Index(query, "WHERE")
-	if wherePos < 0 {
-		t.Fatalf("%s's query has no WHERE clause", funcName)
+	var queries []string
+	ast.Inspect(target, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		// Both the direct `conn.Query(ctx, sql, ...)` shape and the
+		// `remaining.QueryWorkItemDerivationSubjects(ctx, conn, sql, ...)`
+		// helper shape put the SQL in a fixed position; take whichever
+		// argument folds to a string containing WHERE.
+		if selector.Sel.Name != "Query" && !strings.HasPrefix(selector.Sel.Name, "Query") {
+			return true
+		}
+		for _, arg := range call.Args {
+			folded, ok := foldStringExpr(arg)
+			if ok && strings.Contains(folded, "WHERE") {
+				queries = append(queries, folded)
+			}
+		}
+		return true
+	})
+
+	if len(queries) == 0 {
+		t.Fatalf("%s contains no query call whose SQL argument has a WHERE clause", funcName)
 	}
-	return strings.Join(strings.Fields(query[wherePos:]), " ")
+	if len(queries) > 1 {
+		t.Fatalf("%s issues %d WHERE-bearing queries; this guard assumes exactly one", funcName, len(queries))
+	}
+	wherePos := strings.Index(queries[0], "WHERE")
+	return strings.Join(strings.Fields(queries[0][wherePos:]), " ")
+}
+
+// foldStringExpr resolves a string literal, or a `+` chain of them, to its
+// value. A package-qualified constant (remaining.WorkItemDerivationSubjectColumns)
+// cannot be resolved from this file's AST alone; it contributes no WHERE clause,
+// so it folds to an empty string rather than failing the whole extraction.
+func foldStringExpr(expr ast.Expr) (string, bool) {
+	switch node := expr.(type) {
+	case *ast.BasicLit:
+		if node.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(node.Value)
+		if err != nil {
+			return "", false
+		}
+		return value, true
+	case *ast.BinaryExpr:
+		if node.Op != token.ADD {
+			return "", false
+		}
+		left, leftOK := foldStringExpr(node.X)
+		right, rightOK := foldStringExpr(node.Y)
+		if !leftOK && !rightOK {
+			return "", false
+		}
+		return left + right, true
+	case *ast.SelectorExpr, *ast.Ident:
+		return "", true
+	default:
+		return "", false
+	}
 }

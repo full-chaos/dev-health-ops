@@ -121,7 +121,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 			scope.day,
 			projected,
 			workItemMetricsTransitions(transitions),
-			workitemmetrics.AssertAligned(len(sorted), len(projected), workItemMetricsResolver(sorted, attributions)),
+			workitemmetrics.AssertAligned(workItemMetricsSourceIDs(sorted), projected, workItemMetricsResolver(sorted, attributions)),
 		)
 
 		written, err := WriteWorkItemMetricsDaily(
@@ -188,6 +188,16 @@ func sortWorkItemMetricsRows(items []workItemMetricsRow) []workItemMetricsRow {
 	copy(sorted, items)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].WorkItemID < sorted[j].WorkItemID })
 	return sorted
+}
+
+// workItemMetricsSourceIDs is the source row order AssertAligned checks the
+// projection against, item for item.
+func workItemMetricsSourceIDs(rows []workItemMetricsRow) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.WorkItemID)
+	}
+	return ids
 }
 
 func workItemMetricsItems(rows []workItemMetricsRow) []workitemmetrics.Item {

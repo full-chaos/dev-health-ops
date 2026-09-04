@@ -339,6 +339,59 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
             completed_at=_hour(20, 0, 0, 1),
             assignees=["grace"],
         ),
+        # MULTI-ASSIGNEE: first and last identities DIFFER. Without this,
+        # `assignees[0]` and `assignees[-1]` are indistinguishable -- every
+        # other corpus item has zero or one assignee, so a port taking the LAST
+        # assignee passes both the frozen corpus and the live rot guard
+        # (codex r1 P2, proved with `jq '[.items[]|select((.assignees|length)>1)]|length'` -> 0).
+        # Drives user_identity in work_item_user_metrics_daily and assignee in
+        # work_item_cycle_times.
+        _item(
+            "gh:25",
+            project_id="acme/multi",
+            status="done",
+            created_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+            started_at=_hour(2),
+            completed_at=_hour(20),
+            assignees=["ivan", "judy", "ken"],
+            story_points=2.0,
+        ),
+        # DUAL TERMINAL, STRADDLING the window end -- the only shape that
+        # actually discriminates _earliest_utc.
+        #
+        # Measured, not assumed: a first version put both timestamps INSIDE the
+        # day (closed 09:00, completed 21:00) and the mutation "return the first
+        # non-nil instead of the earliest" SURVIVED, because both values are
+        # before `end`, so terminal_at lands on the same side of every
+        # comparison either way. Reaching the arm is not discriminating it --
+        # the same lesson as M6, hit a second time.
+        #
+        # closed_at is INSIDE the window and completed_at is OUTSIDE it, so:
+        #   earliest      -> closed_at  (before end) -> item counts as terminal
+        #   first non-nil -> completed_at (after end) -> item counts as OPEN
+        # which flips wip_count_end_of_day and the estimate-coverage backlog.
+        _item(
+            "gh:26",
+            project_id="acme/dual",
+            status="done",
+            created_at=datetime(2026, 8, 21, tzinfo=timezone.utc),
+            started_at=_hour(3),
+            completed_at=datetime(2026, 8, 25, 6, tzinfo=timezone.utc),
+            closed_at=_hour(9),
+        ),
+        # DUAL TERMINAL, the REVERSE ordering (completed_at earlier). Both
+        # orderings are needed: with only one, a port that always picks
+        # `closed_at` (or always `completed_at`) still matches on the single
+        # case present.
+        _item(
+            "gh:27",
+            project_id="acme/dual",
+            status="done",
+            created_at=datetime(2026, 8, 21, tzinfo=timezone.utc),
+            started_at=_hour(4),
+            completed_at=_hour(8),
+            closed_at=_hour(22),
+        ),
         # OPEN items carrying story_points, in their own scope, so estimate
         # coverage produces a real FRACTION (1/3) rather than only the 0.0 and
         # None a corpus of terminal-or-unestimated items can reach.

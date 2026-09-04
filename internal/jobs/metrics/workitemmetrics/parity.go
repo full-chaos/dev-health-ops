@@ -211,29 +211,46 @@ func maxFloat(left, right float64) float64 {
 }
 
 // AssertAligned pins the Resolver index contract at the point a Resolver is
-// built: it panics unless the caller's source-row count equals the Item count
-// the same projection produced.
+// built: it panics unless the projected Items are the caller's source rows, in
+// the same order, item for item.
 //
-// A panic is the right severity here, and deliberately not an error return.
-// Misalignment means every attribution after the first dropped row is silently
-// WRONG -- items land in another item's team, and the output is plausible,
-// non-empty, and undetectable downstream. There is no partial-credit recovery:
-// a caller that has already mis-projected cannot compute a correct answer from
-// what it holds. Failing loudly at construction converts a silent data-
-// corruption class into an immediate, obviously-attributable crash in the
-// caller's own tests.
+// It compares IDENTITY, not cardinality. The first version compared only
+// len(sourceRows) == len(items), which codex r1 correctly called out as
+// accepting exactly the corruption the guard claims to prevent: a source
+// [A(team-a), B(team-b)] projected as [B, A] has equal counts, passes, and then
+// resolves B against A's attribution and vice versa -- two real rows, both
+// silently wrong, no error anywhere. Equal length is a necessary condition that
+// says nothing about order, and order is the whole contract.
 //
-// It costs one integer comparison per family per repo, so it stays on in
+// A panic is the right severity and deliberately not an error return.
+// Misalignment means every attribution from the first divergence on is WRONG --
+// items land in another item's team, and the output is plausible, non-empty and
+// undetectable downstream. There is no partial-credit recovery: a caller that
+// has already mis-projected cannot compute a correct answer from what it holds.
+// Failing loudly at construction converts a silent data-corruption class into an
+// immediate, obviously-attributable crash in the caller's own tests.
+//
+// Cost is one string compare per item per family per repo, so it stays on in
 // production rather than being test-only.
-func AssertAligned(sourceRows, items int, resolve Resolver) Resolver {
-	if sourceRows != items {
+func AssertAligned(sourceIDs []string, items []Item, resolve Resolver) Resolver {
+	if len(sourceIDs) != len(items) {
 		panic(fmt.Sprintf(
 			"workitemmetrics: Resolver index contract violated -- %d source rows "+
 				"projected to %d items. The projection must be 1:1 and "+
-				"order-preserving; a filtering projection mis-attributes every item "+
-				"after the first dropped row.",
-			sourceRows, items,
+				"order-preserving.",
+			len(sourceIDs), len(items),
 		))
+	}
+	for index := range items {
+		if items[index].WorkItemID != sourceIDs[index] {
+			panic(fmt.Sprintf(
+				"workitemmetrics: Resolver index contract violated at index %d -- "+
+					"source row is %q but the projected item is %q. The projection "+
+					"reordered or substituted rows, so every resolver answer from "+
+					"here on attributes one work item using another's ownership.",
+				index, sourceIDs[index], items[index].WorkItemID,
+			))
+		}
 	}
 	return resolve
 }

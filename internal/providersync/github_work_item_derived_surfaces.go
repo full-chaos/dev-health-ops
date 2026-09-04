@@ -258,7 +258,7 @@ func buildGitHubEstimateCoverageMetricsDaily(
 
 	computed := workitemmetrics.ComputeEstimateCoverage(
 		dayUTC, items,
-		workitemmetrics.AssertAligned(len(rows.WorkItems), len(items), workItemMetricResolver(rows, derived)),
+		workitemmetrics.AssertAligned(workItemMetricSourceIDs(rows), items, workItemMetricResolver(rows, derived)),
 	)
 	stamp := githubWorkItemDerivedStamp(computedAt, githubEstimateCoverageStampPrecision)
 	result := make([]githubEstimateCoverageMetricsDailyRow, 0, len(computed))

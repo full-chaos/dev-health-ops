@@ -303,6 +303,51 @@
 #      wrapper has gotten this far, its own round .log is guaranteed to
 #      exist no matter what happens next.
 #
+# v4.8.6 (2026-09-04, chris's ruling via the GWC session): on bigboy every Go
+# run -- gates, integration suites, launchers, codex clones -- moved to the
+# SHARED caches (GOCACHE=$HOME/.cache/go-build, GOMODCACHE=$HOME/go/pkg/mod),
+# never per-lane/per-round ones, and nothing may ever `go clean` them. This
+# wrapper's own per-round GOCACHE/GOMODCACHE/GOPATH scratch dirs (v4.8.2/
+# v4.8.4 above) were the one place in the fleet still creating fresh
+# throwaway caches on every round -- on Linux ONLY, this wrapper now:
+#
+#   1. Honours the caller's GOCACHE/GOMODCACHE/GOPATH environment values
+#      (the plain Go env vars, not the CODEX_REVIEW_* overrides, though
+#      those still win when set -- see below), defaulting to
+#      $HOME/.cache/go-build, $HOME/go/pkg/mod and $HOME/go respectively --
+#      the exact shared paths the bigboy login shell already exports.
+#      Precedence, highest first: CODEX_REVIEW_GOCACHE/GOMODCACHE/GOPATH
+#      (explicit per-call override, unchanged from v4.8.2/v4.8.4) > the
+#      caller's own GOCACHE/GOMODCACHE/GOPATH (new) > the shared-path
+#      default (new).
+#   2. STOPS creating a fresh, timestamped, per-round directory for these
+#      three -- `mkdir -p` only, against the resolved (shared, persistent)
+#      path, never a new $LANE_KEY-$TS-suffixed one.
+#   3. STOPS reaping/removing them in cleanup(): a shared, persistent
+#      cache is not this run's to delete just because this run resolved
+#      it. cleanup() on Linux therefore skips the RGOCACHE/RGOMODCACHE/
+#      RGOPATH removal entirely (CODEX_KEEP_CACHE is meaningless there now
+#      -- there is nothing per-round left to keep or discard). The
+#      --reap-mine/--reap-stale subcommands are UNCHANGED: their glob
+#      patterns (codex-review-*-LANE-*, codex-go-cache-*, etc.) only ever
+#      matched the old per-round /tmp names, which this wrapper no longer
+#      creates on Linux, so there is nothing new for them to reap and
+#      nothing for them to accidentally catch in the shared paths either.
+#
+# The macOS (darwin) path is COMPLETELY UNCHANGED: it keeps routing
+# GOCACHE/GOMODCACHE/GOPATH/GOTMPDIR/TMPDIR under literal /tmp, per-round,
+# reaped by cleanup() exactly as v4.8.5 did -- that is what makes Go
+# executable inside the sandbox on macOS at all (see the v4.3/v4.4 notes
+# above); a $TMPDIR-rooted or $HOME-rooted cache fails there. GOSUMDB stays
+# at its default (ON) on both hosts -- this is a cache-location change, never
+# a checksum-verification change. Everything else in this file -- the
+# 0555-safe rm_rf_writable() cleanup of review worktrees and RGOTMPDIR/
+# RTMPDIR, the LANE_KEY basename+hash keying (still used for the review
+# worktree and RGOTMPDIR/RTMPDIR names, which are not Go caches), the OUTDIR
+# mkdir, the warm step and its go.mod gate, the WARM_MODULES `|| true` count
+# pipeline, creating $L before anything else can die, and warm-step
+# SKIPPED reason=no-go.mod for a repo with none -- is unchanged.
+#
 # Usage: scripts/codex-review.sh [options]   (run from the lane worktree,
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
@@ -323,8 +368,13 @@
 #   Standalone maintenance subcommands -- see v4.8.2 note above. Exit 0 on
 #   completion (busy/skipped dirs are reported, not errors); non-zero only
 #   on a usage error (missing argument).
+#
+# codex-review.sh --version
+#   Prints "codex-review.sh vX.Y.Z" and exits 0.
 
 set -euo pipefail
+
+VERSION="4.8.6"
 
 warn() { printf 'codex-review: %s\n' "$*" >&2; }
 die()  { warn "$*"; exit 1; }
@@ -470,6 +520,10 @@ reap_stale() {
 }
 
 case "${1:-}" in
+  --version)
+    printf 'codex-review.sh v%s\n' "$VERSION"
+    exit 0
+    ;;
   --reap-mine)
     [ $# -ge 2 ] || die "usage: codex-review.sh --reap-mine LANE"
     reap_mine "$2"
@@ -587,16 +641,45 @@ else
   WT_HASH=$$
 fi
 LANE_KEY="$LANE-$WT_HASH"
-RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE_KEY-$TS}"
-mkdir -p "$RGOCACHE" || die "cannot create review GOCACHE $RGOCACHE"
-# GOMODCACHE, bounded for the same reason as GOCACHE: an unset GOMODCACHE
-# defaults to $HOME/go/pkg/mod, which read-only denies exactly like the
-# denied-$TMPDIR case above, and workspace-write should not be trusted to
-# widen access to the user's real mod cache just because it happens to be
-# writable there. New in v4.8.2 -- v4.8.1 and earlier left GOMODCACHE
-# unbounded.
-RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE_KEY-$TS}"
-mkdir -p "$RGOMODCACHE" || die "cannot create review GOMODCACHE $RGOMODCACHE"
+
+# HOST_OS resolved ONCE, here, and reused below (sandbox default, GOPATH
+# default) rather than re-running `uname -s` at each site -- one source of
+# truth for which branch of the v4.8.6 Linux/macOS split a given line is on.
+HOST_OS="$(uname -s)"
+
+# v4.8.6 (chris's ruling, 2026-09-04): on bigboy (Linux) every Go run --
+# gates, integration suites, launchers, codex clones -- uses the SHARED
+# caches, never a per-lane/per-round one, and this wrapper's own GOCACHE/
+# GOMODCACHE are no exception any more. On macOS the behaviour below this
+# `if` is BYTE-FOR-BYTE what v4.8.2/v4.8.4 already did: a fresh, timestamped,
+# per-round dir under /tmp, reaped by cleanup() -- see the top-of-file
+# changelog for why (macOS sandbox writability, proven per v4.3/v4.4).
+if [ "$HOST_OS" = Linux ]; then
+  # Precedence: CODEX_REVIEW_GOCACHE/GOMODCACHE (explicit per-call override,
+  # unchanged since v4.8.2) > the caller's own GOCACHE/GOMODCACHE (new in
+  # v4.8.6 -- the bigboy login shell already exports these) > the shared-path
+  # default (new in v4.8.6). No $LANE_KEY/$TS suffix anywhere in this branch
+  # -- that suffix is what made the old path per-round; a shared path has
+  # none.
+  RGOCACHE="${CODEX_REVIEW_GOCACHE:-${GOCACHE:-$HOME/.cache/go-build}}"
+  RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-${GOMODCACHE:-$HOME/go/pkg/mod}}"
+else
+  RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE_KEY-$TS}"
+  # GOMODCACHE, bounded for the same reason as GOCACHE: an unset GOMODCACHE
+  # defaults to $HOME/go/pkg/mod, which read-only denies exactly like the
+  # denied-$TMPDIR case above, and workspace-write should not be trusted to
+  # widen access to the user's real mod cache just because it happens to be
+  # writable there. New in v4.8.2 -- v4.8.1 and earlier left GOMODCACHE
+  # unbounded.
+  RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE_KEY-$TS}"
+fi
+# `mkdir -p` either way: on macOS this CREATES the fresh per-round dir (as
+# before); on Linux the shared path should already exist (chris's standing
+# bigboy setup), but `-p` is a harmless no-op if it does and a one-time
+# bootstrap if it somehow does not -- it is never "creating a per-round dir",
+# because the path itself carries no per-round suffix on that branch.
+mkdir -p "$RGOCACHE" || die "cannot create/find GOCACHE $RGOCACHE"
+mkdir -p "$RGOMODCACHE" || die "cannot create/find GOMODCACHE $RGOMODCACHE"
 
 # Resolve the bounds ONCE, into variables, so the warn line below reports
 # exactly what is applied. The first version re-evaluated the defaults inside
@@ -632,7 +715,7 @@ RGOMAXPROCS="${CODEX_REVIEW_GOMAXPROCS:-4}"
 # workspace-write is therefore the Linux default; it is not a widening choice,
 # it is the only mode in which Go executes there at all. CODEX_REVIEW_SANDBOX,
 # when the caller sets it explicitly, always wins over this host default.
-case "$(uname -s)" in
+case "$HOST_OS" in
   Linux) RSANDBOX="${CODEX_REVIEW_SANDBOX:-workspace-write}" ;;
   *)     RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}" ;;
 esac
@@ -669,20 +752,33 @@ RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 # own round because I read the verdict and not the log.
 RTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
 
-# v4.8.4: per-round GOPATH. On bigboy, ~/go and ~/go/pkg are root:root 755
-# (chris chowns this separately -- never this script's job), so an unset
-# GOPATH defaulting to $HOME/go makes `go mod download all` fail trying to
-# create $GOPATH/pkg/sumdb/... -- an ENOENT that reads exactly like a
-# network failure and is not one; it is a permission denial one directory
-# up. Same pattern as RGOTMPDIR/RGOCACHE above: a per-round dir under
-# /tmp, cleaned up by cleanup() below, unless the caller pins
-# CODEX_REVIEW_GOPATH (e.g. to a warm, already-writable GOPATH it manages
-# itself). GOSUMDB verification is left at its default (ON) either way --
-# this fixes a permission problem, it does not relax checksum
-# verification.
+# v4.8.4 introduced a per-round GOPATH because bigboy's ~/go and ~/go/pkg
+# used to be root:root 755, and an unset GOPATH defaulting to $HOME/go made
+# `go mod download all` fail trying to create $GOPATH/pkg/sumdb/... -- an
+# ENOENT that reads exactly like a network failure and is not one.
+#
+# v4.8.6 (chris's ruling): that per-lane workaround is retired on Linux. The
+# shared caches (GOCACHE/GOMODCACHE, see above) are the fleet-standard
+# location now, and $HOME/go is expected to be writable there -- same
+# precedence as GOCACHE/GOMODCACHE above: CODEX_REVIEW_GOPATH (explicit
+# override) > the caller's own GOPATH (new) > $HOME/go (new default,
+# matching Go's own default and sitting alongside the $HOME/go/pkg/mod
+# GOMODCACHE default above). No per-round dir, no $LANE_KEY/$TS suffix.
+# If a warm-step failure on Linux still names an unwritable pkg/sumdb path
+# under this, that is chris's bigboy setup to fix, not a per-round
+# workaround for this script to reintroduce.
+#
+# macOS is UNCHANGED: still a fresh per-round dir under /tmp, reaped by
+# cleanup() below, for the same sandbox-writability reason as RGOTMPDIR/
+# RGOCACHE. GOSUMDB verification is left at its default (ON) on both hosts
+# either way -- this has only ever been a permission/location fix, never a
+# checksum-verification change.
 if [ -n "${CODEX_REVIEW_GOPATH:-}" ]; then
   RGOPATH="$CODEX_REVIEW_GOPATH"
   mkdir -p "$RGOPATH" || die "cannot create GOPATH $RGOPATH"
+elif [ "$HOST_OS" = Linux ]; then
+  RGOPATH="${GOPATH:-$HOME/go}"
+  mkdir -p "$RGOPATH" || die "cannot create/find GOPATH $RGOPATH"
 else
   RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX") \
     || die "cannot create per-round GOPATH"
@@ -856,21 +952,35 @@ cleanup() {
   # RTMPDIR too, or every round leaves a /tmp/codex-review-gotmp-*-shell-*
   # behind.
   rm_rf_writable "${RTMPDIR:-}"
-  # RGOPATH (v4.8.4): the per-round GOPATH scratch dir -- see where it is
-  # created, above. Same rules: this run's own dir, never $HOME/go.
-  rm_rf_writable "${RGOPATH:-}"
-  # v4.8.2: GOCACHE/GOMODCACHE, by exact variable and never a glob (see the
-  # top-of-file changelog note). Straight rm -rf, not `go clean -cache`
-  # scoped to the dir first: for a large cache `go clean -cache` walks and
-  # re-verifies every entry, which is not cheap, while rm -rf on a path this
-  # script itself created and owns exclusively is. CODEX_KEEP_CACHE=1 is the
-  # explicit opt-out for a caller that wants the old warm-across-rounds
-  # cache back (see RGOCACHE above) and will police its own cleanup.
-  if [ "${CODEX_KEEP_CACHE:-0}" != 1 ]; then
-    rm_rf_writable "${RGOCACHE:-}"
-    rm_rf_writable "${RGOMODCACHE:-}"
+  # v4.8.6: on Linux, RGOPATH/RGOCACHE/RGOMODCACHE are now the SHARED,
+  # PERSISTENT bigboy caches (see where they are resolved, above) -- not
+  # this run's own scratch dirs any more. Removing them would be exactly
+  # the "go clean -cache on the shared cache" incident class this file
+  # already warns about elsewhere (lane-4818, 09-02), just via rm -rf
+  # instead of `go clean`. cleanup() on Linux therefore does not touch any
+  # of the three, ever, regardless of CODEX_KEEP_CACHE -- there is no
+  # per-round remnant left to keep or discard. On macOS this block is
+  # UNCHANGED from v4.8.4: all three are this run's own per-round dirs
+  # under /tmp, removed here unless CODEX_KEEP_CACHE=1.
+  if [ "$HOST_OS" = Linux ]; then
+    warn "shared bigboy caches left in place (not per-round any more): GOPATH=$RGOPATH GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE"
   else
-    warn "CODEX_KEEP_CACHE=1 -- keeping $RGOCACHE and $RGOMODCACHE"
+    # RGOPATH (v4.8.4): the per-round GOPATH scratch dir -- see where it is
+    # created, above. Same rules: this run's own dir, never $HOME/go.
+    rm_rf_writable "${RGOPATH:-}"
+    # v4.8.2: GOCACHE/GOMODCACHE, by exact variable and never a glob (see the
+    # top-of-file changelog note). Straight rm -rf, not `go clean -cache`
+    # scoped to the dir first: for a large cache `go clean -cache` walks and
+    # re-verifies every entry, which is not cheap, while rm -rf on a path this
+    # script itself created and owns exclusively is. CODEX_KEEP_CACHE=1 is the
+    # explicit opt-out for a caller that wants the old warm-across-rounds
+    # cache back (see RGOCACHE above) and will police its own cleanup.
+    if [ "${CODEX_KEEP_CACHE:-0}" != 1 ]; then
+      rm_rf_writable "${RGOCACHE:-}"
+      rm_rf_writable "${RGOMODCACHE:-}"
+    else
+      warn "CODEX_KEEP_CACHE=1 -- keeping $RGOCACHE and $RGOMODCACHE"
+    fi
   fi
   if [ "$KEEP" -eq 1 ]; then warn "keeping review worktree $RW (-k)"; return; fi
   git -C "$WT" worktree remove --force "$RW" 2>/dev/null \

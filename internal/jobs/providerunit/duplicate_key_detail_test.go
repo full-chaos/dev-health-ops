@@ -90,25 +90,6 @@ func (c *acceptingConn) PrepareBatch(context.Context, string, ...driver.PrepareB
 	return &acceptingBatch{}, nil
 }
 
-// Query models the CHAOS-5045 content-skip readback: this double exercises the
-// duplicate-key WRITE path, so it reports an empty store — nothing is already
-// persisted, the skip does not fire, and the write under test still runs.
-func (c *acceptingConn) Query(context.Context, string, ...any) (driver.Rows, error) {
-	return emptyAcceptingRows{}, nil
-}
-
-type emptyAcceptingRows struct{}
-
-func (emptyAcceptingRows) Next() bool                       { return false }
-func (emptyAcceptingRows) Scan(...any) error                { return nil }
-func (emptyAcceptingRows) ScanStruct(any) error             { return nil }
-func (emptyAcceptingRows) ColumnTypes() []driver.ColumnType { return nil }
-func (emptyAcceptingRows) Totals(...any) error              { return nil }
-func (emptyAcceptingRows) Columns() []string                { return nil }
-func (emptyAcceptingRows) Close() error                     { return nil }
-func (emptyAcceptingRows) Err() error                       { return nil }
-func (emptyAcceptingRows) HasData() bool                    { return false }
-
 type acceptingBatch struct{ driver.Batch }
 
 func (b *acceptingBatch) Append(...any) error { return nil }

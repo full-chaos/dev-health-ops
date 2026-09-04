@@ -316,16 +316,6 @@ type githubTestsDuplicateKeyConn struct {
 	batch *githubTestsDuplicateKeyBatch
 }
 
-// Query models the CHAOS-5045 content-skip readback. This double exists to
-// exercise the duplicate-key WRITE path, so it reports an empty store: nothing
-// is already persisted, the skip does not fire, and the write under test still
-// runs. Without this the embedded nil driver.Conn panics on the new read.
-func (c *githubTestsDuplicateKeyConn) Query(
-	context.Context, string, ...any,
-) (driver.Rows, error) {
-	return emptyGitHubWorkItemDerivationRows{}, nil
-}
-
 func (c *githubTestsDuplicateKeyConn) PrepareBatch(
 	context.Context, string, ...driver.PrepareBatchOption,
 ) (driver.Batch, error) {

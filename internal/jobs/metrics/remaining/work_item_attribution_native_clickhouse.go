@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -962,7 +963,27 @@ func (executor *WorkItemAttributionExecutor) orgItemCount(ctx context.Context, o
 func (executor *WorkItemAttributionExecutor) loadFacts(
 	ctx context.Context, orgID string, asOf time.Time,
 ) (teamattribution.GithubWorkItemDerivationFacts, error) {
-	loader := teamattribution.ClickHouseFactSource{Conn: executor.conn}
+	return LoadWorkItemDerivationFacts(ctx, executor.conn, orgID, asOf)
+}
+
+// LoadWorkItemDerivationFacts composes the six ClickHouseFactSource loaders
+// into the fact set the attribution cascade needs, for one org as of one
+// instant.
+//
+// Exported (CHAOS-4283 PR2) because the metrics.daily `work_item_attribution`
+// family needs the IDENTICAL fact set, and this composition is not the trivial
+// sequence it looks like: LoadMembers returns FOUR slices, and its fourth --
+// provider-tagged roster members -- must be appended to ProviderMembers rather
+// than assigned anywhere, because `teams.members` mixes admin-curated entries
+// with unreviewed provider auto-import writes and therefore belongs in the
+// FALLBACK layer, not the admin one (chris, 2026-08-26, after a codex HIGH
+// finding). A second hand-written copy of that would be free to drop the
+// append and silently promote provider rosters to authoritative overrides --
+// exactly the defect that review caught. One implementation, two callers.
+func LoadWorkItemDerivationFacts(
+	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
+	loader := teamattribution.ClickHouseFactSource{Conn: conn}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
 	if facts.Teams, err = loader.LoadTeams(ctx, orgID); err != nil {

@@ -12,9 +12,29 @@ import (
 )
 
 // benchmarkingSchema is the production shape of the tables this family touches:
-// `repos` (for the org anchor), one source metric table, and the two output
-// tables the assertions read. The other four outputs share the same writer path
-// and are covered by the compute-side oracle.
+// `repos` (for the org anchor), one source metric table, and ALL SIX output
+// tables, copied from migration 031_testops_benchmarking.sql.
+//
+// All six, not just the two the assertions read. The first version created only
+// those two, reasoning that "the other four share the same writer path and are
+// covered by the compute-side oracle". Both halves of that are true and the
+// conclusion still does not follow: the oracle covers the VALUES those tables
+// receive, but the writer prepares one batch PER TABLE and aborts on the first
+// that does not exist --
+//
+//	prepare testops_period_comparisons batch: code: 60,
+//	message: Table worker_test.testops_period_comparisons does not exist
+//
+// so the run died before reaching any assertion. The question a write-path
+// fixture must answer is which tables the WRITER WRITES, never which tables the
+// assertions read.
+//
+// Note these six carry org_id as a plain column with DEFAULT ” and do NOT have
+// it in their sorting keys: migration 031 created them AFTER 027's org_id-first
+// sweep, so they were never part of it. That is production's real shape and is
+// reproduced faithfully rather than corrected here. It is safe today only
+// because all six are plain MergeTree (no dedup collapse) and the loader filters
+// org_id explicitly.
 var benchmarkingSchema = []string{
 	`CREATE TABLE repos (
     id UUID, org_id String, repo String, settings String, provider String,
@@ -42,6 +62,41 @@ var benchmarkingSchema = []string{
     org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
   ORDER BY (metric_name, scope_type, scope_key, period_end)`,
+	`CREATE TABLE testops_period_comparisons (
+    metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
+    current_period_start Date, current_period_end Date,
+    comparison_period_start Date, comparison_period_end Date,
+    current_value Float64, comparison_value Float64, absolute_delta Float64,
+    percentage_change Nullable(Float64), trend_direction LowCardinality(String),
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(current_period_end)
+  ORDER BY (metric_name, scope_type, scope_key, current_period_end, comparison_period_end)`,
+	`CREATE TABLE testops_metric_anomalies (
+    metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
+    day Date, value Float64, baseline_value Float64, z_score Float64,
+    anomaly_type LowCardinality(String), direction LowCardinality(String),
+    severity LowCardinality(String), volatility_score Float64,
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(day)
+  ORDER BY (metric_name, scope_type, scope_key, day, anomaly_type)`,
+	`CREATE TABLE testops_metric_correlations (
+    metric_name LowCardinality(String), paired_metric_name LowCardinality(String),
+    scope_type LowCardinality(String), scope_key String,
+    period_start Date, period_end Date, coefficient Float64, p_value Float64,
+    sample_size UInt32, is_significant UInt8, interpretation String,
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
+  ORDER BY (metric_name, paired_metric_name, scope_type, scope_key, period_end)`,
+	`CREATE TABLE testops_benchmark_insights (
+    insight_id String, insight_type LowCardinality(String),
+    scope_type LowCardinality(String), scope_key String,
+    metric_name LowCardinality(String), paired_metric_name Nullable(String),
+    period_start Nullable(Date), period_end Nullable(Date),
+    severity LowCardinality(String), summary String,
+    evidence_json String DEFAULT '{}',
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(coalesce(period_end, toDate(computed_at)))
+  ORDER BY (insight_id, computed_at)`,
 }
 
 // TestBenchmarkingComputesOncePerOrgNotOncePerPartition is the proof of this

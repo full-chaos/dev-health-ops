@@ -174,15 +174,15 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4292 (Done)",
     },
     "testops_pipeline": {
-        "citation": "Python: `compute_testops.py:105 compute_pipeline_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
         "ticket": "CHAOS-4284",
     },
     "testops_test": {
-        "citation": "Python: `compute_testops.py:207 compute_test_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent",
         "ticket": "CHAOS-4284",
     },
     "testops_coverage": {
-        "citation": "Python: `compute_testops.py:355 compute_coverage_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse",
         "ticket": "CHAOS-4284",
     },
     "deploy": {

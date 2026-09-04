@@ -801,6 +801,44 @@ func dailyNativeFamilyRegistrations(
 			"error", testopsRiskErr,
 		)
 	}
+	// CHAOS-4284: testops_pipeline / testops_test / testops_coverage.
+	// Registered as THREE separate families, matching families.json, so a
+	// failure in one leaves only that one on the Python bridge -- see
+	// TestopsPipelineExecutor's doc comment for why they are not one
+	// executor. Same fail-open construction policy as every family above.
+	if testopsPipelineExecutor, testopsPipelineErr := daily.NewTestopsPipelineExecutor(clickhouseConnection); testopsPipelineErr == nil {
+		native["testops_pipeline"] = testopsPipelineExecutor
+	} else {
+		logger.Error(
+			"testops_pipeline native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsPipelineErr,
+		)
+	}
+	if testopsTestExecutor, testopsTestErr := daily.NewTestopsTestExecutor(clickhouseConnection); testopsTestErr == nil {
+		native["testops_test"] = testopsTestExecutor
+	} else {
+		logger.Error(
+			"testops_test native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsTestErr,
+		)
+	}
+	if testopsCoverageExecutor, testopsCoverageErr := daily.NewTestopsCoverageExecutor(clickhouseConnection); testopsCoverageErr == nil {
+		native["testops_coverage"] = testopsCoverageExecutor
+	} else {
+		logger.Error(
+			"testops_coverage native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsCoverageErr,
+		)
+	}
 	// CHAOS-4278: work_item_state reads its team attribution
 	// from work_item_team_attributions.is_primary=1 rather than
 	// recomputing the 9-source cascade -- see

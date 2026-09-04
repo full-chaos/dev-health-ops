@@ -156,8 +156,11 @@ aggregation layer built on top of these tables (see METRICS below).
 This is wrong for raw ingestion -- see the `tests` dataset rows above (`internal/providersync/github_tests_effects_clickhouse.go:152,185,218`,
 and the explicitly cross-provider `testOpsEffects`, `internal/providersync/testops_effects.go:23-28`, doc
 comment: "the single six-destination effect projection shared by GitHub and GitLab TestOps handlers"). What
-IS still 100% Python is the separate daily-metrics *aggregation* layer built on top of these tables --
-`testops_pipeline`/`testops_test`/`testops_coverage` under METRICS below. The brief conflated the two layers.
+was still 100% Python at the time of that note is the separate daily-metrics *aggregation* layer built on
+top of these tables -- `testops_pipeline`/`testops_test`/`testops_coverage` under METRICS below. The brief
+conflated the two layers. **Superseded 2026-09-04 (CHAOS-4284): all three of those families are now NATIVE
+too**, so neither layer is Python-only any more; only the (still-present, no longer authoritative)
+`compute_testops.py` compute remains, feeding `testops_risk` in-process.
 
 **Doc-drift finding (filed as a follow-up ticket, not fixed here):** `gitlab` `incidents` is present and
 `native_go`/`route_ready` in `matrix.json` (table above reflects this correctly) but has no entry in the
@@ -206,10 +209,10 @@ function directly, even for families whose worker kind is now native:
 | review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
 | team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`) |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
-| testops_coverage | COMPAT-Python | Python: `compute_testops.py:355 compute_coverage_metrics_daily` | CHAOS-4284 |
-| testops_pipeline | COMPAT-Python | Python: `compute_testops.py:105 compute_pipeline_metrics_daily` | CHAOS-4284 |
+| testops_coverage | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse | CHAOS-4284 |
+| testops_pipeline | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4284 |
 | testops_risk | NATIVE | Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4294 (Done) |
-| testops_test | COMPAT-Python | Python: `compute_testops.py:207 compute_test_metrics_daily` | CHAOS-4284 |
+| testops_test | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent | CHAOS-4284 |
 | work_graph_edges | COMPAT-Python | Python: `ai_workflow.py extract_review_deployment_incident_edges` | CHAOS-4286 |
 | work_item | COMPAT-Python | Python: `compute_work_items.py:766 compute_work_item_metrics_daily` | CHAOS-4283 |
 | work_item_attribution | COMPAT-Python | Python: `compute_work_items.py:1189 compute_work_item_team_attributions` (full daily compute -- distinct from §3's native staleness-only backstop of the same table) | CHAOS-4283 |
@@ -223,12 +226,16 @@ page's own drift gate, per `.remember/remaining-python-compute-inventory-2026-09
 independently re-verified this pass; tracked as a follow-up ticket, not listed as a row here per team-lead's
 instruction not to fold doc-drift findings into the doc itself).
 
-**`internal/jobs/metrics/testops/compute.go`** exists as pure Go compute (with Python oracles for parity
-tests) but is **only** an internal dependency of `testops_risk`'s own input recompute
-(`testops_risk_native_clickhouse.go:15` imports it) -- its own package doc states it does NOT register as a
-native family and does NOT write `testops_{pipeline,test,coverage}_metrics_daily`. Built, not wired; those
-three families are COMPAT-Python above, not ported by this file's existence. Tracked by **CHAOS-4284** (the
-family that would actually consume this code as a native executor).
+**`internal/jobs/metrics/testops/compute.go`** is the pure Go compute (with live-Python oracles for parity)
+shared by `testops_risk` and the three `testops_{pipeline,test,coverage}` families. It was written by
+CHAOS-4294 as an internal dependency of `testops_risk`'s own input recompute and was, for a period,
+*built but not wired* -- no native family consumed it and nothing wrote
+`testops_{pipeline,test,coverage}_metrics_daily`. **CHAOS-4284 closed that gap**: those three families are
+NATIVE above, implemented in `internal/jobs/metrics/daily/testops_native_executor.go` on top of this same
+compute, with cap-free ClickHouse readers in `testops_native_clickhouse.go`. The Python compute in
+`compute_testops.py` is deliberately still present and still runs -- `job_daily.py` feeds its in-process
+results to `testops_risk`'s own functions -- but its three `s.write_testops_*` calls are now skip-gated, so
+Go owns the writes. Deleting the Python path is a deliberate follow-up, not part of CHAOS-4284.
 
 ### Remaining metrics families (`internal/jobs/metrics/remaining/families.json`)
 

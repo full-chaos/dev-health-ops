@@ -1,0 +1,585 @@
+//go:build integration
+
+package daily
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+)
+
+// ----------------------------------------------------------------------
+// CHAOS-4284: the PUSHDOWN-vs-RAW differential.
+//
+// The three native testops families read ClickHouse differently from the
+// row-at-a-time loaders CHAOS-4294 wrote next door: case rows are reduced to
+// one row per case_name in-database, coverage is reduced to one snapshot, and
+// dedup is argMax-over-a-tuple instead of FINAL. Each of those is a place the
+// new readers could silently disagree with the oracle-proved path.
+//
+// So this test runs BOTH paths over the SAME seeded ClickHouse and asserts the
+// resulting records are equal FIELD BY FIELD, floats compared by bit pattern:
+//
+//	(a) pushdown readers  -> testops accumulators  -> records
+//	(b) existing FINAL row loaders -> testops slice API -> records
+//
+// (b) is the side already covered by the live-Python oracles in
+// internal/jobs/metrics/testops, so equality here transitively ties the
+// pushdown path to Python without re-running Python inside a container.
+//
+// The fixture is deliberately hostile. Every row below exists to break a
+// specific assumption:
+//
+//   - Five duplicate copies of each case row with ASCENDING last_synced and
+//     CONTRADICTORY statuses. This is CHAOS-5045's shape (GitHub's TestOps
+//     ARTIFACTS phase re-projecting the same rows every hourly unit). If the
+//     argMax dedup is dropped or keyed wrongly, flake_rate and
+//     retry_dependency_rate move, because a superseded "failed" would join
+//     the newest "passed" in the same status set.
+//   - Statuses with mixed case and surrounding whitespace, so a reader that
+//     normalised in SQL instead of Go would diverge.
+//   - A suite from the NEXT day sharing a run_id with today's, which the
+//     day-boundary guard must exclude.
+//   - team_id/service_id as nil vs "" -- distinct Python dict keys, and
+//     therefore distinct output rows for testops_pipeline.
+//   - Two coverage snapshots under one run_id, so the (run_id, snapshot_id)
+//     lexical tie-break is actually exercised.
+//
+// SYSTEM STOP MERGES is held for the whole test (CHAOS-4902/CHAOS-4953,
+// per-table not server-wide): without it ReplacingMergeTree may collapse the
+// duplicates on its own, and both paths would then be passing on the ENGINE's
+// dedup rather than on their own queries -- a vacuous green.
+// ----------------------------------------------------------------------
+
+func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Sorting keys carry org_id FIRST, matching production after migration
+	// 042 (042_rmt_org_id_dedup_keys.py) -- NOT 029's original
+	// (repo_id, ...) keys. The native readers GROUP BY exactly these tuples,
+	// so a fixture on the pre-042 keys would be testing a shape that no
+	// longer exists. Shared with the executor test below via
+	// testopsDifferentialSchema so the two can never drift apart.
+	for _, statement := range testopsDifferentialSchema() {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, table := range []string{"ci_pipeline_runs", "test_suite_results", "test_case_results", "coverage_snapshots"} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges %s: %v", table, err)
+		}
+		defer func(table string) {
+			resumeCtx, cancelResume := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelResume()
+			if err := conn.Exec(resumeCtx, "SYSTEM START MERGES "+table); err != nil {
+				t.Errorf("resume merges %s: %v", table, err)
+			}
+		}(table)
+	}
+
+	const orgID = "00000000-0000-4000-8000-000000000009"
+	repoID := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	day := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	start := day
+	end := day.Add(24 * time.Hour)
+	historyStart := day.AddDate(0, 0, -29)
+	priorStart := day.AddDate(0, 0, -30)
+
+	seedTestopsDifferentialFixture(ctx, t, conn, orgID, repoID, day)
+
+	// ---------------- testops_pipeline ----------------
+	pushAccumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), nil)
+	if err := loadNativeTestopsPipelineRuns(ctx, conn, pushAccumulator, orgID, repoID, start, end); err != nil {
+		t.Fatalf("pushdown pipeline read: %v", err)
+	}
+	pushPipeline := pushAccumulator.Finish()
+
+	rawPipelineRows, err := loadTestopsPipelineRuns(ctx, conn, orgID, repoID, start, end)
+	if err != nil {
+		t.Fatalf("row-loader pipeline read: %v", err)
+	}
+	rawPipeline := testops.ComputePipelineMetrics(repoID, rawPipelineRows, repoID.String(), nil)
+
+	if len(pushPipeline) != len(rawPipeline) {
+		t.Fatalf("pipeline row count: pushdown=%d rowloader=%d", len(pushPipeline), len(rawPipeline))
+	}
+	if len(pushPipeline) < 2 {
+		t.Fatalf("fixture is vacuous: expected >=2 pipeline groups (nil vs \"\" service_id), got %d", len(pushPipeline))
+	}
+	for index := range rawPipeline {
+		if !samePipelineMetric(rawPipeline[index], pushPipeline[index]) {
+			t.Fatalf("pipeline row %d diverges:\nrowloader=%+v\npushdown =%+v", index, rawPipeline[index], pushPipeline[index])
+		}
+	}
+
+	// ---------------- testops_test ----------------
+	pushTestAccumulator := testops.NewTestAccumulator(repoID, repoID.String(), nil)
+	if err := loadNativeTestopsSuites(ctx, conn, pushTestAccumulator, orgID, repoID, start, end); err != nil {
+		t.Fatalf("pushdown suite read: %v", err)
+	}
+	if err := loadNativeTestopsCaseGroups(ctx, conn, pushTestAccumulator, orgID, repoID, start, end); err != nil {
+		t.Fatalf("pushdown case-group read: %v", err)
+	}
+	pushHistorical, err := loadNativeHistoricalFailedCaseNames(ctx, conn, orgID, repoID, historyStart, start, end)
+	if err != nil {
+		t.Fatalf("pushdown historical read: %v", err)
+	}
+	pushTest := pushTestAccumulator.Finish(pushHistorical)
+
+	rawSuites, rawCases, err := loadTestopsSuiteAndCaseRows(ctx, conn, orgID, repoID, start, end)
+	if err != nil {
+		t.Fatalf("row-loader suite/case read: %v", err)
+	}
+	rawHistorical, err := loadHistoricalFailedCaseNames(ctx, conn, orgID, repoID, historyStart, start, end)
+	if err != nil {
+		t.Fatalf("row-loader historical read: %v", err)
+	}
+	rawTest := testops.ComputeTestMetrics(repoID, rawSuites, rawCases, rawHistorical, repoID.String(), nil)
+
+	// The duplicate rows must actually reach the row loader, or the argMax
+	// dedup was never under test: the FINAL-based loader collapses them, so
+	// its case count is the DISTINCT count while the table holds 5x that.
+	assertRowCountAtLeast(ctx, t, conn, "test_case_results", 15)
+
+	if len(pushTest) != len(rawTest) {
+		t.Fatalf("test row count: pushdown=%d rowloader=%d", len(pushTest), len(rawTest))
+	}
+	if len(rawTest) != 1 {
+		t.Fatalf("expected exactly 1 testops_test row, got %d", len(rawTest))
+	}
+	if !sameTestMetric(rawTest[0], pushTest[0]) {
+		t.Fatalf("test row diverges:\nrowloader=%+v\npushdown =%+v", rawTest[0], pushTest[0])
+	}
+	if rawTest[0].FlakeRate == 0 || rawTest[0].RetryDependencyRate == 0 || rawTest[0].FailureRecurrence == 0 {
+		t.Fatalf("fixture is vacuous: flake/retry/recurrence must all be nonzero, got %+v", rawTest[0])
+	}
+
+	// ---------------- testops_coverage ----------------
+	pushCurrent, err := loadNativeTestopsLatestCoverage(ctx, conn, orgID, repoID, start, end)
+	if err != nil {
+		t.Fatalf("pushdown coverage read: %v", err)
+	}
+	pushPrior, err := loadNativeTestopsLatestCoverage(ctx, conn, orgID, repoID, priorStart, start)
+	if err != nil {
+		t.Fatalf("pushdown prior-coverage read: %v", err)
+	}
+	pushCoverage := testops.ComputeCoverageMetric(repoID, pushCurrent, pushPrior, repoID.String(), nil)
+
+	rawCurrent, err := loadTestopsCoverageSnapshots(ctx, conn, orgID, repoID, start, end)
+	if err != nil {
+		t.Fatalf("row-loader coverage read: %v", err)
+	}
+	rawPrior, err := loadTestopsCoverageSnapshots(ctx, conn, orgID, repoID, priorStart, start)
+	if err != nil {
+		t.Fatalf("row-loader prior-coverage read: %v", err)
+	}
+	rawCoverage := testops.ComputeCoverageMetric(repoID, rawCurrent, rawPrior, repoID.String(), nil)
+
+	if len(rawCurrent) < 2 {
+		t.Fatalf("fixture is vacuous: expected >=2 current coverage snapshots so the (run_id, snapshot_id) tie-break runs, got %d", len(rawCurrent))
+	}
+	if rawCoverage == nil || pushCoverage == nil {
+		t.Fatalf("coverage: rowloader=%v pushdown=%v, both must be non-nil", rawCoverage, pushCoverage)
+	}
+	if !sameCoverageMetric(*rawCoverage, *pushCoverage) {
+		t.Fatalf("coverage row diverges:\nrowloader=%+v\npushdown =%+v", *rawCoverage, *pushCoverage)
+	}
+	if rawCoverage.CoverageDeltaPct == nil {
+		t.Fatal("fixture is vacuous: coverage_delta_pct must be exercised (prior snapshot missing?)")
+	}
+}
+
+// TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse drives the
+// three executors through the SAME entry point PartitionHandler uses
+// (ComputeFamily), so it also covers the scope/validation path, the
+// LoadWellbeingTeams call every family makes, and the ClickHouse batch
+// writers -- none of which the differential above touches.
+func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range testopsDifferentialSchema() {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const orgID = "00000000-0000-4000-8000-000000000009"
+	repoID := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	day := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+	seedTestopsDifferentialFixture(ctx, t, conn, orgID, repoID, day)
+
+	run := Run{ID: "run-1", OrganizationID: orgID, TargetDay: day}
+	partition := Partition{ID: "partition-1", RunID: "run-1", RepoIDs: []RepositoryID{RepositoryID(repoID.String())}}
+
+	pipelineExecutor, err := NewTestopsPipelineExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testExecutor, err := NewTestopsTestExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverageExecutor, err := NewTestopsCoverageExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, spec := range []struct {
+		name     string
+		executor NativeFamilyExecutor
+		table    string
+	}{
+		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily"},
+		{"testops_test", testExecutor, "testops_test_metrics_daily"},
+		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily"},
+	} {
+		written, err := spec.executor.ComputeFamily(ctx, run, partition)
+		if err != nil {
+			t.Fatalf("%s ComputeFamily: %v", spec.name, err)
+		}
+		if written == 0 {
+			t.Fatalf("%s reported 0 rows written; the fixture has data for it", spec.name)
+		}
+		// The reported count is what feeds ObserveDailyMetricsNativeFamily's
+		// rows argument (daily.go:598), so a count that does not match the
+		// table would make the telemetry lie even while the write succeeded.
+		var stored uint64
+		if err := conn.QueryRow(ctx,
+			fmt.Sprintf("SELECT count() FROM %s WHERE org_id = ? AND repo_id = ?", spec.table),
+			orgID, repoID,
+		).Scan(&stored); err != nil {
+			t.Fatalf("%s readback: %v", spec.name, err)
+		}
+		if stored != uint64(written) {
+			t.Fatalf("%s wrote %d rows but reported %d", spec.name, stored, written)
+		}
+	}
+}
+
+// testopsDifferentialSchema is the DDL both tests above use. Kept as one
+// function so the two can never drift into testing different table shapes.
+func testopsDifferentialSchema() []string {
+	return []string{
+		`CREATE TABLE teams (
+    id String, name String, members Array(String), repo_patterns Array(String), org_id String
+) ENGINE = ReplacingMergeTree ORDER BY (id)`,
+		`CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
+    finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
+    pipeline_name Nullable(String), provider LowCardinality(String) DEFAULT '',
+    duration_seconds Nullable(Float64), queue_seconds Nullable(Float64),
+    retry_count UInt32 DEFAULT 0, cancel_reason Nullable(String), trigger_source Nullable(String),
+    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
+    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`,
+		`CREATE TABLE test_suite_results (
+    repo_id UUID, run_id String, suite_id String, suite_name String,
+    framework Nullable(String), environment Nullable(String),
+    total_count UInt32, passed_count UInt32, failed_count UInt32, skipped_count UInt32,
+    error_count UInt32 DEFAULT 0, quarantined_count UInt32 DEFAULT 0, retried_count UInt32 DEFAULT 0,
+    duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
+    finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
+    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id)`,
+		`CREATE TABLE test_case_results (
+    repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
+    class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
+    retry_attempt UInt32 DEFAULT 0, failure_message Nullable(String), failure_type Nullable(String),
+    stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
+    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id, case_id)`,
+		`CREATE TABLE coverage_snapshots (
+    repo_id UUID, run_id String, snapshot_id String, report_format Nullable(String),
+    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), line_coverage_pct Nullable(Float64),
+    branches_total Nullable(UInt32), branches_covered Nullable(UInt32), branch_coverage_pct Nullable(Float64),
+    functions_total Nullable(UInt32), functions_covered Nullable(UInt32),
+    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
+    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, snapshot_id)`,
+		`CREATE TABLE testops_pipeline_metrics_daily (
+    repo_id UUID, day Date, pipelines_count UInt32, success_count UInt32, failure_count UInt32,
+    cancelled_count UInt32, success_rate Float64, failure_rate Float64, cancel_rate Float64,
+    rerun_rate Float64, median_duration_seconds Nullable(Float64), p95_duration_seconds Nullable(Float64),
+    avg_queue_seconds Nullable(Float64), p95_queue_seconds Nullable(Float64),
+    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
+    computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+		`CREATE TABLE testops_test_metrics_daily (
+    repo_id UUID, day Date, total_cases UInt32, passed_count UInt32, failed_count UInt32,
+    skipped_count UInt32, quarantined_count UInt32, pass_rate Float64, failure_rate Float64,
+    flake_rate Float64, retry_dependency_rate Float64, total_suites UInt32,
+    suite_duration_p50_seconds Nullable(Float64), suite_duration_p95_seconds Nullable(Float64),
+    failure_recurrence_score Float64, team_id Nullable(String), service_id Nullable(String),
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+		`CREATE TABLE testops_coverage_metrics_daily (
+    repo_id UUID, day Date, line_coverage_pct Nullable(Float64), branch_coverage_pct Nullable(Float64),
+    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), coverage_delta_pct Nullable(Float64),
+    uncovered_files_count UInt32, coverage_regression_count UInt32,
+    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
+    computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+	}
+}
+
+// seedTestopsDifferentialFixture writes the hostile corpus described in this
+// file's header comment.
+func seedTestopsDifferentialFixture(
+	ctx context.Context, t *testing.T, conn driver.Conn,
+	orgID string, repoID uuid.UUID, day time.Time,
+) {
+	t.Helper()
+	inDay := day.Add(9 * time.Hour)
+	nextDay := day.Add(30 * time.Hour)
+	priorDay := day.AddDate(0, 0, -3).Add(9 * time.Hour)
+	historyDay := day.AddDate(0, 0, -10).Add(9 * time.Hour)
+	synced := day.Add(23 * time.Hour)
+
+	// --- ci_pipeline_runs: three groups (nil service, "" service, "svc-1"),
+	// plus a superseded duplicate whose stale status would flip
+	// success_count if the dedup were dropped.
+	type pipelineSeed struct {
+		runID     string
+		status    string
+		service   *string
+		queue     float64
+		retry     uint32
+		started   time.Time
+		lastSync  time.Time
+		duration  float64
+		wantStale bool
+	}
+	emptyService := ""
+	namedService := "svc-1"
+	for _, seed := range []pipelineSeed{
+		{runID: "run-1", status: "success", service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 100},
+		{runID: "run-2", status: "  SUCCESS  ", service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 200},
+		{runID: "run-3", status: "failed", service: &emptyService, queue: 0.1, started: inDay, lastSync: synced, duration: 300},
+		{runID: "run-4", status: "cancelled", service: &namedService, queue: 0.1, retry: 3, started: inDay, lastSync: synced, duration: 400},
+		// Superseded copy of run-1: OLDER last_synced, contradictory status.
+		// argMax and FINAL must both discard it.
+		{runID: "run-1", status: "failed", service: nil, queue: 99, started: inDay, lastSync: synced.Add(-2 * time.Hour), duration: 1, wantStale: true},
+		// Prior-window run, so coverage's prior snapshot has a run to join.
+		{runID: "run-prior", status: "success", service: nil, queue: 0.1, started: priorDay, lastSync: synced, duration: 500},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO ci_pipeline_runs
+(repo_id, run_id, status, queued_at, started_at, finished_at, last_synced,
+ duration_seconds, queue_seconds, retry_count, team_id, service_id, org_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, seed.runID, seed.status,
+			seed.started, seed.started, seed.started.Add(time.Duration(seed.duration)*time.Second),
+			seed.lastSync, seed.duration, seed.queue, seed.retry,
+			nil, seed.service, orgID,
+		); err != nil {
+			t.Fatalf("seed ci_pipeline_runs %s: %v", seed.runID, err)
+		}
+	}
+
+	// --- test_suite_results: today's suite, a NEXT-DAY suite sharing run-1's
+	// id (the day-boundary guard), and a historical suite for recurrence.
+	type suiteSeed struct {
+		runID, suiteID string
+		started        time.Time
+	}
+	for _, seed := range []suiteSeed{
+		{runID: "run-1", suiteID: "suite-1", started: inDay},
+		{runID: "run-1", suiteID: "suite-next-day", started: nextDay},
+		{runID: "run-hist", suiteID: "suite-hist", started: historyDay},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO test_suite_results
+(repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count,
+ error_count, quarantined_count, duration_seconds, started_at, finished_at,
+ team_id, service_id, org_id, last_synced)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, seed.runID, seed.suiteID, "suite", uint32(6), uint32(3), uint32(2), uint32(1),
+			uint32(1), uint32(1), 12.5, seed.started, seed.started.Add(time.Minute),
+			nil, nil, orgID, synced,
+		); err != nil {
+			t.Fatalf("seed test_suite_results %s/%s: %v", seed.runID, seed.suiteID, err)
+		}
+	}
+
+	// --- test_case_results: FIVE copies of every case row, ascending
+	// last_synced, with the OLDER copies carrying contradictory statuses.
+	// This is the CHAOS-5045 duplicate shape.
+	type caseSeed struct {
+		runID, suiteID, caseID, caseName string
+		winnerStatus                     string
+		staleStatus                      string
+		winnerRetry                      uint32
+	}
+	caseSeeds := []caseSeed{
+		// "flaky" fails on attempt 0 and passes on a retry -> flake + retry-dependent.
+		{runID: "run-1", suiteID: "suite-1", caseID: "c1", caseName: "flaky", winnerStatus: "FAILED", staleStatus: "passed"},
+		{runID: "run-1", suiteID: "suite-1", caseID: "c2", caseName: "flaky", winnerStatus: " Passed ", staleStatus: "failed", winnerRetry: 2},
+		// "recurring" fails today AND in the history window -> recurrence.
+		{runID: "run-1", suiteID: "suite-1", caseID: "c3", caseName: "recurring", winnerStatus: "timed_out", staleStatus: "passed"},
+		{runID: "run-1", suiteID: "suite-1", caseID: "c4", caseName: "clean", winnerStatus: "succeeded", staleStatus: "failed"},
+		// Next-day suite: excluded by the day-boundary guard. Its status
+		// would add a "passed" to "recurring" and destroy the recurrence
+		// score if the guard were dropped.
+		{runID: "run-1", suiteID: "suite-next-day", caseID: "c5", caseName: "recurring", winnerStatus: "passed", staleStatus: "passed"},
+		// Historical failure for "recurring".
+		{runID: "run-hist", suiteID: "suite-hist", caseID: "c6", caseName: "recurring", winnerStatus: "error", staleStatus: "passed"},
+	}
+	for _, seed := range caseSeeds {
+		for copyIndex := 0; copyIndex < 5; copyIndex++ {
+			status := seed.staleStatus
+			retry := uint32(0)
+			lastSync := synced.Add(-time.Duration(5-copyIndex) * time.Hour)
+			if copyIndex == 4 { // newest copy wins
+				status = seed.winnerStatus
+				retry = seed.winnerRetry
+				lastSync = synced
+			}
+			if err := conn.Exec(ctx, `INSERT INTO test_case_results
+(repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, org_id, last_synced)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				repoID, seed.runID, seed.suiteID, seed.caseID, seed.caseName,
+				status, retry, orgID, lastSync,
+			); err != nil {
+				t.Fatalf("seed test_case_results %s copy %d: %v", seed.caseID, copyIndex, err)
+			}
+		}
+	}
+
+	// --- coverage_snapshots: two snapshots under run-1 so the
+	// (run_id, snapshot_id) lexical tie-break decides, plus one in the prior
+	// window so coverage_delta_pct is non-nil.
+	type coverageSeed struct {
+		runID, snapshotID string
+		linePct           float64
+		linesTotal        uint32
+		linesCovered      uint32
+	}
+	for _, seed := range []coverageSeed{
+		{runID: "run-1", snapshotID: "snap-a", linePct: 70.0, linesTotal: 1000, linesCovered: 700},
+		{runID: "run-1", snapshotID: "snap-b", linePct: 81.5, linesTotal: 1000, linesCovered: 815},
+		{runID: "run-prior", snapshotID: "snap-p", linePct: 61.5, linesTotal: 900, linesCovered: 553},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO coverage_snapshots
+(repo_id, run_id, snapshot_id, lines_total, lines_covered, line_coverage_pct, branch_coverage_pct,
+ team_id, service_id, org_id, last_synced)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, seed.runID, seed.snapshotID, seed.linesTotal, seed.linesCovered,
+			seed.linePct, seed.linePct-5.0, nil, nil, orgID, synced,
+		); err != nil {
+			t.Fatalf("seed coverage_snapshots %s/%s: %v", seed.runID, seed.snapshotID, err)
+		}
+	}
+}
+
+func assertRowCountAtLeast(ctx context.Context, t *testing.T, conn driver.Conn, table string, want uint64) {
+	t.Helper()
+	var got uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM "+table).Scan(&got); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	if got < want {
+		t.Fatalf("%s holds %d rows, expected >=%d -- the duplicate fixture did not land, so the dedup was never under test", table, got, want)
+	}
+}
+
+// ----------------------------------------------------------------------
+// Field-wise comparators. A struct `!=` would compare the *float64 fields by
+// ADDRESS; floats are compared by BIT PATTERN so a divergence in the last ULP
+// (the FMA / Neumaier class this port must not introduce) cannot slip through
+// as "close enough".
+// ----------------------------------------------------------------------
+
+func samePipelineMetric(a, b testops.PipelineMetric) bool {
+	return a.RepoID == b.RepoID && a.OrgID == b.OrgID &&
+		a.PipelinesCount == b.PipelinesCount && a.SuccessCount == b.SuccessCount &&
+		a.FailureCount == b.FailureCount && a.CancelledCount == b.CancelledCount &&
+		sameFloat(a.SuccessRate, b.SuccessRate) && sameFloat(a.FailureRate, b.FailureRate) &&
+		sameFloat(a.CancelRate, b.CancelRate) && sameFloat(a.RerunRate, b.RerunRate) &&
+		sameFloatPtr(a.MedianDurationSeconds, b.MedianDurationSeconds) &&
+		sameFloatPtr(a.P95DurationSeconds, b.P95DurationSeconds) &&
+		sameFloatPtr(a.AvgQueueSeconds, b.AvgQueueSeconds) &&
+		sameFloatPtr(a.P95QueueSeconds, b.P95QueueSeconds) &&
+		sameStrPtr(a.TeamID, b.TeamID) && sameStrPtr(a.ServiceID, b.ServiceID)
+}
+
+func sameTestMetric(a, b testops.TestMetric) bool {
+	return a.RepoID == b.RepoID && a.OrgID == b.OrgID &&
+		a.TotalCases == b.TotalCases && a.PassedCount == b.PassedCount &&
+		a.FailedCount == b.FailedCount && a.SkippedCount == b.SkippedCount &&
+		a.QuarantinedCount == b.QuarantinedCount && a.TotalSuites == b.TotalSuites &&
+		sameFloat(a.PassRate, b.PassRate) && sameFloat(a.FailureRate, b.FailureRate) &&
+		sameFloat(a.FlakeRate, b.FlakeRate) && sameFloat(a.RetryDependencyRate, b.RetryDependencyRate) &&
+		sameFloatPtr(a.SuiteDurationP50Seconds, b.SuiteDurationP50Seconds) &&
+		sameFloatPtr(a.SuiteDurationP95Seconds, b.SuiteDurationP95Seconds) &&
+		sameFloat(a.FailureRecurrence, b.FailureRecurrence) &&
+		sameStrPtr(a.TeamID, b.TeamID) && sameStrPtr(a.ServiceID, b.ServiceID)
+}
+
+func sameCoverageMetric(a, b testops.CoverageMetric) bool {
+	return a.RepoID == b.RepoID && a.OrgID == b.OrgID &&
+		sameFloatPtr(a.LineCoveragePct, b.LineCoveragePct) &&
+		sameFloatPtr(a.BranchCoveragePct, b.BranchCoveragePct) &&
+		sameUintPtr(a.LinesTotal, b.LinesTotal) && sameUintPtr(a.LinesCovered, b.LinesCovered) &&
+		sameFloatPtr(a.CoverageDeltaPct, b.CoverageDeltaPct) &&
+		a.UncoveredFilesCount == b.UncoveredFilesCount &&
+		a.CoverageRegressionCount == b.CoverageRegressionCount &&
+		sameStrPtr(a.TeamID, b.TeamID) && sameStrPtr(a.ServiceID, b.ServiceID)
+}
+
+func sameFloat(a, b float64) bool { return math.Float64bits(a) == math.Float64bits(b) }
+
+func sameFloatPtr(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return sameFloat(*a, *b)
+}
+
+func sameUintPtr(a, b *uint32) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func sameStrPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}

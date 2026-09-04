@@ -50,6 +50,11 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     "incident": "incident_metrics_daily",
     "testops_pipeline": "testops_pipeline_metrics_daily",
     "testops_test": "testops_test_metrics_daily",
+    # CHAOS-4284: added when testops_coverage went native alongside
+    # testops_pipeline/testops_test (which were already here). Same
+    # (repo_id, day) shape as its two siblings -- one row per repo that
+    # had a coverage snapshot attached to a pipeline run that day.
+    "testops_coverage": "testops_coverage_metrics_daily",
     "repo_user_commit": "repo_metrics_daily",
     "dora": "dora_metrics_daily",
     # "complexity" is the family internal/jobs/metrics/daily/families.json

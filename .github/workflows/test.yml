@@ -86,6 +86,18 @@ jobs:
               # (CHAOS-3513 Codex round 2).
               - '.gitignore'
               - '.ignore'
+              # CHAOS-4843, round 2 of #2169's peer review, P2b: this
+              # workflow's own tooling suite carries
+              # test_lefthook_glob_matches_typecheck_relevance_patterns,
+              # which fails loud the moment lefthook.yml's mypy glob
+              # diverges from ci/typecheck_relevance.py's RELEVANT_PATTERNS.
+              # Without this entry, a PR touching ONLY lefthook.yml (e.g.
+              # narrowing that glob, or reverting the mypy command to a bare
+              # `mypy`) got code=false, skipped test-matrix entirely, and
+              # the one guard built to catch exactly that regression never
+              # ran -- the same "the guard's own trigger scope is the gap"
+              # shape as the .gitignore/.ignore entries above.
+              - 'lefthook.yml'
               - 'ruff.toml'
               - '.ruff.toml'
               - 'mypy.ini'

@@ -2961,9 +2961,9 @@ def test_every_compose_spelling_is_refused(command: str) -> None:
 # Definitions in tests/tooling that are dead TODAY and not this ticket's to fix.
 # Asserted STILL ORPHANED, so the list cannot rot into a silent exemption.
 _KNOWN_ORPHANS: dict[str, frozenset[str]] = {
-    "test_aggregate_gate_results.py": frozenset(
-        {"_code_filter_patterns", "_job", "_steps"}
-    ),
+    # CHAOS-4843, round 2 of #2169's peer review: _code_filter_patterns is no
+    # longer orphaned -- test_paths_filter_covers_lefthook_yml now calls it.
+    "test_aggregate_gate_results.py": frozenset({"_job", "_steps"}),
     # `pytestmark` is pytest's own module-level skip-marker hook (CHAOS-4976):
     # pytest's collector reads it by this exact reserved name, never by an
     # in-file reference, so it is structurally never "used" from this

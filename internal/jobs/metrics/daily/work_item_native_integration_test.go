@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -208,6 +211,8 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
 	// LATEST migration that touched each table, which for five of these is a
 	// PYTHON migration, not a .sql one:
 	//
+	//   055_rmt (work_item_daily_rollups) work_item_metrics_daily     ENGINE ReplacingMergeTree(computed_at)
+	//                                   work_item_user_metrics_daily ENGINE ReplacingMergeTree(computed_at)
 	//   042_rmt_org_id_dedup_keys.py    work_items                  (org_id, repo_id, work_item_id)
 	//                                   work_item_transitions       (org_id, repo_id, work_item_id, occurred_at)
 	//   027_add_org_id_to_sorting_keys.py
@@ -260,14 +265,14 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     new_bugs_count UInt32, new_items_count UInt32, defect_intro_rate Float64,
     wip_congestion_ratio Float64, predictability_score Float64,
     computed_at DateTime('UTC'), org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id)`,
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id)`,
 		`CREATE TABLE work_item_user_metrics_daily (
     day Date, provider String, work_scope_id String, user_identity String,
     team_id String, team_name String,
     items_started UInt32, items_completed UInt32, wip_count_end_of_day UInt32,
     cycle_time_p50_hours Nullable(Float64), cycle_time_p90_hours Nullable(Float64),
     computed_at DateTime('UTC'), org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day)`,
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day)`,
 		`CREATE TABLE work_item_cycle_times (
     work_item_id String, provider String, day Date, work_scope_id String,
     team_id Nullable(String), team_name Nullable(String), assignee Nullable(String),
@@ -291,6 +296,8 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 			t.Fatal(err)
 		}
 	}
+
+	assertFixtureSchemaMatchesProduction(ctx, t, conn)
 
 	const (
 		orgA = "00000000-0000-4000-8000-0000000000a0"
@@ -621,4 +628,70 @@ func sameIntegrationFloatPointer(left, right *float64) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+// productionSchema is what the LATEST migration touching each table declares --
+// engine (with its version column) AND sorting key, read straight back out of
+// system.tables so the fixture cannot drift from production silently.
+//
+// Every value here cites the migration that set it. Note how many are PYTHON
+// migrations: a .sql-only search finds none of them, which is exactly how this
+// fixture drifted twice.
+//
+//	009_raw_work_items.sql / 001_metrics_v2.sql   original DDL (superseded)
+//	027_add_org_id_to_sorting_keys.py             org_id-first sorting keys
+//	042_rmt_org_id_dedup_keys.py                  org_id-first RMT dedup keys
+//	055_work_item_daily_rollups_replacing_merge_tree.py
+//	                                              the two daily rollups ->
+//	                                              ReplacingMergeTree(computed_at)
+//
+// THE TRAP THIS CLOSES. An earlier version of this fixture copied the ORIGINAL
+// .sql DDL and so declared pre-rekey ORDER BYs. That was fixed by auditing the
+// KEYS -- and only the keys. Migration 055 had ALSO changed the ENGINE of two
+// of the same tables, from MergeTree to ReplacingMergeTree(computed_at), and
+// that went unnoticed because the previous fix asked "are the keys right?"
+// rather than "is every clause derived from the latest migration?". A fixture
+// that dedups differently from production can only prove things about a schema
+// nobody runs -- and with the wrong ENGINE it does exactly that while every
+// sorting key looks correct.
+//
+// So this asserts the whole shape, for every table, not the clause that last
+// failed.
+var productionSchema = []struct {
+	table      string
+	engine     string // engine_full's leading engine expression, incl. version column
+	sortingKey string
+}{
+	{"work_items", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id"},
+	{"work_item_transitions", "ReplacingMergeTree(last_synced)", "org_id, repo_id, work_item_id, occurred_at"},
+	{"work_item_team_attributions", "ReplacingMergeTree(computed_at)", "org_id, repo_id, work_item_id, ifNull(team_id, ''), source"},
+	{"work_item_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, day, work_scope_id, team_id"},
+	{"work_item_user_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, provider, work_scope_id, user_identity, day"},
+	{"work_item_cycle_times", "ReplacingMergeTree(computed_at)", "org_id, provider, work_item_id"},
+	{"estimate_coverage_metrics_daily", "ReplacingMergeTree(computed_at)", "org_id, day, provider, work_scope_id, ifNull(team_id, '')"},
+}
+
+// assertFixtureSchemaMatchesProduction reads engine and sorting key back from
+// system.tables. Reading them back matters: asserting against the CREATE
+// strings this file just executed would only prove the file agrees with itself.
+func assertFixtureSchemaMatchesProduction(ctx context.Context, t *testing.T, conn driver.Conn) {
+	t.Helper()
+	for _, want := range productionSchema {
+		var engine, sortingKey string
+		row := conn.QueryRow(ctx,
+			`SELECT engine_full, sorting_key FROM system.tables WHERE database = currentDatabase() AND name = ?`,
+			want.table)
+		if err := row.Scan(&engine, &sortingKey); err != nil {
+			t.Fatalf("read schema for %s: %v", want.table, err)
+		}
+		if !strings.HasPrefix(engine, want.engine) {
+			t.Fatalf("%s engine is %q, want it to start %q -- the fixture must declare the engine the LATEST migration sets "+
+				"(055 converted the daily rollups to ReplacingMergeTree(computed_at)); a fixture that dedups differently "+
+				"from production proves nothing about production", want.table, engine, want.engine)
+		}
+		if sortingKey != want.sortingKey {
+			t.Fatalf("%s sorting key is %q, want %q -- rekeyed by the PYTHON migrations 027/042, which a .sql-only search misses",
+				want.table, sortingKey, want.sortingKey)
+		}
+	}
 }

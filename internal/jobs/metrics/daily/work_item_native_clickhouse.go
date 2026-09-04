@@ -118,11 +118,18 @@ type workItemBatchConn interface {
 // (sinks/clickhouse/work_graph.py:198) -- same table, same 26 columns, same
 // order.
 //
-// `work_item_metrics_daily` is a plain MergeTree with no dedup key, so a
-// partition recompute DUPLICATES rows here rather than replacing them. That is
-// Python's behaviour today, in production, and this port mirrors it faithfully
-// rather than quietly changing the write contract (team-lead ruling,
-// CHAOS-4283); see the PR's RISK-NOTES.
+// `work_item_metrics_daily` is ReplacingMergeTree(computed_at) -- migration
+// 055_work_item_daily_rollups_replacing_merge_tree.py (CHAOS-2645) converted it
+// from plain MergeTree for exactly this reason: append-only re-writes of the
+// same (key, day) left duplicate versions that flat-aggregating readers
+// double-counted. A partition recompute therefore COLLAPSES to the newest
+// computed_at on the sorting key rather than duplicating.
+//
+// This writer is unchanged either way -- it mirrors Python's INSERT -- but the
+// engine is why readers say FINAL (see capacity/recommendations), and an
+// earlier version of this comment claimed the opposite. It said "plain
+// MergeTree ... a partition recompute DUPLICATES rows", which was the
+// pre-055 truth and would have told an operator the wrong thing.
 // workItemUInt32s range-checks a row's counters through the package's single
 // checkUint32Range, naming the offending COLUMN in the error rather than just
 // the row. Every UInt32 destination these writers touch goes through here --
@@ -211,8 +218,9 @@ func WriteWorkItemMetricsDaily(
 }
 
 // WriteWorkItemUserMetricsDaily ports write_work_item_user_metrics
-// (sinks/clickhouse/work_graph.py:259). Also a plain MergeTree -- same
-// duplicate-on-recompute contract as above.
+// (sinks/clickhouse/work_graph.py:259). Also converted to
+// ReplacingMergeTree(computed_at) by migration 055 -- same collapse-on-recompute
+// contract as above, not duplication.
 func WriteWorkItemUserMetricsDaily(
 	ctx context.Context, conn workItemBatchConn, organizationID string, day time.Time,
 	rows []workitemmetrics.UserMetricsDailyRow, computedAt time.Time,

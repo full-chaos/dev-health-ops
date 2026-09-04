@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -292,6 +293,12 @@ type Dispatcher struct {
 	store      Store
 	publisher  Publisher
 	discoverer RepositoryDiscoverer
+	// CHAOS-5049 dead-claim sweep. All three are optional: a Dispatcher
+	// without them behaves exactly as before, so NewDispatcher's signature
+	// and every existing caller are unchanged.
+	sweeper       ExecutionSweeper
+	sweepObserver jobruntime.DailyMetricsExecutionSweepObserver
+	sweepLogger   *slog.Logger
 }
 
 func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscoverer) (*Dispatcher, error) {

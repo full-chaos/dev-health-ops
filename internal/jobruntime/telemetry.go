@@ -690,6 +690,25 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // pass and only becomes eligible on a later one).
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
 
+// dailyMetricsExecutionSweepOutcomes is the closed set of bounded outcomes
+// CHAOS-5049's dead-claim execution sweep can report per row it considered.
+// "swept" counts a metric_compatibility_executions row stuck 'executing'
+// whose derived claim was provably dead and which this pass moved to
+// 'ambiguous'; "skipped_claim_active" counts a row left untouched because its
+// claim still read as live -- a live 'executing' claim is real, still-in-flight
+// work, never something to sweep out from under.
+//
+// "failed" is in this vocabulary deliberately, and it is the member that makes
+// the other two readable. The sweep is fail-open by design: it must never fail
+// the dispatch job it rides on. But a fail-open path with NO failure counter is
+// indistinguishable from one that is working -- if every pass errored, "swept"
+// and "skipped_claim_active" would both sit at zero, which reads exactly like
+// "there was nothing to sweep". That is the CHAOS-4970 shape reproduced inside
+// the mechanism built to report it. Silent to the job, never silent to metrics.
+var dailyMetricsExecutionSweepOutcomes = []string{
+	"swept", "skipped_claim_active", "failed",
+}
+
 // dailyMetricsFinalizeLedgerRepairOutcomes is the closed set of bounded
 // outcomes CHAOS-4409's finalize-ledger bulk repair can report per execution
 // row it considered. "repaired" counts a daily/finalize
@@ -930,6 +949,10 @@ type MetricsCollector struct {
 	// activity by bounded outcome. See dailyMetricsFinalizeSweepOutcomes for
 	// the vocabulary.
 	dailyMetricsFinalizeSweep map[string]uint64
+	// dailyMetricsExecutionSweep (CHAOS-5049) counts dead-claim execution
+	// sweep activity by bounded outcome. See
+	// dailyMetricsExecutionSweepOutcomes for the closed set.
+	dailyMetricsExecutionSweep map[string]uint64
 	// dailyMetricsFinalizeLedgerRepair (CHAOS-4409) counts finalize-ledger
 	// bulk-repair activity by bounded outcome. See
 	// dailyMetricsFinalizeLedgerRepairOutcomes for the vocabulary. No
@@ -1236,6 +1259,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
+		dailyMetricsExecutionSweep:           make(map[string]uint64, len(dailyMetricsExecutionSweepOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
 		dailyMetricsPartitionRecompute:       make(map[dailyMetricsPartitionRecomputeLabels]uint64, len(dailyMetricsPartitionRecomputeFamilies)*len(dailyMetricsPartitionRecomputeOutcomes)),
@@ -1706,6 +1730,22 @@ func (collector *MetricsCollector) ObserveDailyMetricsRedrive(reason string, cou
 // outcome during a CHAOS-4389 stranded-finalize sweep. count must be >= 0,
 // matching ObserveDailyMetricsRedrive's discipline: a sweep pass that found
 // nothing still calls this with 0 so the series stays present, not absent.
+// ObserveDailyMetricsExecutionSweep records count execution rows moved (or
+// left alone, or lost to an error) by one bounded outcome during a CHAOS-5049
+// dead-claim sweep.
+func (collector *MetricsCollector) ObserveDailyMetricsExecutionSweep(outcome string, count int) error {
+	if !slices.Contains(dailyMetricsExecutionSweepOutcomes, outcome) {
+		return errors.New("daily metrics execution sweep outcome is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics execution sweep count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsExecutionSweep[outcome] += uint64(count)
+	return nil
+}
+
 func (collector *MetricsCollector) ObserveDailyMetricsFinalizeSweep(outcome string, count int) error {
 	if !slices.Contains(dailyMetricsFinalizeSweepOutcomes, outcome) {
 		return errors.New("daily metrics finalize sweep outcome is not registered")
@@ -3292,6 +3332,11 @@ func (collector *MetricsCollector) writeDailyMetricsRedrive(output *strings.Buil
 // label) so "how many runs are stuck" and "how many did we actually move"
 // each have their own unambiguous name for an alert to key off.
 func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *strings.Builder) {
+	writeMetadata(output, "dev_health_daily_metrics_executions_swept_ambiguous_total", "metric_compatibility_executions rows stuck 'executing' with a provably dead claim, by bounded outcome, from the CHAOS-5049 dead-claim sweep. outcome=\"failed\" is what distinguishes a sweep with nothing to do from one erroring every pass.", "counter")
+	for _, outcome := range dailyMetricsExecutionSweepOutcomes {
+		writeUintSample(output, "dev_health_daily_metrics_executions_swept_ambiguous_total",
+			[]metricLabel{{"outcome", outcome}}, collector.dailyMetricsExecutionSweep[outcome])
+	}
 	writeMetadata(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", "Daily-metrics runs found status='running' with every partition succeeded but finalization never reaching a terminal state, detected by a CHAOS-4389 stranded-finalize sweep.", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", nil, collector.dailyMetricsFinalizeSweep["detected"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", "Daily-metrics runs whose metrics.daily_finalize job was freshly (re-)enqueued by a CHAOS-4389 stranded-finalize sweep, outside the outbox's normal per-run dedupe.", "counter")

@@ -246,6 +246,20 @@ type DailyMetricsFinalizeSweepObserver interface {
 	ObserveDailyMetricsFinalizeSweep(outcome string, count int) error
 }
 
+// DailyMetricsExecutionSweepObserver is the narrow capability CHAOS-5049's
+// dead-claim execution sweep depends on. Every exit from 'executing' in
+// metric_compatibility_executions is written by the process holding the claim,
+// so a process that dies leaves the row stuck forever -- the ledger has no
+// lease column of its own to expire. The sweep moves such rows to 'ambiguous'
+// and reports what it did here.
+//
+// It is fail-open: it can never fail the dispatch job it rides on. The
+// "failed" outcome is therefore the only way an operator can tell a sweep with
+// nothing to do from one erroring on every pass.
+type DailyMetricsExecutionSweepObserver interface {
+	ObserveDailyMetricsExecutionSweep(outcome string, count int) error
+}
+
 // DailyMetricsFinalizeLedgerRepairObserver is the narrow capability a
 // CHAOS-4409 finalize-ledger bulk repair depends on: only the repair itself
 // knows how many daily/finalize metric_compatibility_executions rows it

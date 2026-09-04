@@ -839,11 +839,35 @@ if [ "$HOST_OS" = Linux ]; then
   # "/var/lib/oci-cache/lane-scratch/$NAME" resolve OUTSIDE the mandated
   # root entirely (measured: it resolves to plain /tmp, exactly the
   # location this whole change exists to stop using). `basename --` on the
-  # value collapses any such traversal to a single, harmless path segment
-  # (the same defensive idiom LANE/LANE_KEY already uses for $WT above) --
-  # this can never escape the lane-scratch root, no matter what `-n` was
-  # given.
+  # value collapses a MULTI-component traversal like that one to a single,
+  # harmless path segment (the same defensive idiom LANE/LANE_KEY already
+  # uses for $WT above).
+  #
+  # `basename --` is NOT sufficient by itself, though (found by this
+  # version's own confirmation-pass round, EXECUTED, independently
+  # reproduced by the lane): `basename -- '..'` returns `..` UNCHANGED --
+  # basename only strips a leading directory portion, it has no notion that
+  # `.` or `..` are themselves unsafe as a final path component. `-n '..'`
+  # therefore still resolves ONE level up, to /var/lib/oci-cache itself --
+  # the parent of go-build/go-mod/uv AND of every other lane's scratch
+  # directory. Explicitly reject a basename of `.` or `..` (and, belt and
+  # braces, an empty result) by dying rather than guessing a substitute --
+  # this is the same "fail closed on anything unexpected" posture as the
+  # `mkdir -p` failure a few lines below.
   SAFE_LANE_NAME=$(basename -- "$NAME")
+  # `.`/`..` are the two escapes actually measured (see above); `/` is a
+  # third `basename` special-case swept in while fixing those two rather
+  # than found independently -- `basename -- "/"` returns the single
+  # character `/` (unlike every other input, which never contains a `/`
+  # once basename has run), which would make the "lane" subdirectory
+  # component vanish entirely and collapse onto the shared lane-scratch
+  # ROOT itself rather than a per-lane subdirectory under it. Not an
+  # upward escape like `.`/`..`, but still not a safe, named, per-lane
+  # directory -- rejected for the same reason.
+  case "$SAFE_LANE_NAME" in
+    '' | . | .. | /)
+      die "-n/lane name '$NAME' sanitizes to '$SAFE_LANE_NAME', which is not a safe lane-scratch directory name -- refusing to guess a substitute" ;;
+  esac
   LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$SAFE_LANE_NAME"
   mkdir -p "$LANE_SCRATCH_ROOT" \
     || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"

@@ -97,7 +97,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1067 1074 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1091 1098 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -192,7 +192,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 903 912 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 927 936 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -314,7 +314,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1200 1200 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1224 1224 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -372,7 +372,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1160 1244 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1184 1268 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -608,7 +608,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 903 912 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 927 936 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -649,7 +649,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1092 1111 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1116 1135 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -890,7 +890,7 @@ fi
 # instead of switching location. Proof: extract the real if/else/heredoc
 # block, run it once per host, assert the generated prompt-fragment text.
 # ---------------------------------------------------------------------------
-extract 1330 1340 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1354 1364 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
@@ -933,7 +933,7 @@ fi
 # unavailable. Proof: extract the real STANDING_RULES heredoc BODY (between
 # its literal open/close marker lines in the shipped script) and check it.
 # ---------------------------------------------------------------------------
-extract 1255 1296 'go test unavailable' "$WORK/standing_rules_body.txt"
+extract 1279 1320 'go test unavailable' "$WORK/standing_rules_body.txt"
 if grep -q "creating work dir" "$WORK/standing_rules_body.txt" \
    && grep -qi "RETRY IT EXACTLY ONCE" "$WORK/standing_rules_body.txt"; then
   ok "v4.8.6 addendum: the injected prompt tells the reviewer to retry exactly once on a 'creating work dir' failure"
@@ -953,11 +953,13 @@ fi
 # `mkdir -p "$LANE_SCRATCH_ROOT"` never touches the real /var/lib on
 # whatever host runs this harness.
 # ---------------------------------------------------------------------------
-extract 834 857 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
+extract 834 881 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
 grep -qF 'SAFE_LANE_NAME=$(basename -- "$NAME")' "$WORK/lane_scratch_root.sh" \
   || { echo "FAIL: extracted lane_scratch_root.sh does not contain the NAME sanitization line" >&2; exit 1; }
-grep -qF '/var/lib/oci-cache/lane-scratch/$NAME' "$WORK/lane_scratch_root.sh" \
+grep -qF '/var/lib/oci-cache/lane-scratch/$SAFE_LANE_NAME' "$WORK/lane_scratch_root.sh" \
   || { echo "FAIL: extracted lane_scratch_root.sh does not contain the expected lane-scratch path template" >&2; exit 1; }
+grep -qF "case \"\$SAFE_LANE_NAME\" in" "$WORK/lane_scratch_root.sh" \
+  || { echo "FAIL: extracted lane_scratch_root.sh does not contain the '.'/'..'/'/' rejection case block" >&2; exit 1; }
 
 run_lane_scratch_root() {
   local host_os="$1" name="$2" tmpdir_val="$3" mkdir_calls_file="$4" mkdir_should_fail="$5"
@@ -1082,6 +1084,74 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# v4.8.6, found by round #2 of the bigboy confirmation pass and
+# independently reproduced by the lane before fixing: `basename --` alone
+# is NOT sufficient -- `basename -- '..'` returns `..` UNCHANGED (basename
+# strips a leading directory portion; it has no notion that `.`/`..` are
+# themselves unsafe as a final path component), so `-n '..'` still made
+# LANE_SCRATCH_ROOT resolve to /var/lib/oci-cache itself, one level above
+# the mandated lane-scratch/<lane> subdirectory and the direct parent of
+# the shared go-build/go-mod/uv caches. Swept further by the lane itself
+# (not flagged by the round): `basename -- '/'` returns the bare `/`
+# character, collapsing the lane subdirectory away entirely. Fixed with an
+# explicit `case` rejecting a SAFE_LANE_NAME of '', '.', '..', or '/' by
+# dying rather than guessing a substitute. Proof: each bad value must die
+# (non-zero exit, explicit refusal message) through the REAL block; a
+# legitimate name must still pass.
+# ---------------------------------------------------------------------------
+for BAD_NAME in '.' '..' '/' ''; do
+  CALLS_SCRATCH_DOTDOT="$WORK/mkdir-calls-dotdot-$(printf '%s' "$BAD_NAME" | tr -c 'a-zA-Z0-9' '_').txt"
+  set +e
+  RESOLVE_SCRATCH_DOTDOT=$(run_lane_scratch_root Linux "$BAD_NAME" "$WORK/unused-tmpdir" "$CALLS_SCRATCH_DOTDOT" 0 2>&1)
+  RC_SCRATCH_DOTDOT=$?
+  set -e
+  if [ "$RC_SCRATCH_DOTDOT" -ne 0 ] \
+     && printf '%s' "$RESOLVE_SCRATCH_DOTDOT" | grep -qi 'not a safe lane-scratch directory name' \
+     && [ ! -s "$CALLS_SCRATCH_DOTDOT" ]; then
+    ok "v4.8.6 scratch dot-dot fix: NAME='$BAD_NAME' is REJECTED (dies, never calls mkdir) rather than resolving to an unsafe LANE_SCRATCH_ROOT"
+  else
+    notok "v4.8.6 scratch dot-dot fix: NAME='$BAD_NAME' was NOT rejected (rc=$RC_SCRATCH_DOTDOT, out='$RESOLVE_SCRATCH_DOTDOT', mkdir calls: $(cat "$CALLS_SCRATCH_DOTDOT" 2>/dev/null))"
+  fi
+done
+
+CALLS_SCRATCH_DOTDOT_LEGIT="$WORK/mkdir-calls-dotdot-legit.txt"
+RESOLVE_SCRATCH_DOTDOT_LEGIT=$(run_lane_scratch_root Linux my-legit-lane "$WORK/unused-tmpdir" "$CALLS_SCRATCH_DOTDOT_LEGIT" 0)
+if printf '%s' "$RESOLVE_SCRATCH_DOTDOT_LEGIT" | grep -q '^RW_BASE=/var/lib/oci-cache/lane-scratch/my-legit-lane$'; then
+  ok "v4.8.6 scratch dot-dot fix: a legitimate NAME ('my-legit-lane') still resolves and is not caught by the new rejection case"
+else
+  notok "v4.8.6 scratch dot-dot fix: a legitimate NAME was wrongly rejected or misresolved (got: $RESOLVE_SCRATCH_DOTDOT_LEGIT)"
+fi
+
+# Negative control: strip the '.'/'..'/'/' rejection case block and confirm
+# the same bad NAMEs do NOT die -- proves the tests above exercise the real
+# fix, not a harness quirk.
+sed '/^  case "\$SAFE_LANE_NAME" in$/,/^  esac$/d' \
+  "$WORK/lane_scratch_root.sh" > "$WORK/lane_scratch_root_no_dotdot_check.sh"
+grep -qF 'case "$SAFE_LANE_NAME" in' "$WORK/lane_scratch_root_no_dotdot_check.sh" \
+  && { echo "FAIL: mutation strip of lane_scratch_root_no_dotdot_check.sh did not remove the rejection case block -- fix the sed pattern" >&2; exit 1; }
+for BAD_NAME in '.' '..' '/'; do
+  CALLS_SCRATCH_DOTDOT_NEG="$WORK/mkdir-calls-dotdot-neg-$(printf '%s' "$BAD_NAME" | tr -c 'a-zA-Z0-9' '_').txt"
+  : > "$CALLS_SCRATCH_DOTDOT_NEG"
+  set +e
+  RESOLVE_SCRATCH_DOTDOT_NEG=$(
+    HOST_OS=Linux NAME="$BAD_NAME" TMPDIR="$WORK/unused-tmpdir"
+    mkdir() { printf '%s\n' "$*" >> "$CALLS_SCRATCH_DOTDOT_NEG"; return 0; }
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/lane_scratch_root_no_dotdot_check.sh"
+    printf 'RW_BASE=%s\n' "$RW_BASE"
+  )
+  RC_SCRATCH_DOTDOT_NEG=$?
+  set -e
+  if [ "$RC_SCRATCH_DOTDOT_NEG" -eq 0 ] && [ -s "$CALLS_SCRATCH_DOTDOT_NEG" ]; then
+    ok "v4.8.6 scratch dot-dot negative control: with the rejection case stripped, NAME='$BAD_NAME' DOES proceed to mkdir (rc=0), confirming the positive tests exercise the real fix"
+  else
+    notok "v4.8.6 scratch dot-dot negative control: with the rejection case stripped, NAME='$BAD_NAME' still didn't proceed (rc=$RC_SCRATCH_DOTDOT_NEG, out='$RESOLVE_SCRATCH_DOTDOT_NEG') -- the positive tests above may not be exercising the real bug"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # v4.8.6 (found in the field, same day): a lane keying only on "does stdout
 # contain a VERDICT= line" (not the exit code) misread a FAILED codex round
 # as a real verdict, because the wrapper printed `VERDICT=$V` even when
@@ -1092,7 +1162,7 @@ fi
 # NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
 # form, never a VERDICT= line, and exiting 7).
 # ---------------------------------------------------------------------------
-extract 1570 1570 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+extract 1594 1594 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
 
 RC_CHECK_OUT_OK=$(
   set +e

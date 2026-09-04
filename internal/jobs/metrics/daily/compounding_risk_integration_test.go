@@ -143,28 +143,36 @@ INSERT INTO repo_complexity_daily
 	}
 	targetDay := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 
-	// TYPE PIN (CI failure on #2231, both tests in this file). `day`,
-	// `start`, `mid` and `end` are ClickHouse `Date` PARAMETERS, and binding a
-	// time.Time to one is a server-side parse error, not a silent coercion:
+	// TYPE PIN. Every typed {name:Type} query parameter must be bound as a Go
+	// STRING. clickhouse-go passes a Go string through verbatim and quotes
+	// everything else, and the SERVER parses a wire-level typed parameter --
+	// so the quotes land inside the literal and the type parser rejects it.
+	// Both instances of this class have now been caught here, on a real
+	// server, and nowhere else:
 	//
-	//   Cannot parse date here: toDateTime('2026-08-24 00:00:00')
-	//   cannot be parsed as Date for query parameter 'day'
+	//   Date  (#2231 CI): Cannot parse date here:
+	//     toDateTime('2026-08-24 00:00:00') cannot be parsed as Date
+	//   UUID  (#2230 bigboy integration): Cannot parse UUID from String:
+	//     invalid format, expected 32 hexadecimal digits
 	//
-	// The loader binds them as YYYY-MM-DD strings for that reason. Nothing in
-	// the compute-side tests can reach this -- it is a driver/server contract,
-	// visible only against a real ClickHouse -- so this assertion exists to
-	// make the binding itself the thing under test rather than incidental to
-	// the row assertions below. If someone "simplifies" the Format calls away,
-	// this fails with the message above rather than a confusing row mismatch.
+	// The UUID one survived the Date fix because the pin only covered Date --
+	// so it is written as a CLASS pin now, not a per-type one. Note the trap
+	// that hid it: {repo_ids:Array(UUID)} binds []uuid.UUID happily, because
+	// quoted elements are valid inside array-literal syntax. A passing array
+	// bind says nothing about the scalar bind beside it.
+	//
+	// No compute-side test can reach any of this; it is a driver/server
+	// contract. These calls exist so the BINDING is the thing under test,
+	// failing with the message above instead of a confusing row mismatch.
 	if _, err := executor.loader.LoadRepoMetrics(
 		ctx, orgA, []uuid.UUID{uuid.MustParse(repoA1)}, targetDay,
 	); err != nil {
-		t.Fatalf("Date-parameter binding regressed in LoadRepoMetrics: %v", err)
+		t.Fatalf("typed-parameter binding regressed in LoadRepoMetrics: %v", err)
 	}
 	if _, err := executor.loader.LoadComplexityDelta(
 		ctx, orgA, uuid.MustParse(repoA1), targetDay, compoundingrisk.ComplexityWindowDays,
 	); err != nil {
-		t.Fatalf("Date-parameter binding regressed in LoadComplexityDelta: %v", err)
+		t.Fatalf("typed-parameter binding regressed in LoadComplexityDelta: %v", err)
 	}
 	run := Run{ID: "run-a", OrganizationID: orgA, TargetDay: targetDay}
 	partition := Partition{ID: "partition-a", RunID: "run-a", RepoIDs: []RepositoryID{RepositoryID(repoA1)}}

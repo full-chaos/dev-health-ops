@@ -91,7 +91,7 @@ FROM (
     WHERE org_id = {org_id:String}
       AND day = {day:Date}
       AND repo_id IN {repo_ids:Array(UUID)}
-    GROUP BY repo_id
+    GROUP BY org_id, repo_id
 )
 ORDER BY repo_id`
 
@@ -197,7 +197,7 @@ FROM (
     WHERE repo_id = {repo_id:UUID}
       AND day >= {start:Date} AND day <= {end:Date}
       AND org_id = {org_id:String}
-    GROUP BY day
+    GROUP BY org_id, repo_id, day
 )`
 
 // LoadComplexityDelta returns the relative change in cyclomatic_per_kloc over

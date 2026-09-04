@@ -261,6 +261,14 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				log.Printf("query-api: investment/explain streaming error: %v", result.err)
 				return
 			}
+			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
+			// result.body is EncodeInvestmentMixExplanation's own JSON
+			// output (investment_explain_route.go's caller, this function's
+			// own doc comment above), never HTML -- Content-Type is set to
+			// application/json at this function's entry. Same triage shape
+			// as main.go's readyzHandler suppression for this identical
+			// rule: a scanner that cannot see the Content-Type header or
+			// the byte source, not a real XSS surface on a JSON-only route.
 			_, _ = w.Write(result.body)
 			if flusher != nil {
 				flusher.Flush()

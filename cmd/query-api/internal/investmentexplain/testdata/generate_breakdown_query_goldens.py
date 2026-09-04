@@ -81,6 +81,9 @@ async def _capture(case_name: str, fn, kwargs: dict[str, Any]) -> dict[str, Any]
                 subcategories=kwargs.get("subcategories"),
             )
         except _CaptureSentinel:
+            # Expected control flow, not a swallowed error: the stub raises
+            # this deliberately (see _make_capturing_stub) right after
+            # capturing query/params, so the real DB call is never reached.
             pass
     if "query" not in captured:
         raise RuntimeError(f"{case_name}: stub was never reached")

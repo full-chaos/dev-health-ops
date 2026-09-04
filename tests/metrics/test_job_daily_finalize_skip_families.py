@@ -111,7 +111,14 @@ def _neutralize_finalize(monkeypatch: Any, *, sink: Any, calls: dict[str, int]) 
     # Everything after the IC block belongs to CHAOS-4365, not this gate.
     monkeypatch.setattr(job_daily, "build_repo_pattern_resolver", lambda *a, **k: None)
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
-    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", lambda **k: 0)
+    # The finalize-scope CHAOS-4365 writers, which run AFTER the IC block and
+    # are not what these tests are about. Neutralised by their real names --
+    # an earlier revision patched _write_compounding_risk_for_day, which
+    # exists but is the PARTITION-scope one and is never called here, so the
+    # patch silently did nothing and the run died further down.
+    monkeypatch.setattr(
+        job_daily, "_write_compounding_risk_team_rows_for_day", lambda **k: 0
+    )
 
 
 @pytest.mark.asyncio

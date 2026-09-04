@@ -352,11 +352,21 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 	}
 
 	t.Run("work_item_metrics_daily matches the python golden", func(t *testing.T) {
+		// The ORDER BY must match Python's sort key EXACTLY, because the
+		// comparison below is positional: compute_work_items.py:1325 sorts by
+		// (provider, work_scope_id, str(team_id or "")).
+		//
+		// Omitting `provider` agreed by accident while every corpus row was
+		// github. Adding jira and linear scopes broke it -- ClickHouse orders
+		// "PROJ"/"TEAM" BEFORE lowercase "acme/..." lexically, while Python
+		// puts them last (github < jira < linear). Every row was correct; only
+		// this readback's order disagreed, and the positional compare turned
+		// that into eight phantom mismatches on the first real-ClickHouse run.
 		rows, err := conn.Query(ctx, `
 SELECT work_scope_id, team_id, team_name, items_started, items_completed,
        wip_count_end_of_day, cycle_time_p50_hours, story_points_completed, predictability_score
 FROM work_item_metrics_daily WHERE org_id = ?
-ORDER BY work_scope_id, team_id`, orgA)
+ORDER BY provider, work_scope_id, ifNull(team_id, '')`, orgA)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -453,10 +463,12 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 	})
 
 	t.Run("estimate_coverage_metrics_daily matches the python golden", func(t *testing.T) {
+		// Same sort key as the metrics readback above, and for the same reason;
+		// compute_work_items.py:1475 sorts identically.
 		rows, err := conn.Query(ctx, `
 SELECT work_scope_id, ifNull(team_id, ''), estimated_count, unestimated_count, backlog_size, ratio
 FROM estimate_coverage_metrics_daily FINAL WHERE org_id = ?
-ORDER BY work_scope_id, ifNull(team_id, '')`, orgA)
+ORDER BY provider, work_scope_id, ifNull(team_id, '')`, orgA)
 		if err != nil {
 			t.Fatal(err)
 		}

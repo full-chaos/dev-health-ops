@@ -265,6 +265,44 @@
 # cache mid-flight on 09-02 and invalidated other lanes' in-progress work;
 # these prefixes exist so a reap can never repeat that by accident.
 #
+# v4.8.5 (2026-09-03) fixes a silent whole-script death found by GWC's
+# lane-web-681 running v4.8.4 on dev-health-web (a repo with no go.mod):
+#
+#   1. The warm step ran UNCONDITIONALLY, even in a repo with no Go code.
+#      `go mod download all` failed as expected (no go.mod), but the count
+#      line right after it -- `find "$RGOMODCACHE/cache/download" -name
+#      '*.zip' | wc -l | tr -d ' '` -- runs against a path that only ever
+#      gets created BY a successful `go mod download`, so it also failed;
+#      under `set -euo pipefail` that pipeline failure killed the whole
+#      script before the warm step's own `if [ "$WARM_RC" -ne 0 ]` block
+#      ever got to run its controlled, message-printing `die`. Net effect:
+#      exit 1, no round .log, no verdict, nothing but a 114-byte .log.warm
+#      -- a failure indistinguishable from the wrapper never having run.
+#      Fixed two ways, both needed:
+#        a. the warm step now only runs when `$RW/go.mod` exists at the
+#           reviewed tip. A repo with no go.mod (web, acr-frontend) skips
+#           it entirely -- `warm-step: SKIPPED reason=no-go.mod` in the
+#           round .log, no Go env exported to codex, straight to the
+#           review. A repo WITH go.mod is unaffected: same warm step, same
+#           loud abort on a real failure.
+#        b. belt-and-braces, because the same crash shape can still occur
+#           in a go.mod repo whose `go mod download all` fails before ever
+#           creating cache/download: the WARM_MODULES count pipeline gets
+#           `|| true` (same class as the `pgrep -fc ... 2>/dev/null ||
+#           echo 0` idiom this file already discusses above), so a missing
+#           cache/download dir can never stop the script from reaching its
+#           own `if [ "$WARM_RC" -ne 0 ]` check and dying WITH a message.
+#   2. The round .log ($L) was not created until the first thing wrote to
+#      it -- in practice, the warm step's own failure block (or, on a
+#      clean run, the round-provenance line well after the warm step).
+#      Any death before that point (including the one above) left NO .log
+#      at all, which is what made the failure read as "the wrapper never
+#      started" instead of "the wrapper started and hit an error". Fixed:
+#      `$L` is now created (empty) immediately once its path is resolved,
+#      before the warm step or anything else that could die -- once the
+#      wrapper has gotten this far, its own round .log is guaranteed to
+#      exist no matter what happens next.
+#
 # Usage: scripts/codex-review.sh [options]   (run from the lane worktree,
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
@@ -484,6 +522,15 @@ TS=$(date +%Y%m%dT%H%M%S)
 V="$OUTDIR/$NAME-$TS.md"
 L="$OUTDIR/$NAME-$TS.log"
 [ -e "$V" ] && die "verdict file $V already exists — refusing to reuse a name"
+# v4.8.5: create the round .log NOW, before anything else in this script can
+# die (the warm step in particular -- see its changelog note above). Every
+# earlier version left $L uncreated until the first thing wrote to it, so a
+# death before that point (a killed pipeline under set -euo pipefail, a
+# stray die() from a step that forgot to append) left NO .log at all --
+# indistinguishable from the wrapper never having started. From here on,
+# once the wrapper has gotten this far, its own round .log is guaranteed to
+# exist no matter what happens next.
+: >"$L" || die "cannot create round log $L"
 
 # Bound the Go build cache the REVIEWER's own builds use.
 #
@@ -867,75 +914,97 @@ git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add 
 # (lane-structure-memory r2: `go mod download` + `go build ./...` into the
 # round caches, then one `go test -count=1` on a single test to prove the
 # graph resolves offline).
-WARM_LOG="$L.warm"
-WARM_OUT="$RGOTMPDIR/warmbuild"
-WARM_START=$(date +%s)
-warn "warm: go mod download + build/vet (+ -tags=integration) + offline resolve proof in $RW against $RGOMODCACHE, outside the sandbox ..."
-WARM_RC=0
-( cd "$RW" && env \
-    GOFLAGS="$RGOFLAGS" \
-    GOMAXPROCS="$RGOMAXPROCS" \
-    GOCACHE="$RGOCACHE" \
-    GOMODCACHE="$RGOMODCACHE" \
-    GOTMPDIR="$RGOTMPDIR" \
-    GOPATH="$RGOPATH" \
-    TMPDIR="$RTMPDIR" \
-    bash -c '
-      set -euo pipefail
-      mkdir -p "$1"
-      go mod download all
-      go build -o "$1/" ./...
-      go vet ./...
-      go build -tags=integration -o "$1/" ./...
-      go vet -tags=integration ./...
-      GOPROXY=off go test -count=1 -run "^\$" ./...
-    ' _ "$WARM_OUT" ) >"$WARM_LOG" 2>&1 || WARM_RC=$?
-WARM_END=$(date +%s)
-WARM_DURATION=$((WARM_END - WARM_START))
-# Module count: zip files under the round's own GOMODCACHE download dir.
-# 2>/dev/null so a cache that never got far enough to create this path (e.g.
-# `go mod download` itself failed) reports 0 rather than erroring the count.
-WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name '*.zip' 2>/dev/null | wc -l | tr -d ' ')
-# Cache sizes (team-lead's ask, to size-compare against a manually warmed
-# round like lane-structure-memory's 432M mod / 587M build). `du -sh` on a
-# dir this script itself created and already mkdir'd, so it always exists;
-# `|| true` + a fallback field covers the (unexpected) case du itself is
-# missing or errors, rather than aborting the round over a reporting line.
-WARM_MODCACHE_SIZE=$(du -sh "$RGOMODCACHE" 2>/dev/null | cut -f1)
-WARM_MODCACHE_SIZE=${WARM_MODCACHE_SIZE:-unknown}
-WARM_GOCACHE_SIZE=$(du -sh "$RGOCACHE" 2>/dev/null | cut -f1)
-WARM_GOCACHE_SIZE=${WARM_GOCACHE_SIZE:-unknown}
-# v4.8.4: a warm-step failure whose raw `go` error names an unwritable
-# $GOPATH/pkg/sumdb path (bigboy: ~/go and ~/go/pkg are root:root 755)
-# reads exactly like a network failure -- "open .../pkg/sumdb/
-# sum.golang.org/latest: no such file or directory" -- and is not one.
-# GOPATH is already pointed at RGOPATH above, so this should not fire on
-# a correctly-configured round; if it still does (e.g. a caller-pinned
-# CODEX_REVIEW_GOPATH pointing somewhere unwritable), name the exact path
-# and say plainly that this is a permission problem, not a network one.
-if [ "$WARM_RC" -ne 0 ]; then
-  SUMDB_HIT=$(grep -oE '[^ ]*pkg/sumdb/[^ ]*' "$WARM_LOG" 2>/dev/null | head -1 || true)
-  if [ -n "$SUMDB_HIT" ]; then
-    SUMDB_PARENT=$(dirname "$SUMDB_HIT")
-    while [ -n "$SUMDB_PARENT" ] && [ "$SUMDB_PARENT" != "/" ] && [ ! -e "$SUMDB_PARENT" ]; do
-      SUMDB_PARENT=$(dirname "$SUMDB_PARENT")
-    done
-    if [ -n "$SUMDB_PARENT" ] && [ ! -w "$SUMDB_PARENT" ]; then
-      warn "WARM STEP hit $SUMDB_HIT, whose nearest existing parent ($SUMDB_PARENT) is not writable by this user -- this is a PERMISSION problem, not a network problem. GOPATH for this round was $RGOPATH; if the failing path above is NOT under that, GOPATH did not take effect for this command -- check CODEX_REVIEW_GOPATH."
+# v4.8.5: this whole step needs Go tooling to warm anything, and only a repo
+# with a go.mod at the reviewed tip has any. Gate on the ACTUAL TIP CONTENT
+# ($RW/go.mod, populated by the `git worktree add` above), never the repo
+# name or a flag -- a repo with no go.mod (dev-health-web, acr-frontend)
+# skips the entire step and exports no Go env to codex; a repo WITH go.mod
+# is unaffected and keeps the full warm step, including its loud abort.
+if [ -f "$RW/go.mod" ]; then
+  WARM_LOG="$L.warm"
+  WARM_OUT="$RGOTMPDIR/warmbuild"
+  WARM_START=$(date +%s)
+  warn "warm: go mod download + build/vet (+ -tags=integration) + offline resolve proof in $RW against $RGOMODCACHE, outside the sandbox ..."
+  WARM_RC=0
+  ( cd "$RW" && env \
+      GOFLAGS="$RGOFLAGS" \
+      GOMAXPROCS="$RGOMAXPROCS" \
+      GOCACHE="$RGOCACHE" \
+      GOMODCACHE="$RGOMODCACHE" \
+      GOTMPDIR="$RGOTMPDIR" \
+      GOPATH="$RGOPATH" \
+      TMPDIR="$RTMPDIR" \
+      bash -c '
+        set -euo pipefail
+        mkdir -p "$1"
+        go mod download all
+        go build -o "$1/" ./...
+        go vet ./...
+        go build -tags=integration -o "$1/" ./...
+        go vet -tags=integration ./...
+        GOPROXY=off go test -count=1 -run "^\$" ./...
+      ' _ "$WARM_OUT" ) >"$WARM_LOG" 2>&1 || WARM_RC=$?
+  WARM_END=$(date +%s)
+  WARM_DURATION=$((WARM_END - WARM_START))
+  # Module count: zip files under the round's own GOMODCACHE download dir.
+  # 2>/dev/null so a cache that never got far enough to create this path (e.g.
+  # `go mod download` itself failed) reports 0 rather than erroring the count.
+  # v4.8.5: `|| true` on the WHOLE assignment, not just the find -- under
+  # `set -euo pipefail`, `find` exiting non-zero (path does not exist yet,
+  # e.g. `go mod download` failed before creating it) survives the `| wc -l |
+  # tr -d ' '` pipe as the pipeline's own exit status and, unguarded, killed
+  # the script right here, before the `if [ "$WARM_RC" -ne 0 ]` block below
+  # ever got to run its own controlled, message-printing `die` (found by
+  # GWC's lane-web-681: a no-go.mod repo hit exactly this, silently, with no
+  # .log at all). The captured value is unaffected -- `wc -l` on find's empty
+  # output is still "0" -- only the fatal exit status is suppressed. Same
+  # class as the `pgrep -fc ... 2>/dev/null || echo 0` idiom this file
+  # already discusses in the v4.2/v4.8.1 notes above.
+  WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name '*.zip' 2>/dev/null | wc -l | tr -d ' ') || true
+  # Cache sizes (team-lead's ask, to size-compare against a manually warmed
+  # round like lane-structure-memory's 432M mod / 587M build). `du -sh` on a
+  # dir this script itself created and already mkdir'd, so it always exists;
+  # `|| true` + a fallback field covers the (unexpected) case du itself is
+  # missing or errors, rather than aborting the round over a reporting line.
+  WARM_MODCACHE_SIZE=$(du -sh "$RGOMODCACHE" 2>/dev/null | cut -f1)
+  WARM_MODCACHE_SIZE=${WARM_MODCACHE_SIZE:-unknown}
+  WARM_GOCACHE_SIZE=$(du -sh "$RGOCACHE" 2>/dev/null | cut -f1)
+  WARM_GOCACHE_SIZE=${WARM_GOCACHE_SIZE:-unknown}
+  # v4.8.4: a warm-step failure whose raw `go` error names an unwritable
+  # $GOPATH/pkg/sumdb path (bigboy: ~/go and ~/go/pkg are root:root 755)
+  # reads exactly like a network failure -- "open .../pkg/sumdb/
+  # sum.golang.org/latest: no such file or directory" -- and is not one.
+  # GOPATH is already pointed at RGOPATH above, so this should not fire on
+  # a correctly-configured round; if it still does (e.g. a caller-pinned
+  # CODEX_REVIEW_GOPATH pointing somewhere unwritable), name the exact path
+  # and say plainly that this is a permission problem, not a network one.
+  if [ "$WARM_RC" -ne 0 ]; then
+    SUMDB_HIT=$(grep -oE '[^ ]*pkg/sumdb/[^ ]*' "$WARM_LOG" 2>/dev/null | head -1 || true)
+    if [ -n "$SUMDB_HIT" ]; then
+      SUMDB_PARENT=$(dirname "$SUMDB_HIT")
+      while [ -n "$SUMDB_PARENT" ] && [ "$SUMDB_PARENT" != "/" ] && [ ! -e "$SUMDB_PARENT" ]; do
+        SUMDB_PARENT=$(dirname "$SUMDB_PARENT")
+      done
+      if [ -n "$SUMDB_PARENT" ] && [ ! -w "$SUMDB_PARENT" ]; then
+        warn "WARM STEP hit $SUMDB_HIT, whose nearest existing parent ($SUMDB_PARENT) is not writable by this user -- this is a PERMISSION problem, not a network problem. GOPATH for this round was $RGOPATH; if the failing path above is NOT under that, GOPATH did not take effect for this command -- check CODEX_REVIEW_GOPATH."
+      fi
     fi
+    {
+      printf 'warm-step: FAILED rc=%s duration=%ss modules=%s modcache=%s gocache=%s\n' \
+        "$WARM_RC" "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE"
+      printf -- '--- warm step output (%s) ---\n' "$WARM_LOG"
+      cat "$WARM_LOG" 2>/dev/null || true
+    } >>"$L" 2>/dev/null || true
+    warn "WARM STEP FAILED after ${WARM_DURATION}s (rc=$WARM_RC, $WARM_MODULES module(s) cached in $RGOMODCACHE) -- a cold sandbox must never silently degrade to a gofmt-only verdict. See $L and $WARM_LOG. ABORTING before codex starts."
+    die "warm step failed for $TIP -- round aborted, no codex round was started"
   fi
-  {
-    printf 'warm-step: FAILED rc=%s duration=%ss modules=%s modcache=%s gocache=%s\n' \
-      "$WARM_RC" "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE"
-    printf -- '--- warm step output (%s) ---\n' "$WARM_LOG"
-    cat "$WARM_LOG" 2>/dev/null || true
-  } >>"$L" 2>/dev/null || true
-  warn "WARM STEP FAILED after ${WARM_DURATION}s (rc=$WARM_RC, $WARM_MODULES module(s) cached in $RGOMODCACHE) -- a cold sandbox must never silently degrade to a gofmt-only verdict. See $L and $WARM_LOG. ABORTING before codex starts."
-  die "warm step failed for $TIP -- round aborted, no codex round was started"
+  printf 'warm-step: OK duration=%ss modules=%s modcache=%s gocache=%s resolve=ok\n' \
+    "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE" >>"$L"
+  warn "warm: OK duration=${WARM_DURATION}s modules=$WARM_MODULES modcache=$WARM_MODCACHE_SIZE gocache=$WARM_GOCACHE_SIZE cached in $RGOMODCACHE"
+else
+  printf 'warm-step: SKIPPED reason=no-go.mod\n' >>"$L"
+  warn "warm: SKIPPED -- no go.mod at $TIP, nothing to warm, no Go env exported -- proceeding straight to codex"
 fi
-printf 'warm-step: OK duration=%ss modules=%s modcache=%s gocache=%s resolve=ok\n' \
-  "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE" >>"$L"
-warn "warm: OK duration=${WARM_DURATION}s modules=$WARM_MODULES modcache=$WARM_MODCACHE_SIZE gocache=$WARM_GOCACHE_SIZE cached in $RGOMODCACHE"
 
 cp "$PROMPT" "$RW/prompt.md"
 # STANDING SAFETY LINE, appended to every prompt regardless of what the lane

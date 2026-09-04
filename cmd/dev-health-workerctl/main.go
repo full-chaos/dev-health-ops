@@ -903,6 +903,36 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	}
 }
 
+// canonicalDedupedRepositoryIDs canonicalizes AND de-duplicates rawIDs
+// (codex adversarial review round 3, P1). Both steps matter: canonicalizing
+// alone (as an earlier fix already did) is not enough, because
+// ManualDailyRunGeneration hashes this returned slice verbatim BEFORE
+// daily.normalizeRepositoryPartitions deduplicates the persisted partition
+// set downstream. `--repo-id R --repo-id R` used to mint a DIFFERENT
+// generation than a single `--repo-id R`, even though both persist the
+// identical single-repository partition -- and because a repository-scoped
+// request skips StartManualDailyRun's cross-generation coverage check
+// entirely (that check is deferred-discovery-only by design), the two
+// generations dispatched two independent, genuinely duplicate computations
+// of the same (org, day, repo) scope.
+func canonicalDedupedRepositoryIDs(rawIDs []string) ([]daily.RepositoryID, error) {
+	seen := make(map[daily.RepositoryID]struct{}, len(rawIDs))
+	repositoryIDs := make([]daily.RepositoryID, 0, len(rawIDs))
+	for _, id := range rawIDs {
+		canonical, err := canonicalUUID(id)
+		if err != nil {
+			return nil, err
+		}
+		repositoryID := daily.RepositoryID(canonical)
+		if _, duplicate := seen[repositoryID]; duplicate {
+			continue
+		}
+		seen[repositoryID] = struct{}{}
+		repositoryIDs = append(repositoryIDs, repositoryID)
+	}
+	return repositoryIDs, nil
+}
+
 // dispatchMetricsDailyStart handles `metrics daily-start` (CHAOS-5055): the
 // operator entry point that dispatches a daily-metrics run for one
 // (organization, day-range[, repository set]) through the SAME StartRunTx
@@ -949,13 +979,9 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
 		return writeError(stderr, "invalid_request")
 	}
-	repositoryIDs := make([]daily.RepositoryID, 0, len(repoIDs))
-	for _, id := range repoIDs {
-		canonicalRepo, err := canonicalUUID(id)
-		if err != nil {
-			return writeError(stderr, "invalid_request")
-		}
-		repositoryIDs = append(repositoryIDs, daily.RepositoryID(canonicalRepo))
+	repositoryIDs, err := canonicalDedupedRepositoryIDs(repoIDs)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
 	}
 	if runtime.pools == nil || runtime.registry == nil {
 		return writeError(stderr, "operator_backend_unavailable")

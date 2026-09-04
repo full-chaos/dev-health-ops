@@ -1455,6 +1455,84 @@ func TestManualDailyRunGenerationIsCaseInsensitiveOnceCanonicalized(t *testing.T
 	}
 }
 
+// TestCanonicalDedupedRepositoryIDsDeduplicatesAndCanonicalizes is the
+// regression test for codex adversarial review round 3, P1:
+// canonicalDedupedRepositoryIDs must both canonicalize AND de-duplicate, or
+// `--repo-id R --repo-id R` (same UUID, repeated) produces a longer,
+// DIFFERENT slice than a single `--repo-id R` -- and since
+// ManualDailyRunGeneration hashes that slice before
+// daily.normalizeRepositoryPartitions deduplicates it downstream, the two
+// invocations would mint different generations for the identical persisted
+// scope.
+func TestCanonicalDedupedRepositoryIDsDeduplicatesAndCanonicalizes(t *testing.T) {
+	repoA := "00000000-0000-4000-8000-000000000002"
+	repoAUpper := strings.ToUpper(repoA)
+	repoB := "00000000-0000-4000-8000-000000000003"
+
+	single, err := canonicalDedupedRepositoryIDs([]string{repoA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := canonicalDedupedRepositoryIDs([]string{repoA, repoA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repeated) != len(single) || len(repeated) != 1 {
+		t.Fatalf("repeated identical --repo-id was not deduplicated: single=%v repeated=%v", single, repeated)
+	}
+
+	// A case-variant repeat must also collapse to one entry (canonicalize
+	// happens BEFORE the dedup check, not after).
+	caseVariantRepeat, err := canonicalDedupedRepositoryIDs([]string{repoA, repoAUpper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caseVariantRepeat) != 1 {
+		t.Fatalf("case-variant repeat of the same UUID was not deduplicated: %v", caseVariantRepeat)
+	}
+
+	// Two genuinely distinct repositories must both survive.
+	distinct, err := canonicalDedupedRepositoryIDs([]string{repoA, repoB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(distinct) != 2 {
+		t.Fatalf("two distinct repository ids were incorrectly collapsed: %v", distinct)
+	}
+
+	if _, err := canonicalDedupedRepositoryIDs([]string{"not-a-uuid"}); err == nil {
+		t.Fatal("canonicalDedupedRepositoryIDs did not reject an invalid uuid")
+	}
+}
+
+// TestManualDailyRunGenerationIsStableAcrossDuplicateRepositoryIDs is the
+// end-to-end regression test composed from the two functions
+// dispatchMetricsDailyStart actually calls in order
+// (canonicalDedupedRepositoryIDs then daily.ManualDailyRunGeneration):
+// proves a request with a repeated --repo-id mints the SAME generation as
+// the equivalent single --repo-id request, where before this fix it would
+// not have.
+func TestManualDailyRunGenerationIsStableAcrossDuplicateRepositoryIDs(t *testing.T) {
+	const day = "2026-08-26"
+	const org = "00000000-0000-4000-8000-000000000001"
+	repo := "00000000-0000-4000-8000-000000000002"
+
+	single, err := canonicalDedupedRepositoryIDs([]string{repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := canonicalDedupedRepositoryIDs([]string{repo, repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := daily.ManualDailyRunGeneration(org, day, single)
+	second := daily.ManualDailyRunGeneration(org, day, repeated)
+	if first != second {
+		t.Fatalf("a repeated --repo-id produced a different generation than the single-flag equivalent: %q vs %q", first, second)
+	}
+}
+
 // TestManualBackstopTriggerGenerationIsCaseInsensitiveOnceCanonicalized
 // mirrors the daily-start regression above for
 // dispatchMetricsRemainingTriggerBackstop's own org/team canonicalization.

@@ -327,24 +327,42 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	return run, nil
 }
 
-// HasSucceededRunForDay reports whether a daily-metrics run under a
-// DIFFERENT generation than excludeGeneration has already reached a
-// successful terminal state for (organizationID, day): 'succeeded'
-// (materialized partitions completed) or 'no_repositories' (deferred
-// discovery genuinely found none, MaterializeScheduledFanout's own terminal
-// fence). Used by StartManualDailyRun to refuse a deferred-discovery manual
-// trigger when a prior scheduled fan-out, post-sync re-drive, or a
-// DIFFERENT earlier manual trigger already covers the same (org, day) -- see
-// ErrDayAlreadyCovered's doc comment for why this check exists and what it
-// deliberately does NOT cover.
+// HasSucceededRunForDay reports whether a SCHEDULED-FANOUT or POST-SYNC
+// daily-metrics run (never a manual one -- see below) under a DIFFERENT
+// generation than excludeGeneration has already reached a successful
+// terminal state for (organizationID, day): 'succeeded' (materialized
+// partitions completed) or 'no_repositories' (deferred discovery genuinely
+// found none, MaterializeScheduledFanout's own terminal fence). Used by
+// StartManualDailyRun to refuse a deferred-discovery (all-repository)
+// manual trigger when a prior scheduled fan-out or post-sync re-drive
+// already covers the same (org, day) -- see ErrDayAlreadyCovered's doc
+// comment for why this check exists and what it deliberately does NOT
+// cover.
 //
-// excludeGeneration MUST be the CALLER's own about-to-be-used generation:
-// without excluding it, a legitimate idempotent RETRY of a manual request
-// that already succeeded (ManualDailyRunGeneration is deterministic per
-// logical request specifically so a retry reuses the SAME generation) would
-// see its own prior success and be refused as "already covered" instead of
-// reaching StartRunTx's ON CONFLICT DO NOTHING idempotency path -- turning a
-// safe retry into a hard failure.
+// Restricted to isScheduledFanoutGeneration/isPostSyncGeneration on
+// PURPOSE (codex adversarial review round 3, P1): a manual run's
+// generation is never a valid coverage source here, because a manual
+// `daily_metrics_runs` row can be either deferred-discovery (all
+// repositories) OR repository-scoped (`--repo-id`), and nothing in this
+// table distinguishes the two once partitions are materialized -- both
+// shapes populate `daily_metrics_partitions` identically. Before this
+// restriction, a successful REPOSITORY-SCOPED manual run (say, a single
+// `--repo-id R`) satisfied this EXISTS check for org+day alone, so a LATER
+// all-repository request for the same day was refused as "already
+// covered" even though every OTHER repository in the org had never been
+// computed -- a silent under-computation, worse than the duplicate-compute
+// this check exists to prevent. Excluding manual generations loses no real
+// protection: two manual all-repository requests for the identical (org,
+// day) always derive the SAME generation (ManualDailyRunGeneration is
+// deterministic per logical request), so StartRunTx's own ON CONFLICT DO
+// NOTHING idempotency already dedupes manual-vs-manual without this check's
+// help.
+//
+// excludeGeneration MUST be the CALLER's own about-to-be-used generation.
+// It can never match a scheduled-fanout/post-sync generation (a manual
+// caller's generation always carries the `manual-daily:` prefix), so this
+// is defensive rather than load-bearing after the restriction above --
+// kept for clarity and in case a future caller's generation space widens.
 func (store *PostgresStore) HasSucceededRunForDay(
 	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
 ) (bool, error) {
@@ -357,12 +375,30 @@ SELECT EXISTS (
     SELECT 1 FROM public.daily_metrics_runs
     WHERE org_id = $1::uuid AND target_day = $2::date
       AND generation <> $3
+      AND (generation LIKE $4 OR generation LIKE $5)
       AND status IN ('succeeded', 'no_repositories')
-)`, organizationID, day, excludeGeneration).Scan(&exists)
+)`, organizationID, day, excludeGeneration,
+		escapeLikePrefix(ScheduledFanoutGenerationPrefix)+"%",
+		escapeLikePrefix(postSyncGenerationPrefix)+"%",
+	).Scan(&exists)
 	if err != nil {
 		return false, ErrUnavailable
 	}
 	return exists, nil
+}
+
+// escapeLikePrefix escapes SQL LIKE's own wildcard characters (%, _) in a
+// literal prefix before it is used as a LIKE pattern. Not merely
+// defense-in-depth: ScheduledFanoutGenerationPrefix itself contains literal
+// underscores ("fixed-schedule:daily_metrics_fanout:"), which LIKE treats
+// as "match any single character" unless escaped -- unescaped, the pattern
+// would still match every real fixed-schedule generation (an underscore
+// matching itself is one of the characters it can match), but would ALSO
+// silently accept a generation that substituted a different character in
+// those two positions. Escaping makes the match exact, not merely adequate.
+func escapeLikePrefix(prefix string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(prefix)
 }
 
 // StartScheduledFanoutRunTx creates the durable state for one organization in

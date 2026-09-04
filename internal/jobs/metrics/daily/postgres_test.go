@@ -1,6 +1,9 @@
 package daily
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestDailyRepositoryPartitionSizeEnvKeyIsTheCoordinatedCHAOS4264Contract
 // pins the exact env key and default CHAOS-4263 and CHAOS-4264 (bridge-runner
@@ -112,5 +115,31 @@ func TestManualDailyRunGenerationOutputSatisfiesIsManualDailyGeneration(t *testi
 	generation := ManualDailyRunGeneration("00000000-0000-4000-8000-000000000001", "2026-08-26", nil)
 	if !isManualDailyGeneration(generation) {
 		t.Fatalf("ManualDailyRunGeneration(...) = %q, which isManualDailyGeneration rejects", generation)
+	}
+}
+
+// TestEscapeLikePrefixEscapesActualUnderscoresInTheScheduledFanoutPrefix is
+// the regression test for codex adversarial review round 3, P1:
+// HasSucceededRunForDay's coverage query restricts matches to
+// ScheduledFanoutGenerationPrefix/postSyncGenerationPrefix via LIKE, and
+// ScheduledFanoutGenerationPrefix itself contains literal underscores
+// ("fixed-schedule:daily_metrics_fanout:") -- LIKE's own wildcard for
+// "any single character" -- so an unescaped prefix would still match every
+// real fixed-schedule generation, but would ALSO silently accept an
+// impostor that substituted a different character in either underscore's
+// position. This proves the escaped form only matches the literal text.
+func TestEscapeLikePrefixEscapesActualUnderscoresInTheScheduledFanoutPrefix(t *testing.T) {
+	escaped := escapeLikePrefix(ScheduledFanoutGenerationPrefix)
+	if escaped == ScheduledFanoutGenerationPrefix {
+		t.Fatalf("escapeLikePrefix did not change a prefix containing literal underscores: %q", escaped)
+	}
+	if !strings.Contains(escaped, `\_`) {
+		t.Fatalf("escapeLikePrefix(%q) = %q, want the literal underscores escaped as \\_", ScheduledFanoutGenerationPrefix, escaped)
+	}
+	// postSyncGenerationPrefix ("post-sync:") has no wildcard characters, so
+	// escaping it is a genuine no-op -- pinning that the function does not
+	// spuriously alter a prefix that needs no escaping.
+	if got := escapeLikePrefix(postSyncGenerationPrefix); got != postSyncGenerationPrefix {
+		t.Fatalf("escapeLikePrefix(%q) = %q, want unchanged (no wildcard characters)", postSyncGenerationPrefix, got)
 	}
 }

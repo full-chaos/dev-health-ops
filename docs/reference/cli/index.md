@@ -456,7 +456,7 @@ and are no longer accepted.
 
 ```bash
 # Forecast a single team, right now
-dev-hops metrics capacity --org <org-uuid> --team-id eng-core \
+dev-hops metrics capacity --org <org-uuid> --team-id <team-uuid> \
   --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
 
 # Forecast all discovered teams for a specific past day

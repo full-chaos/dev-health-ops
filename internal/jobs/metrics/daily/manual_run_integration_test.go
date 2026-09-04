@@ -111,17 +111,23 @@ func TestStartManualDailyRunWithDeferredDiscoveryMaterializesThroughTheSharedPat
 // TestStartManualDailyRunRefusesADayAlreadyCoveredByADifferentGeneration is
 // the red-on-baseline proof for codex adversarial review round 2, P1
 // (CHAOS-5055): `metrics daily --org O` for a day whose all-repository
-// computation the nightly fixed schedule (or a post-sync re-drive, or an
-// earlier manual trigger under a DIFFERENT generation) already completed
-// used to dispatch a SECOND, independent all-repository run anyway --
-// StartRunTx's (org_id, target_day, generation) uniqueness only makes ONE
-// generation idempotent against its own replays, so two different triggers
-// for the identical (org, day) scope both persisted and executed,
+// computation the nightly fixed schedule or a post-sync re-drive already
+// completed used to dispatch a SECOND, independent all-repository run
+// anyway -- StartRunTx's (org_id, target_day, generation) uniqueness only
+// makes ONE generation idempotent against its own replays, so two different
+// triggers for the identical (org, day) scope both persisted and executed,
 // duplicate-writing every native daily family (file_hotspots included).
 // This test seeds a succeeded run under the SCHEDULED fan-out's own
 // generation format, then proves a deferred-discovery manual trigger for
 // the same org/day is refused with ErrDayAlreadyCovered rather than
 // dispatching a duplicate.
+//
+// Round 3 (codex adversarial review, P1) narrowed HasSucceededRunForDay to
+// ONLY scheduled-fanout/post-sync generations as valid coverage sources --
+// an earlier manual trigger (repository-scoped or not) can no longer serve
+// as the "already covered" source; see
+// TestStartManualDailyRunDoesNotFalselyBlockAnAllRepositoryRequestAfterARepositoryScopedOne
+// below for the regression that finding fixed.
 func TestStartManualDailyRunRefusesADayAlreadyCoveredByADifferentGeneration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -253,5 +259,86 @@ WHERE id = $2::uuid`, now, outcome.RunID); err != nil {
 	}
 	if runCount != 1 {
 		t.Fatalf("expected the retry to reuse the same row (still 1), found %d", runCount)
+	}
+}
+
+// TestStartManualDailyRunDoesNotFalselyBlockAnAllRepositoryRequestAfterARepositoryScopedOne
+// is the red-on-baseline proof for codex adversarial review round 3, P1
+// (CHAOS-5055): round 2's own HasSucceededRunForDay check queried only
+// (org_id, target_day, status) with no awareness of which repositories a
+// prior run actually covered. A successful REPOSITORY-SCOPED manual run
+// (e.g. `--repo-id R`) satisfied that EXISTS check for the whole org+day,
+// so a LATER, genuinely different all-repository request for the same day
+// was refused as "already covered" -- even though every OTHER repository
+// in the organization was never computed. That is a SILENT
+// UNDER-COMPUTATION, worse than the duplicate-compute the check exists to
+// prevent. Round 3 restricted HasSucceededRunForDay to scheduled-fanout/
+// post-sync generations only (see its own doc comment); this test proves a
+// prior repository-scoped manual success no longer blocks a later
+// all-repository manual request for the same org/day.
+func TestStartManualDailyRunDoesNotFalselyBlockAnAllRepositoryRequestAfterARepositoryScopedOne(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const org = "00000000-0000-4000-8000-000000000015"
+	const day = "2026-08-26"
+	const repo = RepositoryID("00000000-0000-4000-8000-000000000016")
+
+	// A successful, repository-SCOPED manual run for the same org/day.
+	scopedGeneration := ManualDailyRunGeneration(org, day, []RepositoryID{repo})
+	scopedOutcome, err := store.StartManualDailyRun(ctx, org, day, scopedGeneration, []RepositoryID{repo}, publisher)
+	if err != nil {
+		t.Fatalf("repository-scoped StartManualDailyRun failed: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := pool.Exec(ctx, `
+UPDATE daily_metrics_runs SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+WHERE id = $2::uuid`, now, scopedOutcome.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A LATER, genuinely different all-repository (deferred-discovery)
+	// request for the SAME org/day must NOT be refused as already covered.
+	allRepoGeneration := ManualDailyRunGeneration(org, day, nil)
+	allRepoOutcome, err := store.StartManualDailyRun(ctx, org, day, allRepoGeneration, nil, publisher)
+	if err != nil {
+		t.Fatalf("all-repository request was falsely blocked by a prior repository-scoped success: %v", err)
+	}
+	if allRepoOutcome.RunID == scopedOutcome.RunID {
+		t.Fatalf("all-repository request was given the repository-scoped run's id instead of its own: %s", allRepoOutcome.RunID)
+	}
+
+	var runCount int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM daily_metrics_runs WHERE org_id = $1::uuid AND target_day = $2::date",
+		org, day,
+	).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 2 {
+		t.Fatalf("expected 2 distinct runs (the repository-scoped one and the all-repository one), found %d", runCount)
 	}
 }

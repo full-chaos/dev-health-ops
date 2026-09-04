@@ -357,3 +357,141 @@ INSERT INTO git_pull_request_reviews
 		)
 	}
 }
+
+// TestReviewEdgesDedupIsTenantScopedWhenTwoOrgsShareARepoID is the cross-tenant
+// guard for the dedup, on the one shape that can actually expose it: TWO ORGS
+// CARRYING THE SAME repo_id.
+//
+// That is not hypothetical. repo ids are derived deterministically from the
+// repo slug (uuid5 over the URL), so two orgs syncing the same public repo get
+// the SAME repo_id -- clickhouse_dedup.py:115's own comment records this as the
+// reason review_edges_daily's natural key had to gain org_id.
+//
+// # What this defends
+//
+// Migrations 027/042 rekeyed git_pull_requests to (org_id, repo_id, number).
+// A dedup whose GROUP BY omits org_id therefore does not match the table's
+// sorting key: argMax collapses BOTH tenants' rows for a shared repo_id into
+// one group and the newest row wins across the tenant boundary.
+//
+// Today this loader is safe regardless, because its org filter is
+// PRE-aggregation -- in the same SELECT as the GROUP BY, so WHERE runs first
+// and the aggregate never sees the other tenant. The GROUP BY now leads with
+// org_id anyway, which makes the boundary STRUCTURAL: it holds even if a later
+// refactor hoists that filter into an outer query to reuse the inner one.
+//
+// STATUS OF THAT CLAIM, stated exactly: the mechanism is derived from the
+// table's sorting key (migrations 027/042) plus SQL evaluation order -- WHERE
+// before GROUP BY -- and this test is compile-verified only. The red/green
+// demonstration (hoist the filter outward; RED without org_id in the GROUP BY,
+// GREEN with it) requires a real ClickHouse and therefore the bigboy
+// integration turn. It has NOT been executed on the Mac, because integration
+// tests do not run there.
+//
+// Said plainly so nobody reads a reasoned argument as a measurement: this
+// assertion is a guard whose own failure mode is currently unproven. The
+// standing rule is to state what code DOES only after executing it, and the
+// executed half of this is still owed.
+func TestReviewEdgesDedupIsTenantScopedWhenTwoOrgsShareARepoID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range reviewEdgesSchema {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const (
+		orgA = "00000000-0000-4000-8000-0000000000e0"
+		orgB = "00000000-0000-4000-8000-0000000000e1"
+		// THE SAME repo_id under both orgs -- the collision the deterministic
+		// slug-derived id actually produces.
+		shared = "00000000-0000-4000-8000-0000000000ee"
+	)
+
+	// Org B's row is NEWER. A dedup that ignores org_id would let it win for an
+	// org A read.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests
+(repo_id, number, author_name, author_email, created_at, merged_at, last_synced, org_id) VALUES
+(toUUID('`+shared+`'), 1, 'AnnOrgA', 'ann@org-a.example',  '2026-08-24 08:00:00.000', NULL, '2026-08-24 08:00:00.000', '`+orgA+`'),
+(toUUID('`+shared+`'), 1, 'BobOrgB', 'bob@org-b.example',  '2026-08-24 08:00:00.000', NULL, '2026-08-24 23:00:00.000', '`+orgB+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_request_reviews
+(repo_id, number, review_id, reviewer, state, submitted_at, last_synced, org_id) VALUES
+(toUUID('`+shared+`'), 1, 'rA', 'ReviewerA', 'APPROVED', '2026-08-24 10:00:00.000', '2026-08-24 10:00:00.000', '`+orgA+`'),
+(toUUID('`+shared+`'), 1, 'rB', 'ReviewerB', 'APPROVED', '2026-08-24 11:00:00.000', '2026-08-24 23:00:00.000', '`+orgB+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewReviewEdgesExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetDay := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+
+	// Compute for org A ONLY.
+	if _, err := executor.ComputeFamily(ctx,
+		Run{ID: "run-e", OrganizationID: orgA, TargetDay: targetDay},
+		Partition{ID: "partition-e", RunID: "run-e", RepoIDs: []RepositoryID{RepositoryID(shared)}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := conn.Query(ctx, `
+SELECT reviewer, author, org_id FROM review_edges_daily ORDER BY reviewer`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type edge struct{ reviewer, author, org string }
+	var got []edge
+	for rows.Next() {
+		var e edge
+		if err := rows.Scan(&e.reviewer, &e.author, &e.org); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, e)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d edges %+v, want exactly 1 (only org A was computed)", len(got), got)
+	}
+	if got[0].org != orgA {
+		t.Errorf("edge carries org_id %q, want org A %q", got[0].org, orgA)
+	}
+	// The decisive assertion: org B's row is NEWER by last_synced, so a dedup
+	// that collapsed both tenants would attribute org A's edge to org B's author.
+	if got[0].author == "bob@org-b.example" {
+		t.Fatal(
+			"CROSS-TENANT LEAK: org A's edge resolved to org B's author. The dedup " +
+				"collapsed two tenants sharing a repo_id -- its GROUP BY no longer matches " +
+				"git_pull_requests' sorting key (org_id, repo_id, number) from migrations 027/042",
+		)
+	}
+	if got[0].author != "ann@org-a.example" {
+		t.Errorf("author = %q, want org A's own %q", got[0].author, "ann@org-a.example")
+	}
+	if got[0].reviewer != "ReviewerA" {
+		t.Errorf("reviewer = %q, want org A's own \"ReviewerA\"", got[0].reviewer)
+	}
+}

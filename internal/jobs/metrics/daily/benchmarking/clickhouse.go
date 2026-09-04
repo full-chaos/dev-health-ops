@@ -84,6 +84,11 @@ func coverageMetric(column string) MetricDefinition {
 	}
 }
 
+// clickHouseDateLayout is the wire form for a {name:Date} query parameter.
+// See FetchMetricSeriesByScope's binding note for why a time.Time cannot be
+// bound directly.
+const clickHouseDateLayout = "2006-01-02"
+
 // ClickHouseLoader implements SeriesFetcher against a real ClickHouse.
 type ClickHouseLoader struct {
 	conn  conn
@@ -158,8 +163,18 @@ ORDER BY scope_key, day`,
 	)
 
 	arguments := []any{
-		clickhouse.Named("start_day", startDay),
-		clickhouse.Named("end_day", endDay),
+		// Date parameters are bound as YYYY-MM-DD STRINGS, not time.Time. The
+		// driver serialises a time.Time for a {name:Date} parameter as a full
+		// DateTime literal and the server rejects it outright -- "Cannot parse
+		// date here: toDateTime('2026-08-24 00:00:00') cannot be parsed as
+		// Date". Caught on the sibling compounding_risk loader by CI (#2231's
+		// shard leg) and fixed here in the same pass BEFORE this family ever
+		// reached CI, since the shape is identical. Same fix and reasoning as
+		// RecommendationsLoader.windowArguments (recommendations_loader.go:77-97);
+		// the string form is also the closer mirror of what Python's
+		// clickhouse-connect puts on the wire for a datetime.date.
+		clickhouse.Named("start_day", startDay.Format(clickHouseDateLayout)),
+		clickhouse.Named("end_day", endDay.Format(clickHouseDateLayout)),
 		clickhouse.Named("org_id", loader.orgID),
 	}
 	if canonical == "deployment_frequency" {

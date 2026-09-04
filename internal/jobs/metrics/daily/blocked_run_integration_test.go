@@ -163,7 +163,19 @@ func TestReconcileBlockedRunsMarksOnlyRunsThatCanNeverFinish(t *testing.T) {
 			name:        "failed_permanent alongside an expired-lease running IS blocked",
 			partitions:  []string{"failed_permanent", runningExpiredLease},
 			wantBlocked: true,
-			wantReason:  BlockedReasonPartialPartitionsPermanent,
+			// ALL, not PARTIAL, and the distinction is about OUTPUT rather
+			// than a literal partition census: nothing here succeeded, so
+			// there is no computed output a redrive could needlessly
+			// recompute. That is the question the reason answers for an
+			// operator. The name reads a little loosely against this fixture
+			// -- one partition is running, not failed_permanent -- but the
+			// signal it carries ("nothing to preserve, redrive freely") is
+			// exactly right, and it is the signal the redrive decision needs.
+			// The succeeded-alongside case is covered by
+			// TestAnExpiredLeaseRunningPartitionLeavesTheRunStrandedAndMarked,
+			// which asserts PARTIAL for the same shape plus a succeeded
+			// partition.
+			wantReason: BlockedReasonAllPartitionsPermanent,
 		},
 		{
 			name:        "all succeeded is not blocked",

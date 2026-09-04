@@ -15,6 +15,53 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
+// compoundingRiskSchema is the production shape of the three tables this family
+// touches. ONE copy, deliberately: it was inlined per-test, and a schema
+// duplicated per test is how #2231's stale-sorting-key bug happened -- one copy
+// drifted from production while the others looked fine, and the test that
+// depended on the drifted copy silently stopped testing what it claimed.
+var compoundingRiskSchema = []string{
+	// Production shape: 001_metrics_v2.sql's repo_metrics_daily plus the
+	// columns 004/006 add, with migration 027's sorting key
+	// (org_id, repo_id, day). The column TYPES are the point of this test
+	// -- three plain Float64, one UInt32, one Nullable(Float64) -- so they
+	// are reproduced exactly rather than normalized to nullable floats.
+	`CREATE TABLE repo_metrics_daily (
+    repo_id UUID, day Date,
+    rework_churn_ratio_30d Float64,
+    single_owner_file_ratio_30d Float64,
+    code_ownership_gini Float64 DEFAULT 0.0,
+    bus_factor UInt32 DEFAULT 0,
+    pr_first_review_p90_hours Nullable(Float64),
+    computed_at DateTime, org_id String
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+	// 007_complexity_investment_issues.sql + migration 027's sorting key.
+	`CREATE TABLE repo_complexity_daily (
+    repo_id UUID, day Date, loc_total UInt64, cyclomatic_total UInt64,
+    cyclomatic_per_kloc Float64, high_complexity_functions UInt64,
+    very_high_complexity_functions UInt64,
+    computed_at DateTime, org_id String
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+	// 040_compounding_risk_daily.sql verbatim, including the two Enum8s --
+	// writing an out-of-range severity or scope string is a server-side
+	// error here, which is itself part of what this test proves.
+	`CREATE TABLE compounding_risk_daily (
+    org_id String, day Date,
+    scope Enum8('repo' = 1, 'team' = 2), scope_id String,
+    compounding_risk Nullable(Float64),
+    severity Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3),
+    churn_norm Nullable(Float64), complexity_norm Nullable(Float64),
+    ownership_norm Nullable(Float64), review_norm Nullable(Float64),
+    rework_churn Nullable(Float64), complexity_delta Nullable(Float64),
+    bus_factor Nullable(Float64), ownership_gini Nullable(Float64),
+    single_owner_ratio Nullable(Float64), review_latency_p90h Nullable(Float64),
+    w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
+    threshold_elevated Float64, threshold_high Float64,
+    computed_at DateTime DEFAULT now()
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
+  ORDER BY (org_id, scope, scope_id, day, computed_at)`,
+}
+
 // TestCompoundingRiskComputeFamilyAgainstRealClickHouse is
 // CompoundingRiskExecutor's live-ClickHouse proof (CHAOS-4287), run through the
 // real production entry point rather than exercising the writer in isolation.
@@ -52,47 +99,7 @@ func TestCompoundingRiskComputeFamilyAgainstRealClickHouse(t *testing.T) {
 	}
 	defer conn.Close()
 
-	for _, statement := range []string{
-		// Production shape: 001_metrics_v2.sql's repo_metrics_daily plus the
-		// columns 004/006 add, with migration 027's sorting key
-		// (org_id, repo_id, day). The column TYPES are the point of this test
-		// -- three plain Float64, one UInt32, one Nullable(Float64) -- so they
-		// are reproduced exactly rather than normalized to nullable floats.
-		`CREATE TABLE repo_metrics_daily (
-    repo_id UUID, day Date,
-    rework_churn_ratio_30d Float64,
-    single_owner_file_ratio_30d Float64,
-    code_ownership_gini Float64 DEFAULT 0.0,
-    bus_factor UInt32 DEFAULT 0,
-    pr_first_review_p90_hours Nullable(Float64),
-    computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
-		// 007_complexity_investment_issues.sql + migration 027's sorting key.
-		`CREATE TABLE repo_complexity_daily (
-    repo_id UUID, day Date, loc_total UInt64, cyclomatic_total UInt64,
-    cyclomatic_per_kloc Float64, high_complexity_functions UInt64,
-    very_high_complexity_functions UInt64,
-    computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
-		// 040_compounding_risk_daily.sql verbatim, including the two Enum8s --
-		// writing an out-of-range severity or scope string is a server-side
-		// error here, which is itself part of what this test proves.
-		`CREATE TABLE compounding_risk_daily (
-    org_id String, day Date,
-    scope Enum8('repo' = 1, 'team' = 2), scope_id String,
-    compounding_risk Nullable(Float64),
-    severity Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3),
-    churn_norm Nullable(Float64), complexity_norm Nullable(Float64),
-    ownership_norm Nullable(Float64), review_norm Nullable(Float64),
-    rework_churn Nullable(Float64), complexity_delta Nullable(Float64),
-    bus_factor Nullable(Float64), ownership_gini Nullable(Float64),
-    single_owner_ratio Nullable(Float64), review_latency_p90h Nullable(Float64),
-    w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
-    threshold_elevated Float64, threshold_high Float64,
-    computed_at DateTime DEFAULT now()
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
-  ORDER BY (org_id, scope, scope_id, day, computed_at)`,
-	} {
+	for _, statement := range compoundingRiskSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
@@ -321,38 +328,7 @@ func TestCompoundingRiskComplexityWindowOneSidedYieldsUnknown(t *testing.T) {
 	}
 	defer conn.Close()
 
-	for _, statement := range []string{
-		`CREATE TABLE repo_metrics_daily (
-    repo_id UUID, day Date,
-    rework_churn_ratio_30d Float64,
-    single_owner_file_ratio_30d Float64,
-    code_ownership_gini Float64 DEFAULT 0.0,
-    bus_factor UInt32 DEFAULT 0,
-    pr_first_review_p90_hours Nullable(Float64),
-    computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE repo_complexity_daily (
-    repo_id UUID, day Date, loc_total UInt64, cyclomatic_total UInt64,
-    cyclomatic_per_kloc Float64, high_complexity_functions UInt64,
-    very_high_complexity_functions UInt64,
-    computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
-		`CREATE TABLE compounding_risk_daily (
-    org_id String, day Date,
-    scope Enum8('repo' = 1, 'team' = 2), scope_id String,
-    compounding_risk Nullable(Float64),
-    severity Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3),
-    churn_norm Nullable(Float64), complexity_norm Nullable(Float64),
-    ownership_norm Nullable(Float64), review_norm Nullable(Float64),
-    rework_churn Nullable(Float64), complexity_delta Nullable(Float64),
-    bus_factor Nullable(Float64), ownership_gini Nullable(Float64),
-    single_owner_ratio Nullable(Float64), review_latency_p90h Nullable(Float64),
-    w_churn Float64, w_complexity Float64, w_ownership Float64, w_review Float64,
-    threshold_elevated Float64, threshold_high Float64,
-    computed_at DateTime DEFAULT now()
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
-  ORDER BY (org_id, scope, scope_id, day, computed_at)`,
-	} {
+	for _, statement := range compoundingRiskSchema {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
@@ -420,5 +396,133 @@ FROM compounding_risk_daily WHERE org_id = ?`, org,
 	// signal must not erase the others.
 	if churn == nil || *churn != 0.5 {
 		t.Errorf("churn_norm = %v, want 0.5 (0.15/0.30) even though the composite is unknown", churn)
+	}
+}
+
+// TestCompoundingRiskTupleDedupKeepsTheWinningRowsNullP90 is the guard the
+// LEDGER previously CLAIMED existed and did not.
+//
+// codex r1 on #2230 caught that: the existing fixture's two candidate rows both
+// carry a non-NULL pr_first_review_p90_hours, so a regression from one
+// argMax(tuple(...)) back to five INDEPENDENT argMax calls would have passed
+// unnoticed. The claim was in the ledger, the proof was not in the tree.
+//
+// The discriminating shape is a NEWER row whose p90 is NULL. Independent
+// per-column argMax skips NULLs, so it keeps the OLDER row's 12.0 and pairs it
+// with the newer row's other four columns -- a row that never existed in the
+// table, and one that reports a score where the real latest snapshot has no
+// review data at all.
+//
+// This test does not merely assert the correct answer. It runs BOTH query
+// shapes against the SAME fixture and requires them to DISAGREE, because an
+// assertion that the tuple form returns NULL proves nothing unless the
+// independent form would have returned something else on that very data.
+func TestCompoundingRiskTupleDedupKeepsTheWinningRowsNullP90(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range compoundingRiskSchema {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const (
+		orgID  = "00000000-0000-4000-8000-0000000000c0"
+		repoID = "00000000-0000-4000-8000-0000000000c1"
+	)
+
+	// OLDER row: p90 present. NEWER row: p90 NULL, every other column different.
+	if err := conn.Exec(ctx, `
+INSERT INTO repo_metrics_daily
+(repo_id, day, rework_churn_ratio_30d, single_owner_file_ratio_30d, code_ownership_gini, bus_factor, pr_first_review_p90_hours, computed_at, org_id) VALUES
+(toUUID('`+repoID+`'), '2026-08-24', 0.90, 0.90, 0.90, 9, 12.0, '2026-08-24 06:00:00', '`+orgID+`'),
+(toUUID('`+repoID+`'), '2026-08-24', 0.15, 0.35, 0.20, 3, NULL, '2026-08-24 09:00:00', '`+orgID+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	// POSITIVE CONTROL: the independent-argMax shape, run against this exact
+	// fixture. If it does NOT return 12.0, the fixture cannot exhibit the defect
+	// and every assertion below is vacuous -- so this failing is a failure of
+	// the test, stated as such.
+	var independentP90 *float64
+	if err := conn.QueryRow(ctx, `
+SELECT argMax(pr_first_review_p90_hours, computed_at)
+FROM repo_metrics_daily
+WHERE org_id = ? AND repo_id = ? AND day = '2026-08-24'
+GROUP BY org_id, repo_id`, orgID, repoID).Scan(&independentP90); err != nil {
+		t.Fatal(err)
+	}
+	if independentP90 == nil || *independentP90 != 12.0 {
+		t.Fatalf(
+			"positive control: independent argMax returned %v, want 12 -- this fixture "+
+				"cannot exhibit the Frankenstein defect, so the assertion below proves nothing",
+			independentP90,
+		)
+	}
+
+	// The shipped loader uses argMax(tuple(...)): the NEWER row wins WHOLE,
+	// NULL p90 included.
+	executor, err := NewCompoundingRiskExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := executor.loader.LoadRepoMetrics(
+		ctx, orgID, []uuid.UUID{uuid.MustParse(repoID)},
+		time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d row(s), want 1", len(rows))
+	}
+	got := rows[0]
+	if got.PRFirstReviewP90Hours != nil {
+		t.Errorf(
+			"p90 = %v, want NULL -- the winning row's NULL was replaced by the older "+
+				"row's value, which is the independent-argMax Frankenstein this dedup exists to prevent",
+			*got.PRFirstReviewP90Hours,
+		)
+	}
+	// The other four columns must ALSO come from the newer row. Checking only
+	// the NULL would pass on a row that took p90 from the winner and the rest
+	// from the loser -- the same defect with the columns swapped.
+	deref := func(name string, value *float64) float64 {
+		t.Helper()
+		if value == nil {
+			t.Fatalf("%s is NULL, want a value from the winning row", name)
+		}
+		return *value
+	}
+	for _, column := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"rework_churn_ratio_30d", deref("rework_churn_ratio_30d", got.ReworkChurnRatio30D), 0.15},
+		{"single_owner_file_ratio_30d", deref("single_owner_file_ratio_30d", got.SingleOwnerFileRatio30D), 0.35},
+		{"code_ownership_gini", deref("code_ownership_gini", got.CodeOwnershipGini), 0.20},
+		{"bus_factor", deref("bus_factor", got.BusFactor), 3},
+	} {
+		if column.got != column.want {
+			t.Errorf(
+				"%s = %v, want %v -- this column did not come from the winning row, so the "+
+					"dedup assembled one row out of two snapshots",
+				column.name, column.got, column.want,
+			)
+		}
 	}
 }

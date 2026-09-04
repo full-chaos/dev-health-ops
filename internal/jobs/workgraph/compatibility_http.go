@@ -3,15 +3,64 @@ package workgraph
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"syscall"
+	"unicode"
+	"unicode/utf8"
 )
 
 const maxCompatibilityResponseBytes = 8 * 1024
+
+// maxCompatibilityDetailBytes bounds the diagnostic slice attached to a
+// classified failure. It is deliberately far below the ledger's own 1024
+// bound so the sentinel text plus the status prefix always fit alongside it.
+const maxCompatibilityDetailBytes = 200
+
+// The bridge can fail in three ways that mean genuinely different things to
+// the caller, and collapsing them into one sentinel is what wedged
+// CHAOS-4970's request chain: every failure reached handler.work's
+// releaseAmbiguous, and 'ambiguous' is a state Claim refuses and
+// joboutbox's strand-repair sweep excludes by construction, so only a human
+// /internal/worker/workgraph/v1/executions/{id}/repair call can ever move it
+// again. Nothing in Go calls that endpoint, so "ambiguous" is in practice
+// terminal.
+//
+// All three wrap ErrUnavailable so existing callers that only ask "was the
+// dependency unavailable" keep working unchanged; a caller that cares about
+// the distinction asks for the specific sentinel.
+var (
+	// ErrCompatibilityNotSent reports a failure that happened BEFORE any
+	// byte reached the bridge -- a wiring fault, an unencodable request, or
+	// a connection that was never established (DNS, refused dial, a TLS
+	// handshake rejected before the request was written). The bridge cannot
+	// have observed this attempt, so there is no side effect to reconcile
+	// and no ambiguity to record.
+	ErrCompatibilityNotSent = fmt.Errorf("work graph compatibility request was never sent: %w", ErrUnavailable)
+	// ErrCompatibilityRefused reports a completed round trip that the bridge
+	// declined: a 4xx other than 408/429, or a parsed response whose status
+	// is not "success" or whose evidence fails validation. The bridge made a
+	// decision about this request rather than being interrupted mid-flight,
+	// so a retry is safe -- it will either be refused identically or succeed
+	// once the refused condition clears.
+	ErrCompatibilityRefused = fmt.Errorf("work graph compatibility request was refused by the bridge: %w", ErrUnavailable)
+	// ErrCompatibilityUnknown reports a failure that MAY have left a side
+	// effect: a deadline or reset after the request was written, a 408/429,
+	// any 5xx, or a 2xx whose body could not be read or decoded. This is the
+	// only class that still deserves the ambiguous release, and it is the
+	// default for anything this package cannot positively place in one of
+	// the other two -- the safe direction is the one that keeps recording an
+	// ambiguity.
+	ErrCompatibilityUnknown = fmt.Errorf("work graph compatibility execution outcome is unknown: %w", ErrUnavailable)
+)
 
 type HTTPCompatibilityConfig struct {
 	Endpoint              string
@@ -28,43 +77,306 @@ func NewHTTPCompatibilityExecutor(client *http.Client, config HTTPCompatibilityC
 	if client == nil || !validCompatibilityEndpoint(config.Endpoint, config.AllowInsecureInternal) || len(config.BearerToken) == 0 || len(config.BearerToken) > 512 {
 		return nil, ErrUnavailable
 	}
-	return &HTTPCompatibilityExecutor{client: client, config: config}, nil
+	// Redirects are REFUSED, and this is a data-safety guard, not hygiene.
+	// http.NewRequestWithContext sets GetBody automatically for a
+	// *bytes.Reader (net/http/request.go), and net/http's redirectBehavior
+	// re-sends the body on 307/308 when GetBody is non-nil
+	// (net/http/client.go). So the bridge can EXECUTE this request and then
+	// redirect -- and if the redirected hop then fails to dial, the only
+	// error this package ever sees is an ordinary dial failure, which
+	// compatibilityTransportSentinel would classify NotSent. That is correct
+	// for a first hop and WRONG here: it would retry work the bridge already
+	// performed. Refusing to follow the redirect removes the ambiguity at
+	// its source -- the 3xx comes back as a response and is classified
+	// Unknown by status, which is the honest answer, since we cannot know
+	// what the bridge did before redirecting.
+	//
+	// The client is COPIED, never mutated: it belongs to the caller and may
+	// be shared with callers that legitimately follow redirects. The shallow
+	// copy deliberately shares Transport, so connection pooling is unaffected.
+	redirectless := *client
+	redirectless.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &HTTPCompatibilityExecutor{client: &redirectless, config: config}, nil
 }
 
 func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Claim) ([]byte, error) {
-	if executor == nil || executor.client == nil || !validRequest(claim.Request) || !validUUID(claim.Token) {
-		return nil, ErrUnavailable
+	if executor == nil || executor.client == nil {
+		return nil, compatibilityFailure(ErrCompatibilityNotSent, 0, "executor is not configured")
+	}
+	if !validRequest(claim.Request) || !validUUID(claim.Token) {
+		return nil, compatibilityFailure(ErrCompatibilityNotSent, 0, "claim failed local validation")
 	}
 	body, err := json.Marshal(struct {
 		RequestID  string `json:"request_id"`
 		ClaimToken string `json:"claim_token"`
 	}{RequestID: claim.Request.ID, ClaimToken: claim.Token})
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, compatibilityFailure(ErrCompatibilityNotSent, 0, "request body could not be encoded")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, executor.config.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, compatibilityFailure(ErrCompatibilityNotSent, 0, "request could not be built")
 	}
 	request.Header.Set("Authorization", "Bearer "+executor.config.BearerToken)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := executor.client.Do(request)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, executor.fail(compatibilityTransportSentinel(err), 0, transportDetail(err))
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxCompatibilityResponseBytes+1))
-	if err != nil || len(data) > maxCompatibilityResponseBytes || response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, ErrUnavailable
+	if err != nil {
+		// The status line arrived, so the bridge accepted and may have run
+		// the request; losing the body says nothing about what it did.
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "response body could not be read")
+	}
+	if len(data) > maxCompatibilityResponseBytes {
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "response body exceeded its bound")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		// The bridge's own response text is deliberately NOT persisted. It
+		// is untrusted input on its way to a durable, operator-readable
+		// column, and redacting the bearer token out of it byte-for-byte is
+		// not sufficient: a bridge that echoes the Authorization header
+		// through ordinary JSON encoding produces an ESCAPED form that an
+		// exact-substring redaction does not match (a token containing a
+		// quote arrives as \" and slips straight through). Rather than
+		// chase encodings, nothing free-form crosses this boundary at all --
+		// the sentinel and the HTTP status are the discriminator, and the
+		// bridge's own prose remains available in the bridge's logs.
+		return nil, executor.fail(compatibilityStatusSentinel(response.StatusCode), response.StatusCode,
+			"bridge returned a non-success status")
 	}
 	var decoded struct {
 		Status         string          `json:"status"`
 		OutputEvidence json.RawMessage `json:"output_evidence"`
 	}
-	if err := json.Unmarshal(data, &decoded); err != nil || decoded.Status != "success" || !validEvidence(decoded.OutputEvidence) {
-		return nil, ErrUnavailable
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		// A 2xx with an undecodable body is far more likely to be a bridge
+		// that ran and a response this side could not read than a bridge
+		// that declined -- a decline arrives as a non-2xx. Unknown, not
+		// Refused.
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "success response body could not be decoded")
+	}
+	if decoded.Status != "success" {
+		// UNKNOWN, not Refused. This bridge RAISES on failure -- every
+		// non-success outcome leaves as a 4xx/5xx, never as a 2xx body -- so a
+		// 2xx carrying some other status word is undocumented, which in
+		// practice means version skew between this worker and the bridge. We
+		// cannot tell from an unrecognised word whether it committed, and the
+		// default for "cannot tell" is Unknown.
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode,
+			"bridge reported an unrecognised status in its response body")
+	}
+	if !validEvidence(decoded.OutputEvidence) {
+		// UNKNOWN, not Refused. The bridge just told us it SUCCEEDED, and it
+		// only says that after committing -- worker_workgraph.py returns
+		// {"status": "success", ...} on the far side of the execution, with
+		// every failure path above it raising instead. So a success whose
+		// evidence we cannot use means the work HAPPENED and only the proof is
+		// missing or malformed (a serialization fault, a version skew, a
+		// truncated field). Calling that Refused would make it retryable and
+		// re-run an execution that already applied -- the precise data-safety
+		// failure this classification exists to prevent. Grouping it with the
+		// status != "success" case above was wrong for exactly that reason:
+		// the two look adjacent and mean opposite things.
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode,
+			"bridge reported success with unusable output evidence")
 	}
 	return decoded.OutputEvidence, nil
+}
+
+// refusedStatuses is a CLOSED ALLOWLIST: the ONLY HTTP statuses this package
+// will treat as "the bridge declined without executing". Membership requires a
+// citation in the bridge's own source, not an inference about what a code
+// usually means.
+//
+//	401 -- worker_auth.py:27,39,47,50, every authorize_* helper. The credential
+//	       is rejected before any handler runs.
+//	409 -- worker_workgraph.py:391, "Execution lease is unavailable". The claim
+//	       itself was refused, so no execution began.
+//	422 -- FastAPI request validation, which runs BEFORE the handler by
+//	       construction (measured against the live bridge: a POST of `{}` to the
+//	       pinned execute path returns 422). worker_workgraph.py:438,442,447 also
+//	       raise it explicitly, on the repair endpoint.
+//
+// 403 is deliberately ABSENT. It appears nowhere in worker_workgraph.py or
+// worker_auth.py -- this bridge never emits it -- and a code we cannot cite is
+// exactly the kind of "surely that means declined" reasoning this allowlist
+// exists to stop. If the bridge ever starts returning it, add it here WITH its
+// line, and the table test below will already be failing to remind you.
+var refusedStatuses = map[int]struct{}{
+	401: {},
+	409: {},
+	422: {},
+}
+
+// compatibilityStatusSentinel places a response status.
+//
+// This is a DEFAULT-UNKNOWN classifier, and that direction is the point.
+// Three review rounds each found the same class of defect -- something
+// classified as safe-to-retry that had in fact already executed -- because the
+// old shape enumerated what was UNSAFE and let everything else fall through to
+// "retryable". It now enumerates what is provably SAFE and lets everything else
+// fall through to Unknown, so being wrong costs an unnecessary ambiguous
+// release rather than a duplicate execution. Adding a status to the retryable
+// set is now a deliberate, citable act.
+func compatibilityStatusSentinel(status int) error {
+	if _, refused := refusedStatuses[status]; refused {
+		return ErrCompatibilityRefused
+	}
+	return ErrCompatibilityUnknown
+}
+
+// compatibilityTransportSentinel places a client.Do error. Only errors that
+// prove the request never left this process are NotSent; everything else --
+// a deadline, a reset, an unexpected EOF -- may have been received and acted
+// on before the connection broke, and is Unknown. The default is Unknown so
+// an unrecognised transport error keeps today's ambiguous release rather than
+// silently losing an executed attempt.
+func compatibilityTransportSentinel(err error) error {
+	if err == nil {
+		return ErrCompatibilityUnknown
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return ErrCompatibilityNotSent
+	}
+	// A dial that failed never wrote a request byte. A read/write OpError
+	// deliberately falls through to Unknown.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return ErrCompatibilityNotSent
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return ErrCompatibilityNotSent
+	}
+	// A handshake rejected on either side ends before net/http writes the
+	// request line.
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return ErrCompatibilityNotSent
+	}
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return ErrCompatibilityNotSent
+	}
+	var authorityErr x509.UnknownAuthorityError
+	if errors.As(err, &authorityErr) {
+		return ErrCompatibilityNotSent
+	}
+	var recordErr tls.RecordHeaderError
+	if errors.As(err, &recordErr) {
+		return ErrCompatibilityNotSent
+	}
+	return ErrCompatibilityUnknown
+}
+
+// fail is the only failure constructor used once a bearer token exists on
+// this executor. It redacts that token from the diagnostic as a SECOND line
+// of defence; the first is that no free-form bridge response text is passed
+// in here at all (see the non-2xx branch above). Redaction alone is not
+// sufficient, because an exact-substring replacement cannot match a token
+// that untrusted text has re-encoded -- it remains useful for the transport
+// error path, whose text this package does not construct.
+//
+// This is not hypothetical: the detail is built from the bridge's own
+// response body, and a bridge that echoes the Authorization header it was
+// sent -- deliberately or by including request context in an error -- would
+// otherwise write the credential straight into the ledger's failure_detail
+// column, which is durable and operator-readable. Redacting here covers the
+// transport-error path too, where the error text can quote request headers.
+func (executor *HTTPCompatibilityExecutor) fail(sentinel error, status int, detail string) error {
+	if executor != nil && executor.config.BearerToken != "" {
+		detail = strings.ReplaceAll(detail, executor.config.BearerToken, "[redacted]")
+	}
+	return compatibilityFailure(sentinel, status, detail)
+}
+
+// transportDetail describes a client.Do failure using a FIXED vocabulary
+// derived from the error's TYPE, never from its text.
+//
+// err.Error() cannot be persisted. A transport error embeds raw bytes off the
+// wire and formats them with %q, which ESCAPES them -- so a bearer token
+// containing a quote arrives in a form an exact-substring redaction cannot
+// match. Measured, not argued: a malformed response header
+// `X-Echo ab"cd nocolon` produces
+// `malformed MIME header: missing colon: "X-Echo ab\"cd nocolon"`, and the
+// token `ab"cd` lands in the durable ledger detail as `ab\"cd`.
+//
+// This is the same class as the response-body leak fixed earlier, reopened
+// through the exception that fix deliberately left -- the comment there
+// claimed this path's text was "constructed by this package", which was
+// simply false. The lesson generalises: redaction cannot be the defence when
+// the input is untrusted, because sanitising is a guess about every encoding
+// the source might use. Describing instead of echoing removes the guess.
+func transportDetail(err error) string {
+	switch sentinel := compatibilityTransportSentinel(err); {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline exceeded after the request was sent"
+	case errors.Is(err, context.Canceled):
+		return "context canceled after the request was sent"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(sentinel, ErrCompatibilityNotSent):
+		// Every remaining NotSent shape is a pre-send failure: DNS, a failed
+		// dial, or a rejected TLS handshake.
+		return "connection could not be established"
+	default:
+		return "transport failure after the request was sent"
+	}
+}
+
+// compatibilityFailure wraps one of the three sentinels with the HTTP status
+// (0 when no response was received) and a bounded, sanitized diagnostic.
+// Callers that hold a bearer token must go through fail rather than calling
+// this directly; the endpoint that can appear in a transport error's text is
+// separately validated by validCompatibilityEndpoint to carry no userinfo and
+// no query string.
+func compatibilityFailure(sentinel error, status int, detail string) error {
+	trimmed := sanitizeDetail(detail, maxCompatibilityDetailBytes)
+	if trimmed == "" {
+		return fmt.Errorf("%w: status=%d", sentinel, status)
+	}
+	return fmt.Errorf("%w: status=%d %s", sentinel, status, trimmed)
+}
+
+// sanitizeDetail makes an arbitrary string safe to carry in an error that may
+// end up in the ledger's failure_detail column: control characters and
+// newlines become single spaces, runs of whitespace collapse, and the result
+// is cut to limit BYTES on a rune boundary so a multi-byte tail can never be
+// split into invalid UTF-8.
+func sanitizeDetail(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(min(len(value), limit))
+	pendingSpace := false
+	for _, symbol := range value {
+		if symbol == utf8.RuneError || !unicode.IsPrint(symbol) {
+			pendingSpace = builder.Len() > 0
+			continue
+		}
+		if unicode.IsSpace(symbol) {
+			pendingSpace = builder.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			if builder.Len()+1+utf8.RuneLen(symbol) > limit {
+				return builder.String()
+			}
+			builder.WriteByte(' ')
+			pendingSpace = false
+		}
+		if builder.Len()+utf8.RuneLen(symbol) > limit {
+			return builder.String()
+		}
+		builder.WriteRune(symbol)
+	}
+	return builder.String()
 }
 
 func validCompatibilityEndpoint(raw string, allowInsecure bool) bool {

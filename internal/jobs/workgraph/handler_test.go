@@ -115,6 +115,11 @@ type fakeStore struct {
 	// lastEvidence is what Complete received, so a test can assert what the
 	// step fragments merged into rather than only that a completion happened.
 	lastEvidence []byte
+	// lastAmbiguousDetail is what Ambiguous received. Before CHAOS-4970 every
+	// ambiguous release wrote one fixed literal, so the ledger row carried no
+	// discriminator at all; a test asserting the classified detail ACTUALLY
+	// reaches the store is what keeps that from silently regressing.
+	lastAmbiguousDetail string
 }
 
 func (s *fakeStore) Claim(context.Context, string, Kind) (*Claim, error) {
@@ -133,8 +138,12 @@ func (s *fakeStore) Complete(_ context.Context, _ Claim, evidence []byte) error 
 	s.lastEvidence = evidence
 	return nil
 }
-func (*fakeStore) Fail(context.Context, Claim, string) error        { return nil }
-func (s *fakeStore) Ambiguous(context.Context, Claim, string) error { s.ambiguous++; return nil }
+func (*fakeStore) Fail(context.Context, Claim, string) error { return nil }
+func (s *fakeStore) Ambiguous(_ context.Context, _ Claim, detail string) error {
+	s.ambiguous++
+	s.lastAmbiguousDetail = detail
+	return nil
+}
 
 type blockingExecutor struct {
 	delay               time.Duration

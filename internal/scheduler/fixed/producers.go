@@ -603,6 +603,22 @@ func NewRemainingMetricsFanoutProducer(
 				// makes the backstop look healthy while repairing nothing.
 				RequiresGraphBuild: true,
 			},
+			"work_item_attribution_daily_fanout": {
+				Family: "work_item_attribution",
+				// ComputeOrg (WorkItemAttributionExecutor, the native
+				// executor) takes only an org ID -- it ignores this static
+				// scope entirely and always recomputes its own affected set
+				// via detectScope's watermark comparison at run time (see
+				// work_item_attribution_native_clickhouse.go). This value
+				// only needs to satisfy validateFamilyScope's shape
+				// (scopes.go): org_wide is the closest placeholder meaning
+				// to every other fixed-schedule fanout's whole-organization
+				// scope, since an empty repo_ids/project_keys pair with
+				// org_wide=false is itself invalid per that same guard.
+				Scope: func(string) (json.RawMessage, error) {
+					return json.Marshal(map[string]any{"version": 1, "org_wide": true})
+				},
+			},
 			"capacity_forecast_weekly_fanout": {
 				Family: "capacity",
 				Scope: func(string) (json.RawMessage, error) {

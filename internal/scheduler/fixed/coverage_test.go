@@ -433,19 +433,20 @@ func TestScheduleCoverageFingerprintsTheBeatTimezone(t *testing.T) {
 // catch up, has to be an explicit edit to this table.
 func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 	want := map[string]CatchUpPolicy{
-		"scheduled_reports_dispatch":       CatchUpSkip,
-		"phone_home_heartbeat":             CatchUpSkip,
-		"prune_rate_limit_observations":    CatchUpSkip,
-		"prune_external_ingest_batches":    CatchUpSkip,
-		"prune_ask_dev_conversations":      CatchUpSkip,
-		"daily_metrics_fanout":             CatchUpBounded,
-		"complexity_daily_fanout":          CatchUpBounded,
-		"release_impact_daily_fanout":      CatchUpBounded,
-		"recommendations_daily_fanout":     CatchUpBounded,
-		"dora_daily_fanout":                CatchUpBounded,
-		"membership_backfill_daily_fanout": CatchUpBounded,
-		"capacity_forecast_weekly_fanout":  CatchUpBounded,
-		"sync_coverage_refresh":            CatchUpSkip,
+		"scheduled_reports_dispatch":         CatchUpSkip,
+		"phone_home_heartbeat":               CatchUpSkip,
+		"prune_rate_limit_observations":      CatchUpSkip,
+		"prune_external_ingest_batches":      CatchUpSkip,
+		"prune_ask_dev_conversations":        CatchUpSkip,
+		"daily_metrics_fanout":               CatchUpBounded,
+		"complexity_daily_fanout":            CatchUpBounded,
+		"release_impact_daily_fanout":        CatchUpBounded,
+		"recommendations_daily_fanout":       CatchUpBounded,
+		"dora_daily_fanout":                  CatchUpBounded,
+		"membership_backfill_daily_fanout":   CatchUpBounded,
+		"capacity_forecast_weekly_fanout":    CatchUpBounded,
+		"sync_coverage_refresh":              CatchUpSkip,
+		"work_item_attribution_daily_fanout": CatchUpBounded,
 	}
 	schedules, err := Schedules()
 	if err != nil {

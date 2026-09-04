@@ -7,7 +7,7 @@
 --   backstop run -- unlike the sync-time deriver (which re-derives on every
 --   item sync) and unlike the retired Python daily sweep (which re-derived
 --   every work item loaded that day, unconditionally). Detecting "changed
---   since" needs a persisted watermark per scope; there is nothing to diff
+--   since" needs a persisted watermark per scope -- there is nothing to diff
 --   against without one.
 --
 -- SHAPE mirrors work_unit_membership_runs / work_unit_membership_scoped_runs
@@ -18,7 +18,7 @@
 --
 -- promoted_reason (team-lead's PR-B ruling) is the one field that does NOT
 -- mirror #2177: a scoped run also rederives its linked_issue CLOSURE (donors
--- of affected items, and items whose donor is affected, one hop each way);
+-- of affected items, and items whose donor is affected, one hop each way) --
 -- if that closure exceeds 25% of the org's items, the run is PROMOTED to
 -- org-wide rather than writing a scoped marker for a set that is
 -- effectively the whole org anyway. promoted_reason records why (empty for
@@ -43,7 +43,7 @@ ORDER BY (org_id, run_id);
 
 -- scope_kind is 'repo' or 'project' (the two ownership-table triggers this
 -- backstop scopes on -- see the ruling in CHAOS-3092 PR-B). An
--- identities/teams change is org-wide by design (team = ownership; admin
+-- identities/teams change is org-wide by design (team = ownership -- admin
 -- membership has no single-repo/project scope to key on), so it is recorded
 -- via work_item_attribution_backstop_runs, never this table -- and so is a
 -- scope PROMOTED to org-wide by the linked_issue-closure bound above.

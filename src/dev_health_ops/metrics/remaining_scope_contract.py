@@ -198,6 +198,45 @@ class MembershipBackfillScope(_StrictScope):
         return canonical
 
 
+class WorkItemAttributionScope(_StrictScope):
+    """Mirrors internal/jobs/metrics/remaining/scopes.go's workItemAttributionScope
+    exactly, including its org_wide/repo_ids/project_keys mutual-exclusion rule
+    (CHAOS-3092 PR-B): a repo- or project-ownership change scopes to that
+    affected set (both lists may be non-empty together), an identities/teams
+    change is org_wide, and the two are mutually exclusive."""
+
+    _family = "work_item_attribution"
+
+    repo_ids: list[str] = Field(default_factory=list, max_length=256)
+    project_keys: list[str] = Field(default_factory=list, max_length=256)
+    org_wide: bool = False
+
+    @field_validator("repo_ids")
+    @classmethod
+    def validate_repo_ids(cls, value: list[str]) -> list[str]:
+        canonical = [_uuid_text(item) for item in value]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("repo_ids must be unique")
+        return canonical
+
+    @field_validator("project_keys")
+    @classmethod
+    def validate_project_keys(cls, value: list[str]) -> list[str]:
+        canonical = [_bounded_text(item, maximum=256) for item in value]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("project_keys must be unique")
+        return canonical
+
+    @model_validator(mode="after")
+    def validate_scope_shape(self) -> WorkItemAttributionScope:
+        affected = bool(self.repo_ids) or bool(self.project_keys)
+        if self.org_wide and affected:
+            raise ValueError("org_wide cannot be combined with repo_ids/project_keys")
+        if not self.org_wide and not affected:
+            raise ValueError("org_wide scope requires repo_ids or project_keys")
+        return self
+
+
 SCOPE_MODELS: dict[str, type[_StrictScope]] = {
     model._family: model
     for model in (
@@ -207,6 +246,7 @@ SCOPE_MODELS: dict[str, type[_StrictScope]] = {
         ReleaseImpactScope,
         RecommendationsScope,
         MembershipBackfillScope,
+        WorkItemAttributionScope,
     )
 }
 

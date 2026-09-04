@@ -3,6 +3,7 @@ package joboutbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 )
@@ -236,7 +237,11 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 		var err error
 		deferred, err = relay.routes.DeferredKinds(ctx)
 		if err != nil {
-			return result, ErrUnavailable
+			// CHAOS-4993: preserve the real cause (jobroute.DeferredKinds
+			// already names the offending kind) while keeping
+			// errors.Is(_, ErrUnavailable) true for every existing caller
+			// that classifies on the sentinel alone.
+			return result, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		if len(deferred) > maxRelayPolicyKinds {
 			return result, ErrInvalidConfiguration
@@ -252,7 +257,10 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 		if relay.routes != nil {
 			transport, routeErr := relay.routes.Resolve(ctx, claim.JobKind)
 			if routeErr != nil {
-				return result, ErrUnavailable
+				// CHAOS-4993: same preservation as the DeferredKinds branch
+				// above -- kind name plus real cause, sentinel still
+				// matches for classification.
+				return result, fmt.Errorf("%w: resolve route for kind %q: %w", ErrUnavailable, claim.JobKind, routeErr)
 			}
 			if transport == "celery" {
 				if releaseErr := relay.repository.releaseClaim(ctx, claim, now); releaseErr != nil {

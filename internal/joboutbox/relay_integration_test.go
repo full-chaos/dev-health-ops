@@ -122,6 +122,16 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 			}
 			continue
 		}
+		if descriptor.Kind == jobcontract.KindRemainingWorkItemAttribution {
+			// CHAOS-3092 PR-B: another Go-native-only kind, same
+			// celery_removed/river/none shape as the two above -- the
+			// retired Python daily sweep it replaces was an unconditional
+			// full recompute, not a predecessor this kind rolls back to.
+			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
+				t.Fatalf("work-item-attribution native-only policy drifted: %#v", descriptor)
+			}
+			continue
+		}
 		if descriptor.Route != "river" || descriptor.MigrationState != "go_default" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
 			t.Fatalf("checked-in production route drifted from post-cutover go_default/river policy: %#v", descriptor)
 		}

@@ -196,6 +196,13 @@ include-package-data = true
   "contracts/sync-dispatch/v1/*.json",
   "contracts/sync-dispatch/v1/*.md",
 ]
+# CHAOS-5013: same reason and same trap as the three trees above --
+# go_api_dispatcher._current_schema_digest() reads schema.graphql at RUNTIME
+# via contract_artifacts.contract_directory(), on every Go-dispatch attempt,
+# not only in a checkout. Caught by codex round 1 on #2204 before it shipped
+# (tests/tooling/test_contract_artifact_packaging.py's RUNTIME_CONTRACT_TREES
+# now covers this tree too).
+"contracts/graphql/v1" = ["contracts/graphql/v1/*.graphql"]
 
 [tool.ruff]
 line-length = 88

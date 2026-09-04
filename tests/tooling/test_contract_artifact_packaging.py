@@ -45,6 +45,16 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_CONTRACT_TREES = {
     ("provider-matrix", "v1"): "matrix.json",
     ("sync-dispatch", "v1"): "transport-routes.json",
+    # CHAOS-5013: go_api_dispatcher._current_schema_digest() reads this file
+    # via contract_artifacts.contract_directory() on every dispatch attempt
+    # -- the exact same CHAOS-3933 packaging trap this file exists to catch,
+    # caught here BEFORE it shipped (codex round 1, #2204): the installed
+    # `api` image runs `pip install --prefix=/install .`
+    # (docker/Dockerfile), and contracts/graphql/v1 was not in
+    # [tool.setuptools.data-files] -- the checkout branch of
+    # contract_directory() masked this in every local run and test, since a
+    # checkout always has contracts/ on disk.
+    ("graphql", "v1"): "schema.graphql",
 }
 
 

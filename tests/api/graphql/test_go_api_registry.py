@@ -179,6 +179,83 @@ async def test_lookup_routing_state_returns_the_row_once_registered(
     assert result.rollout_percentage == 5
 
 
+async def test_lookup_routing_state_filters_by_schema_digest_when_two_rows_share_the_operation(
+    session: AsyncSession,
+) -> None:
+    """CHAOS-5013, codex round 1 (#2204): the ``schema_digest`` predicate is
+    not incidental. ``RoutingState``'s primary key is ``(schema_digest,
+    document_digest, selected_operation)``, and ``lookup_routing_state`` uses
+    ``scalar_one_or_none()``, which RAISES ``sqlalchemy.exc.
+    MultipleResultsFound`` the moment more than one row matches. This is the
+    executed proof that an earlier (self-caught, never-pushed) version of
+    this PR would have failed: two rows for the SAME ``(document_digest,
+    selected_operation)`` under two DIFFERENT ``schema_digest`` values --
+    exactly what an unrotated schema change leaves behind -- must resolve to
+    the single row matching the CALLER's digest, not raise and not return
+    the wrong one.
+    """
+    await register_candidate_build(
+        session,
+        schema_digest="old-digest",
+        document_digest="d2",
+        selected_operation="featureFlags",
+        candidate_build="build-old",
+    )
+    await register_candidate_build(
+        session,
+        schema_digest="new-digest",
+        document_digest="d2",
+        selected_operation="featureFlags",
+        candidate_build="build-new",
+    )
+    session.add(
+        RoutingState(
+            schema_digest="old-digest",
+            document_digest="d2",
+            selected_operation="featureFlags",
+            current_candidate_build="build-old",
+            owner="go",
+            mode="disabled",
+            rollout_percentage=0,
+        )
+    )
+    session.add(
+        RoutingState(
+            schema_digest="new-digest",
+            document_digest="d2",
+            selected_operation="featureFlags",
+            current_candidate_build="build-new",
+            owner="go",
+            mode="canary",
+            rollout_percentage=100,
+        )
+    )
+    await session.commit()
+
+    # Would raise sqlalchemy.exc.MultipleResultsFound if the schema_digest
+    # predicate were dropped -- two rows now share (document_digest,
+    # selected_operation).
+    result = await lookup_routing_state(
+        session,
+        schema_digest="new-digest",
+        document_digest="d2",
+        selected_operation="featureFlags",
+    )
+    assert result is not None
+    assert result.mode == "canary"
+    assert result.current_candidate_build == "build-new"
+
+    other = await lookup_routing_state(
+        session,
+        schema_digest="old-digest",
+        document_digest="d2",
+        selected_operation="featureFlags",
+    )
+    assert other is not None
+    assert other.mode == "disabled"
+    assert other.current_candidate_build == "build-old"
+
+
 async def test_record_proof_run_rejects_invalid_stage(session: AsyncSession) -> None:
     with pytest.raises(ValueError, match="invalid proof-run stage"):
         await record_proof_run(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,4 +206,77 @@ func TestNilWorkItemExecutorsRefuse(t *testing.T) {
 	if _, err := estimate.ComputeFamily(context.Background(), Run{}, Partition{}); err == nil {
 		t.Error("a nil WorkItemEstimateExecutor did not refuse")
 	}
+}
+
+// TestWorkItemLoadersShareTheLoadWorkItemsPredicate asserts that
+// LoadWorkItemMetricsWorkItems and LoadWorkItemStateWorkItems apply the SAME
+// row-selection predicate -- the one ported from
+// ClickHouseMetricsLoader.load_work_items (loaders/clickhouse.py:454).
+//
+// The two loaders exist separately only because they select different COLUMN
+// sets. If their WHERE clauses ever drift, one family silently computes over a
+// different population than the other from the same partition, and no other
+// test in this repo would notice: the parity tests take items as given, and the
+// integration test drives only one loader per family.
+//
+// This parses the two query strings out of their own source file rather than
+// restating the predicate as a literal here. A restated literal is a THIRD copy
+// that can drift from both, and would let a matching pair of wrong clauses pass.
+func TestWorkItemLoadersShareTheLoadWorkItemsPredicate(t *testing.T) {
+	metricsWhere := whereClauseOf(t, "work_item_native_clickhouse.go", "LoadWorkItemMetricsWorkItems")
+	stateWhere := whereClauseOf(t, "work_item_state_native_clickhouse.go", "LoadWorkItemStateWorkItems")
+
+	if metricsWhere != stateWhere {
+		t.Errorf(
+			"the two work-item loaders no longer share load_work_items' predicate.\n"+
+				"  LoadWorkItemMetricsWorkItems: %s\n"+
+				"  LoadWorkItemStateWorkItems:   %s\n"+
+				"They must select the SAME rows and differ only in columns; if this "+
+				"divergence is deliberate, the Python loader they both port "+
+				"(loaders/clickhouse.py:454) changed and BOTH need updating.",
+			metricsWhere, stateWhere,
+		)
+	}
+	// Vacuity guard: an extraction bug that returned "" for both would make the
+	// comparison above trivially true.
+	for _, clause := range []string{metricsWhere, stateWhere} {
+		for _, required := range []string{"created_at < ?", "status != 'done'", "completed_at >= ?"} {
+			if !strings.Contains(clause, required) {
+				t.Fatalf("extracted predicate %q is missing %q -- the extractor, not the "+
+					"loaders, is broken, and the equality assertion above is vacuous",
+					clause, required)
+			}
+		}
+	}
+}
+
+// whereClauseOf extracts the WHERE clause of the single SQL literal inside the
+// named function, normalised to one space-separated line.
+func whereClauseOf(t *testing.T, fileName, funcName string) string {
+	t.Helper()
+	source, err := os.ReadFile(fileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(source)
+	start := strings.Index(body, "func "+funcName+"(")
+	if start < 0 {
+		t.Fatalf("%s not found in %s", funcName, fileName)
+	}
+	open := strings.Index(body[start:], "`")
+	if open < 0 {
+		t.Fatalf("no raw SQL literal inside %s", funcName)
+	}
+	open += start + 1
+	closing := strings.Index(body[open:], "`")
+	if closing < 0 {
+		t.Fatalf("unterminated SQL literal inside %s", funcName)
+	}
+	query := body[open : open+closing]
+
+	wherePos := strings.Index(query, "WHERE")
+	if wherePos < 0 {
+		t.Fatalf("%s's query has no WHERE clause", funcName)
+	}
+	return strings.Join(strings.Fields(query[wherePos:]), " ")
 }

@@ -1,6 +1,7 @@
 package workitemmetrics
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -207,4 +208,32 @@ func maxFloat(left, right float64) float64 {
 		return left
 	}
 	return right
+}
+
+// AssertAligned pins the Resolver index contract at the point a Resolver is
+// built: it panics unless the caller's source-row count equals the Item count
+// the same projection produced.
+//
+// A panic is the right severity here, and deliberately not an error return.
+// Misalignment means every attribution after the first dropped row is silently
+// WRONG -- items land in another item's team, and the output is plausible,
+// non-empty, and undetectable downstream. There is no partial-credit recovery:
+// a caller that has already mis-projected cannot compute a correct answer from
+// what it holds. Failing loudly at construction converts a silent data-
+// corruption class into an immediate, obviously-attributable crash in the
+// caller's own tests.
+//
+// It costs one integer comparison per family per repo, so it stays on in
+// production rather than being test-only.
+func AssertAligned(sourceRows, items int, resolve Resolver) Resolver {
+	if sourceRows != items {
+		panic(fmt.Sprintf(
+			"workitemmetrics: Resolver index contract violated -- %d source rows "+
+				"projected to %d items. The projection must be 1:1 and "+
+				"order-preserving; a filtering projection mis-attributes every item "+
+				"after the first dropped row.",
+			sourceRows, items,
+		))
+	}
+	return resolve
 }

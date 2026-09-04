@@ -40,11 +40,22 @@ type workItemMetricsRow struct {
 //
 // It exists alongside LoadWorkItemStateWorkItems rather than replacing it
 // because the two families read DIFFERENT column sets -- work_item_state never
-// looks at type/assignees/closed_at/story_points. Widening the shared loader
-// would make every work_item_state partition pay for four columns it discards;
-// keeping the predicate identical (and asserted identical by
-// TestWorkItemLoadersShareTheLoadWorkItemsPredicate) is what actually matters
-// for parity.
+// looks at type/assignees/started_at/closed_at/story_points. Widening the
+// shared loader would make every work_item_state partition pay for five columns
+// it discards; keeping the PREDICATE identical is what actually matters for
+// parity, and TestWorkItemLoadersShareTheLoadWorkItemsPredicate
+// (work_item_native_executor_test.go) asserts that by parsing both queries out
+// of their own source rather than trusting this comment.
+//
+// Python additionally appends `SETTINGS max_block_size` here (CHAOS-4361, after
+// a real MemoryError on a long-lived repo's open-item backlog). That setting
+// bounds how many rows clickhouse-connect buffers into ONE wide string read,
+// and it exists because Python selects `* EXCEPT (description)` -- every
+// remaining column, including several it never reads. This query names its
+// columns explicitly and reads no wide text at all, so the buffering hazard the
+// setting mitigates is absent by construction rather than merely mitigated.
+// Copying the setting across would be cargo-culting a fix for a query shape
+// this one does not have.
 //
 // `work_items` is ReplacingMergeTree(last_synced) keyed on
 // (repo_id, work_item_id), so FINAL is a complete, correct dedup here --
@@ -104,7 +115,7 @@ type workItemBatchConn interface {
 }
 
 // WriteWorkItemMetricsDaily ports write_work_item_metrics
-// (sinks/clickhouse/work_graph.py:198) -- same table, same 25 columns, same
+// (sinks/clickhouse/work_graph.py:198) -- same table, same 26 columns, same
 // order.
 //
 // `work_item_metrics_daily` is a plain MergeTree with no dedup key, so a

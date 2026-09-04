@@ -88,6 +88,14 @@ type Attribution struct {
 // the computation -- an index, not a work_item_id, so that two rows sharing an
 // id can never collapse into one answer.
 //
+// THE INDEX IS A CONTRACT: a Resolver almost always closes over the caller's
+// own row slice and subscripts it with this index, so the projection from those
+// rows to []Item must be strictly 1:1 and order-preserving. A caller that
+// filters while projecting would silently mis-attribute every item after the
+// first dropped one -- or panic. Callers should build both slices in one pass
+// and pass the result of AssertAligned to make the invariant explicit rather
+// than assumed.
+//
 // It is called at exactly the points Python calls resolve_team_attribution:
 // AFTER the relevance filter in ComputeDailyTriplet (compute_work_items.py
 // short-circuits ineligible items before resolving), and for every

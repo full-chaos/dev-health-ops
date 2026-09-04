@@ -116,11 +116,12 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		computedAt := executor.nowUTC()
 
 		sorted := sortWorkItemMetricsRows(items)
+		projected := workItemMetricsItems(sorted)
 		triplet := workitemmetrics.ComputeDailyTriplet(
 			scope.day,
-			workItemMetricsItems(sorted),
+			projected,
 			workItemMetricsTransitions(transitions),
-			workItemMetricsResolver(sorted, attributions),
+			workitemmetrics.AssertAligned(len(sorted), len(projected), workItemMetricsResolver(sorted, attributions)),
 		)
 
 		written, err := WriteWorkItemMetricsDaily(

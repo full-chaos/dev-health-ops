@@ -191,8 +191,11 @@ func buildWorkItemDerivedSurfacesForProvider(
 	end := dayUTC.AddDate(0, 0, 1)
 	computedAt = computedAt.UTC()
 
+	// `end` is deliberately NOT passed: ComputeEstimateCoverage derives the
+	// window from dayUTC itself, so handing it a second, independently-computed
+	// bound would create two sources of truth for the same edge.
 	coverage, err := buildGitHubEstimateCoverageMetricsDaily(
-		claim, rows, dayUTC, end, computedAt, derived,
+		claim, rows, dayUTC, computedAt, derived,
 	)
 	if err != nil {
 		return githubWorkItemDerivedSurfaces{}, err
@@ -216,10 +219,6 @@ func buildWorkItemDerivedSurfacesForProvider(
 	}, nil
 }
 
-type githubEstimateCoverageKey struct {
-	provider, workScopeID, teamID string
-}
-
 // buildGitHubEstimateCoverageMetricsDaily adapts providersync's row shape onto
 // the shared compute_estimate_coverage_metrics_daily port
 // (internal/jobs/metrics/workitemmetrics.ComputeEstimateCoverage). The
@@ -235,7 +234,7 @@ type githubEstimateCoverageKey struct {
 func buildGitHubEstimateCoverageMetricsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
-	dayUTC, end, computedAt time.Time,
+	dayUTC, computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
 ) ([]githubEstimateCoverageMetricsDailyRow, error) {
 	items := make([]workitemmetrics.Item, 0, len(rows.WorkItems))
@@ -258,7 +257,8 @@ func buildGitHubEstimateCoverageMetricsDaily(
 	}
 
 	computed := workitemmetrics.ComputeEstimateCoverage(
-		dayUTC, items, workItemMetricResolver(rows, derived),
+		dayUTC, items,
+		workitemmetrics.AssertAligned(len(rows.WorkItems), len(items), workItemMetricResolver(rows, derived)),
 	)
 	stamp := githubWorkItemDerivedStamp(computedAt, githubEstimateCoverageStampPrecision)
 	result := make([]githubEstimateCoverageMetricsDailyRow, 0, len(computed))
@@ -279,16 +279,6 @@ func buildGitHubEstimateCoverageMetricsDaily(
 		})
 	}
 	return result, nil
-}
-
-func githubEstimateCoverageKeyLess(left, right githubEstimateCoverageKey) bool {
-	if left.provider != right.provider {
-		return left.provider < right.provider
-	}
-	if left.workScopeID != right.workScopeID {
-		return left.workScopeID < right.workScopeID
-	}
-	return left.teamID < right.teamID
 }
 
 // buildGitHubWorkItemTeamAttributions mirrors

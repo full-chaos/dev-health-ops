@@ -208,7 +208,8 @@ func buildWorkItemMetricTripletForProvider(
 	}
 
 	triplet := workitemmetrics.ComputeDailyTriplet(
-		day, items, transitions, workItemMetricResolver(rows, derived),
+		day, items, transitions,
+		workitemmetrics.AssertAligned(len(rows.WorkItems), len(items), workItemMetricResolver(rows, derived)),
 	)
 	return githubWorkItemMetricTriplet{
 		MetricsDaily:     githubWorkItemMetricsDailyRows(triplet.MetricsDaily, computedAt, claim.OrgID),

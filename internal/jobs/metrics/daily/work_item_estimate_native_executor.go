@@ -78,10 +78,11 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 
 		computedAt := executor.nowUTC()
 		sorted := sortWorkItemMetricsRows(items)
+		projected := workItemMetricsItems(sorted)
 		rows := workitemmetrics.ComputeEstimateCoverage(
 			scope.day,
-			workItemMetricsItems(sorted),
-			workItemMetricsResolver(sorted, attributions),
+			projected,
+			workitemmetrics.AssertAligned(len(sorted), len(projected), workItemMetricsResolver(sorted, attributions)),
 		)
 
 		written, err := WriteEstimateCoverageMetricsDaily(

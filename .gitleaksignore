@@ -61,3 +61,11 @@ e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
 # scans; both full-SHA and short-id forms per the CHAOS-2690 precedent above.
 8201b545fb716f3189060126172bfded8dea65c3:internal/platform/logging/logging_test.go:generic-api-key:65
 8201b545f:internal/platform/logging/logging_test.go:generic-api-key:65
+# CHAOS-4441: an openai-style fake key literal in a secret-sanitizer test
+# fixture (TestSanitizeMessageRedactsCredentials). The finding is on an
+# already-pushed commit within this PR's own branch range, so a later
+# commit's inline `// gitleaks:allow` comment does not remove it from the
+# range gitleaks scans; both full-SHA and short-id forms per the CHAOS-2690
+# precedent above.
+3ec0adda70431279f6a1b9c2abbb3d446646fd94:internal/jobs/investment/categorize/errors_test.go:generic-api-key:17
+3ec0adda7:internal/jobs/investment/categorize/errors_test.go:generic-api-key:17

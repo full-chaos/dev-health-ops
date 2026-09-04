@@ -251,11 +251,25 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 			t.Fatal(err)
 		}
 	}
-	// A second tenant holding an item with the SAME id, so a missing org
-	// predicate in any of the three loaders shows up as doubled counts rather
-	// than as nothing at all.
+	// A second tenant in the SAME repo, so a missing org predicate in any of
+	// the three loaders shows up as an extra row rather than as nothing at all.
+	//
+	// Its work_item_id is DELIBERATELY DIFFERENT from every org A id. An
+	// earlier version reused golden.Items[0]'s id to make the collision
+	// obvious -- which was wrong: production `work_items` is
+	// ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id), and
+	// org_id is NOT in that key. Same repo + same work_item_id is therefore the
+	// SAME ROW to the engine, so FINAL would collapse the two tenants into one,
+	// with equal last_synced making the survivor arbitrary. That would have
+	// silently deleted an org A item from the fixture and made this test's
+	// expectations non-deterministic -- while the cross-tenant guard it was
+	// written to provide proved nothing at all.
+	//
+	// Keeping the repo the same and the id distinct is what actually isolates
+	// the ORG predicate: the repo filter cannot exclude this row, so only
+	// `org_id = ?` can.
 	if err := itemBatch.Append(
-		repo, golden.Items[0].WorkItemID, golden.Items[0].Provider, "in_progress",
+		repo, "gh:other-tenant-1", golden.Items[0].Provider, "in_progress",
 		"", "acme/other-tenant", "", "", "task", []string{"mallory"},
 		day, &day, nil, nil, (*float64)(nil), orgB, synced,
 	); err != nil {

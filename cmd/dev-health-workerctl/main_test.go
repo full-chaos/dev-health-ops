@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
@@ -1382,6 +1383,111 @@ func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T)
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{"remaining", "stop"}, &stdout, &stderr)
 	if code != 1 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("unknown remaining subcommand not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestCanonicalUUIDNormalizesCaseAndRejectsInvalid is the regression test for
+// codex adversarial review round 2, P1: canonicalUUID is what
+// dispatchMetricsDailyStart and dispatchMetricsRemainingTriggerBackstop now
+// call BEFORE folding --org/--repo-id/--team's text into a generation string
+// or persisted scope JSON, closing the case-spelling duplicate-write class
+// (see canonicalUUID's own doc comment for the full mechanism).
+func TestCanonicalUUIDNormalizesCaseAndRejectsInvalid(t *testing.T) {
+	lower := "00000000-0000-4000-8000-000000000001"
+	upper := "00000000-0000-4000-8000-000000000001"
+	upper = strings.ToUpper(upper)
+
+	gotLower, err := canonicalUUID(lower)
+	if err != nil {
+		t.Fatalf("canonicalUUID(%q) = %v", lower, err)
+	}
+	gotUpper, err := canonicalUUID(upper)
+	if err != nil {
+		t.Fatalf("canonicalUUID(%q) = %v", upper, err)
+	}
+	if gotLower != gotUpper {
+		t.Fatalf("canonicalUUID must normalize case: lower=%q upper=%q", gotLower, gotUpper)
+	}
+	if gotLower != lower {
+		t.Fatalf("canonicalUUID(%q) = %q, want the already-canonical lowercase form unchanged", lower, gotLower)
+	}
+	if _, err := canonicalUUID("not-a-uuid"); err == nil {
+		t.Fatal("canonicalUUID(\"not-a-uuid\") did not error")
+	}
+}
+
+// TestManualDailyRunGenerationIsCaseInsensitiveOnceCanonicalized is the
+// end-to-end regression test for the same finding, composed from the two
+// pure functions dispatchMetricsDailyStart actually calls in order
+// (canonicalUUID then daily.ManualDailyRunGeneration) -- proving that two
+// callers of the identical logical (org, day, repo scope) differing only in
+// UUID case now mint the SAME generation, where before this fix they would
+// not have (daily.ManualDailyRunGeneration hashes its input verbatim, with
+// no case normalization of its own).
+func TestManualDailyRunGenerationIsCaseInsensitiveOnceCanonicalized(t *testing.T) {
+	const day = "2026-08-26"
+	lowerOrg := "00000000-0000-4000-8000-000000000001"
+	upperOrg := strings.ToUpper(lowerOrg)
+	lowerRepo := "00000000-0000-4000-8000-000000000002"
+	upperRepo := strings.ToUpper(lowerRepo)
+
+	canonicalLowerOrg, err := canonicalUUID(lowerOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperOrg, err := canonicalUUID(upperOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalLowerRepo, err := canonicalUUID(lowerRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperRepo, err := canonicalUUID(upperRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := daily.ManualDailyRunGeneration(canonicalLowerOrg, day, []daily.RepositoryID{daily.RepositoryID(canonicalLowerRepo)})
+	second := daily.ManualDailyRunGeneration(canonicalUpperOrg, day, []daily.RepositoryID{daily.RepositoryID(canonicalUpperRepo)})
+	if first != second {
+		t.Fatalf("case-variant org/repo-id spellings of the SAME UUIDs produced different generations after canonicalization: %q vs %q", first, second)
+	}
+}
+
+// TestManualBackstopTriggerGenerationIsCaseInsensitiveOnceCanonicalized
+// mirrors the daily-start regression above for
+// dispatchMetricsRemainingTriggerBackstop's own org/team canonicalization.
+func TestManualBackstopTriggerGenerationIsCaseInsensitiveOnceCanonicalized(t *testing.T) {
+	const day = "2026-09-04"
+	lowerOrg := "00000000-0000-4000-8000-000000000001"
+	upperOrg := strings.ToUpper(lowerOrg)
+	lowerTeam := "00000000-0000-4000-8000-000000000002"
+	upperTeam := strings.ToUpper(lowerTeam)
+
+	canonicalLowerOrg, err := canonicalUUID(lowerOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperOrg, err := canonicalUUID(upperOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalLowerTeam, err := canonicalUUID(lowerTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperTeam, err := canonicalUUID(upperTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	discriminator1 := manualBackstopTriggerScopeDiscriminator("capacity", &canonicalLowerTeam, false, 0)
+	discriminator2 := manualBackstopTriggerScopeDiscriminator("capacity", &canonicalUpperTeam, false, 0)
+	first := manualBackstopTriggerGeneration("capacity", canonicalLowerOrg, day, discriminator1)
+	second := manualBackstopTriggerGeneration("capacity", canonicalUpperOrg, day, discriminator2)
+	if first != second {
+		t.Fatalf("case-variant org/team spellings of the SAME UUIDs produced different generations after canonicalization: %q vs %q", first, second)
 	}
 }
 

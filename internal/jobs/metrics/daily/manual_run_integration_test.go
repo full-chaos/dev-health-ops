@@ -4,6 +4,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -104,5 +105,153 @@ func TestStartManualDailyRunWithDeferredDiscoveryMaterializesThroughTheSharedPat
 	}
 	if partitionCount != 1 || ids != `["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]` {
 		t.Fatalf("manual-daily materialized partitions=%d ids=%s", partitionCount, ids)
+	}
+}
+
+// TestStartManualDailyRunRefusesADayAlreadyCoveredByADifferentGeneration is
+// the red-on-baseline proof for codex adversarial review round 2, P1
+// (CHAOS-5055): `metrics daily --org O` for a day whose all-repository
+// computation the nightly fixed schedule (or a post-sync re-drive, or an
+// earlier manual trigger under a DIFFERENT generation) already completed
+// used to dispatch a SECOND, independent all-repository run anyway --
+// StartRunTx's (org_id, target_day, generation) uniqueness only makes ONE
+// generation idempotent against its own replays, so two different triggers
+// for the identical (org, day) scope both persisted and executed,
+// duplicate-writing every native daily family (file_hotspots included).
+// This test seeds a succeeded run under the SCHEDULED fan-out's own
+// generation format, then proves a deferred-discovery manual trigger for
+// the same org/day is refused with ErrDayAlreadyCovered rather than
+// dispatching a duplicate.
+func TestStartManualDailyRunRefusesADayAlreadyCoveredByADifferentGeneration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const org = "00000000-0000-4000-8000-000000000012"
+	const day = "2026-08-26"
+	const scheduledRunID = "00000000-0000-4000-8000-000000000013"
+	now := time.Now().UTC()
+
+	// Simulate the nightly fixed schedule having already computed and
+	// finalized this exact org+day, under ITS OWN generation format --
+	// nothing this test does reaches MaterializeScheduledFanout/finalize;
+	// only the terminal daily_metrics_runs.status this check reads matters.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
+VALUES ($1::uuid,$2::uuid,$3::date,'fixed-schedule:daily_metrics_fanout:2026-08-26T01:00:00Z','succeeded','succeeded',$4,$4)`,
+		scheduledRunID, org, day, now); err != nil {
+		t.Fatal(err)
+	}
+
+	generation := ManualDailyRunGeneration(org, day, nil)
+	outcome, err := store.StartManualDailyRun(ctx, org, day, generation, nil, publisher)
+	if !errors.Is(err, ErrDayAlreadyCovered) {
+		t.Fatalf("expected ErrDayAlreadyCovered for a day the fixed schedule already covered, got err=%v outcome=%+v", err, outcome)
+	}
+
+	var runCount int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM daily_metrics_runs WHERE org_id = $1::uuid AND target_day = $2::date",
+		org, day,
+	).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 {
+		t.Fatalf("expected no new run to be inserted (still 1, the seeded scheduled run), found %d", runCount)
+	}
+}
+
+// TestStartManualDailyRunStillAllowsAnIdempotentRetryOfItsOwnSuccess proves
+// HasSucceededRunForDay's excludeGeneration parameter does its job: a
+// retried CLI invocation for the SAME logical manual request (deterministic
+// generation, ManualDailyRunGeneration) must still reach StartRunTx's own
+// ON CONFLICT DO NOTHING idempotency path -- not be refused as
+// "already covered" by its own prior success, which would turn a safe retry
+// into a hard failure.
+func TestStartManualDailyRunStillAllowsAnIdempotentRetryOfItsOwnSuccess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const org = "00000000-0000-4000-8000-000000000014"
+	const day = "2026-08-26"
+	generation := ManualDailyRunGeneration(org, day, nil)
+
+	outcome, err := store.StartManualDailyRun(ctx, org, day, generation, nil, publisher)
+	if err != nil {
+		t.Fatalf("first StartManualDailyRun failed: %v", err)
+	}
+	// Mark it succeeded directly (matching the other integration tests'
+	// convention of writing the terminal state straight to the table rather
+	// than driving a full claim/materialize/finalize sequence, which is not
+	// what this test is proving).
+	now := time.Now().UTC()
+	if _, err := pool.Exec(ctx, `
+UPDATE daily_metrics_runs SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $1
+WHERE id = $2::uuid`, now, outcome.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	retried, err := store.StartManualDailyRun(ctx, org, day, generation, nil, publisher)
+	if err != nil {
+		t.Fatalf("idempotent retry under the SAME generation was refused: %v", err)
+	}
+	if retried.RunID != outcome.RunID {
+		t.Fatalf("retry returned a different run: first=%s retried=%s", outcome.RunID, retried.RunID)
+	}
+
+	var runCount int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM daily_metrics_runs WHERE org_id = $1::uuid AND target_day = $2::date",
+		org, day,
+	).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 {
+		t.Fatalf("expected the retry to reuse the same row (still 1), found %d", runCount)
 	}
 }

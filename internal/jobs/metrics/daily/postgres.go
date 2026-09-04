@@ -327,6 +327,44 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	return run, nil
 }
 
+// HasSucceededRunForDay reports whether a daily-metrics run under a
+// DIFFERENT generation than excludeGeneration has already reached a
+// successful terminal state for (organizationID, day): 'succeeded'
+// (materialized partitions completed) or 'no_repositories' (deferred
+// discovery genuinely found none, MaterializeScheduledFanout's own terminal
+// fence). Used by StartManualDailyRun to refuse a deferred-discovery manual
+// trigger when a prior scheduled fan-out, post-sync re-drive, or a
+// DIFFERENT earlier manual trigger already covers the same (org, day) -- see
+// ErrDayAlreadyCovered's doc comment for why this check exists and what it
+// deliberately does NOT cover.
+//
+// excludeGeneration MUST be the CALLER's own about-to-be-used generation:
+// without excluding it, a legitimate idempotent RETRY of a manual request
+// that already succeeded (ManualDailyRunGeneration is deterministic per
+// logical request specifically so a retry reuses the SAME generation) would
+// see its own prior success and be refused as "already covered" instead of
+// reaching StartRunTx's ON CONFLICT DO NOTHING idempotency path -- turning a
+// safe retry into a hard failure.
+func (store *PostgresStore) HasSucceededRunForDay(
+	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
+) (bool, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || day == "" {
+		return false, ErrUnavailable
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM public.daily_metrics_runs
+    WHERE org_id = $1::uuid AND target_day = $2::date
+      AND generation <> $3
+      AND status IN ('succeeded', 'no_repositories')
+)`, organizationID, day, excludeGeneration).Scan(&exists)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	return exists, nil
+}
+
 // StartScheduledFanoutRunTx creates the durable state for one organization in
 // the nightly fixed schedule. Repository discovery intentionally happens in
 // the heavy worker after this coordinator transaction commits.

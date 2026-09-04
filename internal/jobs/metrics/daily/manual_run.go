@@ -55,6 +55,26 @@ func ManualDailyRunGeneration(organizationID, day string, repositoryIDs []Reposi
 // today. generation MUST be deterministic per logical request (see
 // ManualDailyRunGeneration) so a retried CLI invocation is idempotent rather
 // than dispatching a second run for the same day.
+//
+// Deferred-discovery requests (repositoryIDs empty) are refused with
+// ErrDayAlreadyCovered when the same (org, day) already has a succeeded run
+// under ANY OTHER generation -- a prior scheduled fan-out, post-sync
+// re-drive, or earlier manual trigger (CHAOS-5055, codex adversarial review
+// round 2, P1): StartRunTx's (org_id, target_day, generation) uniqueness
+// only makes THIS generation idempotent against ITS OWN replays, so without
+// this check a manual trigger for a day the schedule already computed would
+// insert a second, independent all-repository run and duplicate-write every
+// native daily family. A transaction-scoped advisory lock keyed on (org,
+// day) serializes this check against a CONCURRENT manual trigger for the
+// same day (the same shape remaining/manual_backfill.go's
+// startManualTriggerRun uses); it does NOT serialize against a concurrent
+// scheduled-fanout or post-sync transaction, since neither of those take
+// this lock -- closing that direction would mean changing the nightly
+// schedule's own behavior, which is deliberately out of this fix's scope
+// (see ErrDayAlreadyCovered's doc comment). Repository-scoped requests
+// (repositoryIDs non-empty) skip this check entirely: a narrower,
+// deliberately-scoped manual recompute of specific repositories is not the
+// scenario this guards against.
 func (store *PostgresStore) StartManualDailyRun(
 	ctx context.Context,
 	organizationID, day, generation string,
@@ -85,6 +105,22 @@ func (store *PostgresStore) StartManualDailyRun(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
+
+	if len(repositoryIDs) == 0 {
+		if _, err := tx.Exec(ctx,
+			"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+			"daily_metrics_manual_day", organizationID+":"+day,
+		); err != nil {
+			return ManualDailyRunOutcome{}, ErrUnavailable
+		}
+		covered, err := store.HasSucceededRunForDay(ctx, tx, organizationID, day, generation)
+		if err != nil {
+			return ManualDailyRunOutcome{}, err
+		}
+		if covered {
+			return ManualDailyRunOutcome{}, ErrDayAlreadyCovered
+		}
+	}
 
 	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
 		OrganizationID: organizationID,

@@ -925,9 +925,11 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
-	if _, err := uuid.Parse(*org); err != nil {
+	canonicalOrg, err := canonicalUUID(*org)
+	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	*org = canonicalOrg
 	fromDay, err := time.Parse("2006-01-02", *day)
 	if err != nil {
 		return writeError(stderr, "invalid_request")
@@ -949,10 +951,11 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	}
 	repositoryIDs := make([]daily.RepositoryID, 0, len(repoIDs))
 	for _, id := range repoIDs {
-		if _, err := uuid.Parse(id); err != nil {
+		canonicalRepo, err := canonicalUUID(id)
+		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
-		repositoryIDs = append(repositoryIDs, daily.RepositoryID(id))
+		repositoryIDs = append(repositoryIDs, daily.RepositoryID(canonicalRepo))
 	}
 	if runtime.pools == nil || runtime.registry == nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -970,6 +973,15 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 		dayString := cursor.Format("2006-01-02")
 		generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
 		outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
+		if errors.Is(err, daily.ErrDayAlreadyCovered) {
+			// A clean, distinguishable code (codex adversarial review round
+			// 2, P1) rather than the generic operator_request_failed
+			// writeServiceError would otherwise report -- an operator
+			// re-running `metrics daily` over a range needs to see WHICH
+			// day was already covered by a different trigger, not just
+			// that the range as a whole failed partway through.
+			return writeError(stderr, "already_covered")
+		}
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}
@@ -1880,6 +1892,29 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 	}
 }
 
+// canonicalUUID parses s as a UUID and returns its canonical lowercase
+// string form (codex adversarial review round 2, P1). Any caller that
+// folds a UUID's TEXT verbatim into a generation string or persisted scope
+// JSON -- rather than only ever passing it through as a `$N::uuid`-typed SQL
+// parameter, which Postgres itself case-normalizes -- MUST canonicalize
+// first: dispatchMetricsDailyStart's `--org`/`--repo-id` and
+// dispatchMetricsRemainingTriggerBackstop's `--org`/`--team` all do exactly
+// that (ManualDailyRunGeneration's hash, manualBackstopTriggerGeneration's
+// concatenation, and the capacity/recommendations scope JSON's "team_id"
+// field are all plain string operations with no type-level normalization).
+// Without this, two callers of the identical logical request differing only
+// in UUID case (uppercase vs lowercase) mint two DIFFERENT generations (or
+// two different scope JSON values) and dispatch two separate computations
+// for the same scope -- reopening the exact duplicate-write class this
+// dispatch migration exists to close.
+func canonicalUUID(s string) (string, error) {
+	parsed, err := uuid.Parse(s)
+	if err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
+}
+
 // manualBackstopTriggerGeneration derives a deterministic generation for one
 // `metrics remaining trigger-backstop` request, distinct from BOTH the
 // fixed-schedule fanout's own "fixed-schedule:<schedule-id>:<time>" format
@@ -2037,22 +2072,27 @@ func dispatchMetricsRemainingTriggerBackstop(
 	if !slices.Contains(remaining.ManualBackstopTriggerFamilies, *family) {
 		return writeError(stderr, "invalid_request")
 	}
-	if _, err := uuid.Parse(*org); err != nil {
+	canonicalOrg, err := canonicalUUID(*org)
+	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	*org = canonicalOrg
 	if strings.TrimSpace(*reviewEvidence) == "" {
 		return writeError(stderr, "invalid_request")
 	}
 	// capacity/recommendations scope by team, not by day-window -- exactly
 	// one of --team/--all-teams is required for them (mirroring
 	// capacityScope's own all_teams-XOR-team_id validation, scopes.go);
-	// every other family ignores both flags entirely.
+	// every other family ignores both flags entirely. Canonicalized for the
+	// same reason *org is above -- it ends up in both the generation string
+	// and the persisted capacity/recommendations scope JSON's "team_id".
 	var teamID *string
 	if strings.TrimSpace(*team) != "" {
-		if _, err := uuid.Parse(*team); err != nil {
+		canonicalTeam, err := canonicalUUID(*team)
+		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
-		teamID = team
+		teamID = &canonicalTeam
 	}
 	if (*family == "capacity" || *family == "recommendations") && (teamID != nil) == *allTeams {
 		return writeError(stderr, "invalid_request")

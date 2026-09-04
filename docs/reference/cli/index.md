@@ -1122,6 +1122,20 @@ trigger source, so there is no separate, unguarded Python write path. Not
 restricted to historical days (unlike `metrics remaining start` below) --
 `--to` may be today.
 
+**Coverage check (codex adversarial review round 2, P1):** a deferred-discovery
+request (no `--repo-id`) is refused with `already_covered` if the same
+(org, day) already has a succeeded run from a DIFFERENT trigger -- the nightly
+fixed schedule, a post-sync re-drive, or an earlier manual trigger under a
+different generation. This prevents duplicate-writing every native daily
+family (`file_hotspots` included) for a day that already computed. A retried
+CLI invocation for the identical logical request is unaffected (it reuses the
+same deterministic generation and lands on the ordinary idempotency path, not
+the coverage refusal). A `--repo-id`-scoped request skips this check --
+narrower, deliberately-scoped repository recomputes are not what this guards
+against. This does NOT protect the reverse direction (a manual trigger fired
+BEFORE that day's fixed-schedule occurrence) -- closing that would mean
+changing the nightly schedule's own behavior, deliberately out of scope here.
+
 ```bash
 dev-health-workerctl metrics daily-start \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \

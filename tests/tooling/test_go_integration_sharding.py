@@ -1678,6 +1678,18 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # apart silently), and TestGitHubTestsLatePublishedArtifactIsNotLostForever
     # -- the regression guard for the defect above, red on the reverted design.
     #
+    # codex r2 fixes (+4 ordinary, 1326 -> 1330, integration-tagged UNCHANGED at
+    # 154 -- all four are plain unit tests with fake ClickHouse conns, no build
+    # tag): TestGitHubTestsContentSkipCannotBypassRowValidation (r2 P1 -- the
+    # skip must not run ahead of the fail-closed row validation),
+    # TestGitHubTestsContentSkipIsReachableForValidRows (its reachability
+    # control, so the refusals above cannot pass merely because the skip never
+    # fires -- and the r2 P3 assertion that a suppressed insert is observable),
+    # TestGitHubTestsContentSkipDetectsASignedZeroChange (r2 P2 -- -0 vs +0 must
+    # not compare equal), and TestGitHubTestsContentSkipStillFiresOnAnIdenticalFloat
+    # (its control, so the signed-zero test proves discrimination rather than a
+    # comparator that never matches).
+    #
     # Integration-tagged (+2): TestGitHubTestsReportWindowWritesOneRawRowPerKeyAcrossWindows
     # (raw count asserted WITHOUT FINAL, since a FINAL readback collapses the
     # duplicates and would pass on the unfixed code) and
@@ -1686,7 +1698,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # Both join the existing internal/providersync shard row, so
     # ci/go_integration_shards.tsv needs no new row and its 44-row count is
     # unchanged.
-    assert len(expected_provider_tests) == 1326
+    assert len(expected_provider_tests) == 1330
     assert len(expected_integration_tests) == 154
     assert expected_integration_tests < expected_provider_tests
 
@@ -1703,7 +1715,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1326
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1330
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1790,7 +1802,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1326
+    assert len(selected_tests) == len(set(selected_tests)) == 1330
     assert set(selected_tests) == expected_tests
 
 

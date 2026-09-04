@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,5 +222,130 @@ func TestGovernanceWritersAreNoOpsOnEmptyInput(t *testing.T) {
 	}
 	if written, err := WriteAIGovernanceCoverageDaily(context.Background(), conn, nil, time.Now()); err != nil || written != 0 {
 		t.Fatalf("WriteAIGovernanceCoverageDaily(nil) = %d, %v; want 0, nil", written, err)
+	}
+}
+
+// orderRecordingConn records the INSERT target of each PrepareBatch, and can
+// be told to fail the Nth one, so a two-table write's partial-failure
+// behaviour is observable without a real ClickHouse.
+type orderRecordingConn struct {
+	stubDriverConn
+	targets  []string
+	failFrom int // 1-based; 0 means never fail
+	batch    *recordingBatch
+}
+
+func (conn *orderRecordingConn) Query(_ context.Context, _ string, _ ...any) (chdriver.Rows, error) {
+	return &oneGovernanceArtifactRows{}, nil
+}
+
+// oneGovernanceArtifactRows yields a single artifact whose shape guarantees at
+// least one violation AND one coverage row, so BOTH writers are reached and the
+// executor's real call order is observable.
+type oneGovernanceArtifactRows struct {
+	chdriver.Rows
+	done bool
+}
+
+func (rows *oneGovernanceArtifactRows) Next() bool {
+	if rows.done {
+		return false
+	}
+	rows.done = true
+	return true
+}
+func (rows *oneGovernanceArtifactRows) Err() error   { return nil }
+func (rows *oneGovernanceArtifactRows) Close() error { return nil }
+func (rows *oneGovernanceArtifactRows) Scan(dest ...any) error {
+	if len(dest) != 15 {
+		return errors.New("unexpected governance artifact column count")
+	}
+	*(dest[0].(*string)) = "org-42"
+	*(dest[1].(**uuid.UUID)) = nil
+	*(dest[2].(*string)) = "pull_request"
+	*(dest[3].(*string)) = "1"
+	*(dest[4].(*time.Time)) = time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	*(dest[5].(*uint8)) = 0 // not declared -> MISSING_AI_DECLARATION
+	*(dest[6].(**uint8)) = nil
+	*(dest[7].(**uint8)) = nil
+	*(dest[8].(*uint8)) = 0
+	*(dest[9].(*string)) = ""
+	*(dest[10].(*string)) = ""
+	*(dest[11].(*string)) = "unknown"
+	*(dest[12].(*string)) = "pr_body"
+	*(dest[13].(*string)) = "ai_assisted"
+	*(dest[14].(**float32)) = nil
+	return nil
+}
+
+func (conn *orderRecordingConn) PrepareBatch(_ context.Context, query string, _ ...chdriver.PrepareBatchOption) (chdriver.Batch, error) {
+	table := "unknown"
+	switch {
+	case strings.Contains(query, "ai_policy_events"):
+		table = "ai_policy_events"
+	case strings.Contains(query, "ai_governance_coverage_daily"):
+		table = "ai_governance_coverage_daily"
+	}
+	conn.targets = append(conn.targets, table)
+	if conn.failFrom > 0 && len(conn.targets) >= conn.failFrom {
+		return nil, errors.New("simulated ClickHouse write failure")
+	}
+	if conn.batch == nil {
+		conn.batch = &recordingBatch{}
+	}
+	return conn.batch, nil
+}
+
+// TestGovernanceWritesTheMergeableTableFirst pins the write ORDER, which is a
+// correctness property rather than style.
+//
+// On any executor error, computeNativeFamilies (daily.go:588-595) omits the
+// family from skipFamilies and the Python bridge writes BOTH tables. Coverage
+// duplicates merge away (its ORDER BY key has no random component); policy
+// events CANNOT (Python's event_id is uuid4, ours is derived), so a Go policy
+// event plus a Python fallback event is a permanent duplicate.
+//
+// Writing coverage first means a mid-sequence failure can only ever have
+// committed rows the fallback merges away. Swapping the two calls back
+// reddens this test.
+func TestGovernanceWritesTheMergeableTableFirst(t *testing.T) {
+	violations := []aigovernance.Violation{{
+		EventID: uuid.New(), OrgID: "org-42", RuleID: aigovernance.RuleMissingAIDeclaration,
+		Severity: aigovernance.SeverityWarning, SubjectType: "pull_request", SubjectID: "1",
+		ObservedAt: time.Now().UTC(), Evidence: map[string]any{},
+	}}
+	coverage := []aigovernance.CoverageDaily{{
+		OrgID: "org-42", Day: time.Now().UTC().Truncate(24 * time.Hour), AIArtifacts: 1,
+	}}
+
+	// Drive the REAL executor, not the writers directly -- otherwise this test
+	// pins only the contract and a swap inside ComputeFamily would not redden
+	// it. The stubbed Query yields one undeclared PR artifact, which produces
+	// both a violation and a coverage row, so both writers are reached.
+	conn := &orderRecordingConn{}
+	executor := &AIGovernanceExecutor{conn: conn, nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
+	run := Run{OrganizationID: "org-42", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	if _, err := executor.ComputeFamily(context.Background(), run, Partition{ID: "p1"}); err != nil {
+		t.Fatalf("ComputeFamily: %v", err)
+	}
+	if len(conn.targets) != 2 || conn.targets[0] != "ai_governance_coverage_daily" || conn.targets[1] != "ai_policy_events" {
+		t.Fatalf("write order was %v; the SELF-MERGING table (ai_governance_coverage_daily) must be "+
+			"written FIRST and the non-mergeable ai_policy_events LAST, so a partial failure can only "+
+			"leave rows the Python fallback merges away", conn.targets)
+	}
+
+	// Failure on the SECOND write: the only committed table must be the
+	// mergeable one. This is the case that would otherwise strand a permanent
+	// duplicate policy event.
+	failing := &orderRecordingConn{failFrom: 2}
+	if _, err := WriteAIGovernanceCoverageDaily(context.Background(), failing, coverage, time.Now()); err != nil {
+		t.Fatalf("coverage write should succeed as the first call: %v", err)
+	}
+	if _, err := WriteAIPolicyEvents(context.Background(), failing, violations, time.Now()); err == nil {
+		t.Fatal("expected the second write to fail in this fixture")
+	}
+	if failing.targets[0] != "ai_governance_coverage_daily" {
+		t.Fatalf("the committed table was %q; a partial failure must only ever commit the mergeable "+
+			"table, never ai_policy_events", failing.targets[0])
 	}
 }

@@ -23,9 +23,12 @@ import (
 //  1. work_item_attribution's scope carries no "day" field at all (a static
 //     {"version":1,"org_wide":true} placeholder), which is exactly the shape
 //     findManualBackfillBlocker's query used to silently mishandle (it
-//     filtered on partition.scope->>'day', NULL for this family) before it
-//     was rewired onto run.scope_key -- these tests are the red-on-baseline
-//     proof that fix actually closes the coverage gap for this family.
+//     filtered on partition.scope->>'day' alone, NULL for this family) before
+//     it gained a COALESCE(partition.scope->>'day', run.scope_key) fallback
+//     -- these tests are the red-on-baseline proof that fix actually closes
+//     the coverage gap for this family, without changing dora/complexity/
+//     release_impact's behavior (their scope always has a real "day", so
+//     COALESCE resolves to the exact same value the old query read).
 //  2. the deliberate NON-goal: proving trigger-backstop never touches
 //     fixed_schedule_occurrences is a STRUCTURAL fact, not a runtime one --
 //     `go list -deps ./internal/jobs/metrics/remaining` has no edge to
@@ -78,13 +81,13 @@ func seedSucceededWorkItemAttributionPartition(
 }
 
 // TestFindManualBackfillBlockerDetectsWorkItemAttributionCoverageViaScopeKey
-// is the red-on-baseline proof for the run.scope_key fix: before it,
-// findManualBackfillBlocker's query filtered on partition.scope->>'day',
-// which is NULL for work_item_attribution's scope (no "day" field) -- every
-// row for this family was silently excluded from the WHERE clause, so this
-// coverage check would have found NOTHING no matter how many succeeded
-// partitions already existed, and a repeat trigger would have inserted a
-// genuine duplicate run for an already-covered day.
+// is the red-on-baseline proof for the COALESCE(partition.scope->>'day',
+// run.scope_key) fix: before it, findManualBackfillBlocker's query filtered
+// on partition.scope->>'day' alone, which is NULL for work_item_attribution's
+// scope (no "day" field) -- every row for this family was silently excluded
+// from the WHERE clause, so this coverage check would have found NOTHING no
+// matter how many succeeded partitions already existed, and a repeat trigger
+// would have inserted a genuine duplicate run for an already-covered day.
 func TestFindManualBackfillBlockerDetectsWorkItemAttributionCoverageViaScopeKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

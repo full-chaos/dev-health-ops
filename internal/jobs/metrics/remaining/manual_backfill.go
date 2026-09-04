@@ -393,18 +393,23 @@ const (
 // a targeted range read on the (org_id, family) index shape, not a full
 // per-organization table scan.
 //
-// Keyed on run.scope_key rather than partition.scope->>'day': every day-scoped
-// family's fixed-schedule/manual-backfill run sets ScopeKey to the same day
-// string it (may) also embed in the partition scope
-// (RemainingMetricsFanoutProducer.Produce and StartManualBackfillRun both set
-// ScopeKey: day unconditionally, for every family), so this is behavior-
-// preserving for dora/complexity/release_impact. work_item_attribution
-// (CHAOS-5016) is the reason it changed: its scope is the static
-// {"version":1,"org_wide":true} placeholder with no "day" field at all, so
-// partition.scope->>'day' reads NULL for it and would silently exclude every
-// one of its rows from this query -- a coverage check that never finds
-// anything covered defeats the whole point of asking. run.scope_key exists
-// for every family and is never null, so this one change covers both.
+// Keyed on COALESCE(partition.scope->>'day', run.scope_key), not
+// partition.scope->>'day' alone: dora/complexity/release_impact's Scope
+// always embeds the true day (manualBackfillDayScope, RemainingMetricsFanoutProducer's
+// per-family Scope builders), so COALESCE resolves to that same value for
+// them -- byte-identical to the prior behavior, including against
+// manual_backfill_integration_test.go's seedSucceededDoraPartitionWithBackfillDays
+// fixture, which (correctly, matching real callers) embeds the true day in
+// Scope but -- unlike any real production caller -- passes an unrelated
+// value as ScopeKey. work_item_attribution (CHAOS-5016) is the reason the
+// fallback exists: its scope is the static {"version":1,"org_wide":true}
+// placeholder with no "day" field at all, so partition.scope->>'day' alone
+// reads NULL for it and would silently exclude every one of its rows from
+// this query -- a coverage check that never finds anything covered defeats
+// the whole point of asking. run.scope_key IS the day for every real
+// work_item_attribution caller (RemainingMetricsFanoutProducer.Produce and
+// StartManualBackfillRun both set ScopeKey: day unconditionally), so the
+// fallback is exact for it, not a guess.
 func (store *PostgresStore) findManualBackfillBlocker(
 	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string,
 ) (runID string, reason blockReason, err error) {
@@ -414,13 +419,15 @@ func (store *PostgresStore) findManualBackfillBlocker(
 	}
 	upperBound := requested.AddDate(0, 0, maxDayScopedBackfillDays-1).Format("2006-01-02")
 	rows, err := tx.Query(ctx, `
-SELECT run.id::text, run.generation, run.status, partition.status, run.scope_key,
+SELECT run.id::text, run.generation, run.status, partition.status,
+       coalesce(partition.scope->>'day', run.scope_key),
        coalesce((partition.scope->>'backfill_days')::int, 1), partition.output_evidence
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
   AND run.status IN ('pending', 'running', 'succeeded')
-  AND run.scope_key >= $3 AND run.scope_key <= $4`,
+  AND coalesce(partition.scope->>'day', run.scope_key) >= $3
+  AND coalesce(partition.scope->>'day', run.scope_key) <= $4`,
 		organizationID, family, day, upperBound,
 	)
 	if err != nil {

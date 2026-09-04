@@ -30,8 +30,10 @@ import (
 //     fixture seeds TWO un-merged rows for the same (repo_id, number) with
 //     different last_synced and DIFFERENT reviews_count. Python's query, which
 //     joins that table with neither FINAL nor any dedup, would emit the
-//     artifact twice and count it twice. This loader's argMax dedup must emit
-//     it once, with the LATER last_synced's reviews_count winning.
+//     artifact twice and count it twice. This loader's FINAL read must emit it
+//     once, with the LATER last_synced's reviews_count winning. (It was an
+//     argMax dedup until #2229 round 3 showed argMax is nondeterministic on a
+//     tied version; see the loader's doc comment.)
 //
 //  3. Q1 -- IDEMPOTENCY. ComputeFamily is run TWICE, exactly as it is in
 //     production when an org has more than one repo partition (the family is
@@ -514,29 +516,156 @@ WHERE org_id = ? AND lower(coalesce(status, '')) IN ('success','passed','complet
 		t.Fatalf("read FINAL reference: %v", err)
 	}
 
-	// What this loader's dedup shape produces.
-	var argMaxScanCount uint64
+	// The PRODUCTION shape, lifted from LoadGovernanceArtifacts' scan subquery.
+	// It used to be an argMax dedup and is now FINAL (#2229 codex round 3 P1),
+	// so this string must be kept in step with the loader -- an embedded copy of
+	// SQL that production no longer runs is a test of nothing.
+	var productionScanCount uint64
 	if err := conn.QueryRow(ctx, `
-SELECT count() FROM (
-    SELECT repo_id, tupleElement(argMax(tuple(status), last_synced), 1) AS status
-    FROM ci_pipeline_runs WHERE org_id = ?
-    GROUP BY org_id, repo_id, run_id
-)
-WHERE lower(coalesce(status, '')) IN ('success','passed','completed')`,
-		nullOrg).Scan(&argMaxScanCount); err != nil {
-		t.Fatalf("read argMax dedup: %v", err)
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE lower(coalesce(status, '')) IN ('success','passed','completed') AND org_id = ?`,
+		nullOrg).Scan(&productionScanCount); err != nil {
+		t.Fatalf("read production dedup: %v", err)
 	}
 
-	if argMaxScanCount != finalScanCount {
-		t.Fatalf("dedup counted %d successful scans, FINAL counts %d. A bare argMax over the "+
-			"Nullable `status` column SKIPS the newer NULL row and retains the older 'success', "+
-			"so every AI PR in this repo is marked security-scanned while Python emits "+
-			"MISSING_SECURITY_SCAN. Wrap the projection in tuple() -- tuple(NULL) is never NULL, "+
-			"so the row competes and the NULL survives the unwrap.",
-			argMaxScanCount, finalScanCount)
+	if productionScanCount != finalScanCount {
+		t.Fatalf("production dedup counted %d successful scans, FINAL counts %d. The newer row's "+
+			"status is genuinely NULL, and a dedup that drops it retains the older 'success' -- "+
+			"marking every AI PR in this repo security-scanned while Python emits "+
+			"MISSING_SECURITY_SCAN. A bare argMax over a Nullable column does exactly that, "+
+			"which is why this read is FINAL.",
+			productionScanCount, finalScanCount)
 	}
 	if finalScanCount != 0 {
 		t.Fatalf("fixture is not exercising the case: FINAL counts %d successful scans, want 0 "+
 			"(the newest row's status is NULL)", finalScanCount)
+	}
+}
+
+// TestGovernanceScanDedupIsDeterministicAndMatchesFINAL is the regression guard
+// for #2229 codex round 3's P1: it fails if anyone turns the `FINAL` reads in
+// LoadGovernanceArtifacts back into `argMax`.
+//
+// # WHY THE FIXTURE IS 400 KEYS AND NOT 2
+//
+// This size is not enthusiasm. The first attempt at this repro used TWO rows,
+// found FINAL and argMax agreeing and stable, and nearly concluded the finding
+// did not reproduce. That negative was worthless: argMax's tie behaviour is a
+// PARALLEL AGGREGATION property, and with one small part and one thread there
+// is nothing to race. A two-row tie fixture cannot detect the defect it would
+// be written to catch.
+//
+// At 400 tied keys across 40 unmerged parts with merges stopped, the same query
+// on the same bytes returned 60, 300, 180, 120 and 80 disagreeing keys on five
+// consecutive runs (ClickHouse 26.7.6.57). That is the scale that discriminates.
+//
+// # WHY MERGES ARE STOPPED
+//
+// The second attempt let background merges run and produced self-contradictory
+// output -- a disagreement count alongside value distributions that implied no
+// disagreement -- because the table was collapsing underneath the measurement.
+// `SYSTEM STOP MERGES` before any insert is what makes the pre-merge state
+// observable at all. Without it this test would pass for the wrong reason:
+// post-merge, argMax and FINAL agree.
+func TestGovernanceScanDedupIsDeterministicAndMatchesFINAL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	const (
+		tieRepo = "00000000-0000-4000-8000-0000000000e1"
+		tieOrg  = "00000000-0000-4000-8000-0000000000e0"
+	)
+
+	if err := conn.Exec(ctx, `CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    started_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`); err != nil {
+		t.Fatal(err)
+	}
+	// Freeze the table BEFORE inserting, so the pre-merge state is what is
+	// measured rather than whatever the merge scheduler has reached.
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES ci_pipeline_runs`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 400 keys, each with two rows at an IDENTICAL last_synced and DIFFERENT
+	// status, written as 40 separate parts so aggregation has something to race.
+	for batch := 0; batch < 20; batch++ {
+		for _, status := range []string{"success", "pending"} {
+			if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id)
+SELECT toUUID(?), concat('run-', toString(number)), ?,
+       toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+       toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), ?
+FROM numbers(?, 20)`, tieRepo, status, tieOrg, uint64(batch*20)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// POSITIVE CONTROL. Without this the test can pass by measuring a fixture
+	// that does not actually tie -- 800 undeduped rows and 400 keys is the
+	// property under test, not an incidental detail.
+	var rowCount, keyCount, distinctVersions uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count(), uniqExact(run_id), uniqExact(last_synced)
+FROM ci_pipeline_runs WHERE org_id = ?`, tieOrg).Scan(&rowCount, &keyCount, &distinctVersions); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 800 || keyCount != 400 || distinctVersions != 1 {
+		t.Fatalf("fixture does not tie as intended: %d rows, %d keys, %d distinct last_synced "+
+			"(want 800/400/1). A fixture that has already merged, or whose versions differ, "+
+			"cannot exercise the tie this test exists for", rowCount, keyCount, distinctVersions)
+	}
+
+	// The reference: what Python's FINAL read sees.
+	scanCountVia := func(t *testing.T, query string) uint64 {
+		t.Helper()
+		var count uint64
+		if err := conn.QueryRow(ctx, query, tieOrg).Scan(&count); err != nil {
+			t.Fatalf("query %q: %v", query, err)
+		}
+		return count
+	}
+
+	const finalQuery = `
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE org_id = ? AND lower(coalesce(status, '')) IN ('success','passed','completed')`
+
+	// The production shape, lifted from LoadGovernanceArtifacts' scan subquery.
+	const productionQuery = `
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE lower(coalesce(status, '')) IN ('success','passed','completed') AND org_id = ?`
+
+	want := scanCountVia(t, finalQuery)
+
+	// STABILITY across repeats is the half a single comparison cannot show: a
+	// bare argMax can agree with FINAL on one run and disagree on the next.
+	seen := map[uint64]int{}
+	for range 5 {
+		seen[scanCountVia(t, productionQuery)]++
+	}
+	if len(seen) != 1 {
+		t.Fatalf("the scan dedup is NOT deterministic across identical runs: saw %v. "+
+			"argMax is unspecified when the version ties and varies under parallel "+
+			"aggregation; FINAL does not. Do not replace these FINAL reads with argMax", seen)
+	}
+	for got := range seen {
+		if got != want {
+			t.Fatalf("scan dedup counted %d successful scans, FINAL counts %d on the same tied "+
+				"fixture. Python reads this table with FINAL (loaders.py:248), so a divergence "+
+				"here is a parity defect, not a preference", got, want)
+		}
 	}
 }

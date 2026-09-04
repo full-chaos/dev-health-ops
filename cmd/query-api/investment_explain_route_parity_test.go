@@ -223,7 +223,7 @@ func TestInvestmentExplainWorkHandlerRejectsUnsupportedProviderPreStream(t *test
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	handler := newInvestmentExplainWorkHandler(reader, nil)
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=anthropic", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
@@ -256,7 +256,7 @@ func TestInvestmentExplainWorkHandlerSupportedProviderStillStreams(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	handler := newInvestmentExplainWorkHandler(reader, nil)
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
@@ -284,7 +284,7 @@ func TestInvestmentExplainWorkHandlerRejectsOversizedBodyInsteadOfTruncating(t *
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	handler := newInvestmentExplainWorkHandler(reader, nil)
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil)
 
 	prefix := []byte(`{"filters":{}}`)
 	pad := investmentExplainMaxBodyBytes - len(prefix)

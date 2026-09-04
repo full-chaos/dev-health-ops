@@ -365,7 +365,7 @@ func TestExplainInvestmentMix_SeededRealClickHouse_QuotesBindingSucceeds(t *test
 	// ClickHouse read ExplainInvestmentMix performs along the way --
 	// including FetchWorkUnitInvestmentQuotes -- succeeds against the
 	// real driver.
-	got, err := reader.ExplainInvestmentMix(ctx, nil, CompleteInvestmentMixExplanation, ExplainInvestmentMixOptions{
+	got, err := reader.ExplainInvestmentMix(ctx, nil, availabilityFromIsLLMAvailable, CompleteInvestmentMixExplanation, ExplainInvestmentMixOptions{
 		OrgID:        orgID,
 		StartTS:      time.Date(2025, 12, 25, 0, 0, 0, 0, time.UTC),
 		EndTS:        time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC),

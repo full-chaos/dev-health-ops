@@ -159,3 +159,26 @@ func (s Store) Model(ctx context.Context, orgID, provider string) (string, error
 	}
 	return settings[keyModel], nil
 }
+
+// Resolver is the seam a caller outside this package (CHAOS-5006 PR3:
+// cmd/query-api/internal/investmentexplain) depends on instead of the
+// concrete Store type -- an interface, not internal/jobs/investment/
+// categorize.OrgProviderResolver's bare func type, because a caller that
+// needs credentials/model too (not just kind resolution) wants all three
+// methods behind one value it can pass around and nil-check once. Store
+// satisfies this exactly; a caller with no Postgres wiring yet passes a
+// nil Resolver, which every method here treats identically to "org has
+// no usable BYO provider" (see each method's own nil-orgSettings
+// handling at its call sites).
+type Resolver interface {
+	// ResolveUsableProvider matches categorize.OrgProviderResolver's own
+	// func-type signature exactly, so `store.ResolveUsableProvider` (a
+	// method value) can be passed directly wherever an
+	// OrgProviderResolver is expected -- no adapter needed.
+	ResolveUsableProvider(ctx context.Context, orgID string) (string, error)
+	Credentials(ctx context.Context, orgID, provider string) (Credentials, bool, error)
+	Matches(ctx context.Context, orgID, provider string) (bool, error)
+	Model(ctx context.Context, orgID, provider string) (string, error)
+}
+
+var _ Resolver = Store{}

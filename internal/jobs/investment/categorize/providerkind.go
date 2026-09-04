@@ -294,3 +294,69 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
 	}
 }
+
+// NewProviderFromCredentials is NewProviderFromEnv's org-BYO sibling
+// (CHAOS-5006 PR3): constructs a Provider for kind from EXPLICIT
+// apiKey/baseURL/model values -- an org's own decrypted settings,
+// resolved by internal/llmorgsettings -- instead of reading environment
+// variables. This is the source-bound half of CHAOS-2550's invariant
+// (resolve_llm_credentials: never mix a platform key with an org
+// base_url or vice versa): a caller passes either ALL-env
+// (NewProviderFromEnv) or ALL-org (this function) values for one
+// construction, never a blend of the two.
+//
+// No generic-LLM_*-env-overrides-any-provider layering here (unlike
+// NewProviderFromEnv's firstNonEmptyEnv calls) -- apiKey/baseURL/model
+// are already the caller's fully-resolved final values; layering a
+// platform env override underneath them would silently reintroduce the
+// exact credential mixing CHAOS-2550 forbids.
+//
+// This function never logs, wraps, or interpolates apiKey/baseURL into
+// any returned error string -- see providerkind_credentials_test.go's
+// TestNewProviderFromCredentialsNeverLeaksSecretsInErrors, which fails
+// the whole suite if that guarantee is ever broken by a future edit
+// here.
+func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string) (Provider, error) {
+	switch kind {
+	case ProviderKindMock:
+		return MockProvider{}, nil
+
+	case ProviderKindNone:
+		return NoneProvider{}, nil
+
+	case ProviderKindOpenAI:
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
+		}
+		return NewOpenAIProvider(OpenAIProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+			Model:   model,
+		}), nil
+
+	case ProviderKindLocal:
+		// Same as NewProviderFromEnv's own comment: an empty base_url is
+		// not an error for "local" -- NewLocalProvider applies Ollama's
+		// default endpoint fallback regardless of where the (empty)
+		// value came from.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	case ProviderKindOllama:
+		return NewOllamaProvider(OllamaProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
+	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
+		return unimplementedProvider{kind: kind}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
+	}
+}

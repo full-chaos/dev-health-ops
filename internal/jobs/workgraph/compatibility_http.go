@@ -123,7 +123,7 @@ func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Cl
 	request.Header.Set("Content-Type", "application/json")
 	response, err := executor.client.Do(request)
 	if err != nil {
-		return nil, executor.fail(compatibilityTransportSentinel(err), 0, err.Error())
+		return nil, executor.fail(compatibilityTransportSentinel(err), 0, transportDetail(err))
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxCompatibilityResponseBytes+1))
@@ -293,6 +293,40 @@ func (executor *HTTPCompatibilityExecutor) fail(sentinel error, status int, deta
 		detail = strings.ReplaceAll(detail, executor.config.BearerToken, "[redacted]")
 	}
 	return compatibilityFailure(sentinel, status, detail)
+}
+
+// transportDetail describes a client.Do failure using a FIXED vocabulary
+// derived from the error's TYPE, never from its text.
+//
+// err.Error() cannot be persisted. A transport error embeds raw bytes off the
+// wire and formats them with %q, which ESCAPES them -- so a bearer token
+// containing a quote arrives in a form an exact-substring redaction cannot
+// match. Measured, not argued: a malformed response header
+// `X-Echo ab"cd nocolon` produces
+// `malformed MIME header: missing colon: "X-Echo ab\"cd nocolon"`, and the
+// token `ab"cd` lands in the durable ledger detail as `ab\"cd`.
+//
+// This is the same class as the response-body leak fixed earlier, reopened
+// through the exception that fix deliberately left -- the comment there
+// claimed this path's text was "constructed by this package", which was
+// simply false. The lesson generalises: redaction cannot be the defence when
+// the input is untrusted, because sanitising is a guess about every encoding
+// the source might use. Describing instead of echoing removes the guess.
+func transportDetail(err error) string {
+	switch sentinel := compatibilityTransportSentinel(err); {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline exceeded after the request was sent"
+	case errors.Is(err, context.Canceled):
+		return "context canceled after the request was sent"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.Is(sentinel, ErrCompatibilityNotSent):
+		// Every remaining NotSent shape is a pre-send failure: DNS, a failed
+		// dial, or a rejected TLS handshake.
+		return "connection could not be established"
+	default:
+		return "transport failure after the request was sent"
+	}
 }
 
 // compatibilityFailure wraps one of the three sentinels with the HTTP status

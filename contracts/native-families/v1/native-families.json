@@ -2,6 +2,7 @@
   "schema_version": 1,
   "generated_from": "cmd/dev-health-worker/daily.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
   "daily": {
+    "ai_governance": "native",
     "cicd": "native",
     "deploy": "native",
     "file_hotspots": "native",

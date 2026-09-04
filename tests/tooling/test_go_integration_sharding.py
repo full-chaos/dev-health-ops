@@ -84,6 +84,11 @@ EXPECTED_PACKAGES = {
     "internal/syncreconciler",
     "internal/synccoverage",
     "internal/syncroute",
+    # CHAOS-4897: the recommendations loader's owned-repo scoping join reads
+    # team_repo_ownership's bitemporal window for real, so its correctness
+    # (valid_from/valid_to boundaries, NULL-repo_id exclusion, org isolation)
+    # is a property of the real engine a fake connection cannot prove.
+    "internal/teamownership",
     # CHAOS-4902: the RMT sweep's own authoritative-count/dedup-key
     # integration test -- applies the real migration chain to a fresh
     # ClickHouse container and reads system.tables directly, so a fake
@@ -360,9 +365,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 40 -> 41 on its own branch: CHAOS-4977's
     # cmd/query-api/internal/investmentexplain and CHAOS-4902's
     # internal/testsupport/chschema. The merged total is 42.
-    # CHAOS-4989 added internal/llmorgsettings: 42 -> 43.
-    assert "43 package(s) discovered, 0 denylisted, 43 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 43 package(s)" in result.stdout
+    # CHAOS-4989 and CHAOS-4897 landed independently, each written as
+    # 42 -> 43 on its own branch: CHAOS-4989's internal/llmorgsettings and
+    # CHAOS-4897's internal/teamownership. Merged total: 44.
+    assert "44 package(s) discovered, 0 denylisted, 44 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 44 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -401,8 +408,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 40 -> 41 on its own branch (see the "package(s) discovered" note
     # above). FLATTENED includes the providersync shard-1 package, same
     # as every other count in this comment block. Merged total: 42.
-    # CHAOS-4989 added internal/llmorgsettings: 42 -> 43.
-    assert len(flattened) == len(set(flattened)) == 43
+    # CHAOS-4989 and CHAOS-4897 landed independently, each written as
+    # 42 -> 43 on its own branch: internal/llmorgsettings and
+    # internal/teamownership. Merged total: 44.
+    assert len(flattened) == len(set(flattened)) == 44
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1718,9 +1727,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # 39 -> 40 on its own branch: cmd/query-api/internal/investmentexplain
     # and internal/testsupport/chschema. Merged total: 41
     # (42 discovered - 1 for the providersync shard-1 package).
-    # CHAOS-4989 added internal/llmorgsettings: 42, not 41
-    # (43 discovered - 1 for the providersync shard-1 package).
-    assert len(selected_packages) == len(set(selected_packages)) == 42
+    # CHAOS-4989 and CHAOS-4897 landed independently, each written as
+    # 41 -> 42 on its own branch: internal/llmorgsettings and
+    # internal/teamownership (44 discovered - 1 for the providersync
+    # shard-1 package = 43).
+    assert len(selected_packages) == len(set(selected_packages)) == 43
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

@@ -6,31 +6,37 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // The recommendations reads, ported from recommendations/loader.py.
 //
-// # CHAOS-4897: FOUR QUERIES HERE ARE NOT TEAM-SCOPED, DELIBERATELY
+// # CHAOS-4897: FOUR QUERIES ARE SCOPED VIA AN OWNED-REPO JOIN, NOT A COLUMN
 //
-// q_lat, q_rework, q_cpx and q_hs below carry no team predicate, so they return
-// ORG-WIDE values that are identical for every team in the org. That feeds
-// review_latency_p75_hours, rework_churn_ratio, hotspot_complexity_delta and
-// hotspot_churn_overlap, and therefore three of the five rules
-// (review-concentration, thrash, and compounding-risk's legacy proxy).
+// q_lat, q_rework, q_cpx and q_hs below have no team_id column to filter on --
+// repo_metrics_daily, repo_complexity_daily and file_hotspot_daily carry
+// repo_id and nothing else identifying a team. Before this fix they ran
+// unscoped and returned ORG-WIDE values identical for every team in the org,
+// feeding review_latency_p75_hours, rework_churn_ratio,
+// hotspot_complexity_delta and hotspot_churn_overlap -- and therefore three of
+// the five rules (review-concentration, thrash, compounding-risk's legacy
+// proxy).
 //
-// This is a faithful mirror of a KNOWN DEFECT, not an oversight in the port.
-// Do not "fix" it here: the executed-parity harness compares this loader
-// against the live Python reference, so adding scoping would make every parity
-// test fail. Each of the four carries its own comment saying so.
+// The fix is teamownership.OwnedRepoIDs: each of the four queries is now
+// additionally filtered to `repo_id IN (<team's owned repos>)`, resolved
+// once per LoadTeamMetricsWindow call and threaded through. A team that owns
+// no repos sees ABSENT/no rows for these four signals, not an org-wide
+// fallback -- unscoped-on-empty was the defect, so falling back to it here
+// would just reintroduce it at the empty-ownership boundary.
 //
-// The reason the reference lacks the predicate is that THERE IS NO COLUMN TO
-// FILTER ON -- repo_metrics_daily, repo_complexity_daily and file_hotspot_daily
-// carry repo_id and no team_id. Scoping them needs the team's owned-repository
-// set derived from team_repo_ownership, which is a resolution subsystem
-// (pattern-vs-exact matching, is_primary/specificity/priority precedence,
-// valid_from/valid_to windowing, pattern-unresolved repo_id IS NULL rows to
-// exclude, and orphaned rows to drop via a repos join). That lands as a
-// follow-up PR against a shared internal/teamownership package.
+// This is a DELIBERATE, DOCUMENTED DIVERGENCE from the live Python reference
+// (recommendations/loader.py), which still runs these four queries unscoped
+// -- see the standing rule (no Python fixes for metrics; port to Go) and
+// CHAOS-4281's follow-up note. recommendations_loader_integration_test.go's
+// parity check excludes exactly these four fields for exactly this reason;
+// do not "fix" the divergence by reverting this scoping to match Python.
 
 // RecommendationsLoader reads one team's signal window out of ClickHouse.
 //
@@ -179,50 +185,62 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
 //
 // MIXED SCOPING, and the halves disagree.
 //
-// q_lat is NOT team-scoped -- CHAOS-4897: repo_metrics_daily has no team_id
-// column, so review latency is an org-wide average over every repo. Mirrored
-// deliberately; owned-repo derivation pending.
+// q_lat is scoped to ownedRepoIDs (CHAOS-4897): repo_metrics_daily has no
+// team_id column, so review latency is averaged only over the repos
+// teamownership.OwnedRepoIDs resolved for this team. An empty ownedRepoIDs
+// (the team owns no repos) short-circuits to absent without querying --
+// running the query unscoped in that case would silently reintroduce the
+// org-wide defect at the empty-ownership boundary.
 //
-// q_gini IS team-scoped (user_metrics_daily carries team_id).
+// q_gini IS team-scoped (user_metrics_daily carries team_id) and unaffected
+// by ownedRepoIDs.
 //
 // Note also that the review-concentration evidence row records
 // metric_table="review_edge_daily" while the gini value comes from
 // user_metrics_daily. That mismatch is the sibling finding on CHAOS-4897 and is
-// likewise mirrored rather than corrected.
+// likewise mirrored rather than corrected -- it is an evidence-provenance
+// label bug, unrelated to which rows feed the number.
 func (loader *RecommendationsLoader) loadReviewSignals(
-	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
+	ctx context.Context, teamID string, ownedRepoIDs []uuid.UUID, windowStart, windowEnd time.Time,
 ) (latency float64, latencyKnown bool, gini float64, giniKnown bool, err error) {
 	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
 
-	latencyQuery := `
+	if len(ownedRepoIDs) == 0 {
+		latency, latencyKnown = 0, false
+	} else {
+		latencyArguments := loader.windowArguments(teamID, windowStart, windowEnd)
+		latencyArguments["repo_ids"] = ownedRepoIDs
+		latencyQuery := `
             SELECT avg(p75) AS avg_p75
             FROM (
                 SELECT repo_id, argMax(pr_cycle_p75_hours, computed_at) AS p75
                 FROM repo_metrics_daily
-                WHERE day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
+                WHERE repo_id IN {repo_ids:Array(UUID)}
+                  AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY repo_id
             )
         `
-	latencyRows, err := loader.conn.Query(ctx, latencyQuery, namedArguments(arguments)...)
-	if err != nil {
-		return 0, false, 0, false, fmt.Errorf("load review latency: %w", err)
-	}
-	// The reference reads row zero if any row exists, and treats no rows as
-	// None. ClickHouse's avg() over an empty set returns one NULL row rather
-	// than zero rows, so both spellings arrive here as "absent".
-	if latencyRows.Next() {
-		// avg() over a non-Nullable Float64 column is itself non-Nullable and
-		// returns NaN for an empty set, which _safe_float turns into absent --
-		// so the empty case arrives here as NaN rather than as NULL.
-		var average float64
-		if scanErr := latencyRows.Scan(&average); scanErr != nil {
-			latencyRows.Close()
-			return 0, false, 0, false, fmt.Errorf("scan review latency: %w", scanErr)
+		latencyRows, latencyErr := loader.conn.Query(ctx, latencyQuery, namedArguments(latencyArguments)...)
+		if latencyErr != nil {
+			return 0, false, 0, false, fmt.Errorf("load review latency: %w", latencyErr)
 		}
-		latency, latencyKnown = safeFloat(&average)
-	}
-	if closeErr := latencyRows.Close(); closeErr != nil {
-		return 0, false, 0, false, closeErr
+		// The reference reads row zero if any row exists, and treats no rows as
+		// None. ClickHouse's avg() over an empty set returns one NULL row rather
+		// than zero rows, so both spellings arrive here as "absent".
+		if latencyRows.Next() {
+			// avg() over a non-Nullable Float64 column is itself non-Nullable and
+			// returns NaN for an empty set, which _safe_float turns into absent --
+			// so the empty case arrives here as NaN rather than as NULL.
+			var average float64
+			if scanErr := latencyRows.Scan(&average); scanErr != nil {
+				latencyRows.Close()
+				return 0, false, 0, false, fmt.Errorf("scan review latency: %w", scanErr)
+			}
+			latency, latencyKnown = safeFloat(&average)
+		}
+		if closeErr := latencyRows.Close(); closeErr != nil {
+			return 0, false, 0, false, closeErr
+		}
 	}
 
 	giniQuery := `
@@ -262,23 +280,29 @@ func (loader *RecommendationsLoader) loadReviewSignals(
 
 // loadReworkRatio ports _load_rework_ratio.
 //
-// NOT TEAM-SCOPED -- CHAOS-4897: repo_metrics_daily has no team_id column, so
-// this is an org-wide average across every repo and every team in the org gets
-// the same number. Mirrored deliberately; owned-repo derivation pending.
+// Scoped to ownedRepoIDs (CHAOS-4897): repo_metrics_daily has no team_id
+// column, so this averages only over the repos teamownership.OwnedRepoIDs
+// resolved for this team. A team that owns no repos gets absent, not the
+// org-wide average.
 func (loader *RecommendationsLoader) loadReworkRatio(
-	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
+	ctx context.Context, teamID string, ownedRepoIDs []uuid.UUID, windowStart, windowEnd time.Time,
 ) (float64, bool, error) {
+	if len(ownedRepoIDs) == 0 {
+		return 0, false, nil
+	}
+	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
+	arguments["repo_ids"] = ownedRepoIDs
 	query := `
             SELECT avg(rework) AS avg_rework
             FROM (
                 SELECT repo_id, argMax(pr_rework_ratio, computed_at) AS rework
                 FROM repo_metrics_daily
-                WHERE day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
+                WHERE repo_id IN {repo_ids:Array(UUID)}
+                  AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY repo_id
             )
         `
-	rows, err := loader.conn.Query(ctx, query,
-		namedArguments(loader.windowArguments(teamID, windowStart, windowEnd))...)
+	rows, err := loader.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {
 		return 0, false, fmt.Errorf("load rework ratio: %w", err)
 	}
@@ -396,12 +420,15 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 // loadCompoundingSignals ports _load_compounding_signals, the legacy hotspot
 // proxy that compounding-risk falls back to.
 //
-// NEITHER QUERY IS TEAM-SCOPED -- CHAOS-4897: repo_complexity_daily and
-// file_hotspot_daily carry repo_id and no team_id, so both the complexity delta
-// and the hotspot count are org-wide. Mirrored deliberately; owned-repo
-// derivation pending.
+// BOTH QUERIES ARE SCOPED TO ownedRepoIDs (CHAOS-4897): repo_complexity_daily
+// and file_hotspot_daily carry repo_id and no team_id, so the complexity
+// delta and the hotspot count are computed only over the repos
+// teamownership.OwnedRepoIDs resolved for this team. A team that owns no
+// repos gets absent complexity and zero hotspots (which, per
+// churnOverlapFrom, is itself absent churn_overlap) rather than the org-wide
+// numbers.
 func (loader *RecommendationsLoader) loadCompoundingSignals(
-	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
+	ctx context.Context, teamID string, ownedRepoIDs []uuid.UUID, windowStart, windowEnd time.Time,
 ) (complexityDelta float64, complexityKnown bool, churnOverlap float64, churnKnown bool, err error) {
 	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
 	// mid = ws + timedelta(days=max(1, (we - ws).days // 2)). The max(1, ...)
@@ -414,6 +441,11 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 	}
 	arguments["mid"] = windowStart.AddDate(0, 0, half).Format("2006-01-02")
 
+	if len(ownedRepoIDs) == 0 {
+		return 0, false, 0, false, nil
+	}
+	arguments["repo_ids"] = ownedRepoIDs
+
 	complexityQuery := `
             SELECT
                 avg(if(day < {mid:Date}, cpk, NULL)) AS first_half,
@@ -422,7 +454,8 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
                 SELECT day, repo_id,
                        argMax(cyclomatic_per_kloc, computed_at) AS cpk
                 FROM repo_complexity_daily
-                WHERE day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
+                WHERE repo_id IN {repo_ids:Array(UUID)}
+                  AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY day, repo_id
             )
         `
@@ -447,7 +480,8 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
             FROM (
                 SELECT file_path, argMax(risk_score, computed_at) AS risk_score
                 FROM file_hotspot_daily
-                WHERE day >= {mid:Date} AND day < {end:Date}` + loader.orgClause() + `
+                WHERE repo_id IN {repo_ids:Array(UUID)}
+                  AND day >= {mid:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY file_path
             ) WHERE risk_score > 0
         `
@@ -541,11 +575,27 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	latency, latencyKnown, gini, giniKnown, err := scoped.loadReviewSignals(ctx, teamID, windowStart, windowEnd)
+	// Resolved ONCE per window load and threaded through every repo-keyed
+	// query below (CHAOS-4897), rather than re-queried per signal: all three
+	// callers need the SAME team-as-of-now owned-repo set, and asOf is windowEnd
+	// -- the window's own effective instant, matching the load's own semantics
+	// rather than time.Now() (which would let two loads of the same historical
+	// window return different scoping depending on when they happen to run).
+	// scoped.orgID, NOT the raw orgID parameter: when the caller passes ""
+	// (mirroring the reference's own swap-only-if-given contract, see the
+	// comment above), scoped keeps loader's ALREADY-BOUND org rather than the
+	// empty string -- using the parameter directly here would scope the
+	// ownership lookup to org_id='' whenever a caller relies on that fallback,
+	// finding nothing regardless of what team_repo_ownership actually holds.
+	ownedRepoIDs, err := teamownership.OwnedRepoIDs(ctx, scoped.conn, scoped.orgID, teamID, windowEnd)
+	if err != nil {
+		return MetricsSnapshot{}, fmt.Errorf("load owned repo ids: %w", err)
+	}
+	latency, latencyKnown, gini, giniKnown, err := scoped.loadReviewSignals(ctx, teamID, ownedRepoIDs, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	rework, reworkKnown, err := scoped.loadReworkRatio(ctx, teamID, windowStart, windowEnd)
+	rework, reworkKnown, err := scoped.loadReworkRatio(ctx, teamID, ownedRepoIDs, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
@@ -553,7 +603,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	complexityDelta, complexityKnown, churnOverlap, churnKnown, err := scoped.loadCompoundingSignals(ctx, teamID, windowStart, windowEnd)
+	complexityDelta, complexityKnown, churnOverlap, churnKnown, err := scoped.loadCompoundingSignals(ctx, teamID, ownedRepoIDs, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}

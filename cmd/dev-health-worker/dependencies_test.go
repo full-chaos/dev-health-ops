@@ -2322,3 +2322,122 @@ func TestQueuesReadyStillReportsQueueCoverageWhenCoverageIsActuallyWrong(t *test
 		)
 	}
 }
+
+// TestConfigureSurfacesTheShutdownReasonAndItsOperands closes the gap codex
+// round 1 found (P2): the other two CHAOS-5034 tests call queuesReady() DIRECTLY,
+// so neither exercises the SECOND flattening point -- the configuration caller.
+// Reverting that caller to an unconditional
+// `dependencyUnavailable("queue_coverage_validation_failed")` left both of them
+// passing while the shutdown reason was masked again from the only path
+// production actually takes. A test that cannot see the defect it was written
+// for is not coverage.
+//
+// It also pins the P1 fix: the operand log must reach an operator on the
+// no-database path, which returns live-but-unready BEFORE composition and so
+// never reached the original log site at all.
+func TestConfigureSurfacesTheShutdownReasonAndItsOperands(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	sources.newRiverClientID = func() string { return "test-client" }
+
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+
+	_, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Service:                 "dev-health-worker",
+			Queues:                  []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency:  map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:     "river",
+			ShutdownTimeout:         30 * time.Second,
+			ShutdownTimeoutExplicit: true,
+		},
+		health.NewRegistry(100*time.Millisecond),
+		sources,
+		logger,
+	)
+
+	logged := output.String()
+
+	// The reason must survive the configuration caller, not just queuesReady().
+	if err != nil {
+		var failure dependencyFailure
+		if !errors.As(err, &failure) {
+			t.Fatalf("configure error = %v, want a reason-carrying dependencyFailure", err)
+		}
+		if failure.DependencyReason() != reasonShutdownTimeoutBelowDrainBudget {
+			t.Fatalf(
+				"configure reason = %q, want %q -- the caller is masking it again",
+				failure.DependencyReason(), reasonShutdownTimeoutBelowDrainBudget,
+			)
+		}
+		if !errors.Is(err, errWorkerDependencyUnavailable) {
+			t.Fatalf("configure error = %v, want the dependency sentinel to still match", err)
+		}
+	}
+
+	// Whether or not an error is returned on this path, the operands must reach
+	// the operator: readiness surfaces check NAMES only, so the log is the only
+	// place the floor and the supplied value appear.
+	if !strings.Contains(logged, reasonShutdownTimeoutBelowDrainBudget) {
+		t.Fatalf("log did not name the reason; got %q", logged)
+	}
+	for _, field := range []string{
+		"configured_shutdown_timeout",
+		"required_shutdown_timeout",
+		"longest_queue_timeout",
+		"finalization_buffer",
+		"computed_drain_budget",
+	} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("log is missing operand %q; got %q", field, logged)
+		}
+	}
+	// Exactly once: the reason is known before the logger is assigned, so a
+	// second call site would emit the same line twice for one failure.
+	if got := strings.Count(logged, "worker startup contract refused"); got != 1 {
+		t.Fatalf("startup-contract log emitted %d times, want exactly 1: %q", got, logged)
+	}
+}
+
+// TestQueuesReadyNamesARegistryFailureNotQueueCoverage pins codex round 1's P1:
+// jobruntime.Load returns (nil, error), so a broken registry sets registryErr AND
+// leaves runtimeRegistry nil. Checking nil FIRST returned the bare sentinel, the
+// caller relabelled it as coverage, and a broken contract artifact sent the
+// operator to the worker's queue coverage instead.
+func TestQueuesReadyNamesARegistryFailureNotQueueCoverage(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	dependencies := &workerDependencies{
+		registryErr:     dependencyUnavailable("worker_job_registry_unavailable"),
+		runtimeRegistry: nil, // exactly what jobruntime.Load leaves behind
+	}
+	err := dependencies.queuesReady(context.Background())
+	if err == nil {
+		t.Fatal("queuesReady() = nil, want a registry refusal")
+	}
+	var failure dependencyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("queuesReady() error = %v, want a reason-carrying dependencyFailure", err)
+	}
+	if failure.DependencyReason() == "queue_coverage_validation_failed" {
+		t.Fatal("a registry load failure must not report as queue coverage")
+	}
+	if failure.DependencyReason() != "worker_job_registry_unavailable" {
+		t.Fatalf("reason = %q, want worker_job_registry_unavailable", failure.DependencyReason())
+	}
+
+	// Nil registry with NO recorded reason must still be bounded, not the bare
+	// sentinel that the caller would relabel as coverage.
+	bare := &workerDependencies{runtimeRegistry: nil}
+	bareErr := bare.queuesReady(context.Background())
+	if !errors.As(bareErr, &failure) {
+		t.Fatalf("queuesReady() error = %v, want a bounded reason even with no registryErr", bareErr)
+	}
+	if failure.DependencyReason() != "worker_job_registry_unavailable" {
+		t.Fatalf("reason = %q, want worker_job_registry_unavailable", failure.DependencyReason())
+	}
+}

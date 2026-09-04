@@ -714,6 +714,16 @@ func configureWorkerDependenciesWithSources(
 			return nil, err
 		}
 	}
+	// Report a startup-contract violation HERE, not only from the composition
+	// failure path below (codex r1 P1). The no-database branch that follows is a
+	// deliberate live-but-unready return, so a worker configured with BOTH an
+	// invalid --shutdown-timeout and no database returned success, zero
+	// components, and logged nothing at all -- the reason was recorded on the
+	// struct and never reached anyone. Readiness surfaces check NAMES only, so
+	// without this line that operator has no reason code and no operands.
+	// logStartupContractFailure ignores every non-shutdown reason, so this is a
+	// no-op on all other paths.
+	dependencies.logStartupContractFailure(dependencies.startupErr)
 	if dependencies.database == nil {
 		if dependencies.databaseErr != nil && !databaseConfigurationRejected(dependencies.databaseErr) {
 			// A DSN that was supplied but could not be opened used to return
@@ -782,6 +792,24 @@ func configureWorkerDependenciesWithSources(
 		// to see the real reason without attaching a debugger.
 		logger.Error("worker family composition failed", "error", composeErr)
 		dependencies.close()
+		// A THIRD masking site (CHAOS-5034, found by the configure-level test
+		// codex r1 asked for). buildWorkerDependencies returns EARLY when the
+		// startup contract is violated, so `dependencies` is half-built and
+		// composition then fails for a downstream reason -- which was reported
+		// as `worker_family_composition_failed`, hiding the real cause after
+		// queuesReady() and the coverage relabel had already been fixed. When the
+		// contract was already violated, this composition error is a SYMPTOM of
+		// that, not an independent fault.
+		//
+		// Reported here rather than by refusing before composition: a missing
+		// contract artifact must stay live-but-unready with a nil error
+		// (TestMissingContractArtifactsFailRegistryAndQueueChecks), and an early
+		// refusal turned that documented behaviour into a hard failure.
+		if dependencies.startupErr != nil {
+			return nil, preserveDependencyReason(
+				dependencies.startupErr, "worker_startup_contract_failed",
+			)
+		}
 		return nil, dependencyUnavailable("worker_family_composition_failed")
 	}
 	for name, source := range active.metricsSource {
@@ -804,9 +832,21 @@ func configureWorkerDependenciesWithSources(
 	if len(active.handlers) > 0 || len(active.queues) > 0 {
 		if err := dependencies.queuesReady(ctx); err != nil {
 			// queuesReady now names its own fault; do not overwrite it with the
-			// coverage reason, which is only one of the three it can report
-			// (CHAOS-5034).
-			dependencies.logStartupContractFailure(err)
+			// coverage reason, which is only one of the faults it can report
+			// (CHAOS-5034). No logStartupContractFailure call here: every
+			// startupErr is already known before the earlier call site above
+			// (buildWorkerDependencies runs before the logger is assigned), so a
+			// second call would emit the SAME line twice for one failure.
+			//
+			// HONEST NOTE on coverage: reaching this line means composition
+			// SUCCEEDED, which requires a non-nil registry and an unviolated
+			// startup contract -- so queuesReady() here can only return the
+			// coverage reason or nil, and preserveDependencyReason is currently
+			// a no-op in practice. It is kept because it stops this site from
+			// silently re-flattening if queuesReady ever gains a new reason, but
+			// it is DEFENSIVE, not load-bearing today: mutating it back to the
+			// unconditional relabel leaves the whole package green. Do not read
+			// the passing suite as proof that this specific line is exercised.
 			_ = closeWorkerFamily(active)
 			dependencies.close()
 			return nil, preserveDependencyReason(err, "queue_coverage_validation_failed")
@@ -1625,18 +1665,31 @@ func (dependencies *workerDependencies) logStartupContractFailure(err error) {
 // and the deployment budget in one place, so no other readiness path can
 // approve a partially constructed queue selection.
 func (dependencies *workerDependencies) queuesReady(context.Context) error {
-	if dependencies == nil || dependencies.runtimeRegistry == nil {
+	if dependencies == nil {
 		return errWorkerDependencyUnavailable
 	}
-	// Three distinct faults used to leave here as one sentinel (CHAOS-5034): a
-	// registry that never loaded, a startup contract that was already violated
-	// during construction, and genuine queue-coverage drift. Only the last is
-	// actually about queue coverage; reporting the other two as coverage
-	// failures sends an operator to the wrong knob.
+	// Four distinct faults used to leave here as one sentinel (CHAOS-5034): a
+	// registry that never loaded, a registry that is nil for no recorded reason,
+	// a startup contract already violated during construction, and genuine
+	// queue-coverage drift. Only the last is actually about queue coverage;
+	// reporting the others as coverage failures sends an operator to the wrong
+	// knob.
+	//
+	// ORDER IS LOAD-BEARING (codex r1 P1). jobruntime.Load returns (nil, error)
+	// on a load or validation failure, so a broken registry sets registryErr AND
+	// leaves runtimeRegistry nil. The first version of this fix checked nil
+	// FIRST, so that case still left as the bare sentinel and the caller still
+	// relabelled it `queue_coverage_validation_failed` -- the exact masking this
+	// change exists to remove, still live for the registry fault. Check the
+	// recorded reason before the nil it caused.
 	if dependencies.registryErr != nil {
 		return preserveDependencyReason(
 			dependencies.registryErr, "worker_job_registry_unavailable",
 		)
+	}
+	if dependencies.runtimeRegistry == nil {
+		// Nil with no recorded reason: still bounded, still not "coverage".
+		return dependencyUnavailable("worker_job_registry_unavailable")
 	}
 	if dependencies.startupErr != nil {
 		return preserveDependencyReason(

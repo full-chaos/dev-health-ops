@@ -176,6 +176,35 @@ func TestResolveProviderKindForOrg_LogsOnOrgBYOWin(t *testing.T) {
 	}
 }
 
+// TestResolveProviderKindForOrg_LogsNormalizedValue is the codex round 2,
+// P3 regression: the log line previously logged the RAW resolver output
+// (e.g. "  OLLAMA  ") while the function RETURNED its normalized form
+// ("ollama") -- the log never matched the value actually selected, which
+// breaks any search/aggregation keyed on the logged provider name.
+func TestResolveProviderKindForOrg_LogsNormalizedValue(t *testing.T) {
+	clearProviderEnv(t)
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	kind, err := ResolveProviderKindForOrg(
+		context.Background(), "auto", "org-1", staticOrgResolver("  OLLAMA  ", nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if kind != ProviderKindOllama {
+		t.Fatalf("kind = %q, want ollama", kind)
+	}
+	got := buf.String()
+	if strings.Contains(got, "OLLAMA") || strings.Contains(got, "  ollama  ") {
+		t.Fatalf("log output = %q, must log the NORMALIZED value (%q), not the raw resolver output", got, kind)
+	}
+	if !strings.Contains(got, string(kind)) {
+		t.Fatalf("log output = %q, must contain the actual returned kind %q", got, kind)
+	}
+}
+
 // TestResolveProviderKindForOrg_NoLogOnNonOrgPaths proves the new log line
 // is scoped to the org-BYO-wins branch only -- it must not fire on the
 // kill-switch, no-org-provider-available, or auto-detect paths.

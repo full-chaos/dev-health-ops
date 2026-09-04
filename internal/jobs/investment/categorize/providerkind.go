@@ -161,8 +161,16 @@ func ResolveProviderKindForOrg(
 			// other resolution path. Org id only, never the resolved
 			// provider's credentials (this function only ever receives a
 			// provider NAME string here, never a secret).
-			log.Printf("categorize: org %q BYO provider %q selected over platform default for auto resolution", orgID, orgProvider)
-			return normalizeProviderKind(orgProvider), nil
+			//
+			// codex round 2, P3: normalize BEFORE logging, not after --
+			// the earlier version logged the raw resolver output
+			// (e.g. "  OLLAMA  ") while RETURNING its normalized form
+			// ("ollama"), so telemetry never matched the value actually
+			// selected, breaking any search/aggregation keyed on the
+			// logged provider name.
+			normalized := normalizeProviderKind(orgProvider)
+			log.Printf("categorize: org %q BYO provider %q selected over platform default for auto resolution", orgID, normalized)
+			return normalized, nil
 		}
 	}
 

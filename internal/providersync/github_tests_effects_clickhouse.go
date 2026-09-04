@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -19,6 +20,18 @@ import (
 type TestOpsClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
+	// OnContentSkip observes a CHAOS-5045 content skip: a batch whose rows the
+	// store already holds, so the INSERT was suppressed. It exists because a
+	// suppressed insert and a real write are otherwise indistinguishable to an
+	// operator -- WriteEffect returns nil either way and the committer counts
+	// both as Written (codex r2, P3).
+	//
+	// It is a FIELD rather than a changed WriteEffect signature deliberately:
+	// WriteEffect has hundreds of call sites across every sink, and a sentinel
+	// return would be read as a failure by every caller that does not know it.
+	// Optional -- a nil observer is a silent skip, which is the pre-existing
+	// behaviour, not a regression.
+	OnContentSkip func(destination string, runs, rows int)
 }
 
 // GitHubTestsClickHouseEffects remains as the source-compatible name used by
@@ -70,6 +83,58 @@ func githubTestsDestination(destination string) bool {
 // agree on NULL handling and float formatting between the two runtimes, which
 // is exactly the class of parity trap this repo has been bitten by before.
 
+// validateTestOpsSuiteRows and validateTestOpsCaseRows hoist the per-row
+// tenancy/stamp/key checks out of the INSERT loop so they run BEFORE the
+// content skip (codex r2, P1). The INSERT loop still performs its own identical
+// check: the duplication is deliberate, because the loop's check is what
+// guards the append itself, and a future edit that moved or dropped one of the
+// two should not silently disarm the other.
+// noteContentSkip records a suppressed INSERT. Fields are bounded: destination,
+// run count and row count only -- never row payloads, which carry provider
+// content.
+func (sink TestOpsClickHouseEffects) noteContentSkip(claim Claim, destination string, runs, rows int) {
+	slog.Info(
+		"testops report rows already stored; insert suppressed",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"destination", destination, "runs", runs, "rows", rows,
+	)
+	if sink.OnContentSkip != nil {
+		sink.OnContentSkip(destination, runs, rows)
+	}
+}
+
+func countTestOpsRuns[T any](rows []T, key func(T) testOpsRunKey) int {
+	seen := map[testOpsRunKey]struct{}{}
+	for _, row := range rows {
+		seen[key(row)] = struct{}{}
+	}
+	return len(seen)
+}
+
+func validateTestOpsSuiteRows(claim Claim, rows []testSuiteResultRow) error {
+	for _, row := range rows {
+		if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
+			return err
+		}
+		if row.SuiteID == "" {
+			return ErrInvalidConfiguration
+		}
+	}
+	return nil
+}
+
+func validateTestOpsCaseRows(claim Claim, rows []testCaseResultRow) error {
+	for _, row := range rows {
+		if err := validateGitHubTestsRow(claim, row.OrgID, row.RepoID, row.RunID, row.LastSynced); err != nil {
+			return err
+		}
+		if row.SuiteID == "" || row.CaseID == "" {
+			return ErrInvalidConfiguration
+		}
+	}
+	return nil
+}
+
 // testOpsRunKey identifies the natural-key prefix a report batch is scoped to.
 type testOpsRunKey struct{ orgID, repoID, runID string }
 
@@ -80,11 +145,19 @@ func sameOptionalString(a, b *string) bool {
 	return *a == *b
 }
 
+// sameOptionalFloat compares by BIT PATTERN, not by ==. Go's == treats -0 and
+// +0 as equal, and both report parsers accept a signed zero
+// (github_tests_reports.go, gitlab_tests_route.go), so a duration flipping
+// between +0 and -0 would compare equal here and the write would be skipped,
+// leaving the earlier bit pattern persisted (codex r2, P2). NaN never occurs in
+// a persisted duration, so Float64bits needs no NaN special case: two NaNs with
+// the same payload compare equal under it, which is the answer this skip wants
+// anyway.
 func sameOptionalFloat(a, b *float64) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return *a == *b
+	return math.Float64bits(*a) == math.Float64bits(*b)
 }
 
 // storedTestCaseRows reads back every persisted case row for one run through
@@ -315,12 +388,24 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		if len(rows) == 0 {
 			return sink.Lease.Assert(ctx)
 		}
+		// CHAOS-5045 r2 P1: validate BEFORE considering the skip. The skip is an
+		// optimisation; validateGitHubTestsRow is a fail-closed tenancy and
+		// stamp guard. Running the skip first let a foreign or malformed effect
+		// match a stored row, return success and be reported as committed --
+		// the guard stopped guarding exactly when the skip fired.
+		if err := validateTestOpsSuiteRows(claim, rows); err != nil {
+			return err
+		}
 		// CHAOS-5045, suite-level twin of the case-level skip below.
 		unchanged, err := testSuiteBatchAlreadyStored(ctx, sink.Conn, rows)
 		if err != nil {
 			return err
 		}
 		if unchanged {
+			sink.noteContentSkip(claim, effect.Destination,
+				countTestOpsRuns(rows, func(row testSuiteResultRow) testOpsRunKey {
+					return testOpsRunKey{row.OrgID, row.RepoID, row.RunID}
+				}), len(rows))
 			return sink.Lease.Assert(ctx)
 		}
 		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_suite_results (org_id,repo_id,run_id,suite_id,suite_name,framework,environment,total_count,passed_count,failed_count,skipped_count,error_count,quarantined_count,retried_count,duration_seconds,started_at,finished_at,team_id,service_id,last_synced)`)
@@ -356,6 +441,11 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		if len(rows) == 0 {
 			return sink.Lease.Assert(ctx)
 		}
+		// CHAOS-5045 r2 P1: validate BEFORE considering the skip -- see the
+		// suite path above for why the order is load-bearing.
+		if err := validateTestOpsCaseRows(claim, rows); err != nil {
+			return err
+		}
 		// CHAOS-5045: skip the INSERT when the store already holds these exact
 		// rows. See the comment above testOpsRunKey for why the fetch is never
 		// skipped and only the write is.
@@ -364,6 +454,10 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			return err
 		}
 		if unchanged {
+			sink.noteContentSkip(claim, effect.Destination,
+				countTestOpsRuns(rows, func(row testCaseResultRow) testOpsRunKey {
+					return testOpsRunKey{row.OrgID, row.RepoID, row.RunID}
+				}), len(rows))
 			return sink.Lease.Assert(ctx)
 		}
 		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_case_results (org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,retry_attempt,failure_message,failure_type,stack_trace,is_quarantined,last_synced)`)

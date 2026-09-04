@@ -107,9 +107,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # cmd/query-api/internal/investmentexplain and CHAOS-4902's
     # internal/testsupport/chschema (the RMT sweep's own authoritative-count
     # integration test). Merged total: 42.
+    # CHAOS-4897 added internal/teamownership (the owned-repo membership
+    # helper the recommendations loader's team-scoping join reads): 42 -> 43.
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
-    assert "42 package(s) discovered, 0 denylisted, 42 will run" in result.stdout
+    assert "43 package(s) discovered, 0 denylisted, 43 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

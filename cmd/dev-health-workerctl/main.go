@@ -1731,9 +1731,237 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 			return 1
 		}
 		return code
+	case "trigger-backstop":
+		return dispatchMetricsRemainingTriggerBackstop(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// manualBackstopTriggerReadbackHint returns the ClickHouse readback query
+// for one trigger-backstop family. A switch, not a map: a family added to
+// remaining.ManualBackstopTriggerFamilies without a case here fails loud
+// (dispatchMetricsRemainingTriggerBackstop below refuses to print a result
+// with no hint) instead of silently printing an empty/broken query the way
+// a map-with-no-entry would (manualBackfillReadbackTable has exactly that
+// gap for families outside complexity/dora/release_impact -- see
+// remaining.ManualBackfillDayScopedFamilies's doc comment). day is UNUSED
+// deliberately: work_item_attribution_backstop_runs has no day column (it is
+// keyed on completed_at, not a calendar day) -- see
+// manualBackfillDayScope's work_item_attribution case.
+func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
+	switch family {
+	case "work_item_attribution":
+		return fmt.Sprintf(
+			"ClickHouse: SELECT run_id, completed_at, promoted_reason FROM work_item_attribution_backstop_runs FINAL WHERE org_id = '%s' ORDER BY completed_at DESC LIMIT 5",
+			org,
+		), true
+	default:
+		return "", false
+	}
+}
+
+// manualBackstopTriggerGeneration derives a deterministic generation for one
+// `metrics remaining trigger-backstop` request, distinct from BOTH the
+// fixed-schedule fanout's own "fixed-schedule:<schedule-id>:<time>" format
+// (internal/scheduler/fixed/producers.go) and `metrics remaining start`'s
+// "manual-backfill:" prefix -- so a trigger-backstop run is identifiable as
+// its own trigger source in remaining_metric_runs.generation without
+// resorting to a side table, and a retried CLI invocation with identical
+// flags lands on insertRun's ON CONFLICT DO NOTHING idempotency path instead
+// of inserting a second run for the same org/day (same reasoning as
+// manualBackfillGeneration above).
+func manualBackstopTriggerGeneration(family, org, day string) string {
+	return "manual-trigger:" + family + ":" + org + ":" + day
+}
+
+// dispatchMetricsRemainingTriggerBackstop handles `metrics remaining
+// trigger-backstop` (CHAOS-5016): a same-day-capable manual trigger for a
+// fixed-schedule backstop family (currently only work_item_attribution) so
+// an operator does not have to wait for the family's own daily cron
+// occurrence -- work_item_attribution_daily_fanout runs once at 02:30Z, and
+// the FIRST occurrence after any cold start (a fresh schedule row, or one
+// whose anchor was reset) is always skipped as cold_start_baseline
+// (internal/scheduler/fixed/producers.go's coldStartBaselineReason,
+// engine.go's stepSchedule), so without this command the very first real run
+// is invisible until the SECOND 02:30Z after deploy.
+//
+// This deliberately reuses remaining.PostgresStore.StartManualBackfillRun --
+// the SAME core `metrics remaining start` uses -- rather than adding any new
+// path through internal/scheduler/fixed's Engine/Ledger. That choice IS the
+// anchor-safety design: StartManualBackfillRun only ever reads/writes
+// remaining_metric_runs and remaining_metric_partitions; it has no reference
+// to fixed_schedule_occurrences (internal/scheduler/fixed/ledger.go) or to
+// Engine.lastRecorded's anchor at all. A trigger-backstop run can therefore
+// never become the schedule's own lastRecorded anchor, never marks a real
+// occurrence as satisfied, and never disturbs cold_start_baseline/DueOccurrence
+// bookkeeping for the SAME schedule the operator is impatient about -- the
+// 02:30Z cron keeps firing on its own unmodified cadence regardless of how
+// many manual triggers ran in between.
+//
+// Idempotency reuses StartManualBackfillRun's own findManualBackfillBlocker
+// coverage check, keyed on (org, family, day) via remaining_metric_runs.scope_key
+// (manual_backfill.go) -- a repeat trigger for the same org/day either finds
+// the prior run already succeeded (ErrDayAlreadyCovered) or still in flight
+// under the same generation (surfaced as "already_ran", not a new run) --
+// the same dedup key the automatic 02:30Z occurrence uses for that day, so a
+// manual trigger and that night's real occurrence for the SAME day cannot
+// both dispatch a live ComputeOrg run.
+//
+// day is a DEDUP KEY, not a compute window: WorkItemAttributionExecutor.ComputeOrg
+// (internal/jobs/metrics/remaining/work_item_attribution_native_clickhouse.go)
+// takes only an org id and always recomputes from its own live watermark
+// (work_item_attribution_backstop_runs.completed_at) -- --day only labels
+// which remaining_metric_runs row this trigger becomes/dedupes against, it
+// never scopes or windows what gets recomputed. Two different --day values
+// dispatch the exact same computation; the value only changes which prior
+// run (if any) findManualBackfillBlocker matches against.
+//
+// --day defaults to yesterday UTC, mirroring `start`'s day-scoping caution
+// (main.go's "today itself is ALSO excluded" comment on dispatchMetricsRemaining)
+// without inheriting its hard refusal: work_item_attribution's Scope carries
+// no day-window (manualBackfillDayScope's case), and ComputeOrg is
+// watermark-driven and safely re-entrant, so --today (an explicit flag,
+// never silently inferred from an operator typing today's date) is
+// supported here where `start` refuses it outright for every family it
+// serves.
+//
+// Manual-vs-schedule interaction, answered precisely (team-lead's review
+// note) -- a manual trigger COEXISTS with the schedule's own 02:30Z
+// occurrence, it never SUPPRESSES it, on EITHER side of a --day match:
+//   - StartRunTx (the automatic path's own call, via
+//     RemainingMetricsFanoutProducer.Produce) has a coverage-merging
+//     advisory-lock block ONLY for family=="dora" (postgres.go); for
+//     work_item_attribution it falls straight through to insertRun's plain
+//     ON CONFLICT DO NOTHING on (org_id, family, generation, scope_key).
+//   - The automatic generation ("fixed-schedule:work_item_attribution_daily_fanout:<time>")
+//     and this command's ("manual-trigger:work_item_attribution:<org>:<day>",
+//     manualBackstopTriggerGeneration below) are NEVER equal, so that
+//     uniqueness constraint never fires between them -- even when --day
+//     happens to equal the UTC calendar date the 02:30Z boundary falls on
+//     (rare: 02:30Z is 19:30 PDT the PRIOR PDT day, so "today" here and
+//     "tonight's" occurrence usually land on DIFFERENT UTC dates already).
+//   - Verified in TestStartManualBackfillRunWorkItemAttributionCoexistsWithASameDayAutomaticOccurrence
+//     (manual_backstop_trigger_integration_test.go): a manual trigger
+//     followed by a same-day simulated automatic StartRunTx call both
+//     succeed as two DISTINCT runs/partitions, neither blocked nor merged.
+//
+// This is safe, not merely permitted: ComputeOrg is watermark-driven, so a
+// second dispatch (whichever runs second) finds nothing changed since the
+// first one's watermark write and either no-ops (SkippedNoop) or writes a
+// benign, redundant completion marker -- it never double-counts or corrupts
+// work_item_team_attributions. The real cost of triggering --today right
+// before the schedule's own occurrence is CONTENTION, not correctness:
+// work_item_attribution's max_concurrency is 1 (families.json), so two
+// independent runs queue behind each other for the family's single worker
+// slot, and whichever one loses that race is delayed, not lost. That
+// tradeoff -- and not a data-safety concern -- is the actual reason --day
+// defaults to yesterday and today needs an explicit ask.
+func dispatchMetricsRemainingTriggerBackstop(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics remaining trigger-backstop")
+	family := flags.String("family", "work_item_attribution", "fixed-schedule backstop family to trigger now (work_item_attribution)")
+	org := flags.String("org", "", "organization id (uuid)")
+	day := flags.String("day", "", "dedup key for the run this trigger becomes, NOT a compute window (YYYY-MM-DD, UTC) -- defaults to yesterday UTC; today requires --today")
+	today := flags.Bool("today", false, "REQUIRED to target today's UTC date -- otherwise --day=today is refused; a same-day manual run COEXISTS with (never suppresses) tonight's own 02:30Z occurrence, but both compete for this family's max_concurrency=1 worker slot (families.json), so today should be an explicit choice, not an accident")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this backstop is being triggered manually (e.g. \"CHAOS-5016 -- chris wants same-day confirmation, not waiting for the 02:30Z schedule\")")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if !slices.Contains(remaining.ManualBackstopTriggerFamilies, *family) {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	todayUTC := time.Now().UTC().Truncate(24 * time.Hour)
+	var targetDay time.Time
+	if strings.TrimSpace(*day) == "" {
+		if *today {
+			targetDay = todayUTC
+		} else {
+			targetDay = todayUTC.AddDate(0, 0, -1)
+		}
+	} else {
+		parsed, err := time.Parse("2006-01-02", *day)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		targetDay = parsed
+	}
+	if targetDay.After(todayUTC) {
+		// A future day carries no intent this command can act on -- there is
+		// nothing to have missed yet.
+		return writeError(stderr, "invalid_request")
+	}
+	if targetDay.Equal(todayUTC) && !*today {
+		// codex-review-shaped guard, matching `start`'s round-3 P1 fix: an
+		// operator who wants today MUST say so explicitly via --today, never
+		// by --day's value alone -- so this command's help text and its
+		// actual gate agree, and a scripted caller cannot silently target
+		// today by constructing today's date string.
+		return writeError(stderr, "invalid_request")
+	}
+	dayString := targetDay.Format("2006-01-02")
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := remaining.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	readbackHint, ok := manualBackstopTriggerReadbackHint(*family, *org)
+	if !ok {
+		// Unreachable while ManualBackstopTriggerFamilies and this switch stay
+		// in sync (mirrors the *_test.go sync test guarding the `start` verb's
+		// own family list against manualBackfillDayScope) -- refuse loud
+		// rather than print a result with a missing readback hint.
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	generation := manualBackstopTriggerGeneration(*family, *org, dayString)
+	outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+	status := "started"
+	switch {
+	case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
+		status = "already_covered"
+	case errors.Is(startErr, remaining.ErrDayInProgress):
+		status = "in_progress"
+	case errors.Is(startErr, remaining.ErrManualBackfillGenerationExhausted):
+		status = "exhausted"
+	case startErr != nil:
+		status = "error"
+	case outcome.AlreadyRan:
+		status = "already_ran"
+	}
+	result := map[string]any{
+		"family":          *family,
+		"org":             *org,
+		"day":             dayString,
+		"generation":      generation,
+		"review_evidence": *reviewEvidence,
+		"status":          status,
+		"run_id":          outcome.RunID,
+		"readback_hint":   readbackHint,
+	}
+	if startErr != nil && status == "error" {
+		result["error"] = startErr.Error()
+	}
+	if outcome.PartitionID != "" {
+		result["partition_id"] = outcome.PartitionID
+	}
+	code := writeResult(stdout, stderr, result)
+	if code == 0 && (status == "error" || status == "exhausted") {
+		return 1
+	}
+	return code
 }
 
 // redriveDailyMetricsLedger calls the Python compatibility bridge's bulk

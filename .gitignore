@@ -15,6 +15,13 @@ test-results/
 benchmark**
 !src/**/benchmarking/
 !src/**/benchmarking/**
+# CHAOS-4288: the Go port of the benchmarking family lives under
+# internal/jobs/metrics/daily/benchmarking/ and matches `benchmark**`
+# above, which exists for benchmark OUTPUT. Without these negations the
+# whole package is silently untracked -- `git add` reports nothing and the
+# commit succeeds carrying only the fixtures. Mirrors the src/ negations.
+!internal/**/benchmarking/
+!internal/**/benchmarking/**
 src/**/bench**/__pycache__/**
 demo-data**
 .flake8

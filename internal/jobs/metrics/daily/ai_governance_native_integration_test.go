@@ -43,8 +43,10 @@ import (
 //     flat. Under Python's uuid4() it would double. This is the assertion that
 //     makes the whole Q1 decision testable rather than merely argued.
 //
-//  4. The argMax replacements for Python's FINAL subqueries agree with the
-//     answer FINAL would give, including the org_id-after-dedup ordering.
+//  4. The scan/finding reads agree with Python. They now use FINAL, exactly as
+//     Python does, after #2229 round 3 showed argMax is nondeterministic on a
+//     tied version -- so this is no longer "an argMax replacement that agrees
+//     with FINAL", it is the same instrument Python uses.
 func TestAIGovernanceComputeFamilyAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -643,18 +645,17 @@ FROM ci_pipeline_runs WHERE org_id = ?`, tieOrg).Scan(&rowCount, &keyCount, &dis
 SELECT count() FROM ci_pipeline_runs FINAL
 WHERE org_id = ? AND lower(coalesce(status, '')) IN ('success','passed','completed')`
 
-	// The production shape, lifted from LoadGovernanceArtifacts' scan subquery.
-	const productionQuery = `
-SELECT count() FROM ci_pipeline_runs FINAL
-WHERE lower(coalesce(status, '')) IN ('success','passed','completed') AND org_id = ?`
-
+	// The static shape assertions live in ai_governance_sql_shape_test.go, which
+	// carries no build tag so they run without a container -- the regression they
+	// catch is a one-line edit and must not depend on Docker being present.
+	// Behavioural half: prove WHY the static assertion above matters.
 	want := scanCountVia(t, finalQuery)
 
 	// STABILITY across repeats is the half a single comparison cannot show: a
 	// bare argMax can agree with FINAL on one run and disagree on the next.
 	seen := map[uint64]int{}
 	for range 5 {
-		seen[scanCountVia(t, productionQuery)]++
+		seen[scanCountVia(t, finalQuery)]++
 	}
 	if len(seen) != 1 {
 		t.Fatalf("the scan dedup is NOT deterministic across identical runs: saw %v. "+

@@ -12,6 +12,112 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
 )
 
+// governanceArtifactsSQL is the artifact query, extracted to a package-level
+// const so the integration guard can run THE QUERY PRODUCTION RUNS instead of
+// a copy of it.
+//
+// The copy was not hypothetical: TestGovernanceDedupKeepsANewerNullStatus
+// embedded its own argMax version of the scan subquery, and when the loader
+// moved to FINAL that test went on exercising SQL production no longer ran.
+// A guard that reimplements the thing it guards cannot see the thing change.
+const governanceArtifactsSQL = `
+SELECT
+    toString(a.org_id) AS org_id,
+    a.repo_id AS repo_id,
+    a.subject_type AS subject_type,
+    a.subject_id AS subject_id,
+    a.observed_at AS observed_at,
+    a.source IN ('manual', 'pr_label', 'commit_trailer') AS declared_ai,
+    if(a.subject_type = 'pull_request', pr.reviews_count > 0, NULL) AS human_reviewed,
+    if(a.subject_type = 'pull_request', scan.scan_count > 0, NULL) AS security_scanned,
+    finding.finding_count > 0 AS license_or_dependency_finding,
+    JSONExtractString(a.evidence, 'tool_name') AS tool_name,
+    JSONExtractString(a.evidence, 'model_name') AS model_name,
+    multiIf(
+        allow_exact.status != '', allow_exact.status,
+        allow_wild.status != '', allow_wild.status,
+        'unknown'
+    ) AS tool_allowlist_status,
+    a.source AS source,
+    a.kind AS kind,
+    a.confidence AS confidence
+FROM ai_attribution_resolved AS a
+-- FINAL where Python reads raw (loaders.py:242-246 joins this table with no
+-- dedup at all). git_pull_requests is a ReplacingMergeTree, so FINAL is what
+-- Python's raw read CONVERGES TO once merges settle: equal to Python
+-- post-merge, and deterministic before it.
+--
+-- This carried an argMax dedup until #2229 r3. That was justified as "Go is
+-- deterministic where Python is merge-timing dependent", and the justification
+-- was false -- a bare argMax is nondeterministic on a tied last_synced
+-- (measured; see the tie section above), and a batch sync writes many rows of
+-- this table in the same millisecond. So it diverged from Python while
+-- delivering none of the determinism that was its only purpose. FINAL delivers
+-- both halves; argMax delivered neither (team-lead ruling, 2026-09-04).
+--
+-- Python's own merge-timing dependence here stays recorded as a pre-existing
+-- defect (CHAOS-5086), not silently corrected.
+LEFT JOIN (
+    SELECT repo_id, number, reviews_count
+    FROM git_pull_requests FINAL
+    WHERE org_id = ?
+) AS pr
+    ON a.repo_id = pr.repo_id
+    AND a.subject_type = 'pull_request'
+    AND a.subject_id = toString(pr.number)
+-- FINAL, exactly as Python reads it (loaders.py:248). NOT argMax -- see the
+-- doc comment's tie section: argMax is nondeterministic on a tied version and
+-- FINAL is not, and status ties are routine here.
+LEFT JOIN (
+    SELECT repo_id, count() AS scan_count
+    FROM ci_pipeline_runs FINAL
+    WHERE lower(coalesce(status, '')) IN ('success', 'passed', 'completed')
+      AND org_id = ?
+    GROUP BY repo_id
+) AS scan ON a.repo_id = scan.repo_id
+-- FINAL, exactly as Python reads it (loaders.py:255). Same reasoning.
+LEFT JOIN (
+    SELECT repo_id, count() AS finding_count
+    FROM security_alerts FINAL
+    WHERE lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
+      AND org_id = ?
+    GROUP BY repo_id
+) AS finding ON a.repo_id = finding.repo_id
+-- Allowlist precedence (CHAOS-2209), ported verbatim: an exact tool+model row
+-- beats a wildcard row, each side already deduped by argMax over computed_at.
+-- Wildcard means nullIf(model_name, '') IS NULL -- legacy '' rows are
+-- wildcard, never exact, because JSONExtractString yields '' for missing model
+-- evidence and a '' "exact" key would phantom-match every artifact lacking it.
+LEFT JOIN (
+    SELECT
+        org_id,
+        tool_name,
+        model_name AS model_key,
+        argMax(status, computed_at) AS status
+    FROM ai_tool_allowlist
+    WHERE nullIf(model_name, '') IS NOT NULL
+    GROUP BY org_id, tool_name, model_key
+) AS allow_exact
+    ON toString(a.org_id) = allow_exact.org_id
+    AND JSONExtractString(a.evidence, 'tool_name') = allow_exact.tool_name
+    AND JSONExtractString(a.evidence, 'model_name') = allow_exact.model_key
+LEFT JOIN (
+    SELECT
+        org_id,
+        tool_name,
+        argMax(status, computed_at) AS status
+    FROM ai_tool_allowlist
+    WHERE nullIf(model_name, '') IS NULL
+    GROUP BY org_id, tool_name
+) AS allow_wild
+    ON toString(a.org_id) = allow_wild.org_id
+    AND JSONExtractString(a.evidence, 'tool_name') = allow_wild.tool_name
+WHERE toString(a.org_id) = ?
+  AND a.observed_at >= ?
+  AND a.observed_at <= ?
+ORDER BY a.subject_type, a.subject_id, a.source
+`
+
 // LoadGovernanceArtifacts ports _ARTIFACTS_SQL plus _artifact_from_row
 // (audit/ai_governance/loaders.py:214 and :126) -- the input half of
 // build_governance_rows_for_day.
@@ -189,102 +295,7 @@ func LoadGovernanceArtifacts(
 		return nil, ErrInvalidState
 	}
 
-	rows, err := conn.Query(ctx, `
-SELECT
-    toString(a.org_id) AS org_id,
-    a.repo_id AS repo_id,
-    a.subject_type AS subject_type,
-    a.subject_id AS subject_id,
-    a.observed_at AS observed_at,
-    a.source IN ('manual', 'pr_label', 'commit_trailer') AS declared_ai,
-    if(a.subject_type = 'pull_request', pr.reviews_count > 0, NULL) AS human_reviewed,
-    if(a.subject_type = 'pull_request', scan.scan_count > 0, NULL) AS security_scanned,
-    finding.finding_count > 0 AS license_or_dependency_finding,
-    JSONExtractString(a.evidence, 'tool_name') AS tool_name,
-    JSONExtractString(a.evidence, 'model_name') AS model_name,
-    multiIf(
-        allow_exact.status != '', allow_exact.status,
-        allow_wild.status != '', allow_wild.status,
-        'unknown'
-    ) AS tool_allowlist_status,
-    a.source AS source,
-    a.kind AS kind,
-    a.confidence AS confidence
-FROM ai_attribution_resolved AS a
--- FINAL where Python reads raw (loaders.py:242-246 joins this table with no
--- dedup at all). git_pull_requests is a ReplacingMergeTree, so FINAL is what
--- Python's raw read CONVERGES TO once merges settle: equal to Python
--- post-merge, and deterministic before it.
---
--- This carried an argMax dedup until #2229 r3. That was justified as "Go is
--- deterministic where Python is merge-timing dependent", and the justification
--- was false -- a bare argMax is nondeterministic on a tied last_synced
--- (measured; see the tie section above), and a batch sync writes many rows of
--- this table in the same millisecond. So it diverged from Python while
--- delivering none of the determinism that was its only purpose. FINAL delivers
--- both halves; argMax delivered neither (team-lead ruling, 2026-09-04).
---
--- Python's own merge-timing dependence here stays recorded as a pre-existing
--- defect (CHAOS-5086), not silently corrected.
-LEFT JOIN (
-    SELECT repo_id, number, reviews_count
-    FROM git_pull_requests FINAL
-    WHERE org_id = ?
-) AS pr
-    ON a.repo_id = pr.repo_id
-    AND a.subject_type = 'pull_request'
-    AND a.subject_id = toString(pr.number)
--- FINAL, exactly as Python reads it (loaders.py:248). NOT argMax -- see the
--- doc comment's tie section: argMax is nondeterministic on a tied version and
--- FINAL is not, and status ties are routine here.
-LEFT JOIN (
-    SELECT repo_id, count() AS scan_count
-    FROM ci_pipeline_runs FINAL
-    WHERE lower(coalesce(status, '')) IN ('success', 'passed', 'completed')
-      AND org_id = ?
-    GROUP BY repo_id
-) AS scan ON a.repo_id = scan.repo_id
--- FINAL, exactly as Python reads it (loaders.py:255). Same reasoning.
-LEFT JOIN (
-    SELECT repo_id, count() AS finding_count
-    FROM security_alerts FINAL
-    WHERE lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
-      AND org_id = ?
-    GROUP BY repo_id
-) AS finding ON a.repo_id = finding.repo_id
--- Allowlist precedence (CHAOS-2209), ported verbatim: an exact tool+model row
--- beats a wildcard row, each side already deduped by argMax over computed_at.
--- Wildcard means nullIf(model_name, '') IS NULL -- legacy '' rows are
--- wildcard, never exact, because JSONExtractString yields '' for missing model
--- evidence and a '' "exact" key would phantom-match every artifact lacking it.
-LEFT JOIN (
-    SELECT
-        org_id,
-        tool_name,
-        model_name AS model_key,
-        argMax(status, computed_at) AS status
-    FROM ai_tool_allowlist
-    WHERE nullIf(model_name, '') IS NOT NULL
-    GROUP BY org_id, tool_name, model_key
-) AS allow_exact
-    ON toString(a.org_id) = allow_exact.org_id
-    AND JSONExtractString(a.evidence, 'tool_name') = allow_exact.tool_name
-    AND JSONExtractString(a.evidence, 'model_name') = allow_exact.model_key
-LEFT JOIN (
-    SELECT
-        org_id,
-        tool_name,
-        argMax(status, computed_at) AS status
-    FROM ai_tool_allowlist
-    WHERE nullIf(model_name, '') IS NULL
-    GROUP BY org_id, tool_name
-) AS allow_wild
-    ON toString(a.org_id) = allow_wild.org_id
-    AND JSONExtractString(a.evidence, 'tool_name') = allow_wild.tool_name
-WHERE toString(a.org_id) = ?
-  AND a.observed_at >= ?
-  AND a.observed_at <= ?
-ORDER BY a.subject_type, a.subject_id, a.source`,
+	rows, err := conn.Query(ctx, governanceArtifactsSQL,
 		organizationID, organizationID, organizationID,
 		organizationID, windowStart.UTC(), windowEndInclusive.UTC(),
 	)

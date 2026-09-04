@@ -1,6 +1,34 @@
 """Static (no-Postgres) proof that every remaining-metrics family's job kind
 has a worker_job_routes seed row somewhere in the Alembic migration set.
 
+APPROXIMATION, NOT THE AUTHORITATIVE GATE (team-lead ruling, post-codex-round-3):
+this parser is a fast, fail-closed LOCAL approximation of route-seed
+coverage, not the source of truth. It runs on plain `git diff`/every unit
+tier (no Postgres needed), and it is deliberately over-cautious -- three
+rounds of adversarial review found and closed one false-accept shape after
+another, and each was a genuinely obscure Python construction (a
+conditionally-returning factory, a rebound `for` loop variable, a
+reassigned module "constant", ...) with ZERO occurrences anywhere in the
+current 124-file migration history. Hand-written static analysis over an
+arbitrary AST is an UNBOUNDED surface: there is always another shape to
+construct. The AUTHORITATIVE gate is
+test_worker_job_routes_registry_coverage_postgres_migration.py's
+`test_every_registry_kind_has_a_worker_job_routes_row` -- it actually runs
+`alembic upgrade head` against a real, disposable PostgreSQL database and
+queries the resulting `worker_job_routes` table directly, so it is immune
+to every static-analysis blind spot by construction (it doesn't parse
+Python source at all, it observes the real post-migration database state).
+That test covers every kind in registry.json, a strict superset of every
+families.json route_key this parser checks (see
+TestJobKindForFamilyResolvesToARegisteredContractDescriptor in
+internal/jobs/metrics/remaining/publisher_test.go for the families.json ->
+registry.json containment proof) -- so it already covers this parser's
+entire scope and more. If this parser and the Postgres test ever disagree,
+trust the Postgres test; a disagreement means this parser needs a fix or a
+narrower claim, not the other way around. This parser earns its keep by
+being fast enough to run on every `pytest` invocation and specific enough
+to name the exact missing kind quickly -- not by being the last word.
+
 CHAOS-5007 companion to
 test_worker_job_routes_registry_coverage_postgres_migration.py: that test
 proves the same fact by actually RUNNING every migration against a real

@@ -125,190 +125,202 @@ PULL_REQUESTS: list[PullRequestRow] = [
     pr(15, created_offset_us=2 * HOUR_US),
 ]
 
-REVIEWS: list[PullRequestReviewRow] = cast(list[PullRequestReviewRow], [
-    # PR 11 has two reviews, one CHANGES_REQUESTED -> drives the fallback.
-    {
-        "repo_id": REPO,
-        "number": 11,
-        "state": "APPROVED",
-        "submitted_at": BASE + timedelta(minutes=10),
-    },
-    {
-        "repo_id": REPO,
-        "number": 11,
-        "state": "changes_requested",
-        "submitted_at": BASE + timedelta(minutes=20),
-    },
-    # Lowercase input proves .upper() is applied rather than an exact match.
-    {
-        "repo_id": REPO,
-        "number": 12,
-        "state": "CHANGES_REQUESTED",
-        "submitted_at": BASE + timedelta(minutes=5),
-    },
-    # A review with no submitted_at must not break first_review_at.
-    {"repo_id": REPO, "number": 1, "state": "APPROVED", "submitted_at": None},
-])
+REVIEWS: list[PullRequestReviewRow] = cast(
+    list[PullRequestReviewRow],
+    [
+        # PR 11 has two reviews, one CHANGES_REQUESTED -> drives the fallback.
+        {
+            "repo_id": REPO,
+            "number": 11,
+            "state": "APPROVED",
+            "submitted_at": BASE + timedelta(minutes=10),
+        },
+        {
+            "repo_id": REPO,
+            "number": 11,
+            "state": "changes_requested",
+            "submitted_at": BASE + timedelta(minutes=20),
+        },
+        # Lowercase input proves .upper() is applied rather than an exact match.
+        {
+            "repo_id": REPO,
+            "number": 12,
+            "state": "CHANGES_REQUESTED",
+            "submitted_at": BASE + timedelta(minutes=5),
+        },
+        # A review with no submitted_at must not break first_review_at.
+        {"repo_id": REPO, "number": 1, "state": "APPROVED", "submitted_at": None},
+    ],
+)
 
-ATTRIBUTIONS: list[AIPullRequestAttributionRow] = cast(list[AIPullRequestAttributionRow], [
-    {
-        "repo_id": REPO,
-        "number": 1,
-        "kind": "ai_assisted",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    # Mixed case + hyphen -> _safe_bucket must strip/lower/replace.
-    {
-        "repo_id": REPO,
-        "number": 2,
-        "kind": "  AI-Assisted  ",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 3,
-        "kind": "ai_assisted",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 4,
-        "kind": "human",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 5,
-        "kind": "human",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 6,
-        "kind": "agent_created",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 7,
-        "kind": "ai_review",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    # 9/10/11/12 are human so they land in the baseline bucket.
-    {
-        "repo_id": REPO,
-        "number": 9,
-        "kind": "human",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 10,
-        "kind": "human",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 11,
-        "kind": "human",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    {
-        "repo_id": REPO,
-        "number": 12,
-        "kind": "human",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    # An unrecognised kind -> unknown, never folded into the human baseline.
-    {
-        "repo_id": REPO,
-        "number": 15,
-        "kind": "vibes",
-        "work_type": "pull_request",
-        "team_id": None,
-    },
-    # A different work_type -> its own group.
-    {
-        "repo_id": REPO_B,
-        "number": 13,
-        "kind": "ai_assisted",
-        "work_type": "issue",
-        "team_id": None,
-    },
-])
+ATTRIBUTIONS: list[AIPullRequestAttributionRow] = cast(
+    list[AIPullRequestAttributionRow],
+    [
+        {
+            "repo_id": REPO,
+            "number": 1,
+            "kind": "ai_assisted",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        # Mixed case + hyphen -> _safe_bucket must strip/lower/replace.
+        {
+            "repo_id": REPO,
+            "number": 2,
+            "kind": "  AI-Assisted  ",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 3,
+            "kind": "ai_assisted",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 4,
+            "kind": "human",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 5,
+            "kind": "human",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 6,
+            "kind": "agent_created",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 7,
+            "kind": "ai_review",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        # 9/10/11/12 are human so they land in the baseline bucket.
+        {
+            "repo_id": REPO,
+            "number": 9,
+            "kind": "human",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 10,
+            "kind": "human",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 11,
+            "kind": "human",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        {
+            "repo_id": REPO,
+            "number": 12,
+            "kind": "human",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        # An unrecognised kind -> unknown, never folded into the human baseline.
+        {
+            "repo_id": REPO,
+            "number": 15,
+            "kind": "vibes",
+            "work_type": "pull_request",
+            "team_id": None,
+        },
+        # A different work_type -> its own group.
+        {
+            "repo_id": REPO_B,
+            "number": 13,
+            "kind": "ai_assisted",
+            "work_type": "issue",
+            "team_id": None,
+        },
+    ],
+)
 
-INCIDENTS: list[IncidentRow] = cast(list[IncidentRow], [
-    {"repo_id": REPO, "started_at": BASE + timedelta(hours=3)},
-    {"repo_id": REPO, "started_at": BASE + timedelta(hours=4)},
-    # Out of window -> must not count.
-    {"repo_id": REPO, "started_at": BASE + timedelta(hours=30)},
-])
+INCIDENTS: list[IncidentRow] = cast(
+    list[IncidentRow],
+    [
+        {"repo_id": REPO, "started_at": BASE + timedelta(hours=3)},
+        {"repo_id": REPO, "started_at": BASE + timedelta(hours=4)},
+        # Out of window -> must not count.
+        {"repo_id": REPO, "started_at": BASE + timedelta(hours=30)},
+    ],
+)
 
 # PR->commit linkage. Present (not None), so has_test_change is KNOWN for the
 # PRs listed and unknown (None) for those absent -- the CHAOS-2183 distinction.
-PR_COMMIT_STATS: dict[tuple[uuid.UUID, int], list[CommitStatRow]] = cast(dict[tuple[uuid.UUID, int], list[CommitStatRow]], {
-    # PR 1: a test file -> has_test_change True.
-    (REPO, 1): [
-        {
-            "file_path": "src/Tests/Thing.spec.ts",  # mixed case -> needs .lower()
-            "commit_hash": "aaa",
-            "committer_when": BASE + timedelta(minutes=30),
-            "evidence": "native",
-        }
-    ],
-    # PR 2: no test file -> a real gap.
-    (REPO, 2): [
-        {
-            "file_path": "src/thing.ts",
-            "commit_hash": "bbb",
-            "committer_when": BASE + timedelta(minutes=30),
-            "evidence": "native",
-        }
-    ],
-    # PR 4: ONLY the squash artifact -> followup_commits must be 0, not 1.
-    (REPO, 4): [
-        {
-            "file_path": "src/x.ts",
-            "commit_hash": "ccc",
-            "committer_when": BASE + timedelta(minutes=90),
-            "evidence": "commit_message_squash_pr_ref",
-        }
-    ],
-    # PR 5: the SAME hash appears twice, once ordinary and once as the merge
-    # artifact. Python collects it into artifact_hashes and then POPS it, so it
-    # is excluded. A single-pass `continue` would keep it and count 1.
-    (REPO, 5): [
-        {
-            "file_path": "src/y.ts",
-            "commit_hash": "ddd",
-            "committer_when": BASE + timedelta(minutes=100),
-            "evidence": "native",
-        },
-        {
-            "file_path": "src/y.ts",
-            "commit_hash": "ddd",
-            "committer_when": BASE + timedelta(minutes=100),
-            "evidence": "commit_message_pr_ref",
-        },
-        {
-            "file_path": "src/z.ts",
-            "commit_hash": "eee",
-            "committer_when": BASE + timedelta(minutes=110),
-            "evidence": "native",
-        },
-    ],
-})
+PR_COMMIT_STATS: dict[tuple[uuid.UUID, int], list[CommitStatRow]] = cast(
+    dict[tuple[uuid.UUID, int], list[CommitStatRow]],
+    {
+        # PR 1: a test file -> has_test_change True.
+        (REPO, 1): [
+            {
+                "file_path": "src/Tests/Thing.spec.ts",  # mixed case -> needs .lower()
+                "commit_hash": "aaa",
+                "committer_when": BASE + timedelta(minutes=30),
+                "evidence": "native",
+            }
+        ],
+        # PR 2: no test file -> a real gap.
+        (REPO, 2): [
+            {
+                "file_path": "src/thing.ts",
+                "commit_hash": "bbb",
+                "committer_when": BASE + timedelta(minutes=30),
+                "evidence": "native",
+            }
+        ],
+        # PR 4: ONLY the squash artifact -> followup_commits must be 0, not 1.
+        (REPO, 4): [
+            {
+                "file_path": "src/x.ts",
+                "commit_hash": "ccc",
+                "committer_when": BASE + timedelta(minutes=90),
+                "evidence": "commit_message_squash_pr_ref",
+            }
+        ],
+        # PR 5: the SAME hash appears twice, once ordinary and once as the merge
+        # artifact. Python collects it into artifact_hashes and then POPS it, so it
+        # is excluded. A single-pass `continue` would keep it and count 1.
+        (REPO, 5): [
+            {
+                "file_path": "src/y.ts",
+                "commit_hash": "ddd",
+                "committer_when": BASE + timedelta(minutes=100),
+                "evidence": "native",
+            },
+            {
+                "file_path": "src/y.ts",
+                "commit_hash": "ddd",
+                "committer_when": BASE + timedelta(minutes=100),
+                "evidence": "commit_message_pr_ref",
+            },
+            {
+                "file_path": "src/z.ts",
+                "commit_hash": "eee",
+                "committer_when": BASE + timedelta(minutes=110),
+                "evidence": "native",
+            },
+        ],
+    },
+)
 
 
 def resolver(_repo_id, repo_name, _identity):

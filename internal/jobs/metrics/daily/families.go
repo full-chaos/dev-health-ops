@@ -1,0 +1,162 @@
+package daily
+
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"sort"
+)
+
+//go:embed families.json
+var rawFamilies []byte
+
+// Registry is the parsed metrics.daily family inventory.
+//
+// # Why this file exists (CHAOS-4283 PR2)
+//
+// families.json has always been the drift-tested contract for this package,
+// but until now nothing in the daily package READ it at runtime -- it was
+// documentation plus a fixture for tests and the generated matrix, while the
+// actual registration lived as hand-written map assignments in
+// cmd/dev-health-worker/daily.go. That was fine while the only per-family
+// facts were "is it native" and "which phase", both of which the registration
+// site expresses directly.
+//
+// Family ORDERING cannot be expressed that way. SetNativeFamilies takes a MAP,
+// and Go map iteration is randomised, so the pre-CHAOS-4283 implementation
+// sorted names alphabetically to get determinism. Alphabetical order happens to
+// put `work_item` BEFORE `work_item_attribution` -- so once the work-item
+// families move to pre_bridge, the three READERS of work_item_team_attributions
+// would run before the family that WRITES it, silently reintroducing the exact
+// stale-read defect codex round 1 caught as a P1 on CHAOS-4278. Nothing in the
+// suite would have failed: the ordering was incidental, so no assertion
+// depended on it.
+//
+// Encoding the dependency in families.json (as `"after"`) and deriving the run
+// order from it makes the constraint declarative, drift-tested alongside the
+// rest of the contract, and visible to the same guards that already read this
+// file -- rather than a comment asking the next editor to keep two hand-written
+// lists in a particular order.
+type Registry struct {
+	SchemaVersion int      `json:"schema_version"`
+	Owner         string   `json:"owner"`
+	Source        string   `json:"source"`
+	Families      []Family `json:"families"`
+}
+
+// Family is one metrics.daily family's contract row.
+type Family struct {
+	Name   string   `json:"name"`
+	Python string   `json:"python"`
+	Writes []string `json:"writes"`
+	// Port is "go" when a native executor computes this family, "pending"
+	// when it still goes to the Python compatibility bridge.
+	Port   string `json:"port"`
+	Golden string `json:"golden"`
+	// Phase is "" (pre_bridge, the default) or "post_bridge".
+	Phase     string `json:"phase"`
+	PhaseNote string `json:"phase_note"`
+	// After names families that MUST compute before this one within the same
+	// phase. It is a hard ordering constraint, not a hint: a family listed
+	// here writes a table this family reads in the same partition.
+	After []string `json:"after"`
+}
+
+// LoadRegistry parses the embedded families.json.
+func LoadRegistry() (Registry, error) {
+	var registry Registry
+	if err := json.Unmarshal(rawFamilies, &registry); err != nil {
+		return Registry{}, fmt.Errorf("decode families.json: %w", err)
+	}
+	if len(registry.Families) == 0 {
+		return Registry{}, fmt.Errorf("families.json declares no families")
+	}
+	return registry, nil
+}
+
+// ErrFamilyOrderCycle reports an `after` graph that cannot be linearised.
+//
+// This is a CONSTRUCTION failure, never a fallback to alphabetical order. A
+// cycle means two families each claim to need the other's output first, which
+// is not a preference the dispatcher may quietly resolve -- whichever way it
+// broke the tie, one of the two would read a stale table, which is precisely
+// the defect this ordering exists to prevent. Failing loudly at startup is the
+// only honest response.
+var ErrFamilyOrderCycle = fmt.Errorf("families.json: `after` graph contains a cycle")
+
+// ErrFamilyOrderUnknown reports an `after` entry naming a family that does not
+// exist.
+//
+// Also fatal, and for a subtler reason: an unknown name would otherwise impose
+// NO constraint at all, so a typo would silently degrade to "unordered" while
+// still looking, in the JSON, exactly like a declared dependency. That is the
+// same fail-open shape as a gate that reports a value it never checks.
+var ErrFamilyOrderUnknown = fmt.Errorf("families.json: `after` names an unknown family")
+
+// FamilyRunOrder linearises `names` so that every declared `after` dependency
+// computes first, breaking ties alphabetically so the result is deterministic
+// and reproducible run to run.
+//
+// `names` is the set actually REGISTERED (which may be a subset of
+// families.json -- a family whose executor failed to construct is absent).
+// Dependencies pointing outside that set are satisfied vacuously: the ordering
+// constraint exists to sequence two families that both run, and a family that
+// is not running cannot be waited for. It is still validated against the full
+// registry, so a typo is caught even when the named family is not registered.
+func FamilyRunOrder(registry Registry, names []string) ([]string, error) {
+	known := make(map[string]struct{}, len(registry.Families))
+	for _, family := range registry.Families {
+		known[family.Name] = struct{}{}
+	}
+	registered := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		registered[name] = struct{}{}
+	}
+
+	dependencies := make(map[string][]string, len(names))
+	for _, family := range registry.Families {
+		for _, after := range family.After {
+			if _, ok := known[after]; !ok {
+				return nil, fmt.Errorf("%w: %q lists %q", ErrFamilyOrderUnknown, family.Name, after)
+			}
+			if _, ok := registered[family.Name]; !ok {
+				continue
+			}
+			if _, ok := registered[after]; !ok {
+				continue
+			}
+			dependencies[family.Name] = append(dependencies[family.Name], after)
+		}
+	}
+
+	remaining := make([]string, len(names))
+	copy(remaining, names)
+	sort.Strings(remaining)
+
+	done := make(map[string]struct{}, len(remaining))
+	ordered := make([]string, 0, len(remaining))
+	for len(remaining) > 0 {
+		progressed := false
+		for index, name := range remaining {
+			ready := true
+			for _, dependency := range dependencies[name] {
+				if _, satisfied := done[dependency]; !satisfied {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				continue
+			}
+			ordered = append(ordered, name)
+			done[name] = struct{}{}
+			remaining = append(remaining[:index], remaining[index+1:]...)
+			progressed = true
+			break
+		}
+		if !progressed {
+			return nil, fmt.Errorf("%w: unresolvable among %v", ErrFamilyOrderCycle, remaining)
+		}
+	}
+	return ordered, nil
+}

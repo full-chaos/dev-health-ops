@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -46,7 +47,7 @@ const dedupRead = `SELECT identity_id FROM (
 ) WHERE org_id = ? AND author_email = ?`
 
 type chWritingFinalizeFamily struct {
-	conn  clickhousestore.Conn
+	conn  driver.Conn
 	orgID string
 	when  time.Time
 }
@@ -69,7 +70,7 @@ func (family *chWritingFinalizeFamily) ComputeFinalizeFamily(ctx context.Context
 // finalize running after the native family would produce.
 type chWritingBridge struct {
 	fakeCompatibility
-	conn  clickhousestore.Conn
+	conn  driver.Conn
 	orgID string
 	when  time.Time
 	wrote bool

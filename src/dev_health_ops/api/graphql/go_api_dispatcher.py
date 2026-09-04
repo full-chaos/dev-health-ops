@@ -326,10 +326,6 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             # explicitly set). Not telemetered: this is "the dispatcher is
             # off", not a per-request fallback decision.
             return None
-        schema_digest = os.getenv("GO_API_SCHEMA_DIGEST")
-        if not schema_digest:
-            return None
-
         try:
             extracted = await _extract_operation(request)
         except Exception:
@@ -379,7 +375,6 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             async with get_postgres_session() as session:
                 routing = await lookup_routing_state(
                     session,
-                    schema_digest=schema_digest,
                     document_digest=doc_digest,
                     selected_operation=selected_operation,
                 )

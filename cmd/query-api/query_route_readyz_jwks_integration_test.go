@@ -71,7 +71,6 @@ func TestBuildQueryRoute_FailsFastOnMissingJWKS(t *testing.T) {
 		EnvelopeJWKSPath:    filepath.Join(t.TempDir(), "does-not-exist.json"),
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
-		SchemaDigest:        itRealSchemaDigest,
 	}
 
 	_, _, _, buildErr := buildQueryRoute(cfg)
@@ -115,7 +114,6 @@ func TestBuildQueryRoute_FailsFastOnMalformedJWKS(t *testing.T) {
 		EnvelopeJWKSPath:    malformedPath,
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
-		SchemaDigest:        itRealSchemaDigest,
 	}
 
 	_, _, _, buildErr := buildQueryRoute(cfg)
@@ -181,7 +179,6 @@ func TestReadyz_JWKSValidAtStartup_ThenDeletedAfterStartup_Returns503(t *testing
 		EnvelopeJWKSPath:    jwksPath,
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
-		SchemaDigest:        itRealSchemaDigest,
 	}
 
 	_, ready, cleanup, buildErr := buildQueryRoute(cfg)
@@ -256,7 +253,6 @@ func TestReadyz_JWKSValidAtStartup_ThenOverwrittenMalformedAfterStartup_Returns5
 		EnvelopeJWKSPath:    jwksPath,
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
-		SchemaDigest:        itRealSchemaDigest,
 	}
 
 	_, ready, cleanup, buildErr := buildQueryRoute(cfg)

@@ -56,11 +56,10 @@ __all__ = [
 async def lookup_routing_state(
     session: AsyncSession,
     *,
-    schema_digest: str,
     document_digest: str,
     selected_operation: str,
 ) -> RoutingState | None:
-    """Read the current routing decision for one operation triple.
+    """Read the current routing decision for one operation.
 
     Returns ``None`` when no :class:`RoutingState` row exists -- an
     unregistered operation, which the caller must treat as ``mode=python``
@@ -68,11 +67,18 @@ async def lookup_routing_state(
     Raises on any database failure rather than treating it as a miss: an
     unreachable registry is an incident, not "no rollout yet" (see
     ``go_api_registry_telemetry``'s ``result`` label doc).
+
+    Not filtered by ``schema_digest`` (CHAOS-5013: removed the Python
+    edge's per-request GO_API_SCHEMA_DIGEST comparison alongside
+    query-api's startup gate on the same env var) -- Wave 0 has exactly
+    one live schema digest at a time (see
+    ``cmd/query-api/internal/routeswitch/postgres_switch.go``'s doc
+    comment), so this stays correct without an operator-configured value
+    the edge process would otherwise need to keep in sync with query-api.
     """
     try:
         result = await session.execute(
             select(RoutingState).where(
-                RoutingState.schema_digest == schema_digest,
                 RoutingState.document_digest == document_digest,
                 RoutingState.selected_operation == selected_operation,
             )
@@ -83,7 +89,6 @@ async def lookup_routing_state(
         logger.exception(
             "go_api_registry.lookup_failed",
             extra={
-                "schema_digest": schema_digest,
                 "document_digest": document_digest,
                 "selected_operation": selected_operation,
             },

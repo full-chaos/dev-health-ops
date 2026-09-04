@@ -214,7 +214,7 @@ func main() {
 		// digestByOperation's composite literal to stay exactly where it
 		// is, assigned directly, not returned from a helper).
 	} else {
-		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_*/GO_API_SCHEMA_DIGEST unset) -- staying Wave-0 empty")
+		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_* unset) -- staying Wave-0 empty")
 	}
 	mux.HandleFunc("/readyz", readyzHandler(ready))
 

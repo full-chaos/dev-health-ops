@@ -535,23 +535,29 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
 // cmd/query-api/tools/registrydump computes the EXACT SAME digest this
 // running process does -- not a second hand-typed copy of a two-line
 // function that could silently drift from this one. (The schema-digest
-// half of what this comment used to call "no canonical algorithm has
-// landed" is a separate follow-up PR's concern -- see this file's
-// GO_API_SCHEMA_DIGEST verification for that half; this function is
-// document digest only.)
+// half -- digest.Schema(schemav1.SDL), computed in buildQueryRoute for
+// routeswitch.PostgresSwitch's own routing key -- is a separate concern;
+// this function is document digest only.)
 func digestHex(document string) string {
 	return digest.Document(document)
 }
 
 // queryRouteConfig is env-sourced configuration for the live /query
 // route. All fields are required together -- see loadQueryRouteConfig.
+//
+// There is deliberately no operator-supplied schema-digest field here
+// (CHAOS-5013 removed GO_API_SCHEMA_DIGEST and the startup gate that
+// verified it): the schema digest routeswitch.PostgresSwitch needs for its
+// own routing-state lookups is computed directly from the embedded SDL
+// (digest.Schema(schemav1.SDL), see buildQueryRoute) -- a build-time
+// constant, not something an operator configures or a process can
+// mis-start over.
 type queryRouteConfig struct {
 	ClickHouseURI       string
 	RegistryPostgresURI string
 	EnvelopeJWKSPath    string
 	EnvelopeIssuer      string
 	EnvelopeAudience    string
-	SchemaDigest        string
 }
 
 // loadQueryRouteConfig reads the /query route's configuration from the
@@ -569,10 +575,9 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 		EnvelopeJWKSPath:    os.Getenv("GO_API_ENVELOPE_JWKS_PATH"),
 		EnvelopeIssuer:      os.Getenv("GO_API_ENVELOPE_ISSUER"),
 		EnvelopeAudience:    os.Getenv("GO_API_ENVELOPE_AUDIENCE"),
-		SchemaDigest:        os.Getenv("GO_API_SCHEMA_DIGEST"),
 	}
 	if cfg.ClickHouseURI == "" || cfg.RegistryPostgresURI == "" || cfg.EnvelopeJWKSPath == "" ||
-		cfg.EnvelopeIssuer == "" || cfg.EnvelopeAudience == "" || cfg.SchemaDigest == "" {
+		cfg.EnvelopeIssuer == "" || cfg.EnvelopeAudience == "" {
 		return cfg, false
 	}
 	return cfg, true
@@ -694,76 +699,6 @@ func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
 	})
 }
 
-// verifySchemaDigestErr is returned by verifySchemaDigest on a mismatch.
-// A distinct, named error type (rather than fmt.Errorf inline) so a test
-// can assert on the FAILURE MODE, not just match a substring of the
-// message text.
-type verifySchemaDigestErr struct {
-	configured string
-	computed   string
-}
-
-func (e *verifySchemaDigestErr) Error() string {
-	return fmt.Sprintf(
-		"query-api: GO_API_SCHEMA_DIGEST mismatch -- configured=%s computed=%s (from contracts/graphql/v1/schema.graphql, embedded at build time). "+
-			"This is not a transient error: either GO_API_SCHEMA_DIGEST was set to a value that does not match the SDL this binary was actually built against "+
-			"(a stale pin, a hand-typed placeholder, or a scratch value like \"sha256:lane-...\" that reached a real environment), or the binary was built against "+
-			"a schema.graphql that has since changed without GO_API_SCHEMA_DIGEST being updated to match. Regenerate the correct value with "+
-			"`go run ./cmd/query-api/tools/registrydump -schema-digest` and set GO_API_SCHEMA_DIGEST to its output -- never hand-type or guess this value.",
-		e.configured, e.computed,
-	)
-}
-
-// verifySchemaDigest is CHAOS-4696 PR2's canonical-schema-digest ruling:
-// query-api must VERIFY its GO_API_SCHEMA_DIGEST configuration against
-// the SDL it was actually built with, not trust an operator-supplied
-// string blindly. Before this PR, GO_API_SCHEMA_DIGEST was opaque --
-// query_route.go's own former doc comment admitted "no canonical
-// algorithm has landed" -- so a wrong value (a stale pin, a copy-pasted
-// placeholder, a test harness's throwaway "sha256:lane-...-schema-digest"
-// reaching a real environment) made every PostgresSwitch lookup miss and
-// fail closed, SILENTLY -- indistinguishable from "not canaried yet",
-// with no way for an operator to tell those two states apart.
-//
-// digest.Schema(schemav1.SDL) is the ONE canonical producer both this
-// runtime check and cmd/query-api/tools/registrydump's schema-digest
-// subcommand call -- see that package's doc comment for why sha256 over
-// RAW file bytes (no SDL re-printing) is the algorithm, and why it is
-// stable by construction: contracts/graphql/v1/schema.graphql is ALREADY
-// pinned byte-for-byte to Python's Strawberry export by
-// tests/api/graphql/test_schema_sdl_pinned.py, so this Go-side digest
-// never needs its own SDL printer to agree with anything -- the exact
-// two-printer trap CHAOS-4696 PR1 closed for document digests, one level
-// up, for the schema digest.
-//
-// A mismatch is a hard, loud, fail-CLOSED error (returned to
-// buildQueryRoute's caller, which is main()'s EXISTING
-// `if buildErr != nil { log.Fatalf(...) }` -- the process refuses to
-// start at all, not merely "does not mount /query"). This is the
-// opposite of the shape this PR's own predecessor code had: an unset
-// env var makes loadQueryRouteConfig return ok=false and /query silently
-// does not mount (main.go logs a single informational line and keeps
-// serving /healthz+/readyz -- a DELIBERATE, documented "not configured
-// yet" operating mode). A SET-BUT-WRONG digest is a materially different
-// state -- an operator believes this instance is correctly pinned, and
-// PostgresSwitch's routing-state lookups would silently miss for every
-// operation, exactly the "indistinguishable from not canaried yet"
-// failure this ruling exists to make structurally impossible. Silence is
-// the thing being removed here; a crash with a named, actionable error
-// is the replacement.
-func verifySchemaDigest(configured string) error {
-	computed := digest.Schema(schemav1.SDL)
-	if configured != computed {
-		log.Printf(
-			"query-api: GO_API_SCHEMA_DIGEST verification FAILED: configured=%s computed=%s -- refusing to start",
-			configured, computed,
-		)
-		recordSchemaDigestMismatch()
-		return &verifySchemaDigestErr{configured: configured, computed: computed}
-	}
-	return nil
-}
-
 // buildQueryRoute wires the real featureFlags path from env-sourced
 // config: the shared dev-health-go ClickHouse client, a real Postgres
 // pool, and the effective-principal verifier, then hands them to
@@ -781,15 +716,16 @@ func verifySchemaDigest(configured string) error {
 // own comment for why it does not substitute for the live one in
 // readinessCheck.
 func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Context) error, func(), error) {
-	// CHAOS-4696 PR2: verify BEFORE any network I/O (ClickHouse client,
-	// Postgres pool, JWKS verifier all cost real dials/reads) -- a schema
-	// digest mismatch is a pure, cheap, static check that should fail
-	// fast, before this process spends any time on dependencies it has no
-	// business connecting to if its own configuration is already known
-	// to be wrong.
-	if err := verifySchemaDigest(cfg.SchemaDigest); err != nil {
-		return nil, nil, nil, err
-	}
+	// CHAOS-5013: the schema digest routeswitch.PostgresSwitch needs for
+	// its own routing-state lookups is computed directly from the
+	// embedded SDL, not read from an operator-supplied env var and
+	// verified against it (that startup gate -- GO_API_SCHEMA_DIGEST,
+	// verifySchemaDigest, log.Fatalf-on-mismatch -- is REMOVED: chris's
+	// ruling, "you version a schema, but to start something -- no"). This
+	// is the same value the removed gate used to verify, computed the
+	// same way, just no longer something a missing/wrong env var can
+	// prevent this process from starting over.
+	schemaDigest := digest.Schema(schemav1.SDL)
 
 	chClient, err := newQueryRouteClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
@@ -841,7 +777,7 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 		return nil, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
 	}
 
-	handler := newQueryHandler(chClient, pgPool, verifier, cfg.SchemaDigest)
+	handler := newQueryHandler(chClient, pgPool, verifier, schemaDigest)
 	cleanup := func() { pgPool.Close() }
 	ready := readinessCheck(chClient, pgPool, verifier)
 	return handler, ready, cleanup, nil

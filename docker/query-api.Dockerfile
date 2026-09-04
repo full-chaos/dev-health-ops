@@ -38,10 +38,12 @@ COPY cmd/query-api ./cmd/query-api
 # source ... no go:embed/ReadFile of the SDL exists there") and that build
 # broke the moment it stopped being true. CHAOS-4696 PR2 added
 # contracts/graphql/v1/sdl.go, a go:embed of schema.graphql that
-# query_route.go's verifySchemaDigest imports as `schemav1.SDL` to check
-# GO_API_SCHEMA_DIGEST against the SDL this binary was actually built with
-# (see that file's doc comment) -- a real, verified runtime import this
-# Dockerfile's build context did not carry, so `go build` failed closed
+# query_route.go's buildQueryRoute imports as `schemav1.SDL` to compute
+# routeswitch.PostgresSwitch's schema-digest routing key (CHAOS-5013
+# removed the operator-supplied GO_API_SCHEMA_DIGEST env var and its
+# startup verification -- the digest is now always computed from this
+# embed, never configured) -- a real runtime import this Dockerfile's
+# build context did not carry, so `go build` failed closed
 # with "cannot find module providing package
 # .../contracts/graphql/v1: import lookup disabled by -mod=readonly"
 # (confirmed by running this exact build). Copy only contracts/graphql/v1,

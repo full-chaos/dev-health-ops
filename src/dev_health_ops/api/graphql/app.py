@@ -171,8 +171,8 @@ def create_graphql_app(
         a :class:`~strawberry.fastapi.GraphQLRouter` subclass that
         dispatches Go-eligible, Go-enabled operations to query-api before
         falling back to strawberry's own execution. Unconfigured
-        (``GO_API_QUERY_API_URL``/``GO_API_SCHEMA_DIGEST`` unset), it
-        behaves identically to the plain ``GraphQLRouter`` it replaces.
+        (``GO_API_QUERY_API_URL`` unset), it behaves identically to the
+        plain ``GraphQLRouter`` it replaces.
     """
 
     async def context_getter(request: Request) -> GraphQLContext:

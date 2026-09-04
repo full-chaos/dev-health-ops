@@ -37,9 +37,9 @@ port reproduces that "authorized org always wins" behavior exactly (see
 
 `main.go` mounts `/query` when `CLICKHOUSE_URI`,
 `GO_API_REGISTRY_POSTGRES_URI`, `GO_API_ENVELOPE_JWKS_PATH`,
-`GO_API_ENVELOPE_ISSUER`, `GO_API_ENVELOPE_AUDIENCE`, and
-`GO_API_SCHEMA_DIGEST` are all set — otherwise it stays Wave-0-empty (only
-`/healthz`/`/readyz`). `/query` requests are gated by `routeswitch.Mux` +
+`GO_API_ENVELOPE_ISSUER`, and `GO_API_ENVELOPE_AUDIENCE` are all set —
+otherwise it stays Wave-0-empty (only `/healthz`/`/readyz`). `/query`
+requests are gated by `routeswitch.Mux` +
 `PostgresSwitch` (reachable only when `go_api_routing_state.mode` is
 `canary`/`primary` for the SPECIFIC operation being dispatched —
 featureFlags, reviewEdges, cognitiveLoad, complexityTimeseries, and

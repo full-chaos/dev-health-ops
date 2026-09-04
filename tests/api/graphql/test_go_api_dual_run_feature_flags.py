@@ -389,7 +389,6 @@ def _start_go_server(
         "GO_API_ENVELOPE_JWKS_PATH": jwks_path,
         "GO_API_ENVELOPE_ISSUER": issuer,
         "GO_API_ENVELOPE_AUDIENCE": audience,
-        "GO_API_SCHEMA_DIGEST": producer_schema_digest(),
     }
     process = subprocess.Popen(
         [binary],

@@ -894,11 +894,59 @@ if [ "$HOST_OS" = Linux ]; then
   # no local re-sanitization needed, and there's only one place left that
   # can ever get this wrong.
   LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
+  # v4.8.6, found by confirmation-pass round #4 on bigboy (P1, mechanism
+  # EXECUTED, independently reproduced by the lane in an isolated temp
+  # dir -- never against the real shared /var/lib path): NAME passing
+  # NAME_ALLOWLIST_RE proves the STRING is safe, not that the FILESYSTEM
+  # PATH built from it is safe to use. /var/lib/oci-cache/lane-scratch/ is
+  # a SHARED parent every lane on this host writes into. If anything --
+  # another lane's bug, a leftover from an incident, or a hostile actor
+  # with write access to that shared parent -- pre-plants
+  # lane-scratch/$NAME as a SYMLINK to some other writable directory
+  # before this script runs, `mkdir -p` follows it silently (standard
+  # POSIX behaviour for an existing symlink-to-a-directory), and every
+  # mktemp call below (RW/RGOTMPDIR/RTMPDIR) then physically writes
+  # through the symlink, entirely outside the mandated lane root, with no
+  # error and nothing in this script's own output that would ever reveal
+  # it happened. Measured directly: `mkdir -p` on a pre-planted symlink
+  # resolves and writes through it every time.
+  #
+  # Fixed: refuse a lane-scratch/$NAME that is ALREADY a symlink, checked
+  # both BEFORE and AFTER the mkdir -p (a symlink could be planted in the
+  # gap between the two) -- this is meant to be exclusively this lane's
+  # own directory, reused round over round, so a symlink there is never
+  # something to silently follow, regardless of where it points. Then
+  # resolve the REAL physical path and verify it is actually CONTAINED
+  # under the real, resolved lane-scratch PARENT (both sides resolved via
+  # `pwd -P`, never compared to a hardcoded lexical string -- an ancestor
+  # symlink, if this host ever legitimately had one, would move both
+  # sides identically and never trip this check; only a redirection AT
+  # the final `$NAME` component itself does). From here on, every
+  # subsequent scratch dir is built from the RESOLVED path
+  # (LANE_SCRATCH_ROOT_REAL), not the lexical one, so a symlink planted at
+  # the lexical path AFTER this point can no longer redirect anything --
+  # the remaining TOCTOU window (someone replacing the REAL directory
+  # itself) is a materially smaller, harder-to-target attack than
+  # replacing a predictable, lexically-named symlink.
+  if [ -L "$LANE_SCRATCH_ROOT" ]; then
+    die "the mandated Linux scratch root $LANE_SCRATCH_ROOT already exists as a SYMLINK -- refusing to follow it (this is meant to be exclusively this lane's own directory; a pre-existing symlink here is never expected and never safe to trust)"
+  fi
   mkdir -p "$LANE_SCRATCH_ROOT" \
     || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"
-  RW_BASE="$LANE_SCRATCH_ROOT"
-  RGOTMPDIR_BASE="$LANE_SCRATCH_ROOT"
-  RTMPDIR_BASE="$LANE_SCRATCH_ROOT"
+  if [ -L "$LANE_SCRATCH_ROOT" ]; then
+    die "the mandated Linux scratch root $LANE_SCRATCH_ROOT became a SYMLINK between the check above and mkdir -p -- refusing to use it (this looks like a race, not an accident)"
+  fi
+  LANE_SCRATCH_PARENT_REAL=$(cd /var/lib/oci-cache/lane-scratch && pwd -P) \
+    || die "cannot resolve the physical path of the shared /var/lib/oci-cache/lane-scratch parent"
+  LANE_SCRATCH_ROOT_REAL=$(cd "$LANE_SCRATCH_ROOT" && pwd -P) \
+    || die "cannot resolve the physical path of $LANE_SCRATCH_ROOT after creating it"
+  case "$LANE_SCRATCH_ROOT_REAL" in
+    "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
+    *) die "the mandated Linux scratch root $LANE_SCRATCH_ROOT resolves to '$LANE_SCRATCH_ROOT_REAL', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it" ;;
+  esac
+  RW_BASE="$LANE_SCRATCH_ROOT_REAL"
+  RGOTMPDIR_BASE="$LANE_SCRATCH_ROOT_REAL"
+  RTMPDIR_BASE="$LANE_SCRATCH_ROOT_REAL"
 else
   RW_BASE="${TMPDIR:-/tmp}"
   RGOTMPDIR_BASE="/tmp"

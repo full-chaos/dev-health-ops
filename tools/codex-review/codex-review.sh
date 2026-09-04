@@ -572,6 +572,37 @@ done
 WT=$(cd "$WT" && pwd) || die "worktree $WT not found"
 git -C "$WT" rev-parse --git-dir >/dev/null 2>&1 || die "$WT is not a git worktree"
 NAME=${NAME:-$(basename "$WT")}
+# v4.8.6 (generalized 09-04, chris/team-lead ruling after the LANE-scratch
+# confirmation-pass finding): NAME becomes a path/filename component at
+# MULTIPLE sites below -- V/L (this round's own verdict+log filenames, a
+# few lines down), RESIDUE_DIR (preserve_residue(), later in the file), and
+# on Linux, LANE_SCRATCH_ROOT. A caller-supplied `-n` value is used
+# VERBATIM and untrusted; the DEFAULT (`basename "$WT"`) is safe on its own
+# merits (WT was just canonicalized to an absolute path above, and can
+# never literally basename to `.`/`..`), but a `-n` value never goes
+# through basename at all in the general (non-Linux-lane-scratch) path --
+# `-n '../../../../tmp/evil'` reached V/L and RESIDUE_DIR completely
+# unsanitized before this fix, letting a round's own "verdict" file land
+# anywhere the process can write, escaping OUTDIR entirely.
+#
+# Fixed with ONE mechanism, validated ONCE, here -- not a sanitize-then-
+# reject helper duplicated at every site NAME reaches (that duplication is
+# exactly how the earlier Linux-only `basename --`-then-case-check fix
+# still missed this: it protected the ONE site its own author was looking
+# at while leaving V/L/RESIDUE_DIR, which never called that helper at all,
+# wide open). A positive ALLOWLIST, not a blocklist: NAME must be
+# non-empty, start with an alnum, and contain only alnum/`.`/`_`/`-`
+# afterward -- which structurally also excludes `.`, `..`, and anything
+# containing `/` (a leading `.` already fails the first-character check),
+# so there is no separate "and also reject . and .." clause to keep in
+# sync with the regex by hand. `LC_ALL=C` pins the character-class
+# semantics so this can never accept something unexpected under a non-C
+# locale. Refuse outright on anything else -- no silent rewriting, no
+# best-effort basename-and-hope.
+NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+if ! printf '%s' "$NAME" | LC_ALL=C grep -Eq "$NAME_ALLOWLIST_RE"; then
+  die "-n/round name '$NAME' is not a safe path/filename component -- must be non-empty, start with a letter or digit, and contain only letters, digits, '.', '_', '-' afterward (this also rejects '.', '..', and anything containing '/'). Refusing to guess a substitute."
+fi
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}
 # v4.8.4: OUTDIR (and the log dir, which is the same directory -- see V/L
@@ -832,43 +863,18 @@ START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
 # runs now leaves an orphan under lane-scratch that --reap-stale cannot see.
 # Flagged for a follow-up, not blocking this change.
 if [ "$HOST_OS" = Linux ]; then
-  # SANITIZE $NAME before it becomes a path component: unlike the default
-  # `NAME=$(basename "$WT")` a few lines up (which can never contain a `/`),
-  # a caller-supplied `-n` value is used VERBATIM and is never validated --
-  # `-n '../../../../tmp'` makes the naive
-  # "/var/lib/oci-cache/lane-scratch/$NAME" resolve OUTSIDE the mandated
-  # root entirely (measured: it resolves to plain /tmp, exactly the
-  # location this whole change exists to stop using). `basename --` on the
-  # value collapses a MULTI-component traversal like that one to a single,
-  # harmless path segment (the same defensive idiom LANE/LANE_KEY already
-  # uses for $WT above).
-  #
-  # `basename --` is NOT sufficient by itself, though (found by this
-  # version's own confirmation-pass round, EXECUTED, independently
-  # reproduced by the lane): `basename -- '..'` returns `..` UNCHANGED --
-  # basename only strips a leading directory portion, it has no notion that
-  # `.` or `..` are themselves unsafe as a final path component. `-n '..'`
-  # therefore still resolves ONE level up, to /var/lib/oci-cache itself --
-  # the parent of go-build/go-mod/uv AND of every other lane's scratch
-  # directory. Explicitly reject a basename of `.` or `..` (and, belt and
-  # braces, an empty result) by dying rather than guessing a substitute --
-  # this is the same "fail closed on anything unexpected" posture as the
-  # `mkdir -p` failure a few lines below.
-  SAFE_LANE_NAME=$(basename -- "$NAME")
-  # `.`/`..` are the two escapes actually measured (see above); `/` is a
-  # third `basename` special-case swept in while fixing those two rather
-  # than found independently -- `basename -- "/"` returns the single
-  # character `/` (unlike every other input, which never contains a `/`
-  # once basename has run), which would make the "lane" subdirectory
-  # component vanish entirely and collapse onto the shared lane-scratch
-  # ROOT itself rather than a per-lane subdirectory under it. Not an
-  # upward escape like `.`/`..`, but still not a safe, named, per-lane
-  # directory -- rejected for the same reason.
-  case "$SAFE_LANE_NAME" in
-    '' | . | .. | /)
-      die "-n/lane name '$NAME' sanitizes to '$SAFE_LANE_NAME', which is not a safe lane-scratch directory name -- refusing to guess a substitute" ;;
-  esac
-  LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$SAFE_LANE_NAME"
+  # v4.8.6: this used to re-derive its own SAFE_LANE_NAME here via
+  # `basename --` plus a local `.`/`..`/`/` rejection case -- a
+  # sanitize-then-reject helper that protected ONLY this one site while
+  # V/L and RESIDUE_DIR (elsewhere in the file), which never called it,
+  # stayed wide open to the exact same `-n` value (see the "item 3" finding
+  # this generalized). Superseded: $NAME is now validated ONCE against a
+  # positive allowlist right after it's resolved (a few hundred lines up,
+  # search NAME_ALLOWLIST_RE) and this file dies before reaching here if it
+  # isn't safe -- so $NAME can be used directly as a path component below,
+  # no local re-sanitization needed, and there's only one place left that
+  # can ever get this wrong.
+  LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
   mkdir -p "$LANE_SCRATCH_ROOT" \
     || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"
   RW_BASE="$LANE_SCRATCH_ROOT"

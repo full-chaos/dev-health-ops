@@ -838,6 +838,24 @@ func dailyNativeFamilyRegistrations(
 		)
 	}
 
+	// CHAOS-4288: benchmarking reads testops_*/work_item/dora daily tables as
+	// HISTORY (30-90 day windows), not as this partition's fresh output, so it
+	// has no same-partition write-ordering dependency and registers pre_bridge.
+	// It is org-scoped compute and computes ONCE per org/day on the org's
+	// lexicographically-first repo partition -- see BenchmarkingExecutor's doc
+	// comment for why Python's per-repo re-run is fixed rather than mirrored.
+	if benchmarkingExecutor, benchmarkingErr := daily.NewBenchmarkingExecutor(clickhouseConnection, logger); benchmarkingErr == nil {
+		native["benchmarking"] = benchmarkingExecutor
+	} else {
+		logger.Error(
+			"benchmarking native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", benchmarkingErr,
+		)
+	}
+
 	postBridge = map[string]daily.NativeFamilyExecutor{}
 	// CHAOS-4287: compounding_risk reads repo_metrics_daily, which
 	// repo_user_commit writes in the SAME partition. repo_user_commit

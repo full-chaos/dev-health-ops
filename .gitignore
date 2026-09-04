@@ -22,6 +22,13 @@ benchmark**
 # commit succeeds carrying only the fixtures. Mirrors the src/ negations.
 !internal/**/benchmarking/
 !internal/**/benchmarking/**
+# ...and the LOOSE sibling files. The directory negations above do NOT
+# cover `internal/jobs/metrics/daily/benchmarking_native_executor.go` or
+# `benchmarking_integration_test.go`, which `benchmark**` also matches:
+# they sit BESIDE the package directory, not inside it. Missing this cost
+# a commit that silently carried neither file while its message described
+# both.
+!internal/**/benchmarking_*.go
 src/**/bench**/__pycache__/**
 demo-data**
 .flake8

@@ -122,7 +122,13 @@ func PercentileRank(values []float64, value float64) float64 {
 			equal++
 		}
 	}
-	return float64((float64(lower)+(float64(equal)*0.5))/float64(len(values))) * 100.0
+	// The product is barriered even though both operands are exact here
+	// (small integers and a halving, so no rounding can occur): the
+	// repo's TestNoUnguardedFloatFMAInJobsPackages lint is deliberately
+	// syntactic and does not reason about value ranges, and arguing with a
+	// conservative lint costs more than the barrier does.
+	halfEqual := float64(float64(equal) * 0.5)
+	return float64((float64(lower)+halfEqual)/float64(len(values))) * 100.0
 }
 
 // Mean ports _common.py:192-193: `sum(values) / len(values)`.

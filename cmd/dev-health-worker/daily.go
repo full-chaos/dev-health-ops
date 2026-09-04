@@ -168,6 +168,19 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				// CHAOS-5040: the fan-out is the only genuinely periodic,
+				// per-organization thing in this family, so it is where the
+				// blocked-run marker is kept current.
+				if blockedObserver, ok := observer.(jobruntime.DailyMetricsBlockedRunObserver); ok {
+					handler.SetBlockedRunObserver(blockedObserver)
+				}
+				// Said once, at boot, not counted per pass. A store without
+				// the capability is a deployment-constant wiring fact, but it
+				// silently disables the marker -- so if a future refactor
+				// swaps the store, the boot log is where that becomes visible.
+				if !daily.SupportsBlockedRunReconcile(store) {
+					logger.Warn("blocked-run reconcile disabled: store does not implement it")
+				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsDispatchArgs](
 					registry, spec, handler, dailyDependencies,
 				)

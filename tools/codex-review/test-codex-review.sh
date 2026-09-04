@@ -3,8 +3,8 @@
 # the v4.8.5 silent-death fix (warm step killed the whole script under
 # set -euo pipefail in a repo with no go.mod; see that changelog block), and
 # the v4.8.6 Linux-shared-cache change (bigboy GOCACHE/GOMODCACHE/GOPATH move
-# to the fleet-shared paths, never a per-round dir, never reaped; macOS
-# unchanged; see that changelog block).
+# to the fleet-shared /var/lib/oci-cache volume, never a per-round dir, never
+# reaped; macOS unchanged; see that changelog block).
 #
 # No test harness existed in this directory before this file (there is no
 # bats, no go test target, nothing else under tools/codex-review/ that runs
@@ -18,6 +18,21 @@
 # is followed by a signature grep that FAILS LOUDLY if the expected line is
 # not inside the extracted range -- a silent line-number drift after a
 # future edit must not make this file test the wrong code, or nothing.
+#
+# v4.8.6 SAFETY NOTE: the Linux GOCACHE/GOMODCACHE defaults are now literal,
+# host-absolute paths (/var/lib/oci-cache/go-build, /var/lib/oci-cache/go-mod)
+# -- NOT $HOME-relative any more -- so a test that actually SOURCES the
+# default-taking branch and lets its `mkdir -p` run would try to create real
+# directories under /var/lib on whatever machine runs this harness (this
+# Mac, a CI runner, anywhere). The "default" assertions below therefore use
+# a value-only extraction (the if/elif/else WITHOUT the two mkdir -p lines
+# that follow it) and check the resolved STRING only -- no directory is ever
+# created for the literal-default case by this harness. Every case that DOES
+# exercise the mkdir side effect (CODEX_REVIEW_* override, caller env
+# override, the macOS per-round path) points at a $WORK-scoped fake path, so
+# it never falls through to the real /var/lib/oci-cache default. The true
+# default's mkdir behaviour was proved separately, for real, on bigboy
+# itself (see the PR body / handoff for that dry run).
 #
 # Run: bash tools/codex-review/test-codex-review.sh   (from anywhere; the
 # script locates its own sibling codex-review.sh by its own path).
@@ -49,7 +64,7 @@ extract() {
 # The two helpers every extracted block below may call, pulled verbatim
 # from the top of codex-review.sh (same lines the real script defines
 # them at) so the extracted blocks run with production-identical warn/die.
-extract 379 380 'warn() {' "$WORK/helpers.sh"
+extract 399 400 'warn() {' "$WORK/helpers.sh"
 
 # A stub `uname` on PATH, so extracted blocks that read $HOST_OS (itself
 # resolved from `uname -s`) can be forced down either the Linux or the
@@ -73,7 +88,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 940 947 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 965 972 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -120,7 +135,7 @@ rm -rf "$D1B" 2>/dev/null || true
 # against two directories that share a basename but differ in full path,
 # assert the resulting LANE_KEY values differ.
 # ---------------------------------------------------------------------------
-extract 621 643 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
+extract 641 663 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
 
 mkdir -p "$WORK/lane-a/acr" "$WORK/lane-b/acr"
 LANE_KEY_A=$(
@@ -163,7 +178,7 @@ esac
 # via the same rm_rf_writable() defect-1 already proved, confirming the
 # trap tears it down.
 # ---------------------------------------------------------------------------
-extract 776 785 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 801 810 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -234,7 +249,7 @@ fi
 # run the real `mkdir -p "$OUTDIR"` line against a not-yet-existing path,
 # assert it now exists.
 # ---------------------------------------------------------------------------
-extract 562 562 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
+extract 582 582 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
 
 OUTDIR_TEST="$WORK/does/not/exist/yet"
 [ ! -e "$OUTDIR_TEST" ] || { echo "FAIL: test setup bug, $OUTDIR_TEST already exists" >&2; exit 1; }
@@ -258,7 +273,7 @@ fi
 # run the real TS/V/L/touch block verbatim against a fresh OUTDIR, assert
 # $L exists (and is empty) right after, well before any warm-step logic.
 # ---------------------------------------------------------------------------
-extract 575 587 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
+extract 595 607 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
 
 OUTDIR_LOG_TEST="$WORK/log-test-outdir"
 mkdir -p "$OUTDIR_LOG_TEST"
@@ -285,7 +300,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1073 1073 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1098 1098 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -343,7 +358,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1033 1117 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1058 1142 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -423,53 +438,62 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# v4.8.6: on Linux, RGOCACHE/RGOMODCACHE default to the SHARED bigboy paths
-# ($HOME/.cache/go-build, $HOME/go/pkg/mod), honour the caller's plain
+# v4.8.6: on Linux, RGOCACHE/RGOMODCACHE default to the SHARED
+# /var/lib/oci-cache volume (go-build, go-mod -- see the SAFETY NOTE at the
+# top of this file for why the "default" sub-test below never lets a real
+# mkdir run against that literal path), honour the caller's plain
 # GOCACHE/GOMODCACHE env vars when set, and CODEX_REVIEW_GOCACHE/
 # CODEX_REVIEW_GOMODCACHE still win over both. No $LANE_KEY/$TS suffix
 # appears in any of the three cases -- that suffix is what made the old
-# path per-round. Proof: run the real host-branch block verbatim (forced
-# onto the Linux branch via the uname stub), once per precedence level.
+# path per-round.
 # ---------------------------------------------------------------------------
-extract 621 682 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve.sh"
-grep -qF 'HOST_OS="$(uname -s)"' "$WORK/cache_resolve.sh" \
-  || { echo "FAIL: extracted cache_resolve.sh does not contain the HOST_OS resolution line" >&2; exit 1; }
-grep -qF 'HOME/.cache/go-build' "$WORK/cache_resolve.sh" \
-  || { echo "FAIL: extracted cache_resolve.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
+
+# VALUE-ONLY extraction: the if/elif/else WITHOUT the two mkdir -p lines
+# that follow it in the real script (those start right after line 698 --
+# see codex-review.sh). Used ONLY for the (a) default-value check below, so
+# that case never touches the filesystem at all.
+extract 641 698 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_value_only.sh"
+grep -qF 'HOST_OS="$(uname -s)"' "$WORK/cache_resolve_value_only.sh" \
+  || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the HOST_OS resolution line" >&2; exit 1; }
+grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
+  || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
+if grep -qE '^mkdir -p "\$RGOCACHE"' "$WORK/cache_resolve_value_only.sh"; then
+  echo "FAIL: cache_resolve_value_only.sh unexpectedly contains a mkdir line -- the value-only/mkdir split in codex-review.sh has drifted, fix the extract range before trusting test (a) below" >&2
+  exit 1
+fi
+
+# FULL extraction, mkdir lines included -- used for (b)/(c)/(d), which all
+# point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
+# never fall through to the real /var/lib/oci-cache default, so their mkdir
+# is always safe.
+extract 641 705 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_full.sh"
 
 make_uname_stub Linux
-run_cache_resolve() {
-  # $1=WT $2=TS  env GOCACHE/GOMODCACHE/CODEX_REVIEW_GOCACHE/CODEX_REVIEW_GOMODCACHE/HOME
-  # already exported by the caller before invoking this.
-  (
-    PATH="$STUBBIN_UNAME:$PATH"
-    WT="$1" TS="$2"
-    # shellcheck source=/dev/null
-    source "$WORK/helpers.sh"
-    # shellcheck source=/dev/null
-    source "$WORK/cache_resolve.sh"
-    printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
-  )
-}
 
-# (a) Linux defaults: no caller env, no CODEX_REVIEW_* override -> the
-# shared fleet paths, created (mkdir -p ran), under a fake $HOME so this
-# never touches the real one.
-FAKE_HOME_A="$WORK/fake-home-a"
-mkdir -p "$FAKE_HOME_A"
+# (a) Linux DEFAULTS: no caller env, no CODEX_REVIEW_* override -> the
+# literal shared-volume paths. VALUE ONLY -- no mkdir runs, see the
+# extraction above, so this is safe on any host including this one.
 unset GOCACHE GOMODCACHE CODEX_REVIEW_GOCACHE CODEX_REVIEW_GOMODCACHE 2>/dev/null || true
-RESOLVE_A=$(HOME="$FAKE_HOME_A" run_cache_resolve "$WORK/lane-a/acr" "19700101T000000-a")
+RESOLVE_A=$(
+  PATH="$STUBBIN_UNAME:$PATH"
+  WT="$WORK/lane-a/acr" TS="19700101T000000-a"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/cache_resolve_value_only.sh"
+  printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
+)
 RGOCACHE_A=$(printf '%s' "$RESOLVE_A" | sed -n 's/^RGOCACHE=//p')
 RGOMODCACHE_A=$(printf '%s' "$RESOLVE_A" | sed -n 's/^RGOMODCACHE=//p')
-if [ "$RGOCACHE_A" = "$FAKE_HOME_A/.cache/go-build" ] && [ -d "$RGOCACHE_A" ]; then
-  ok "v4.8.6a: Linux default RGOCACHE is \$HOME/.cache/go-build, created ($RGOCACHE_A)"
+if [ "$RGOCACHE_A" = "/var/lib/oci-cache/go-build" ]; then
+  ok "v4.8.6a: Linux default RGOCACHE is /var/lib/oci-cache/go-build ($RGOCACHE_A)"
 else
-  notok "v4.8.6a: Linux default RGOCACHE wrong (got '$RGOCACHE_A', wanted '$FAKE_HOME_A/.cache/go-build')"
+  notok "v4.8.6a: Linux default RGOCACHE wrong (got '$RGOCACHE_A', wanted '/var/lib/oci-cache/go-build')"
 fi
-if [ "$RGOMODCACHE_A" = "$FAKE_HOME_A/go/pkg/mod" ] && [ -d "$RGOMODCACHE_A" ]; then
-  ok "v4.8.6a: Linux default RGOMODCACHE is \$HOME/go/pkg/mod, created ($RGOMODCACHE_A)"
+if [ "$RGOMODCACHE_A" = "/var/lib/oci-cache/go-mod" ]; then
+  ok "v4.8.6a: Linux default RGOMODCACHE is /var/lib/oci-cache/go-mod ($RGOMODCACHE_A)"
 else
-  notok "v4.8.6a: Linux default RGOMODCACHE wrong (got '$RGOMODCACHE_A', wanted '$FAKE_HOME_A/go/pkg/mod')"
+  notok "v4.8.6a: Linux default RGOMODCACHE wrong (got '$RGOMODCACHE_A', wanted '/var/lib/oci-cache/go-mod')"
 fi
 case "$RGOCACHE_A$RGOMODCACHE_A" in
   *19700101T000000-a*) notok "v4.8.6a: a per-round \$TS suffix leaked into the Linux shared-cache path -- it is supposed to be gone" ;;
@@ -477,31 +501,45 @@ case "$RGOCACHE_A$RGOMODCACHE_A" in
 esac
 
 # (b) Linux honours the CALLER's plain GOCACHE/GOMODCACHE (new in v4.8.6)
-# over the shared-path default.
-FAKE_HOME_B="$WORK/fake-home-b"
-mkdir -p "$FAKE_HOME_B"
+# over the shared-volume default. Points at $WORK-scoped fake paths, so
+# the FULL (mkdir-including) extraction is safe to use here.
 CALLER_GOCACHE="$WORK/caller-gocache"
 CALLER_GOMODCACHE="$WORK/caller-gomodcache"
 unset CODEX_REVIEW_GOCACHE CODEX_REVIEW_GOMODCACHE 2>/dev/null || true
-RESOLVE_B=$(HOME="$FAKE_HOME_B" GOCACHE="$CALLER_GOCACHE" GOMODCACHE="$CALLER_GOMODCACHE" \
-  run_cache_resolve "$WORK/lane-b/acr" "19700101T000000-b")
+RESOLVE_B=$(
+  PATH="$STUBBIN_UNAME:$PATH"
+  WT="$WORK/lane-b/acr" TS="19700101T000000-b"
+  GOCACHE="$CALLER_GOCACHE" GOMODCACHE="$CALLER_GOMODCACHE"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/cache_resolve_full.sh"
+  printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
+)
 RGOCACHE_B=$(printf '%s' "$RESOLVE_B" | sed -n 's/^RGOCACHE=//p')
 RGOMODCACHE_B=$(printf '%s' "$RESOLVE_B" | sed -n 's/^RGOMODCACHE=//p')
-if [ "$RGOCACHE_B" = "$CALLER_GOCACHE" ] && [ "$RGOMODCACHE_B" = "$CALLER_GOMODCACHE" ]; then
-  ok "v4.8.6b: Linux honours the caller's own GOCACHE/GOMODCACHE env values over the shared default"
+if [ "$RGOCACHE_B" = "$CALLER_GOCACHE" ] && [ "$RGOMODCACHE_B" = "$CALLER_GOMODCACHE" ] \
+   && [ -d "$RGOCACHE_B" ] && [ -d "$RGOMODCACHE_B" ]; then
+  ok "v4.8.6b: Linux honours the caller's own GOCACHE/GOMODCACHE env values over the shared default, and creates them"
 else
   notok "v4.8.6b: caller GOCACHE/GOMODCACHE not honoured (got RGOCACHE='$RGOCACHE_B', RGOMODCACHE='$RGOMODCACHE_B')"
 fi
 
 # (c) CODEX_REVIEW_GOCACHE/CODEX_REVIEW_GOMODCACHE still win over the
 # caller's plain env vars (existing v4.8.2 override, unchanged precedence).
-FAKE_HOME_C="$WORK/fake-home-c"
-mkdir -p "$FAKE_HOME_C"
 OVERRIDE_GOCACHE="$WORK/override-gocache"
 OVERRIDE_GOMODCACHE="$WORK/override-gomodcache"
-RESOLVE_C=$(HOME="$FAKE_HOME_C" GOCACHE="$CALLER_GOCACHE" GOMODCACHE="$CALLER_GOMODCACHE" \
-  CODEX_REVIEW_GOCACHE="$OVERRIDE_GOCACHE" CODEX_REVIEW_GOMODCACHE="$OVERRIDE_GOMODCACHE" \
-  run_cache_resolve "$WORK/lane-c/acr" "19700101T000000-c")
+RESOLVE_C=$(
+  PATH="$STUBBIN_UNAME:$PATH"
+  WT="$WORK/lane-c/acr" TS="19700101T000000-c"
+  GOCACHE="$CALLER_GOCACHE" GOMODCACHE="$CALLER_GOMODCACHE"
+  CODEX_REVIEW_GOCACHE="$OVERRIDE_GOCACHE" CODEX_REVIEW_GOMODCACHE="$OVERRIDE_GOMODCACHE"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/cache_resolve_full.sh"
+  printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
+)
 RGOCACHE_C=$(printf '%s' "$RESOLVE_C" | sed -n 's/^RGOCACHE=//p')
 RGOMODCACHE_C=$(printf '%s' "$RESOLVE_C" | sed -n 's/^RGOMODCACHE=//p')
 if [ "$RGOCACHE_C" = "$OVERRIDE_GOCACHE" ] && [ "$RGOMODCACHE_C" = "$OVERRIDE_GOMODCACHE" ]; then
@@ -512,7 +550,8 @@ fi
 unset GOCACHE GOMODCACHE CODEX_REVIEW_GOCACHE CODEX_REVIEW_GOMODCACHE 2>/dev/null || true
 
 # (d) macOS branch is unchanged: still the per-round /tmp path keyed on
-# LANE_KEY-TS. Same block, uname stubbed to Darwin instead.
+# LANE_KEY-TS. Same (full) block, uname stubbed to Darwin instead -- always
+# resolves under /tmp regardless of caller env, so this is also safe.
 make_uname_stub Darwin
 RESOLVE_D=$(
   PATH="$STUBBIN_UNAME:$PATH"
@@ -520,7 +559,7 @@ RESOLVE_D=$(
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   # shellcheck source=/dev/null
-  source "$WORK/cache_resolve.sh"
+  source "$WORK/cache_resolve_full.sh"
   printf 'RGOCACHE=%s\nRGOMODCACHE=%s\nLANE_KEY=%s\n' "$RGOCACHE" "$RGOMODCACHE" "$LANE_KEY"
 )
 RGOCACHE_D=$(printf '%s' "$RESOLVE_D" | sed -n 's/^RGOCACHE=//p')
@@ -536,12 +575,16 @@ fi
 rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# v4.8.6: GOPATH on Linux follows the same precedence as GOCACHE/GOMODCACHE
-# above (CODEX_REVIEW_GOPATH > caller's GOPATH > $HOME/go), no per-round
-# mktemp dir. macOS keeps its per-round mktemp'd GOPATH (already proved as
-# "defect 3" above, with HOST_OS forced to Darwin there).
+# v4.8.6: GOPATH on Linux follows the same override precedence as
+# GOCACHE/GOMODCACHE above (CODEX_REVIEW_GOPATH > caller's GOPATH >
+# $HOME/go), no per-round mktemp dir. Unlike GOCACHE/GOMODCACHE, GOPATH's
+# Linux default IS $HOME-relative (see the codex-review.sh comment: neither
+# ruling names a GOPATH target, so it keeps Go's own $HOME/go default), so
+# sandboxing it with a fake $HOME is sufficient -- no /var/lib literal-path
+# safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
+# proved as "defect 3" above, with HOST_OS forced to Darwin there).
 # ---------------------------------------------------------------------------
-extract 776 785 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 801 810 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 make_uname_stub Linux
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
@@ -587,7 +630,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 965 984 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 990 1009 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 

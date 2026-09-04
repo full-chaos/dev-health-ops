@@ -20,6 +20,75 @@ fail with pgx.ErrNoRows -> ErrUnknownRoute -> joboutbox.ErrUnavailable on the
 very first reconciler tick, with no Postgres-side error to find -- CHAOS-3092
 PR-B's live incident (metrics.remaining.work_item_attribution, fixed by
 alembic 0123, same pattern as 0094 and 0115).
+
+PARSER CONTRACT (written down explicitly per team-lead's request before
+codex round 3, after two rounds of adversarial review already tightened
+it -- read this before extending any extractor below, and keep it in sync
+with the code):
+
+  1. FILE-LOCAL ONLY. Each migration file is analyzed independently, using
+     only that file's own AST. There is no cross-module resolution: a table
+     object imported from another module, with no local `sa.table()`/
+     `sa.Table()` call anywhere in the migration file itself, is invisible.
+     This is a deliberate design boundary, not a bug (see
+     _MigrationModule's docstring) -- verified to have zero occurrences in
+     the current 124-file migration history.
+
+  2. ROUTES-TABLE IDENTITY is recognized only as: an inline
+     `sa.table("worker_job_routes", ...)` or
+     `sa.Table("worker_job_routes", ...)` call; a call to a local function
+     whose EVERY `return` statement resolves (directly or transitively
+     through another such function) to one of those; or a variable whose
+     EVERY assignment anywhere in the file resolves to one of those. A
+     function or variable with a MIXED resolution (the routes table on one
+     branch/assignment, something else on another) is AMBIGUOUS, not
+     routes-identified -- this parser has no flow-sensitive/branch
+     analysis, so it never guesses which one governs at a given call site.
+
+  3. RECOGNIZED SEED (insert) SHAPES, only when the receiver is
+     unambiguously the routes table (rule 2): `X.insert().values(job_kind=
+     <value>)`; `X.insert().values(<bulk list/listcomp>)` (positional, no
+     job_kind keyword); `bind_or_op.execute(X.insert(), <bulk
+     list/listcomp>)`; `op.bulk_insert(X, <bulk list/listcomp>)`.
+
+  4. RECOGNIZED RETIREMENT (delete) SHAPES, only when the receiver is
+     unambiguously the routes table: `X.delete().where(<routes>.c.job_kind
+     .in_(<value>))`; `X.delete().where(<routes>.c.job_kind == <value>)`.
+
+  5. A job_kind VALUE resolves only to a literal string constant, or a
+     module-level name assigned (exactly once) a literal str/tuple(str).
+
+  6. FAILS CLOSED (raises SeedPatternUnrecognized -- a loud, specific test
+     failure, never a silently smaller seeded set) when: a raw string this
+     file's code could produce anywhere reachable from upgrade() (a
+     literal, a `+`-concatenation, or an f-string with resolvable
+     interpolations) matches a DML pattern naming the routes table
+     directly; a recognized insert/delete shape's receiver IS the routes
+     table but its job_kind value or delete condition can't be resolved to
+     a literal; a `.delete().where(...)` on the routes table whose
+     condition isn't job_kind-based at all; or a call/variable receiver is
+     AMBIGUOUS per rule 2.
+
+  7. Everything else -- a call whose receiver definitively resolves to
+     something OTHER than the routes table, and is not ambiguous -- is
+     SILENTLY not counted. This is correct, not a gap: it is genuinely
+     unrelated code (an insert/delete against some other table), and the
+     file-level pre-filter (rule 1's substring check) is deliberately
+     broad, so most files it lets through will contain plenty of code this
+     parser correctly has nothing to say about.
+
+  The property this contract is meant to guarantee: this parser NEVER
+  silently counts something as a worker_job_routes seed or retirement
+  unless it can prove that structurally (rules 3-5); anything
+  routes-adjacent it cannot fully resolve is a loud failure (rule 6), never
+  a silent guess. A known, deliberately unhandled shape (rule 1's
+  cross-module case; also multi-target assignment `a = b = sa.table(...)`;
+  an aliased function reference `rt = _routes; rt()`) can only ever cause
+  this parser to UNDER-count (a real seed goes unrecognized, surfacing as a
+  false "missing" on the coverage assertion below -- annoying, but safe:
+  it never hides a genuine gap) -- never to OVER-count. If a new extractor
+  is ever added, preserve that asymmetry: err toward failing loud or
+  missing silently, never toward a guessed accept.
 """
 
 from __future__ import annotations
@@ -94,16 +163,24 @@ class _MigrationModule:
         self.local_aliases: dict[str, ast.expr] = {}
         self.routes_factory_functions: set[str] = set()
         self.routes_variable_names: set[str] = set()
-        # Names ever bound to something OTHER than a routes-table expression
-        # ANYWHERE in the file, in addition to (at some point) a routes-table
-        # expression -- e.g. `routes = _routes(); routes = _audit()` (codex
-        # round 2, P1: rebinding a name after it was marked routes-backed let
-        # a later insert through the SAME name silently count against a
-        # DIFFERENT table). This parser has no flow-sensitive analysis, so a
-        # rebound name is inherently ambiguous from here, and is
-        # deliberately excluded from routes_variable_names AND flagged so
-        # the extractors below can fail closed instead of guessing which
-        # assignment governs at the use site.
+        # Functions/names that are AMBIGUOUS with respect to the routes
+        # table: a function with MULTIPLE distinct return shapes, at least
+        # one of which is the routes table and at least one of which is not
+        # (a CONDITIONAL factory, e.g. `def _routes(): return
+        # sa.table("worker_job_routes",...) if FLAG else
+        # sa.table("audit_log",...)` -- confirmed a real false-ACCEPT risk
+        # while verifying round 2's fixes, not a codex finding: an
+        # unconditional-factory assumption meant every call to such a
+        # function was wrongly trusted as the routes table, even on the
+        # branch that returns something else); or a variable rebound to a
+        # non-routes value after being routes-bound elsewhere (codex round
+        # 2, P1), or bound to an ambiguous factory's call. This parser has
+        # no flow-sensitive/branch analysis, so any of these is inherently
+        # unresolvable from here -- deliberately excluded from the
+        # corresponding "known routes" set AND flagged so the extractors
+        # below fail closed instead of guessing which shape governs at the
+        # use site.
+        self.ambiguous_factory_functions: set[str] = set()
         self.ambiguous_variable_names: set[str] = set()
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -114,30 +191,38 @@ class _MigrationModule:
                         self.constants[target.id] = literal
             elif isinstance(node, ast.FunctionDef):
                 self.functions[node.name] = node
-        # A function is a "routes factory" if it directly returns the
-        # worker_job_routes TableClause -- e.g. every migration's own
-        # `def _routes(): return sa.table("worker_job_routes", ...)` -- OR
-        # if it returns a call to another already-known routes factory (a
-        # "factory of a factory": `def _r2(): return _routes()`, codex round
-        # 2, P1). Iterated to a fixed point since a transitive factory's own
-        # dependency may be defined later in the file.
+        # A function is a "routes factory" only if EVERY one of its `return`
+        # statements resolves to the worker_job_routes TableClause (directly,
+        # e.g. every migration's own `def _routes(): return
+        # sa.table("worker_job_routes", ...)`, or transitively through
+        # another already-known routes factory -- a "factory of a factory":
+        # `def _r2(): return _routes()`, codex round 2, P1). A function with
+        # ANY other return shape mixed in is ambiguous, not a factory --
+        # see the class docstring's note above. Iterated to a fixed point
+        # since a transitive factory's own dependency may be defined later
+        # in the file, or may itself only become known-ambiguous once ITS
+        # dependency resolves.
         changed = True
         while changed:
             changed = False
             for name, func in self.functions.items():
-                if name in self.routes_factory_functions:
+                if (
+                    name in self.routes_factory_functions
+                    or name in self.ambiguous_factory_functions
+                ):
                     continue
+                shapes: set[str] = set()
                 for stmt in ast.walk(func):
                     if isinstance(stmt, ast.Return) and stmt.value is not None:
-                        value = stmt.value
-                        if _is_routes_table_call(value) or (
-                            isinstance(value, ast.Call)
-                            and isinstance(value.func, ast.Name)
-                            and value.func.id in self.routes_factory_functions
-                        ):
-                            self.routes_factory_functions.add(name)
-                            changed = True
-                            break
+                        shapes.add(self._classify_routes_shape(stmt.value))
+                if not shapes or shapes == {"other"}:
+                    continue  # not routes-related at all; leave it alone
+                if shapes == {"routes"}:
+                    self.routes_factory_functions.add(name)
+                    changed = True
+                elif "other" in shapes or "ambiguous" in shapes:
+                    self.ambiguous_factory_functions.add(name)
+                    changed = True
         # Passthrough-filter local aliases, e.g. 0064's
         # `missing = [kind for kind in _KINDS if kind not in existing]`.
         # Resolving through the `if` clause would mean simulating runtime
@@ -149,9 +234,11 @@ class _MigrationModule:
         # across two different helpers.
         #
         # The same pass also collects routes-table variable bindings, e.g.
-        # `routes = _routes()` or an inline `routes = sa.table("worker_job_routes", ...)`.
-        routes_bound: set[str] = set()
-        non_routes_bound: set[str] = set()
+        # `routes = _routes()` or an inline `routes = sa.table("worker_job_routes", ...)`,
+        # using the same routes/ambiguous/other classification as above --
+        # a name is only trusted as the routes table if EVERY assignment to
+        # it, anywhere in the file, classifies as "routes".
+        binding_shapes: dict[str, set[str]] = {}
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.Assign)
@@ -169,16 +256,30 @@ class _MigrationModule:
                     and value.elt.id == generator.target.id
                 ):
                     self.local_aliases[target_name] = generator.iter
-            if _is_routes_table_call(value) or (
-                isinstance(value, ast.Call)
-                and isinstance(value.func, ast.Name)
-                and value.func.id in self.routes_factory_functions
-            ):
-                routes_bound.add(target_name)
-            else:
-                non_routes_bound.add(target_name)
-        self.ambiguous_variable_names = routes_bound & non_routes_bound
-        self.routes_variable_names = routes_bound - self.ambiguous_variable_names
+            binding_shapes.setdefault(target_name, set()).add(
+                self._classify_routes_shape(value)
+            )
+        for name, shapes in binding_shapes.items():
+            if shapes == {"routes"}:
+                self.routes_variable_names.add(name)
+            elif "other" in shapes and "routes" in shapes:
+                self.ambiguous_variable_names.add(name)
+            elif "ambiguous" in shapes:
+                self.ambiguous_variable_names.add(name)
+
+    def _classify_routes_shape(self, value: ast.expr) -> str:
+        """ "routes" (provably the worker_job_routes TableClause), "ambiguous"
+        (a call to an ambiguous factory function -- unresolvable, not
+        provably one or the other), or "other" (anything else, including a
+        call to a function unrelated to the routes table)."""
+        if _is_routes_table_call(value):
+            return "routes"
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            if value.func.id in self.routes_factory_functions:
+                return "routes"
+            if value.func.id in self.ambiguous_factory_functions:
+                return "ambiguous"
+        return "other"
 
     def resolve(self, node: ast.expr) -> tuple[str, ...] | None:
         if isinstance(node, ast.Name):
@@ -211,7 +312,13 @@ class _MigrationModule:
         )
 
     def is_ambiguous_receiver(self, node: ast.expr) -> bool:
-        return isinstance(node, ast.Name) and node.id in self.ambiguous_variable_names
+        if isinstance(node, ast.Name):
+            return node.id in self.ambiguous_variable_names
+        return bool(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in self.ambiguous_factory_functions
+        )
 
     def _reachable_functions(self, entry_point: str) -> list[ast.FunctionDef]:
         if entry_point not in self.functions:
@@ -936,3 +1043,41 @@ def test_factory_of_a_factory_is_recognized_as_the_routes_table(
     seeded, retired = _collect_seed_state(synthetic)
     assert not seeded
     assert retired == {"metrics.remaining.capacity"}
+
+
+def test_conditional_factory_fails_closed_instead_of_being_trusted_unconditionally(
+    tmp_path: Path,
+) -> None:
+    """Found by the lane while self-auditing before round 3 (not a codex
+    finding): a "factory" function that returns the routes table on only
+    ONE branch (`def _routes(): return sa.table("worker_job_routes", ...)
+    if FLAG else sa.table("audit_log", ...)`) used to be trusted as an
+    UNCONDITIONAL routes factory the instant ANY of its return statements
+    matched -- so every call to it was wrongly counted as the routes table,
+    even on the branch that actually returns something else. This is a
+    genuine false-ACCEPT (the dangerous direction, not merely a missed
+    seed): a real insert into `audit_log` at runtime could have been
+    silently counted as covering a `worker_job_routes` family. Must fail
+    closed instead of guessing which branch governs at the call site.
+    """
+    synthetic = tmp_path / "9990_conditional_factory.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            FLAG = False
+
+            def _routes():
+                if FLAG:
+                    return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+                return sa.table("audit_log", sa.column("job_kind", sa.String()))
+
+            def upgrade():
+                op.execute(_routes().insert().values(job_kind="metrics.remaining.capacity"))
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="ambiguous|bound to"):
+        _collect_seed_state(synthetic)

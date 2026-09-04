@@ -22,6 +22,8 @@ package investmentexplain
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -160,8 +162,66 @@ func newProviderForOrg(
 			}
 			return newProviderFromCredentials(kind, creds.APIKey, creds.BaseURL, model)
 		}
+		// Not usable via org BYO. team-lead ruling (codex round 1, P2 --
+		// SSRF-fallback telemetry, the one finding this package's own
+		// doc.go already flagged as a known, deferred gap): as the FIRST
+		// production caller of this package, log the fallback -- but
+		// ONLY when it happened because the org's own base_url
+		// specifically failed the SSRF guard, not for the overwhelmingly
+		// common "org configured no BYO for this provider at all" case
+		// (that would be noise, not a security signal). Org id + URL
+		// scheme/host only -- never the full URL, its path/query, or any
+		// credential value.
+		logOrgBaseURLSSRFFallback(ctx, orgSettings, orgID, string(kind))
 	}
 	return newProviderFromEnv(kind)
+}
+
+// logOrgBaseURLSSRFFallback re-checks the org's RAW (unvalidated)
+// base_url against the SSRF guard specifically to decide whether THIS
+// fallback (platform env instead of org credentials) has a security
+// signal worth logging -- every other "not usable" reason (no BYO
+// configured, incomplete api_key) is silent, matching Python's own
+// fallback paths, none of which have an equivalent audit event either.
+// Indirected through a package var so a test can capture what would
+// have been logged without parsing real log output.
+var logOrgBaseURLSSRFFallback = func(ctx context.Context, orgSettings llmorgsettings.Resolver, orgID, provider string) {
+	rawURL, configured, err := orgSettings.RawBaseURL(ctx, orgID, provider)
+	if err != nil || !configured || rawURL == "" {
+		return
+	}
+	if ok, _ := llmorgsettings.ValidateBaseURL(ctx, rawURL); ok {
+		return // not usable for some OTHER reason (e.g. incomplete api_key)
+	}
+	scheme, host := schemeAndHostForLogging(rawURL)
+	log.Printf(
+		"investment/explain: org %s configured a BYO base_url for provider %s that failed "+
+			"the SSRF guard (scheme=%s host=%s); falling back to the platform default provider",
+		orgID, provider, scheme, host,
+	)
+}
+
+// schemeAndHostForLogging extracts ONLY the scheme and host from a
+// base_url for a log line -- never the path, query, userinfo, or any
+// other component, so a credential accidentally embedded in the URL
+// (userinfo, a query-string API key) can never reach a log. An
+// unparseable URL logs as "invalid"/"invalid" rather than the raw value.
+func schemeAndHostForLogging(rawURL string) (scheme, host string) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "invalid", "invalid"
+	}
+	if parsed.Scheme == "" {
+		scheme = "unknown"
+	} else {
+		scheme = parsed.Scheme
+	}
+	if parsed.Hostname() == "" {
+		host = "unknown"
+	} else {
+		host = parsed.Hostname()
+	}
+	return scheme, host
 }
 
 // newProviderFromCredentials/newProviderFromEnv are newProviderForOrg's

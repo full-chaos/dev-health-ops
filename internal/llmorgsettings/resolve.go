@@ -160,6 +160,31 @@ func (s Store) Model(ctx context.Context, orgID, provider string) (string, error
 	return settings[keyModel], nil
 }
 
+// RawBaseURL returns the org's raw, UNVALIDATED base_url for `provider`
+// (empty when the org has not configured this provider at all) --
+// deliberately bypassing the SSRF guard and completeness checks
+// Credentials()/Matches() apply. CHAOS-5006 PR3 (this package's first
+// production caller) uses it ONLY to distinguish, for its own fallback
+// telemetry, "org never configured BYO for this provider" from "org
+// configured BYO but its base_url specifically failed the SSRF guard" --
+// Credentials()'s bare ok=false collapses both into one signal, which is
+// deliberately not enough to decide whether an SSRF-fallback log line is
+// warranted (this package's own doc.go still does not write that log
+// itself -- see its documented, still-open gap: the Python audit-log
+// write this mirrors is a separate, larger follow-up).
+func (s Store) RawBaseURL(ctx context.Context, orgID, provider string) (baseURL string, configured bool, err error) {
+	settings, err := s.loadGatedSettings(ctx, orgID)
+	if err != nil {
+		return "", false, err
+	}
+	configuredProvider := normalizeProvider(settings[keyProvider])
+	requested := normalizeProvider(provider)
+	if requested != "auto" && requested != configuredProvider {
+		return "", false, nil
+	}
+	return settings[keyBaseURL], true, nil
+}
+
 // Resolver is the seam a caller outside this package (CHAOS-5006 PR3:
 // cmd/query-api/internal/investmentexplain) depends on instead of the
 // concrete Store type -- an interface, not internal/jobs/investment/
@@ -179,6 +204,7 @@ type Resolver interface {
 	Credentials(ctx context.Context, orgID, provider string) (Credentials, bool, error)
 	Matches(ctx context.Context, orgID, provider string) (bool, error)
 	Model(ctx context.Context, orgID, provider string) (string, error)
+	RawBaseURL(ctx context.Context, orgID, provider string) (baseURL string, configured bool, err error)
 }
 
 var _ Resolver = Store{}

@@ -3,9 +3,6 @@ package units
 import (
 	"strings"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
-
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -16,68 +13,40 @@ import (
 // a divergence does not fail loudly -- it produces a DIFFERENT BUCKET, and the
 // two planes' dashboards disagree while both look healthy.
 
-// pythonLower reproduces Python's str.lower().
+// Case folding here is pythonparity.Lower (CPython's str.lower(), NOT
+// strings.ToLower). The full rationale -- SpecialCasing, why language.Und is
+// correct BY DESIGN rather than by observed agreement, and the measured
+// 31-rune Final_Sigma lookahead divergence -- now lives on that function's doc
+// comment, which this package's local copy was promoted into (CHAOS-4280).
 //
-// # THIS IS NOT strings.ToLower
+// # WHY THAT DIVERGENCE IS STILL CONTAINED FOR THIS PACKAGE
 //
-// str.lower() applies the full Unicode lowercase mapping including the
-// SpecialCasing rules; strings.ToLower maps rune by rune. Measured divergences:
-//
-//	"ΟΔΟΣ".lower() -> "οδος"        final sigma, context-sensitive
-//	                  strings.ToLower gives "οδοσ" -- no such rule
-//	"İ".lower()    -> "i" + U+0307, TWO code points
-//	                  unicode.ToLower gives one, dropping the combining dot
-//
-// cases.Lower(language.Und) is correct BY DESIGN, not by observed agreement, and
-// the distinction matters because the second kind evaporates on a dependency
-// bump. CPython's str.lower() is locale-INDEPENDENT by definition: it applies
-// the default Unicode mapping and never the Turkish (dotless i) or Lithuanian
-// tailorings, whatever the process locale. Und is the caser with no tailoring,
-// so it is the only correct choice here -- not merely the one that currently
-// agrees. A future x/text release changing a DEFAULT would be a bug in x/text;
-// one changing a tailoring cannot reach us.
-//
-// (Raised by lane-pathb-go: my first wording stated the agreement without the
-// reason, which reads as a coincidence a reader has no way to re-derive.)
-//
-// # A MEASURED, BOUNDED DIVERGENCE THAT IS CONTAINED RATHER THAN IGNORED
-//
-// x/text is not a complete substitute either. Its Final_Sigma lookahead is
-// BOUNDED where CPython's is not, and the boundary is exactly 31 case-ignorable
-// runes. Found by a codex round; reproduced here before being accepted:
-//
-//	("A\u03a3" + "." * n + "B").lower()      n <= 30      n >= 31
-//	  CPython 3.14.7                          sigma        sigma      (medial)
-//	  x/text cases.Lower(Und)                 sigma        FINAL      <- differs
-//
-// Final_Sigma says a capital sigma is final only when it is NOT followed by a
-// cased letter, skipping case-ignorable characters in between. With 31 dots and
-// then "B" the sigma is not final, and CPython sees that at any distance;
-// x/text's scan gives up and concludes "no following cased letter".
-//
-// This is NOT accepted on the grounds that a 31-dot model name is implausible.
-// Implausibility is not a measurement, and this lane has been wrong that way
-// before. It is accepted because it is CONTAINED, provably:
+// x/text's Final_Sigma lookahead is bounded at 31 case-ignorable runes and
+// CPython's is not, so the two can disagree on which sigma form a long string
+// lowercases to. That is accepted HERE -- not on the grounds that a 31-dot
+// model name is implausible (implausibility is not a measurement, and this
+// lane has been wrong that way before), but because it is CONTAINED, provably:
 //
 //   - both sigma spellings are non-ASCII;
 //   - every entry in every allow-list here is ASCII;
 //   - every prefix ModelBucket tests is ASCII.
 //
-// So a string differing only in which sigma it carries takes the same branch and
-// lands in the same bucket, whichever form appears.
+// So a string differing only in which sigma it carries takes the same branch
+// and lands in the same bucket, whichever form appears.
 //
 // TestSigmaFormCannotChangeABucket asserts exactly that, and is the reason this
-// stays acceptable. It fails the moment the containment does -- if pythonLower
-// is exported, if a non-ASCII entry joins an allow-list, or if a non-ASCII
-// prefix is added. At that point this comment stops being a justification and
-// the Final_Sigma rule has to be implemented directly.
+// stays acceptable. It fails the moment the containment does -- if a non-ASCII
+// entry joins an allow-list, or a non-ASCII prefix is added. At that point this
+// comment stops being a justification and Final_Sigma has to be implemented
+// directly.
 //
-// A caser is not safe for concurrent use, so one is constructed per call rather
-// than shared. These are called once per telemetry emission, not in a loop over
-// rows; if that changes, use a sync.Pool rather than a package-level caser.
-func pythonLower(value string) string {
-	return cases.Lower(language.Und).String(value)
-}
+// CORRECTED (CHAOS-4280): the previous wording also listed "if pythonLower is
+// exported" as a trigger. Promoting it to pythonparity.Lower did exactly that,
+// and the containment above is UNAFFECTED -- it depends on this package's own
+// allow-lists being ASCII, not on the helper's visibility. What promotion does
+// change is that the divergence is now shared, so the argument no longer
+// travels with the function: each NEW caller must establish its own
+// containment. That obligation is stated on pythonparity.Lower itself.
 
 // Bounded ports llm_telemetry_labels.bounded.
 //
@@ -176,7 +145,7 @@ var SortedValidationErrorFamilies = [...]string{
 // parsers' set, and str.splitlines' boundaries) -- so the class is named at
 // every call site rather than inferred from what the neighbouring function does.
 func ProviderBucket(provider string) string {
-	return Bounded(pythonLower(pythonparity.Strip(provider)), Providers, "other")
+	return Bounded(pythonparity.Lower(pythonparity.Strip(provider)), Providers, "other")
 }
 
 // ModelBucket ports model_bucket.
@@ -197,7 +166,7 @@ func ProviderBucket(provider string) string {
 // the unrecognised case, so a missing model is distinguishable in the metrics
 // from an unknown one.
 func ModelBucket(model string) string {
-	normalized := pythonLower(pythonparity.Strip(model))
+	normalized := pythonparity.Lower(pythonparity.Strip(model))
 	if normalized == "" {
 		return "unknown"
 	}

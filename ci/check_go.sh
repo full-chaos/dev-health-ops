@@ -448,6 +448,36 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/aiimpact (ai_impact port vs live Python, CHAOS-4280)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestAIImpactMatchesLivePythonProduction|TestRepoPatternResolverMatchesLivePython)$' \
+        ./internal/jobs/metrics/aiimpact
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY, per the sibling goldens' reasoning: one shared marker
+  # would be satisfied by whichever guard happened to run, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed. The
+  # resolver oracle is not optional -- it is the sole source of ai_impact's
+  # team dimension.
+  for marker in ai-impact-golden ai-impact-repo-teams-golden; do
+    proof_file="${proof_dir}/${marker}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: ai_impact live Python oracle measurement did not occur (%s)\n' "${marker}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
+
   printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294)\n'
   if ! (
     cd "${ROOT}"

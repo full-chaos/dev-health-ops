@@ -145,14 +145,50 @@ API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
 
+# CHAOS-5025: per-process teardown bound. The old cleanup() below did a bare
+# `wait "${pid}"` with no bound at all, so ONE service that ignored SIGTERM
+# pinned the whole job until GitHub's 6h cancel (run 33822295135: the proof
+# itself PASSED at 00:41:40Z, then teardown hung for 5h55m).
+TEARDOWN_WAIT_SECS="${METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}"
+
+stop_service() {
+  local name="$1" pid="$2"
+  [ -n "${pid}" ] || return 0
+  kill -0 "${pid}" >/dev/null 2>&1 || return 0
+
+  kill -TERM "${pid}" >/dev/null 2>&1 || true
+
+  # bash has no timed `wait`, and polling `kill -0` cannot tell a live process
+  # from a not-yet-reaped zombie, so it would burn the full bound either way.
+  # Arm a watchdog subshell instead: it SIGKILLs the child once the bound
+  # expires, and THAT is what makes the `wait` below guaranteed to return.
+  local started="${SECONDS}"
+  ( sleep "${TEARDOWN_WAIT_SECS}"; kill -KILL "${pid}" >/dev/null 2>&1 ) &
+  local watchdog="$!"
+
+  wait "${pid}" >/dev/null 2>&1 || true
+  local elapsed=$((SECONDS - started))
+
+  kill -TERM "${watchdog}" >/dev/null 2>&1 || true
+  wait "${watchdog}" >/dev/null 2>&1 || true
+
+  if [ "${elapsed}" -ge "${TEARDOWN_WAIT_SECS}" ]; then
+    echo "WARNING: ${name} (pid ${pid}) ignored SIGTERM for ${TEARDOWN_WAIT_SECS}s; escalated to SIGKILL." >&2
+  fi
+}
+
 cleanup() {
   local rc=$?
-  for pid in "${API_PID}" "${WORKER_PID}" "${RECONCILER_PID}"; do
-    if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
-      kill "${pid}" >/dev/null 2>&1 || true
-      wait "${pid}" >/dev/null 2>&1 || true
-    fi
-  done
+  # Kill ORDER is load-bearing (CHAOS-5025), not cosmetic. dev-health-worker is
+  # the API's only client (--operational-bridge-url below), so the API must be
+  # signalled LAST. The old loop signalled it FIRST and then blocked on an
+  # unbounded wait, which left the worker alive and still issuing bridge calls
+  # into a shutting-down uvicorn -- 100 further job attempts over 16 minutes in
+  # run 33822295135 -- so uvicorn's "waiting for connections to close" loop
+  # never converged. Drain the clients first, then the server.
+  stop_service "dev-health-worker" "${WORKER_PID}"
+  stop_service "dev-health-reconciler" "${RECONCILER_PID}"
+  stop_service "dev-hops api" "${API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
@@ -304,11 +340,18 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
   export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
   export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
+  # --shutdown-timeout, CHAOS-5025 (H3): was 7260s (2h1m) -- a second
+  # unbounded-teardown time bomb once cleanup() actually reaches the worker.
+  # Proof jobs run ~11s, so 120s is far above the real drain need and well
+  # under stop_service()'s 60s SIGTERM bound, which escalates to SIGKILL
+  # regardless. NOTE: this comment lives ABOVE the command on purpose -- a `#`
+  # between backslash-continued arguments would comment out every argument
+  # after it, silently.
   exec "${BIN_DIR}/dev-health-worker" \
     --queues=metrics,sync \
     --queue-concurrency=metrics=2,sync=1 \
     --worker-group=heavy \
-    --shutdown-timeout=7260s \
+    --shutdown-timeout=120s \
     --http-addr=":${WORKER_HTTP_PORT}" \
     --river-schema=river \
     --domain-database-role="${RIVER_DOMAIN_ROLE}" \

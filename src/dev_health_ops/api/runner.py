@@ -6,6 +6,54 @@ import uvicorn
 
 from dev_health_ops.logging_config import configure_logging, uvicorn_log_config
 
+# CHAOS-5025: uvicorn.Server.shutdown() drains two collections in sequence --
+# server_state.connections ("Waiting for connections to close.") and then
+# server_state.tasks ("Waiting for background tasks to complete.") -- and BOTH
+# loops are unbounded unless timeout_graceful_shutdown is set. We shipped it
+# unset, so one leaked task pins the process forever. In CI run 33822295135
+# that is exactly what happened: connections finally drained at 00:56:34Z, then
+# the task loop never finished and the API stayed up until the job was
+# cancelled 5h40m later. Bound it.
+GRACEFUL_SHUTDOWN_SECONDS_ENV = "DEV_HEALTH_API_GRACEFUL_SHUTDOWN_SECONDS"
+DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30
+
+
+def _graceful_shutdown_seconds() -> int:
+    """Resolve uvicorn's graceful-shutdown bound.
+
+    Overridable by environment variable NAME only (no CLI flag): deployments
+    that legitimately need a longer drain set the env var, but there is no
+    ambient way to restore the old unbounded behaviour -- a non-positive or
+    unparseable value falls back to the default rather than disabling the bound.
+    """
+    raw = os.environ.get(GRACEFUL_SHUTDOWN_SECONDS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_GRACEFUL_SHUTDOWN_SECONDS
+
+    logger = logging.getLogger(__name__)
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring unparseable %s=%r; using %ss",
+            GRACEFUL_SHUTDOWN_SECONDS_ENV,
+            raw,
+            DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
+        )
+        return DEFAULT_GRACEFUL_SHUTDOWN_SECONDS
+
+    if value <= 0:
+        logger.warning(
+            "Ignoring non-positive %s=%r (an unbounded shutdown is what "
+            "CHAOS-5025 fixed); using %ss",
+            GRACEFUL_SHUTDOWN_SECONDS_ENV,
+            raw,
+            DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
+        )
+        return DEFAULT_GRACEFUL_SHUTDOWN_SECONDS
+
+    return value
+
 
 def run_api_server(ns: argparse.Namespace) -> int:
     """Start the FastAPI server."""
@@ -48,6 +96,7 @@ def run_api_server(ns: argparse.Namespace) -> int:
             workers=workers,
             reload=reload,
             reload_dirs=reload_dirs,
+            timeout_graceful_shutdown=_graceful_shutdown_seconds(),
         )
         return 0
     except Exception as e:

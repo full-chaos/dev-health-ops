@@ -138,6 +138,7 @@ internal/jobs/system	12
 internal/jobs/workgraph	7
 internal/jobs/workgraph/edges	20
 internal/jobs/workgraph/issueprlinks	20
+internal/llmorgsettings	15
 internal/providerfoundation	12
 internal/providersync	1166
 internal/scheduler/fixed	143

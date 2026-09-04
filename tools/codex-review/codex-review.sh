@@ -665,7 +665,20 @@ LANE_KEY="$LANE-$WT_HASH"
 # HOST_OS resolved ONCE, here, and reused below (sandbox default, GOPATH
 # default) rather than re-running `uname -s` at each site -- one source of
 # truth for which branch of the v4.8.6 Linux/macOS split a given line is on.
-HOST_OS="$(uname -s)"
+#
+# `command -p uname`, not a bare `uname`: a bare invocation resolves through
+# the CALLER's PATH, so a caller-controlled shim earlier on PATH could make
+# this resolve to something other than the real system uname (found by the
+# codex round that reviewed this same v4.8.6 diff, round
+# lane-wrapper-v486-20260904T082800: an exact-but-WRONG token from a
+# PATH-shadowed uname passes the validation below just as legitimately as a
+# real one would, and could route a genuinely-Linux host into the macOS
+# cleanup branch the same way the malformed-uname P1 above did).
+# `command -p` runs the command against a fixed, system-defined default PATH
+# (POSIX; supported by both bash 3.2 and 5.x) instead of the caller's own,
+# closing this off at the same source rather than adding a second guard
+# after the fact.
+HOST_OS="$(command -p uname -s)"
 # v4.8.6 P1 (found by codex round lane-wrapper-v486-20260904T080604, EXECUTED
 # and independently reproduced): every `[ "$HOST_OS" = Linux ]` check in this
 # file does an EXACT string match, and every site that checks it does so the
@@ -1213,15 +1226,31 @@ STANDING_RULES
 # have to resolve itself inside the sandbox. Kept separate from the
 # single-quoted STANDING_RULES block above so that block's own `$`/backtick
 # markdown-code-span characters never need escaping.
+#
+# v4.8.6 P2 (found by codex round lane-wrapper-v486-20260904T082800, EXECUTED):
+# the retry fallback below used to unconditionally point the reviewer at
+# $HOME/go/pkg/mod -- correct pre-v4.8.6, when $RGOMODCACHE was a COLD
+# per-round cache and the host's real, long-lived default module cache was
+# the only place with useful content to fall back to. On Linux, $RGOMODCACHE
+# IS now that persistent, shared cache (or a caller-set explicit location) --
+# $HOME/go/pkg/mod is the ruling's own LEGACY path, no lane writes there any
+# more, so it is likely stale or empty and routing a reviewer's retry at it
+# is directionless guidance at best. Host-branched: Linux gets no fallback
+# path suggestion at all (a lookup failure against the persistent shared
+# cache is a real gap worth reporting, not a location problem to route
+# around); macOS is UNCHANGED, since its $RGOMODCACHE stays a per-round
+# cache and $HOME/go/pkg/mod remains the same sensible last resort it always
+# was there.
+if [ "$HOST_OS" = Linux ]; then
+  MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, that means the persistent shared cache above is genuinely missing something -- say so explicitly (name the missing module) and fall back to a source-trace verdict. Do NOT retry against \$HOME/go/pkg/mod: that path is legacy and no lane writes to it, so it is not a meaningful fallback."
+else
+  MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, retry ONCE with GOMODCACHE=$HOME/go/pkg/mod GOPROXY=off (read-only intent -- never write there) before falling back to a source-trace verdict, and say explicitly which GOMODCACHE you ended up using."
+fi
 cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
 
 This round's own module cache -- already warmed and offline-resolve-proven
 (via \`GOPROXY=off go test -count=1 -run '^\$' ./...\`) before you started --
-is at $RGOMODCACHE. If \`go test\` still fails on a module lookup once you
-are inside the sandbox, retry ONCE with GOMODCACHE=$HOME/go/pkg/mod
-GOPROXY=off (read-only intent -- never write there) before falling back to
-a source-trace verdict, and say explicitly which GOMODCACHE you ended up
-using.
+is at $RGOMODCACHE. $MODCACHE_FALLBACK_LINE
 PROMPT_MODCACHE_INFO
 for aux in .codex-review-context.md LEDGER.md; do
   [ -f "$WT/$aux" ] && cp "$WT/$aux" "$RW/$aux"

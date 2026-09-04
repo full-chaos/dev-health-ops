@@ -4,7 +4,10 @@
 # set -euo pipefail in a repo with no go.mod; see that changelog block), and
 # the v4.8.6 Linux-shared-cache change (bigboy GOCACHE/GOMODCACHE/GOPATH move
 # to the fleet-shared /var/lib/oci-cache volume, never a per-round dir, never
-# reaped; macOS unchanged; see that changelog block).
+# reaped; macOS unchanged; plus the two codex-round-found defects layered on
+# top: a malformed uname -s value used to silently pick a cache-removal
+# branch, and command -p uname closing off a PATH-shadowed uname; see the
+# file's own v4.8.6 changelog block).
 #
 # No test harness existed in this directory before this file (there is no
 # bats, no go test target, nothing else under tools/codex-review/ that runs
@@ -19,20 +22,26 @@
 # not inside the extracted range -- a silent line-number drift after a
 # future edit must not make this file test the wrong code, or nothing.
 #
-# v4.8.6 SAFETY NOTE: the Linux GOCACHE/GOMODCACHE defaults are now literal,
-# host-absolute paths (/var/lib/oci-cache/go-build, /var/lib/oci-cache/go-mod)
-# -- NOT $HOME-relative any more -- so a test that actually SOURCES the
-# default-taking branch and lets its `mkdir -p` run would try to create real
-# directories under /var/lib on whatever machine runs this harness (this
-# Mac, a CI runner, anywhere). The "default" assertions below therefore use
-# a value-only extraction (the if/elif/else WITHOUT the two mkdir -p lines
-# that follow it) and check the resolved STRING only -- no directory is ever
-# created for the literal-default case by this harness. Every case that DOES
-# exercise the mkdir side effect (CODEX_REVIEW_* override, caller env
-# override, the macOS per-round path) points at a $WORK-scoped fake path, so
-# it never falls through to the real /var/lib/oci-cache default. The true
-# default's mkdir behaviour was proved separately, for real, on bigboy
-# itself (see the PR body / handoff for that dry run).
+# v4.8.6 SAFETY NOTE (defaults): the Linux GOCACHE/GOMODCACHE defaults are
+# now literal, host-absolute paths (/var/lib/oci-cache/go-build,
+# /var/lib/oci-cache/go-mod) -- NOT $HOME-relative -- so a test that actually
+# SOURCES the default-taking branch and lets its `mkdir -p` run would try to
+# create real directories under /var/lib on whatever machine runs this
+# harness. The "default" assertions below therefore use a value-only
+# extraction (the if/elif/else WITHOUT the two mkdir -p lines that follow
+# it) and check the resolved STRING only -- no directory is ever created for
+# the literal-default case by this harness.
+#
+# v4.8.6 SAFETY/DESIGN NOTE (HOST_OS): the shipped HOST_OS resolution line
+# is `HOST_OS="$(command -p uname -s)"` (fixed by this version specifically
+# so that PATH-based stubbing CANNOT override it -- see the "command -p
+# closes off a PATH-shadowed uname" test near the end of this file, which
+# exists to prove exactly that). Every OTHER test below that needs a
+# specific HOST_OS value therefore sets `HOST_OS=Linux` / `HOST_OS=Darwin`
+# / a malformed value DIRECTLY as a shell variable, and extracts a range
+# that starts AFTER the `command -p uname -s` assignment line -- never by
+# trying to fake `uname` on PATH, which the shipped line is now specifically
+# designed to defeat.
 #
 # Run: bash tools/codex-review/test-codex-review.sh   (from anywhere; the
 # script locates its own sibling codex-review.sh by its own path).
@@ -66,11 +75,11 @@ extract() {
 # them at) so the extracted blocks run with production-identical warn/die.
 extract 399 400 'warn() {' "$WORK/helpers.sh"
 
-# A stub `uname` on PATH, so extracted blocks that read $HOST_OS (itself
-# resolved from `uname -s`) can be forced down either the Linux or the
-# macOS branch regardless of what host this harness actually runs on
-# (CI runners are Linux; a lane's own Mac is Darwin -- both branches need
-# proving on either).
+# A stub `uname` on PATH -- used ONLY by the dedicated "command -p closes off
+# a PATH-shadowed uname" test near the end of this file. Nothing else uses
+# PATH-based stubbing any more (see the SAFETY/DESIGN NOTE above): every
+# other HOST_OS-dependent test sets $HOST_OS directly instead, since the
+# shipped resolution line is specifically designed to ignore this stub.
 STUBBIN_UNAME="$WORK/stubbin-uname"
 mkdir -p "$STUBBIN_UNAME"
 make_uname_stub() {
@@ -88,7 +97,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 987 994 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1000 1007 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -134,6 +143,11 @@ rm -rf "$D1B" 2>/dev/null || true
 # collided on the same cache path. Proof: run the real LANE_KEY block
 # against two directories that share a basename but differ in full path,
 # assert the resulting LANE_KEY values differ.
+#
+# This same lane_key.sh extraction is reused below by every v4.8.6 test
+# that needs $LANE_KEY (the macOS per-round cache paths still use it) --
+# it sits entirely BEFORE the HOST_OS resolution line, so it has no
+# HOST_OS dependency of its own.
 # ---------------------------------------------------------------------------
 extract 641 663 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
 
@@ -172,22 +186,20 @@ esac
 # `go mod download all` needs a writable $GOPATH/pkg/sumdb; on bigboy ~/go
 # used to be root:root and this failed looking like a network error. Proof:
 # run the real per-round-GOPATH block (unless CODEX_REVIEW_GOPATH is set,
-# and forcing the macOS/non-Linux branch via the uname stub -- see v4.8.6
-# tests below for the Linux branch), assert it creates a fresh, writable
-# directory; confirm a command actually SEES it as GOPATH; then remove it
-# via the same rm_rf_writable() defect-1 already proved, confirming the
-# trap tears it down.
+# with $HOST_OS set directly to Darwin -- see the SAFETY/DESIGN NOTE at the
+# top of this file for why this is no longer done via a uname stub), assert
+# it creates a fresh, writable directory; confirm a command actually SEES it
+# as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
+# proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 823 832 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 836 845 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
 unset CODEX_REVIEW_GOPATH 2>/dev/null || true
-make_uname_stub Darwin
 (
   # LANE_KEY and TS are already set above; a subshell inherits them as-is.
-  PATH="$STUBBIN_UNAME:$PATH"
-  HOST_OS="$(uname -s)"
+  HOST_OS=Darwin
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   # shellcheck source=/dev/null
@@ -225,9 +237,11 @@ else
 fi
 
 # CODEX_REVIEW_GOPATH override path: must be used as-is (mkdir -p'd, not
-# mktemp'd under a fresh name).
+# mktemp'd under a fresh name). Takes the FIRST branch of the if/elif/else,
+# so $HOST_OS's value doesn't matter here -- still set for consistency.
 CUSTOM_GOPATH="$WORK/custom-gopath"
 (
+  HOST_OS=Darwin
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   CODEX_REVIEW_GOPATH="$CUSTOM_GOPATH"
@@ -300,7 +314,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1120 1120 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1133 1133 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -358,7 +372,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1080 1164 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1093 1177 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -446,15 +460,18 @@ fi
 # CODEX_REVIEW_GOMODCACHE still win over both. No $LANE_KEY/$TS suffix
 # appears in any of the three cases -- that suffix is what made the old
 # path per-round.
+#
+# Per the SAFETY/DESIGN NOTE at the top of this file, $HOST_OS is set
+# DIRECTLY as a shell variable for every case below, never via a uname
+# stub -- the extraction ranges start AFTER the command -p uname -s line on
+# purpose, so setting $HOST_OS beforehand actually takes effect.
 # ---------------------------------------------------------------------------
 
-# VALUE-ONLY extraction: the if/elif/else WITHOUT the two mkdir -p lines
-# that follow it in the real script (those start right after line 698 --
-# see codex-review.sh). Used ONLY for the (a) default-value check below, so
-# that case never touches the filesystem at all.
-extract 641 720 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_value_only.sh"
-grep -qF 'HOST_OS="$(uname -s)"' "$WORK/cache_resolve_value_only.sh" \
-  || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the HOST_OS resolution line" >&2; exit 1; }
+# VALUE-ONLY extraction: the ruling comment + if/elif/else, WITHOUT the two
+# mkdir -p lines that follow it in the real script. Used ONLY for the (a)
+# default-value check below, so that case never touches the filesystem at
+# all. Starts right after the HOST_OS validation case/esac block ends.
+extract 705 733 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
 grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
   || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
 if grep -qE '^mkdir -p "\$RGOCACHE"' "$WORK/cache_resolve_value_only.sh"; then
@@ -466,23 +483,28 @@ fi
 # point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
 # never fall through to the real /var/lib/oci-cache default, so their mkdir
 # is always safe.
-extract 641 727 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_full.sh"
+extract 705 740 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
 
-make_uname_stub Linux
+run_cache_resolve_value_only() {
+  # $1=WT $2=TS $3=HOST_OS  env GOCACHE/GOMODCACHE/CODEX_REVIEW_GOCACHE/
+  # CODEX_REVIEW_GOMODCACHE already exported by the caller before invoking.
+  (
+    WT="$1" TS="$2" HOST_OS="$3"
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/lane_key.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/cache_resolve_value_only.sh"
+    printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
+  )
+}
 
 # (a) Linux DEFAULTS: no caller env, no CODEX_REVIEW_* override -> the
 # literal shared-volume paths. VALUE ONLY -- no mkdir runs, see the
 # extraction above, so this is safe on any host including this one.
 unset GOCACHE GOMODCACHE CODEX_REVIEW_GOCACHE CODEX_REVIEW_GOMODCACHE 2>/dev/null || true
-RESOLVE_A=$(
-  PATH="$STUBBIN_UNAME:$PATH"
-  WT="$WORK/lane-a/acr" TS="19700101T000000-a"
-  # shellcheck source=/dev/null
-  source "$WORK/helpers.sh"
-  # shellcheck source=/dev/null
-  source "$WORK/cache_resolve_value_only.sh"
-  printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
-)
+RESOLVE_A=$(run_cache_resolve_value_only "$WORK/lane-a/acr" "19700101T000000-a" Linux)
 RGOCACHE_A=$(printf '%s' "$RESOLVE_A" | sed -n 's/^RGOCACHE=//p')
 RGOMODCACHE_A=$(printf '%s' "$RESOLVE_A" | sed -n 's/^RGOMODCACHE=//p')
 if [ "$RGOCACHE_A" = "/var/lib/oci-cache/go-build" ]; then
@@ -507,11 +529,12 @@ CALLER_GOCACHE="$WORK/caller-gocache"
 CALLER_GOMODCACHE="$WORK/caller-gomodcache"
 unset CODEX_REVIEW_GOCACHE CODEX_REVIEW_GOMODCACHE 2>/dev/null || true
 RESOLVE_B=$(
-  PATH="$STUBBIN_UNAME:$PATH"
-  WT="$WORK/lane-b/acr" TS="19700101T000000-b"
+  WT="$WORK/lane-b/acr" TS="19700101T000000-b" HOST_OS=Linux
   GOCACHE="$CALLER_GOCACHE" GOMODCACHE="$CALLER_GOMODCACHE"
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/lane_key.sh"
   # shellcheck source=/dev/null
   source "$WORK/cache_resolve_full.sh"
   printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
@@ -530,12 +553,13 @@ fi
 OVERRIDE_GOCACHE="$WORK/override-gocache"
 OVERRIDE_GOMODCACHE="$WORK/override-gomodcache"
 RESOLVE_C=$(
-  PATH="$STUBBIN_UNAME:$PATH"
-  WT="$WORK/lane-c/acr" TS="19700101T000000-c"
+  WT="$WORK/lane-c/acr" TS="19700101T000000-c" HOST_OS=Linux
   GOCACHE="$CALLER_GOCACHE" GOMODCACHE="$CALLER_GOMODCACHE"
   CODEX_REVIEW_GOCACHE="$OVERRIDE_GOCACHE" CODEX_REVIEW_GOMODCACHE="$OVERRIDE_GOMODCACHE"
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/lane_key.sh"
   # shellcheck source=/dev/null
   source "$WORK/cache_resolve_full.sh"
   printf 'RGOCACHE=%s\nRGOMODCACHE=%s\n' "$RGOCACHE" "$RGOMODCACHE"
@@ -550,14 +574,14 @@ fi
 unset GOCACHE GOMODCACHE CODEX_REVIEW_GOCACHE CODEX_REVIEW_GOMODCACHE 2>/dev/null || true
 
 # (d) macOS branch is unchanged: still the per-round /tmp path keyed on
-# LANE_KEY-TS. Same (full) block, uname stubbed to Darwin instead -- always
+# LANE_KEY-TS. Same (full) block, $HOST_OS=Darwin instead -- always
 # resolves under /tmp regardless of caller env, so this is also safe.
-make_uname_stub Darwin
 RESOLVE_D=$(
-  PATH="$STUBBIN_UNAME:$PATH"
-  WT="$WORK/lane-d/acr" TS="19700101T000000-d"
+  WT="$WORK/lane-d/acr" TS="19700101T000000-d" HOST_OS=Darwin
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/lane_key.sh"
   # shellcheck source=/dev/null
   source "$WORK/cache_resolve_full.sh"
   printf 'RGOCACHE=%s\nRGOMODCACHE=%s\nLANE_KEY=%s\n' "$RGOCACHE" "$RGOMODCACHE" "$LANE_KEY"
@@ -582,17 +606,14 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # ruling names a GOPATH target, so it keeps Go's own $HOME/go default), so
 # sandboxing it with a fake $HOME is sufficient -- no /var/lib literal-path
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
-# proved as "defect 3" above, with HOST_OS forced to Darwin there).
+# proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 823 832 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
-make_uname_stub Linux
+extract 836 845 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
 RGOPATH_LINUX_DEFAULT=$(
-  PATH="$STUBBIN_UNAME:$PATH"
-  HOME="$FAKE_HOME_GP"
-  HOST_OS="$(uname -s)"
+  HOME="$FAKE_HOME_GP" HOST_OS=Linux
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   # shellcheck source=/dev/null
@@ -607,9 +628,7 @@ fi
 
 CALLER_GOPATH="$WORK/caller-gopath"
 RGOPATH_LINUX_CALLER=$(
-  PATH="$STUBBIN_UNAME:$PATH"
-  HOME="$FAKE_HOME_GP" GOPATH="$CALLER_GOPATH"
-  HOST_OS="$(uname -s)"
+  HOME="$FAKE_HOME_GP" GOPATH="$CALLER_GOPATH" HOST_OS=Linux
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   # shellcheck source=/dev/null
@@ -630,7 +649,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1012 1031 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1025 1044 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -670,49 +689,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# v4.8.6 P1 (found by codex round lane-wrapper-v486-20260904T080604, EXECUTED
-# and independently reproduced by the lane before this fix): every
+# v4.8.6 P1 (round 1, lane-wrapper-v486-20260904T080604, EXECUTED and
+# independently reproduced by the lane before this fix): every
 # `[ "$HOST_OS" = Linux ]` check does an exact string match, and a malformed
-# `uname -s` output (e.g. a trailing `\r` from a wrapped uname) failed that
-# match at EVERY site -- including cleanup()'s removal branch. Combined with
-# the SUPPORTED CODEX_REVIEW_GOCACHE/CODEX_REVIEW_GOMODCACHE override
-# pointed at the real shared /var/lib/oci-cache paths (a documented use of
-# those overrides), this misrouted a genuinely-Linux host into the
-# macOS/`else` removal branch and called rm_rf_writable on the shared bigboy
-# cache -- the exact "delete the shared cache" incident class this whole
-# version exists to prevent. Fix: HOST_OS is validated immediately after
-# resolution; anything other than exact `Linux` or `Darwin` now `die`s
-# before any cache path is even resolved.
+# `uname -s` output (e.g. a trailing `\r`) failed that match at EVERY site
+# -- including cleanup()'s removal branch. Combined with the SUPPORTED
+# CODEX_REVIEW_GOCACHE/CODEX_REVIEW_GOMODCACHE override pointed at the real
+# shared /var/lib/oci-cache paths, this misrouted a genuinely-Linux host
+# into the macOS/`else` removal branch and called rm_rf_writable on the
+# shared bigboy cache -- the exact "delete the shared cache" incident class
+# this whole version exists to prevent. Fix: HOST_OS is validated
+# immediately after resolution; anything other than exact `Linux` or
+# `Darwin` now `die`s before any cache path is even resolved.
+#
+# This extraction is JUST the case/esac validation block (not the
+# `command -p uname -s` assignment line above it) -- $HOST_OS is set
+# directly, per the file-level SAFETY/DESIGN NOTE.
 # ---------------------------------------------------------------------------
-extract 668 690 'HOST_OS="$(uname -s)"' "$WORK/host_os_validate.sh"
-grep -qF 'case "$HOST_OS" in' "$WORK/host_os_validate.sh" \
-  || { echo "FAIL: extracted host_os_validate.sh does not contain the validation case block" >&2; exit 1; }
+extract 700 703 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
 
-make_uname_stub_raw() {
-  # Unlike make_uname_stub() above (which prints its argument as literal
-  # %s data, so a caller-supplied "\r" stays two harmless characters), this
-  # embeds the argument as printf's OWN FORMAT STRING inside the generated
-  # stub -- so an escape sequence like \r is interpreted by printf AT STUB
-  # RUNTIME, reproducing the exact codex-round repro shape
-  # (`uname() { printf "Linux\r\n"; }`) byte-for-byte, including a REAL
-  # embedded carriage return the shell's command substitution does not
-  # strip (unlike a plain trailing \n, which command substitution always
-  # strips regardless of this bug).
-  local raw="$1"
-  {
-    printf '#!/usr/bin/env bash\n'
-    printf 'printf "%s"\n' "$raw"
-  } > "$STUBBIN_UNAME/uname"
-  chmod +x "$STUBBIN_UNAME/uname"
-}
-
-# (a) malformed HOST_OS ("Linux\r") now DIES before resolving any cache path
-# -- run under set +e / capture rc, same discipline as the other die-path
-# probes in this file.
-make_uname_stub_raw 'Linux\r\n'
+# (a) malformed HOST_OS ("Linux\r", set directly, not via a uname stub —
+# see the note above) now DIES with the expected message instead of
+# silently resolving a cache branch.
 set +e
 HOSTOS_MALFORMED_OUT=$( (
-  PATH="$STUBBIN_UNAME:$PATH"
+  HOST_OS=$'Linux\r'
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   # shellcheck source=/dev/null
@@ -722,9 +723,9 @@ HOSTOS_MALFORMED_OUT=$( (
 RC_HOSTOS_MALFORMED=$?
 set -e
 if [ "$RC_HOSTOS_MALFORMED" -ne 0 ] && printf '%s' "$HOSTOS_MALFORMED_OUT" | grep -qi 'unrecognised or malformed'; then
-  ok "v4.8.6 P1 fix: a malformed uname -s output (embedded CR) DIES with the expected message instead of silently resolving a cache branch"
+  ok "v4.8.6 P1 fix: a malformed HOST_OS (embedded CR) DIES with the expected message instead of silently resolving a cache branch"
 else
-  notok "v4.8.6 P1 fix: malformed uname -s output did NOT die as expected (rc=$RC_HOSTOS_MALFORMED, out='$HOSTOS_MALFORMED_OUT')"
+  notok "v4.8.6 P1 fix: malformed HOST_OS did NOT die as expected (rc=$RC_HOSTOS_MALFORMED, out='$HOSTOS_MALFORMED_OUT')"
 fi
 
 # (b) MUTATION negative control: the exact same probe, run against the
@@ -735,14 +736,14 @@ sed '/^case "\$HOST_OS" in$/,/^esac$/d' "$WORK/host_os_validate.sh" > "$WORK/hos
 grep -qF 'case "$HOST_OS" in' "$WORK/host_os_validate_unfixed.sh" \
   && { echo "FAIL: mutation strip of host_os_validate_unfixed.sh did not remove the case block -- fix the sed pattern" >&2; exit 1; }
 set +e
-HOSTOS_UNFIXED_OUT=$(
-  PATH="$STUBBIN_UNAME:$PATH"
+HOSTOS_UNFIXED_OUT=$( (
+  HOST_OS=$'Linux\r'
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
   # shellcheck source=/dev/null
   source "$WORK/host_os_validate_unfixed.sh"
   printf 'REACHED, HOST_OS=%q\n' "$HOST_OS"
-) 2>&1
+) 2>&1 )
 RC_HOSTOS_UNFIXED=$?
 set -e
 if [ "$RC_HOSTOS_UNFIXED" -eq 0 ] && printf '%s' "$HOSTOS_UNFIXED_OUT" | grep -q '^REACHED'; then
@@ -754,9 +755,8 @@ fi
 # (c) legitimate exact values ("Linux", "Darwin") still pass through
 # unharmed -- guard against an overzealous fix that rejects valid input.
 for legit_os in Linux Darwin; do
-  make_uname_stub "$legit_os"
   LEGIT_OUT=$(
-    PATH="$STUBBIN_UNAME:$PATH"
+    HOST_OS="$legit_os"
     # shellcheck source=/dev/null
     source "$WORK/helpers.sh"
     # shellcheck source=/dev/null
@@ -769,6 +769,104 @@ for legit_os in Linux Darwin; do
     notok "v4.8.6 P1 fix: legitimate HOST_OS='$legit_os' was rejected or altered (got '$LEGIT_OUT')"
   fi
 done
+
+# ---------------------------------------------------------------------------
+# v4.8.6 P1, round 2 (lane-wrapper-v486-20260904T082800, EXECUTED): the
+# malformed-value guard above closes accidental garbage in `uname -s`'s
+# output, but the resolution line itself, `HOST_OS="$(uname -s)"`, resolved
+# `uname` through the CALLER's PATH -- so a caller-controlled shim earlier
+# on PATH could make it resolve to an exact, VALID-looking-but-WRONG token
+# (e.g. a Linux host with a PATH-shadowed `uname` that prints exact
+# "Darwin"), which passes the case/esac guard above just as legitimately as
+# a real value would, then picks the wrong (removal) branch anyway. Fixed:
+# the shipped line is now `HOST_OS="$(command -p uname -s)"` -- `command -p`
+# runs against a fixed, system-defined default PATH, ignoring the caller's
+# PATH (and also bypassing a shell FUNCTION named `uname`, the exact
+# mechanism codex's own repro used). Proof: with a fake `uname` earlier on
+# PATH, confirm (1) a BARE `uname -s` picks up the fake (demonstrating the
+# vulnerability the fix closes existed, i.e. this test's own stubbing
+# technique is real) and (2) `command -p uname -s`, run under the identical
+# poisoned PATH, does NOT -- it returns the REAL host's `uname -s` -- and
+# (3) the ACTUAL shipped HOST_OS assignment line, extracted verbatim, also
+# resolves to the real value under the same poisoned PATH.
+# ---------------------------------------------------------------------------
+extract 681 681 'HOST_OS="$(command -p uname -s)"' "$WORK/host_os_assign.sh"
+
+REAL_UNAME_S=$(command -p uname -s)
+make_uname_stub 'TotallyFakeOS'
+
+BARE_UNAME_RESULT=$(PATH="$STUBBIN_UNAME:$PATH" bash -c 'uname -s')
+if [ "$BARE_UNAME_RESULT" = "TotallyFakeOS" ]; then
+  ok "v4.8.6 P1 (round 2) setup check: a bare 'uname -s' IS fooled by a PATH-shadowed uname (confirms the stubbing technique used below is real)"
+else
+  notok "v4.8.6 P1 (round 2) setup check: bare 'uname -s' was NOT fooled by the stub (got '$BARE_UNAME_RESULT') -- the test below may not be exercising anything"
+fi
+
+COMMAND_P_UNAME_RESULT=$(PATH="$STUBBIN_UNAME:$PATH" bash -c 'command -p uname -s')
+if [ "$COMMAND_P_UNAME_RESULT" = "$REAL_UNAME_S" ]; then
+  ok "v4.8.6 P1 (round 2) fix mechanism: 'command -p uname -s' ignores the PATH-shadowed uname and returns the real value ('$REAL_UNAME_S')"
+else
+  notok "v4.8.6 P1 (round 2) fix mechanism: 'command -p uname -s' did NOT return the real value under a poisoned PATH (got '$COMMAND_P_UNAME_RESULT', wanted '$REAL_UNAME_S')"
+fi
+
+SHIPPED_LINE_RESULT=$(
+  PATH="$STUBBIN_UNAME:$PATH"
+  # shellcheck source=/dev/null
+  source "$WORK/host_os_assign.sh"
+  printf '%s' "$HOST_OS"
+)
+if [ "$SHIPPED_LINE_RESULT" = "$REAL_UNAME_S" ]; then
+  ok "v4.8.6 P1 (round 2) fix: the ACTUAL shipped HOST_OS assignment line resolves to the real host OS ('$REAL_UNAME_S') even under a PATH-shadowed uname"
+else
+  notok "v4.8.6 P1 (round 2) fix: the shipped HOST_OS assignment line was fooled by the PATH-shadowed uname (got '$SHIPPED_LINE_RESULT', wanted '$REAL_UNAME_S') -- command -p is not doing its job"
+fi
+
+# ---------------------------------------------------------------------------
+# v4.8.6 P2 (round 2, lane-wrapper-v486-20260904T082800, EXECUTED): the
+# reviewer-facing module-cache fallback text used to unconditionally point a
+# retry at $HOME/go/pkg/mod -- correct pre-v4.8.6 (the round's own cache was
+# COLD, so the host's real long-lived default module cache was the only
+# useful fallback), but that path is now the ruling's own LEGACY path (no
+# lane writes there) on Linux, where $RGOMODCACHE already IS the persistent
+# shared cache -- so the old fallback text pointed a reviewer's retry at a
+# location the fix itself says nobody should rely on. Fixed: the fallback
+# line is host-branched -- Linux gets no location-based fallback at all
+# (report the gap instead), macOS is unchanged. Proof: extract the real
+# if/else/heredoc block, run it once per host, assert the generated
+# prompt-fragment text matches.
+# ---------------------------------------------------------------------------
+extract 1244 1254 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+
+FALLBACK_LINUX=$(
+  RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
+  mkdir -p "$RW"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/modcache_fallback.sh"
+  cat "$RW/prompt.md"
+)
+if printf '%s' "$FALLBACK_LINUX" | grep -q 'Do NOT retry against \$HOME/go/pkg/mod' \
+   && ! printf '%s' "$FALLBACK_LINUX" | grep -q 'retry ONCE with GOMODCACHE='; then
+  ok "v4.8.6 P2 fix: on Linux, the reviewer prompt does NOT suggest retrying against the legacy \$HOME/go/pkg/mod path"
+else
+  notok "v4.8.6 P2 fix: Linux fallback text still suggests the legacy path or lost its own warning ($FALLBACK_LINUX)"
+fi
+
+FALLBACK_DARWIN=$(
+  RW="$WORK/fallback-rw-darwin" HOST_OS=Darwin RGOMODCACHE="$WORK/darwin-modcache" HOME="$WORK/darwin-home"
+  mkdir -p "$RW"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/modcache_fallback.sh"
+  cat "$RW/prompt.md"
+)
+if printf '%s' "$FALLBACK_DARWIN" | grep -q "retry ONCE with GOMODCACHE=$WORK/darwin-home/go/pkg/mod"; then
+  ok "v4.8.6 P2 fix: on macOS, the reviewer prompt still suggests the \$HOME/go/pkg/mod retry fallback (unchanged)"
+else
+  notok "v4.8.6 P2 fix: macOS fallback text changed unexpectedly ($FALLBACK_DARWIN)"
+fi
 
 echo "----"
 echo "passed=$PASS failed=$FAIL"

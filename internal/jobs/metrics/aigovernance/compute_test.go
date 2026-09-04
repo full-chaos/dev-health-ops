@@ -187,6 +187,18 @@ func fixtureArtifacts() []Artifact {
 		}),
 		fixtureArtifact(func(a *Artifact) { a.SubjectID = "16"; a.AIDetected = false; a.DeclaredAI = false }),
 		fixtureArtifact(func(a *Artifact) { a.SubjectID = "17"; a.ToolName = nil; a.ModelName = nil }),
+		// 19/20 carry MILLISECOND precision -- see the oracle script. Every
+		// other artifact is an exact second, which is what let a
+		// Truncate(time.Second) mutation pass both checks.
+		fixtureArtifact(func(a *Artifact) {
+			a.SubjectID = "19"
+			a.DeclaredAI = false
+			a.ObservedAt = time.Date(2026, 9, 3, 12, 0, 0, 123000000, time.UTC)
+		}),
+		fixtureArtifact(func(a *Artifact) {
+			a.SubjectID = "20"
+			a.ObservedAt = time.Date(2026, 9, 3, 23, 59, 59, 999000000, time.UTC)
+		}),
 		fixtureArtifact(func(a *Artifact) {
 			a.SubjectID = "18"
 			zero := 0.0
@@ -225,7 +237,7 @@ func TestGovernanceRowsMatchLivePythonProduction(t *testing.T) {
 			Severity:    string(got.Severity),
 			SubjectType: got.SubjectType,
 			SubjectID:   got.SubjectID,
-			ObservedAt:  got.ObservedAt.UTC().Format("2006-01-02T15:04:05-07:00"),
+			ObservedAt:  pythonISOFormat(got.ObservedAt),
 			Evidence:    gotEvidence,
 		}
 		assertJSONEqual(t, fmt.Sprintf("violation %d", index), wantViolation, gotRow)
@@ -452,6 +464,29 @@ func TestRollupIsOrderInvariantOverItsInput(t *testing.T) {
 		got := RollupCoverageDaily(shuffled, fixtureDay)
 		assertJSONEqual(t, fmt.Sprintf("shuffle %d", attempt), want, got)
 	}
+}
+
+// pythonISOFormat mirrors CPython's datetime.isoformat() for a tz-aware UTC
+// value, INCLUDING its fractional-second rule: omitted entirely when the
+// microsecond is zero, and exactly six digits otherwise (Python never trims
+// trailing zeros, so 123000us renders ".123000", not ".123").
+//
+// The comparator previously used a seconds-only layout. That silently DISCARDED
+// the fraction on both sides of the comparison, so a mutation truncating
+// observed_at to whole seconds passed the oracle AND the frozen fixture --
+// every fixture artifact happened to sit on an exact second. Found by codex
+// round 1 on #2229 (P2), which is exactly the oracle-attack class the prompt
+// asked for: a field the fixture never varies and the comparator throws away.
+//
+// Go's ".999999" layout verb would trim trailing zeros and diverge from Python
+// on any value whose microseconds end in zero -- which, for a DateTime64(3)
+// column, is EVERY non-zero value. Hence the explicit branch.
+func pythonISOFormat(value time.Time) string {
+	utc := value.UTC()
+	if utc.Nanosecond() == 0 {
+		return utc.Format("2006-01-02T15:04:05+00:00")
+	}
+	return utc.Format("2006-01-02T15:04:05.000000+00:00")
 }
 
 func uuidStringPtr(value *uuid.UUID) *string {

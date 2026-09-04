@@ -88,15 +88,15 @@ QUALIFY ROW_NUMBER() OVER (
 		`CREATE TABLE git_pull_requests (
     repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
     last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE ci_pipeline_runs (
     repo_id UUID, run_id String, status Nullable(String),
     started_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`,
 		`CREATE TABLE security_alerts (
     repo_id UUID, alert_id String, source String,
     created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, alert_id)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id)`,
 		`CREATE TABLE ai_tool_allowlist (
     org_id String, tool_name String, model_name Nullable(String),
     status LowCardinality(String), reason Nullable(String),
@@ -318,7 +318,7 @@ func TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie(t *testing.T) {
 	if err := conn.Exec(ctx, `CREATE TABLE git_pull_requests (
     repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
     last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number)`); err != nil {
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,5 +353,99 @@ FROM (
 		t.Fatalf("dedup emitted reviews_count=%d with org_id=%s -- that PAIR exists in no seeded row. "+
 			"Two independent argMax aggregates resolved the last_synced tie differently; the seeded "+
 			"rows were (5, %s) and (9, %s).", reviewsCount, resolvedOrgID, tieOrgA, tieOrgB)
+	}
+}
+
+// TestGovernanceDedupIsTenantScoped is the regression guard for codex round
+// 1's P1 on #2229: a dedup GROUP BY that omits org_id selects the newest row
+// ACROSS TENANTS.
+//
+// The live sorting keys all begin with org_id --
+//
+//	git_pull_requests  (org_id, repo_id, number)   027_add_org_id_to_sorting_keys.py:63
+//	ci_pipeline_runs   (org_id, repo_id, run_id)   :65
+//	security_alerts    (org_id, repo_id, alert_id) 042_rmt_org_id_dedup_keys.py:93
+//
+// -- but the CREATE statements in 000_raw_tables.sql do not, and migration 024
+// explicitly says org_id is NOT in any sorting key, which was true when written
+// and is now stale. The first version of this loader grouped without org_id on
+// the strength of that note.
+//
+// THE FIXTURE IS THE ASSERTION. Two organisations legitimately share one
+// repo_id and one PR number. Org B's row is NEWER and has reviews_count=0; org
+// A's is older with reviews_count=5. Grouping without org_id makes B's row win
+// globally, A's org filter then misses, and A's artifact reads as unreviewed --
+// so org A gets a spurious MISSING_HUMAN_REVIEW. Grouping by the real key gives
+// each tenant its own group and A keeps its own facts.
+//
+// A single-tenant fixture cannot see this at all, which is why the original
+// integration test passed while the defect was live.
+func TestGovernanceDedupIsTenantScoped(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// The CURRENT key, from the rekey migrations -- not the stale CREATE.
+	if err := conn.Exec(ctx, `CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		sharedRepo = "00000000-0000-4000-8000-0000000000e1"
+		orgA       = "00000000-0000-4000-8000-0000000000e0"
+		orgB       = "00000000-0000-4000-8000-0000000000f0"
+	)
+	// Same (repo_id, number) in two tenants. B is NEWER and unreviewed.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 7, 5, toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), 7, 0, toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The dedup shape LoadGovernanceArtifacts uses, in isolation.
+	var reviewsCount uint32
+	if err := conn.QueryRow(ctx, `
+SELECT reviews_count FROM (
+    SELECT repo_id, number, argMax(reviews_count, last_synced) AS reviews_count
+    FROM git_pull_requests
+    WHERE org_id = ?
+    GROUP BY org_id, repo_id, number
+)`, orgA).Scan(&reviewsCount); err != nil {
+		t.Fatalf("read org A's deduped row: %v", err)
+	}
+	if reviewsCount != 5 {
+		t.Fatalf("org A sees reviews_count=%d, want 5. Org B's NEWER row won a dedup group that "+
+			"omitted org_id, so org A's own reviewed PR was suppressed and would emit a spurious "+
+			"MISSING_HUMAN_REVIEW. The GROUP BY must be the CURRENT sorting key "+
+			"(org_id, repo_id, number), per 027_add_org_id_to_sorting_keys.py:63.", reviewsCount)
+	}
+
+	// Org B must still see its own row -- the fix must not simply pin org A.
+	var orgBReviews uint32
+	if err := conn.QueryRow(ctx, `
+SELECT reviews_count FROM (
+    SELECT repo_id, number, argMax(reviews_count, last_synced) AS reviews_count
+    FROM git_pull_requests
+    WHERE org_id = ?
+    GROUP BY org_id, repo_id, number
+)`, orgB).Scan(&orgBReviews); err != nil {
+		t.Fatalf("read org B's deduped row: %v", err)
+	}
+	if orgBReviews != 0 {
+		t.Fatalf("org B sees reviews_count=%d, want 0", orgBReviews)
 	}
 }

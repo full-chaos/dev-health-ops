@@ -136,6 +136,23 @@ ARTIFACTS = [
     # 17. Absent tool/model evidence: _optional_str turns "" into None, so the
     #     persisted evidence JSON carries nulls, not empty strings.
     artifact(subject_id="17", tool_name=None, model_name=None),
+    # 19/20. SUB-SECOND observed_at. Every other artifact sits on an exact
+    #     second, which let a Truncate(time.Second) mutation pass BOTH this
+    #     oracle and the frozen fixture (codex round 1 P2 on #2229): the Go
+    #     comparator formatted seconds-only, so the fraction was discarded on
+    #     both sides before comparison. These two carry millisecond precision --
+    #     the resolution of the real DateTime64(3) column -- so the fraction is
+    #     now load-bearing. 19 is undeclared so it also emits a violation, where
+    #     observed_at is a persisted column.
+    artifact(
+        subject_id="19",
+        declared_ai=False,
+        observed_at=datetime(2026, 9, 3, 12, 0, 0, 123000, tzinfo=timezone.utc),
+    ),
+    artifact(
+        subject_id="20",
+        observed_at=datetime(2026, 9, 3, 23, 59, 59, 999000, tzinfo=timezone.utc),
+    ),
     # 18. confidence 0.0 -- must stay 0.0 in the evidence JSON, NOT collapse to
     #     null the way an empty string would. Guards against applying
     #     _optional_str to a numeric field.

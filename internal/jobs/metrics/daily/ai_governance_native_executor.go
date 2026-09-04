@@ -96,11 +96,43 @@ func (executor *AIGovernanceExecutor) ComputeFamily(
 	violations := aigovernance.EvaluateArtifacts(artifacts)
 	coverage := aigovernance.RollupCoverageDaily(artifacts, dayStart)
 
-	writtenEvents, err := WriteAIPolicyEvents(ctx, executor.conn, violations, computedAt)
+	// WRITE ORDER IS LOAD-BEARING: the SELF-MERGING table goes FIRST, the
+	// non-mergeable one LAST. Do not reorder these two calls.
+	//
+	// ClickHouse gives no cross-table transaction, so a two-table write can
+	// always commit the first and fail the second. What happens then is decided
+	// by computeNativeFamilies (daily.go:588-595): on ANY error the family is
+	// NOT added to skipFamilies, so the Python compatibility bridge computes
+	// and writes BOTH tables for this partition. That fallback is fail-open BY
+	// DESIGN (chris's ruling, CHAOS-4276) -- one family degrading must not fail
+	// the partition -- so the executor has to be safe under it rather than try
+	// to prevent it.
+	//
+	// The two tables behave differently under a duplicate write:
+	//
+	//   ai_governance_coverage_daily -- ORDER BY (org_id, team_id, repo_id, day),
+	//     no random component. Python's rewrite lands on the SAME key and the
+	//     ReplacingMergeTree collapses it. Duplicating this is harmless.
+	//
+	//   ai_policy_events -- ORDER BY (..., event_id), and Python's event_id is
+	//     uuid4 (models.py:113) while ours is derived. The two can NEVER merge,
+	//     so a Go row plus a Python fallback row is a PERMANENT duplicate
+	//     policy event for one artifact.
+	//
+	// Writing coverage first makes every failure mode safe: if coverage fails,
+	// nothing was committed at all; if coverage succeeds and policy events
+	// fail, the only committed rows are ones Python's rewrite merges away. The
+	// non-mergeable table is only ever written once the mergeable one is
+	// already durable, and if it fails it has written nothing.
+	//
+	// Found by codex round 1 on #2229 (P1), which correctly traced the fallback
+	// path; the original order wrote policy events first.
+	// Pinned by TestGovernanceWritesTheMergeableTableFirst.
+	writtenCoverage, err := WriteAIGovernanceCoverageDaily(ctx, executor.conn, coverage, computedAt)
 	if err != nil {
 		return 0, err
 	}
-	writtenCoverage, err := WriteAIGovernanceCoverageDaily(ctx, executor.conn, coverage, computedAt)
+	writtenEvents, err := WriteAIPolicyEvents(ctx, executor.conn, violations, computedAt)
 	if err != nil {
 		return 0, err
 	}

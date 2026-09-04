@@ -26,61 +26,66 @@ import (
 // silently changed a boundary operator would be a behavioural assumption
 // rather than a proven equivalence.
 //
-// # FINAL -> argMax (team-lead ruling, design.md Q4)
+// # FINAL -> argMax, GROUPED BY THE CURRENT SORTING KEY (team-lead ruling, design.md Q4)
 //
-// Python's scan/finding subqueries read `... FINAL ... GROUP BY repo_id`,
-// which is FINAL underneath an aggregation -- the shape the standing rule
-// forbids, because it makes the answer depend on background-merge timing.
-// Both are replaced with `argMax(<col>, last_synced) GROUP BY <the table's
-// exact ORDER BY key>`: ci_pipeline_runs is ORDER BY (repo_id, run_id) and
-// security_alerts is ORDER BY (repo_id, alert_id), both
-// ReplacingMergeTree(last_synced), so the argMax winner IS the FINAL winner,
-// merge-independently.
+// Python's scan/finding subqueries read `... FINAL ... GROUP BY repo_id`, which
+// is FINAL underneath an aggregation -- the shape the standing rule forbids,
+// because it makes the answer depend on background-merge timing. Both are
+// replaced with `argMax(<col>, last_synced) GROUP BY <the table's CURRENT
+// sorting key>`, which is the FINAL winner merge-independently.
 //
-// org_id is carried through the dedup ALONGSIDE the payload columns and
-// filtered AFTER it, not before. That is load-bearing: migration 024 added
-// org_id as a plain column, NOT part of any sorting key, so two rows sharing a
-// dedup key can carry different org_ids and FINAL keeps the last_synced
-// winner's. A pre-dedup org filter would therefore be a DIFFERENT query, not
-// an optimisation of the same one. The consequence is Python's own cost
-// profile -- an unbounded scan of both tables, since neither the org filter
-// nor any day bound can be pushed below the dedup. Kept deliberately (the
-// all-time semantics are what Python computes; narrowing them would change
-// the answer) and recorded as a pre-existing performance smell.
+// # READ THE CURRENT KEY FROM THE REKEY MIGRATIONS, NOT FROM CREATE TABLE
 //
-// # ONE argMax OVER A TUPLE, NEVER ONE PER COLUMN
+// Every sorting key here starts with org_id:
 //
-// Each dedup below takes a SINGLE argMax(tuple(payload, org_id), last_synced)
-// and unwraps it with tupleElement. Writing the obvious thing instead --
-// argMax(payload, last_synced) beside argMax(org_id, last_synced) -- is WRONG,
-// and was this file's first version.
+//	git_pull_requests         (org_id, repo_id, number)
+//	ci_pipeline_runs          (org_id, repo_id, run_id)
+//	security_alerts           (org_id, repo_id, alert_id)
 //
-// Two aggregates over the same GROUP BY resolve ties INDEPENDENTLY. When two
-// physical rows share a last_synced, one argMax can take its value from row A
-// while the other takes its value from row B, emitting a row that never
-// existed: a payload column paired with a different row's org_id. Here that
-// means a stale reviews_count deciding human_reviewed, or a value being
-// org-filtered under the wrong tenant's id.
+// from 027_add_org_id_to_sorting_keys.py:63-65 and
+// 042_rmt_org_id_dedup_keys.py:93, which REBUILT these tables. The CREATE
+// statements in 000_raw_tables.sql / 032_security_alerts.sql are stale for
+// every one of them, and migration 024 -- which says org_id was added as a
+// plain column NOT in any sorting key -- was true when written and is now
+// false.
 //
-// The tie is ordinary, not exotic: last_synced is DateTime64(3) stamped from
-// datetime.now(), and these writers insert a fresh row per sync rather than
-// short-circuiting, so two versions of one key landing in the same millisecond
-// is routine. discover_repos (job_daily.py:145-175) hit exactly this as
-// CHAOS-2787 and documents the tuple remedy; this file reproduced the
-// anti-pattern anyway by reasoning about argMax one column at a time.
+// This file's FIRST version grouped by (repo_id, number) / (repo_id, run_id) /
+// (repo_id, alert_id) on the strength of that 024 note, and cited 024 in this
+// comment, which made a stale claim look verified. The consequence was not
+// cosmetic: two orgs legitimately share a repo_id, so an argMax that omits
+// org_id selects the newest row ACROSS TENANTS. Org A's reviewed PR could be
+// suppressed by org B's newer row, and Go would emit a spurious
+// MISSING_HUMAN_REVIEW for A. Found by codex round 1 on #2229.
 //
-// The tuple form fixes a second thing for free: a bare argMax over a Nullable
-// column SKIPS NULLs, so an older non-NULL value can mask a genuinely NULL
-// latest value -- and both `status` and `source` here are Nullable. The outer
-// tuple is never NULL even when an element is, so the winner is chosen on the
-// row, and NULL elements survive the unwrap.
+// Because org_id is IN the key, the org filter now sits BEFORE the dedup:
+// rows of other tenants form different groups, so filtering early is the same
+// answer and prunes the scan instead of reading every tenant's history. The
+// earlier "carried through the dedup and filtered AFTER it" design was a
+// correct consequence of a false premise.
 //
-// The two ai_tool_allowlist subqueries further down keep a single-column
-// argMax deliberately: `status` is their ONLY non-key projection, so there is
-// no second aggregate to disagree with it. Do not "consistency-fix" those into
-// tuples -- the defect needs two aggregates, not one.
+// RULE for anyone adding a reader here: derive the GROUP BY from 027/042's key
+// maps, never from a CREATE TABLE or a migration's prose. A migration comment
+// is a snapshot of the day it was written.
 //
-// Pinned by TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie.
+// # ONE argMax OVER A TUPLE WHEN MORE THAN ONE NON-KEY COLUMN
+//
+// Two aggregates over the same GROUP BY resolve ties INDEPENDENTLY: on a shared
+// last_synced, one argMax can take its value from row A while another takes its
+// value from row B, emitting a row that never existed. Where a dedup projects
+// more than one non-key column, take a SINGLE argMax over a tuple and unwrap it
+// with tupleElement (the shape discover_repos adopted for CHAOS-2787,
+// job_daily.py:176-189). The tuple also preserves NULLs, which a bare argMax
+// over a Nullable column silently skips.
+//
+// After the rekey above, each dedup in THIS file projects exactly one non-key
+// column (org_id having moved into the group), so a single-column argMax is
+// correct and no tuple is needed -- the defect requires two aggregates. The
+// same is true of the two ai_tool_allowlist subqueries further down. Do not
+// "consistency-fix" any of them into tuples; do reach for the tuple the moment
+// a second non-key column is projected.
+//
+// Pinned by TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie (tuple
+// coherence) and TestGovernanceDedupIsTenantScoped (the org_id key).
 //
 // # git_pull_requests dedup: A DELIBERATE DIVERGENCE (Finding A)
 //
@@ -136,19 +141,12 @@ LEFT JOIN (
     SELECT
         repo_id,
         number,
-        tupleElement(latest, 1) AS reviews_count,
-        tupleElement(latest, 2) AS org_id
-    FROM (
-        SELECT
-            repo_id,
-            number,
-            argMax(tuple(reviews_count, org_id), last_synced) AS latest
-        FROM git_pull_requests
-        GROUP BY repo_id, number
-    )
+        argMax(reviews_count, last_synced) AS reviews_count
+    FROM git_pull_requests
+    WHERE org_id = ?
+    GROUP BY org_id, repo_id, number
 ) AS pr
     ON a.repo_id = pr.repo_id
-    AND pr.org_id = ?
     AND a.subject_type = 'pull_request'
     AND a.subject_id = toString(pr.number)
 LEFT JOIN (
@@ -156,19 +154,12 @@ LEFT JOIN (
     FROM (
         SELECT
             repo_id,
-            tupleElement(latest, 1) AS status,
-            tupleElement(latest, 2) AS org_id
-        FROM (
-            SELECT
-                repo_id,
-                run_id,
-                argMax(tuple(status, org_id), last_synced) AS latest
-            FROM ci_pipeline_runs
-            GROUP BY repo_id, run_id
-        )
+            argMax(status, last_synced) AS status
+        FROM ci_pipeline_runs
+        WHERE org_id = ?
+        GROUP BY org_id, repo_id, run_id
     )
-    WHERE org_id = ?
-      AND lower(coalesce(status, '')) IN ('success', 'passed', 'completed')
+    WHERE lower(coalesce(status, '')) IN ('success', 'passed', 'completed')
     GROUP BY repo_id
 ) AS scan ON a.repo_id = scan.repo_id
 LEFT JOIN (
@@ -176,19 +167,12 @@ LEFT JOIN (
     FROM (
         SELECT
             repo_id,
-            tupleElement(latest, 1) AS source,
-            tupleElement(latest, 2) AS org_id
-        FROM (
-            SELECT
-                repo_id,
-                alert_id,
-                argMax(tuple(source, org_id), last_synced) AS latest
-            FROM security_alerts
-            GROUP BY repo_id, alert_id
-        )
+            argMax(source, last_synced) AS source
+        FROM security_alerts
+        WHERE org_id = ?
+        GROUP BY org_id, repo_id, alert_id
     )
-    WHERE org_id = ?
-      AND lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
+    WHERE lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
     GROUP BY repo_id
 ) AS finding ON a.repo_id = finding.repo_id
 -- Allowlist precedence (CHAOS-2209), ported verbatim: an exact tool+model row

@@ -179,11 +179,16 @@ func (executor *HTTPCompatibilityExecutor) ComputePartition(ctx context.Context,
 	})
 }
 
-func (executor *HTTPCompatibilityExecutor) Finalize(ctx context.Context, run Run) error {
+func (executor *HTTPCompatibilityExecutor) Finalize(ctx context.Context, run Run, skipFamilies []string) error {
 	if run.ID == "" {
 		return ErrInvalidState
 	}
-	return executor.post(ctx, compatibilityRequest{Operation: "finalize", RunID: run.ID})
+	// SkipFamilies carries omitempty, so a finalize with no native family
+	// serialises BYTE-IDENTICALLY to before this field was sent -- which is
+	// what keeps this change inert for every org that has none.
+	return executor.post(ctx, compatibilityRequest{
+		Operation: "finalize", RunID: run.ID, SkipFamilies: skipFamilies,
+	})
 }
 
 type compatibilityRequest struct {

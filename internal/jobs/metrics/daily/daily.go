@@ -266,7 +266,14 @@ type RunPublisher interface {
 // exactly as before this field existed.
 type CompatibilityExecutor interface {
 	ComputePartition(ctx context.Context, run Run, partition Partition, skipFamilies []string) error
-	Finalize(context.Context, Run) error
+	// Finalize takes skipFamilies for the same reason ComputePartition does
+	// (CHAOS-4290): a NativeFinalizeFamilyExecutor that already computed and
+	// wrote a finalize-scope family must stop the Python bridge recomputing
+	// it. Without this the two writers race on an append-only table deduped
+	// `ORDER BY computed_at DESC LIMIT 1 BY ...`, where the LATER writer wins
+	// silently -- so a correct native family would be invisibly superseded
+	// and the port would change nothing in production.
+	Finalize(ctx context.Context, run Run, skipFamilies []string) error
 }
 
 // NativeFamilyExecutor computes and writes ONE families.json family's rows
@@ -286,6 +293,21 @@ type CompatibilityExecutor interface {
 // service fleet-wide.
 type NativeFamilyExecutor interface {
 	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
+}
+
+// NativeFinalizeFamilyExecutor computes and writes ONE families.json family
+// whose scope is the RUN, not a partition -- the finalize-scope families that
+// run once after every partition has landed (CHAOS-4290, ic_finalize being
+// the first).
+//
+// It is a SEPARATE interface from NativeFamilyExecutor rather than the same
+// one with a nil Partition. The scopes are genuinely different: a finalize
+// family reads back what the partitions wrote, so handing it a partition
+// would be meaningless. Keeping them distinct makes registering a
+// finalize-scope family on the partition path (or vice versa) a COMPILE
+// error instead of a convention nobody enforces.
+type NativeFinalizeFamilyExecutor interface {
+	ComputeFinalizeFamily(ctx context.Context, run Run) (rowsWritten int, err error)
 }
 
 type Dispatcher struct {
@@ -991,6 +1013,11 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 type FinalizeHandler struct {
 	store         Store
 	compatibility CompatibilityExecutor
+	// nativeFinalizeFamilies mirrors PartitionHandler.nativeFamilies: a
+	// nil/empty map is a no-op, so every family stays on the compatibility
+	// path exactly as before this capability existed.
+	nativeFinalizeFamilies    map[string]NativeFinalizeFamilyExecutor
+	nativeFinalizeFamilyNames []string
 }
 
 func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*FinalizeHandler, error) {
@@ -998,6 +1025,51 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 		return nil, ErrUnavailable
 	}
 	return &FinalizeHandler{store: store, compatibility: compatibility}, nil
+}
+
+// SetNativeFinalizeFamilies registers the finalize-scope families computed
+// natively in Go instead of by the Python compatibility bridge. Mirrors
+// PartitionHandler.SetNativeFamilies exactly -- REPLACES the map on every
+// call and sorts the names, so iteration is deterministic and one family's
+// failure never makes another's inclusion depend on Go map order.
+func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]NativeFinalizeFamilyExecutor) {
+	if handler == nil {
+		return
+	}
+	handler.nativeFinalizeFamilies = families
+	names := make([]string, 0, len(families))
+	for name := range families {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	handler.nativeFinalizeFamilyNames = names
+}
+
+// computeNativeFinalizeFamilies runs every registered finalize-scope executor
+// and returns the names that SUCCEEDED, in sorted order.
+//
+// FAIL-OPEN, for the same reason computeNativeFamilies is (CHAOS-4276's
+// ruling, applied unchanged here): a native family's runtime failure is not a
+// finalize failure. It is left OUT of the returned skip list, so the bridge
+// computes that family exactly as it would have before any native executor
+// existed. Degrading one family to Python must never fail the whole finalize,
+// and must never turn a transient ClickHouse hiccup into a Permanent error.
+func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) []string {
+	if handler == nil || len(handler.nativeFinalizeFamilyNames) == 0 {
+		return nil
+	}
+	skipFamilies := make([]string, 0, len(handler.nativeFinalizeFamilyNames))
+	for _, name := range handler.nativeFinalizeFamilyNames {
+		executor := handler.nativeFinalizeFamilies[name]
+		if executor == nil {
+			continue
+		}
+		if _, err := executor.ComputeFinalizeFamily(ctx, run); err != nil {
+			continue
+		}
+		skipFamilies = append(skipFamilies, name)
+	}
+	return skipFamilies
 }
 
 func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) error {
@@ -1026,7 +1098,13 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.store.RenewFinalize(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			return handler.compatibility.Finalize(workCtx, claim.Run)
+			// Native families run FIRST and their names become the bridge's
+			// skip list, so the bridge never recomputes what Go just wrote.
+			// Inside the lease-renewal callback deliberately: a native
+			// family's compute is real work and must hold the lease the same
+			// way the bridge call does.
+			skipFamilies := handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
+			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
 		releaseFinalize(handler.store, ctx, *claim)

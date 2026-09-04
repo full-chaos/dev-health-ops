@@ -2094,6 +2094,7 @@ async def run_daily_metrics_finalize(
     day: date,
     org_id: str,
     sink: str = "auto",
+    skip_families: set[str] | None = None,
 ) -> None:
     """Run only the IC finalize logic (IC metrics + landscape rolling).
 
@@ -2211,22 +2212,32 @@ async def run_daily_metrics_finalize(
             backend,
         )
 
-    ic_metrics = compute_ic_metrics_daily(
-        git_metrics=git_metrics,
-        wi_metrics=wi_user_metrics,
-        team_map=load_team_map(),
-    )
-    for s in sinks_list:
-        s.write_user_metrics(ic_metrics)
+    # CHAOS-4290: same gate shape as run_daily_metrics_job's families
+    # (`"file_hotspots" in skip_families` at :1875 and its siblings). When a
+    # native Go executor already computed and wrote ic_finalize for this run,
+    # recomputing here would append a SECOND generation of the same rows --
+    # and user_metrics_daily is append-only, deduped
+    # `ORDER BY computed_at DESC LIMIT 1 BY (org_id, repo_id, author_email, day)`,
+    # so the later writer wins silently and the native rows would vanish with
+    # nothing failing.
+    skip_families = skip_families or set()
+    if "ic_finalize" not in skip_families:
+        ic_metrics = compute_ic_metrics_daily(
+            git_metrics=git_metrics,
+            wi_metrics=wi_user_metrics,
+            team_map=load_team_map(),
+        )
+        for s in sinks_list:
+            s.write_user_metrics(ic_metrics)
 
-    rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
-    ic_landscape = compute_ic_landscape_rolling(
-        as_of_day=day,
-        rolling_stats=rolling_stats,
-        team_map=load_team_map(),
-    )
-    for s in sinks_list:
-        s.write_ic_landscape_rolling(ic_landscape)
+        rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
+        ic_landscape = compute_ic_landscape_rolling(
+            as_of_day=day,
+            rolling_stats=rolling_stats,
+            team_map=load_team_map(),
+        )
+        for s in sinks_list:
+            s.write_ic_landscape_rolling(ic_landscape)
 
     # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily and
     # ALL of team_cognitive_load_daily are written exactly ONCE here, per

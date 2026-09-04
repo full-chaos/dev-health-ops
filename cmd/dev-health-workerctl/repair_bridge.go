@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +27,13 @@ const (
 	reviewEvidenceMaxBytes = 2048
 	outputEvidenceMaxBytes = 4096
 )
+
+// bridgeResponseBodyCap bounds how much of a bridge response postWorkerBridge
+// reads. postWorkerBridge reads bridgeResponseBodyCap+1 bytes and treats a
+// body that fills that extra byte as OVER the cap (codex round 3, P1) --
+// never silently accepting a truncated PREFIX that happens to parse as
+// complete, valid JSON.
+const bridgeResponseBodyCap = 1 << 16
 
 // validateReviewEvidence reports whether text is a non-empty, in-bound
 // review-evidence string (trimmed non-empty, <= reviewEvidenceMaxBytes UTF-8
@@ -78,41 +88,169 @@ func parseOutputEvidence(raw string) (map[string]any, error) {
 // Python's `json.dumps(v, sort_keys=True, separators=(",", ":"))` -- the
 // exact call both `_canonical` (worker_workgraph.py:60) and
 // `_canonical_json` (worker_metrics.py:868) make, with json.dumps' DEFAULT
-// ensure_ascii=True in effect (neither call passes ensure_ascii=False). Under
-// ensure_ascii, every character outside ASCII is escaped to `\uXXXX` (6
-// bytes), or a UTF-16 surrogate pair of two `\uXXXX` escapes (12 bytes) for
-// a rune above the Basic Multilingual Plane -- never emitted as raw UTF-8.
-// Go's json.Marshal never does this (it emits UTF-8 directly), so this
-// walks the marshaled bytes as runes and re-prices each one under Python's
-// scheme instead of trusting len(json.Marshal(v)).
+// ensure_ascii=True in effect (neither call passes ensure_ascii=False).
+//
+// This walks v RECURSIVELY and re-prices each scalar under Python's own
+// rules, rather than trusting Go's json.Marshal output (codex round 2, P2:
+// Go emits raw UTF-8 for non-ASCII characters, Python's ensure_ascii
+// \uXXXX-escapes them -- fixed below in pythonJSONStringByteLen; codex
+// round 3, P2: json.Number PRESERVES THE OPERATOR'S LITERAL LEXEME, e.g.
+// "1e+09", but Python's json.loads parses any number containing '.'/'e'/'E'
+// as a float and Python's json.dumps re-serializes that float via its own
+// repr -- "1e+09" canonicalizes to "1000000000.0", not "1e+09" -- so
+// re-marshaling the Go-side json.Number verbatim silently undercounts any
+// payload using exponent/decimal notation; fixed via pythonNumberRepr).
+// v must be built from a parseOutputEvidence-style decode (UseNumber()):
+// map[string]any, []any, json.Number, string, bool, or nil.
 func pythonCanonicalJSONByteLen(v any) (int, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	// Go's json.Marshal HTML-escapes <, >, and & by default; Python's
-	// json.dumps never does. Disable that here so those three ASCII
-	// characters price at 1 byte each, matching Python, instead of Go's
-	// default 6-byte <-style escape -- SetEscapeHTML is unrelated to
-	// the ensure_ascii repricing this function does below, but leaving it
-	// on would overcount those three characters specifically.
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(v); err != nil {
-		return 0, err
+	switch value := v.(type) {
+	case nil:
+		return len("null"), nil
+	case bool:
+		if value {
+			return len("true"), nil
+		}
+		return len("false"), nil
+	case string:
+		return pythonJSONStringByteLen(value), nil
+	case json.Number:
+		repr, err := pythonNumberRepr(value)
+		if err != nil {
+			return 0, err
+		}
+		return len(repr), nil
+	case float64:
+		// Reachable only if a caller passes a plain Go float64 rather than
+		// a UseNumber()-decoded json.Number; kept for defensiveness, not
+		// exercised by parseOutputEvidence's own decode path.
+		return len(pythonFloatRepr(value)), nil
+	case map[string]any:
+		length := 2 // { }
+		first := true
+		for key, mapValue := range value {
+			if !first {
+				length++ // ,
+			}
+			first = false
+			length += pythonJSONStringByteLen(key)
+			length++ // :
+			valueLength, err := pythonCanonicalJSONByteLen(mapValue)
+			if err != nil {
+				return 0, err
+			}
+			length += valueLength
+		}
+		return length, nil
+	case []any:
+		length := 2 // [ ]
+		for index, item := range value {
+			if index > 0 {
+				length++ // ,
+			}
+			itemLength, err := pythonCanonicalJSONByteLen(item)
+			if err != nil {
+				return 0, err
+			}
+			length += itemLength
+		}
+		return length, nil
+	default:
+		return 0, fmt.Errorf("pythonCanonicalJSONByteLen: unsupported type %T", v)
 	}
-	// Encoder.Encode appends a trailing newline Marshal does not; trim it
-	// before counting so this matches json.dumps' own output exactly.
-	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
-	length := 0
-	for _, r := range string(encoded) {
+}
+
+// pythonJSONStringByteLen is the byte length Python's json.dumps(s) (with
+// its default ensure_ascii=True) would produce for the JSON-string encoding
+// of s, including its two surrounding quotes.
+func pythonJSONStringByteLen(s string) int {
+	length := 2 // the opening and closing quote
+	for _, r := range s {
 		switch {
+		case r == '"' || r == '\\':
+			length += 2 // \" or \\
+		case r == '\n' || r == '\r' || r == '\t':
+			length += 2 // \n, \r, or \t
+		case r < 0x20:
+			length += 6 // \u00XX for any other control character
 		case r < 0x80:
 			length++
 		case r > 0xFFFF:
-			length += 12 // two \uXXXX surrogate-pair escapes
+			length += 12 // a UTF-16 surrogate pair, two \uXXXX escapes
 		default:
 			length += 6 // one \uXXXX escape
 		}
 	}
-	return length, nil
+	return length
+}
+
+// pythonNumberRepr returns the exact text Python's json.dumps would emit
+// for the JSON number number decodes to. A lexeme with no '.', 'e', or 'E'
+// parses in Python as an arbitrary-precision int and round-trips through
+// json.dumps UNCHANGED (Go's json.Number already preserves this lexeme
+// verbatim, which is round 1's UseNumber() fix). A lexeme WITH any of
+// those (decimal point or exponent) parses as a Python float, which
+// json.dumps re-serializes via float repr -- never the original lexeme.
+func pythonNumberRepr(number json.Number) (string, error) {
+	lexeme := number.String()
+	if !strings.ContainsAny(lexeme, ".eE") {
+		return lexeme, nil
+	}
+	value, err := number.Float64()
+	if err != nil {
+		return "", fmt.Errorf("output-evidence numeric value %q: %w", lexeme, err)
+	}
+	return pythonFloatRepr(value), nil
+}
+
+// pythonFloatRepr renders f the way CPython's float.__repr__ (which
+// json.dumps calls for every Python float) does: the shortest decimal
+// string that round-trips to f, in FIXED notation with an explicit ".0" for
+// a whole number whenever f's decimal exponent is in [-4, 17) -- CPython's
+// own threshold -- and in scientific notation outside that range. Go's
+// strconv has no equivalent formatter (its 'g' verb picks scientific
+// notation based on significant-digit count, not this fixed exponent
+// threshold, and never appends ".0"), so this derives the exponent from
+// Go's own shortest round-trip scientific form and re-renders it under
+// Python's rule.
+func pythonFloatRepr(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	}
+	scientific := strconv.FormatFloat(f, 'e', -1, 64)
+	exponent := pythonFloatSciExponent(scientific)
+	if exponent >= -4 && exponent < 17 {
+		fixed := strconv.FormatFloat(f, 'f', -1, 64)
+		if !strings.ContainsRune(fixed, '.') {
+			fixed += ".0"
+		}
+		return fixed
+	}
+	// Residual, not byte-proven against Python at this magnitude: outside
+	// [-4, 17) both Go's 'e' verb and Python's repr use scientific
+	// notation with a signed, zero-padded-to-2-digit exponent, and every
+	// measured case agrees -- but no evidence payload realistically
+	// reaches 1e17 or 1e-4, so this is intentionally not chased further.
+	return scientific
+}
+
+// pythonFloatSciExponent extracts the decimal exponent from a Go
+// strconv.FormatFloat(f, 'e', -1, 64) string (e.g. "1e+09" -> 9,
+// "1.234e-05" -> -5).
+func pythonFloatSciExponent(scientific string) int {
+	index := strings.IndexByte(scientific, 'e')
+	if index < 0 {
+		return 0
+	}
+	exponent, err := strconv.Atoi(scientific[index+1:])
+	if err != nil {
+		return 0
+	}
+	return exponent
 }
 
 // requiredFieldValidator is implemented by every strict bridge-2xx-response
@@ -135,6 +273,32 @@ type requiredFieldValidator interface {
 	// Go field's type, e.g. a string where a number was expected, as a
 	// decode error before this method ever runs).
 	validateRequiredFields() error
+}
+
+// assertAllFieldsArePointers is codex round 3's answer to its own P3: the
+// generic constraint on decodeStrictBridgeResponse (`PT interface{*T;
+// requiredFieldValidator}`) cannot itself require every field of T to be a
+// pointer type -- nothing in the Go type system stops a future
+// *BridgeResponse type from adding a non-pointer required field, which
+// could then never distinguish "absent" from "present with the JSON zero
+// value" the way this whole mechanism exists to guarantee, and nothing
+// would catch it except a reviewer reading the struct by eye. This walks
+// T's fields via reflection and fails loud if any is not a pointer Kind.
+// Called from a test (repair_test.go) once per concrete response type, NOT
+// from the request hot path in postWorkerBridge -- reflection cost is
+// intentionally kept off every real bridge call.
+func assertAllFieldsArePointers[T any]() error {
+	structType := reflect.TypeOf(*new(T))
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		if field.Type.Kind() != reflect.Pointer {
+			return fmt.Errorf(
+				"%s.%s is type %s, not a pointer -- every field must be a pointer so an absent field decodes to nil, never a JSON zero value indistinguishable from a real one",
+				structType.Name(), field.Name, field.Type,
+			)
+		}
+	}
+	return nil
 }
 
 // decodeStrictBridgeResponse decodes raw response bytes into a fresh T
@@ -166,10 +330,19 @@ func decodeStrictBridgeResponse[T any, PT interface {
 
 // redriveLedgerBridgeResponse is `POST /internal/worker/daily-metrics/v1/redrive`'s
 // 2xx shape (`_bulk_redrive_ambiguous_executions`'s `return {"repaired":
-// repaired, "skipped_claim_active": skipped}`, worker_metrics.py:1535).
+// repaired, "skipped_claim_active": skipped}`, worker_metrics.py:1535 --
+// both Python `int`s, never fractional). Fields are *int64, not *float64
+// (codex round 3, P1): with *float64, a non-contract response like
+// `"skipped_claim_active": 0.5` passed strict validation (present, right
+// Go-side kind) and was then silently TRUNCATED to 0 by main.go's
+// `int(skipped)` conversion, reporting "nothing skipped" for a response
+// that was itself already anomalous. json.Unmarshal into *int64 rejects a
+// JSON number with a fractional part outright (an UnmarshalTypeError), so
+// the strict decode itself refuses the response before any caller ever
+// sees a value to truncate.
 type redriveLedgerBridgeResponse struct {
-	Repaired           *float64 `json:"repaired"`
-	SkippedClaimActive *float64 `json:"skipped_claim_active"`
+	Repaired           *int64 `json:"repaired"`
+	SkippedClaimActive *int64 `json:"skipped_claim_active"`
 }
 
 func (r *redriveLedgerBridgeResponse) validateRequiredFields() error {
@@ -287,28 +460,57 @@ func postWorkerBridge[T any, PT interface {
 		return 0, nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+	// codex round 3, P1: reading exactly bridgeResponseBodyCap bytes with no
+	// overflow check let a body LARGER than the cap be silently truncated to
+	// a prefix that can still parse as valid, complete-looking JSON (e.g. a
+	// legitimate response plus trailing whitespace, cut off right before
+	// more data) -- read one byte past the cap so a body that's actually
+	// bigger is DETECTED, not silently accepted as a valid-looking prefix.
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, bridgeResponseBodyCap+1))
 	if err != nil {
 		return 0, nil, err
 	}
+	if len(responseBody) > bridgeResponseBodyCap {
+		return response.StatusCode, nil, fmt.Errorf(
+			"bridge response exceeds the %d-byte cap -- refusing rather than silently accepting a truncated prefix",
+			bridgeResponseBodyCap,
+		)
+	}
 	var decoded map[string]any
 	if len(responseBody) > 0 {
-		// codex round 1, P1: an earlier version substituted
-		// {"raw_response": <text>} here on an unmarshal failure and returned
-		// nil error -- redriveDailyMetricsLedgerChunk's type-asserted reads
-		// (chunkResult["repaired"].(float64), comma-ok) then silently treated
-		// a malformed/truncated 200 body as {repaired:0, skipped_claim_active:0},
-		// which reads as "fully repaired, nothing to skip" and lets
-		// dispatchMetrics proceed to redrive partitions against an UNREPAIRED
-		// ledger -- reintroducing the exact CHAOS-4304 hazard the ledger-repair
-		// gate exists to prevent. A response the bridge sent but this CLI
-		// cannot parse must be a hard error, never a decodable-looking zero
-		// value a caller's arithmetic can silently trust.
 		if unmarshalErr := json.Unmarshal(responseBody, &decoded); unmarshalErr != nil {
-			return response.StatusCode, nil, fmt.Errorf(
-				"bridge returned status %d with an undecodable body (%d bytes): %w",
-				response.StatusCode, len(responseBody), unmarshalErr,
-			)
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				// codex round 1, P1: an earlier version substituted
+				// {"raw_response": <text>} here on ANY status and returned nil
+				// error -- redriveDailyMetricsLedgerChunk's type-asserted reads
+				// (chunkResult["repaired"].(float64), comma-ok) then silently
+				// treated a malformed/truncated 200 body as
+				// {repaired:0, skipped_claim_active:0}, which reads as "fully
+				// repaired, nothing to skip" and lets dispatchMetrics proceed
+				// to redrive partitions against an UNREPAIRED ledger --
+				// reintroducing the exact CHAOS-4304 hazard the ledger-repair
+				// gate exists to prevent. A 2xx response the bridge sent but
+				// this CLI cannot parse must be a hard error, never a
+				// decodable-looking zero value a caller's arithmetic can
+				// silently trust.
+				return response.StatusCode, nil, fmt.Errorf(
+					"bridge returned status %d with an undecodable body (%d bytes): %w",
+					response.StatusCode, len(responseBody), unmarshalErr,
+				)
+			}
+			// codex round 3, P2: the check above USED TO run unconditionally
+			// on every status, not just 2xx -- a real HTTP error (401/409/422/
+			// 500/502, a reverse-proxy error page, plain text, or a JSON array/
+			// scalar body) whose body isn't a JSON OBJECT was misclassified as
+			// a Go transport error identical to "never reached the bridge at
+			// all," and every repair verb then discarded the real response and
+			// printed only "operator_backend_unavailable" -- hiding exactly the
+			// detail (e.g. the bridge's real 422 message) an operator needs.
+			// A non-2xx status ALREADY signals failure on its own; unlike the
+			// 2xx case above, nothing downstream ever trusts a FIELD out of a
+			// non-2xx body, so relaying the raw text is safe, not a repeat of
+			// round 1's hazard.
+			decoded = map[string]any{"raw_response": string(responseBody)}
 		}
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {

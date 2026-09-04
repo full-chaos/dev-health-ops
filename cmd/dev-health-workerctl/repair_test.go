@@ -782,3 +782,209 @@ func TestMetricExecutionRepairBridgeResponseShapeGuard(t *testing.T) {
 		{"state_wrong_type", `{"status":"repaired","execution_id":"` + testAmbiguousExecutionID + `","state":1}`, true},
 	})
 }
+
+// --- codex round 3 (bigboy, FINAL) --------------------------------------
+
+// TestPostWorkerBridgeRejectsAResponseOverTheCap is round 3's P1 red-first
+// proof: reading exactly bridgeResponseBodyCap bytes with no overflow check
+// let a body LARGER than the cap be silently truncated to a prefix that
+// still parses as complete, valid JSON (e.g. a real response plus trailing
+// padding, cut off right before more real data) -- postWorkerBridge must
+// DETECT the overflow and refuse, not accept the truncated prefix as if it
+// were the whole response.
+func TestPostWorkerBridgeRejectsAResponseOverTheCap(t *testing.T) {
+	oversized := strings.Repeat(" ", bridgeResponseBodyCap-1) + "!"
+	fake := newFakeBridge(t, http.StatusOK, `{"repaired":1,"skipped_claim_active":0}`+oversized)
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+	_, _, err := postWorkerBridge[redriveLedgerBridgeResponse](context.Background(), "WORKER_METRIC_REPAIR_TOKEN", "/x", map[string]any{})
+	if err == nil {
+		t.Fatal("postWorkerBridge on a response over the byte cap = nil error, want a rejection")
+	}
+}
+
+func TestPostWorkerBridgeAcceptsAResponseExactlyAtTheCap(t *testing.T) {
+	// A response exactly AT the cap (not over it) must still work -- the
+	// overflow check must not be off-by-one in the strict direction either.
+	body := `{"repaired":1,"skipped_claim_active":0}`
+	padded := body + strings.Repeat(" ", bridgeResponseBodyCap-len(body))
+	if len(padded) != bridgeResponseBodyCap {
+		t.Fatalf("test fixture itself is %d bytes, want exactly %d", len(padded), bridgeResponseBodyCap)
+	}
+	fake := newFakeBridge(t, http.StatusOK, padded)
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+	status, _, err := postWorkerBridge[redriveLedgerBridgeResponse](context.Background(), "WORKER_METRIC_REPAIR_TOKEN", "/x", map[string]any{})
+	if err != nil {
+		t.Fatalf("postWorkerBridge on a response exactly at the cap: %v, want no error", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+}
+
+// TestRedriveLedgerBridgeResponseRejectsFractionalCounts is round 3's P1
+// (second finding) red-first proof: with *float64 fields, a non-contract
+// response like `"skipped_claim_active": 0.5` passed strict validation
+// (present, right Go-side kind) and was then silently TRUNCATED to 0 by
+// main.go's int(...) conversion -- *int64 fields make json.Unmarshal itself
+// reject a fractional JSON number outright, before any caller ever sees a
+// value to truncate.
+func TestRedriveLedgerBridgeResponseRejectsFractionalCounts(t *testing.T) {
+	runShapeGuardCases[redriveLedgerBridgeResponse](t, []shapeGuardCase{
+		{"fractional_skipped_claim_active", `{"repaired":1,"skipped_claim_active":0.5}`, true},
+		{"fractional_repaired", `{"repaired":1.5,"skipped_claim_active":0}`, true},
+		{"whole_number_as_float_literal_still_ok", `{"repaired":1,"skipped_claim_active":0}`, false},
+	})
+}
+
+// TestPythonCanonicalJSONByteLenMatchesPythonOnExponentNotation is round 3's
+// P2 (first finding) red-first proof, using Python's own exact measured
+// figures: json.Number preserves the operator's literal lexeme ("1e+09"),
+// but Python's json.loads parses any number containing '.'/'e'/'E' as a
+// float and re-serializes it via float repr -- "1e+09" canonicalizes to
+// "1000000000.0", eleven bytes longer than the six-byte lexeme.
+func TestPythonCanonicalJSONByteLenMatchesPythonOnExponentNotation(t *testing.T) {
+	decodeUseNumber := func(raw string) map[string]any {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		var value map[string]any
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatalf("decode fixture: %v", err)
+		}
+		return value
+	}
+	t.Run("single_value", func(t *testing.T) {
+		length, err := pythonCanonicalJSONByteLen(decodeUseNumber(`{"n":1e9}`))
+		if err != nil {
+			t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
+		}
+		if length != 18 { // python: json.dumps({"n":1e9}, sort_keys=True, separators=(",",":")) == 18 bytes
+			t.Fatalf("pythonCanonicalJSONByteLen = %d, want 18 (python measured)", length)
+		}
+	})
+	t.Run("680_element_array_matches_codex_own_measurement", func(t *testing.T) {
+		raw := `{"a":[` + strings.Repeat("1e9,", 679) + "1e9]}"
+		length, err := pythonCanonicalJSONByteLen(decodeUseNumber(raw))
+		if err != nil {
+			t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
+		}
+		if length != 8847 { // python: json.dumps({"a": [1e9]*680}, sort_keys=True, separators=(",",":")) == 8847 bytes
+			t.Fatalf("pythonCanonicalJSONByteLen = %d, want 8847 (python measured, matches codex round 3's own repro)", length)
+		}
+	})
+}
+
+// TestParseOutputEvidenceRejectsExponentPayloadThatExceedsThePythonCanonicalBound
+// exercises the fix through the real dispatch path: a payload whose RAW/Go
+// re-marshaled length is under the 4096-byte bound but whose Python-canonical
+// length (after Python reparses the exponent notation as a float) is not
+// must be rejected LOCALLY.
+func TestParseOutputEvidenceRejectsExponentPayloadThatExceedsThePythonCanonicalBound(t *testing.T) {
+	raw := `{"a":[` + strings.Repeat("1e9,", 679) + "1e9]}"
+	if len(raw) >= outputEvidenceMaxBytes {
+		t.Fatalf("test fixture itself is %d bytes, want it under %d so the OLD (buggy) check would have accepted it", len(raw), outputEvidenceMaxBytes)
+	}
+	if _, err := parseOutputEvidence(raw); err == nil {
+		t.Fatal("parseOutputEvidence accepted an exponent-notation payload whose Python-canonical length exceeds the bridge's bound")
+	}
+}
+
+func TestPythonFloatReprMatchesPythonMeasuredCases(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{"whole_number_in_fixed_range", 1e9, "1000000000.0"},
+		{"simple_fraction", 0.5, "0.5"},
+		{"small_magnitude_scientific", 1.5e-7, "1.5e-07"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := pythonFloatRepr(testCase.value); got != testCase.want {
+				t.Fatalf("pythonFloatRepr(%v) = %q, want %q (python measured)", testCase.value, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestPostWorkerBridgeRelaysNonObjectNon2xxBodiesInsteadOfErroring is round
+// 3's P2 (second finding) red-first proof: the undecodable-body check
+// previously ran unconditionally on EVERY status, not just 2xx -- a real
+// HTTP error (422/500/502, a proxy error page, plain text, or a JSON array)
+// whose body isn't a JSON OBJECT was misclassified as a Go transport error
+// identical to "never reached the bridge at all," and every repair verb
+// then printed only "operator_backend_unavailable" instead of the bridge's
+// real response.
+func TestPostWorkerBridgeRelaysNonObjectNon2xxBodiesInsteadOfErroring(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"plain_text_502", http.StatusBadGateway, "Bad Gateway"},
+		{"json_array_422", http.StatusUnprocessableEntity, `["field required"]`},
+		{"json_string_500", http.StatusInternalServerError, `"internal error"`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fake := newFakeBridge(t, testCase.status, testCase.body)
+			t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+			t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
+			status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+			if err != nil {
+				t.Fatalf("postWorkerBridge on a non-object non-2xx body: err = %v, want nil (relayed, not a transport error)", err)
+			}
+			if status != testCase.status {
+				t.Fatalf("status = %d, want %d", status, testCase.status)
+			}
+			if raw, _ := body["raw_response"].(string); raw != testCase.body {
+				t.Fatalf("body[raw_response] = %q, want the bridge's exact body %q", raw, testCase.body)
+			}
+		})
+	}
+}
+
+// TestPostWorkerBridgeStillErrorsOnAnUndecodable2xxBody is a companion
+// negative control for the fix above: an undecodable 2xx body must STILL
+// be a hard error (round 1's original fix) -- the fix must be scoped to
+// non-2xx only, not accidentally weaken the 2xx safety behavior.
+func TestPostWorkerBridgeStillErrorsOnAnUndecodable2xxBody(t *testing.T) {
+	fake := newFakeBridge(t, http.StatusOK, `not-json`)
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
+	_, _, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	if err == nil {
+		t.Fatal("postWorkerBridge on an undecodable 200 body = nil error, want an error")
+	}
+}
+
+// --- assertAllFieldsArePointers (round 3, P3) ----------------------------
+
+// badPointerFieldResponse is a TEST-ONLY fixture: a hypothetical future
+// response shape with a non-pointer required field, exactly the class codex
+// round 3's P3 flagged as uncatchable by the generic constraint alone. It
+// exists to prove assertAllFieldsArePointers is a real positive control
+// (catches a real violation), not just a function that always returns nil.
+type badPointerFieldResponse struct {
+	Status string `json:"status"` // deliberately NOT a pointer
+}
+
+func (r *badPointerFieldResponse) validateRequiredFields() error { return nil }
+
+func TestAssertAllFieldsArePointersCatchesANonPointerField(t *testing.T) {
+	if err := assertAllFieldsArePointers[badPointerFieldResponse](); err == nil {
+		t.Fatal("assertAllFieldsArePointers on a non-pointer-field type = nil error, want it caught")
+	}
+}
+
+func TestAssertAllFieldsArePointersPassesOnEveryRealResponseType(t *testing.T) {
+	if err := assertAllFieldsArePointers[redriveLedgerBridgeResponse](); err != nil {
+		t.Fatalf("redriveLedgerBridgeResponse: %v", err)
+	}
+	if err := assertAllFieldsArePointers[workgraphRepairBridgeResponse](); err != nil {
+		t.Fatalf("workgraphRepairBridgeResponse: %v", err)
+	}
+	if err := assertAllFieldsArePointers[metricExecutionRepairBridgeResponse](); err != nil {
+		t.Fatalf("metricExecutionRepairBridgeResponse: %v", err)
+	}
+}

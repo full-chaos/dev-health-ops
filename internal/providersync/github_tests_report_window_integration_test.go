@@ -40,8 +40,10 @@ func githubTestsReportWindowCounts(
 }
 
 // CHAOS-5045, proof (a). Two consecutive hourly windows over one unchanged run
-// must leave ONE raw row per (run, suite, case). Before the updated_at lower
-// bound in the report phase, the second window re-downloaded the artifact and
+// must leave ONE raw row per (run, suite, case). The report phase deliberately
+// re-fetches the run every pass -- it must, because a late-published artifact is
+// otherwise lost forever (codex r1's P1) -- so this asserts the WRITE is what
+// gets suppressed, not the fetch. Before the content skip, each re-fetch
 // re-inserted every case with a fresh last_synced, and the duplicate was
 // invisible to every reader that went through FINAL.
 func TestGitHubTestsReportWindowWritesOneRawRowPerKeyAcrossWindows(t *testing.T) {
@@ -121,5 +123,82 @@ func TestGitHubTestsReportWindowWritesOneRawRowPerKeyAcrossWindows(t *testing.T)
 	if failed != 0 {
 		t.Fatalf("FINAL still reports %d failed case(s) after the retry passed -- "+
 			"the update did not win the ReplacingMergeTree collapse", failed)
+	}
+}
+
+// CHAOS-5045 requirement (c): the content-skip must DISCRIMINATE. Writing the
+// identical batch twice must not add a raw row; changing a single field must.
+//
+// This is the test that would catch the skip degenerating in either direction —
+// a skip that never fires (the duplication returns) or one that always fires (a
+// genuinely changed report is silently dropped, which is strictly worse than the
+// duplication it replaces).
+func TestGitHubTestsContentSkipWritesOnlyWhenTheReportChanged(t *testing.T) {
+	ctx, sink := newGitHubTestsIntegrationSink(t)
+	claim := nativeTestClaim("github", "tests")
+
+	base := githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitFixture})
+	changed := githubTestsZip(t, map[string]string{"junit.xml": githubTestsJUnitRetriedFixture})
+
+	collectInto := func(archive []byte, at time.Time) {
+		t.Helper()
+		doer := &githubTestsReportWindowDoer{
+			t: t, updatedAt: "2026-07-22T10:05:00Z", archive: archive,
+		}
+		if err := (GitHubTestsRouteHandler{}).CollectChunks(
+			ctx, claim, providerfoundation.Credential{},
+			githubTestsClient(t, doer), at, "",
+			func(emission ChunkRouteEmission) error {
+				for _, effect := range emission.Batch.Effects {
+					if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		); err != nil {
+			t.Fatalf("CollectChunks: %v", err)
+		}
+	}
+
+	collectInto(base, time.Date(2026, 7, 22, 11, 5, 0, 0, time.UTC))
+	afterFirst, distinctFirst := githubTestsReportWindowCounts(ctx, t, sink, claim.OrgID)
+	if afterFirst == 0 || afterFirst != distinctFirst {
+		t.Fatalf("first write raw=%d distinct=%d, want equal and non-zero", afterFirst, distinctFirst)
+	}
+
+	// Identical content, later pass: the fetch happens again, the write must not.
+	collectInto(base, time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))
+	raw, distinct := githubTestsReportWindowCounts(ctx, t, sink, claim.OrgID)
+	if raw != afterFirst {
+		t.Fatalf("re-collecting an UNCHANGED report wrote %d raw rows, want %d — "+
+			"the content skip did not fire, so last_synced churn is back", raw, afterFirst)
+	}
+	if distinct != distinctFirst {
+		t.Fatalf("distinct keys moved from %d to %d on an unchanged re-collect", distinctFirst, distinct)
+	}
+
+	// One field differs (a case that failed now passes): the write MUST happen.
+	collectInto(changed, time.Date(2026, 7, 22, 15, 5, 0, 0, time.UTC))
+	raw, distinct = githubTestsReportWindowCounts(ctx, t, sink, claim.OrgID)
+	if raw <= afterFirst {
+		t.Fatalf("a CHANGED report wrote nothing (raw still %d) — the skip is over-firing "+
+			"and silently dropping a real update, which is worse than the duplication it replaces", raw)
+	}
+	if distinct != distinctFirst {
+		t.Fatalf("a changed report altered the key set (%d -> %d); it should update in place",
+			distinctFirst, distinct)
+	}
+
+	var failed uint64
+	if err := sink.Conn.QueryRow(ctx,
+		`SELECT count() FROM test_case_results FINAL WHERE org_id = ? AND status = 'failed'`,
+		claim.OrgID,
+	).Scan(&failed); err != nil {
+		t.Fatalf("count failed cases: %v", err)
+	}
+	if failed != 0 {
+		t.Fatalf("FINAL still reports %d failed case(s) after the retry passed — "+
+			"the changed report did not win the collapse", failed)
 	}
 }

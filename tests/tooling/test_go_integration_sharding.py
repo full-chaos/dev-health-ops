@@ -1659,31 +1659,35 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # The other new test this round, TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse
     # (cmd/dev-health-worker), is `-tags=integration`, so it does not touch this
     # count -- the integration-tagged count stays 152.
-    # CHAOS-5045 (GitHub TestOps report phase bounded on updated_at): +8 top-level
-    # (1319 -> 1327), of which +1 is integration-tagged (152 -> 153).
-    # Ordinary (+7, github_tests_report_window_test.go): the report-window
-    # disposition needs both directions pinned, because narrowing a sync window
-    # can fail two opposite ways -- re-collecting what it should skip, and
-    # dropping what it must keep. TestGitHubTestsReportPhaseSkipsARunUnchangedSinceAnEarlierWindow
-    # (the red one: asserts the per-run /artifacts request is NOT reissued),
-    # TestGitHubTestsReportPhaseStillCollectsARunUpdatedInsideTheWindow,
-    # TestGitHubTestsReportPhaseGraceCoversOneWindowOfIndexingLag,
+    # CHAOS-5045 (GitHub TestOps duplicate report ingestion): +7 top-level
+    # (1319 -> 1326), of which +2 are integration-tagged (152 -> 154).
+    #
+    # The first attempt bounded the report-collection WINDOW on the run's
+    # updated_at. Codex round 1 proved that silently and permanently drops a
+    # report published after updated_at settles, while the watermark advances
+    # over the gap -- so the window bound was REVERTED and the duplication is
+    # suppressed at the WRITE instead (identical rows are not re-inserted).
+    # The three tests that encoded the window bound were removed with it; the
+    # counts below reflect the surviving set, not the first attempt's.
+    #
+    # Ordinary (+5): TestGitHubTestsReportPhaseStillCollectsARunUpdatedInsideTheWindow,
     # TestGitHubTestsReportPhaseNeverSkipsARunWithoutAnUpdatedAt,
     # TestGitHubTestsReportPhaseFiltersNothingWithoutASinceBound,
-    # TestGitHubTestsReportWindowDispositionIsSharedByBothRoutes,
-    # TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt (GitLab is the
-    # precedent this fix mirrors; asserting its live query keeps the two
-    # providers' report windows from drifting apart silently).
-    # Integration-tagged (+1, github_tests_report_window_integration_test.go):
-    # TestGitHubTestsReportWindowWritesOneRawRowPerKeyAcrossWindows, which needs a
-    # real ClickHouse because its whole point is a raw count read WITHOUT FINAL --
-    # a FINAL readback collapses the duplicate keys and would pass on the
-    # unfixed code, which is exactly why the defect survived unnoticed.
-    # It joins the existing internal/providersync shard row, so
+    # TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt (GitLab bounds its own
+    # report phase server-side and is asserted so the two providers cannot drift
+    # apart silently), and TestGitHubTestsLatePublishedArtifactIsNotLostForever
+    # -- the regression guard for the defect above, red on the reverted design.
+    #
+    # Integration-tagged (+2): TestGitHubTestsReportWindowWritesOneRawRowPerKeyAcrossWindows
+    # (raw count asserted WITHOUT FINAL, since a FINAL readback collapses the
+    # duplicates and would pass on the unfixed code) and
+    # TestGitHubTestsContentSkipWritesOnlyWhenTheReportChanged (the skip must
+    # discriminate: identical rows write nothing, one changed field writes).
+    # Both join the existing internal/providersync shard row, so
     # ci/go_integration_shards.tsv needs no new row and its 44-row count is
     # unchanged.
-    assert len(expected_provider_tests) == 1327
-    assert len(expected_integration_tests) == 153
+    assert len(expected_provider_tests) == 1326
+    assert len(expected_integration_tests) == 154
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1699,7 +1703,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1327
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1326
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1786,7 +1790,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1327
+    assert len(selected_tests) == len(set(selected_tests)) == 1326
     assert set(selected_tests) == expected_tests
 
 

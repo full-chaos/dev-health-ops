@@ -43,6 +43,172 @@ func githubTestsDestination(destination string) bool {
 	}
 }
 
+// CHAOS-5045. The GitHub TestOps report phase deliberately RE-COLLECTS runs it
+// has already seen: GitHub's per-run artifact listing has no documented
+// availability bound, so a report can become listable minutes after the run's
+// own updated_at has settled. An earlier fix bounded the collection window on
+// updated_at instead, and codex round 1 proved that silently and PERMANENTLY
+// drops such a late report while the watermark advances over the gap -- the
+// run is skipped, the unit reports complete, and after midnight the
+// date-granular server-side filter stops returning the run at all.
+//
+// So the fetch is never skipped. The DUPLICATION the ticket is actually about
+// -- 7,072,971 raw test_case_results rows for 3,795,833 distinct keys on one
+// repo, invisible to every reader that goes through FINAL -- is suppressed one
+// level lower instead: if the store already holds exactly the rows this batch
+// would write, the INSERT is skipped. A re-collection that found nothing new
+// costs a read, not a rewrite, and a ReplacingMergeTree row is not rewritten
+// with a fresh last_synced for a run nothing changed.
+//
+// last_synced is EXCLUDED from the comparison by construction: it is the very
+// field that differs on every pass and the one whose churn this fixes. Every
+// other column participates, so a genuinely changed report -- a retried job, a
+// late-arriving suite, a status flip -- still writes.
+//
+// The comparison is done in Go against rows read back through FINAL, NOT by
+// hashing in ClickHouse and again in Go: a cross-language digest would have to
+// agree on NULL handling and float formatting between the two runtimes, which
+// is exactly the class of parity trap this repo has been bitten by before.
+
+// testOpsRunKey identifies the natural-key prefix a report batch is scoped to.
+type testOpsRunKey struct{ orgID, repoID, runID string }
+
+func sameOptionalString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func sameOptionalFloat(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// storedTestCaseRows reads back every persisted case row for one run through
+// FINAL, keyed by the part of the natural key the run prefix does not fix.
+func storedTestCaseRows(ctx context.Context, conn driver.Conn, key testOpsRunKey) (map[[2]string]testCaseResultRow, error) {
+	rows, err := conn.Query(ctx, `SELECT suite_id,case_id,case_name,class_name,status,duration_seconds,toInt64(retry_attempt),failure_message,failure_type,stack_trace,is_quarantined != 0 FROM test_case_results FINAL WHERE org_id=? AND repo_id=? AND run_id=?`, key.orgID, key.repoID, key.runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	stored := map[[2]string]testCaseResultRow{}
+	for rows.Next() {
+		row := testCaseResultRow{OrgID: key.orgID, RepoID: key.repoID, RunID: key.runID}
+		if err := rows.Scan(&row.SuiteID, &row.CaseID, &row.CaseName, &row.ClassName, &row.Status, &row.DurationSeconds, &row.RetryAttempt, &row.FailureMessage, &row.FailureType, &row.StackTrace, &row.IsQuarantined); err != nil {
+			return nil, err
+		}
+		stored[[2]string{row.SuiteID, row.CaseID}] = row
+	}
+	return stored, rows.Err()
+}
+
+func sameTestCaseRow(want, got testCaseResultRow) bool {
+	return want.CaseName == got.CaseName &&
+		sameOptionalString(want.ClassName, got.ClassName) &&
+		want.Status == got.Status &&
+		sameOptionalFloat(want.DurationSeconds, got.DurationSeconds) &&
+		want.RetryAttempt == got.RetryAttempt &&
+		sameOptionalString(want.FailureMessage, got.FailureMessage) &&
+		sameOptionalString(want.FailureType, got.FailureType) &&
+		sameOptionalString(want.StackTrace, got.StackTrace) &&
+		want.IsQuarantined == got.IsQuarantined
+}
+
+// testCaseBatchAlreadyStored reports whether every row in the batch is already
+// persisted with identical content. A batch spanning several runs is only
+// skipped when EVERY run matches -- a partial match still writes the whole
+// batch, because the INSERT is the unit of atomicity here and splitting it
+// would trade a cheap redundant write for a much worse partial-write seam.
+func testCaseBatchAlreadyStored(ctx context.Context, conn driver.Conn, rows []testCaseResultRow) (bool, error) {
+	byRun := map[testOpsRunKey][]testCaseResultRow{}
+	for _, row := range rows {
+		key := testOpsRunKey{row.OrgID, row.RepoID, row.RunID}
+		byRun[key] = append(byRun[key], row)
+	}
+	for key, want := range byRun {
+		stored, err := storedTestCaseRows(ctx, conn, key)
+		if err != nil {
+			return false, err
+		}
+		// A differing row COUNT is decisive on its own: a run that gained or
+		// lost cases is a changed run, whatever the surviving rows say.
+		if len(stored) != len(want) {
+			return false, nil
+		}
+		for _, row := range want {
+			got, ok := stored[[2]string{row.SuiteID, row.CaseID}]
+			if !ok || !sameTestCaseRow(row, got) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// storedTestSuiteRows is the suite-level twin of storedTestCaseRows.
+func storedTestSuiteRows(ctx context.Context, conn driver.Conn, key testOpsRunKey) (map[string]testSuiteResultRow, error) {
+	rows, err := conn.Query(ctx, `SELECT suite_id,suite_name,framework,environment,toInt64(total_count),toInt64(passed_count),toInt64(failed_count),toInt64(skipped_count),toInt64(error_count),toInt64(quarantined_count),toInt64(retried_count),duration_seconds,started_at,finished_at,team_id,service_id FROM test_suite_results FINAL WHERE org_id=? AND repo_id=? AND run_id=?`, key.orgID, key.repoID, key.runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	stored := map[string]testSuiteResultRow{}
+	for rows.Next() {
+		row := testSuiteResultRow{OrgID: key.orgID, RepoID: key.repoID, RunID: key.runID}
+		if err := rows.Scan(&row.SuiteID, &row.SuiteName, &row.Framework, &row.Environment, &row.TotalCount, &row.PassedCount, &row.FailedCount, &row.SkippedCount, &row.ErrorCount, &row.QuarantinedCount, &row.RetriedCount, &row.DurationSeconds, &row.StartedAt, &row.FinishedAt, &row.TeamID, &row.ServiceID); err != nil {
+			return nil, err
+		}
+		stored[row.SuiteID] = row
+	}
+	return stored, rows.Err()
+}
+
+func sameTestSuiteRow(want, got testSuiteResultRow) bool {
+	return want.SuiteName == got.SuiteName &&
+		sameOptionalString(want.Framework, got.Framework) &&
+		sameOptionalString(want.Environment, got.Environment) &&
+		want.TotalCount == got.TotalCount &&
+		want.PassedCount == got.PassedCount &&
+		want.FailedCount == got.FailedCount &&
+		want.SkippedCount == got.SkippedCount &&
+		want.ErrorCount == got.ErrorCount &&
+		want.QuarantinedCount == got.QuarantinedCount &&
+		want.RetriedCount == got.RetriedCount &&
+		sameOptionalFloat(want.DurationSeconds, got.DurationSeconds) &&
+		sameOptionalTime(want.StartedAt, got.StartedAt) &&
+		sameOptionalTime(want.FinishedAt, got.FinishedAt) &&
+		sameOptionalString(want.TeamID, got.TeamID) &&
+		sameOptionalString(want.ServiceID, got.ServiceID)
+}
+
+func testSuiteBatchAlreadyStored(ctx context.Context, conn driver.Conn, rows []testSuiteResultRow) (bool, error) {
+	byRun := map[testOpsRunKey][]testSuiteResultRow{}
+	for _, row := range rows {
+		key := testOpsRunKey{row.OrgID, row.RepoID, row.RunID}
+		byRun[key] = append(byRun[key], row)
+	}
+	for key, want := range byRun {
+		stored, err := storedTestSuiteRows(ctx, conn, key)
+		if err != nil {
+			return false, err
+		}
+		if len(stored) != len(want) {
+			return false, nil
+		}
+		for _, row := range want {
+			got, ok := stored[row.SuiteID]
+			if !ok || !sameTestSuiteRow(row, got) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if err := sink.valid(ctx, claim, effect.Destination); err != nil {
 		return err
@@ -149,6 +315,14 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 		if len(rows) == 0 {
 			return sink.Lease.Assert(ctx)
 		}
+		// CHAOS-5045, suite-level twin of the case-level skip below.
+		unchanged, err := testSuiteBatchAlreadyStored(ctx, sink.Conn, rows)
+		if err != nil {
+			return err
+		}
+		if unchanged {
+			return sink.Lease.Assert(ctx)
+		}
 		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_suite_results (org_id,repo_id,run_id,suite_id,suite_name,framework,environment,total_count,passed_count,failed_count,skipped_count,error_count,quarantined_count,retried_count,duration_seconds,started_at,finished_at,team_id,service_id,last_synced)`)
 		if err != nil {
 			return err
@@ -180,6 +354,16 @@ func (sink TestOpsClickHouseEffects) WriteEffect(ctx context.Context, claim Clai
 			return err
 		}
 		if len(rows) == 0 {
+			return sink.Lease.Assert(ctx)
+		}
+		// CHAOS-5045: skip the INSERT when the store already holds these exact
+		// rows. See the comment above testOpsRunKey for why the fetch is never
+		// skipped and only the write is.
+		unchanged, err := testCaseBatchAlreadyStored(ctx, sink.Conn, rows)
+		if err != nil {
+			return err
+		}
+		if unchanged {
 			return sink.Lease.Assert(ctx)
 		}
 		batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO test_case_results (org_id,repo_id,run_id,suite_id,case_id,case_name,class_name,status,duration_seconds,retry_attempt,failure_message,failure_type,stack_trace,is_quarantined,last_synced)`)

@@ -447,7 +447,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || githubTestsReportRunOutsideWindow(pipeline, claim) {
+		if !include || (claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC())) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
@@ -608,67 +608,6 @@ func githubTestsIncompleteCount(incomplete []GitHubTestsIncomplete) int {
 }
 
 func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.StartedAt; return &value }
-
-// githubTestsArtifactIndexingGrace widens the report phase's LOWER bound so a
-// run whose artifacts were not yet listable when its own window was collected
-// still gets exactly one more chance in the next window.
-//
-// It is NOT derived from a documented GitHub SLA -- no such bound is published
-// (the artifacts REST reference and "Downloading workflow artifacts" both state
-// only the 90-day retention default), and the listing lag after a run completes
-// is a real, reported behaviour (actions/upload-artifact#400). It is derived
-// from measurement instead, on 2026-09-04 against full-chaos/dev-health-ops:
-//
-//   - In 6/6 sampled completed runs, EVERY artifact's created_at preceded the
-//     run's own updated_at, by between 41s and 25m56s -- artifacts are created
-//     by the upload step inside the run, and updated_at settles after it. So
-//     updated_at is a sound ordering key for "this run's reports are final".
-//   - The unit for window [T-1h, T] executes AFTER T: the 14:00Z units finished
-//     between 14:02:26Z and 14:14:07Z. A run updated at T-e is therefore read
-//     2-14 minutes after it completed, which is the only exposure to a listing
-//     lag; 15 minutes covers that read skew with margin.
-//
-// The cost is bounded and stated: only runs updated in the last 15 minutes of a
-// window are offered twice, so the worst-case duplication is ~1.25x rather than
-// the once-per-pass-per-day re-projection this grace replaces.
-const githubTestsArtifactIndexingGrace = 15 * time.Minute
-
-// githubTestsReportRunOutsideWindow decides whether a run's REPORT ARTIFACTS
-// belong to this claim's window.
-//
-// The runs/pipelines phase is bounded on both ends (ciPipelineRunOutsideWindow
-// over StartedAt, plus a server-side created=since..before range), which is why
-// ci_pipeline_runs carries no duplicates. The report phase was bounded on the
-// UPPER end only, and its server-side filter is date-granular
-// (created>=<day of SinceAt>, pinned as a Python-parity observation by
-// github_tests_generic_oracle_test.go) -- so every hourly pass re-downloaded and
-// re-projected every default-branch run created since midnight, rewriting
-// test_suite_results/test_case_results with a fresh last_synced each time
-// (CHAOS-5045: 7,072,971 raw rows for 3,795,833 distinct keys on one repo).
-//
-// The bound is on UPDATED_AT, not StartedAt, which is what makes it safe for
-// the cases the window must not drop: a re-run, a retried job, or a suite that
-// arrives late all bump the run's updated_at into the current window, so the
-// run is re-collected and its rows legitimately updated. Only a run that has
-// not changed since an earlier window is skipped.
-//
-// Two deliberate fail-open cases: a claim with no SinceAt (backfill/first sync)
-// filters nothing, and a payload with no updated_at is never excluded, because
-// a run we cannot date is a run we must not silently drop.
-//
-// The server-side query is deliberately left alone; this is a client-side
-// disposition only, so the parity observation above is unaffected.
-func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
-	if claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC()) {
-		return true
-	}
-	if claim.SinceAt == nil || pipeline.FinishedAt == nil {
-		return false
-	}
-	return pipeline.FinishedAt.UTC().Before(
-		claim.SinceAt.UTC().Add(-githubTestsArtifactIndexingGrace),
-	)
-}
 
 func normalizeGitHubTestsPipeline(claim Claim, repoID string, run gitHubWorkflowRunPayload, at time.Time) (githubTestsPipelineRow, bool) {
 	queuedRaw := parseGitHubWorkflowTime(run.CreatedAt)

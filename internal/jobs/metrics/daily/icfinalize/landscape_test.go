@@ -30,27 +30,34 @@ func TestComputeLandscapeEmitsThreeMapsPerIdentity(t *testing.T) {
 	}
 }
 
-// Normalization is PER TEAM. Two teams whose members have identical raw values
-// must each rank internally, never against the other team's members.
+// Normalization is PER TEAM.
+//
+// The teams must have DIFFERENT distributions for this to discriminate, and
+// the first revision of this test got that wrong: it gave both teams {1, 100},
+// where the per-team and global answers are BOTH 0.25 -- per-team is
+// (0 + 0.5*1)/2, and globally a1 ties b1 so it is (0 + 0.5*2)/4. Identical.
+// A global-normalization mutation SURVIVED that fixture, which is how the flaw
+// was found rather than by inspection.
+//
+// With A={1,2} and B={100,200} nothing ties across teams, so a1 is
+// (0 + 0.5*1)/2 = 0.25 per team against (0 + 0.5*1)/4 = 0.125 globally.
 func TestNormalizationIsPerTeamNotGlobal(t *testing.T) {
 	records := ComputeLandscape([]RollingStat{
 		{IdentityID: "a1", TeamID: "A", ChurnLOC30d: 1, DeliveryUnits30: 1},
-		{IdentityID: "a2", TeamID: "A", ChurnLOC30d: 100, DeliveryUnits30: 100},
-		{IdentityID: "b1", TeamID: "B", ChurnLOC30d: 1, DeliveryUnits30: 1},
-		{IdentityID: "b2", TeamID: "B", ChurnLOC30d: 100, DeliveryUnits30: 100},
+		{IdentityID: "a2", TeamID: "A", ChurnLOC30d: 2, DeliveryUnits30: 2},
+		{IdentityID: "b1", TeamID: "B", ChurnLOC30d: 100, DeliveryUnits30: 100},
+		{IdentityID: "b2", TeamID: "B", ChurnLOC30d: 200, DeliveryUnits30: 200},
 	}, nil)
-	// Bottom of a 2-member team: countLess=0, countEqual=1 -> 0.5/2 = 0.25.
-	for _, identity := range []string{"a1", "b1"} {
-		got := recordFor(records, identity, "churn_throughput").XNorm
-		if got != 0.25 {
-			t.Fatalf("%s XNorm = %v, want 0.25 -- ranked within its own team of 2, "+
-				"not against all 4 identities", identity, got)
-		}
+	got := recordFor(records, "a1", "churn_throughput").XNorm
+	if got != 0.25 {
+		t.Fatalf("a1 XNorm = %v, want 0.25 -- bottom of its own 2-member team", got)
 	}
-	// If it had normalized globally, the bottom of 4 identical-shaped members
-	// would be 0.125, not 0.25.
-	if recordFor(records, "a1", "churn_throughput").XNorm == 0.125 {
-		t.Fatal("normalization is GLOBAL -- a1 ranked against all four identities")
+	if got == 0.125 {
+		t.Fatal("normalization is GLOBAL -- a1 was ranked against all four identities")
+	}
+	// The top of the OTHER team is likewise ranked within B, not globally.
+	if got := recordFor(records, "b2", "churn_throughput").XNorm; got != 0.75 {
+		t.Fatalf("b2 XNorm = %v, want 0.75 (top of team B); globally it would be 0.875", got)
 	}
 }
 

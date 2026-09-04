@@ -51,11 +51,24 @@ spec:
             - name: http
               containerPort: {{ .Values.api.port }}
               protocol: TCP
+          {{- /*
+          CHAOS-4984: extraEnvFrom renders FIRST so an operator-supplied
+          source (e.g. a local dotenv Secret) can seed defaults the chart's
+          own configMap/Secret below then override -- Kubernetes resolves a
+          key present in more than one envFrom source in favour of the LAST
+          source that sets it, so ordering here is load-bearing, not
+          cosmetic. Without an extraEnvFrom hook this envFrom list was fixed
+          to exactly these two chart-owned sources, so an operator wanting a
+          third source in front of them (as opposed to appending .extraEnv
+          entries, which only add discrete names) had no way to express it
+          in values and had to kubectl patch the rendered Deployment
+          out-of-band -- a patch a subsequent `helm upgrade` silently drops.
+          */}}
+          {{- $apiEnvFrom := .Values.api.extraEnvFrom | default (list) }}
+          {{- $apiEnvFrom = append $apiEnvFrom (dict "configMapRef" (dict "name" (include "dev-health.configMapName" .))) }}
+          {{- $apiEnvFrom = append $apiEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" .))) }}
           envFrom:
-            - configMapRef:
-                name: {{ include "dev-health.configMapName" . }}
-            - secretRef:
-                name: {{ include "dev-health.secretName" . }}
+            {{- toYaml $apiEnvFrom | nindent 12 }}
           {{- $apiEnv := list }}
           {{- if .Values.goWorkers.enabled }}
           {{- $apiEnv = append $apiEnv (dict "name" "EXPECTED_WORKER_GROUPS" "value" (.Values.goWorkers.expectedWorkerGroups | join ",")) }}

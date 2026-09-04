@@ -118,6 +118,24 @@ jobs:
               - '.dockerignore'
               - 'deploy/**'
               - 'Makefile'
+              # codex round 5 (#2162), P1: the `build` job's own base-guard
+              # step invokes this script directly (`bash
+              # ci/python_base_ref.sh ...`) -- a PR touching ONLY this file
+              # set changes.code=false and skipped `build` (and the guard)
+              # entirely. A single exact path, not a broader `ci/**`: the
+              # build job invokes exactly this one ci/ script today (grep-
+              # verified), and `ci/**` would make every OTHER, unrelated
+              # ci/ script change (there are many, none touching this
+              # workflow) trigger a real image rebuild+republish for no
+              # reason. tests/tooling/test_go_image_publishing.py's
+              # test_build_job_ci_script_references_are_covered_by_the_changes_filter
+              # is the actual recurrence guard -- it fails the moment the
+              # build job invokes a ci/ script this filter doesn't name,
+              # regardless of how broad or narrow the filter is, so a
+              # second script added here later is caught structurally
+              # rather than depending on this filter having been made
+              # broad enough by guess.
+              - 'ci/python_base_ref.sh'
               # A change to this workflow IS a change to how images are built.
               # Without this line the publish pipeline cannot republish itself:
               # the CHAOS-3923 Go publish jobs merged to main and every build
@@ -256,6 +274,215 @@ jobs:
       - name: Ensure the Python base image is mirrored
         run: |
           set -euo pipefail
+          # CHAOS-4949: this step comes from the MERGE REF, the tree comes from
+          # the PR HEAD, and on a pull_request those are different commits.
+          #
+          #   on: pull_request  -> GitHub evaluates the workflow from the merge
+          #                        ref (branch + main), so this step exists as
+          #                        soon as it is on main;
+          #   checkout ref:     -> github.event.pull_request.head.sha, i.e. the
+          #                        PR branch tree, which may predate it.
+          #
+          # So a branch opened before #2152 gets this step against a tree with no
+          # ci/python_base_ref.sh, and the step dies on a missing file. Measured
+          # (identical tree state, the only variable being run creation time
+          # relative to #2152 merging at 07:53:11Z):
+          #
+          #   run 33726620458  created 07:08  step ABSENT from the job  PASSED
+          #   run 33732034142  created 08:11  step PRESENT              FAILED
+          #
+          # The absence is MEANINGFUL, not an error to swallow: a tree without
+          # the derivation script also has a Dockerfile that pulls its base
+          # directly from Docker Hub, so there is no mirrored image for this step
+          # to ensure. Verified on b854c646 and 1c448f2e5 -- both `FROM
+          # python:3.14-slim`.
+          #
+          # A bare `[ -f ... ] || exit 0` is deliberately NOT used. That would
+          # also pass silently on a tree that DOES consume the mirrored base
+          # while missing its derivation -- a genuinely broken state, and exactly
+          # the shape (a step that succeeds having done nothing) this workflow
+          # has been bitten by repeatedly. So the absent branch ASSERTS the
+          # condition that makes skipping correct, and fails loudly otherwise.
+          # STRUCTURAL, NOT TEXTUAL (team-lead, after three codex rounds).
+          #
+          # This guard used to read docker/Dockerfile and decide from its text
+          # whether the tree consumes a mirrored base. Three rounds found nine
+          # defects, every one a Dockerfile grammar feature the regexes did not
+          # model: assembled references (${REGISTRY}/${OWNER}/python), a direct
+          # FROM with no ARG, lowercase `from`, escaped-newline continuations,
+          # RUN heredoc bodies read as instructions, missing token boundaries
+          # (ARG PYTHON_BASE_IMAGE_OLD, ghcr.io/acme/python-builder), and the
+          # fact that `#` outside line start is NOT a comment but argument text
+          # -- which made the "comment stripping" a literal-corrupting rewrite.
+          #
+          # Each fix was correct and the next round found the next feature. That
+          # is not a converging series: it is an under-specified reimplementation
+          # of a parser, and a fourth round would find --platform flags and ARG
+          # stage scoping. So the guard stops parsing.
+          #
+          # The question was never "what does this Dockerfile say". It is "does
+          # this tree predate the mirror", and git answers that exactly. #2152
+          # added ci/python_base_ref.sh and the mirrored Dockerfile in ONE
+          # commit, so the script's presence IS the mirror -- no text needed.
+          MIRROR_LANDED=6fbd7dc8d4651b82f78b823a2b6f55cd53f0ff1f   # the #2152 merge
+
+          # "SCRIPT PRESENT" IS CHECKED FIRST, AND THAT ORDER IS A CORRECTNESS
+          # REQUIREMENT, NOT A CONVENIENCE (084-prod). The authoring branch of
+          # #2152 (0c1d9ff66) HAS the script while NOT containing 6fbd7dc8d --
+          # it *is* the change, so it precedes its own merge commit. Reversing
+          # these two checks would fail every #2152-descended feature branch
+          # that has not merged main.
+          #
+          # THE CHERRY-PICK RESIDUAL IS CLOSED, not documented (round 4 P1).
+          # A branch that cherry-picks #2152's Dockerfile WITHOUT
+          # ci/python_base_ref.sh has 6fbd7dc8d as a non-ancestor, so ancestry
+          # alone says "pre-mirror" and skips -- while the tree consumes a
+          # mirrored base. Round 4 reproduced that topology and got
+          # `Nothing to ensure, skipping.`, which is a confident FALSE
+          # statement in the log. (Comma, not semicolon -- see the
+          # no-semicolon note beside the echo itself; 084-prod caught this
+          # comment still quoting the old form after the message changed,
+          # which would have sent the next reader grepping for a string the
+          # code no longer emits.)
+          #
+          # Severity checked rather than assumed: docker/Dockerfile:17 holds
+          # `ARG PYTHON_BASE_IMAGE="ghcr.io/<owner>/python:...@sha256:..."` and
+          # ci/python_base_ref.sh only READS it. So a scriptless tree can name
+          # a digest that was never mirrored, and the build then fails right
+          # after this step announced there was nothing to ensure.
+          #
+          # THE CHECK BELOW IS A FIXED-STRING CONTAINMENT TEST, NOT THE TEXTUAL
+          # GUARD THAT WAS REMOVED. That guard lost nine defects to Dockerfile
+          # GRAMMAR -- assembled refs, bare FROM, lowercase `from`, escaped
+          # newlines, RUN heredocs, token boundaries, `#` outside line start.
+          # This has no grammar: one literal substring, no anchors, no
+          # instruction model. Its only false positive is the string appearing
+          # in a comment, and that direction FAILS CLOSED (a loud error on a
+          # tree that needed no ensuring) rather than silently skipping a tree
+          # that did.
+          #
+          # IT CAN ONLY TURN A SKIP INTO AN ERROR, NEVER AN ERROR INTO A SKIP
+          # (084-prod). It runs only inside the branch where ancestry already
+          # answered "not an ancestor", so every path it can reach was
+          # previously a skip. That asymmetry is what makes it a safety net
+          # rather than a relapse into the guard rounds 1-3 deleted -- a future
+          # reader who remembers those rounds should read this paragraph before
+          # concluding the textual guard came back.
+          #
+          # THE STRING IS `.../python`, NOT THE BARE OWNER PREFIX (084-prod).
+          # The property is "consumes the mirrored PYTHON base", not
+          # "references ghcr at all". A genuinely pre-mirror branch whose
+          # Dockerfile pulls some other ghcr.io/<owner>/... image -- a tool
+          # stage, a builder -- is doing nothing wrong, and the bare prefix
+          # would hard-fail it while telling it its tree is inconsistent.
+          if [ ! -f ci/python_base_ref.sh ]; then
+            # A SHALLOW CLONE CANNOT ANSWER THE ANCESTRY QUESTION. Refuse before
+            # asking it, so the failure names the cause rather than surfacing as
+            # a mysterious 128 below.
+            if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+              echo "::error::this is a shallow repository, so ancestry against" \
+                   "${MIRROR_LANDED} cannot be determined. The build checkouts set" \
+                   "fetch-depth: 0; if this fires, that changed. Refusing to guess." >&2
+              exit 1
+            fi
+            # `--is-ancestor` is three-valued and the third value matters.
+            # Measured by 084-prod against this repository:
+            #
+            #   6fbd7dc8d ancestor of 32831d63e   -> 0
+            #   32831d63e ancestor of 6fbd7dc8d   -> 1
+            #   a sha that exists nowhere         -> 128
+            #
+            # Collapsing >=2 into "not an ancestor" is exactly the
+            # grep-status-1-vs-2 mistake this guard already made once, so it is
+            # handled separately and fails closed.
+            #
+            # WHY THE SHALLOW REFUSAL AND fetch-depth: 0 ARE LOAD-BEARING RATHER
+            # THAN BELT-AND-BRACES: a depth-1 clone yields 128 because the OBJECT
+            # IS ABSENT, not because git detects truncation. So anything that
+            # made the object present-but-unreachable would return 1, which is
+            # indistinguishable from a legitimate "not an ancestor" -- a wrong
+            # answer rather than an error. 084-prod tried to construct that case
+            # and could not (`fetch --depth 1 origin <sha>` is refused
+            # server-side), but no counterexample found is not proof there is
+            # none, so both defences stay.
+            if git merge-base --is-ancestor "$MIRROR_LANDED" HEAD 2>/dev/null; then
+              ancestry=yes
+            else
+              ancestry_status=$?
+              if [ "$ancestry_status" -eq 1 ]; then
+                ancestry=no
+              else
+                echo "::error::cannot determine whether ${MIRROR_LANDED} is an" \
+                     "ancestor of HEAD (git merge-base --is-ancestor exited" \
+                     "${ancestry_status}; a shallow clone cannot answer this)." \
+                     "Refusing to guess: an unanswerable history is not a" \
+                     "pre-mirror tree. The build checkout sets fetch-depth: 0," \
+                     "so this should not happen -- if it does, that changed." >&2
+                exit 1
+              fi
+            fi
+
+            if [ "$ancestry" = yes ]; then
+              echo "::error::this tree contains #2152 (${MIRROR_LANDED}), which added" \
+                   "ci/python_base_ref.sh and the mirrored base together, yet the" \
+                   "script is absent. The ref cannot be derived and the tree is" \
+                   "inconsistent; it is NOT the pre-mirror case." >&2
+              exit 1
+            fi
+
+            # grep is three-valued in the same way --is-ancestor is: 1 means
+            # "read the file, no match", >=2 means "could not read it". This
+            # guard already made the collapse-them mistake once, so they are
+            # separated here too. A MISSING Dockerfile is handled before the
+            # grep, because "no Dockerfile" genuinely means "no mirrored base
+            # referenced" -- that is an answer, not a failure to answer.
+            if [ ! -f docker/Dockerfile ]; then
+              mirrored=no
+            elif grep -qF "ghcr.io/${{ github.repository_owner }}/python" docker/Dockerfile; then
+              mirrored=yes
+            else
+              grep_status=$?
+              if [ "$grep_status" -eq 1 ]; then
+                mirrored=no
+              else
+                echo "::error::docker/Dockerfile exists but could not be read" \
+                     "(grep exited ${grep_status}). Refusing to guess whether this" \
+                     "tree consumes the mirrored base." >&2
+                exit 1
+              fi
+            fi
+
+            if [ "$mirrored" = yes ]; then
+              echo "::error::cherry-picked mirror Dockerfile without" \
+                   "ci/python_base_ref.sh: the script is absent, #2152" \
+                   "(${MIRROR_LANDED}) is not an ancestor of HEAD, yet" \
+                   "docker/Dockerfile names" \
+                   "ghcr.io/${{ github.repository_owner }}/python." \
+                   "This tree consumes the mirrored base with no derivation" \
+                   "available, so the ref cannot be ensured and the build will" \
+                   "fail pulling it. Merge #2152 or drop the cherry-picked" \
+                   "Dockerfile change." >&2
+              exit 1
+            fi
+
+            # NO SEMICOLON IN THIS MESSAGE. tests/tooling's registry guard
+            # (test_run_steps_do_not_pull_from_unapproved_registries) splits a
+            # run block on `[\n;]|&&|\|\|` BEFORE tokenising and does not
+            # respect quotes, so a `;` inside a quoted string cuts the line in
+            # half and the tail loses its opening quote -- `shlex.split` then
+            # raises "No closing quotation" and the step is reported as
+            # unparseable. It scans this step at all only because the word
+            # `docker` appears in the text. Verified: this was the single
+            # unparseable step in the whole file, and it turned the Tests
+            # workflow red. Use a comma.
+            echo "ci/python_base_ref.sh is absent, #2152 (${MIRROR_LANDED}) is not" \
+                 "an ancestor of HEAD, and docker/Dockerfile does not name" \
+                 "ghcr.io/${{ github.repository_owner }}/python: this tree predates" \
+                 "the" \
+                 "mirror and pulls its Python base directly. Nothing to ensure," \
+                 "skipping."
+            exit 0
+          fi
           # ONE derivation, shared with mirror-test-images.yml (CHAOS-4922).
           # Two validators for one property diverged; the gap was the silent
           # failure set. ci/python_base_ref.sh is now the only definition.

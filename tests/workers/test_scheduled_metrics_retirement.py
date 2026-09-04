@@ -50,9 +50,11 @@ def test_retired_dispatcher_has_no_runtime_exports_or_beat_entry():
     # pure re-export shim over the now-deleted metrics_partitioned.py
     # dispatch chain), so it is no longer scanned here -- there is nothing
     # left to import.
-    from dev_health_ops.workers import metrics_daily, tasks
+    # CHAOS-4439: workers.metrics_daily was itself deleted too (dead
+    # Celery-only code, zero live callers) -- dropped from this scan for the
+    # same reason, nothing left to import there either.
+    from dev_health_ops.workers import tasks
     from dev_health_ops.workers.config import beat_schedule
 
-    assert not hasattr(metrics_daily, "dispatch_scheduled_metrics")
     assert "dispatch_scheduled_metrics" not in tasks.__all__
     assert "dispatch-scheduled-metrics" not in beat_schedule

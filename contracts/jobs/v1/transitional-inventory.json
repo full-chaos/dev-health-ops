@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 102,
+  "row_count": 98,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -39,78 +39,6 @@
       "deletion_evidence_requirement": "Deleted alongside Beat entry `dispatch-scheduled-syncs` once its native replacement is proven.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
       "notes": "Beat entry dispatch-scheduled-syncs, 300s"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/metrics_daily.py:19",
-      "surface": "run_daily_metrics",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/metrics_daily.py",
-        "line": 19
-      },
-      "queue_or_cadence": "metrics",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "Go scheduler + heavy worker"
-      },
-      "target_kind_id": "task:run_daily_metrics",
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Celery worker (queue: metrics) invoked only via the pure-Python external-ingest-recompute chain; no Go dispatch path exists yet.",
-      "deletion_evidence_requirement": "Celery task deleted from src/dev_health_ops/workers/metrics_daily.py; external-ingest recompute chain (recompute.py:368) rewritten to call the native external recompute controller (CUT-11) instead of chain(daily_sig, build_sig).apply_async; River history shows the equivalent native kind executing for 30 days with zero legacy enqueues.",
-      "acceptance_test_id": "tests/test_external_ingest_recompute_dispatch.py",
-      "notes": "HTTP-bridge only compute (gap review 2.3) | Distinct standalone compute body used only by the external-recompute chain; not the same call path as the daily_dispatch/partition/finalize family."
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/metrics_extra.py:14",
-      "surface": "run_complexity_job",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/metrics_extra.py",
-        "line": 14
-      },
-      "queue_or_cadence": "metrics",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "metrics.remaining.complexity"
-      },
-      "target_kind_id": "kind:metrics.remaining.complexity",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `metrics.remaining.complexity` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "registry kind metrics.remaining.complexity; Beat entry run-complexity-daily"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/metrics_extra.py:88",
-      "surface": "run_dora_metrics",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/metrics_extra.py",
-        "line": 88
-      },
-      "queue_or_cadence": "metrics",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "metrics.remaining.dora"
-      },
-      "target_kind_id": "kind:metrics.remaining.dora",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "No longer invoked by the Go worker: CHAOS-3092 R1 cut registry kind metrics.remaining.dora over to the native executor. This row stays until the Python surface itself goes, which is not what the Go cutover decides.",
-      "deletion_evidence_requirement": "Deleted once registry kind `metrics.remaining.dora` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "NOT a Beat entry, no standalone TRD 6 line item; registry kind metrics.remaining.dora"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/external_ingest_reconciler.py:59",
@@ -327,30 +255,6 @@
       "deletion_evidence_requirement": "Deleted once registry kind `sync.team_autoimport` no longer routes through the HTTP compatibility bridge.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "registry kind sync.team_autoimport"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/team_drift_sync.py:56",
-      "surface": "sync_team_drift",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/team_drift_sync.py",
-        "line": 56
-      },
-      "queue_or_cadence": "sync",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native Go team-drift coordinator"
-      },
-      "target_kind_id": "task:sync_team_drift",
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Celery worker (queue: sync); dispatched via celery_app.signature('sync_team_drift').apply_async (bare task name, no dev_health_ops.workers.tasks prefix).",
-      "deletion_evidence_requirement": "internal/jobs/teamdrift (or equivalent) package registered in a production cmd/ binary and passing Registry.ValidateStartup; POST /teams/trigger-drift-sync rewritten to enqueue the native kind; River history shows zero legacy enqueues for 30 days.",
-      "acceptance_test_id": "tests/workers/test_team_drift_sync.py",
-      "notes": "bare task name, no dev_health_ops.workers.tasks prefix; no registry kind, no Go package exists (gap 2.6) | No registry kind and no Go package exist yet (gap 2.6); this is the sole owning row for the eventual native team-drift coordinator target."
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:90",

@@ -293,20 +293,13 @@ def test_never_references_disqualified_tasks() -> None:
         assert forbidden not in source, f"{forbidden} must never be referenced (D6)"
 
 
-def test_daily_metrics_kwargs_subset_of_task_signature() -> None:
-    """D14: kwargs built for run_daily_metrics must be a strict subset of
-    the real task's ``.run`` signature -- catches kwarg drift that a
-    mocked ``.delay()``/``.apply_async()`` call would hide."""
-    from dev_health_ops.workers.metrics_daily import run_daily_metrics
-
-    plan = _plan()
-    kwargs = recompute_mod._daily_metrics_kwargs(plan, repo_id="repo-a")
-    params = set(inspect.signature(run_daily_metrics.run).parameters)
-    assert set(kwargs) <= params
-
-    fallback_kwargs = recompute_mod._daily_metrics_kwargs(plan, repo_id=None)
-    assert set(fallback_kwargs) <= params
-    assert "repo_id" not in fallback_kwargs
+# test_daily_metrics_kwargs_subset_of_task_signature (D14) removed CHAOS-4439:
+# it introspected dev_health_ops.workers.metrics_daily.run_daily_metrics's
+# `.run` signature to catch kwarg drift, but that module is dead Celery-only
+# code (deleted here, zero live callers) and _RUN_DAILY_METRICS_TASK is
+# dispatched by task-NAME STRING via celery_app.send_task (recompute.py:396-398),
+# which never needs the target function importable locally -- there is no
+# longer a real signature to drift against.
 
 
 def test_work_graph_build_kwargs_subset_of_task_signature() -> None:

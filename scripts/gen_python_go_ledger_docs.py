@@ -440,8 +440,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "external_ingest_reconciler.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole importer tasks.py:9",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole Python importer tasks.py:2-4 -- but CHAOS-4439 found (config.py:164-167) this task is still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod. Not deletable until that fleet stops running it",
+        "ticket": "CHAOS-4439 (kept -- ask-dev acceptance fleet dependency)",
     },
     "feature_flag_sync.py": {
         "category": "a",
@@ -457,16 +457,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "resolve_worker_job_route called sync_units.py:999, inside dispatch_sync_run",
         "ticket": "n/a",
-    },
-    "metrics_daily.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L19 run_daily_metrics); sole importer tasks.py:5; live daily-metrics route calls dev_health_ops.metrics.job_daily instead (worker_metrics.py:1682) — different module",
-        "ticket": "CHAOS-4439 (dead worker modules)",
-    },
-    "metrics_extra.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` x2 (L14/L88); sole importer tasks.py:6-9; live complexity/DORA routes call metrics.job_complexity_db/job_dora instead",
-        "ticket": "CHAOS-4439 (dead worker modules)",
     },
     "org_guard.py": {
         "category": "c",
@@ -490,8 +480,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "queue_monitor.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); importers celery_app.py (comment only) + tasks.py:8; no route caller",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); Python importers celery_app.py (comment only) + tasks.py:5; no route caller -- but CHAOS-4439 found (config.py:164-167) this task is still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod. Not deletable until that fleet stops running it",
+        "ticket": "CHAOS-4439 (kept -- ask-dev acceptance fleet dependency)",
     },
     "queues.py": {
         "category": "c",
@@ -602,11 +592,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "run_post_sync_team_autoimport imported worker_sync.py:27, served by /team-autoimport",
         "ticket": "CHAOS-4198",
-    },
-    "team_drift_sync.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L56 sync_team_drift); sole importer tasks.py:22",
-        "ticket": "CHAOS-4439 (dead worker modules)",
     },
     "work_graph_tasks.py": {
         "category": "a",

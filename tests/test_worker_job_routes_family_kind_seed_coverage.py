@@ -56,14 +56,21 @@ def _literal_str_or_strings(node: ast.expr) -> tuple[str, ...] | None:
     return None
 
 
+_ROUTES_TABLE_CONSTRUCTORS = ("table", "Table")
+
+
 def _is_routes_table_call(node: ast.AST) -> bool:
-    """`sa.table("worker_job_routes", ...)`, the inline TableClause shape
-    every migration in this history uses (usually inside a `_routes()`
-    helper, occasionally inlined directly, e.g. 0055's `upgrade()`)."""
+    """`sa.table("worker_job_routes", ...)` (the lightweight TableClause
+    shape every migration in this history actually uses, usually inside a
+    `_routes()` helper) OR `sa.Table("worker_job_routes", metadata, ...)`
+    (the fuller ORM/metadata-bound form -- not used in this history today,
+    but a plausible future migration shape team-lead's round-2 attack
+    correctly predicted this parser would silently miss entirely, since
+    BOTH constructors take the table name as their first positional arg)."""
     return bool(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "table"
+        and node.func.attr in _ROUTES_TABLE_CONSTRUCTORS
         and node.args
         and isinstance(node.args[0], ast.Constant)
         and node.args[0].value == _ROUTES_TABLE_NAME
@@ -647,4 +654,41 @@ def test_delete_against_an_unrelated_table_does_not_trip_the_fail_closed_guard(
     )
     seeded, retired = _collect_seed_state(synthetic)
     assert not seeded
+    assert not retired
+
+
+def test_sa_table_capital_t_construction_is_recognized_as_the_routes_table(
+    tmp_path: Path,
+) -> None:
+    """Round 2 attack (team-lead): a migration could declare the routes
+    table with the fuller `sa.Table("worker_job_routes", metadata, ...)`
+    constructor instead of the lightweight `sa.table(...)` every real
+    migration in this history actually uses -- both take the table name as
+    their first positional arg, but the parser previously only recognized
+    the lowercase form, so a file using `sa.Table(...)` bound to a
+    module-level variable and consumed via `op.bulk_insert` was invisible
+    end to end: `_file_targets_routes_table` returned False and the whole
+    file was silently skipped.
+    """
+    synthetic = tmp_path / "9995_sa_table_capital_construction.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            metadata = sa.MetaData()
+            routes = sa.Table(
+                "worker_job_routes",
+                metadata,
+                sa.Column("job_kind", sa.String()),
+            )
+
+            def upgrade():
+                op.bulk_insert(routes, [{"job_kind": "metrics.remaining.capacity"}])
+            """
+        )
+    )
+    seeded, retired = _collect_seed_state(synthetic)
+    assert seeded == {"metrics.remaining.capacity"}
     assert not retired

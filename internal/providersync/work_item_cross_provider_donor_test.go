@@ -10,6 +10,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // CHAOS-3978: a cross-provider donor edge is minted by ONE provider's sync and
@@ -64,14 +65,14 @@ func crossProviderWorkItem(claim Claim, workItemID string) githubWorkItemRow {
 // crossProviderDonorFacts is the donor as ClickHouse holds it: a Linear issue
 // whose native team key resolves through the teams fact, i.e. a rank-0
 // `native_team` donor -- an allowed donor source.
-func crossProviderDonorFacts(claim Claim) githubWorkItemDerivationFacts {
+func crossProviderDonorFacts(claim Claim) teamattribution.GithubWorkItemDerivationFacts {
 	nativeKey := crossProviderTeamID
-	return githubWorkItemDerivationFacts{
-		Teams: []githubWorkItemDerivationTeamFact{{
+	return teamattribution.GithubWorkItemDerivationFacts{
+		Teams: []teamattribution.GithubWorkItemDerivationTeamFact{{
 			Provider: "linear", TeamID: crossProviderTeamID,
 			TeamName: crossProviderTeamName, ProjectKeys: []string{crossProviderTeamID},
 		}},
-		DonorItems: []githubWorkItemDerivationSubject{{
+		DonorItems: []teamattribution.GithubWorkItemDerivationSubject{{
 			WorkItemID: crossProviderDonor, Provider: "linear",
 			NativeTeamKey: &nativeKey, OrgID: claim.OrgID,
 		}},
@@ -86,7 +87,7 @@ func crossProviderStoredEdge(claim Claim, syncedAt time.Time) githubWorkItemDepe
 	}
 }
 
-func crossProviderSubject(claim Claim) githubWorkItemDerivationSubject {
+func crossProviderSubject(claim Claim) teamattribution.GithubWorkItemDerivationSubject {
 	return githubWorkItemDerivationSubjectFromRow(crossProviderWorkItem(claim, crossProviderPR))
 }
 
@@ -113,7 +114,7 @@ func TestCrossProviderStoredDonorEdgeIsVisibleToTheInheritingWriter(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if teamID, _, candidates := controlContext.resolve(crossProviderSubject(claim)); teamID != nil {
+	if teamID, _, candidates := controlContext.Resolve(crossProviderSubject(claim)); teamID != nil {
 		t.Fatalf("fixture no longer reproduces the defect: control resolved team=%v candidates=%+v",
 			*teamID, candidates)
 	}
@@ -124,7 +125,7 @@ func TestCrossProviderStoredDonorEdgeIsVisibleToTheInheritingWriter(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	teamID, teamName, candidates := derivationContext.resolve(crossProviderSubject(claim))
+	teamID, teamName, candidates := derivationContext.Resolve(crossProviderSubject(claim))
 	if teamID == nil || *teamID != crossProviderTeamID ||
 		teamName == nil || *teamName != crossProviderTeamName {
 		t.Fatalf("cross-provider donor did not resolve: team=%v name=%v candidates=%+v",
@@ -305,11 +306,11 @@ func TestStoredEdgeRetypeIsStillSettledByRecency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if teamID, _, _ := derivationContext.resolve(crossProviderSubject(claim)); teamID != nil {
+	if teamID, _, _ := derivationContext.Resolve(crossProviderSubject(claim)); teamID != nil {
 		t.Fatalf("a retyped blocking relationship still donated a team: %v", *teamID)
 	}
-	if derivationContext.storedEdgeMerge.DonorRescues != 0 {
-		t.Fatalf("rescue counted for an edge that did not donate: %+v", derivationContext.storedEdgeMerge)
+	if derivationContext.StoredEdgeMerge.DonorRescues != 0 {
+		t.Fatalf("rescue counted for an edge that did not donate: %+v", derivationContext.StoredEdgeMerge)
 	}
 }
 
@@ -357,7 +358,7 @@ func TestLegacySemanticsStoredEdgeStillDonates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	teamID, _, _ := derivationContext.resolve(crossProviderSubject(claim))
+	teamID, _, _ := derivationContext.Resolve(crossProviderSubject(claim))
 	if teamID == nil || *teamID != crossProviderTeamID {
 		t.Fatalf("a legacy.v1 non-blocker edge stopped donating: team=%v. "+
 			"If this was a deliberate semantics filter, it also drops every "+
@@ -381,7 +382,7 @@ func TestLegacySemanticsStoredEdgeStillDonates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if teamID, _, _ := blockedContext.resolve(crossProviderSubject(claim)); teamID != nil {
+		if teamID, _, _ := blockedContext.Resolve(crossProviderSubject(claim)); teamID != nil {
 			t.Fatalf("a legacy %q edge donated a team: %v", blockerType, *teamID)
 		}
 	}
@@ -444,11 +445,11 @@ func TestCrossProviderRescueIsObservable(t *testing.T) {
 	sameProviderSubject := "ghpr:full-chaos/dev-health-ops#1801"
 	repoID := "33333333-3333-4333-8333-333333333333"
 	facts := crossProviderDonorFacts(claim)
-	facts.Repos = []githubWorkItemDerivationRepoFact{{
+	facts.Repos = []teamattribution.GithubWorkItemDerivationRepoFact{{
 		Provider: "github", TeamID: "gh-team", TeamName: "GitHub Team",
 		RepoID: &repoID, RepoFullName: "full-chaos/dev-health-ops", IsPrimary: 1,
 	}}
-	facts.DonorItems = append(facts.DonorItems, githubWorkItemDerivationSubject{
+	facts.DonorItems = append(facts.DonorItems, teamattribution.GithubWorkItemDerivationSubject{
 		WorkItemID: sameProviderDonor, Provider: "github", RepoID: &repoID, OrgID: claim.OrgID,
 	})
 
@@ -472,11 +473,11 @@ func TestCrossProviderRescueIsObservable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := githubWorkItemStoredEdgeMergeObservation{
+	want := teamattribution.GithubWorkItemStoredEdgeMergeObservation{
 		StoredEdgesMerged: 2, DonorRescues: 2, CrossProviderRescues: 1,
 	}
-	if derivationContext.storedEdgeMerge != want {
-		t.Fatalf("observation = %+v, want %+v", derivationContext.storedEdgeMerge, want)
+	if derivationContext.StoredEdgeMerge != want {
+		t.Fatalf("observation = %+v, want %+v", derivationContext.StoredEdgeMerge, want)
 	}
 	// The cross-provider count is the CHAOS-3978 population specifically: it
 	// must not simply mirror the total, or a same-provider decay fix would be

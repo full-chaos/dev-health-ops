@@ -30,6 +30,22 @@ api:
   enabled: true
   replicas: 2
   port: 8000
+  # -- The api Service's own type/nodePort, expressible in values instead of
+  #    a hand kubectl-patch. CHAOS-4984: a local kind/kiac profile that needs
+  #    NodePort access (no ingress controller, no LoadBalancer support) had
+  #    no values-driven way to set it -- the Service's `type: ClusterIP` was
+  #    hardcoded in api-service.yaml, so the profile hand-patched the
+  #    rendered Service to NodePort 30530 out of band. That patch is
+  #    invisible to Helm's own state, so the NEXT `helm upgrade` re-asserts
+  #    ClusterIP via Server-Side Apply and the two field managers conflict
+  #    on `spec.type`/`spec.ports[].nodePort`, either overwriting the patch
+  #    silently or failing outright depending on how the patch was applied.
+  #    `nodePort` is only meaningful when `type: NodePort` (or
+  #    `LoadBalancer`) and is otherwise ignored by the API server; leave it
+  #    unset (empty string, below) to let Kubernetes allocate one.
+  service:
+    type: ClusterIP
+    nodePort: ""
   args:
     - "--host"
     - "0.0.0.0"
@@ -197,6 +213,17 @@ goWorkers:
   # out-of-scope concern. Omitted defaults to contract 1 (rollout-safe); see
   # deploy/go-workers/README.md's rollout note before changing this value.
   operationalOrderingContract: "1"
+  # -- Pull policy for every worker group's image (all `ghcr.io/full-chaos/
+  #    dev-health-go-*` -- REGISTRY images). This must NOT inherit the
+  #    top-level image.pullPolicy: that value exists for the commit-tagged
+  #    APPLICATION image a local kind/kiac profile side-loads into the
+  #    cluster and therefore sets to Never (docs/contribute/development/
+  #    lane-isolation-kiac.md) -- applying Never here fails a fresh
+  #    goWorkers.enabled=true install with ErrImageNeverPull on every
+  #    worker pod, since none of the published go-worker images were ever
+  #    side-loaded. Same pattern, same reasoning, as postgresql.image.
+  #    pullPolicy below (a registry image with its own dedicated policy).
+  imagePullPolicy: IfNotPresent
   # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
   #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
   #    and Secret in go-workers.yaml's envFrom list, same rule and same
@@ -270,7 +297,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 7260
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
       # CHAOS-4351: this is the ONLY worker group whose queue set includes
       # `metrics` (confirmed via `rg 'queues='` against every group in this
       # file), i.e. the only one that calls the metrics compatibility
@@ -288,7 +315,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: sync
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [sync]
@@ -296,7 +323,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     # Its own group, like the Celery fleet splits per queue. Fused with sync it
     # cannot start while provider routes are default-off: selected queues must
     # equal constructed queues, and no provider handler is built (CHAOS-3926).
@@ -307,7 +334,7 @@ goWorkers:
       replicas: 0
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: reconciler
       image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
       replicas: 0

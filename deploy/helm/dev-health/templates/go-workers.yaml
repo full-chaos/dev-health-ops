@@ -71,7 +71,9 @@ spec:
       containers:
         - name: {{ $group.name }}
           image: {{ $group.image }}
-          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          # CHAOS-4984: goWorkers.imagePullPolicy, NEVER image.pullPolicy --
+          # see values.yaml's goWorkers.imagePullPolicy comment for why.
+          imagePullPolicy: {{ $.Values.goWorkers.imagePullPolicy }}
           # CHAOS-4020: worker configuration is flags. Every setting a Go
           # binary reads that is not a credential is rendered here, so
           # `helm template` and `kubectl describe` show the deployed
@@ -103,9 +105,9 @@ spec:
               stops overriding the right group the moment an operator's
               values.yaml reassigns the `metrics` queue away from `heavy`
               (or onto a second group too), leaving that group's bridge
-              calls quietly still sharing api's cgroup. `has` needs a real
-              list even for groups (reconciler/scheduler) that declare no
-              `queues` key at all, hence the `default (list)`.
+              calls quietly still sharing api's cgroup. `has`/`intersect`
+              need a real list even for groups (reconciler/scheduler) that
+              declare no `queues` key at all, hence the `default (list)`.
               Falls back to `api` if metricsApi isn't enabled (e.g. a
               fresh install with goWorkers scaled to 0 everywhere), so this
               never renders a reference to a Service that doesn't exist.
@@ -115,10 +117,34 @@ spec:
               an operator overrides api.port/metricsApi.port, since the
               Service's actual listening port would no longer match what
               this flag tells the Go binary to dial.
+
+              CHAOS-4984 (kiac-workers trace, buildOperationalWorker in
+              cmd/dev-health-worker): the flag is not metrics-only -- the
+              `ops` group's own HTTPDispatcher (queues: coverage, heartbeat,
+              retention, webhooks) needs --operational-bridge-url too and
+              crash-loops without it. Same trace also caught
+              buildSyncCoordinatorWorker: the `sync` group's own
+              NewHTTPBridge call fails ErrInvalidBridge on an empty host,
+              since `sync` carries none of the other bridge-needing queues
+              either. Broadened the EMISSION condition to any of these six
+              queue names (checked one at a time -- this Helm's Sprig build
+              has no `intersect` function). The metricsApi-vs-api
+              DEFAULT-URL SELECTION stays gated on `metrics` specifically,
+              unchanged -- an ops- or sync-shaped group with no `metrics`
+              queue gets the `api` default, same as today, since metricsApi
+              exists only to isolate the metrics bridge load, not
+              ops/sync traffic.
             */}}
-            {{- if has "metrics" ($group.queues | default (list)) }}
+            {{- $groupQueues := $group.queues | default (list) }}
+            {{- $needsBridge := false }}
+            {{- range $bridgeQueue := list "metrics" "coverage" "heartbeat" "retention" "webhooks" "sync" }}
+            {{- if has $bridgeQueue $groupQueues }}
+            {{- $needsBridge = true }}
+            {{- end }}
+            {{- end }}
+            {{- if $needsBridge }}
             {{- $defaultBridgeUrl := printf "http://%s-api:%v" (include "dev-health.fullname" $) $.Values.api.port }}
-            {{- if $.Values.metricsApi.enabled }}
+            {{- if and (has "metrics" $groupQueues) $.Values.metricsApi.enabled }}
             {{- $defaultBridgeUrl = printf "http://%s-metrics-api:%v" (include "dev-health.fullname" $) $.Values.metricsApi.port }}
             {{- end }}
             - {{ printf "--operational-bridge-url=%s" (default $defaultBridgeUrl $group.bridgeUrl) | quote }}
@@ -189,6 +215,21 @@ spec:
           livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
 {{- if $group.autoscaling.enabled }}
+{{- /*
+CHAOS-4984: fail the render rather than ship an HPA the API server will
+reject. The stock HorizontalPodAutoscaler API requires minReplicas >= 1
+(scale-to-zero needs a separate, non-default feature gate this chart does
+not assume); the chart's own default values shipped minReplicas: 0 for
+every autoscaling-enabled group, so `goWorkers.enabled=true` with
+untouched defaults produced
+`HorizontalPodAutoscaler.spec.minReplicas: Invalid value: 0: must be
+greater than or equal to 1` on install -- caught only when someone
+actually installed the defaults, not by `helm template` alone, same shape
+as the terminationGracePeriodSeconds guard above.
+*/}}
+{{- if lt (int $group.autoscaling.minReplicas) 1 }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.minReplicas=%v is below 1 -- the HorizontalPodAutoscaler API rejects minReplicas < 1 (no scale-to-zero feature gate assumed here), so this would fail at install time, not render time. Set minReplicas to at least 1, or disable autoscaling for this group instead." $group.name $group.autoscaling.minReplicas) }}
+{{- end }}
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

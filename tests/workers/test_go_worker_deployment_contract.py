@@ -1995,7 +1995,14 @@ def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() ->
         "--operational-bridge-url=http://phase1-dev-health-metrics-api:8000"
     ]
 
-    # Every other group must be untouched by either state.
+    # Every other group must be untouched by either state, EXCEPT ops/sync:
+    # CHAOS-4984 broadened emission so both also carry
+    # --operational-bridge-url (buildOperationalWorker's HTTPDispatcher and
+    # buildSyncCoordinatorWorker's NewHTTPBridge both need it too), always
+    # defaulting to `api` regardless of metricsApi.enabled since neither
+    # group carries the `metrics` queue that would switch the default to
+    # metrics-api.
+    _ALSO_BRIDGED_TO_API = {"ops", "sync"}
     for docs, expected in (
         (disabled_docs, "http://phase1-dev-health-api:8000"),
         (enabled_docs, "http://phase1-dev-health-api:8000"),
@@ -2008,6 +2015,11 @@ def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() ->
                 continue
             args = doc["spec"]["template"]["spec"]["containers"][0]["args"]
             bridge = [a for a in args if a.startswith("--operational-bridge-url=")]
+            if group in _ALSO_BRIDGED_TO_API:
+                assert bridge == [f"--operational-bridge-url={expected}"], (
+                    f"{group}: expected the api default {expected!r}, got {bridge}"
+                )
+                continue
             assert bridge == [], (
                 f"{group}: expected no explicit bridge-url override, got {bridge}"
             )

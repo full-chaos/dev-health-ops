@@ -987,8 +987,57 @@ fi
 # lane root, immediately after creating it -- not a symlink, and its real
 # path is still contained under the real lane parent. A no-op on macOS
 # (LANE_SCRATCH_PARENT_REAL is never set there; nothing to verify against).
+# v4.8.7 (confirmation-pass round #2 on this branch, P1, EXECUTED,
+# INDEPENDENTLY re-verified by the lane): the round found TWO gaps in this
+# helper's original prefix-based form -- (a) a check performed once, right
+# after creation, proves nothing by the time a path is actually USED much
+# later (RGOTMPDIR/RTMPDIR aren't touched again until the warm step,
+# ~300 lines and real wall-clock time downstream -- a swap in that gap is
+# followed silently), and (b) the check's OWN two steps (the `-L` test,
+# then the separate `cd`+`pwd -P`) are not atomic, and the comparison
+# itself was too PERMISSIVE: "resolves to somewhere under the shared
+# lane-scratch parent" is true for every lane's own directory, so a race
+# landing on a SIBLING lane's real directory sailed through unnoticed
+# (reproduced: split the two steps, interposed a swap to a sibling lane's
+# directory in between, watched the old prefix check accept it).
+#
+# CHRIS'S RULING (2026-09-04, after this finding): tighten the comparison
+# from prefix-containment to EXACT-PATH EQUALITY -- capture the expected
+# real path ONCE, immediately after the mktemp/mkdir that creates it
+# (before anything else runs), and require the LATER re-check to resolve
+# to that exact same real path, not merely "somewhere under the parent".
+# This closes gap (b): a race can no longer redirect to a sibling lane's
+# directory and have it accepted, since a sibling's real path can never
+# equal what was captured for THIS lane's own path. It does NOT close gap
+# (a) -- no POSIX-shell path-based check can, since there is no atomic
+# "check and use" primitive available to a bash script; a genuine attacker
+# racing a specific mktemp call in real time could still, in principle,
+# win a window between this check and code far downstream that uses the
+# same variable again. True prevention needs the created directory pinned
+# to a file descriptor (`exec {fd}<"$dir"`, then every subsequent
+# operation goes through `/proc/self/fd/$fd/...` instead of the original
+# path string, since a later path replacement cannot redirect an
+# already-open fd) -- filed as a v4.8.8 candidate, not attempted here.
+#
+# ACCEPTED RESIDUAL, deliberately not closed further right now: every lane
+# in this fleet runs as the same `ubuntu` user, cooperatively scheduled,
+# not a hostile multi-tenant boundary. The realistic threat this whole
+# symlink/containment class defends against is a BUGGY lane or an
+# incident LEFTOVER -- a pre-existing bad symlink sitting at a path before
+# this script ever touches it -- which a single check-right-after-creation
+# already catches completely, exact-equality or not. An attacker
+# deliberately racing a specific mktemp call in the few-line window before
+# its own verification runs is a materially different, much narrower
+# threat that this fix does not claim to close, and closing it fully
+# (fd-pinning) is a real rework deferred to v4.8.8 rather than rushed here
+# under round pressure. The post-`git worktree add` check a few hundred
+# lines below has the identical prefix-permissiveness shape and is
+# DELIBERATELY left as-is for the same reason (that path is vacated then
+# recreated by git, so there is no pre-existing "expected real path" to
+# capture the same way) -- also part of this accepted residual, also
+# closed for real only by the same v4.8.8 fd-pinning work.
 verify_scratch_containment() {
-  local created="$1" label="$2"
+  local created="$1" label="$2" expected_real="$3"
   [ "$HOST_OS" = Linux ] || return 0
   if [ -L "$created" ]; then
     die "$label ($created) is a SYMLINK immediately after creation -- refusing to use it (this looks like a race, not an accident)"
@@ -996,20 +1045,45 @@ verify_scratch_containment() {
   local real
   real=$(cd "$created" && pwd -P) \
     || die "cannot resolve the physical path of $label ($created) after creating it"
+  # BOTH checks, deliberately, not either alone: parent-containment catches
+  # a corruption that happened BEFORE `expected_real` was ever captured (the
+  # equality check alone would see the SAME corrupted value on both sides
+  # and silently agree with itself -- measured directly: a symlink planted
+  # before the expected-path capture escapes entirely undetected by
+  # equality alone, since there is nothing earlier to disagree with).
+  # Exact equality catches a corruption AFTER the capture that still lands
+  # under the parent (a swap to a sibling lane's own real directory, which
+  # the parent-containment check alone accepts, since every lane's
+  # directory legitimately sits under the same shared parent).
   case "$real" in
     "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
     *) die "$label ($created) resolves to '$real', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it" ;;
   esac
+  if [ "$real" != "$expected_real" ]; then
+    die "$label ($created) resolves to '$real', which does NOT match the path captured immediately after creation ('$expected_real') -- refusing to use it (this looks like a race -- possibly a swap to a DIFFERENT lane's own directory, which the parent-containment check alone would not have caught)"
+  fi
 }
 RW=$(mktemp -d "$RW_BASE/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
-verify_scratch_containment "$RW" "review worktree scratch dir (RW)"
+if [ "$HOST_OS" = Linux ]; then
+  RW_EXPECTED_REAL=$(cd "$RW" && pwd -P) \
+    || die "cannot resolve the physical path of review worktree scratch dir (RW) ($RW) immediately after creating it"
+else
+  RW_EXPECTED_REAL=""
+fi
+verify_scratch_containment "$RW" "review worktree scratch dir (RW)" "$RW_EXPECTED_REAL"
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
 # /tmp (macOS) / lane-scratch (Linux) for the same reason as RGOCACHE above.
 RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
-verify_scratch_containment "$RGOTMPDIR" "Go work dir (RGOTMPDIR)"
+if [ "$HOST_OS" = Linux ]; then
+  RGOTMPDIR_EXPECTED_REAL=$(cd "$RGOTMPDIR" && pwd -P) \
+    || die "cannot resolve the physical path of Go work dir (RGOTMPDIR) ($RGOTMPDIR) immediately after creating it"
+else
+  RGOTMPDIR_EXPECTED_REAL=""
+fi
+verify_scratch_containment "$RGOTMPDIR" "Go work dir (RGOTMPDIR)" "$RGOTMPDIR_EXPECTED_REAL"
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -1024,7 +1098,13 @@ verify_scratch_containment "$RGOTMPDIR" "Go work dir (RGOTMPDIR)"
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
 RTMPDIR=$(mktemp -d "$RTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
-verify_scratch_containment "$RTMPDIR" "shell TMPDIR (RTMPDIR)"
+if [ "$HOST_OS" = Linux ]; then
+  RTMPDIR_EXPECTED_REAL=$(cd "$RTMPDIR" && pwd -P) \
+    || die "cannot resolve the physical path of shell TMPDIR (RTMPDIR) ($RTMPDIR) immediately after creating it"
+else
+  RTMPDIR_EXPECTED_REAL=""
+fi
+verify_scratch_containment "$RTMPDIR" "shell TMPDIR (RTMPDIR)" "$RTMPDIR_EXPECTED_REAL"
 
 # v4.8.4 introduced a per-round GOPATH because bigboy's ~/go and ~/go/pkg
 # used to be root:root 755, and an unset GOPATH defaulting to $HOME/go made

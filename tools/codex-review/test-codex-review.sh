@@ -123,7 +123,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1216 1223 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1296 1303 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -218,7 +218,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 1052 1061 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 1132 1141 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -340,7 +340,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1377 1377 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1457 1457 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -398,7 +398,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1337 1421 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1417 1502 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -634,7 +634,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 1052 1061 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 1132 1141 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -675,7 +675,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1241 1260 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1321 1340 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -916,7 +916,7 @@ fi
 # instead of switching location. Proof: extract the real if/else/heredoc
 # block, run it once per host, assert the generated prompt-fragment text.
 # ---------------------------------------------------------------------------
-extract 1507 1517 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1587 1597 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
@@ -959,7 +959,7 @@ fi
 # unavailable. Proof: extract the real STANDING_RULES heredoc BODY (between
 # its literal open/close marker lines in the shipped script) and check it.
 # ---------------------------------------------------------------------------
-extract 1435 1473 'go test unavailable' "$WORK/standing_rules_body.txt"
+extract 1515 1553 'go test unavailable' "$WORK/standing_rules_body.txt"
 if grep -q "creating work dir" "$WORK/standing_rules_body.txt" \
    && grep -qi "RETRY IT EXACTLY ONCE" "$WORK/standing_rules_body.txt"; then
   ok "v4.8.6 addendum: the injected prompt tells the reviewer to retry exactly once on a 'creating work dir' failure"
@@ -1421,7 +1421,7 @@ grep -qF 'RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"' "$SCRIPT" \
 # NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
 # form, never a VERDICT= line, and exiting 7).
 # ---------------------------------------------------------------------------
-extract 1747 1747 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+extract 1827 1827 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
 
 RC_CHECK_OUT_OK=$(
   set +e
@@ -1588,7 +1588,7 @@ fi
 # single straight-line execution of the real script cannot do to itself.
 # ---------------------------------------------------------------------------
 extract 909 979 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_setup.sh"
-extract 990 1005 'verify_scratch_containment() {' "$WORK/lane_scratch_rw_verify.sh"
+extract 1039 1107 'verify_scratch_containment() {' "$WORK/lane_scratch_rw_verify.sh"
 grep -qF 'verify_scratch_containment "$RW"' "$WORK/lane_scratch_rw_verify.sh" \
   || { echo "FAIL: extracted lane_scratch_rw_verify.sh does not contain the RW verification call" >&2; exit 1; }
 
@@ -1640,15 +1640,97 @@ else
   notok "v4.8.7 TOCTOU fix: normal (no-race) case broke (got: $RESOLVE_TOCTOU_NORMAL)"
 fi
 
+# ---------------------------------------------------------------------------
+# v4.8.7, confirmation-pass round #2 on this branch (P1, EXECUTED,
+# independently re-verified by the lane): the round found that a
+# parent-containment check ALONE is too PERMISSIVE -- "resolves to
+# somewhere under the shared lane-scratch parent" is true for every
+# lane's own directory, so a race that swaps to a SIBLING lane's real
+# directory (never outside the parent at all) sailed through silently.
+# Chris's ruling: tighten to exact-path EQUALITY against a value captured
+# immediately after creation, in ADDITION to (not instead of) the
+# parent-containment check.
+#
+# This needs the race injected BETWEEN the expected-value capture and the
+# function's own later re-check -- something the combined
+# lane_scratch_rw_verify.sh block (mktemp + capture + verify, all in one
+# straight-line run) cannot be raced against from the OUTSIDE the way the
+# earlier TOCTOU tests are (those inject the race BEFORE anything in that
+# block runs, which -- as this exact test found the hard way when first
+# written -- lands on the equality check's OWN blind spot: a corruption
+# already in place before the "expected" value is ever captured makes
+# both sides of the equality agree with each other, so equality alone
+# proves nothing there; only the restored containment check catches that
+# case, which the ATTACK/NORMAL tests above already cover). Proof: extract
+# ONLY the function, drive its two steps manually with the race
+# interposed between them -- the same technique used to independently
+# verify this finding before writing the fix.
+# ---------------------------------------------------------------------------
+extract 1039 1065 'verify_scratch_containment() {' "$WORK/verify_scratch_containment_only.sh"
+
+FAKE_SIBLING_PARENT="$WORK/fake-sibling-parent"
+mkdir -p "$FAKE_SIBLING_PARENT/lane-mine" "$FAKE_SIBLING_PARENT/lane-victim/scratch-XXXXXX"
+set +e
+RESOLVE_SIBLING_ATTACK=$( (
+  HOST_OS=Linux LANE_SCRATCH_PARENT_REAL=$(cd "$FAKE_SIBLING_PARENT" && pwd -P)
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/verify_scratch_containment_only.sh"
+  CREATED="$FAKE_SIBLING_PARENT/lane-mine/scratch-XXXXXX"
+  mkdir -p "$CREATED"
+  # Step 1: capture the expected real path immediately after creation --
+  # this is the exact operation the real shipped code does right after
+  # each mktemp, before anything else can interfere.
+  EXPECTED_REAL=$(cd "$CREATED" && pwd -P)
+  # RACE WINDOW: interposed here, between the capture above and the
+  # function's own later re-check below -- exactly the gap the round
+  # found. Swap the PARENT directory ("lane-mine"), not $CREATED itself,
+  # for a symlink to a SIBLING lane's own real directory that already has
+  # a same-named "scratch-XXXXXX" subdirectory waiting inside it -- so
+  # `$CREATED` now resolves, through that ancestor symlink, to the
+  # sibling's real content, while its OWN final path component is still a
+  # real directory, not a symlink. This deliberately defeats the `-L`
+  # check (which only ever looks at the final component) so this test
+  # isolates the EQUALITY check's own, independent value, not just
+  # re-proving `-L` catches a direct symlink swap (already proven above).
+  rm -rf "$FAKE_SIBLING_PARENT/lane-mine"
+  ln -s "$FAKE_SIBLING_PARENT/lane-victim" "$FAKE_SIBLING_PARENT/lane-mine"
+  # Step 2: the real function, called exactly as the shipped code calls it.
+  verify_scratch_containment "$CREATED" "TEST" "$EXPECTED_REAL"
+  printf 'REACHED_END\n'
+) 2>&1 )
+RC_SIBLING_ATTACK=$?
+set -e
+if [ "$RC_SIBLING_ATTACK" -ne 0 ] \
+   && printf '%s' "$RESOLVE_SIBLING_ATTACK" | grep -qi 'does NOT match the path captured immediately after creation' \
+   && ! printf '%s' "$RESOLVE_SIBLING_ATTACK" | grep -q 'REACHED_END'; then
+  ok "v4.8.7 sibling-lane fix: an ancestor-symlink race redirecting into ANOTHER lane's own real directory (still fully contained under the shared parent, and NOT caught by the -L check since \$CREATED's own final component is a real directory) is CAUGHT by exact-path equality"
+else
+  notok "v4.8.7 sibling-lane fix: a sibling-lane redirect was NOT caught (rc=$RC_SIBLING_ATTACK, out='$RESOLVE_SIBLING_ATTACK')"
+fi
+rm -rf "$FAKE_SIBLING_PARENT"
+
 # Negative control: the same race, but sourcing a version of the RW block
 # with the verify_scratch_containment CALL removed (mechanism unchanged,
 # just unused) -- reconstructs the pre-round-1 shape, proving the race is
 # real when nothing checks for it.
-sed '/^verify_scratch_containment "\$RW"/d' "$WORK/lane_scratch_rw_verify.sh" > "$WORK/lane_scratch_rw_verify_unfixed.sh"
+# Also drop everything from RGOTMPDIR onward: those get their OWN
+# (unmutated) verify_scratch_containment calls in the same extracted
+# block, and with the round-2 fix in place they now correctly catch the
+# SAME lane-root corruption independently -- dying before this negative
+# control ever gets to observe RW's own (mutated) behavior. Content-based
+# delete (never a hardcoded line count), so this survives future drift in
+# either block's own size.
+sed '/^verify_scratch_containment "\$RW"/d; /^# Go'"'"'s work dir\./,$d' \
+  "$WORK/lane_scratch_rw_verify.sh" > "$WORK/lane_scratch_rw_verify_unfixed.sh"
 grep -qF 'verify_scratch_containment "$RW"' "$WORK/lane_scratch_rw_verify_unfixed.sh" \
   && { echo "FAIL: mutation strip did not remove the RW verify call -- fix the sed pattern" >&2; exit 1; }
+grep -q 'RGOTMPDIR' "$WORK/lane_scratch_rw_verify_unfixed.sh" \
+  && { echo "FAIL: mutation strip did not remove the RGOTMPDIR/RTMPDIR tail -- fix the sed pattern" >&2; exit 1; }
 TOCTOU_ATTACK_TARGET_NEG="$WORK/toctou-attack-target-neg"
 mkdir -p "$TOCTOU_ATTACK_TARGET_NEG"
+set +e
 RESOLVE_TOCTOU_NEG=$(
   HOST_OS=Linux NAME=toctou-lane-neg TMPDIR="$WORK/unused-tmpdir"
   # shellcheck source=/dev/null
@@ -1662,6 +1744,7 @@ RESOLVE_TOCTOU_NEG=$(
   source "$WORK/lane_scratch_rw_verify_unfixed.sh"
   printf 'RW=%s\n' "$RW"
 )
+set -e
 RW_NEG=$(printf '%s' "$RESOLVE_TOCTOU_NEG" | sed -n 's/^RW=//p')
 RW_NEG_REAL=""
 [ -n "$RW_NEG" ] && [ -d "$RW_NEG" ] && RW_NEG_REAL=$(cd "$RW_NEG" && pwd -P)
@@ -1685,7 +1768,7 @@ rm -rf "$FAKE_TOCTOU_PARENT" "$TOCTOU_ATTACK_TARGET" "$TOCTOU_ATTACK_TARGET_NEG"
 # worktree-add + verification block; a pre-planted symlink at the vacant
 # RW slot pointing at a separate real directory.
 # ---------------------------------------------------------------------------
-extract 1267 1295 'worktree add --detach' "$WORK/worktree_add_verify.sh"
+extract 1347 1375 'worktree add --detach' "$WORK/worktree_add_verify.sh"
 grep -qF 'git rev-parse --show-toplevel' "$WORK/worktree_add_verify.sh" \
   || { echo "FAIL: extracted worktree_add_verify.sh does not contain the post-add toplevel check" >&2; exit 1; }
 

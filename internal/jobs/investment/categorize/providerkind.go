@@ -153,7 +153,18 @@ func ResolveProviderKindForOrg(
 		if err != nil {
 			return "", err
 		}
-		if orgProvider != "" {
+		// #2223 peer read (lane-gate-rounds), LOW: the presence check must
+		// run on the TRIMMED value, not the raw one -- a whitespace-only
+		// resolver output (e.g. "   ") is non-empty by `!= ""` but
+		// normalizes to "" (normalizeProviderKind's own auto-substitution
+		// only fires for a truly empty string, not a whitespace-only one),
+		// so the old check let it enter this branch and return an EMPTY,
+		// invalid ProviderKind instead of falling through to the platform
+		// env / auto-detect like any other "no org BYO provider" case.
+		// Not reachable today -- llmorgsettings.Store.ResolveUsableProvider
+		// never returns a whitespace-only value -- but the check should be
+		// consistent with what it actually gates on regardless.
+		if strings.TrimSpace(orgProvider) != "" {
 			// codex round 1 (#2223), P3: this branch is the whole point of
 			// CHAOS-5006 -- an org's own BYO provider overriding the
 			// platform's LLM_PROVIDER for "auto" -- and had no telemetry at

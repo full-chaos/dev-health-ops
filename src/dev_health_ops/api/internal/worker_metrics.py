@@ -694,6 +694,39 @@ _DAILY_REDRIVE_DEFAULT_OPERATIONS: tuple[Literal["partition", "finalize"], ...] 
 )
 
 
+class MetricExecutionSweepRequest(_StrictRequest):
+    """CHAOS-5049: sweep ledger rows whose WRITER DIED, into `ambiguous`.
+
+    Distinct from both sibling verbs, and deliberately weaker than either.
+    MetricExecutionRepairRequest resolves ONE row an operator already knows;
+    DailyMetricsRedriveRequest bulk-authorizes RETRY under runs an operator has
+    scoped. This one authorizes nothing: it moves `executing` rows whose derived
+    claim is provably dead into `ambiguous`, which is the state that already
+    means "a human must look".
+
+    Why that is the whole scope, and why there is no `resolution` field: every
+    exit from `executing` is written by the process holding the claim
+    (_mark_ambiguous / _mark_retry_authorized / the succeeded path all carry
+    `WHERE state = 'executing'`). When that process dies -- SIGKILL, OOM, a lost
+    pod -- no writer remains and the row stays `executing` forever. CHAOS-5049
+    found 4 such rows across 4 orgs, stuck 7.5 days with expired partition
+    leases. Nothing reclaimed them because the ledger has NO lease column of its
+    own; its liveness is derived from daily_metrics_partitions /
+    daily_metrics_runs, and nothing watches those for expiry.
+
+    An expired lease proves the writer is GONE. It does not prove the writer
+    wrote NOTHING -- which is why this verb stops at `ambiguous` and never
+    authorizes retry. Families whose readers SUM raw rows rather than argMax by
+    computed_at (file_hotspots / file_metrics_daily) silently inflate on a
+    duplicate write, so a needless retry is not free. Retry stays manual,
+    through the existing verbs, with operator review_evidence.
+    """
+
+    run_ids: list[uuid.UUID] = Field(default_factory=list, max_length=256)
+    limit: int = Field(default=100, ge=1, le=1000)
+    dry_run: bool = False
+
+
 class DailyMetricsRedriveRequest(_StrictRequest):
     """CHAOS-4304: bulk-unblock ledger rows for a set of runs an operator has
     already scoped for redrive (typically via the Go-side
@@ -1535,9 +1568,22 @@ async def _bulk_redrive_ambiguous_executions(
     return {"repaired": repaired, "skipped_claim_active": skipped}
 
 
-async def _mark_ambiguous(
-    session: AsyncSession, execution: _Execution, detail: str
+async def _mark_ambiguous_by_id(
+    session: AsyncSession, execution_id: uuid.UUID, detail: str
 ) -> None:
+    """The `executing` -> `ambiguous` transition, addressed by id.
+
+    Extracted from _mark_ambiguous (CHAOS-5049) so the sweep path can perform
+    the EXACT same write without fabricating a partial _Execution: that
+    dataclass carries organization_id, family, generation, scope and
+    scope_digest, none of which the transition needs and none of which a sweep
+    over dead claims can honestly supply. Constructing a half-filled one to
+    satisfy a signature would be a lie the type system would happily accept.
+
+    The SQL, its `WHERE state = 'executing'` guard and the 1024-char bound are
+    unchanged and now live in exactly one place, so the sweep cannot drift from
+    the in-process path it is standing in for.
+    """
     await session.execute(
         text(
             """
@@ -1547,9 +1593,15 @@ async def _mark_ambiguous(
             WHERE id = CAST(:id AS uuid) AND state = 'executing'
             """
         ),
-        {"id": str(execution.id), "detail": detail[:1024]},
+        {"id": str(execution_id), "detail": detail[:1024]},
     )
     await session.commit()
+
+
+async def _mark_ambiguous(
+    session: AsyncSession, execution: _Execution, detail: str
+) -> None:
+    await _mark_ambiguous_by_id(session, execution.id, detail)
 
 
 async def _mark_retry_authorized(
@@ -2954,6 +3006,28 @@ async def repair_metric_execution(
     return await _repair_execution(session, execution_id, request)
 
 
+@router.post("/metric-executions/v1/sweep-dead-claims")
+async def sweep_dead_claim_executions(
+    request: MetricExecutionSweepRequest,
+    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, Any]:
+    """Sweep `executing` rows whose writer died into `ambiguous` (CHAOS-5049).
+
+    Gated by authorize_metric_repair, the same operator-only token the /repair
+    and /redrive verbs already require -- NOT authorize_worker_bridge, which is
+    the weaker gate /execute uses. This verb advances durable ledger state, so it
+    sits with the repair verbs rather than the execution ones, even though it
+    authorizes strictly less than either.
+    """
+    authorize_metric_repair(authorization)
+    result = await _sweep_dead_claim_executions(
+        session, request.run_ids, request.limit, request.dry_run
+    )
+    await session.commit()
+    return result
+
+
 @router.post("/daily-metrics/v1/redrive")
 async def redrive_daily_metrics(
     request: DailyMetricsRedriveRequest,
@@ -2966,3 +3040,84 @@ async def redrive_daily_metrics(
     )
     await session.commit()
     return result
+
+
+async def _sweep_dead_claim_executions(
+    session: AsyncSession,
+    run_ids: list[uuid.UUID],
+    limit: int,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Move `executing` rows whose derived claim is provably dead to `ambiguous`.
+
+    Reuses _original_claim_is_active verbatim -- the same predicate /repair and
+    the bulk redrive already trust -- so "provably dead" means exactly what it
+    already means everywhere else in this file, not a second opinion invented
+    here. A row whose claim is still live is left untouched and counted
+    `skipped_claim_active`, the same refusal a single /repair call makes with
+    409: a live `executing` claim is real, still-in-flight work, never something
+    to sweep out from under.
+
+    The write reuses _mark_ambiguous, so the transition, its
+    `WHERE state = 'executing'` guard and its bounded failure_detail are the
+    ones already in production -- this adds an external TRIGGER for a transition
+    that already exists, not a new transition.
+
+    `retry_authorized` and `succeeded` are absent from this function BY
+    CONSTRUCTION, not by intent: neither string appears in it, so no future edit
+    can widen it into an auto-retry path without adding them deliberately.
+
+    Returns the swept ids because an operator needs the list to run the
+    CHAOS-5042 partition repair/redrive afterwards -- a count alone would make
+    them re-derive it by hand.
+    """
+    if limit < 1:
+        return {
+            "swept": 0,
+            "skipped_claim_active": 0,
+            "swept_ids": [],
+            "dry_run": dry_run,
+        }
+
+    scoped = [str(run_id) for run_id in run_ids]
+    candidates = await session.execute(
+        text(
+            """
+            SELECT id, run_id, partition_id, claim_token, worker_kind, operation,
+                   last_attempt_at
+            FROM metric_compatibility_executions
+            WHERE state = 'executing'
+              AND (CARDINALITY(CAST(:run_ids AS uuid[])) = 0
+                   OR run_id = ANY(CAST(:run_ids AS uuid[])))
+            ORDER BY last_attempt_at ASC
+            LIMIT :limit
+            """
+        ),
+        {"run_ids": scoped, "limit": limit},
+    )
+    rows = candidates.mappings().all()
+
+    swept_ids: list[str] = []
+    skipped = 0
+    for row in rows:
+        if await _original_claim_is_active(session, row):
+            skipped += 1
+            continue
+        if dry_run:
+            swept_ids.append(str(row["id"]))
+            continue
+        await _mark_ambiguous_by_id(
+            session,
+            row["id"],
+            "claim_dead_swept_to_ambiguous: the process holding this claim is gone "
+            "and its derived lease has expired; no output was confirmed either way, "
+            "so retry authorization remains manual (CHAOS-5049)",
+        )
+        swept_ids.append(str(row["id"]))
+
+    return {
+        "swept": len(swept_ids),
+        "skipped_claim_active": skipped,
+        "swept_ids": swept_ids,
+        "dry_run": dry_run,
+    }

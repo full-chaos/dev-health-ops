@@ -13,12 +13,13 @@ import (
 )
 
 var familyJobKinds = map[string]string{
-	"capacity":            jobcontract.KindRemainingCapacity,
-	"complexity":          jobcontract.KindRemainingComplexity,
-	"dora":                jobcontract.KindRemainingDORA,
-	"membership_backfill": jobcontract.KindRemainingMembership,
-	"recommendations":     jobcontract.KindRemainingRecommendations,
-	"release_impact":      jobcontract.KindRemainingReleaseImpact,
+	"capacity":              jobcontract.KindRemainingCapacity,
+	"complexity":            jobcontract.KindRemainingComplexity,
+	"dora":                  jobcontract.KindRemainingDORA,
+	"membership_backfill":   jobcontract.KindRemainingMembership,
+	"recommendations":       jobcontract.KindRemainingRecommendations,
+	"release_impact":        jobcontract.KindRemainingReleaseImpact,
+	"work_item_attribution": jobcontract.KindRemainingWorkItemAttribution,
 }
 
 func JobKindForFamily(family string) (string, bool) {

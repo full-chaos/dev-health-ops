@@ -734,6 +734,15 @@ func configureWorkerDependenciesWithSources(
 		observer, logger, workers, sources,
 	)
 	if composeErr != nil {
+		// CHAOS-4993: dependencyUnavailable's reason string is the only thing
+		// the caller's structured log sees -- the underlying composeErr (the
+		// actual family builder failure: a bad DSN, a schema mismatch, a
+		// duplicate queue claim) was silently discarded here, leaving an
+		// operator with "worker_family_composition_failed" and nothing else
+		// to diagnose from. Logging it is not a fix for the swallow itself
+		// (dependencyFailure still carries no cause), just the minimum needed
+		// to see the real reason without attaching a debugger.
+		logger.Error("worker family composition failed", "error", composeErr)
 		dependencies.close()
 		return nil, dependencyUnavailable("worker_family_composition_failed")
 	}
@@ -836,13 +845,21 @@ func composeSelectedWorkerFamilies(
 	sources workerDependencySources,
 ) (workerFamily, error) {
 	var active workerFamily
-	build := func(family workerFamily, err error) error {
+	// CHAOS-4993: every builder below returns a bare sentinel error (no %w
+	// wrapping, no cause), so a composition failure gave an operator only
+	// "worker_family_composition_failed" with no way to tell which of the six
+	// families it came from. Naming the builder here and logging it at the
+	// point of failure is the minimum that makes that diagnosable without a
+	// debugger -- it does not change which error propagates.
+	build := func(name string, family workerFamily, err error) error {
 		if err != nil {
+			logger.Error("worker family builder failed", "family", name, "error", err)
 			_ = closeWorkerFamily(active)
 			return err
 		}
 		combined, composeErr := composeWorkerFamily(active, family)
 		if composeErr != nil {
+			logger.Error("worker family composition failed", "family", name, "error", composeErr)
 			_ = closeWorkerFamily(family)
 			_ = closeWorkerFamily(active)
 			return composeErr
@@ -850,35 +867,43 @@ func composeSelectedWorkerFamilies(
 		active = combined
 		return nil
 	}
-	for _, builder := range []workerFamilyBuilder{
-		sources.buildOperational,
-		sources.buildDaily,
-		sources.buildWorkgraph,
+	for _, entry := range []struct {
+		name    string
+		builder workerFamilyBuilder
+	}{
+		{"operational", sources.buildOperational},
+		{"daily", sources.buildDaily},
+		{"workgraph", sources.buildWorkgraph},
 	} {
-		if builder == nil {
+		if entry.builder == nil {
 			continue
 		}
-		if err := build(builder(cfg, database, runtimeRegistry, observer, logger, workers)); err != nil {
+		family, familyErr := entry.builder(cfg, database, runtimeRegistry, observer, logger, workers)
+		if err := build(entry.name, family, familyErr); err != nil {
 			return workerFamily{}, err
 		}
 	}
-	for _, builder := range []func(
-		context.Context,
-		config.Config,
-		workerDatabase,
-		*jobruntime.Registry,
-		jobruntime.Observer,
-		*slog.Logger,
-		*river.Workers,
-	) (workerFamily, error){
-		sources.buildReports,
-		sources.buildProviderSync,
-		sources.buildSyncCoordinator,
+	for _, entry := range []struct {
+		name    string
+		builder func(
+			context.Context,
+			config.Config,
+			workerDatabase,
+			*jobruntime.Registry,
+			jobruntime.Observer,
+			*slog.Logger,
+			*river.Workers,
+		) (workerFamily, error)
+	}{
+		{"reports", sources.buildReports},
+		{"providerSync", sources.buildProviderSync},
+		{"syncCoordinator", sources.buildSyncCoordinator},
 	} {
-		if builder == nil {
+		if entry.builder == nil {
 			continue
 		}
-		if err := build(builder(ctx, cfg, database, runtimeRegistry, observer, logger, workers)); err != nil {
+		family, familyErr := entry.builder(ctx, cfg, database, runtimeRegistry, observer, logger, workers)
+		if err := build(entry.name, family, familyErr); err != nil {
 			return workerFamily{}, err
 		}
 	}

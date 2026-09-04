@@ -4,10 +4,10 @@ package main
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -189,7 +189,13 @@ func bootQueueSelection(
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// stderr, not io.Discard: composeSelectedWorkerFamilies' own error return
+	// carries no detail (bare sentinel errors, no %w wrapping -- see
+	// CHAOS-4993), so a failing case's real cause is only visible in
+	// whatever a builder logged before returning. Harmless for the passing
+	// path -- it's captured by `go test -v`'s per-test log buffer, not
+	// printed unconditionally.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	workers := river.NewWorkers()
 	family, err := composeSelectedWorkerFamilies(
 		ctx, cfg, database, registryTree, metrics, logger, workers, productionWorkerDependencySources,

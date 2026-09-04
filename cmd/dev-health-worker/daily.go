@@ -525,6 +525,7 @@ func buildDailyWorker(
 				if metricsClickHouse != nil {
 					_ = metricsClickHouse.Close()
 				}
+				logger.Error("remaining kind registration failed", "kind", spec.Kind, "error", registrationErr)
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
 			registered = append(registered, registeredSpec)
@@ -778,8 +779,11 @@ func addRemainingWorker[T jobruntime.ContractArgs](
 		return jobruntime.HandlerSpec{}, err
 	}
 	adapter, err := jobruntime.NewAdapter[T](registry, spec, handler, dependencies)
-	if err != nil || river.AddWorkerSafely(workers, adapter) != nil {
-		return jobruntime.HandlerSpec{}, errWorkerDependencyUnavailable
+	if err != nil {
+		return jobruntime.HandlerSpec{}, err
+	}
+	if addErr := river.AddWorkerSafely(workers, adapter); addErr != nil {
+		return jobruntime.HandlerSpec{}, addErr
 	}
 	return adapter.Spec(), nil
 }

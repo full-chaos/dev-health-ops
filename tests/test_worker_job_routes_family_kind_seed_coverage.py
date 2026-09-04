@@ -146,6 +146,33 @@ def _is_routes_table_call(node: ast.AST) -> bool:
     )
 
 
+def _walk_own_scope(node: ast.AST):  # noqa: ANN201 -- generator, see docstring
+    """Like `ast.walk`, but does NOT descend into a NESTED
+    FunctionDef/AsyncFunctionDef/Lambda's body -- codex round 3, P1: `ast.
+    walk` recurses into every descendant regardless of scope, so a call
+    inside `def upgrade(): def never_called(): _seed()` (a nested helper
+    upgrade() never actually invokes) was found and counted as if it were
+    upgrade()'s own directly-executed code -- a genuine false ACCEPT: the
+    seed call never runs, but the parser credited it as if it had. A nested
+    def's OWN name/call-sites in the ENCLOSING scope are still visible
+    (this walker yields the nested FunctionDef node itself, just not its
+    body), so `def helper(): ...; helper()` still resolves correctly
+    through the normal `self.functions` machinery -- what's excluded is
+    ONLY code lexically inside a definition that is never shown to be
+    called.
+    """
+    stack = [node]
+    root = node
+    while stack:
+        current = stack.pop()
+        yield current
+        if current is not root and isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+        ):
+            continue
+        stack.extend(ast.iter_child_nodes(current))
+
+
 class _MigrationModule:
     """Resolves module-level name -> literal str/tuple(str) for one migration
     file, finds which local functions are reachable (by direct call) from a
@@ -182,15 +209,35 @@ class _MigrationModule:
         # use site.
         self.ambiguous_factory_functions: set[str] = set()
         self.ambiguous_variable_names: set[str] = set()
+        # A module-level name is trusted as a literal constant only if it has
+        # EXACTLY ONE assignment, and that assignment is itself a literal
+        # (codex round 3, P1: `KIND = "metrics.remaining.capacity"` followed
+        # later by `KIND = dynamic()` kept the STALE literal in `constants`
+        # forever, since only literal-resolving assignments ever wrote to
+        # the dict -- a reassignment to a non-literal silently left the old
+        # value in place instead of invalidating it). A name assigned more
+        # than once, or assigned a non-literal at all, is excluded from
+        # `constants` entirely rather than guessed at -- `resolve()` then
+        # naturally returns None for it, which routes through the existing
+        # `_require_resolved` fail-closed path, same mechanism as an
+        # unresolvable value that was never a name at all.
+        constant_assignment_counts: dict[str, int] = {}
+        constant_literal_values: dict[str, tuple[str, ...]] = {}
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target = node.targets[0]
                 if isinstance(target, ast.Name):
+                    constant_assignment_counts[target.id] = (
+                        constant_assignment_counts.get(target.id, 0) + 1
+                    )
                     literal = _literal_str_or_strings(node.value)
                     if literal is not None:
-                        self.constants[target.id] = literal
+                        constant_literal_values[target.id] = literal
             elif isinstance(node, ast.FunctionDef):
                 self.functions[node.name] = node
+        for name, count in constant_assignment_counts.items():
+            if count == 1 and name in constant_literal_values:
+                self.constants[name] = constant_literal_values[name]
         # A function is a "routes factory" only if EVERY one of its `return`
         # statements resolves to the worker_job_routes TableClause (directly,
         # e.g. every migration's own `def _routes(): return
@@ -266,6 +313,29 @@ class _MigrationModule:
                 self.ambiguous_variable_names.add(name)
             elif "ambiguous" in shapes:
                 self.ambiguous_variable_names.add(name)
+        # `for X in ...:` and `with ... as X:` rebind X too, NOT just a plain
+        # `X = ...` -- codex round 3, P1: the ordinary-reassignment ambiguity
+        # tracking above only scans `ast.Assign` nodes, so a `for routes in
+        # [_audit()]:` loop after `routes = _routes()` was invisible to it;
+        # the parser kept trusting `routes` as the routes table throughout
+        # the loop body, even though it is bound to a different table on
+        # every iteration. Both binding forms are unconditionally ambiguous
+        # here (their bound value can't be statically resolved the way a
+        # plain Assign's RHS can, so there's no "shape" to classify) --
+        # union them into ambiguous_variable_names and revoke any trust
+        # routes_variable_names already granted the same name.
+        loop_or_with_bound_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(
+                node.target, ast.Name
+            ):
+                loop_or_with_bound_names.add(node.target.id)
+            elif isinstance(node, ast.With) or isinstance(node, ast.AsyncWith):
+                for item in node.items:
+                    if isinstance(item.optional_vars, ast.Name):
+                        loop_or_with_bound_names.add(item.optional_vars.id)
+        self.ambiguous_variable_names |= loop_or_with_bound_names
+        self.routes_variable_names -= loop_or_with_bound_names
 
     def _classify_routes_shape(self, value: ast.expr) -> str:
         """ "routes" (provably the worker_job_routes TableClause), "ambiguous"
@@ -333,7 +403,7 @@ class _MigrationModule:
             seen.add(name)
             func = self.functions[name]
             reached.append(func)
-            for node in ast.walk(func):
+            for node in _walk_own_scope(func):
                 if (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Name)
@@ -346,7 +416,7 @@ class _MigrationModule:
         return [
             node
             for func in self._reachable_functions(entry_point)
-            for node in ast.walk(func)
+            for node in _walk_own_scope(func)
             if isinstance(node, ast.Call)
         ]
 
@@ -365,11 +435,18 @@ class _MigrationModule:
         an f-string) was invisible to a per-literal-only scan -- no SINGLE
         AST string node contained the whole DML phrase, even though the
         file's actual runtime string did.
+
+        Also resolves a bare NAME reference to a module-level string
+        constant (codex round 3, P1: `SQL = "DELETE FROM
+        worker_job_routes ..."` used via `op.execute(SQL)` was invisible --
+        the scan only inspected literal/concatenation/f-string EXPRESSIONS
+        directly present in the reachable code, never a Name pointing at
+        one defined elsewhere).
         """
         strings: list[str] = []
         for func in self._reachable_functions(entry_point):
-            for node in ast.walk(func):
-                if isinstance(node, (ast.Constant, ast.BinOp, ast.JoinedStr)):
+            for node in _walk_own_scope(func):
+                if isinstance(node, (ast.Constant, ast.BinOp, ast.JoinedStr, ast.Name)):
                     resolved = self._resolve_string_expr(node)
                     if resolved is not None:
                         strings.append(resolved)
@@ -378,6 +455,11 @@ class _MigrationModule:
     def _resolve_string_expr(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
+        if isinstance(node, ast.Name):
+            resolved = self.resolve(node)
+            if resolved and len(resolved) == 1:
+                return resolved[0]
+            return None
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             left = self._resolve_string_expr(node.left)
             right = self._resolve_string_expr(node.right)
@@ -1076,6 +1158,145 @@ def test_conditional_factory_fails_closed_instead_of_being_trusted_unconditional
 
             def upgrade():
                 op.execute(_routes().insert().values(job_kind="metrics.remaining.capacity"))
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="ambiguous|bound to"):
+        _collect_seed_state(synthetic)
+
+
+def test_reassigned_module_constant_fails_closed_instead_of_using_a_stale_value(
+    tmp_path: Path,
+) -> None:
+    """Codex round 3, P1: `KIND = "metrics.remaining.capacity"` followed by
+    `KIND = dynamic()` (a non-literal reassignment) used to keep the STALE
+    literal in `constants` forever -- only a literal-resolving assignment
+    ever wrote to the dict, so the non-literal reassignment silently left
+    the old value in place instead of invalidating it. A job_kind that
+    resolves to a name assigned more than once (literal or not) must fail
+    closed, not silently trust whichever assignment happened to be literal.
+    """
+    synthetic = tmp_path / "9989_reassigned_constant.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            KIND = "metrics.remaining.capacity"
+
+            def dynamic():
+                return "metrics.remaining.not_capacity"
+
+            KIND = dynamic()
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def upgrade():
+                op.execute(_routes().insert().values(job_kind=KIND))
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="job_kind"):
+        _collect_seed_state(synthetic)
+
+
+def test_call_inside_a_never_invoked_nested_helper_is_not_counted(
+    tmp_path: Path,
+) -> None:
+    """Codex round 3, P1: `ast.walk` recurses into a NESTED function
+    definition's body regardless of whether that nested function is ever
+    actually called -- `def upgrade(): def never_called(): _seed()` used to
+    have `_seed()`'s call counted as upgrade()'s own reachable code, even
+    though `never_called` is defined and never invoked. A genuine false
+    ACCEPT: the seed call never runs at all, but the parser credited it.
+    """
+    synthetic = tmp_path / "9988_nested_uncalled_helper.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def _seed():
+                op.execute(_routes().insert().values(job_kind="metrics.remaining.capacity"))
+
+            def upgrade():
+                def never_called():
+                    _seed()
+            """
+        )
+    )
+    seeded, retired = _collect_seed_state(synthetic)
+    assert not seeded
+    assert not retired
+
+
+def test_module_level_raw_sql_constant_used_by_name_is_still_detected(
+    tmp_path: Path,
+) -> None:
+    """Codex round 3, P1: a raw-SQL statement stored in a MODULE-LEVEL
+    string constant (`SQL = "DELETE FROM worker_job_routes ..."`) and used
+    via `op.execute(SQL)` -- a bare Name reference at the call site, not a
+    string literal/concatenation/f-string directly present in upgrade()'s
+    own code -- was invisible to the raw-SQL scan, which only inspected
+    literal-shaped expressions structurally, never resolved through a name.
+    """
+    synthetic = tmp_path / "9987_module_level_raw_sql_by_name.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            SQL = "DELETE FROM worker_job_routes WHERE job_kind = 'metrics.remaining.capacity'"
+
+            def upgrade():
+                op.execute(
+                    _routes().insert().values(job_kind="metrics.remaining.capacity")
+                )
+                op.execute(SQL)
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="raw-SQL"):
+        _collect_seed_state(synthetic)
+
+
+def test_for_loop_target_rebinding_fails_closed(tmp_path: Path) -> None:
+    """Codex round 3, P1: the ordinary-reassignment ambiguity tracking only
+    scans `ast.Assign` nodes -- a `for routes in [_audit()]:` loop rebinds
+    `routes` too, but via a DIFFERENT AST node (`ast.For.target`), so it was
+    invisible to that tracking. `routes = _routes()` once, followed by a
+    `for routes in [...]:` loop, used to leave `routes` trusted as the
+    routes table for the rest of the file, even though the loop rebinds it
+    to a different table on every iteration.
+    """
+    synthetic = tmp_path / "9986_for_loop_rebind.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def _audit():
+                return sa.table("audit_log", sa.column("job_kind", sa.String()))
+
+            routes = _routes()
+
+            def upgrade():
+                for routes in [_audit()]:
+                    op.execute(routes.insert().values(job_kind="metrics.remaining.capacity"))
             """
         )
     )

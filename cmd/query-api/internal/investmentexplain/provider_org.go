@@ -148,17 +148,29 @@ func ResolveModelNameForOrg(
 // this narrows out only the SSRF-fallback AUDIT LOG, never the
 // fallback decision itself).
 //
-// requestedModel is the caller's own explicit model override (the same
-// raw value ResolveModelNameForOrg receives) -- codex round 1 (#2234),
-// P2: an earlier version ignored it here and always re-derived the model
-// from orgSettings.Model, so an explicit request-level model override
-// was reported as "resolved" by ResolveModelNameForOrg but never actually
-// reached the constructed provider when org BYO was the active source.
-// Precedence matches ResolveModelNameForOrg's own explicit-wins step
-// exactly: non-empty requestedModel wins outright, else fall back to the
-// org's stored model.
+// model is the CompleteInvestmentMixExplanationForOrg's own already-fully-
+// resolved model (ResolveModelNameForOrg's return value -- explicit
+// request override, else the org's stored model, else that provider's
+// documented default), passed through VERBATIM and used directly, never
+// re-derived here.
+//
+// codex round 1 (#2234), P2 [FIXED then]: an earlier version ignored an
+// explicit caller override entirely and always called orgSettings.Model
+// itself. codex round 2 (#2234), P1 [fixed here]: the round-1 fix threaded
+// through the RAW requestedModel (empty whenever the caller passed none),
+// not the FULLY RESOLVED model -- so when an org had BYO credentials but
+// NO stored model, this function's own orgSettings.Model call returned ""
+// too, and construction fell through to categorize's OWN per-provider
+// default (e.g. openaiprovider.go's "gpt-5-nano") instead of
+// ResolveModelNameForOrg's already-computed default (e.g.
+// defaultModelByProvider[openai] == "gpt-5-mini") -- two DIFFERENT
+// hardcoded defaults disagreeing on which model a BYO request with no
+// explicit/stored model actually gets. Passing the ALREADY-RESOLVED value
+// straight through eliminates the second, independent derivation
+// entirely, so there is only one source of truth for "what model does
+// this request use."
 func newProviderForOrg(
-	ctx context.Context, kind categorize.ProviderKind, orgID, requestedModel string, orgSettings llmorgsettings.Resolver,
+	ctx context.Context, kind categorize.ProviderKind, orgID, model string, orgSettings llmorgsettings.Resolver,
 ) (categorize.Provider, error) {
 	if orgSettings != nil {
 		creds, ok, err := orgSettings.Credentials(ctx, orgID, string(kind))
@@ -166,13 +178,6 @@ func newProviderForOrg(
 			return nil, err
 		}
 		if ok {
-			model := requestedModel
-			if model == "" {
-				model, err = orgSettings.Model(ctx, orgID, string(kind))
-				if err != nil {
-					return nil, err
-				}
-			}
 			return newProviderFromCredentials(kind, creds.APIKey, creds.BaseURL, model)
 		}
 		// Not usable via org BYO. team-lead ruling (codex round 1, P2 --
@@ -278,7 +283,7 @@ func CompleteInvestmentMixExplanationForOrg(
 		}
 	}
 
-	provider, err := newProviderForOrg(ctx, kind, orgID, requestedModel, orgSettings)
+	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings)
 	if err != nil {
 		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, fmt.Errorf("construct llm provider: %w", err)
 	}

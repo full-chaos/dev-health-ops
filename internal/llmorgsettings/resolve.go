@@ -31,13 +31,49 @@ var apiKeyRequiredProviders = map[string]struct{}{
 
 // normalizeProvider ports both providers/__init__.py's
 // _normalize_provider_name and credentials.py's _normalize_provider --
-// identical bodies in Python, kept as two names there; one name here.
+// identical bodies in Python, kept as two names there; one name here:
+// `(name or "auto").strip().lower()`. The `or` tests RAW (pre-strip)
+// falsiness -- only a truly EMPTY string substitutes to "auto"; a
+// whitespace-only string is truthy in Python and is NOT substituted, so
+// it strips down to "" (never reaching "auto"). codex round 2 (#2234),
+// P2: this port previously trimmed FIRST and checked the TRIMMED result
+// for emptiness, so a whitespace-only value ("   ") was wrongly
+// substituted to "auto" here -- the exact same trim-order bug
+// categorize.normalizeProviderKind's own doc comment already documents
+// fixing (codex round 2, #2178) for its sibling function; this one was
+// missed. Used for the CONFIGURED side (an org's own stored provider
+// setting) below, where "empty (or whitespace) stored provider means
+// auto" is the correct, intentional semantic -- see normalizeRequested
+// below for why the REQUESTED side needs a DIFFERENT function entirely,
+// not just this same fix.
 func normalizeProvider(name string) string {
-	trimmed := strings.ToLower(strings.TrimSpace(name))
-	if trimmed == "" {
-		return "auto"
+	if name == "" {
+		name = "auto"
 	}
-	return trimmed
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// normalizeRequestedProvider trims and lowercases ONLY -- no empty-to-
+// "auto" substitution at all, unlike normalizeProvider. codex round 2
+// (#2234), P2: every production caller of Credentials/Matches/Model/
+// RawBaseURL passes an ALREADY-RESOLVED categorize.ProviderKind (from
+// ResolveProviderKindForOrg), never a raw, unprocessed user string --
+// and that resolver's own contract is that an empty kind means "the
+// caller explicitly requested an invalid/malformed provider" (e.g. a
+// whitespace-only `?llm_provider=+` query value, which
+// categorize.normalizeProviderKind correctly treats as EXPLICIT and
+// non-"auto", collapsing to ""), which must NEVER be treated as a
+// wildcard "auto" match against whatever the org happens to have
+// configured. Reusing normalizeProvider's own empty-to-"auto"
+// substitution on this already-resolved value let a malformed request
+// silently match ANY configured BYO provider (since "auto" matches
+// unconditionally) instead of correctly refusing it -- a request that
+// should fail the pre-stream availability check with `llm_unavailable`
+// (matching Python) instead passed it, then failed LATE, mid-stream,
+// with a generic construction error after the response had already
+// started with a 200 status.
+func normalizeRequestedProvider(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func isKnownProvider(provider string) bool {
@@ -112,7 +148,7 @@ func (s Store) Credentials(ctx context.Context, orgID, provider string) (Credent
 		return Credentials{}, false, err
 	}
 	configured := normalizeProvider(settings[keyProvider])
-	requested := normalizeProvider(provider)
+	requested := normalizeRequestedProvider(provider)
 	// normalizeProvider never returns "" (an absent/empty stored provider
 	// normalizes to "auto"), so Python's `if configured_provider and ...`
 	// is always true -- the real gate is just this membership check.
@@ -153,7 +189,7 @@ func (s Store) Model(ctx context.Context, orgID, provider string) (string, error
 		return "", err
 	}
 	configured := normalizeProvider(settings[keyProvider])
-	requested := normalizeProvider(provider)
+	requested := normalizeRequestedProvider(provider)
 	if requested != "auto" && requested != configured {
 		return "", nil
 	}
@@ -178,7 +214,7 @@ func (s Store) RawBaseURL(ctx context.Context, orgID, provider string) (baseURL 
 		return "", false, err
 	}
 	configuredProvider := normalizeProvider(settings[keyProvider])
-	requested := normalizeProvider(provider)
+	requested := normalizeRequestedProvider(provider)
 	if requested != "auto" && requested != configuredProvider {
 		return "", false, nil
 	}

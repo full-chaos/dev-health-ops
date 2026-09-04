@@ -108,7 +108,11 @@ func withCapturedProviderConstruction(t *testing.T, fn func(*capturedConstructio
 
 // TestNewProviderForOrg_UsesOrgCredentialsWhenMatched is the proof
 // team-lead's PR3 ruling asked for: a BYO org's request is constructed
-// with ITS OWN key/base_url/model, not the platform environment.
+// with ITS OWN key/base_url/model, not the platform environment. The
+// model passed in here stands in for whatever CompleteInvestmentMixExplanationForOrg
+// already resolved via ResolveModelNameForOrg (codex round 2, #2234, P1:
+// newProviderForOrg no longer re-derives a model itself -- see its own
+// doc comment).
 func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 	resolver := &fakeOrgResolver{
 		credentials: llmorgsettings.Credentials{
@@ -116,11 +120,10 @@ func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 			BaseURL: "https://org-gateway.example.com/v1",
 		},
 		credentialsOK: true,
-		model:         "org-chosen-model",
 	}
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		provider, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", resolver)
+		provider, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "org-chosen-model", resolver)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -153,13 +156,18 @@ func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 }
 
 // TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel is the codex
-// round 1 (#2234), P2 regression: an earlier version ignored the
-// caller's own explicit requestedModel parameter here and always
+// round 1 (#2234), P2 regression, ORIGINALLY: an earlier version ignored
+// the caller's own explicit requestedModel parameter here and always
 // re-derived the model from orgSettings.Model, so a request-level model
 // override was reported as "resolved" by ResolveModelNameForOrg but
 // never reached the actual provider construction when org BYO was the
 // active source -- Python passes the request model straight into
-// get_provider, applying the same override.
+// get_provider, applying the same override. codex round 2, P1 changed
+// HOW this is guaranteed (newProviderForOrg's model parameter is now the
+// caller's own fully-resolved value, used verbatim, with no internal
+// derivation left to override at all) but the invariant this test proves
+// -- an explicit model reaches construction unchanged -- still holds and
+// is still worth asserting directly.
 func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 	resolver := &fakeOrgResolver{
 		credentials: llmorgsettings.Credentials{
@@ -167,7 +175,6 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 			BaseURL: "https://org-gateway.example.com/v1",
 		},
 		credentialsOK: true,
-		model:         "org-chosen-model",
 	}
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
@@ -182,6 +189,51 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 	}
 	if captured.credentialsModel != "request-model" {
 		t.Errorf("Model = %q, want the explicit request-level override, not the org's stored model", captured.credentialsModel)
+	}
+}
+
+// TestCompleteInvestmentMixExplanationForOrg_DefaultModelReachesConstruction
+// is the codex round 2 (#2234), P1 regression, at the WIRING level (not
+// just newProviderForOrg's own unit tests above): a BYO OpenAI org with
+// NO stored model and no explicit request-level model must construct
+// with ResolveModelNameForOrg's own provider-default fallback
+// ("gpt-5-mini" for openai, defaultModelByProvider in provider.go) --
+// not categorize's OWN, DIFFERENT default (openaiprovider.go's
+// "gpt-5-nano"), which is what construction silently fell back to when
+// CompleteInvestmentMixExplanationForOrg passed the RAW (empty)
+// requestedModel into newProviderForOrg instead of the fully-resolved
+// value ResolveModelNameForOrg had already computed.
+func TestCompleteInvestmentMixExplanationForOrg_DefaultModelReachesConstruction(t *testing.T) {
+	resolver := &fakeOrgResolver{
+		credentials: llmorgsettings.Credentials{
+			APIKey:  "org-secret-key",
+			BaseURL: "https://org-gateway.example.com/v1",
+		},
+		credentialsOK: true,
+		matches:       true,
+		model:         "", // org configured no model of its own
+	}
+
+	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
+		_, resolvedProvider, resolvedModel, err := CompleteInvestmentMixExplanationForOrg(
+			context.Background(), "openai", "", "org-1", resolver, "prompt text")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolvedProvider != "openai" {
+			t.Fatalf("resolvedProvider = %q, want openai", resolvedProvider)
+		}
+		if resolvedModel != "gpt-5-mini" {
+			t.Fatalf("resolvedModel = %q, want gpt-5-mini (the reported/resolved value)", resolvedModel)
+		}
+	})
+
+	if !captured.credentialsCalled {
+		t.Fatal("expected newProviderFromCredentials to be called for a matched BYO org")
+	}
+	if captured.credentialsModel != "gpt-5-mini" {
+		t.Errorf("constructed with Model = %q, want gpt-5-mini (ResolveModelNameForOrg's own resolved value) -- "+
+			"NOT categorize's own, different provider default", captured.credentialsModel)
 	}
 }
 

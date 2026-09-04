@@ -347,6 +347,42 @@ func TestCredentials_SourceBound(t *testing.T) {
 	}
 }
 
+// TestCredentials_WhitespaceOnlyRequestedProviderNeverMatches is the
+// codex round 2 (#2234), P2 regression: `?llm_provider=+` decodes to a
+// single whitespace character -- categorize.normalizeProviderKind
+// correctly treats this as an EXPLICIT, non-"auto" request that
+// collapses to an empty kind (never matching a real provider name), but
+// this package's own Credentials/Matches/Model/RawBaseURL used to run
+// that same empty string back through normalizeProvider (which
+// substitutes empty to "auto"), turning an explicitly-invalid request
+// into a wildcard that matched ANY org-configured provider -- letting a
+// malformed request pass the pre-stream availability check and fail
+// LATE, mid-response, instead of cleanly rejecting up front. A genuinely
+// empty string (never sent by ResolveProviderKindForOrg for a real
+// request, but checked here for completeness) must ALSO not match --
+// the fix removes the substitution entirely for the requested side, not
+// just for whitespace specifically.
+func TestCredentials_WhitespaceOnlyRequestedProviderNeverMatches(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertSetting(ctx, t, pool, orgID, "api_key", "sk-org")
+
+	for _, requested := range []string{"", " ", "   "} {
+		t.Run("requested="+requested, func(t *testing.T) {
+			creds, ok, err := store.Credentials(ctx, orgID.String(), requested)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				t.Fatalf("expected NOT ok for an empty/whitespace-only requested provider (must never wildcard-match), got %+v", creds)
+			}
+		})
+	}
+}
+
 // TestResolveUsableProvider_NoFeatureFlagsTable is the codex round 1 P2
 // regression: a pre-migration/minimal DB where the feature_flags TABLE
 // itself does not exist (not just an absent row for this org) must

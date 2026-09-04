@@ -18,29 +18,27 @@
 #
 # LANE-4460-L3 (CHAOS-4460 precondition 6 / CHAOS-4654): this is no longer
 # Wave-0 shape. cmd/query-api/query_route.go's loadQueryRouteConfig()
-# requires ALL SIX of the env vars below together; if any one is unset,
+# requires ALL FIVE of the env vars below together; if any one is unset,
 # /query is never mounted (main.go's documented "stay Wave-0 empty"
-# fallback) -- see that file's doc comment. Getting six-of-six set is a
+# fallback) -- see that file's doc comment. Getting five-of-five set is a
 # NECESSARY but not SUFFICIENT condition for traffic: routing rows in
 # go_api_routing_state are a separate, deliberately NOT-this-lane's step
 # (see .remember/go-api-enablement-runbook.md).
 #
-# Key material and the schema digest are environment-specific and are
-# NEVER committed here:
+# Key material is environment-specific and is NEVER committed here:
 #   - GO_API_ENVELOPE_JWKS_PATH points at a JWKS file (public key only)
 #     produced by principal_envelope.build_envelope_jwks() and mounted
 #     read-only below. The matching PRIVATE key lives only on the Python
 #     edge (api service's GO_API_ENVELOPE_PRIVATE_KEY) -- query-api must
 #     never hold a key capable of forging a user session.
-#   - GO_API_SCHEMA_DIGEST is produced by
-#     `go run ./cmd/query-api/tools/registrydump -schema-digest` at the
-#     deployed SHA and exported as an environment variable (e.g. via the
-#     root .env, next to compose.yml) -- never hand-typed. query-api
-#     VERIFIES this value against its own go:embed'ed SDL bytes at startup
-#     and log.Fatalf's on mismatch (query_route.go's verifySchemaDigest),
-#     so a stale/wrong value is a loud crash, not a silent miss. The
-#     Python edge (api service) must carry the SAME value or every
-#     dispatch attempt 404s as a digest miss and falls back to Python.
+#
+# CHAOS-5013 removed GO_API_SCHEMA_DIGEST and the startup verification
+# that used to gate on it (chris: "you version a schema, but to start
+# something -- no"): the schema digest routeswitch.PostgresSwitch needs
+# for its own routing-state lookups is now always computed from
+# query-api's own go:embed'ed SDL bytes, not operator-supplied here, so
+# there is no value for this file to set or for the Python edge to keep
+# in sync with it.
 services:
   query-api:
     build:
@@ -77,12 +75,6 @@ services:
       GO_API_ENVELOPE_JWKS_PATH: /secrets/envelope-jwks.json
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
-      # No hardcoded fallback: an unset value here must fail loudly (via
-      # verifySchemaDigest's log.Fatalf on the empty-string mismatch) or
-      # `docker compose up`'s own missing-env-var warning, not silently
-      # mount with a stale digest. Export it from the root .env (next to
-      # compose.yml) -- see this file's header comment for the producer.
-      GO_API_SCHEMA_DIGEST: "${GO_API_SCHEMA_DIGEST:?set GO_API_SCHEMA_DIGEST -- run 'go run ./cmd/query-api/tools/registrydump -schema-digest'}"
     # CHAOS-4654: query-api had no declared container memory budget --
     # queryRouteMaxResultRows (500,000, query_route.go) is a WORKLOAD
     # derivation that this ticket's own comment says is "still

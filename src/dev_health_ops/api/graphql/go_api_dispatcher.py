@@ -75,6 +75,8 @@ both independent of OTel posture:
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import logging
 import math
@@ -90,6 +92,7 @@ from strawberry.http.typevars import Context as _Context
 from strawberry.http.typevars import RootValue as _RootValue
 from strawberry.types.unset import UNSET, UnsetType
 
+from dev_health_ops.contract_artifacts import contract_directory
 from dev_health_ops.db import get_postgres_session
 
 from .go_api_dispatch_telemetry import (
@@ -112,6 +115,49 @@ logger = logging.getLogger(__name__)
 __all__ = ["GoApiDispatchRouter"]
 
 _DEFAULT_DISPATCH_TIMEOUT_SECONDS = 5.0
+
+
+@functools.lru_cache(maxsize=1)
+def _current_schema_digest() -> str:
+    """The canonical schema digest: ``"sha256:"`` + hex sha256 of
+    ``contracts/graphql/v1/schema.graphql``'s RAW bytes, unmodified -- the
+    exact same algorithm and the exact same file
+    ``cmd/query-api/internal/digest.Schema(schemav1.SDL)`` computes on the
+    Go side.
+
+    CHAOS-5013 removed the operator-supplied ``GO_API_SCHEMA_DIGEST`` env
+    var from both query-api's startup and this dispatcher's per-request
+    read -- but ``lookup_routing_state``'s ``schema_digest`` filter itself
+    could not simply be dropped: ``go_api_routing_state``'s primary key is
+    ``(schema_digest, document_digest, selected_operation)``, and
+    :func:`~dev_health_ops.api.graphql.go_api_registry.lookup_routing_state`
+    uses ``scalar_one_or_none()``, which RAISES
+    ``sqlalchemy.exc.MultipleResultsFound`` the moment two rows ever share
+    the same ``(document_digest, selected_operation)`` under two different
+    schema digests (exactly what a schema change leaves behind if old rows
+    are not rotated out -- not a hypothetical, since ``RoutingState`` is
+    "one row per schema version", not "one row ever"). Computing the value
+    here instead of reading an env var keeps the filter's ≤1-row guarantee
+    while still requiring no operator configuration.
+
+    Not the CHAOS-4696 two-printer trap this file's own document-digest
+    comment warns about: that trap is about two independent PRINTERS
+    re-emitting text and disagreeing on whitespace/formatting. This hashes
+    a checked-in file's bytes directly -- no parsing, no reprinting, on
+    either side -- so a Python read and a Go ``go:embed`` read of the
+    identical bytes cannot disagree.
+
+    Cached: this is a pure function of the checked-out SDL for the
+    lifetime of one process, so every dispatch after the first reuses the
+    value instead of re-reading and re-hashing the file per request.
+    Deliberately not cached-on-failure (``lru_cache`` does not memoize a
+    raised exception) -- a missing/unreadable file keeps failing loudly
+    on every subsequent call rather than latching a permanent silent
+    fallback from one bad read.
+    """
+    sdl_path = contract_directory("graphql", "v1") / "schema.graphql"
+    return "sha256:" + hashlib.sha256(sdl_path.read_bytes()).hexdigest()
+
 
 #: Modes for which the routing row explicitly says "not reachable" -- the
 #: safe default, same as no row at all (models/go_api_registry.py's
@@ -326,10 +372,16 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             # explicitly set). Not telemetered: this is "the dispatcher is
             # off", not a per-request fallback decision.
             return None
-        schema_digest = os.getenv("GO_API_SCHEMA_DIGEST")
-        if not schema_digest:
+        try:
+            schema_digest = _current_schema_digest()
+        except Exception:
+            # Genuinely exceptional (a checked-in file missing from this
+            # deployment) -- never let it 500 a live request. Logged, not
+            # telemetered: this is a process-lifetime misconfiguration, not
+            # a per-request routing decision the fallback counters exist
+            # to track.
+            logger.exception("go_api_dispatch.schema_digest_unavailable")
             return None
-
         try:
             extracted = await _extract_operation(request)
         except Exception:

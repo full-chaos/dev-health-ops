@@ -68,6 +68,21 @@ async def lookup_routing_state(
     Raises on any database failure rather than treating it as a miss: an
     unreachable registry is an incident, not "no rollout yet" (see
     ``go_api_registry_telemetry``'s ``result`` label doc).
+
+    ``schema_digest`` is REQUIRED, not merely accepted: ``RoutingState``'s
+    primary key is ``(schema_digest, document_digest, selected_operation)``,
+    and this query uses ``scalar_one_or_none()``, which RAISES
+    ``sqlalchemy.exc.MultipleResultsFound`` the moment more than one row
+    matches. Filtering on only two of the three primary-key columns can
+    return more than one row the moment a schema change leaves an old
+    ``schema_digest``'s rows in place alongside new ones -- ``RoutingState``
+    is documented as "one row PER schema version", not "one row ever", so
+    that is the expected shape after any schema change, not an edge case.
+    The caller (``go_api_dispatcher.py``) sources this from a computed
+    value now (CHAOS-5013 removed the operator-supplied
+    ``GO_API_SCHEMA_DIGEST`` env var this used to come from), not from an
+    arbitrary caller-supplied string -- but this function's own filter
+    still needs the value to keep its ≤1-row guarantee.
     """
     try:
         result = await session.execute(

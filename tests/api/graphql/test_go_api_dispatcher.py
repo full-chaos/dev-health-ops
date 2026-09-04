@@ -124,7 +124,6 @@ def router() -> GoApiDispatchRouter[GraphQLContext, None]:
 @pytest.fixture(autouse=True)
 def _configure_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GO_API_QUERY_API_URL", "http://query-api.test:8090")
-    monkeypatch.setenv("GO_API_SCHEMA_DIGEST", "sha256:test-schema-digest")
     # Every test's query digests to something -- point the catalog lookup
     # at a fixed test operation regardless of the actual digest, so tests
     # don't depend on go_api_operations.json's real contents.
@@ -896,7 +895,14 @@ async def test_dispatch_reads_a_real_inserted_routing_row_and_falls_back_after_r
     """
     from dev_health_ops.models.go_api_registry import CandidateBuild, RoutingState
 
-    schema_digest = os.getenv("GO_API_SCHEMA_DIGEST", "sha256:test-schema-digest")
+    # Must be the REAL computed digest, not an arbitrary literal:
+    # lookup_routing_state still filters on schema_digest (CHAOS-5013 kept
+    # that filter -- see its docstring for why dropping it would let
+    # scalar_one_or_none() raise MultipleResultsFound), and the dispatcher
+    # under test calls go_api_dispatcher._current_schema_digest() to get
+    # the value it queries with -- a mismatched literal here would make
+    # step 2 below fall back to Python instead of being served by Go.
+    schema_digest = go_api_dispatcher._current_schema_digest()
     document_digest_value = f"test-digest-{uuid.uuid4()}"
     selected_operation = TEST_OPERATION
     candidate_build = f"test-build-{uuid.uuid4()}"

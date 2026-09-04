@@ -100,7 +100,7 @@ func TestBuildInvestmentExplainRouteStaysUnmountedWithoutConfig(t *testing.T) {
 	for _, name := range []string{
 		"CLICKHOUSE_URI", "GO_API_REGISTRY_POSTGRES_URI",
 		"GO_API_ENVELOPE_JWKS_PATH", "GO_API_ENVELOPE_ISSUER",
-		"GO_API_ENVELOPE_AUDIENCE", "GO_API_SCHEMA_DIGEST",
+		"GO_API_ENVELOPE_AUDIENCE",
 	} {
 		t.Setenv(name, "")
 	}

@@ -56,10 +56,6 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 		EnvelopeJWKSPath:    writeTestJWKS(t, pub),
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
-		// CHAOS-4696 PR2: must be the REAL digest -- verifySchemaDigest
-		// now runs first inside buildQueryRoute, before the
-		// Postgres/readyz behavior this test exists to prove.
-		SchemaDigest: itRealSchemaDigest,
 	}
 
 	_, ready, cleanup, buildErr := buildQueryRoute(cfg)
@@ -132,10 +128,6 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 		EnvelopeJWKSPath:    writeTestJWKS(t, pub),
 		EnvelopeIssuer:      itTestIssuer,
 		EnvelopeAudience:    itTestAudience,
-		// CHAOS-4696 PR2: must be the REAL digest -- verifySchemaDigest
-		// now runs first inside buildQueryRoute, before the
-		// Postgres/readyz behavior this test exists to prove.
-		SchemaDigest: itRealSchemaDigest,
 	}
 
 	_, ready, cleanup, buildErr := buildQueryRoute(cfg)

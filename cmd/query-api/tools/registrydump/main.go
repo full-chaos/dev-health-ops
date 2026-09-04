@@ -72,17 +72,21 @@ var documentConstPattern = regexp.MustCompile(`^registered.*Document$`)
 
 func main() {
 	filePath := flag.String("file", "", "path to cmd/query-api/query_route.go (required unless -schema-digest)")
-	schemaDigest := flag.Bool("schema-digest", false, "print the canonical GO_API_SCHEMA_DIGEST value and exit (does not need -file)")
+	schemaDigest := flag.Bool("schema-digest", false, "print the canonical schema-digest value and exit (does not need -file)")
 	flag.Parse()
 
-	// CHAOS-4696 PR2: -schema-digest is the ONE producer of
-	// GO_API_SCHEMA_DIGEST -- ops CI, the harnesses, and an operator
-	// setting this env var by hand should all run THIS, never hand-type
-	// or copy a value from somewhere else. It calls the exact same
-	// digest.Schema(schemav1.SDL) a running query-api process verifies
-	// against at startup (query_route.go's verifySchemaDigest), so a
-	// value this prints can never disagree with what the binary actually
-	// requires.
+	// CHAOS-4696 PR2: -schema-digest is the ONE producer of the schema
+	// digest used to key go_api_routing_state/go_api_candidate_build rows
+	// -- ops CI, harnesses, and anyone seeding those rows should all run
+	// THIS, never hand-type or copy a value from somewhere else. It calls
+	// the exact same digest.Schema(schemav1.SDL) a running query-api
+	// process computes internally for its own PostgresSwitch routing key
+	// (query_route.go's buildQueryRoute; CHAOS-5013 removed the
+	// operator-supplied GO_API_SCHEMA_DIGEST env var and the startup
+	// verification against it -- the process no longer takes this value
+	// from anywhere, it always computes it), so a value this prints can
+	// never disagree with what a query-api binary built from the same
+	// checkout actually uses.
 	if *schemaDigest {
 		fmt.Println(digest.Schema(schemav1.SDL))
 		return

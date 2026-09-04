@@ -87,8 +87,8 @@ func investmentExplainSwitchFromEnv() *routeswitch.DynamicSwitch {
 // inventing a second set: both routes need the same ClickHouse and
 // envelope-verification dependencies in the same deployment
 // (deploy/go-api/compose-query-api.yml declares them once for the whole
-// service). Does NOT require GO_API_SCHEMA_DIGEST or
-// GO_API_REGISTRY_POSTGRES_URI -- neither is meaningful for a REST route.
+// service). Does NOT require GO_API_REGISTRY_POSTGRES_URI -- not
+// meaningful for a REST route.
 func loadInvestmentExplainRouteConfig() (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
 	cfg, queryOk := loadQueryRouteConfig()
 	if !queryOk {

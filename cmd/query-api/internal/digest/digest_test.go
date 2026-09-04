@@ -105,8 +105,9 @@ func TestSchema_UnlikeDocument_DoesNotTrim(t *testing.T) {
 
 // TestSchema_DeterministicAndSensitiveToContent proves Schema is a pure
 // function of its input (same bytes in, same digest out; different bytes
-// in, different digest out) -- the property GO_API_SCHEMA_DIGEST
-// verification depends on.
+// in, different digest out) -- the property PostgresSwitch's routing key
+// depends on: two processes built from the same SDL must compute the
+// same digest, and a changed SDL must compute a different one.
 func TestSchema_DeterministicAndSensitiveToContent(t *testing.T) {
 	a := Schema([]byte("type Query { a: String }"))
 	aAgain := Schema([]byte("type Query { a: String }"))

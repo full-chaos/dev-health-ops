@@ -6,9 +6,10 @@
 // time in a different binary and hoping the two copies never drift.
 // Package main cannot be imported, so this had to move somewhere both
 // binaries can reach -- here. CHAOS-4696 PR2 adds Schema for the same
-// reason, one level up: query-api's startup verification and
-// registrydump's schema-digest producer must both compute the canonical
-// GO_API_SCHEMA_DIGEST value from the exact same function.
+// reason, one level up: a running query-api process (its PostgresSwitch
+// routing key, query_route.go's buildQueryRoute) and registrydump's
+// schema-digest producer must both compute the canonical schema digest
+// value from the exact same function.
 //
 // This is deliberately NOT the class of cross-language "printer" CHAOS-4696
 // warns against (see query_route.go's registered*Document doc comments):
@@ -36,8 +37,8 @@ func Document(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Schema returns the canonical GO_API_SCHEMA_DIGEST value for a GraphQL
-// SDL file's RAW bytes: "sha256:" + hex-encoded sha256 of the bytes
+// Schema returns the canonical schema-digest value for a GraphQL SDL
+// file's RAW bytes: "sha256:" + hex-encoded sha256 of the bytes
 // UNMODIFIED -- no trim, no normalisation, no re-printing. This is
 // deliberately NOT Document's algorithm: schema.graphql is a checked-in
 // contract file (contracts/graphql/v1/schema.graphql, embedded verbatim

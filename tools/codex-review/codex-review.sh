@@ -832,7 +832,19 @@ START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
 # runs now leaves an orphan under lane-scratch that --reap-stale cannot see.
 # Flagged for a follow-up, not blocking this change.
 if [ "$HOST_OS" = Linux ]; then
-  LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
+  # SANITIZE $NAME before it becomes a path component: unlike the default
+  # `NAME=$(basename "$WT")` a few lines up (which can never contain a `/`),
+  # a caller-supplied `-n` value is used VERBATIM and is never validated --
+  # `-n '../../../../tmp'` makes the naive
+  # "/var/lib/oci-cache/lane-scratch/$NAME" resolve OUTSIDE the mandated
+  # root entirely (measured: it resolves to plain /tmp, exactly the
+  # location this whole change exists to stop using). `basename --` on the
+  # value collapses any such traversal to a single, harmless path segment
+  # (the same defensive idiom LANE/LANE_KEY already uses for $WT above) --
+  # this can never escape the lane-scratch root, no matter what `-n` was
+  # given.
+  SAFE_LANE_NAME=$(basename -- "$NAME")
+  LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$SAFE_LANE_NAME"
   mkdir -p "$LANE_SCRATCH_ROOT" \
     || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"
   RW_BASE="$LANE_SCRATCH_ROOT"

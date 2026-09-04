@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "generated_from": "cmd/dev-health-worker/daily.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
+  "daily": {
+    "cicd": "native",
+    "deploy": "native",
+    "file_hotspots": "native",
+    "file_risk_hotspots": "native",
+    "incident": "native",
+    "repo_user_commit": "native",
+    "team_wellbeing": "native",
+    "testops_risk": "native",
+    "work_item_state": "post_bridge"
+  },
+  "remaining": {
+    "capacity": "native",
+    "complexity": "compat",
+    "dora": "native",
+    "membership_backfill": "native",
+    "recommendations": "native",
+    "release_impact": "compat",
+    "work_item_attribution": "native"
+  }
+}

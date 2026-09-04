@@ -145,18 +145,178 @@ API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
 
+# CHAOS-5025: per-process teardown bound. The old cleanup() below did a bare
+# `wait "${pid}"` with no bound at all, so ONE service that ignored SIGTERM
+# pinned the whole job until GitHub's 6h cancel (run 33822295135: the proof
+# itself PASSED at 00:41:40Z, then teardown hung for 5h55m).
+TEARDOWN_WAIT_SECS="${METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}"
+# Validate it (codex r1 P2). An unvalidated value is not merely untidy: `[ x -lt
+# abc ]` FAILS inside the watchdog's `while` and the `elapsed` `if`, and `set -e`
+# does NOT exit on a failing condition in either context -- so a typo'd override
+# silently turned graceful teardown into an IMMEDIATE SIGKILL with the escalation
+# warning suppressed too (executed: `TEARDOWN_WAIT_SECS=abc` -> child killed, no
+# WARNING line). Fail closed to the default, loudly, exactly as the API-side
+# parser does for its own env var.
+if ! printf '%s' "${TEARDOWN_WAIT_SECS}" | grep -Eq '^[0-9]+$' \
+   || [ "${TEARDOWN_WAIT_SECS}" -lt 1 ] || [ "${TEARDOWN_WAIT_SECS}" -gt 3600 ]; then
+  echo "WARNING: ignoring METRICS_PROOF_TEARDOWN_WAIT_SECS='${TEARDOWN_WAIT_SECS}' (want an integer 1..3600); using 60s." >&2
+  TEARDOWN_WAIT_SECS=60
+fi
+
+# Resolve a service's process-GROUP id, but ONLY when it leads its own group.
+#
+# Why the check is load-bearing and not defensive noise: WITHOUT `set -m` a bash
+# background job stays in the SCRIPT's own process group (measured: job pid
+# 84573, pgid 84350 == the script's), so a bare `kill -- -"$pid"` would signal
+# THIS SCRIPT. The services below are launched under `set -m` precisely so each
+# leads its own group -- but nothing here may DEPEND on that having worked, so
+# an unverified pgid is simply not used.
+# It ALWAYS exits 0. The previous version ended on an `&&` chain, so the
+# not-a-group-leader case returned 1 -- and under `set -e` the CALLER's
+# `pgid="$(service_pgid ...)"` assignment then aborted stop_service() outright,
+# before TERM, before the watchdog, before the fallback kill. The service was
+# never signalled at all (codex r2 P2, executed: `worker=alive`). That made the
+# fallback path strictly WORSE than no fix: a `set -m` that failed to take would
+# have silently disabled teardown completely. A helper whose failure mode is
+# "the caller silently stops" must not be able to fail.
+service_pgid() {
+  local pid="$1" pgid=""
+  case "${pid}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "${pid}" -gt 1 ] || return 0
+  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ')" || pgid=""
+  if [ -n "${pgid}" ] && [ "${pgid}" = "${pid}" ]; then
+    printf '%s' "${pgid}"
+  fi
+  return 0
+}
+
+stop_service() {
+  local name="$1" pid="$2"
+  [ -n "${pid}" ] || return 0
+  # Refuse anything that is not a plausible child pid BEFORE any signal is sent
+  # (codex r3 P3). service_pgid() already declines to resolve a group for pid<=1,
+  # but that only suppressed the GROUP form -- the direct `kill -TERM "${pid}"`
+  # below would still have fired, so running as root in a container this would
+  # have signalled PID 1. A teardown helper must never be able to signal init.
+  case "${pid}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "${pid}" -gt 1 ] || return 0
+  kill -0 "${pid}" >/dev/null 2>&1 || return 0
+
+  # Capture the group id NOW, while the leader is still alive. `ps` cannot report
+  # it once the leader has been reaped, and the surviving descendants are exactly
+  # the case this exists for -- the first version of this fix looked the pgid up
+  # AFTER `wait` returned, got nothing, and left the child running (the very
+  # defect it was written to close).
+  local pgid=""
+  # `|| pgid=""` even though service_pgid() cannot fail: this assignment is the
+  # exact line that aborted teardown under errexit, so it does not rely on a
+  # helper's exit status staying 0 forever.
+  pgid="$(service_pgid "${pid}")" || pgid=""
+
+  if [ -n "${pgid}" ]; then kill -TERM -- -"${pgid}" >/dev/null 2>&1 || true; fi
+  kill -TERM "${pid}" >/dev/null 2>&1 || true
+
+  # bash has no timed `wait`, and polling `kill -0` cannot tell a live process
+  # from a not-yet-reaped zombie, so it would burn the full bound either way.
+  # Arm a watchdog subshell instead: it SIGKILLs the service once the bound
+  # expires, and THAT is what makes the `wait` below guaranteed to return.
+  # It counts in 1s steps rather than one long `sleep`: cancelling the watchdog
+  # SIGTERMs the subshell, which stops the SIGKILL from running (verified on
+  # bigboy) but does NOT signal its `sleep` child, which survives reparented to
+  # init for the rest of the interval. With one `sleep 60` that is a 60s orphan
+  # per service in GitHub's "Terminate orphan process" list -- noise in exactly
+  # the teardown log this change exists to make readable. 1s steps bound it to 1s
+  # with no new dependency.
+  local started="${SECONDS}"
+  (
+    waited=0
+    while [ "${waited}" -lt "${TEARDOWN_WAIT_SECS}" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if [ -n "${pgid}" ]; then kill -KILL -- -"${pgid}" >/dev/null 2>&1 || true; fi
+    kill -KILL "${pid}" >/dev/null 2>&1 || true
+  ) &
+  local watchdog="$!"
+
+  wait "${pid}" >/dev/null 2>&1 || true
+  local elapsed=$((SECONDS - started))
+
+  # The leader is reaped, but descendants in its group can outlive it (codex r1
+  # P2, executed: a wrapper that exits on TERM leaving a TERM-ignoring child made
+  # the old cleanup() return with that child still running). Sweep the group.
+  # NOT covered, deliberately: children the API starts with start_new_session=True
+  # (worker_metrics.py's metric-compat subprocesses) are in their OWN session by
+  # design, and no group signal from here can reach them -- that is the API's own
+  # shutdown to perform, and it is precisely why the graceful-shutdown bound in
+  # api/runner.py matters. See RISK-NOTES.
+  if [ -n "${pgid}" ]; then kill -KILL -- -"${pgid}" >/dev/null 2>&1 || true; fi
+
+  # SIGKILL, not SIGTERM, and the distinction is load-bearing. cleanup() sets
+  # `trap '' INT TERM` on entry (the round-2 re-entrancy fix), and an IGNORED
+  # disposition is INHERITED across fork -- the watchdog is forked after that
+  # line, so a SIGTERM to it is a no-op and the `wait` below blocked for the
+  # FULL bound, per service, every run. Measured in CI run 33869945044: each
+  # service exited instantly, yet teardown took exactly 60s per service
+  # (worker 11:57:38, reconciler 11:58:38, api 11:59:38, step end 12:00:38) --
+  # a silent 3-minute tax on a PASSING job. The watchdog is our own bookkeeping
+  # process with nothing to clean up, and SIGKILL cannot be ignored.
+  kill -KILL "${watchdog}" >/dev/null 2>&1 || true
+  wait "${watchdog}" >/dev/null 2>&1 || true
+
+  if [ "${elapsed}" -ge "${TEARDOWN_WAIT_SECS}" ]; then
+    echo "WARNING: ${name} (pid ${pid}) ignored SIGTERM for ${TEARDOWN_WAIT_SECS}s; escalated to SIGKILL." >&2
+  fi
+}
+
+CLEANUP_DONE=""
 cleanup() {
   local rc=$?
-  for pid in "${API_PID}" "${WORKER_PID}" "${RECONCILER_PID}"; do
-    if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
-      kill "${pid}" >/dev/null 2>&1 || true
-      wait "${pid}" >/dev/null 2>&1 || true
-    fi
-  done
+  # Re-entrancy guard (codex r2 P3). The trap is installed for EXIT, INT and
+  # TERM, so a SIGINT arriving while cleanup is already running re-enters it on
+  # bash's function-return path -- observed: `pop_var_context: head of
+  # shell_variables not a function context`, `local: can only be used in a
+  # function`, and cleanup exiting 1 instead of completing. Run once, and drop
+  # the traps on entry so the second signal cannot re-enter at all.
+  if [ -n "${CLEANUP_DONE}" ]; then
+    return "${rc}"
+  fi
+  CLEANUP_DONE=1
+  # Block re-entry from a second signal while tearing down, but do NOT clear the
+  # EXIT trap here -- on_signal() below manages that, because clearing EXIT from
+  # inside cleanup is what let a cancelled run fall through and resume.
+  trap '' INT TERM
+  # Kill ORDER is load-bearing (CHAOS-5025), not cosmetic. dev-health-worker is
+  # the API's only client (--operational-bridge-url below), so the API must be
+  # signalled LAST. The old loop signalled it FIRST and then blocked on an
+  # unbounded wait, which left the worker alive and still issuing bridge calls
+  # into a shutting-down uvicorn -- 100 further job attempts over 16 minutes in
+  # run 33822295135 -- so uvicorn's "waiting for connections to close" loop
+  # never converged. Drain the clients first, then the server.
+  stop_service "dev-health-worker" "${WORKER_PID}"
+  stop_service "dev-health-reconciler" "${RECONCILER_PID}"
+  stop_service "dev-hops api" "${API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
-trap cleanup EXIT INT TERM
+# A trapped INT/TERM runs the handler and then RESUMES the script -- it does not
+# exit (codex r3 P1). With `cleanup` bound directly to INT/TERM, a cancelled run
+# tore down its services, deleted TMP_DIR, and then carried on executing the
+# proof against nothing; the previous re-entrancy fix made it worse by also
+# ignoring every later signal, so the run could no longer be stopped at all.
+# Handle signals explicitly: tear down once, drop the EXIT trap so cleanup does
+# not run twice, restore the signal's default disposition, and re-raise it so
+# the script dies of the signal and reports 128+signum rather than continuing.
+on_signal() {
+  local sig="$1"
+  cleanup
+  trap - EXIT
+  trap - "${sig}"
+  kill -"${sig}" "$$"
+}
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 wait_for_http_ready() {
   local name="$1" url="$2" log_file="$3" pid_var_name="$4"
@@ -275,6 +435,15 @@ PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
   --set=ON_ERROR_STOP=1 \
   -c "UPDATE sync_dispatch_transport_routes SET transport='river', rollback_transport='celery', generation=generation+1, updated_at=now() WHERE kind IN ('post_sync','dispatch_sync_run','finalize_sync_run','reference_discovery') AND transport <> 'river';"
 
+# Job control ON for the three service launches (codex r1 P2). Without `set -m`
+# a background job stays in THIS script's process group, which makes a group
+# signal in signal_service() both useless (it would not isolate the service) and
+# dangerous (it would target the script). With it, each service's PGID == its
+# PID, so the group form reaches the service's descendants and nothing else.
+# Turned back off straight after the launches so the rest of the script keeps
+# its normal non-job-control behaviour.
+set -m
+
 echo "==> starting dev-hops api (the Go worker's operational bridge)"
 JWT_SECRET_KEY="$(SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" python3 -c "import hashlib, os; print(hashlib.sha256(os.environ['SETTINGS_ENCRYPTION_KEY'].encode()).hexdigest())")"
 # Overridable to a path OUTSIDE TMP_DIR (matching LIVE_E2E_API_LOG_FILE in
@@ -304,6 +473,28 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
   export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
   export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
+  # --shutdown-timeout is 7260s BY CONTRACT -- do not "optimise" it down.
+  # CHAOS-5025 tried 120s and then 30s on the theory that 2h1m was an
+  # unbounded-teardown time bomb. It is not, and the worker REFUSES to start
+  # below the contract (CHAOS-3873, cmd/dev-health-worker/dependencies.go:1247+):
+  #
+  #     workerDrainBudget = shutdownTimeout - workerFinalizationBuffer(60s)
+  #     require workerDrainBudget >= longestTimeout of the selected queues
+  #     => shutdownTimeout >= longestTimeout + 60s
+  #
+  # For these queues longestTimeout is 7200s, so 7260s IS that minimum, not a
+  # round number someone picked. At 30s the budget is -30s and startup fails
+  # with `shutdown_timeout_below_drain_budget` -- which the caller then reports
+  # as the far less helpful `queue_coverage_validation_failed`.
+  #
+  # It was never a teardown risk anyway: stop_service() SIGKILLs at
+  # TEARDOWN_WAIT_SECS (60s) regardless of what the worker asks for, so the
+  # harness bound dominates and the worker's own grace never decides how long
+  # teardown takes. The H3 premise was simply wrong.
+  #
+  # NOTE: this comment lives ABOVE the command on purpose -- a `#` between
+  # backslash-continued arguments would comment out every argument after it,
+  # silently.
   exec "${BIN_DIR}/dev-health-worker" \
     --queues=metrics,sync \
     --queue-concurrency=metrics=2,sync=1 \
@@ -342,6 +533,8 @@ RECONCILER_LOG_FILE="${METRICS_PROOF_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.
 ) >"${RECONCILER_LOG_FILE}" 2>&1 &
 RECONCILER_PID="$!"
 wait_for_http_ready "dev-health-reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${RECONCILER_LOG_FILE}" RECONCILER_PID
+
+set +m
 
 RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
 # Ordering contract (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows

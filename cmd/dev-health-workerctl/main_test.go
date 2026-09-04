@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
@@ -1329,5 +1330,184 @@ func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T)
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{"remaining", "stop"}, &stdout, &stderr)
 	if code != 1 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("unknown remaining subcommand not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// --- CHAOS-5016: `metrics remaining trigger-backstop` ---
+
+func TestManualBackstopTriggerGenerationIsDeterministicAndInputSensitive(t *testing.T) {
+	first := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03")
+	second := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03")
+	if first != second {
+		t.Fatalf("same inputs produced different generations: %q vs %q", first, second)
+	}
+	if len(first) > 128 {
+		t.Fatalf("generation exceeds remaining.maxGenerationLength (128 runes): %d runes: %q", len(first), first)
+	}
+	// Distinct from both the fixed-schedule fanout's own generation prefix
+	// and `start`'s manual-backfill prefix -- the whole point of a separate
+	// prefix is that this run is identifiable as its own trigger source.
+	if strings.HasPrefix(first, "fixed-schedule:") || strings.HasPrefix(first, "manual-backfill:") {
+		t.Fatalf("generation collides with an existing trigger-source prefix: %q", first)
+	}
+	variants := []string{
+		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000002", "2026-09-03"),
+		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-02"),
+	}
+	for _, variant := range variants {
+		if variant == first {
+			t.Fatalf("a different request produced the SAME generation as the baseline: %q", variant)
+		}
+	}
+}
+
+func TestManualBackstopTriggerReadbackHintCoversEveryAllowedFamily(t *testing.T) {
+	// Mirrors the family-list sync tests in manual_backfill_test.go: a
+	// family accepted by remaining.ManualBackstopTriggerFamilies without a
+	// case in manualBackstopTriggerReadbackHint would let
+	// dispatchMetricsRemainingTriggerBackstop refuse every request for it
+	// with operator_backend_unavailable, silently, only once someone tries
+	// it.
+	for _, family := range remaining.ManualBackstopTriggerFamilies {
+		if _, ok := manualBackstopTriggerReadbackHint(family, "00000000-0000-4000-8000-000000000001"); !ok {
+			t.Fatalf("family %q is in remaining.ManualBackstopTriggerFamilies but has no readback hint", family)
+		}
+	}
+	if _, ok := manualBackstopTriggerReadbackHint("dora", "00000000-0000-4000-8000-000000000001"); ok {
+		t.Fatal("dora unexpectedly has a trigger-backstop readback hint -- it is not in ManualBackstopTriggerFamilies")
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopRequiresReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution",
+		"--org", "00000000-0000-4000-8000-000000000001",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("missing --review-evidence code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopRejectsDayScopedFamily proves
+// dora (a real manualBackfillDayScope family) is refused here even though
+// it is accepted by `start` -- ManualBackstopTriggerFamilies is a
+// deliberately separate, narrower allowlist precisely so this verb's
+// --today override can never reach dora and reopen the race `start`'s
+// today-exclusion exists to prevent.
+func TestDispatchMetricsRemainingTriggerBackstopRejectsDayScopedFamily(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "dora",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("dora not rejected by trigger-backstop: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopRejectsUnknownFamily(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "not-a-real-family",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("unknown family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopRejectsInvalidOrg(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution",
+		"--org", "not-a-uuid", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopRejectsMalformedDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", "not-a-date",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("malformed --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopRejectsFutureDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	future := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", future,
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("future --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopRejectsTodayWithoutTheFlag is
+// this verb's analog of `start`'s round-3 P1 today-exclusion fix: typing
+// today's own date into --day must not silently behave like --today.
+func TestDispatchMetricsRemainingTriggerBackstopRejectsTodayWithoutTheFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	today := time.Now().UTC().Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", today,
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != invalidRequestJSON {
+		t.Fatalf("today's --day without --today not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopAcceptsTodayWithTheFlag proves
+// --today is the one thing `start` categorically refuses that this verb
+// exists to allow -- it must reach past validation (operator_backend_unavailable,
+// from the nil pools/registry in this test's bare &operatorRuntime{}), not
+// get rejected as invalid_request.
+func TestDispatchMetricsRemainingTriggerBackstopAcceptsTodayWithTheFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	today := time.Now().UTC().Format("2006-01-02")
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution",
+		"--day", today, "--today",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
+	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
+		t.Fatalf("--today request rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopDefaultsDayToYesterday proves
+// omitting --day entirely reaches past validation using the implicit
+// yesterday-UTC default, with no --today needed.
+func TestDispatchMetricsRemainingTriggerBackstopDefaultsDayToYesterday(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
+	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
+		t.Fatalf("default (no --day) request rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDispatchMetricsRemainingTriggerBackstopAcceptsExplicitPastDay(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", "2026-08-20",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+	}, &stdout, &stderr)
+	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
+	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
+		t.Fatalf("valid past --day rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

@@ -24,10 +24,12 @@ import (
 // literal it also asserts on, so it CANNOT catch a mismatch.
 const FamilyName = "ic_finalize"
 
-// Conn is the narrow ClickHouse capability this package needs.
+// Conn is the narrow ClickHouse capability this package needs -- query plus
+// batch insert, matching the shape repouser already depends on (driver.Conn
+// satisfies it directly).
 type Conn interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
-	Exec(ctx context.Context, query string, args ...any) error
+	PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error)
 }
 
 // gitMetricsSQL reads back what the partitions wrote for the target day. It
@@ -111,4 +113,127 @@ func (executor *Executor) loadWorkItemMetrics(ctx context.Context, orgID string,
 		metrics = append(metrics, metric)
 	}
 	return metrics, rows.Err()
+}
+
+const userMetricsInsertSQL = `INSERT INTO user_metrics_daily (
+    repo_id, day, author_email, identity_id, team_id, loc_touched,
+    prs_opened, work_items_completed, work_items_active, delivery_units,
+    cycle_p50_hours, cycle_p90_hours, computed_at, org_id)`
+
+const landscapeInsertSQL = `INSERT INTO ic_landscape_rolling_30d (
+    repo_id, as_of_day, identity_id, team_id, map_name,
+    x_raw, y_raw, x_norm, y_norm,
+    churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d,
+    computed_at, org_id)`
+
+// landscapeRepoID is the all-zeros UUID compute_ic_landscape_rolling writes
+// for every landscape row (`repo_id=uuid.UUID(int=0)`), under a comment in the
+// reference that openly doubts itself ("Placeholder, landscape is cross-repo
+// usually?"). It is part of ic_landscape_rolling_30d's sorting key, but being
+// CONSTANT it contributes nothing to uniqueness -- unlike the synthesized
+// repo_id on the user-metrics side, which is random and therefore breaks
+// dedup. Replicated exactly per the Q5 ruling; recorded in RISK-NOTES rather
+// than "improved".
+var landscapeRepoID = uuid.UUID{}
+
+// ComputeFinalizeFamily implements daily.NativeFinalizeFamilyExecutor.
+//
+// It reads back what the partitions wrote for the day, merges git and
+// work-item metrics, writes the merged user rows, then reads the 30-day
+// rolling window (which includes what it just wrote, exactly as the Python
+// sequence does) and writes the landscape rows.
+//
+// The ordering is load-bearing and mirrors run_daily_metrics_finalize: the
+// landscape input is a READBACK of the user-metrics write, so the two halves
+// cannot be reordered or run independently.
+func (executor *Executor) ComputeFinalizeFamily(
+	ctx context.Context, orgID string, day time.Time, teamMap map[string]string,
+) (int, error) {
+	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
+	if err != nil {
+		return 0, err
+	}
+	workItems, err := executor.loadWorkItemMetrics(ctx, orgID, day)
+	if err != nil {
+		return 0, err
+	}
+
+	merged := MergeICUserMetrics(gitMetrics, workItems, teamMap)
+	computedAt := executor.now()
+	written, err := executor.writeUserMetrics(ctx, orgID, day, computedAt, merged)
+	if err != nil {
+		return 0, err
+	}
+
+	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day)
+	if err != nil {
+		return written, err
+	}
+	landscapeWritten, err := executor.writeLandscape(
+		ctx, orgID, day, computedAt, ComputeLandscape(stats, teamMap))
+	if err != nil {
+		return written, err
+	}
+	return written + landscapeWritten, nil
+}
+
+func (executor *Executor) writeUserMetrics(
+	ctx context.Context, orgID string, day, computedAt time.Time, metrics []ICUserMetric,
+) (int, error) {
+	if len(metrics) == 0 {
+		return 0, nil
+	}
+	batch, err := executor.conn.PrepareBatch(ctx, userMetricsInsertSQL)
+	if err != nil {
+		return 0, err
+	}
+	for _, metric := range metrics {
+		// The reference mints a FRESH random repo_id for an identity with no
+		// git record. That UUID is part of this table's dedup key
+		// (org_id, repo_id, author_email, day), so those rows never collapse
+		// across re-runs -- each re-drive appends another. Replicated per Q1;
+		// the suspected accumulation defect is filed, Python untouched.
+		repoID := landscapeRepoID
+		if metric.SynthesizedRepoID {
+			repoID = executor.newID()
+		}
+		if err := batch.Append(
+			repoID, day, metric.IdentityID, metric.IdentityID, metric.TeamID,
+			metric.LOCTouched, metric.PRsOpened, metric.WorkItemsComplete,
+			metric.WorkItemsActive, metric.DeliveryUnits,
+			metric.CycleP50Hours, metric.CycleP90Hours, computedAt, orgID,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, err
+	}
+	return len(metrics), nil
+}
+
+func (executor *Executor) writeLandscape(
+	ctx context.Context, orgID string, asOf, computedAt time.Time, records []LandscapeRecord,
+) (int, error) {
+	if len(records) == 0 {
+		return 0, nil
+	}
+	batch, err := executor.conn.PrepareBatch(ctx, landscapeInsertSQL)
+	if err != nil {
+		return 0, err
+	}
+	for _, record := range records {
+		if err := batch.Append(
+			landscapeRepoID, asOf, record.IdentityID, record.TeamID, record.MapName,
+			record.XRaw, record.YRaw, record.XNorm, record.YNorm,
+			record.Churn, record.Delivery, record.CycleP50, record.WIPMax,
+			computedAt, orgID,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, err
+	}
+	return len(records), nil
 }

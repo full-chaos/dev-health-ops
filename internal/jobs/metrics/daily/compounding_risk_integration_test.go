@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -140,6 +142,30 @@ INSERT INTO repo_complexity_daily
 		t.Fatal(err)
 	}
 	targetDay := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+
+	// TYPE PIN (CI failure on #2231, both tests in this file). `day`,
+	// `start`, `mid` and `end` are ClickHouse `Date` PARAMETERS, and binding a
+	// time.Time to one is a server-side parse error, not a silent coercion:
+	//
+	//   Cannot parse date here: toDateTime('2026-08-24 00:00:00')
+	//   cannot be parsed as Date for query parameter 'day'
+	//
+	// The loader binds them as YYYY-MM-DD strings for that reason. Nothing in
+	// the compute-side tests can reach this -- it is a driver/server contract,
+	// visible only against a real ClickHouse -- so this assertion exists to
+	// make the binding itself the thing under test rather than incidental to
+	// the row assertions below. If someone "simplifies" the Format calls away,
+	// this fails with the message above rather than a confusing row mismatch.
+	if _, err := executor.loader.LoadRepoMetrics(
+		ctx, orgA, []uuid.UUID{uuid.MustParse(repoA1)}, targetDay,
+	); err != nil {
+		t.Fatalf("Date-parameter binding regressed in LoadRepoMetrics: %v", err)
+	}
+	if _, err := executor.loader.LoadComplexityDelta(
+		ctx, orgA, uuid.MustParse(repoA1), targetDay, compoundingrisk.ComplexityWindowDays,
+	); err != nil {
+		t.Fatalf("Date-parameter binding regressed in LoadComplexityDelta: %v", err)
+	}
 	run := Run{ID: "run-a", OrganizationID: orgA, TargetDay: targetDay}
 	partition := Partition{ID: "partition-a", RunID: "run-a", RepoIDs: []RepositoryID{RepositoryID(repoA1)}}
 

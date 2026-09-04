@@ -50,23 +50,49 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // score depends only on its own inputs), so this changes ordering only, never
 // a value.
 //
-// The argMax(col, computed_at) GROUP BY repo_id shape is Python's own and is
-// kept verbatim: repo_metrics_daily is append-only, so this is the read-side
-// dedup the table requires. No FINAL -- it would be wrong under aggregation
-// and is not what Python does either.
+// The argMax(..., computed_at) GROUP BY repo_id shape is Python's own and is
+// kept: repo_metrics_daily is append-only, so this is the read-side dedup the
+// table requires. No FINAL -- it would be wrong under aggregation and is not
+// what Python does either.
+//
+// THIRD, and unlike the two above this one is a CORRECTNESS fix rather than a
+// scoping choice: the five columns are packed into ONE argMax(tuple(...))
+// rather than five independent argMax calls. Independent argMax aggregates over
+// the same GROUP BY each choose their own winning row, and on a computed_at TIE
+// they can choose DIFFERENT ones -- producing a repo whose churn ratio comes
+// from one write and whose bus factor comes from another, a combination that
+// never existed. Python has exactly this exposure
+// (job_compounding_risk.py:75-86) and this port does not inherit it. Ties are
+// reachable: one job writes all five columns for a repo/day in a single insert,
+// so they share a computed_at by construction. Rule found by
+// lane-port-ai-families.
 const repoMetricsQuery = `
 SELECT
     repo_id,
-    argMax(rework_churn_ratio_30d,      computed_at) AS rework_churn_ratio_30d,
-    argMax(single_owner_file_ratio_30d, computed_at) AS single_owner_file_ratio_30d,
-    argMax(code_ownership_gini,         computed_at) AS code_ownership_gini,
-    argMax(bus_factor,                  computed_at) AS bus_factor,
-    argMax(pr_first_review_p90_hours,   computed_at) AS pr_first_review_p90_hours
-FROM repo_metrics_daily
-WHERE org_id = {org_id:String}
-  AND day = {day:Date}
-  AND repo_id IN {repo_ids:Array(UUID)}
-GROUP BY repo_id
+    tupleElement(latest, 1) AS rework_churn_ratio_30d,
+    tupleElement(latest, 2) AS single_owner_file_ratio_30d,
+    tupleElement(latest, 3) AS code_ownership_gini,
+    tupleElement(latest, 4) AS bus_factor,
+    tupleElement(latest, 5) AS pr_first_review_p90_hours
+FROM (
+    SELECT
+        repo_id,
+        argMax(
+            tuple(
+                rework_churn_ratio_30d,
+                single_owner_file_ratio_30d,
+                code_ownership_gini,
+                bus_factor,
+                pr_first_review_p90_hours
+            ),
+            computed_at
+        ) AS latest
+    FROM repo_metrics_daily
+    WHERE org_id = {org_id:String}
+      AND day = {day:Date}
+      AND repo_id IN {repo_ids:Array(UUID)}
+    GROUP BY repo_id
+)
 ORDER BY repo_id`
 
 // LoadRepoMetrics returns the partition's argMax-deduplicated
@@ -82,7 +108,15 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 	}
 	rows, err := loader.conn.Query(ctx, repoMetricsQuery,
 		clickhouse.Named("org_id", orgID),
-		clickhouse.Named("day", day),
+		// A ClickHouse `Date` parameter must be bound as a YYYY-MM-DD STRING,
+		// not a time.Time: the driver serialises a time.Time for {name:Date} as
+		// a full DateTime literal and the server rejects it outright --
+		// "Cannot parse date here: toDateTime('2026-08-24 00:00:00') cannot be
+		// parsed as Date". Same fix and same reasoning as
+		// RecommendationsLoader.windowArguments (recommendations_loader.go:77-97),
+		// and it is also the closer mirror of the wire form Python's
+		// clickhouse-connect sends for a datetime.date.
+		clickhouse.Named("day", day.Format(clickHouseDateLayout)),
 		clickhouse.Named("repo_ids", repoIDs),
 	)
 	if err != nil {
@@ -143,6 +177,10 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 // ComplexityWindowDays mirrors COMPLEXITY_WINDOW_DAYS (compounding_risk.py:410).
 const ComplexityWindowDays = 30
 
+// clickHouseDateLayout is the wire form for a {name:Date} query parameter.
+// See LoadRepoMetrics for why a time.Time cannot be bound directly.
+const clickHouseDateLayout = "2006-01-02"
+
 // complexityDeltaQuery is load_repo_complexity_delta_30d's query verbatim
 // (compounding_risk.py:435-447), including the two ClickHouse-side avg()s. The
 // averaging stays in ClickHouse precisely BECAUSE Python leaves it there --
@@ -183,9 +221,10 @@ func (loader *ClickHouseLoader) LoadComplexityDelta(
 
 	rows, err := loader.conn.Query(ctx, complexityDeltaQuery,
 		clickhouse.Named("repo_id", repoID),
-		clickhouse.Named("start", windowStart),
-		clickhouse.Named("mid", midpoint),
-		clickhouse.Named("end", day),
+		// Date parameters, bound as strings -- see LoadRepoMetrics' note.
+		clickhouse.Named("start", windowStart.Format(clickHouseDateLayout)),
+		clickhouse.Named("mid", midpoint.Format(clickHouseDateLayout)),
+		clickhouse.Named("end", day.Format(clickHouseDateLayout)),
 		clickhouse.Named("org_id", orgID),
 	)
 	if err != nil {

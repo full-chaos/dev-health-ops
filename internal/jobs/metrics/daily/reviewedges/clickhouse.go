@@ -44,34 +44,55 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 //   - REVIEW rows: every raw row is counted, so a re-synced review is counted
 //     TWICE and inflates reviews_count.
 //
-// These queries deduplicate with `argMax(<col>, last_synced) GROUP BY <the
+// These queries deduplicate with `argMax(tuple(...), last_synced) GROUP BY <the
 // table's own ORDER BY key>` -- never FINAL under aggregation (CHAOS-5045).
+//
 // That makes the PR author deterministic and stops the review double-count.
 // The second one is a genuine behaviour change: for an org with re-ingested
 // reviews, native reviews_count is LOWER than Python's, and correct. Recorded
 // in RISK-NOTES rather than smuggled in.
+//
+// # ONE argMax OVER A TUPLE, NOT N INDEPENDENT argMax CALLS
+//
+// Several argMax aggregates over the same GROUP BY each choose their own
+// winning row independently, and on a last_synced TIE they can choose
+// DIFFERENT ones -- synthesising a "Frankenstein" row that never existed in the
+// table, e.g. an author_email from one snapshot beside an author_name from
+// another. Ties are not exotic here: a re-sync that writes several columns in
+// one batch stamps them with the same last_synced by construction.
+//
+// Packing the columns into a single argMax(tuple(...)) makes ONE row win for
+// all of them, and tupleElement unpacks it. The window predicate reads its
+// columns out of the same tuple for the same reason -- filtering on an
+// independently-argMax'd created_at could admit a PR on one snapshot's
+// timestamps while reporting another snapshot's author.
+//
+// Rule found by lane-port-ai-families; applied across this lane.
 //
 // The compute itself is untouched by this, which is why the frozen golden
 // still compares bit-exact: the golden feeds identical rows to both sides, and
 // the divergence lives entirely in WHICH rows the loader hands over. Only the
 // integration test can see it, and it pins it.
 const pullRequestsQuery = `
-SELECT repo_id, number, author_email, author_name
+SELECT
+    repo_id,
+    number,
+    tupleElement(latest, 1) AS author_email,
+    tupleElement(latest, 2) AS author_name
 FROM (
     SELECT
         repo_id,
         number,
-        argMax(author_email, last_synced) AS author_email,
-        argMax(author_name,  last_synced) AS author_name,
-        argMax(created_at,   last_synced) AS created_at,
-        argMax(merged_at,    last_synced) AS merged_at
+        argMax(tuple(author_email, author_name, created_at, merged_at), last_synced) AS latest
     FROM git_pull_requests
     WHERE repo_id IN {repo_ids:Array(UUID)}
       AND org_id = {org_id:String}
     GROUP BY repo_id, number
 )
-WHERE (created_at >= {start:DateTime64(3, 'UTC')} AND created_at < {end:DateTime64(3, 'UTC')})
-   OR (merged_at IS NOT NULL AND merged_at >= {start:DateTime64(3, 'UTC')} AND merged_at < {end:DateTime64(3, 'UTC')})
+WHERE (tupleElement(latest, 3) >= {start:DateTime64(3, 'UTC')} AND tupleElement(latest, 3) < {end:DateTime64(3, 'UTC')})
+   OR (tupleElement(latest, 4) IS NOT NULL
+       AND tupleElement(latest, 4) >= {start:DateTime64(3, 'UTC')}
+       AND tupleElement(latest, 4) < {end:DateTime64(3, 'UTC')})
 ORDER BY repo_id, number`
 
 // LoadPullRequests returns the day's PR rows, deduplicated and ordered.
@@ -132,20 +153,24 @@ func (loader *ClickHouseLoader) LoadPullRequests(
 // (repo_id, number, review_id) -- see pullRequestsQuery's comment for why this
 // is both necessary and count-changing.
 const reviewsQuery = `
-SELECT repo_id, number, reviewer, submitted_at
+SELECT
+    repo_id,
+    number,
+    tupleElement(latest, 1) AS reviewer,
+    tupleElement(latest, 2) AS submitted_at
 FROM (
     SELECT
         repo_id,
         number,
         review_id,
-        argMax(reviewer,     last_synced) AS reviewer,
-        argMax(submitted_at, last_synced) AS submitted_at
+        argMax(tuple(reviewer, submitted_at), last_synced) AS latest
     FROM git_pull_request_reviews
     WHERE repo_id IN {repo_ids:Array(UUID)}
       AND org_id = {org_id:String}
     GROUP BY repo_id, number, review_id
 )
-WHERE submitted_at >= {start:DateTime64(3, 'UTC')} AND submitted_at < {end:DateTime64(3, 'UTC')}
+WHERE tupleElement(latest, 2) >= {start:DateTime64(3, 'UTC')}
+  AND tupleElement(latest, 2) < {end:DateTime64(3, 'UTC')}
 ORDER BY repo_id, number, review_id`
 
 // LoadReviews returns the day's review rows, deduplicated and ordered.

@@ -3,6 +3,7 @@ package investmentexplain
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -41,6 +42,17 @@ func extractJSONObject(text string) (map[string]any, bool) {
 	decoder.UseNumber()
 	var parsed any
 	if err := decoder.Decode(&parsed); err != nil {
+		return nil, false
+	}
+	// Python's extract_json_object calls json.loads(json_str) on the
+	// WHOLE slice (json_utils.py:65) -- json.loads rejects any trailing
+	// data after the first complete value ("Extra data" JSONDecodeError).
+	// json.Decoder.Decode only reads ONE value and, unlike json.Unmarshal,
+	// does NOT verify the stream is exhausted afterward -- two adjacent
+	// valid JSON objects in the LLM's raw text ("{...}{...}") silently
+	// decoded to just the first one here, where Python would reject the
+	// whole response as invalid_json. Caught by codex round 3 (P1).
+	if _, err := decoder.Token(); err != io.EOF {
 		return nil, false
 	}
 	parsed = replaceNonFiniteSentinels(parsed)

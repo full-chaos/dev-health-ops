@@ -2,6 +2,7 @@ package investmentexplain
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -87,5 +88,59 @@ func TestDecodeInvestmentMixExplanationRejectsMalformedBandMix(t *testing.T) {
 	malformed := `{"summary":"s","top_findings":[],"confidence":{"level":"low","quality_mean":null,"quality_stddev":null,"band_mix":[],"drivers":[]},"what_to_check_next":[],"anti_claims":[],"status":"valid"}`
 	if _, err := DecodeInvestmentMixExplanation(malformed); err == nil {
 		t.Fatal("DecodeInvestmentMixExplanation with band_mix=[] returned nil error, want an error (cache-read must treat this as a miss)")
+	}
+}
+
+// TestExtractJSONObjectRejectsTrailingData regresses codex round 3 (P1):
+// two adjacent valid JSON objects in the LLM's raw completion text
+// ("{...}{...}") must be rejected as a whole (Python's extract_json_object
+// runs json.loads on the ENTIRE first-{-to-last-} slice, json_utils.py:65,
+// which raises JSONDecodeError "Extra data" for exactly this shape) -- not
+// silently decoded to just the first object, which is what
+// json.Decoder.Decode alone does (it reads one value and never checks the
+// stream is exhausted, unlike json.Unmarshal).
+func TestExtractJSONObjectRejectsTrailingData(t *testing.T) {
+	doubled := validMinimalCompletionText + validMinimalCompletionText
+	result := ParseInvestmentMixResponse(doubled, ParseOptions{FallbackLevel: "moderate"})
+	if result.Status != ParseStatusInvalidJSON {
+		t.Fatalf("status = %s, want %s (Python's json.loads rejects trailing data)", result.Status, ParseStatusInvalidJSON)
+	}
+
+	// The discriminating half: a SINGLE copy of the same text must still
+	// parse as valid -- proves the rejection is about the trailing data,
+	// not something else about the text itself.
+	single := ParseInvestmentMixResponse(validMinimalCompletionText, ParseOptions{FallbackLevel: "moderate"})
+	if single.Status != ParseStatusValid {
+		t.Fatalf("single-copy status = %s, want %s", single.Status, ParseStatusValid)
+	}
+}
+
+// TestValidConfidenceAcceptsArbitraryPrecisionBandMixIntegers regresses
+// codex round 3 (P2): Python's int is arbitrary-precision, so a
+// 1000-digit non-negative band_mix count is a VALID LLM response
+// (investment_mix_validation.py:133 checks isinstance(value, int) and
+// value >= 0, no range limit). A prior draft converted every band_mix
+// value to float64 to check non-negativity, and float64's ~1.8e308 range
+// rejected a value this large with strconv.ErrRange -- turning a
+// well-formed response into invalid_llm_output where Python would
+// accept it.
+func TestValidConfidenceAcceptsArbitraryPrecisionBandMixIntegers(t *testing.T) {
+	huge := strings.Repeat("9", 1000)
+	text := `{"summary": "A minimal valid summary.", "top_findings": [], "confidence": {"level": "moderate", "quality_mean": null, "quality_stddev": null, "band_mix": {"high": ` +
+		huge + `, "moderate": 0, "low": 0, "very_low": 0, "unknown": 0}, "drivers": []}, "what_to_check_next": [], "anti_claims": []}`
+
+	result := ParseInvestmentMixResponse(text, ParseOptions{FallbackLevel: "moderate"})
+	if result.Status != ParseStatusValid {
+		t.Fatalf("status = %s, want %s (a 1000-digit non-negative band_mix count is valid Python input)", result.Status, ParseStatusValid)
+	}
+
+	// The discriminating half: a NEGATIVE huge integer must still be
+	// rejected -- proves the fix checks the sign, not just "parses as an
+	// integer."
+	negativeText := `{"summary": "A minimal valid summary.", "top_findings": [], "confidence": {"level": "moderate", "quality_mean": null, "quality_stddev": null, "band_mix": {"high": -` +
+		huge + `, "moderate": 0, "low": 0, "very_low": 0, "unknown": 0}, "drivers": []}, "what_to_check_next": [], "anti_claims": []}`
+	negativeResult := ParseInvestmentMixResponse(negativeText, ParseOptions{FallbackLevel: "moderate"})
+	if negativeResult.Status != ParseStatusInvalidLLMOutput {
+		t.Fatalf("negative status = %s, want %s", negativeResult.Status, ParseStatusInvalidLLMOutput)
 	}
 }

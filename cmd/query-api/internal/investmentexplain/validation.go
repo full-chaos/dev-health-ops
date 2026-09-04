@@ -384,8 +384,18 @@ func validConfidence(raw any) bool {
 		if !isNumber || !isPythonInt(number) {
 			return false
 		}
-		numeric, err := number.Float64()
-		if err != nil || numeric < 0 {
+		// Non-negativity is checked on the LITERAL DIGIT STRING, not via
+		// number.Float64() -- Python's int is arbitrary-precision
+		// (investment_mix_validation.py:133's check is
+		// isinstance(value, int) and value >= 0, no range limit at all),
+		// so a genuinely huge non-negative integer (e.g. 1000 digits) is
+		// a VALID band_mix count on the Python side. float64's ~1.8e308
+		// range rejected such a value with strconv.ErrRange here, turning
+		// a well-formed LLM response into invalid_llm_output where Python
+		// would accept it -- caught by codex round 3 (P2). isPythonInt
+		// above already confirms the literal has no '.'/'e'/'E', so
+		// checking for a leading '-' is sufficient and exact.
+		if strings.HasPrefix(string(number), "-") {
 			return false
 		}
 	}

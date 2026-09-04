@@ -194,6 +194,16 @@ type investmentExplainRequestBody struct {
 // still in flight.
 const keepAliveInterval = 5 * time.Second
 
+// investmentExplainMaxBodyBytes is a Go-side-only safety cap -- Python's
+// real endpoint has no request-body size limit at all for this route
+// (unlike /query's GraphQL body, which the Python edge's
+// GraphQLQuerySizeLimitMiddleware caps at GRAPHQL_MAX_QUERY_BYTES). The
+// specific value is not a parity target; what IS a parity requirement is
+// that this cap be enforced HONESTLY -- reject a body that exceeds it,
+// never silently truncate and parse a prefix as if it were the whole
+// request.
+const investmentExplainMaxBodyBytes = 1 << 20
+
 // writeKeepAliveJSON ports keep_alive_wrapper's streaming contract: a
 // single space byte, flushed, every keepAliveInterval, until work
 // completes, then the final JSON body as the LAST chunk -- Content-Type
@@ -282,9 +292,26 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
-		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		// Same technique /query's own newQueryHandler uses (query_route.go,
+		// codex review 2026-08-28): LimitReader(..., limit+1) lets a body
+		// of EXACTLY the limit succeed while still detecting one byte
+		// over it, without buffering the oversized remainder. Reading
+		// exactly `investmentExplainMaxBodyBytes` (no +1) let a body
+		// LARGER than the limit through SILENTLY -- io.LimitReader never
+		// errors, it just stops reading, so a request whose first
+		// investmentExplainMaxBodyBytes bytes happened to already form a
+		// complete, valid JSON object had every byte after that silently
+		// dropped and ignored rather than rejected, unlike Python's real
+		// endpoint (no body-size limit at all, so it sees -- and Pydantic
+		// validates -- the WHOLE body, including any trailing data that
+		// would make it invalid). Caught by codex round 3 (P2).
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, investmentExplainMaxBodyBytes+1))
 		if err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if len(bodyBytes) > investmentExplainMaxBodyBytes {
+			http.Error(w, "request body exceeds size limit", http.StatusRequestEntityTooLarge)
 			return
 		}
 

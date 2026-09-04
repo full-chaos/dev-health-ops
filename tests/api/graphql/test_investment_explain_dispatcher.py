@@ -292,6 +292,75 @@ async def test_build_request_error_falls_back(monkeypatch: pytest.MonkeyPatch) -
     assert fake_client.closed
 
 
+async def test_build_request_unicode_error_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regresses codex round 3 (P2): a GO_API_QUERY_API_URL containing a
+    byte that is not valid UTF-8 makes build_request raise
+    UnicodeEncodeError, not httpx.InvalidURL -- confirmed EXECUTED
+    against the real httpx dependency by the round. The round 2 fix's
+    narrow `except httpx.InvalidURL` would not have caught this; the
+    round 3 fix widened to a broad `except Exception` specifically to
+    close this class of gap without enumerating every exception type."""
+    _enable(monkeypatch)
+    _patch_envelope_inputs_ok(monkeypatch)
+
+    class _UnicodeErrorClient:
+        def __init__(self):
+            self.closed = False
+
+        def build_request(
+            self, method, url, *, content=None, params=None, headers=None, timeout=None
+        ):
+            raise UnicodeEncodeError("utf-8", "\udcff", 0, 1, "surrogates not allowed")
+
+        async def send(self, request, *, stream: bool = False):
+            raise AssertionError(
+                "send should never be reached when build_request raises"
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fake_client = _UnicodeErrorClient()
+    monkeypatch.setattr(dispatcher_mod, "_build_http_client", lambda: fake_client)
+
+    result = await maybe_dispatch_investment_explain_to_go(
+        _make_request(),
+        current_user=_sample_user(),
+        llm_provider="auto",
+        force_refresh=False,
+    )
+    assert result is None
+    assert fake_client.closed
+
+
+async def test_build_http_client_construction_error_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regresses codex round 3 (P2): _build_http_client() itself was
+    entirely OUTSIDE any try/except -- an environment misconfiguration
+    (the round's example: a bad SSL_CERT_FILE, which makes
+    httpx.AsyncClient() raise FileNotFoundError) escaped uncaught."""
+    _enable(monkeypatch)
+    _patch_envelope_inputs_ok(monkeypatch)
+
+    def _raise():
+        raise FileNotFoundError(
+            "[Errno 2] No such file or directory: 'missing-ca-file'"
+        )
+
+    monkeypatch.setattr(dispatcher_mod, "_build_http_client", _raise)
+
+    result = await maybe_dispatch_investment_explain_to_go(
+        _make_request(),
+        current_user=_sample_user(),
+        llm_provider="auto",
+        force_refresh=False,
+    )
+    assert result is None
+
+
 async def test_go_timeout_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable(monkeypatch)
     _patch_envelope_inputs_ok(monkeypatch)

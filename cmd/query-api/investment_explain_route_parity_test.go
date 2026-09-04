@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -265,5 +266,41 @@ func TestInvestmentExplainWorkHandlerSupportedProviderStillStreams(t *testing.T)
 
 	if rec.Code == http.StatusNotImplemented {
 		t.Fatalf("mock provider incorrectly hit the pre-stream 501 path")
+	}
+}
+
+// TestInvestmentExplainWorkHandlerRejectsOversizedBodyInsteadOfTruncating
+// regresses codex round 3 (P2): a request body larger than
+// investmentExplainMaxBodyBytes must be REJECTED (413), never silently
+// truncated to the limit and parsed as if that prefix were the whole
+// request -- io.LimitReader never errors, it just stops reading, so
+// reading exactly the limit (no +1) let an oversized-but-valid-prefix
+// body through silently. Constructs a body whose first
+// investmentExplainMaxBodyBytes bytes already form a complete, valid
+// JSON object, with extra trailing bytes appended -- the shape that
+// specifically defeats a bare io.LimitReader(body, limit) read.
+func TestInvestmentExplainWorkHandlerRejectsOversizedBodyInsteadOfTruncating(t *testing.T) {
+	reader, err := investmentexplain.NewReader(unusedQueryClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil)
+
+	prefix := []byte(`{"filters":{}}`)
+	pad := investmentExplainMaxBodyBytes - len(prefix)
+	body := append(append([]byte{}, bytes.Repeat([]byte(" "), pad)...), prefix...)
+	body = append(body, []byte(`{"trailing":true}`)...)
+	if len(body) <= investmentExplainMaxBodyBytes {
+		t.Fatalf("test body construction bug: len(body)=%d, want > %d", len(body), investmentExplainMaxBodyBytes)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", bytes.NewReader(body))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d (body exceeds investmentExplainMaxBodyBytes)", rec.Code, http.StatusRequestEntityTooLarge)
 	}
 }

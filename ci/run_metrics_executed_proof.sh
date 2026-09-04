@@ -171,12 +171,23 @@ fi
 # THIS SCRIPT. The services below are launched under `set -m` precisely so each
 # leads its own group -- but nothing here may DEPEND on that having worked, so
 # an unverified pgid is simply not used.
+# It ALWAYS exits 0. The previous version ended on an `&&` chain, so the
+# not-a-group-leader case returned 1 -- and under `set -e` the CALLER's
+# `pgid="$(service_pgid ...)"` assignment then aborted stop_service() outright,
+# before TERM, before the watchdog, before the fallback kill. The service was
+# never signalled at all (codex r2 P2, executed: `worker=alive`). That made the
+# fallback path strictly WORSE than no fix: a `set -m` that failed to take would
+# have silently disabled teardown completely. A helper whose failure mode is
+# "the caller silently stops" must not be able to fail.
 service_pgid() {
-  local pid="$1" pgid
+  local pid="$1" pgid=""
   case "${pid}" in ''|*[!0-9]*) return 0 ;; esac
   [ "${pid}" -gt 1 ] || return 0
-  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ')"
-  [ -n "${pgid}" ] && [ "${pgid}" = "${pid}" ] && printf '%s' "${pgid}"
+  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ')" || pgid=""
+  if [ -n "${pgid}" ] && [ "${pgid}" = "${pid}" ]; then
+    printf '%s' "${pgid}"
+  fi
+  return 0
 }
 
 stop_service() {
@@ -189,8 +200,11 @@ stop_service() {
   # the case this exists for -- the first version of this fix looked the pgid up
   # AFTER `wait` returned, got nothing, and left the child running (the very
   # defect it was written to close).
-  local pgid
-  pgid="$(service_pgid "${pid}")"
+  local pgid=""
+  # `|| pgid=""` even though service_pgid() cannot fail: this assignment is the
+  # exact line that aborted teardown under errexit, so it does not rely on a
+  # helper's exit status staying 0 forever.
+  pgid="$(service_pgid "${pid}")" || pgid=""
 
   if [ -n "${pgid}" ]; then kill -TERM -- -"${pgid}" >/dev/null 2>&1 || true; fi
   kill -TERM "${pid}" >/dev/null 2>&1 || true
@@ -239,8 +253,20 @@ stop_service() {
   fi
 }
 
+CLEANUP_DONE=""
 cleanup() {
   local rc=$?
+  # Re-entrancy guard (codex r2 P3). The trap is installed for EXIT, INT and
+  # TERM, so a SIGINT arriving while cleanup is already running re-enters it on
+  # bash's function-return path -- observed: `pop_var_context: head of
+  # shell_variables not a function context`, `local: can only be used in a
+  # function`, and cleanup exiting 1 instead of completing. Run once, and drop
+  # the traps on entry so the second signal cannot re-enter at all.
+  if [ -n "${CLEANUP_DONE}" ]; then
+    return "${rc}"
+  fi
+  CLEANUP_DONE=1
+  trap '' EXIT INT TERM
   # Kill ORDER is load-bearing (CHAOS-5025), not cosmetic. dev-health-worker is
   # the API's only client (--operational-bridge-url below), so the API must be
   # signalled LAST. The old loop signalled it FIRST and then blocked on an
@@ -411,18 +437,25 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
   export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
   export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
-  # --shutdown-timeout, CHAOS-5025 (H3): was 7260s (2h1m), a second
-  # unbounded-teardown time bomb once cleanup() actually reaches the worker.
-  # The replacement must sit UNDER stop_service()'s TEARDOWN_WAIT_SECS (60s),
-  # not merely below the old absurd value: a worker asking for longer than the
-  # harness bound never gets to drain at all, it just gets SIGKILLed at 60s, so
-  # the graceful path can only win if its own timeout finishes first. Observed
-  # proof jobs are ~11s (daily_partition 10887-11376ms, daily_finalize 8102ms)
-  # at concurrency metrics=2/sync=1, so a real drain is ~12s: 30s is ~2.5x the
-  # longest real job and 2x under the bound, which leaves SIGKILL a true
-  # backstop. Truncating an in-flight job here cannot affect the result either
-  # way -- cleanup() runs after the readback assertion has already produced the
-  # pass/fail signal.
+  # --shutdown-timeout is 7260s BY CONTRACT -- do not "optimise" it down.
+  # CHAOS-5025 tried 120s and then 30s on the theory that 2h1m was an
+  # unbounded-teardown time bomb. It is not, and the worker REFUSES to start
+  # below the contract (CHAOS-3873, cmd/dev-health-worker/dependencies.go:1247+):
+  #
+  #     workerDrainBudget = shutdownTimeout - workerFinalizationBuffer(60s)
+  #     require workerDrainBudget >= longestTimeout of the selected queues
+  #     => shutdownTimeout >= longestTimeout + 60s
+  #
+  # For these queues longestTimeout is 7200s, so 7260s IS that minimum, not a
+  # round number someone picked. At 30s the budget is -30s and startup fails
+  # with `shutdown_timeout_below_drain_budget` -- which the caller then reports
+  # as the far less helpful `queue_coverage_validation_failed`.
+  #
+  # It was never a teardown risk anyway: stop_service() SIGKILLs at
+  # TEARDOWN_WAIT_SECS (60s) regardless of what the worker asks for, so the
+  # harness bound dominates and the worker's own grace never decides how long
+  # teardown takes. The H3 premise was simply wrong.
+  #
   # NOTE: this comment lives ABOVE the command on purpose -- a `#` between
   # backslash-continued arguments would comment out every argument after it,
   # silently.
@@ -430,7 +463,7 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
     --queues=metrics,sync \
     --queue-concurrency=metrics=2,sync=1 \
     --worker-group=heavy \
-    --shutdown-timeout=30s \
+    --shutdown-timeout=7260s \
     --http-addr=":${WORKER_HTTP_PORT}" \
     --river-schema=river \
     --domain-database-role="${RIVER_DOMAIN_ROLE}" \

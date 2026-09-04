@@ -204,9 +204,14 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// every prerequisite-gated job behind it. A refusal that strands the chain
 	// is worse than the empty result Python produces.
 	//
-	// A zero-width or inverted window needs no special handling downstream:
-	// MaterializeComponent already skips a component whose bounds fall outside
-	// [FromTS, ToTS), so an empty window simply skips everything.
+	// A zero-width or inverted window DOES need handling downstream, and this
+	// comment previously claimed the opposite: it said MaterializeComponent
+	// already skips such components. It did not. Its two bounds checks skip a
+	// component lying WHOLLY before or after the interval, and a component that
+	// straddles an empty interval satisfies neither -- so accepting the window
+	// silently WROTE investment rows where Python writes none. Fixed at the
+	// predicate itself (materializecomponent.go): an empty interval now skips
+	// every component, so acceptance yields the zero-record run Python yields.
 
 	materializer, err := NewMaterializer(executor.reader, executor.writer, provider, executor.logger)
 	if err != nil {

@@ -114,6 +114,24 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 	if !ok {
 		return MaterializeComponentResult{Skipped: skippedNoTimeBounds}, nil
 	}
+	// An EMPTY interval contains nothing, so every component is out of window.
+	//
+	// Stated separately because the two bounds checks below do NOT cover it:
+	// with FromTS=Jan20, ToTS=Jan10 and bounds Jan1-Jan30, `End.Before(FromTS)`
+	// is false and `!Start.Before(ToTS)` is false, so the component was RETAINED
+	// and an investment row written. The same holds for a zero-width window,
+	// which is the reachable case: `window_days: 0` is an accepted scope key
+	// (worker_workgraph.py:82-95).
+	//
+	// The executor deliberately ACCEPTS such windows rather than refusing, to
+	// match _parse_materialize_window (work_graph_tasks.py:57-81, no ordering
+	// check). Python then answers with a successful ZERO-RECORD run because it
+	// filters in SQL. Accepting the window while still writing rows would make
+	// the cutover produce investments Python never produced -- the wrong answer
+	// that looks healthy. Accept, and write nothing.
+	if !input.FromTS.Before(input.ToTS) {
+		return MaterializeComponentResult{Skipped: skippedOutOfWindow}, nil
+	}
 	if bounds.End.Before(input.FromTS) || !bounds.Start.Before(input.ToTS) {
 		return MaterializeComponentResult{Skipped: skippedOutOfWindow}, nil
 	}

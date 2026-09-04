@@ -195,3 +195,73 @@ func TestMaterializeComponentMultipleReposLeavesRepoIDUnset(t *testing.T) {
 		t.Errorf("RepoID = %v, want nil (edges name two different repos)", result.Investment.RepoID)
 	}
 }
+
+// TestMaterializeComponentEmptyWindowWritesNothing is the confirmation pass's
+// P1, and it is WRITER-FACING by way of the retention chain rather than by
+// mocking a writer: Materializer.Run skips a component whose Skipped is
+// non-empty (materialize.go:219 `continue`), so nothing is appended at :355 and
+// nothing reaches WriteInvestments at :392. A component that survives this
+// predicate IS a written row.
+//
+// Both windows here are ACCEPTED by the executor on purpose -- removing the
+// ordering refusal is what matches _parse_materialize_window, which has no
+// ordering check. The bug was that acceptance silently became a WRITE: the two
+// bounds checks admit any component that straddles an empty interval, so a
+// zero-width window produced investment rows where Python produces none.
+//
+// The component spans Jan 1-30 deliberately: it straddles both windows, which
+// is the only shape that reaches the defect. A component wholly before or after
+// is skipped by the ordinary bounds checks and proves nothing.
+func TestMaterializeComponentEmptyWindowWritesNothing(t *testing.T) {
+	jan10 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	jan20 := time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name   string
+		fromTS time.Time
+		toTS   time.Time
+	}{
+		// The reachable one: `window_days: 0` is an accepted scope key, so this
+		// needs no hand-written scope to occur in production.
+		{name: "zero width", fromTS: jan10, toTS: jan10},
+		// Requires a hand-written from > to scope, but the executor accepts it.
+		{name: "inverted", fromTS: jan20, toTS: jan10},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			issueID := "issue-straddling-the-window"
+			start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			end := time.Date(2026, 1, 30, 0, 0, 0, 0, time.UTC)
+
+			input := MaterializeComponentInput{FromTS: testCase.fromTS, ToTS: testCase.toTS}
+			input.Component = units.Component{Nodes: []units.NodeKey{{Type: "issue", ID: issueID}}}
+			input.WorkItems = map[string]chquery.WorkItem{
+				issueID: {WorkItemID: issueID, CreatedAt: start, UpdatedAt: end},
+			}
+
+			result, err := MaterializeComponent(input)
+			if err != nil {
+				t.Fatalf("MaterializeComponent: %v", err)
+			}
+
+			// POSITIVE CONTROL: without it this test would also pass if the
+			// component were skipped for having NO TIME BOUNDS, which is a
+			// different code path and would prove nothing about the window.
+			if result.Skipped == skippedNoTimeBounds {
+				t.Fatalf("fixture is wrong: component has no time bounds, so the window predicate was never reached")
+			}
+
+			if result.Skipped != skippedOutOfWindow {
+				t.Fatalf("Skipped = %q, want %q -- an empty window admitted a component, "+
+					"and Materializer.Run writes every component it does not skip",
+					result.Skipped, skippedOutOfWindow)
+			}
+			if result.Investment.WorkUnitID != "" {
+				t.Fatalf("empty window produced work unit %q, want none -- this row would be written",
+					result.Investment.WorkUnitID)
+			}
+			if len(result.RepoEffort) != 0 {
+				t.Fatalf("empty window produced %d repo-effort rows, want 0", len(result.RepoEffort))
+			}
+		})
+	}
+}

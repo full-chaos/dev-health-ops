@@ -17,8 +17,11 @@ import (
 
 // TestOwnedRepoIDs runs against the real migrated team_repo_ownership schema
 // and pins every boundary CHAOS-4897's follow-up depends on: the bitemporal
-// window, the NULL-repo_id (pattern-unresolved) exclusion, org isolation, and
-// that shared ownership is membership rather than a resolved single winner.
+// window, the NULL-repo_id PATTERN-UNRESOLVED exclusion (a `match_type =
+// 'pattern'` row that never resolved to any concrete repo, name-joined or
+// not -- see TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName for the
+// OTHER, resolvable shape of a NULL repo_id), org isolation, and that shared
+// ownership is membership rather than a resolved single winner.
 func TestOwnedRepoIDs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -88,8 +91,13 @@ func TestOwnedRepoIDs(t *testing.T) {
 	insert(orgID, teamA, repoExpired, before, &past)
 	// A row that has not ACTIVATED yet as of asOf -- must not count.
 	insert(orgID, teamA, repoNotYetActive, future, nil)
-	// A pattern-unresolved row (repo_id NULL) -- must not count, and must not
-	// error the scan.
+	// A pattern-unresolved row (repo_id NULL, repo_full_name a literal glob
+	// no real repo is ever named) -- must not count, and must not error the
+	// scan. This fixture seeds no `repos` rows at all, so the name-join
+	// TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName exercises can
+	// never match here either way; this test's NULL rows are excluded on
+	// BOTH grounds (no repo_id AND no join match), that other test isolates
+	// the join specifically.
 	insertUnresolved(orgID, teamA, before)
 	// Same team_id, different org -- must not leak across tenants.
 	insert(otherOrgID, teamA, repoOtherOrg, before, nil)
@@ -222,5 +230,100 @@ func TestOwnedRepoIDsSurvivesAPreMergeRevocation(t *testing.T) {
 			"the stale active row (valid_to=NULL) was not collapsed away by the "+
 			"newer revoked version, so the query is reading un-merged "+
 			"ReplacingMergeTree state instead of the latest row per key", got)
+	}
+}
+
+// TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName is the red-first proof
+// for a codex adversarial review P1 (2026-09-04, round 3): GitHub's own
+// team-autoimport producer (normalizeGitHubTeamRepoOwnership,
+// internal/providersync/github_team_catalog.go) writes EVERY `provider_access`
+// row with repo_id=NULL, including exact, fully-resolved matches --
+// resolution is deferred to a join against `repos` by (org_id, provider,
+// lower(repo_full_name)) at READ time. Before this fix, `OwnedRepoIDs`
+// filtered `repo_id IS NOT NULL` outright and returned ZERO owned repos for
+// every team using GitHub's own native team-repo permissions -- arguably the
+// single most common real-world ownership source, and a materially worse
+// outcome than the CHAOS-4897 defect this package exists to close for those
+// teams.
+func TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate clickhouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const orgID = "org-teamownership-provider-access"
+	const otherOrgID = "org-teamownership-provider-access-other"
+	const teamID = "team-github-native"
+	asOf := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	before := asOf.AddDate(0, 0, -30)
+
+	insertRepo := func(id uuid.UUID, orgID, provider, fullName string) {
+		if err := conn.Exec(ctx,
+			`INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+			id, fullName, orgID, provider, before,
+		); err != nil {
+			t.Fatalf("seed repos: %v", err)
+		}
+	}
+	insertProviderAccessRow := func(orgID, teamID, fullName string) {
+		if err := conn.Exec(ctx, `
+            INSERT INTO team_repo_ownership
+                (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+                 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+            VALUES (?, 'github', ?, NULL, ?, 'exact', 'provider_access', 0, 1, 0, ?, NULL, ?)
+        `, orgID, teamID, fullName, before, before); err != nil {
+			t.Fatalf("seed provider_access team_repo_ownership: %v", err)
+		}
+	}
+
+	repoAcme := uuid.New()
+	insertRepo(repoAcme, orgID, "github", "Acme/API")
+	// A DIFFERENT case than the repos row -- lower(...) on both sides is what
+	// makes this match, matching the canonical resolver's own case-fold.
+	insertProviderAccessRow(orgID, teamID, "acme/api")
+
+	// A repo with the SAME full name in a DIFFERENT org and under a
+	// DIFFERENT provider -- both must fail to join, proving the join's
+	// org_id/provider predicates are load-bearing, not just its name match.
+	// (Same defect shape as CHAOS-4897's own cross-tenant leak concern,
+	// applied to this new join.)
+	repoOtherOrg := uuid.New()
+	insertRepo(repoOtherOrg, otherOrgID, "github", "acme/api")
+	repoWrongProvider := uuid.New()
+	insertRepo(repoWrongProvider, orgID, "gitlab", "acme/api")
+
+	// A provider_access row whose name NEVER resolves -- must stay excluded,
+	// same as a pattern-unresolved row: nothing to join a repo-keyed metrics
+	// table against.
+	insertProviderAccessRow(orgID, teamID, "acme/never-synced")
+
+	got, err := OwnedRepoIDs(ctx, conn, orgID, teamID, asOf)
+	if err != nil {
+		t.Fatalf("OwnedRepoIDs: %v", err)
+	}
+	if len(got) != 1 || got[0] != repoAcme {
+		t.Fatalf("OwnedRepoIDs = %v, want [%v] -- the provider_access row "+
+			"(repo_id=NULL, repo_full_name=%q) should resolve to the repos "+
+			"table's %q by case-insensitive name within (org_id, provider), "+
+			"and the same-name rows in the other org/provider and the "+
+			"never-synced name must NOT leak in",
+			got, repoAcme, "acme/api", "Acme/API")
 	}
 }

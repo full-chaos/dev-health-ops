@@ -30,6 +30,7 @@ package teamownership
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -47,15 +48,38 @@ import (
 // not count -- an ownership claim is scoped to the instant it actually
 // applied, not to whenever it happened to be written.
 //
-// repo_id IS NOT NULL excludes pattern-unresolved rows: a `match_type =
-// 'pattern'` claim that never resolved to a concrete repository (repo_id
-// Nullable(UUID), NULL when unresolved) has nothing to join a repo-keyed
-// metrics table against, so it is dropped here rather than at every caller.
+// A NULL repo_id does NOT mean unresolved. codex adversarial review
+// (2026-09-04, round 3, P1): the GitHub team-autoimport producer
+// (normalizeGitHubTeamRepoOwnership, internal/providersync/
+// github_team_catalog.go) writes EVERY `provider_access` row with
+// `RepoID: nil`, including exact, fully-resolved matches -- resolution is
+// deferred to a join against `repos` by (org_id, provider,
+// lower(repo_full_name)) at READ time, not stored on the row. An earlier
+// version of this query filtered `repo_id IS NOT NULL` outright, which
+// silently returned ZERO owned repos for every team whose ownership came
+// from GitHub's own native team-repo permissions -- the single most common
+// ownership source in practice, and a materially worse outcome than the
+// CHAOS-4897 defect this package exists to close for teams using it.
 //
-// EVERY source and match_type counts -- native, provider_access, manual,
-// inferred; exact or pattern-resolved. This package answers "is this repo
-// one of this team's," not "who is its authoritative owner," so it does not
-// rank is_primary/specificity/priority the way LoadRepos does (see the
+// The join+coalesce below mirrors the canonical, already-hardened resolver
+// (`load_team_repo_ownership_map`, src/dev_health_ops/providers/teams.py)
+// exactly, including its `matched` sentinel: ClickHouse's default for an
+// UNMATCHED LEFT JOIN column is the type's ZERO VALUE, not real NULL, and
+// that codebase measured this live -- `r.id IS NOT NULL` is true even for a
+// row that never matched, since the zero UUID is not NULL. Without the
+// sentinel, dropping the join filter (or reverting to `r.id IS NOT NULL`)
+// would let every UNRESOLVED repo_full_name silently resolve to the zero
+// UUID and enter a team's owned set. A row counts as resolved only via
+// `o.repo_id IS NOT NULL` (already-resolved, e.g. pattern rows with a
+// concrete match) OR `r.matched = 1` (a genuine name join hit) -- a
+// `match_type = 'pattern'` row that never resolved to a name `repos` holds,
+// and has no repo_id of its own, has nothing to join a repo-keyed metrics
+// table against and is correctly excluded either way.
+//
+// EVERY source and match_type counts otherwise -- native, provider_access,
+// manual, inferred; exact or pattern-resolved. This package answers "is this
+// repo one of this team's," not "who is its authoritative owner," so it does
+// not rank is_primary/specificity/priority the way LoadRepos does (see the
 // package doc for why that precedence does not apply to membership).
 //
 // An empty, non-nil-error result is a real answer, not degraded behaviour: a
@@ -81,14 +105,26 @@ func OwnedRepoIDs(
 	// exactly matching the established pattern for reading this same table
 	// in loadTeamRepoOwnershipActiveInferredRows
 	// (team_repo_ownership_derivation_clickhouse.go).
+	// toString(...), not a bare UUID/Nullable(UUID) select: matches the
+	// Python reference exactly, and sidesteps having to reason about what
+	// type clickhouse-go resolves coalesce(Nullable(UUID), UUID) to on the
+	// wire -- a string round-trips unambiguously through uuid.Parse below
+	// regardless.
 	rows, err := conn.Query(ctx, `
-        SELECT DISTINCT repo_id
-        FROM team_repo_ownership FINAL
-        WHERE org_id = ?
-          AND team_id = ?
-          AND repo_id IS NOT NULL
-          AND valid_from <= ?
-          AND (valid_to IS NULL OR valid_to > ?)
+        SELECT DISTINCT toString(coalesce(o.repo_id, r.id)) AS repo_id
+        FROM team_repo_ownership AS o FINAL
+        LEFT JOIN (
+            SELECT org_id, provider, id, repo, 1 AS matched
+            FROM repos FINAL
+        ) AS r
+            ON r.org_id = o.org_id
+               AND r.provider = o.provider
+               AND lower(r.repo) = lower(o.repo_full_name)
+        WHERE o.org_id = ?
+          AND o.team_id = ?
+          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+          AND o.valid_from <= ?
+          AND (o.valid_to IS NULL OR o.valid_to > ?)
     `, orgID, teamID, asOf, asOf)
 	if err != nil {
 		return nil, err
@@ -97,9 +133,13 @@ func OwnedRepoIDs(
 
 	var repoIDs []uuid.UUID
 	for rows.Next() {
-		var repoID uuid.UUID
-		if err := rows.Scan(&repoID); err != nil {
+		var repoIDText string
+		if err := rows.Scan(&repoIDText); err != nil {
 			return nil, err
+		}
+		repoID, err := uuid.Parse(repoIDText)
+		if err != nil {
+			return nil, fmt.Errorf("owned repo id %q: %w", repoIDText, err)
 		}
 		if repoID != uuid.Nil {
 			repoIDs = append(repoIDs, repoID)

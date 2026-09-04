@@ -1950,10 +1950,10 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 Preview rule-based recommendations for a team — evaluates both fired recommendations and explicit `fired=False` tombstones, and prints them. Uses `CLICKHOUSE_URI` for input reads only.
 
 ```bash
-dev-hops recommendations compute --team eng-core --window 7d
+dev-hops recommendations compute --team <team-uuid> --window 7d
 
 # Override the window with an explicit date range and print JSON
-dev-hops recommendations compute --team eng-core \
+dev-hops recommendations compute --team <team-uuid> \
   --since 2025-01-01 --until 2025-01-31 --output-json
 ```
 

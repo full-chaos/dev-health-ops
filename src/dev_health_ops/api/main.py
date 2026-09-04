@@ -86,6 +86,9 @@ from .dev.router import (
     router as dev_router,
 )
 from .graphql.app import create_graphql_app
+from .graphql.investment_explain_dispatcher import (
+    maybe_dispatch_investment_explain_to_go,
+)
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from .models.filters import (
@@ -1313,6 +1316,20 @@ async def investment_explain(
     force_refresh: bool = False,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
+    # CHAOS-4977 step 5b: forward to query-api's Go handler when the
+    # dispatcher's own switch/reachability checks allow it -- None means
+    # "run the Python path below", exactly like go_api_dispatcher's own
+    # None-return contract. See investment_explain_dispatcher.py's module
+    # docstring for the full fallback vocabulary.
+    go_response = await maybe_dispatch_investment_explain_to_go(
+        request,
+        current_user=current_user,
+        llm_provider=llm_provider,
+        force_refresh=force_refresh,
+    )
+    if go_response is not None:
+        return go_response
+
     try:
         logger.info("Generating streaming investment explanation")
         return StreamingResponse(

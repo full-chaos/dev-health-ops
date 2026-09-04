@@ -1,0 +1,51 @@
+{
+  "case": "valid_minimal_empty_lists",
+  "kwargs": {
+    "fallback_band_mix": {
+      "high": 2,
+      "low": 1,
+      "moderate": 3,
+      "unknown": 0,
+      "very_low": 0
+    },
+    "fallback_drivers": [
+      "thin_component"
+    ],
+    "fallback_level": "moderate",
+    "fallback_mean": 0.6,
+    "fallback_quality_band": "high",
+    "fallback_stddev": 0.1,
+    "subcategory_shares_pct": {
+      "quality.bugfix": 20.0,
+      "velocity.feature": 40.0
+    },
+    "theme_shares_pct": {
+      "quality": 37.5,
+      "velocity": 62.5
+    }
+  },
+  "output": {
+    "anti_claims": [],
+    "confidence": {
+      "band_mix": {
+        "high": 2,
+        "low": 1,
+        "moderate": 3,
+        "unknown": 0,
+        "very_low": 0
+      },
+      "drivers": [
+        "thin_component"
+      ],
+      "level": "moderate",
+      "quality_mean": 0.6,
+      "quality_stddev": 0.1
+    },
+    "status": "valid",
+    "summary": "Effort leans toward velocity work with a smaller quality share.",
+    "top_findings": [],
+    "what_to_check_next": []
+  },
+  "status": "valid",
+  "text": "{\"summary\": \"Effort leans toward velocity work with a smaller quality share.\", \"top_findings\": [], \"confidence\": {\"level\": \"unknown\", \"quality_mean\": null, \"quality_stddev\": null, \"band_mix\": {\"high\": 0, \"moderate\": 0, \"low\": 0, \"very_low\": 0, \"unknown\": 0}, \"drivers\": []}, \"what_to_check_next\": [], \"anti_claims\": []}"
+}

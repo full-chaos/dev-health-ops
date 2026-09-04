@@ -4,7 +4,7 @@ package analytics
 
 // Seeded real-engine proof for CHAOS-4441 plan.md section 5a's dedup
 // obligation: a work_unit_id present in work_unit_supersessions must be
-// invisible to every reader composed from latestWorkUnitInvestmentsSource,
+// invisible to every reader composed from LatestWorkUnitInvestmentsSource,
 // UNCONDITIONALLY -- independent of investmentMembershipScopeFilter's own
 // scope_enabled gate (investmentsupersessions.go's binding condition).
 //

@@ -1,0 +1,13 @@
+{
+  "case": "int_stays_bare",
+  "input": {
+    "type": "map",
+    "value": {
+      "count": {
+        "type": "int",
+        "value": 5
+      }
+    }
+  },
+  "output": "{\n  \"count\": 5\n}"
+}

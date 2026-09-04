@@ -1,0 +1,13 @@
+{
+  "case": "fractional_float",
+  "input": {
+    "type": "map",
+    "value": {
+      "share": {
+        "type": "float",
+        "value": 0.333333
+      }
+    }
+  },
+  "output": "{\n  \"share\": 0.333333\n}"
+}

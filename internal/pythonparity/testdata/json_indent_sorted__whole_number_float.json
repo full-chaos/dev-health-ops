@@ -1,0 +1,13 @@
+{
+  "case": "whole_number_float",
+  "input": {
+    "type": "map",
+    "value": {
+      "share": {
+        "type": "float",
+        "value": 1.0
+      }
+    }
+  },
+  "output": "{\n  \"share\": 1.0\n}"
+}

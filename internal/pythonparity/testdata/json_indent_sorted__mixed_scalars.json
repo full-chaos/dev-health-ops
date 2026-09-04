@@ -1,0 +1,32 @@
+{
+  "case": "mixed_scalars",
+  "input": {
+    "type": "map",
+    "value": {
+      "a": {
+        "type": "int",
+        "value": 1
+      },
+      "b": {
+        "type": "float",
+        "value": 1.0
+      },
+      "c": {
+        "type": "string",
+        "value": "x"
+      },
+      "d": {
+        "type": "bool",
+        "value": true
+      },
+      "e": {
+        "type": "bool",
+        "value": false
+      },
+      "f": {
+        "type": "null"
+      }
+    }
+  },
+  "output": "{\n  \"a\": 1,\n  \"b\": 1.0,\n  \"c\": \"x\",\n  \"d\": true,\n  \"e\": false,\n  \"f\": null\n}"
+}

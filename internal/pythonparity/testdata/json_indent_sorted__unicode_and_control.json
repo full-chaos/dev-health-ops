@@ -1,0 +1,13 @@
+{
+  "case": "unicode_and_control",
+  "input": {
+    "type": "map",
+    "value": {
+      "text": {
+        "type": "string",
+        "value": "caf\u00e9 \ud83d\ude00 \u007f\u001f\u2028\u2029 \" \\ \n \t"
+      }
+    }
+  },
+  "output": "{\n  \"text\": \"caf\u00e9 \ud83d\ude00 \u007f\\u001f\u2028\u2029 \\\" \\\\ \\n \\t\"\n}"
+}

@@ -218,6 +218,20 @@ func main() {
 	}
 	mux.HandleFunc("/readyz", readyzHandler(ready))
 
+	// CHAOS-4977 step 5a: POST /api/v1/investment/explain, gated by its
+	// own routeswitch entry (default OFF via GO_API_INVESTMENT_EXPLAIN_ENABLED)
+	// -- see investment_explain_route.go's package doc comment for the
+	// reachability story (5b: a separate Python-side REST forwarder,
+	// not this file's job) and this route's documented scope gaps.
+	if explainHandler, explainCleanup, explainOK, explainErr := buildInvestmentExplainRoute(); explainErr != nil {
+		log.Fatalf("query-api: build /api/v1/investment/explain route: %v", explainErr)
+	} else if explainOK {
+		defer explainCleanup()
+		mux.HandleFunc("/api/v1/investment/explain", explainHandler)
+	} else {
+		log.Print("query-api: /api/v1/investment/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	server := &http.Server{
 		Addr:              addr(),
 		Handler:           mux,

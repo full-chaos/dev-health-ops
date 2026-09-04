@@ -34,6 +34,13 @@ EXPECTED_PACKAGES = {
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/hotspots",
+    # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
+    # real Map(String, Float64) theme/subcategory columns -- a fake
+    # RowScanner double can hand back any Go type its author declares, so
+    # it can never prove the real clickhouse-go driver's type-conversion
+    # path actually works against the real column type (it didn't, see
+    # workunitreader_seeded_integration_test.go's own header comment).
+    "cmd/query-api/internal/investmentexplain",
     "cmd/query-api/internal/routeswitch",
     "cmd/query-api/internal/workgraph",
     "internal/cacheinvalidation",
@@ -345,9 +352,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # branch: CHAOS-4882's internal/storage/postgres/authschema and
     # CHAOS-4769's internal/jobs/workgraph/issueprlinks. The merged total was
     # 39. CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
-    # CHAOS-4902 then added internal/testsupport/chschema: 40 -> 41.
-    assert "41 package(s) discovered, 0 denylisted, 41 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 41 package(s)" in result.stdout
+    # CHAOS-4977 and CHAOS-4902 landed independently, each written as
+    # 40 -> 41 on its own branch: CHAOS-4977's
+    # cmd/query-api/internal/investmentexplain and CHAOS-4902's
+    # internal/testsupport/chschema. The merged total is 42.
+    assert "42 package(s) discovered, 0 denylisted, 42 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 42 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -382,8 +392,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # internal/jobs/workgraph/issueprlinks, each written as 37 -> 38 on its
     # own branch. FLATTENED includes the providersync shard-1 package.
     # CHAOS-4441: 40, not 39 -- internal/jobs/investment/chwrite added.
-    # CHAOS-4902: 41, not 40 -- internal/testsupport/chschema added.
-    assert len(flattened) == len(set(flattened)) == 41
+    # CHAOS-4977 and CHAOS-4902 landed independently, each written as
+    # 40 -> 41 on its own branch (see the "package(s) discovered" note
+    # above). FLATTENED includes the providersync shard-1 package, same
+    # as every other count in this comment block. Merged total: 42.
+    assert len(flattened) == len(set(flattened)) == 42
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1695,9 +1708,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # the packages shards).
     # CHAOS-4441: 39, not 38 -- internal/jobs/investment/chwrite added
     # (40 discovered - 1 for the providersync shard-1 package = 39).
-    # CHAOS-4902: 40, not 39 -- internal/testsupport/chschema added
-    # (41 discovered - 1 for the providersync shard-1 package = 40).
-    assert len(selected_packages) == len(set(selected_packages)) == 40
+    # CHAOS-4977 and CHAOS-4902 landed independently, each written as
+    # 39 -> 40 on its own branch: cmd/query-api/internal/investmentexplain
+    # and internal/testsupport/chschema. Merged total: 41
+    # (42 discovered - 1 for the providersync shard-1 package).
+    assert len(selected_packages) == len(set(selected_packages)) == 41
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

@@ -160,7 +160,7 @@ func buildUnitTeamSubquery(opts unitTeamSubqueryOptions) string {
 
 // --- investment.py:23-58: LATEST_WORK_UNIT_INVESTMENTS_CTE -------------
 
-// latestWorkUnitInvestmentsSource ports LATEST_WORK_UNIT_INVESTMENTS_CTE
+// LatestWorkUnitInvestmentsSource ports LATEST_WORK_UNIT_INVESTMENTS_CTE
 // (investment.py:23-58, e9ea257ff), restructured from `WITH ... AS (...)`
 // into an inlined derived-table subquery (no trailing alias -- callers
 // append their own, exactly like this package's existing
@@ -211,7 +211,15 @@ func buildUnitTeamSubquery(opts unitTeamSubqueryOptions) string {
 // investmentMembershipScopeFilter()'s own scope_enabled gate, per that
 // section's binding condition. See investmentsupersessions.go for why
 // folding the two together would defeat the sidecar's purpose.
-func latestWorkUnitInvestmentsSource() string {
+// Exported (CHAOS-4977) so cmd/query-api/internal/investmentexplain can
+// reuse this exact dedup query instead of a second, unsynced copy of it --
+// this is the one place the argMax-tuple/null-skip history above
+// (CHAOS-2374 cross-org leak, CHAOS-4547 null-transition) lives; a
+// duplicate would only reintroduce it silently. A test in this package
+// (investment_export_rename_test.go) asserts this export changed nothing
+// but the identifier's case -- the function's own RETURNED SQL is
+// byte-identical to what it returned before the rename.
+func LatestWorkUnitInvestmentsSource() string {
 	return fmt.Sprintf(`(
         SELECT
             work_unit_id,
@@ -308,7 +316,7 @@ func latestWorkUnitRepoEffortSource() string {
 // port follows compiler.py's shape because THAT is what
 // `_get_context_params` (my actual scope) uses. No new argMax
 // nullability risk here: every column is a plain reference into
-// already-deduped latestWorkUnitInvestmentsSource /
+// already-deduped LatestWorkUnitInvestmentsSource /
 // latestWorkUnitRepoEffortSource, not a fresh aggregate.
 func repoAllocationInvestmentSource() string {
 	return fmt.Sprintf(`(
@@ -337,7 +345,7 @@ func repoAllocationInvestmentSource() string {
                 LEFT JOIN %s AS wure
                     ON wure.org_id = wui.org_id
                     AND wure.work_unit_id = wui.work_unit_id
-            ) AS work_unit_investments`, latestWorkUnitInvestmentsSource(), latestWorkUnitRepoEffortSource())
+            ) AS work_unit_investments`, LatestWorkUnitInvestmentsSource(), latestWorkUnitRepoEffortSource())
 }
 
 // --- investment.py:214-256: LATEST_WORK_UNIT_AUTHORS_CTE ----------------
@@ -345,7 +353,7 @@ func repoAllocationInvestmentSource() string {
 // workUnitAuthorsSource ports LATEST_WORK_UNIT_AUTHORS_CTE (investment.py:
 // 214-256, e9ea257ff), inlined -- its two `FROM latest_work_unit_investments
 // AS wui` references (investment.py:223, :241, one per UNION ALL branch)
-// each become a FRESH call to latestWorkUnitInvestmentsSource(), so this
+// each become a FRESH call to LatestWorkUnitInvestmentsSource(), so this
 // one query embeds that CTE's full text three times in total once
 // composed into a caller (main FROM + this function's two branches).
 // Real Python cost parity, not a regression this port introduces: a
@@ -383,7 +391,7 @@ func workUnitAuthorsSource() string {
                     WHERE org_id = {org_id:String}
                     GROUP BY org_id, repo_id, hash
                 ) AS ca ON ca.commit_ref = commit_ref AND ca.org_id = wui.org_id
-                WHERE ca.author_email IS NOT NULL AND ca.author_email != ''`, latestWorkUnitInvestmentsSource())
+                WHERE ca.author_email IS NOT NULL AND ca.author_email != ''`, LatestWorkUnitInvestmentsSource())
 
 	prsBranch := fmt.Sprintf(`
                 SELECT
@@ -400,7 +408,7 @@ func workUnitAuthorsSource() string {
                     WHERE org_id = {org_id:String}
                     GROUP BY org_id, repo_id, number
                 ) AS pa ON pa.pr_ref = pr_ref AND pa.org_id = wui.org_id
-                WHERE pa.author_email IS NOT NULL AND pa.author_email != ''`, latestWorkUnitInvestmentsSource())
+                WHERE pa.author_email IS NOT NULL AND pa.author_email != ''`, LatestWorkUnitInvestmentsSource())
 
 	return fmt.Sprintf(`(
         SELECT
@@ -496,7 +504,7 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 	if useRepoAllocation {
 		source = repoAllocationInvestmentSource()
 	} else {
-		source = fmt.Sprintf("%s AS work_unit_investments", latestWorkUnitInvestmentsSource())
+		source = fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource())
 	}
 
 	// ALWAYS joined for every investment query (compiler.py:191-194) --
@@ -513,10 +521,10 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 	// AS work_unit_investments"`, never the repo-allocation source, even
 	// when the OUTER query's own FROM is repo-allocated) preserved
 	// faithfully here, so this embeds its OWN fresh copy of
-	// latestWorkUnitInvestmentsSource() independent of `source` above.
+	// LatestWorkUnitInvestmentsSource() independent of `source` above.
 	if dimensionListHas(dimensions, DimensionTeam) || needsTeamJoinFlag {
 		unitTeamSQL := buildUnitTeamSubquery(unitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", latestWorkUnitInvestmentsSource()),
+			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
 			InnerTeamAlias: "team_label",
 			IncludeTeamID:  true,
 		})
@@ -567,7 +575,7 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 		Source: source,
 		Alias:  "work_unit_investments",
 		// compiler.py:227 -- from_ts/to_ts are DateTime64(3,'UTC')
-		// (already-deduped via latestWorkUnitInvestmentsSource's own
+		// (already-deduped via LatestWorkUnitInvestmentsSource's own
 		// argMax), compared against the same {start_date:Date}/
 		// {end_date:Date} bindings the non-investment path uses;
 		// ClickHouse implicitly promotes a Date value to midnight UTC

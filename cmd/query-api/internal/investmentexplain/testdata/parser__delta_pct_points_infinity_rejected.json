@@ -1,0 +1,30 @@
+{
+  "case": "delta_pct_points_infinity_rejected",
+  "kwargs": {
+    "fallback_band_mix": {
+      "high": 2,
+      "low": 1,
+      "moderate": 3,
+      "unknown": 0,
+      "very_low": 0
+    },
+    "fallback_drivers": [
+      "thin_component"
+    ],
+    "fallback_level": "moderate",
+    "fallback_mean": 0.6,
+    "fallback_quality_band": "high",
+    "fallback_stddev": 0.1,
+    "subcategory_shares_pct": {
+      "quality.bugfix": 20.0,
+      "velocity.feature": 40.0
+    },
+    "theme_shares_pct": {
+      "quality": 37.5,
+      "velocity": 62.5
+    }
+  },
+  "output": null,
+  "status": "invalid_llm_output",
+  "text": "{\"summary\": \"Effort leans toward velocity work with a smaller quality share.\", \"top_findings\": [{\"finding\": \"Delta points is not a finite number\", \"evidence\": {\"theme\": \"velocity\", \"subcategory\": null, \"share_pct\": 40.0, \"delta_pct_points\": Infinity, \"evidence_quality_mean\": null, \"evidence_quality_band\": null}}], \"confidence\": {\"level\": \"moderate\", \"quality_mean\": 0.6, \"quality_stddev\": 0.1, \"band_mix\": {\"high\": 2, \"moderate\": 3, \"low\": 1, \"very_low\": 0, \"unknown\": 0}, \"drivers\": [\"thin_component\"]}, \"what_to_check_next\": [{\"action\": \"Review feature-delivery evidence quotes\", \"why\": \"Confirms the dominant velocity subcategory\", \"where\": \"Work unit evidence panel\"}], \"anti_claims\": [\"This does not indicate declining quality investment.\"]}"
+}

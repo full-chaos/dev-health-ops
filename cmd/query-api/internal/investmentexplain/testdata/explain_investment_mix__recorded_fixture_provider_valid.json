@@ -1,0 +1,47 @@
+{
+  "case": "recorded_fixture_provider_valid",
+  "llm_provider": "openai",
+  "result": {
+    "anti_claims": [
+      "This does not indicate declining quality investment."
+    ],
+    "confidence": {
+      "band_mix": {
+        "high": 1,
+        "low": 1
+      },
+      "drivers": [],
+      "level": "moderate",
+      "quality_mean": 0.55,
+      "quality_stddev": 0.25
+    },
+    "status": "valid",
+    "summary": "Effort appears to lean toward velocity work this period.",
+    "top_findings": [
+      {
+        "evidence": {
+          "delta_pct_points": null,
+          "evidence_quality_band": null,
+          "evidence_quality_mean": 0.55,
+          "share_pct": 80.0,
+          "subcategory": "velocity.feature",
+          "theme": "velocity"
+        },
+        "finding": "Velocity work leans toward feature delivery (~80% of effort)."
+      }
+    ],
+    "what_to_check_next": [
+      {
+        "action": "Review feature-delivery evidence quotes",
+        "where": "Work unit evidence panel",
+        "why": "Confirms the dominant velocity subcategory"
+      }
+    ]
+  },
+  "written_cache_record": {
+    "cache_key": "13225e409b50b22a4a2b6e42d80b81f0",
+    "explanation_json": "{\"summary\": \"Effort appears to lean toward velocity work this period.\", \"top_findings\": [{\"finding\": \"Velocity work leans toward feature delivery (~80% of effort).\", \"evidence\": {\"theme\": \"velocity\", \"subcategory\": \"velocity.feature\", \"share_pct\": 80.0, \"delta_pct_points\": null, \"evidence_quality_mean\": 0.55, \"evidence_quality_band\": null}}], \"confidence\": {\"level\": \"moderate\", \"quality_mean\": 0.55, \"quality_stddev\": 0.25, \"band_mix\": {\"high\": 1, \"low\": 1}, \"drivers\": []}, \"what_to_check_next\": [{\"action\": \"Review feature-delivery evidence quotes\", \"why\": \"Confirms the dominant velocity subcategory\", \"where\": \"Work unit evidence panel\"}], \"anti_claims\": [\"This does not indicate declining quality investment.\"], \"status\": \"valid\"}",
+    "llm_model": null,
+    "llm_provider": "openai"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "case": "nested_structures",
+  "input": {
+    "type": "map",
+    "value": {
+      "list_of_maps": {
+        "type": "list",
+        "value": [
+          {
+            "type": "map",
+            "value": {
+              "x": {
+                "type": "int",
+                "value": 1
+              }
+            }
+          },
+          {
+            "type": "map",
+            "value": {
+              "y": {
+                "type": "int",
+                "value": 2
+              }
+            }
+          }
+        ]
+      },
+      "outer": {
+        "type": "map",
+        "value": {
+          "inner": {
+            "type": "map",
+            "value": {
+              "deep": {
+                "type": "list",
+                "value": [
+                  {
+                    "type": "int",
+                    "value": 1
+                  },
+                  {
+                    "type": "float",
+                    "value": 2.0
+                  },
+                  {
+                    "type": "string",
+                    "value": "three"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "output": "{\n  \"list_of_maps\": [\n    {\n      \"x\": 1\n    },\n    {\n      \"y\": 2\n    }\n  ],\n  \"outer\": {\n    \"inner\": {\n      \"deep\": [\n        1,\n        2.0,\n        \"three\"\n      ]\n    }\n  }\n}"
+}

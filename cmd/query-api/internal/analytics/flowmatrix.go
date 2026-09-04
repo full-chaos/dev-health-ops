@@ -230,7 +230,7 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 
 // flowMatrixUsesInvestmentSource reports whether CompileFlowMatrix would
 // route req through compileFlowMatrixInvestmentDimension (and therefore
-// through latestWorkUnitInvestmentsSource) -- CHAOS-4759 codex round-2 P1
+// through LatestWorkUnitInvestmentsSource) -- CHAOS-4759 codex round-2 P1
 // fix: resolveFlowMatrix (resolve.go) never sees the useInvestment value
 // compileFlowMatrixInvestmentDimension resolves internally, so a caller
 // that needs to know whether THIS request will touch the investment

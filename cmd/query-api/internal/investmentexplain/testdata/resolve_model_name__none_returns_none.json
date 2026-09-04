@@ -1,0 +1,9 @@
+{
+  "case": "none_returns_none",
+  "input": {
+    "env": {},
+    "model": "whatever",
+    "provider": "none"
+  },
+  "result": null
+}

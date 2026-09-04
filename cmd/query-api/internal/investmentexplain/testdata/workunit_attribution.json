@@ -1,0 +1,748 @@
+{
+  "derive_work_item_id": {
+    "custom_fallback": {
+      "input": {
+        "external_key": "k1",
+        "instance": "some-instance",
+        "system": "custom",
+        "work_item_type": null
+      },
+      "result": "custom:some-instance:k1"
+    },
+    "github_issue": {
+      "input": {
+        "external_key": "5",
+        "instance": "myorg/myrepo",
+        "system": "github",
+        "work_item_type": null
+      },
+      "result": "gh:myorg/myrepo#5"
+    },
+    "github_pr": {
+      "input": {
+        "external_key": "5",
+        "instance": "myorg/myrepo",
+        "system": "github",
+        "work_item_type": "pr"
+      },
+      "result": "ghpr:myorg/myrepo#5"
+    },
+    "gitlab_issue": {
+      "input": {
+        "external_key": "9",
+        "instance": "mygroup/myproject",
+        "system": "gitlab",
+        "work_item_type": null
+      },
+      "result": "gitlab:mygroup/myproject#9"
+    },
+    "gitlab_mr": {
+      "input": {
+        "external_key": "9",
+        "instance": "mygroup/myproject",
+        "system": "gitlab",
+        "work_item_type": "merge_request"
+      },
+      "result": "gitlab:mygroup/myproject!9"
+    },
+    "jira": {
+      "input": {
+        "external_key": "PROJ-1",
+        "instance": "ignored",
+        "system": "jira",
+        "work_item_type": null
+      },
+      "result": "jira:PROJ-1"
+    },
+    "linear": {
+      "input": {
+        "external_key": "ENG-42",
+        "instance": "ignored",
+        "system": "linear",
+        "work_item_type": null
+      },
+      "result": "linear:ENG-42"
+    }
+  },
+  "extract_issue_ids": {
+    "empty_string": {
+      "input": {
+        "payload": ""
+      },
+      "result": []
+    },
+    "invalid_json": {
+      "input": {
+        "payload": "{not valid"
+      },
+      "result": []
+    },
+    "issues_and_prs": {
+      "input": {
+        "payload": "{\"issues\": [\"issue-1\", \"issue-2\", 0, \"\", null], \"prs\": [\"11111111-1111-1111-1111-111111111111#pr42\", \"\"]}"
+      },
+      "result": [
+        "issue-1",
+        "issue-2"
+      ]
+    },
+    "missing_keys": {
+      "input": {
+        "payload": "{\"other\": \"value\"}"
+      },
+      "result": []
+    },
+    "not_a_dict": {
+      "input": {
+        "payload": "[\"a\", \"b\"]"
+      },
+      "result": []
+    }
+  },
+  "extract_pr_refs": {
+    "empty_string": {
+      "input": {
+        "payload": ""
+      },
+      "result": []
+    },
+    "invalid_json": {
+      "input": {
+        "payload": "{not valid"
+      },
+      "result": []
+    },
+    "issues_and_prs": {
+      "input": {
+        "payload": "{\"issues\": [\"issue-1\", \"issue-2\", 0, \"\", null], \"prs\": [\"11111111-1111-1111-1111-111111111111#pr42\", \"\"]}"
+      },
+      "result": [
+        "11111111-1111-1111-1111-111111111111#pr42"
+      ]
+    },
+    "missing_keys": {
+      "input": {
+        "payload": "{\"other\": \"value\"}"
+      },
+      "result": []
+    },
+    "not_a_dict": {
+      "input": {
+        "payload": "[\"a\", \"b\"]"
+      },
+      "result": []
+    }
+  },
+  "majority_team_for_issues": {
+    "blank_team_id_ignored": {
+      "input": {
+        "issue_ids": [
+          "issue-blank-team",
+          "issue-c"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "team-2",
+      "team_name": "Growth"
+    },
+    "clear_majority": {
+      "input": {
+        "issue_ids": [
+          "issue-a",
+          "issue-b",
+          "issue-c"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "team-1",
+      "team_name": "Platform"
+    },
+    "duplicate_refs_do_not_double_vote": {
+      "input": {
+        "issue_ids": [
+          "issue-a",
+          "issue-a",
+          "issue-c"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "team-2",
+      "team_name": "Growth"
+    },
+    "empty_issue_ids": {
+      "input": {
+        "issue_ids": [],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "unassigned",
+      "team_name": "Unassigned"
+    },
+    "label_takes_max_over_winning_id_refs": {
+      "input": {
+        "issue_ids": [
+          "issue-c",
+          "issue-d"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "team-2",
+      "team_name": "Growth Renamed"
+    },
+    "no_known_issues_falls_back_unassigned": {
+      "input": {
+        "issue_ids": [
+          "issue-unknown-1",
+          "issue-unknown-2"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "unassigned",
+      "team_name": "Unassigned"
+    },
+    "tie_breaks_on_larger_team_id": {
+      "input": {
+        "issue_ids": [
+          "issue-tie-x",
+          "issue-tie-y"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "team-zzz",
+      "team_name": "Zed"
+    },
+    "whitespace_team_id_ignored": {
+      "input": {
+        "issue_ids": [
+          "issue-whitespace-team",
+          "issue-c"
+        ],
+        "team_map": {
+          "issue-a": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-b": {
+            "team_id": "team-1",
+            "team_name": "Platform"
+          },
+          "issue-blank-team": {
+            "team_id": "",
+            "team_name": "Ignored"
+          },
+          "issue-c": {
+            "team_id": "team-2",
+            "team_name": "Growth"
+          },
+          "issue-d": {
+            "team_id": "team-2",
+            "team_name": "Growth Renamed"
+          },
+          "issue-tie-x": {
+            "team_id": "team-zzz",
+            "team_name": "Zed"
+          },
+          "issue-tie-y": {
+            "team_id": "team-aaa",
+            "team_name": "Alpha"
+          },
+          "issue-whitespace-team": {
+            "team_id": "   ",
+            "team_name": "Ignored"
+          }
+        }
+      },
+      "team_id": "team-2",
+      "team_name": "Growth"
+    }
+  },
+  "matches_category_filter": {
+    "no_filters_matches_everything": {
+      "input": {
+        "subcategories": [],
+        "subcategory_distribution": {
+          "quality.bugfix": 0.0,
+          "velocity.feature": 40.0
+        },
+        "theme_distribution": {
+          "quality": 0.0,
+          "velocity": 62.5
+        },
+        "themes": []
+      },
+      "result": true
+    },
+    "subcategory_filter_matches": {
+      "input": {
+        "subcategories": [
+          "velocity.feature"
+        ],
+        "subcategory_distribution": {
+          "quality.bugfix": 0.0,
+          "velocity.feature": 40.0
+        },
+        "theme_distribution": {
+          "quality": 0.0,
+          "velocity": 62.5
+        },
+        "themes": []
+      },
+      "result": true
+    },
+    "subcategory_filter_zero_value_does_not_match": {
+      "input": {
+        "subcategories": [
+          "quality.bugfix"
+        ],
+        "subcategory_distribution": {
+          "quality.bugfix": 0.0,
+          "velocity.feature": 40.0
+        },
+        "theme_distribution": {
+          "quality": 0.0,
+          "velocity": 62.5
+        },
+        "themes": []
+      },
+      "result": false
+    },
+    "theme_filter_matches": {
+      "input": {
+        "subcategories": [],
+        "subcategory_distribution": {
+          "quality.bugfix": 0.0,
+          "velocity.feature": 40.0
+        },
+        "theme_distribution": {
+          "quality": 0.0,
+          "velocity": 62.5
+        },
+        "themes": [
+          "velocity"
+        ]
+      },
+      "result": true
+    },
+    "theme_filter_zero_value_does_not_match": {
+      "input": {
+        "subcategories": [],
+        "subcategory_distribution": {
+          "quality.bugfix": 0.0,
+          "velocity.feature": 40.0
+        },
+        "theme_distribution": {
+          "quality": 0.0,
+          "velocity": 62.5
+        },
+        "themes": [
+          "quality"
+        ]
+      },
+      "result": false
+    }
+  },
+  "parse_distribution": {
+    "empty_string": {
+      "input": {
+        "value": ""
+      },
+      "result": {}
+    },
+    "invalid_json": {
+      "input": {
+        "value": "{broken"
+      },
+      "result": {}
+    },
+    "not_a_dict": {
+      "input": {
+        "value": "[1, 2, 3]"
+      },
+      "result": {}
+    },
+    "simple_dict_string": {
+      "input": {
+        "value": "{\"velocity\": 62.5, \"quality\": 37.5}"
+      },
+      "result": {
+        "quality": 37.5,
+        "velocity": 62.5
+      }
+    },
+    "zero_and_null_values": {
+      "input": {
+        "value": "{\"velocity\": 0, \"quality\": null}"
+      },
+      "result": {
+        "quality": 0.0,
+        "velocity": 0.0
+      }
+    }
+  },
+  "pr_ref_work_item_id": {
+    "github_pr_ref": {
+      "input": {
+        "pr_ref": "11111111-1111-1111-1111-111111111111#pr42",
+        "repo_identities": {
+          "11111111-1111-1111-1111-111111111111": [
+            "myorg/myrepo",
+            "github"
+          ],
+          "22222222-2222-2222-2222-222222222222": [
+            "mygroup/myproject",
+            "gitlab"
+          ]
+        }
+      },
+      "result": "ghpr:myorg/myrepo#42"
+    },
+    "gitlab_mr_ref": {
+      "input": {
+        "pr_ref": "22222222-2222-2222-2222-222222222222#pr7",
+        "repo_identities": {
+          "11111111-1111-1111-1111-111111111111": [
+            "myorg/myrepo",
+            "github"
+          ],
+          "22222222-2222-2222-2222-222222222222": [
+            "mygroup/myproject",
+            "gitlab"
+          ]
+        }
+      },
+      "result": "gitlab:mygroup/myproject!7"
+    },
+    "malformed_uuid_length": {
+      "input": {
+        "pr_ref": "1111#pr1",
+        "repo_identities": {
+          "11111111-1111-1111-1111-111111111111": [
+            "myorg/myrepo",
+            "github"
+          ],
+          "22222222-2222-2222-2222-222222222222": [
+            "mygroup/myproject",
+            "gitlab"
+          ]
+        }
+      },
+      "result": null
+    },
+    "not_pr_shaped": {
+      "input": {
+        "pr_ref": "not-a-pr-ref",
+        "repo_identities": {
+          "11111111-1111-1111-1111-111111111111": [
+            "myorg/myrepo",
+            "github"
+          ],
+          "22222222-2222-2222-2222-222222222222": [
+            "mygroup/myproject",
+            "gitlab"
+          ]
+        }
+      },
+      "result": null
+    },
+    "unknown_repo_uuid": {
+      "input": {
+        "pr_ref": "33333333-3333-3333-3333-333333333333#pr1",
+        "repo_identities": {
+          "11111111-1111-1111-1111-111111111111": [
+            "myorg/myrepo",
+            "github"
+          ],
+          "22222222-2222-2222-2222-222222222222": [
+            "mygroup/myproject",
+            "gitlab"
+          ]
+        }
+      },
+      "result": null
+    }
+  },
+  "split_category_filters": {
+    "duplicates_deduped": {
+      "input": {
+        "work_category": [
+          "velocity",
+          "velocity",
+          "velocity.feature"
+        ]
+      },
+      "subcategories": [
+        "velocity.feature"
+      ],
+      "themes": [
+        "velocity"
+      ]
+    },
+    "empty_list": {
+      "input": {
+        "work_category": []
+      },
+      "subcategories": [],
+      "themes": []
+    },
+    "mixed_themes_and_subcategories": {
+      "input": {
+        "work_category": [
+          "velocity",
+          "quality.bugfix",
+          "velocity.feature",
+          ""
+        ]
+      },
+      "subcategories": [
+        "quality.bugfix",
+        "velocity.feature"
+      ],
+      "themes": [
+        "velocity",
+        "quality"
+      ]
+    },
+    "whitespace_entries_dropped": {
+      "input": {
+        "work_category": [
+          "  ",
+          "velocity"
+        ]
+      },
+      "subcategories": [],
+      "themes": [
+        "velocity"
+      ]
+    }
+  }
+}

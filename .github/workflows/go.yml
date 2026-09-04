@@ -51,6 +51,11 @@ on:
       - 'contracts/**'
       - 'internal/**/*.json'
       - 'tests/workers/job_contracts/**'
+      # CHAOS-4977: investmentexplain's LLM prompt template is
+      # //go:embed-ed and read directly by prompt_golden_test.go -- not
+      # under testdata/ or fixtures/, so the shared glob above does not
+      # reach it.
+      - 'cmd/query-api/internal/investmentexplain/prompts/**'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -125,6 +130,11 @@ on:
       - 'contracts/**'
       - 'internal/**/*.json'
       - 'tests/workers/job_contracts/**'
+      # CHAOS-4977: investmentexplain's LLM prompt template is
+      # //go:embed-ed and read directly by prompt_golden_test.go -- not
+      # under testdata/ or fixtures/, so the shared glob above does not
+      # reach it.
+      - 'cmd/query-api/internal/investmentexplain/prompts/**'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'

@@ -1,0 +1,86 @@
+{
+  "case": "cache_key_shaped",
+  "input": {
+    "type": "map",
+    "value": {
+      "filters": {
+        "type": "map",
+        "value": {
+          "date_range": {
+            "type": "map",
+            "value": {
+              "end": {
+                "type": "string",
+                "value": "2026-02-01"
+              },
+              "start": {
+                "type": "string",
+                "value": "2026-01-01"
+              }
+            }
+          },
+          "include_text": {
+            "type": "bool",
+            "value": true
+          },
+          "limit": {
+            "type": "int",
+            "value": 200
+          },
+          "scope": {
+            "type": "map",
+            "value": {
+              "ids": {
+                "type": "list",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "r1"
+                  },
+                  {
+                    "type": "string",
+                    "value": "r2"
+                  }
+                ]
+              },
+              "level": {
+                "type": "string",
+                "value": "repo"
+              }
+            }
+          },
+          "why": {
+            "type": "map",
+            "value": {
+              "work_category": {
+                "type": "list",
+                "value": [
+                  {
+                    "type": "string",
+                    "value": "velocity"
+                  },
+                  {
+                    "type": "string",
+                    "value": "quality.bugfix"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "org_id": {
+        "type": "string",
+        "value": "org-golden-4977"
+      },
+      "subcategory": {
+        "type": "null"
+      },
+      "theme": {
+        "type": "string",
+        "value": "velocity"
+      }
+    }
+  },
+  "output": "{\"filters\": {\"date_range\": {\"end\": \"2026-02-01\", \"start\": \"2026-01-01\"}, \"include_text\": true, \"limit\": 200, \"scope\": {\"ids\": [\"r1\", \"r2\"], \"level\": \"repo\"}, \"why\": {\"work_category\": [\"velocity\", \"quality.bugfix\"]}}, \"org_id\": \"org-golden-4977\", \"subcategory\": null, \"theme\": \"velocity\"}"
+}

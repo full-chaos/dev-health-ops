@@ -1,0 +1,13 @@
+{
+  "case": "empty_string_key_and_value",
+  "input": {
+    "type": "map",
+    "value": {
+      "": {
+        "type": "string",
+        "value": ""
+      }
+    }
+  },
+  "output": "{\n  \"\": \"\"\n}"
+}

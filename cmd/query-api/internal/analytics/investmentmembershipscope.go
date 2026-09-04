@@ -21,7 +21,7 @@ package analytics
 // a caller that needs the same logical relation more than once (this
 // file's own membershipScopedWorkUnitIDsSubquery reads
 // latestCompleteMembershipRunSource AGAIN, and investment.go's
-// latestWorkUnitInvestmentsSource embeds this file's whole scope-filter
+// LatestWorkUnitInvestmentsSource embeds this file's whole scope-filter
 // twice when it is itself referenced twice by workUnitAuthorsSource)
 // calls the function again rather than sharing a materialized name.
 // ClickHouse does not generally materialize a non-recursive WITH

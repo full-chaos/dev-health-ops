@@ -1,0 +1,11 @@
+{
+  "case": "openai_provider_specific_env",
+  "input": {
+    "env": {
+      "LLM_MODEL_OPENAI": "gpt-5-from-env"
+    },
+    "model": null,
+    "provider": "openai"
+  },
+  "result": "gpt-5-from-env"
+}

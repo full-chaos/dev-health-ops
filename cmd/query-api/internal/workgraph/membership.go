@@ -2,7 +2,6 @@ package workgraph
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -12,6 +11,7 @@ import (
 	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/chpairliteral"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 )
 
@@ -331,23 +331,22 @@ func batchResolveMembership(ctx context.Context, client QueryClient, orgID strin
 }
 
 // membershipPairsLiteral renders pairs as a ClickHouse Array(String)
-// parameter literal of hex(nodeType)+":"+hex(nodeID) tokens, e.g.
-// `['69737375653a6130','70723a6231']`-shaped (illustrative, not literal
-// output). See batchResolveMembership's node_pairs binding comment for why
-// this hex+concat shape exists instead of a quoted Array(Tuple(String,
-// String)) literal or a typed clickhouse.Binding value.
+// parameter literal of hex(nodeType)+":"+hex(nodeID) tokens. See
+// batchResolveMembership's node_pairs binding comment for why this
+// hex+concat shape exists instead of a quoted Array(Tuple(String, String))
+// literal or a typed clickhouse.Binding value.
 //
-// hex.EncodeToString produces only [0-9a-f] -- a character set ClickHouse's
-// string-literal grammar never treats specially -- so wrapping each token
-// in plain single quotes needs NO escaping logic at all, for ANY input byte
-// sequence. ':' is a safe, unambiguous separator because hex output can
-// never contain one.
+// CHAOS-4977 lifted the encoder itself into chpairliteral.Encode (a second
+// call site -- investmentexplain.FetchWorkUnitInvestmentQuotes -- hit the
+// exact same dev-health-go binding gap), so this is now a thin adapter from
+// membershipKey to the shared [2]string shape rather than a second copy of
+// the encoding logic.
 func membershipPairsLiteral(pairs []membershipKey) string {
-	encoded := make([]string, len(pairs))
+	tuples := make([][2]string, len(pairs))
 	for i, pair := range pairs {
-		encoded[i] = "'" + hex.EncodeToString([]byte(pair.nodeType)) + ":" + hex.EncodeToString([]byte(pair.nodeID)) + "'"
+		tuples[i] = [2]string{pair.nodeType, pair.nodeID}
 	}
-	return "[" + strings.Join(encoded, ",") + "]"
+	return chpairliteral.Encode(tuples)
 }
 
 // nodeTypeRank mirrors work_graph.py:446's _type_rank -- issue before pr

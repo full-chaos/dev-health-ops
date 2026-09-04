@@ -1,0 +1,13 @@
+{
+  "case": "empty_list_field",
+  "input": {
+    "type": "map",
+    "value": {
+      "ids": {
+        "type": "list",
+        "value": []
+      }
+    }
+  },
+  "output": "{\"ids\": []}"
+}

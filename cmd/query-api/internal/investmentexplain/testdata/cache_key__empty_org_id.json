@@ -1,0 +1,31 @@
+{
+  "cache_key": "430b7a93f10b331ebeddc9889d93193e",
+  "case": "empty_org_id",
+  "input": {
+    "filters": {
+      "type": "map",
+      "value": {
+        "scope": {
+          "type": "map",
+          "value": {
+            "ids": {
+              "type": "list",
+              "value": []
+            },
+            "level": {
+              "type": "string",
+              "value": "org"
+            }
+          }
+        }
+      }
+    },
+    "org_id": "",
+    "subcategory": {
+      "type": "null"
+    },
+    "theme": {
+      "type": "null"
+    }
+  }
+}

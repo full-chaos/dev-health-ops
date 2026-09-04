@@ -1,0 +1,13 @@
+{
+  "case": "unicode_value",
+  "input": {
+    "type": "map",
+    "value": {
+      "note": {
+        "type": "string",
+        "value": "caf\u00e9 \ud83d\ude00"
+      }
+    }
+  },
+  "output": "{\"note\": \"caf\\u00e9 \\ud83d\\ude00\"}"
+}

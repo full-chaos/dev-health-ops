@@ -1,0 +1,31 @@
+{
+  "cache_key": "27c4faaf7b6d1381a41d73ace0eccb8e",
+  "case": "no_theme_no_subcategory",
+  "input": {
+    "filters": {
+      "type": "map",
+      "value": {
+        "scope": {
+          "type": "map",
+          "value": {
+            "ids": {
+              "type": "list",
+              "value": []
+            },
+            "level": {
+              "type": "string",
+              "value": "org"
+            }
+          }
+        }
+      }
+    },
+    "org_id": "org-golden-4977",
+    "subcategory": {
+      "type": "null"
+    },
+    "theme": {
+      "type": "null"
+    }
+  }
+}

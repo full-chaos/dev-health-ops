@@ -19,21 +19,21 @@ package analytics
 // would otherwise resurrect.
 
 // supersededWorkUnitIDsFilter returns the WHERE-clause fragment
-// latestWorkUnitInvestmentsSource appends, unconditionally, alongside its
+// LatestWorkUnitInvestmentsSource appends, unconditionally, alongside its
 // own `WHERE org_id = {org_id:String}` and BEFORE
 // investmentMembershipScopeFilter()'s conditional clause -- ordering does
 // not change the boolean result (both are ANDed) but keeps the
 // unconditional exclusion textually first, matching how a reader should
 // read it: always-on, then scope-gated.
 //
-// Only latestWorkUnitInvestmentsSource needs this. Every other reader in
+// Only LatestWorkUnitInvestmentsSource needs this. Every other reader in
 // this package composes FROM that source (repoAllocationInvestmentSource,
 // workUnitAuthorsSource, and the two direct call sites in flowmatrix.go)
 // rather than reading work_unit_investments or work_unit_repo_effort
 // directly, so filtering the one shared source is sufficient -- verified
 // by grep: latestWorkUnitRepoEffortSource, the only sibling source reading
 // a raw investment table, is itself only ever joined onto
-// latestWorkUnitInvestmentsSource (investment.go:333), never read alone.
+// LatestWorkUnitInvestmentsSource (investment.go:333), never read alone.
 func supersededWorkUnitIDsFilter() string {
 	return `
               AND work_unit_id NOT IN (

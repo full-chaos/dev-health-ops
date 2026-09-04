@@ -1,0 +1,17 @@
+{
+  "case": "bool_values",
+  "input": {
+    "type": "map",
+    "value": {
+      "flag_false": {
+        "type": "bool",
+        "value": false
+      },
+      "flag_true": {
+        "type": "bool",
+        "value": true
+      }
+    }
+  },
+  "output": "{\"flag_false\": false, \"flag_true\": true}"
+}

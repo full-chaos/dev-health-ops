@@ -1,0 +1,24 @@
+{
+  "case": "model_none_falls_back_unknown",
+  "input": {
+    "input_tokens": 10,
+    "model": null,
+    "org_id": "org-golden-4977",
+    "output_tokens": 5,
+    "provider": "openai"
+  },
+  "persisted": true,
+  "record": {
+    "calls": 1,
+    "computed_at": "2026-01-01T12:00:00+00:00",
+    "input_tokens": 10,
+    "model": "unknown",
+    "org_id": "org-golden-4977",
+    "output_tokens": 5,
+    "provider": "openai",
+    "run_id": "",
+    "source": "investment_mix_explain",
+    "use_case": "legacy"
+  },
+  "wrote_a_row": true
+}

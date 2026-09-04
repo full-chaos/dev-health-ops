@@ -1,0 +1,17 @@
+{
+  "case": "negative_and_zero_ints",
+  "input": {
+    "type": "map",
+    "value": {
+      "a": {
+        "type": "int",
+        "value": -5
+      },
+      "b": {
+        "type": "int",
+        "value": 0
+      }
+    }
+  },
+  "output": "{\"a\": -5, \"b\": 0}"
+}

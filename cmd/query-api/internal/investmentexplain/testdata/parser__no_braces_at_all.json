@@ -1,0 +1,30 @@
+{
+  "case": "no_braces_at_all",
+  "kwargs": {
+    "fallback_band_mix": {
+      "high": 2,
+      "low": 1,
+      "moderate": 3,
+      "unknown": 0,
+      "very_low": 0
+    },
+    "fallback_drivers": [
+      "thin_component"
+    ],
+    "fallback_level": "moderate",
+    "fallback_mean": 0.6,
+    "fallback_quality_band": "high",
+    "fallback_stddev": 0.1,
+    "subcategory_shares_pct": {
+      "quality.bugfix": 20.0,
+      "velocity.feature": 40.0
+    },
+    "theme_shares_pct": {
+      "quality": 37.5,
+      "velocity": 62.5
+    }
+  },
+  "output": null,
+  "status": "invalid_json",
+  "text": "just some prose with no JSON at all"
+}

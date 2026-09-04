@@ -1,0 +1,33 @@
+{
+  "cache_key": "90fc2465adae77ae7a77b69809e6e517",
+  "case": "with_subcategory",
+  "input": {
+    "filters": {
+      "type": "map",
+      "value": {
+        "scope": {
+          "type": "map",
+          "value": {
+            "ids": {
+              "type": "list",
+              "value": []
+            },
+            "level": {
+              "type": "string",
+              "value": "org"
+            }
+          }
+        }
+      }
+    },
+    "org_id": "org-golden-4977",
+    "subcategory": {
+      "type": "string",
+      "value": "velocity.feature"
+    },
+    "theme": {
+      "type": "string",
+      "value": "velocity"
+    }
+  }
+}

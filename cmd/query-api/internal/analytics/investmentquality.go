@@ -214,7 +214,7 @@ func unitTeamWindowFilter(scopeFilter, categoryFilter string) string {
 // RESTRUCTURING (this package's standing §9 discipline): Python's
 // `WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE} SELECT ... FROM
 // latest_work_unit_investments AS work_unit_investments` becomes `FROM
-// (SELECT ...) AS work_unit_investments` -- latestWorkUnitInvestmentsSource()
+// (SELECT ...) AS work_unit_investments` -- LatestWorkUnitInvestmentsSource()
 // inlined, no WITH, matching every other caller in this package
 // (investmentContextFor's identical non-repo-allocation branch).
 func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.Date, scopeFilter string, scopeBindings []clickhouse.Binding, themes []string, teamScopeIDs []string) compiledQuery {
@@ -229,7 +229,7 @@ func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.
 	var teamBindings []clickhouse.Binding
 	if len(teamScopeIDs) > 0 {
 		unitTeamSQL := buildUnitTeamSubquery(unitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", latestWorkUnitInvestmentsSource()),
+			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
 			Where:          unitTeamWindowFilter("", ""),
 			InnerTeamAlias: "team_label",
 			IncludeTeamID:  true,
@@ -260,7 +260,7 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
 %s
-`, latestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
+`, LatestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -337,4 +337,27 @@ func executeInvestmentQualityStats(ctx context.Context, client QueryClient, q co
 		VeryLowCount:      int(veryLow),
 		UnknownCount:      int(unknown),
 	}, true, nil
+}
+
+// EvidenceQualityStatsRow is the exported form of investmentQualityStatsRow
+// -- the raw scanned row from fetch_investment_quality_stats
+// (investment.py:1008-1079), before resolveEvidenceQualityStats's
+// GraphQL-shaping (mean/stddev NaN-guarding, band-count JSON marshaling).
+type EvidenceQualityStatsRow = investmentQualityStatsRow
+
+// FetchInvestmentQualityStats is CHAOS-4977's entry point into this
+// package's existing fetch_investment_quality_stats port. It exists so
+// cmd/query-api/internal/investmentexplain (a sibling package under
+// cmd/query-api/internal, per Go's internal/ visibility rules) can reuse
+// compileInvestmentQualityStats/executeInvestmentQualityStats rather than
+// carrying a second, independent Go port of this dedup-critical query
+// (CHAOS-2374, CHAOS-4547) that could drift from this one.
+//
+// found is false only when the query returned zero rows outright -- see
+// executeInvestmentQualityStats's own doc comment: an aggregate query
+// with no GROUP BY normally returns exactly one row (Total==0) even over
+// an empty match set, so found is normally true.
+func FetchInvestmentQualityStats(ctx context.Context, client QueryClient, orgID string, startDate, endDate graphqldate.Date, scopeFilter string, scopeBindings []clickhouse.Binding, themes []string, teamScopeIDs []string) (EvidenceQualityStatsRow, bool, error) {
+	q := compileInvestmentQualityStats(orgID, startDate, endDate, scopeFilter, scopeBindings, themes, teamScopeIDs)
+	return executeInvestmentQualityStats(ctx, client, q)
 }

@@ -517,17 +517,20 @@ func TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse(t *testing.T) {
 	}
 	sql := client.statements[0]
 	for _, want := range []string{
-		// argMax(tuple(...)).1, NOT bare argMax(repo_id, ...) -- the
-		// bare form silently skips rows whose repo_id/provider is NULL
-		// when picking the max, reviving a stale non-null value a newer
-		// version cleared (confirmed live against this ClickHouse
-		// version; codex 2026-08-29 delta round flagged the mechanism,
-		// the tuple-wrap fix was verified empirically before landing).
-		"(argMax(tuple(repo_id), last_synced)).1",
-		"(argMax(tuple(provider), last_synced)).1",
-		"argMax(provenance, last_synced)",
-		"toFloat64(argMax(confidence, last_synced))",
-		"argMax(evidence, last_synced)",
+		// ONE tupled argMax over all five independently-varying columns
+		// (CHAOS-4985), NOT five separate argMax(col, ...) calls -- the
+		// separate form both silently skips rows whose repo_id/provider is
+		// NULL when picking the max (confirmed live against this
+		// ClickHouse version; codex 2026-08-29 delta round) AND, under a
+		// last_synced tie, can independently pick DIFFERENT tied rows per
+		// column and assemble a hybrid that never existed (codex round 1
+		// on #2183/CHAOS-4924, the sibling reader this fix mirrors).
+		"argMax(tuple(repo_id, provider, provenance, confidence, evidence), last_synced) AS winner",
+		"ifNull(toString(winner.1), '')",
+		"ifNull(winner.2, '')",
+		"winner.3 AS provenance",
+		"toFloat64(winner.4)",
+		"winner.5 AS evidence",
 		"any(edge_id)",
 		"GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id",
 		"ORDER BY confidence DESC, edge_id ASC",
@@ -544,12 +547,17 @@ func TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse(t *testing.T) {
 	}
 }
 
-// TestFetchDedupedEdgeRows_RepoFilterAppliesAsHavingNotWhere pins the
-// codex-found (2026-08-29, delta round) fix directly at the query-shape
-// level: a repo filter on this dedup query must render as HAVING
-// referencing the SELECT alias, never as a pre-aggregation WHERE clause
-// on the raw repo_id column.
-func TestFetchDedupedEdgeRows_RepoFilterAppliesAsHavingNotWhere(t *testing.T) {
+// TestFetchDedupedEdgeRows_RepoFilterAppliesAfterTheCollapseNotBeforeIt pins
+// the codex-found (2026-08-29, delta round) fix directly at the query-shape
+// level: a repo filter on this dedup query must apply to the EXTRACTED
+// repo_id (post-collapse), never as a pre-aggregation WHERE clause on the
+// raw repo_id column. CHAOS-4985 moved the GROUP BY into a subquery (see
+// TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse), so the filter now
+// renders as an outer WHERE referencing the subquery's `repo_id` output
+// column, not a HAVING inside the aggregating query -- the invariant this
+// test guards (filtered after the collapse, by the extracted value) is
+// unchanged; only its rendered SQL keyword is.
+func TestFetchDedupedEdgeRows_RepoFilterAppliesAfterTheCollapseNotBeforeIt(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: nil}}}
 	scope := newFilterScope(&model.WorkGraphEdgeFilterInput{Limit: 1000}, []string{"11111111-1111-1111-1111-111111111111"})
 	_, err := fetchDedupedEdgeRows(context.Background(), client, "org1", scope, 1000)
@@ -560,14 +568,16 @@ func TestFetchDedupedEdgeRows_RepoFilterAppliesAsHavingNotWhere(t *testing.T) {
 	if strings.Contains(sql, "WHERE org_id = {org_id:String} AND repo_id IN") {
 		t.Fatalf("repo filter must not be folded into the pre-aggregation WHERE: %s", sql)
 	}
-	if !strings.Contains(sql, "HAVING repo_id IN {repo_ids:Array(String)}") {
-		t.Fatalf("expected repo filter as a HAVING clause referencing the SELECT alias: %s", sql)
+	if !strings.Contains(sql, "WHERE repo_id IN {repo_ids:Array(String)}") {
+		t.Fatalf("expected repo filter as an outer WHERE referencing the extracted repo_id: %s", sql)
 	}
-	// HAVING must appear AFTER GROUP BY in the rendered text.
+	// The outer WHERE must appear AFTER the subquery's closing paren (i.e.
+	// after the GROUP BY it contains) in the rendered text.
 	groupByIdx := strings.Index(sql, "GROUP BY")
-	havingIdx := strings.Index(sql, "HAVING")
-	if groupByIdx < 0 || havingIdx < 0 || havingIdx < groupByIdx {
-		t.Fatalf("HAVING must be rendered after GROUP BY: %s", sql)
+	closeParenIdx := strings.Index(sql[groupByIdx:], ")")
+	outerWhereIdx := strings.LastIndex(sql, "WHERE repo_id IN")
+	if groupByIdx < 0 || closeParenIdx < 0 || outerWhereIdx < 0 || outerWhereIdx < groupByIdx+closeParenIdx {
+		t.Fatalf("outer repo filter must be rendered after the subquery closes: %s", sql)
 	}
 	if v, ok := bindingValue(client.bindings[0], "repo_ids"); !ok {
 		t.Fatal("expected repo_ids binding")

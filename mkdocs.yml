@@ -239,6 +239,7 @@ nav:
       - Runtime:
           - reference/runtime/index.md
           - Python↔Go live-path ledger: reference/runtime/python-go-live-path-ledger.md
+          - Go migration matrix: go-migration-matrix.md
   - Contribute:
       - contribute/index.md
       - Get started:

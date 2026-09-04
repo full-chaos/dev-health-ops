@@ -752,3 +752,67 @@ groups:
                           for it at critical.
             Either way it clears itself once a refresh succeeds; nothing needs a
             restart.
+
+  # ---------------------------------------------------------------------------
+  # Daily-metrics dead-claim execution sweep (CHAOS-5049)
+  # ---------------------------------------------------------------------------
+  - name: daily_metrics_execution_sweep
+    interval: 60s
+    rules:
+      # The sweep is FAIL-OPEN by design: it rides on a dispatch job and can
+      # never fail it, because making a dispatch retry over failed hygiene would
+      # turn a stuck-row cleanup into a delivery outage. That design choice is
+      # exactly why this alert has to exist. Nothing else surfaces a broken
+      # sweep, and without the outcome="failed" label a sweep erroring on every
+      # pass is INDISTINGUISHABLE from a healthy one with nothing to do: both
+      # leave outcome="swept" at zero. Silent to the job, never silent here.
+      #
+      # `for` is deliberately shorter than the rate() window, matching
+      # RecommendationsReadinessGateFailingOpen above: this runs per dispatch
+      # rather than continuously, so one increment must be able to sustain a
+      # positive rate long enough to fire instead of the window and the pending
+      # period racing to expire the same sample.
+      - alert: DailyMetricsExecutionSweepFailing
+        expr: |
+          sum(rate(dev_health_daily_metrics_executions_swept_ambiguous_total{outcome="failed"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Daily-metrics dead-claim sweep is failing"
+          description: |
+            The CHAOS-5049 sweep is erroring rather than clearing executions
+            stranded in 'executing' by a dead api process. Nothing has been
+            silently repaired and the stuck rows are still stuck; the sweep
+            cannot report this any other way, because it is fail-open by design.
+            Check the api bridge endpoint and WORKER_METRIC_REPAIR_TOKEN.
+
+      # Threshold rather than > 0, deliberately. A single stranded execution is
+      # normal attrition -- a pod eviction, a deploy landing mid-run -- and the
+      # sweep exists precisely so those clear themselves into a reviewable
+      # state. A RATE of them is not attrition: it points at whatever is killing
+      # the api, not at the sweep, which is working correctly when this fires.
+      - alert: DailyMetricsDeadClaimExecutionsAccumulating
+        expr: |
+          sum(increase(dev_health_daily_metrics_executions_swept_ambiguous_total{outcome="swept"}[6h])) > 10
+        for: 30m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Daily-metrics executions are being stranded faster than expected"
+          description: |
+            api processes are dying mid-execution often enough to matter. Each
+            swept row is now 'ambiguous' and needs the CHAOS-5042 partition
+            repair; the swept execution ids are in the sweep's info log.
+            Retry is NOT authorized automatically and must not be: an expired
+            lease proves the writer is gone, not that it wrote nothing, and
+            families whose readers SUM raw rows rather than argMax by
+            computed_at silently inflate on a duplicate write.
+
+      # outcome="skipped_claim_active" is deliberately NOT alerted. A live claim
+      # being refused is the sweep working correctly -- real in-flight work,
+      # correctly left alone. It is a separate outcome so a healthy sweep that
+      # found only live claims is distinguishable from one that found nothing,
+      # but neither is a paging condition.

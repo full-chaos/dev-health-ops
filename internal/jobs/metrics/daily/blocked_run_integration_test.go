@@ -4,12 +4,14 @@ package daily
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -378,5 +380,179 @@ func TestBlockedRunsReadbackExplainsWhyTheRunIsStuck(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("readback for an organization with no blocked runs returned %d rows", len(empty))
+	}
+}
+
+// waitForALockedStatement blocks until some backend in this database is
+// waiting on a heavyweight lock, which is how this file knows the redrive's
+// step-1 UPDATE has actually STARTED and taken its snapshot rather than merely
+// having been called. Sleeping a fixed interval instead would make the test
+// prove nothing on a slow host: the interleaving it depends on would not have
+// happened yet and it would pass for the wrong reason.
+func waitForALockedStatement(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database()
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("no backend ever blocked on a lock; the redrive never reached its step-1 UPDATE")
+}
+
+// codex review round 1, P2 -- the finding this test exists to hold closed.
+//
+// The marker clear used to be a SECOND statement scoped by org+day rather than
+// by the rows step 1 actually reset. Under Read Committed the two statements
+// take separate snapshots, so a run that becomes blocked BETWEEN them loses its
+// marker without its partition being reset -- and step 2 excludes
+// failed_permanent, so nothing is published for it either. The run stays wedged
+// AND reports itself healthy, which is worse than never having cleared it.
+//
+// The interleaving is forced, not simulated: a second connection holds a row
+// lock on the redrivable run's partition, so the redrive's step-1 statement
+// takes its snapshot and then WAITS. While it waits, a concurrent fan-out
+// reconcile marks a brand-new blocked run in the same org and day range. That
+// run is invisible to the already-started step 1, but a later second statement
+// would see it -- which is precisely the gap.
+//
+// This drives the REAL RedriveStrandedPartitions. The reversibility test above
+// cannot catch this class because it flips a partition by hand and never enters
+// the redrive at all.
+func TestRedriveClearsOnlyTheRunsItActuallyReset(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPostgresPublisher(pool, dailyTestRegistry{production: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+
+	orgID := uuid.NewString()
+	redrivable := uuid.NewString()
+	seedBlockedRun(t, ctx, pool, blockedFixture{
+		runID: redrivable, orgID: orgID,
+		partitionState: []string{"succeeded", "failed_permanent"},
+	}, now)
+	if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, _ := readMarker(t, ctx, pool, redrivable); !blocked {
+		t.Fatal("precondition: the redrivable run should have been marked blocked")
+	}
+
+	// Hold a row lock on the partition step 1 wants, on a connection the
+	// redrive does not own.
+	blocker, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Release()
+	holdTx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holdTx.Exec(ctx,
+		`SELECT 1 FROM daily_metrics_partitions WHERE run_id = $1::uuid FOR UPDATE`, redrivable,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	targetDay := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	type redriveResult struct {
+		outcome RedriveOutcome
+		err     error
+	}
+	done := make(chan redriveResult, 1)
+	go func() {
+		outcome, err := store.RedriveStrandedPartitions(
+			ctx, publisher, orgID, targetDay, targetDay, "redrive-blocked-race-nonce",
+		)
+		done <- redriveResult{outcome: outcome, err: err}
+	}()
+
+	// Step 1 has now taken its snapshot and is waiting on the lock above.
+	waitForALockedStatement(t, ctx, pool)
+
+	// The concurrent fan-out: a DIFFERENT run wedges and is marked, after the
+	// redrive's step 1 started and therefore invisible to it.
+	concurrentlyBlocked := uuid.NewString()
+	seedBlockedRun(t, ctx, pool, blockedFixture{
+		runID: concurrentlyBlocked, orgID: orgID,
+		partitionState: []string{"succeeded", "failed_permanent"},
+	}, now)
+	if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, _ := readMarker(t, ctx, pool, concurrentlyBlocked); !blocked {
+		t.Fatal("precondition: the concurrently-wedged run should have been marked blocked")
+	}
+
+	if err := holdTx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result := <-done
+	if result.err != nil {
+		t.Fatalf("RedriveStrandedPartitions: %v", result.err)
+	}
+	if result.outcome.PermanentReset != 1 {
+		t.Fatalf("PermanentReset = %d, want 1 -- only the run visible to step 1's snapshot",
+			result.outcome.PermanentReset)
+	}
+
+	// The run the redrive DID reset loses its marker: the latency optimisation
+	// still works, so this test cannot pass by the clear having been deleted.
+	if blocked, _ := readMarker(t, ctx, pool, redrivable); blocked {
+		t.Fatal("the redriven run kept its marker; the clear no longer fires at all")
+	}
+	// The run it did NOT reset keeps its marker. Losing it here is the P2:
+	// still wedged, still holding a failed_permanent partition, nothing
+	// published for it, and now reporting itself healthy.
+	if blocked, reason := readMarker(t, ctx, pool, concurrentlyBlocked); !blocked {
+		t.Fatalf("a run the redrive never reset lost its marker (reason now %q) -- "+
+			"it is still wedged and now reports healthy", reason)
+	}
+	// It is also genuinely still wedged, not merely still marked: its
+	// failed_permanent partition was never reset, so the marker is telling the
+	// truth and clearing it would have been a lie rather than a race that
+	// happened to be harmless.
+	var stillPermanent int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM daily_metrics_partitions WHERE run_id = $1::uuid AND status = 'failed_permanent'`,
+		concurrentlyBlocked,
+	).Scan(&stillPermanent); err != nil {
+		t.Fatal(err)
+	}
+	if stillPermanent != 1 {
+		t.Fatalf("failed_permanent partitions on the untouched run = %d, want 1", stillPermanent)
 	}
 }

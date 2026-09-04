@@ -691,11 +691,21 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
 
 // dailyMetricsBlockedRunOutcomes is the closed set of bounded outcomes a
-// CHAOS-5040 blocked-run reconcile pass can report. Both are TRANSITIONS,
-// deliberately not a level: a pass is per-organization, so a "currently
-// blocked" gauge set from one organization's pass would clobber every other
-// organization's contribution. Transitions compose; a level would not.
-var dailyMetricsBlockedRunOutcomes = []string{"marked", "cleared"}
+// CHAOS-5040 blocked-run reconcile pass can report. "marked" and "cleared"
+// are TRANSITIONS, deliberately not a level: a pass is per-organization, so a
+// "currently blocked" gauge set from one organization's pass would clobber
+// every other organization's contribution. Transitions compose; a level would
+// not.
+//
+// "failed" exists so the reconcile is silent to the JOB but never silent to
+// METRICS. The pass is fail-open by design -- a visibility mechanism must not
+// be able to fail the fan-out that computes the day's metrics -- and a
+// fail-open path with no counter is indistinguishable from one that is
+// working, which is the exact shape this marker was added to eliminate
+// elsewhere. Without it, a reconcile erroring on every pass would leave
+// "marked" and "cleared" both sitting at zero, which reads identically to a
+// healthy fleet with nothing wedged.
+var dailyMetricsBlockedRunOutcomes = []string{"marked", "cleared", "failed"}
 
 // dailyMetricsFinalizeLedgerRepairOutcomes is the closed set of bounded
 // outcomes CHAOS-4409's finalize-ledger bulk repair can report per execution
@@ -3334,6 +3344,8 @@ func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *string
 	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_marked_total", nil, collector.dailyMetricsBlockedRun["marked"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_cleared_total", "Daily metrics runs whose blocked marker was cleared because the predicate stopped holding.", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_cleared_total", nil, collector.dailyMetricsBlockedRun["cleared"])
+	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_reconcile_failed_total", "Blocked-run reconcile passes that failed. The pass is fail-open, so this is the only signal that the marker is not being maintained; marked/cleared sitting at zero cannot distinguish a healthy fleet from a broken reconcile.", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_reconcile_failed_total", nil, collector.dailyMetricsBlockedRun["failed"])
 }
 
 // writeDailyMetricsFinalizeLedgerRepair exposes the CHAOS-4409 finalize-

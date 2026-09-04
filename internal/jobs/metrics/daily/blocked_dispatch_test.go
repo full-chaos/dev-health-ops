@@ -137,8 +137,13 @@ func TestDispatchSucceedsEvenWhenTheBlockedReconcileFails(t *testing.T) {
 	if store.calls != 1 {
 		t.Fatalf("reconcile calls = %d, want 1", store.calls)
 	}
-	if len(observer.counts) != 0 {
-		t.Fatalf("observed %+v on a failed reconcile, want nothing recorded", observer.counts)
+	// Silent to the job, NOT to metrics: a fail-open path with no counter is
+	// indistinguishable from one that is working.
+	if observer.counts["failed"] != 1 {
+		t.Fatalf("observed %+v on a failed reconcile, want failed=1", observer.counts)
+	}
+	if observer.counts["marked"] != 0 || observer.counts["cleared"] != 0 {
+		t.Fatalf("observed %+v on a failed reconcile, want no transitions claimed", observer.counts)
 	}
 }
 

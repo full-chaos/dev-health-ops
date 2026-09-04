@@ -343,10 +343,16 @@ func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizatio
 		return
 	}
 	outcome, err := reconciler.ReconcileBlockedRuns(ctx, organizationID)
-	if err != nil {
+	if handler.blockedObserver == nil {
 		return
 	}
-	if handler.blockedObserver == nil {
+	if err != nil {
+		// Silent to the JOB, never silent to METRICS. Swallowing the error
+		// here is deliberate, but a fail-open path with no counter is
+		// indistinguishable from one that is working: "marked" and "cleared"
+		// would both sit at zero, which reads exactly like a healthy fleet
+		// with nothing wedged.
+		_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("failed", 1)
 		return
 	}
 	// Both are reported every pass, including zeros: a series that

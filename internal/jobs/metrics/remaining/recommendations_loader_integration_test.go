@@ -31,11 +31,16 @@ import (
 // SHIPPED PYTHON LOADER and the Go loader against the SAME DATABASE and compare.
 //
 // It also carries the CHAOS-4897 two-team fixture. Teams A and B are given
-// DIFFERENT underlying data, and the four org-wide signals are asserted to come
-// back IDENTICAL for both -- which is the defect, executed. That assertion is
-// the before-evidence for the join fix, and it is expected to INVERT when the
-// owned-repo scoping lands; the comment on it says so, so whoever changes it
-// knows it is a deliberate flip rather than a regression.
+// DIFFERENT underlying data AND disjoint team_repo_ownership rows, and the
+// four owned-repo-scoped signals (review latency, rework, hotspot complexity
+// delta, hotspot churn overlap) are asserted to come back DIFFERENT for both
+// -- the fix, executed (assertCHAOS4897FixIsPresent). This inverts what the
+// fixture asserted before the join landed (both IDENTICAL, i.e. org-wide);
+// see that function's comment for the history. Because Go now scopes these
+// four fields and the live Python reference (recommendations/loader.py)
+// deliberately does not, compareSnapshotAgainstPython's strict Go==Python
+// check is skipped for exactly these four fields on this fixture -- see its
+// expectOwnedRepoScopeDivergence parameter.
 
 const (
 	loaderOrgID = "org-loader-parity"
@@ -139,26 +144,36 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 		snapshots[teamID] = got
 
 		want := runPythonLoader(t, dsn, teamID, loaderOrgID)
-		compareSnapshotAgainstPython(t, teamID, got, want)
+		// true: alpha and beta own disjoint repo sets in this fixture (seeded
+		// below), so the four CHAOS-4897 fields are SUPPOSED to diverge from
+		// Python here -- see assertCHAOS4897FixIsPresent.
+		compareSnapshotAgainstPython(t, teamID, got, want, true)
 	}
 
-	assertCHAOS4897DefectIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
+	assertCHAOS4897FixIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
 	assertHotspotBoundaryIsMeasured(t, ctx, conn, dsn)
 	assertArgMaxKeysAreUnique(t, ctx, conn)
 }
 
-// assertCHAOS4897DefectIsPresent executes the defect rather than describing it.
+// assertCHAOS4897FixIsPresent executes the FIX rather than describing it.
 //
-// Teams alpha and beta have different work-item, review and commit data, so the
-// TEAM-SCOPED signals must differ. The four signals read from repo-level tables
-// have no team predicate -- there is no team_id column on those tables -- so
-// they must come back IDENTICAL.
+// INVERTED from assertCHAOS4897DefectIsPresent (this test's own prior
+// comment said to invert rather than delete when the owned-repo join landed
+// -- this is that inversion, not a new test written from scratch).
 //
-// WHEN THE OWNED-REPO JOIN LANDS, THIS TEST MUST BE INVERTED, not deleted: the
-// four will then differ per team, and that inversion is the after-evidence.
-// A failure here after the join is expected; a failure here before it means the
-// fixture stopped exercising the defect.
-func assertCHAOS4897DefectIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
+// Teams alpha and beta have different work-item, review and commit data AND
+// (as of this fix) DISJOINT owned-repo sets (alpha owns repoAlpha only, beta
+// owns repoBeta only -- seeded in seedLoaderFixture's team_repo_ownership
+// block). The four signals read from repo-level tables have no team_id
+// column, but are now scoped through teamownership.OwnedRepoIDs, so they
+// MUST differ between the two teams -- exactly like every other per-team
+// signal, and unlike before this fix landed.
+//
+// A failure here means either the owned-repo join regressed back to an
+// org-wide read, or the fixture stopped giving the two teams disjoint
+// ownership -- either way, real per-team scoping is not observably in
+// effect and this must not go green silently.
+func assertCHAOS4897FixIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
 	t.Helper()
 
 	// Team-scoped signals: these MUST differ, or the fixture is not actually
@@ -169,7 +184,7 @@ func assertCHAOS4897DefectIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
 	}
 	if sameFloats(alpha.WIPByDay, beta.WIPByDay) {
 		t.Fatal("alpha and beta have identical wip_by_day; the fixture is not " +
-			"differentiating the teams, so the org-wide assertions below prove nothing")
+			"differentiating the teams, so the ownership-scoping assertions below prove nothing")
 	}
 
 	for _, signal := range []struct {
@@ -186,19 +201,27 @@ func assertCHAOS4897DefectIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
 		{"hotspot_churn_overlap", alpha.HotspotChurnOverlap, beta.HotspotChurnOverlap,
 			alpha.HotspotChurnOverlapKnown, beta.HotspotChurnOverlapKnown},
 	} {
-		if signal.aKnown != signal.bKnown ||
-			!sameFloat64(signal.a, signal.b) {
-			t.Errorf("CHAOS-4897 fixture: %s differs between the teams "+
-				"(alpha=%v/%v, beta=%v/%v). Either the owned-repo join has landed -- "+
-				"in which case INVERT this assertion, it is the after-evidence -- or "+
-				"the fixture stopped exercising the defect.",
+		if signal.aKnown == signal.bKnown && sameFloat64(signal.a, signal.b) {
+			t.Errorf("CHAOS-4897 fix: %s is IDENTICAL between the teams "+
+				"(alpha=%v/%v, beta=%v/%v) despite alpha and beta owning disjoint "+
+				"repos -- the owned-repo join is not actually scoping this signal, "+
+				"or the fixture's team_repo_ownership rows stopped giving them "+
+				"disjoint ownership.",
 				signal.name, signal.a, signal.aKnown, signal.b, signal.bKnown)
 		}
 	}
-	t.Logf("CHAOS-4897 executed: the four repo-derived signals are identical for "+
-		"two teams with different data (latency=%v, rework=%v, complexity=%v, overlap=%v)",
-		alpha.ReviewLatencyP75Hours, alpha.ReworkChurnRatio,
-		alpha.HotspotComplexityDelta, alpha.HotspotChurnOverlap)
+	t.Logf("CHAOS-4897 fix executed: the four repo-derived signals differ for "+
+		"two teams with disjoint owned repos (alpha latency=%v/%v rework=%v/%v "+
+		"complexity=%v/%v overlap=%v/%v; beta latency=%v/%v rework=%v/%v "+
+		"complexity=%v/%v overlap=%v/%v)",
+		alpha.ReviewLatencyP75Hours, alpha.ReviewLatencyP75HoursKnown,
+		alpha.ReworkChurnRatio, alpha.ReworkChurnRatioKnown,
+		alpha.HotspotComplexityDelta, alpha.HotspotComplexityDeltaKnown,
+		alpha.HotspotChurnOverlap, alpha.HotspotChurnOverlapKnown,
+		beta.ReviewLatencyP75Hours, beta.ReviewLatencyP75HoursKnown,
+		beta.ReworkChurnRatio, beta.ReworkChurnRatioKnown,
+		beta.HotspotComplexityDelta, beta.HotspotComplexityDeltaKnown,
+		beta.HotspotChurnOverlap, beta.HotspotChurnOverlapKnown)
 }
 
 func sameFloats(a, b []float64) bool {
@@ -213,7 +236,17 @@ func sameFloats(a, b []float64) bool {
 	return true
 }
 
-func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapshot, want pythonSnapshot) {
+// expectOwnedRepoScopeDivergence is true for a comparison where the two
+// teams being compared were seeded with genuinely DIFFERENT, DISJOINT
+// owned-repo sets (the primary teamA/teamB fixture) -- there, Go's four
+// CHAOS-4897 fields are SUPPOSED to differ from the still-org-wide Python
+// reference, and strict comparison on them is skipped rather than made to
+// fail on purpose. It is false for every other call in this file (the
+// inf/empty/one-hotspot orgs), where the seeded team owns EVERY repo the org
+// has, so Go's owned-repo-scoped read reduces to the same org-wide read
+// Python computes and parity still holds -- keeping strict comparison there
+// is what continues to catch a real regression in those queries' SQL.
+func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapshot, want pythonSnapshot, expectOwnedRepoScopeDivergence bool) {
 	t.Helper()
 	// Identity and window first. These are echoes of the loader's arguments on
 	// both sides, so they look untestable -- which is why they were uncompared,
@@ -236,13 +269,31 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 	compareList(t, teamID, "wip_by_day", got.WIPByDay, want.WIPByDay)
 	compareList(t, teamID, "throughput_by_cycle", got.ThroughputByCycle, want.ThroughputByCycle)
 	compareList(t, teamID, "cycle_time_by_day", got.CycleTimeByDay, want.CycleTimeByDay)
-	compareOptional(t, teamID, "review_latency_p75_hours", got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours)
 	compareOptional(t, teamID, "reviewer_gini", got.ReviewerGini, got.ReviewerGiniKnown, want.ReviewerGini)
-	compareOptional(t, teamID, "rework_churn_ratio", got.ReworkChurnRatio, got.ReworkChurnRatioKnown, want.ReworkChurnRatio)
 	compareOptional(t, teamID, "after_hours_ratio", got.AfterHoursRatio, got.AfterHoursRatioKnown, want.AfterHoursRatio)
-	compareOptional(t, teamID, "hotspot_complexity_delta", got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, want.HotspotComplexityDelta)
-	compareOptional(t, teamID, "hotspot_churn_overlap", got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, want.HotspotChurnOverlap)
 	compareOptional(t, teamID, "compounding_risk_score", got.CompoundingRiskScore, got.CompoundingRiskScoreKnown, want.CompoundingRiskScore)
+	if expectOwnedRepoScopeDivergence {
+		// CHAOS-4897: Go scopes these four to the team's owned repos; Python
+		// (recommendations/loader.py) still reads every repo in the org. That
+		// is the fix, not a regression -- see the package doc on
+		// recommendations_loader.go. Logged, not silently skipped, so a
+		// reader scanning test output can see what each side actually
+		// produced rather than inferring it from an absent assertion.
+		t.Logf("%s: CHAOS-4897 owned-repo-scoped fields, Go vs Python (expected to "+
+			"differ): review_latency_p75_hours go=%v/%v py=%v, "+
+			"rework_churn_ratio go=%v/%v py=%v, "+
+			"hotspot_complexity_delta go=%v/%v py=%v, "+
+			"hotspot_churn_overlap go=%v/%v py=%v",
+			teamID, got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours,
+			got.ReworkChurnRatio, got.ReworkChurnRatioKnown, want.ReworkChurnRatio,
+			got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, want.HotspotComplexityDelta,
+			got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, want.HotspotChurnOverlap)
+	} else {
+		compareOptional(t, teamID, "review_latency_p75_hours", got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours)
+		compareOptional(t, teamID, "rework_churn_ratio", got.ReworkChurnRatio, got.ReworkChurnRatioKnown, want.ReworkChurnRatio)
+		compareOptional(t, teamID, "hotspot_complexity_delta", got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, want.HotspotComplexityDelta)
+		compareOptional(t, teamID, "hotspot_churn_overlap", got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, want.HotspotChurnOverlap)
+	}
 	if got.CompoundingRiskSeverity != want.CompoundingRiskSever {
 		t.Errorf("%s compounding_risk_severity: %q, want %q",
 			teamID, got.CompoundingRiskSeverity, want.CompoundingRiskSever)
@@ -367,7 +418,7 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 	mergeStopped := []string{
 		"work_item_metrics_daily", "repo_metrics_daily", "user_metrics_daily",
 		"team_metrics_daily", "repo_complexity_daily", "file_hotspot_daily",
-		"compounding_risk_daily", "recommendations_daily",
+		"compounding_risk_daily", "recommendations_daily", "team_repo_ownership",
 	}
 	for _, table := range mergeStopped {
 		exec("SYSTEM STOP MERGES " + table)
@@ -463,12 +514,20 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 	// The SAME team_id and days under a DIFFERENT org, with values chosen to be
 	// impossible to confuse with this tenant's.
 	//
-	// This is what makes `orgClause()` load-bearing. Delete the org predicate
-	// and Go aggregates both tenants while Python keeps only the requested one
-	// -- a cross-tenant read. Seeded into work_item_metrics_daily (team-scoped,
-	// so the leak needs the org predicate to be the only thing separating them)
-	// AND repo_metrics_daily, where org is the ONLY scope the query has at all,
-	// which makes it the more exposed of the two.
+	// This is what makes `orgClause()` load-bearing on work_item_metrics_daily
+	// (team-scoped, so the leak needs the org predicate to be the only thing
+	// separating the tenants): delete the predicate there and Go aggregates
+	// both tenants while Python keeps only the requested one.
+	//
+	// The repo_metrics_daily foreign row below (repo 33333333...) no longer
+	// tests orgClause() the same way, post-CHAOS-4897: that query is now ALSO
+	// filtered to `repo_id IN (<team's owned repos>)`, and 33333333... is not
+	// in loaderTeamA's owned set (only repoAlpha is, seeded further down) --
+	// so the ownership filter alone excludes this foreign row even if
+	// orgClause() were dropped from this specific query. org_id stays on the
+	// query as defense in depth (two orgs should never share a repo_id at
+	// all), but this fixture cannot prove it is load-bearing there any more;
+	// it is kept for the tables where it still is.
 	for _, seed := range []struct {
 		day            string
 		provider       string
@@ -516,11 +575,18 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 	// The second tenant must reach EVERY table the loader reads, not just two.
 	//
 	// orgClause() has NINE call sites across SEVEN tables. Seeding the other
-	// tenant into only work_item_metrics_daily and repo_metrics_daily makes the
-	// org predicate load-bearing at those sites and NOWHERE ELSE -- removing it
-	// from any of the other seven survives, because there is no foreign row for
-	// it to let through. Deleting the whole helper is caught; weakening one
-	// query is not, and a per-query removal is the more plausible edit.
+	// tenant into work_item_metrics_daily, user_metrics_daily, team_metrics_daily
+	// and compounding_risk_daily makes the org predicate load-bearing at those
+	// (team-scoped or scope_id-scoped) sites. repo_complexity_daily and
+	// file_hotspot_daily below get the SAME foreign-repo treatment as
+	// repo_metrics_daily above, and the same caveat applies post-CHAOS-4897:
+	// their queries are now also filtered to the team's owned-repo set, which
+	// already excludes repo 33333333... on its own, so this fixture no longer
+	// independently proves orgClause() is load-bearing on those two either.
+	// Deleting the whole helper is still caught everywhere; a per-query
+	// removal on one of these three specific queries is not, until a fixture
+	// gives a foreign org the SAME repo_id as an owned one (deliberately not
+	// done here -- repo_id collisions across orgs are not a real shape).
 	//
 	// Every value below is deliberately extreme, so a leak shows up as an
 	// obviously wrong number rather than a plausible one.
@@ -578,6 +644,17 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		"44444444-4444-4444-4444-444444444444", mustDate(t, "2026-08-25"),
 		"one-hotspot/only.py", 0.5, mustTimestamp(t, "2026-08-26 00:00:00"),
 		loaderOneHotspotOrgID)
+	// loadForOrg always reads loaderTeamA (see its own comment). Ownership
+	// gives it EVERY repo this org has, so the owned-repo-scoped read reduces
+	// to the same org-wide read it was before CHAOS-4897's join -- the
+	// hotspot-boundary pin below tests the zero/one-hotspot COUNT, not
+	// ownership scoping, and must not be reshaped by it.
+	exec(`INSERT INTO team_repo_ownership
+		(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+		 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, 'github', ?, ?, 'one-hotspot/only', 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
+		loaderOneHotspotOrgID, loaderTeamA, "44444444-4444-4444-4444-444444444444",
+		mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-01-01 00:00:00"))
 
 	// See loaderInfOrgID: two max-float rows whose SUM overflows, so avg()
 	// yields +Inf and SafeFloat must pass it through.
@@ -595,6 +672,17 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
 			seed.repo, mustDate(t, seed.day), math.MaxFloat64, math.MaxFloat64,
 			mustTimestamp(t, seed.computedAt), loaderInfOrgID)
+		// Same reasoning as the one-hotspot org above: loadForOrg reads
+		// loaderTeamA only, so giving it BOTH inf repos keeps the
+		// owned-repo-scoped average identical to the pre-fix org-wide one --
+		// this fixture pins the +Inf-survives-SafeFloat behaviour, not
+		// ownership scoping.
+		exec(`INSERT INTO team_repo_ownership
+			(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+			 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
+			loaderInfOrgID, loaderTeamA, seed.repo, seed.repo,
+			mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-01-01 00:00:00"))
 	}
 
 	// repo_metrics_daily: latency and rework. NO team column -- this is the
@@ -617,6 +705,32 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
 			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
 			mustTimestamp(t, seed.computedAt), loaderOrgID)
+	}
+
+	// team_repo_ownership: the CHAOS-4897 join's other half. Alpha owns
+	// repoAlpha ONLY, beta owns repoBeta ONLY -- disjoint on purpose, so the
+	// four owned-repo-scoped signals (review latency, rework, complexity
+	// delta, hotspot churn overlap) are FORCED to differ between the two
+	// teams post-fix: repo_complexity_daily and file_hotspot_daily below have
+	// rows ONLY for repoAlpha, so beta's complexity/hotspot come back
+	// ABSENT while alpha's are present -- a Known-mismatch, which
+	// assertCHAOS4897FixIsPresent treats as "differs" exactly like a value
+	// mismatch. Without this table seeded, ownedRepoIDs is empty for BOTH
+	// teams and all four signals come back absent for both -- identical, by
+	// coincidence, to the pre-fix defect's "both org-wide" outcome, which
+	// would let this fixture stop proving anything without ever failing.
+	for _, seed := range []struct {
+		team, repo string
+	}{
+		{loaderTeamA, repoAlpha},
+		{loaderTeamB, repoBeta},
+	} {
+		exec(`INSERT INTO team_repo_ownership
+			(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+			 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
+			loaderOrgID, seed.team, seed.repo, seed.repo,
+			mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-01-01 00:00:00"))
 	}
 
 	// user_metrics_daily: reviewer gini, team-scoped. Skewed for alpha, even
@@ -788,7 +902,7 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 			infinite.ReviewLatencyP75Hours)
 	}
 	compareSnapshotAgainstPython(t, "inf-org", infinite,
-		runPythonLoader(t, dsn, loaderTeamA, loaderInfOrgID))
+		runPythonLoader(t, dsn, loaderTeamA, loaderInfOrgID), false)
 
 	one := loadForOrg(t, ctx, conn, loaderOneHotspotOrgID)
 	if !one.HotspotChurnOverlapKnown {
@@ -801,9 +915,9 @@ func assertHotspotBoundaryIsMeasured(t *testing.T, ctx context.Context, conn dri
 	// Both halves against the Python reference on the same orgs, so this stays
 	// parity rather than a hard-coded expectation.
 	compareSnapshotAgainstPython(t, "empty-org", empty,
-		runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID))
+		runPythonLoader(t, dsn, loaderTeamA, loaderEmptyOrgID), false)
 	compareSnapshotAgainstPython(t, "one-hotspot-org", one,
-		runPythonLoader(t, dsn, loaderTeamA, loaderOneHotspotOrgID))
+		runPythonLoader(t, dsn, loaderTeamA, loaderOneHotspotOrgID), false)
 }
 
 func loadForOrg(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) MetricsSnapshot {

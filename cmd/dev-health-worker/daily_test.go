@@ -10,12 +10,13 @@ import (
 )
 
 // TestMetricsCollectorFromObserverUnwrapsTheProductionObserver pins the
-// round-2 codex finding (#2177, CHAOS-4282): the observer buildDailyWorker
-// actually receives in production is claimLivenessObserver, not
-// *jobruntime.MetricsCollector directly -- an exact-type assertion alone
-// silently fails on it (embedding promotes methods, not concrete type
-// identity), so any wiring that skips the Unwrap fallback never fires in
-// production despite passing every unit test built against a bare collector.
+// round-2 codex finding (#2173, same class fixed on #2177/CHAOS-4282): the
+// observer buildDailyWorker actually receives in production is
+// claimLivenessObserver, not *jobruntime.MetricsCollector directly -- an
+// exact-type assertion alone silently fails on it (embedding promotes
+// methods, not concrete type identity), so any wiring that skips the Unwrap
+// fallback never fires in production despite passing every unit test built
+// against a bare collector.
 func TestMetricsCollectorFromObserverUnwrapsTheProductionObserver(t *testing.T) {
 	t.Parallel()
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})

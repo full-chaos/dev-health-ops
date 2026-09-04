@@ -2340,12 +2340,18 @@ const (
 	// distinct from finding it wrong, because the remedies differ: an
 	// unreachable database is transient, an incompatible one is a migration.
 	RecommendationsRefusedInspectFailed = "inspect_failed"
+	// RecommendationsRefusedPostgresUnavailable is a nil Postgres pool --
+	// distinct from the ClickHouse case because the remedy differs: this one
+	// means the worker itself was wired without the store the readiness gate
+	// reads (CHAOS-2373), never a transient metrics-store outage.
+	RecommendationsRefusedPostgresUnavailable = "postgres_unavailable"
 )
 
 var recommendationsRefusalReasons = []string{
 	RecommendationsRefusedUnavailable,
 	RecommendationsRefusedSchemaIncompatible,
 	RecommendationsRefusedInspectFailed,
+	RecommendationsRefusedPostgresUnavailable,
 }
 
 // ObserveRecommendationsRefused records that the native recommendations

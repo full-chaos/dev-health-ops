@@ -102,6 +102,18 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
     # WorkItemStateExecutor/resolveWorkItemPrimaryTeam), so this reuses
     # team_readback rather than inventing a fourth shape.
     "work_item_state": "work_item_state_durations_daily",
+    # CHAOS-3092: recommendations_daily is keyed (org_id, team_id, rule_id,
+    # window_end), also team-shaped and no repo_id column at all, like
+    # work_item_state above. team_readback filters on `computed_at`, not
+    # `day`/`window_end` -- that column is the RMT VERSION column here, freshly
+    # stamped on every write (see recommendations_native_clickhouse.go's
+    # writeRecommendations doc comment), so it works unchanged. Zero rows here
+    # is a real proof failure, not a false positive from the readiness gate's
+    # fail-open: an org with no daily_metrics_runs row for the day PROCEEDS
+    # (DailyMetricsReady's absent-row case), and this org has one only once
+    # metrics.daily has actually run for it -- which every other family in
+    # this script already requires.
+    "recommendations": "recommendations_daily",
 }
 
 

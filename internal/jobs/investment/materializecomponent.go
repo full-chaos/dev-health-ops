@@ -114,24 +114,27 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 	if !ok {
 		return MaterializeComponentResult{Skipped: skippedNoTimeBounds}, nil
 	}
-	// An EMPTY interval contains nothing, so every component is out of window.
+	// NO EMPTY-INTERVAL SKIP -- deliberately, and this is PARITY, not an
+	// oversight.
 	//
-	// Stated separately because the two bounds checks below do NOT cover it:
-	// with FromTS=Jan20, ToTS=Jan10 and bounds Jan1-Jan30, `End.Before(FromTS)`
-	// is false and `!Start.Before(ToTS)` is false, so the component was RETAINED
-	// and an investment row written. The same holds for a zero-width window,
-	// which is the reachable case: `window_days: 0` is an accepted scope key
-	// (worker_workgraph.py:82-95).
+	// The two checks below skip a component lying WHOLLY before or after the
+	// interval, so a component STRADDLING an empty interval is retained and its
+	// row written: with FromTS=Jan20, ToTS=Jan10 and bounds Jan1-Jan30, both
+	// halves are false. That looks wrong, and an earlier version of this file
+	// skipped it on the stated grounds that "Python filters in SQL and returns
+	// nothing". THAT CLAIM WAS FALSE.
 	//
-	// The executor deliberately ACCEPTS such windows rather than refusing, to
-	// match _parse_materialize_window (work_graph_tasks.py:57-81, no ordering
-	// check). Python then answers with a successful ZERO-RECORD run because it
-	// filters in SQL. Accepting the window while still writing rows would make
-	// the cutover produce investments Python never produced -- the wrong answer
-	// that looks healthy. Accept, and write nothing.
-	if !input.FromTS.Before(input.ToTS) {
-		return MaterializeComponentResult{Skipped: skippedOutOfWindow}, nil
-	}
+	// materialize.py:1335 is the ONLY date filter in materialize_investments --
+	// `if bounds.end < config.from_ts or bounds.start >= config.to_ts: continue`
+	// -- and it is structurally identical to the two checks below. Every fetch
+	// feeding it is id/org-scoped, never date-scoped. Python therefore retains
+	// the same straddling component and writes the same row.
+	//
+	// So skipping here would make the port DIVERGE from the plane it replaces.
+	// The zero-width-window behaviour is a real defect, filed as its own ticket
+	// against the Python plane; fixing it inside a faithful port would change
+	// behaviour under cover of a cutover, which is exactly what this PR must not
+	// do.
 	if bounds.End.Before(input.FromTS) || !bounds.Start.Before(input.ToTS) {
 		return MaterializeComponentResult{Skipped: skippedOutOfWindow}, nil
 	}

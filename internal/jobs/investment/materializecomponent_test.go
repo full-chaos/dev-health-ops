@@ -196,23 +196,32 @@ func TestMaterializeComponentMultipleReposLeavesRepoIDUnset(t *testing.T) {
 	}
 }
 
-// TestMaterializeComponentEmptyWindowWritesNothing is the confirmation pass's
-// P1, and it is WRITER-FACING by way of the retention chain rather than by
-// mocking a writer: Materializer.Run skips a component whose Skipped is
-// non-empty (materialize.go:219 `continue`), so nothing is appended at :355 and
-// nothing reaches WriteInvestments at :392. A component that survives this
-// predicate IS a written row.
+// TestMaterializeComponentEmptyWindowRetainsStraddlingComponent pins PARITY
+// with materialize.py:1335 for a window that contains no time at all.
 //
-// Both windows here are ACCEPTED by the executor on purpose -- removing the
-// ordering refusal is what matches _parse_materialize_window, which has no
-// ordering check. The bug was that acceptance silently became a WRITE: the two
-// bounds checks admit any component that straddles an empty interval, so a
-// zero-width window produced investment rows where Python produces none.
+// This test previously asserted the OPPOSITE -- that an empty window writes
+// nothing -- and it passed, because a fix had been written to satisfy it. Both
+// were wrong together. The justification was that "Python filters in SQL and
+// returns nothing", a claim never checked against the Python source. It is
+// false: materialize.py:1335 is the ONLY date filter in materialize_investments
 //
-// The component spans Jan 1-30 deliberately: it straddles both windows, which
-// is the only shape that reaches the defect. A component wholly before or after
-// is skipped by the ordinary bounds checks and proves nothing.
-func TestMaterializeComponentEmptyWindowWritesNothing(t *testing.T) {
+//	if bounds.end < config.from_ts or bounds.start >= config.to_ts: continue
+//
+// which is structurally identical to MaterializeComponent's own two checks, and
+// every fetch feeding it (edges, work items, PRs, commits, churn, active hours,
+// parent titles) is id/org-scoped, never date-scoped. Python retains the same
+// straddling component and writes the same row.
+//
+// So the porting-correct behaviour is to RETAIN, and this test now pins that.
+// The rows themselves are questionable in both planes -- a component attributed
+// to a window of zero duration -- but that is a defect in the plane being
+// ported, filed separately. Changing it here would alter behaviour under cover
+// of a cutover.
+//
+// The component spans Jan 1-30 deliberately: only a STRADDLING component
+// reaches this predicate at all. One wholly before or after is skipped by the
+// ordinary bounds checks and would prove nothing about empty windows.
+func TestMaterializeComponentEmptyWindowRetainsStraddlingComponent(t *testing.T) {
 	jan10 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
 	jan20 := time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC)
 
@@ -221,10 +230,11 @@ func TestMaterializeComponentEmptyWindowWritesNothing(t *testing.T) {
 		fromTS time.Time
 		toTS   time.Time
 	}{
-		// The reachable one: `window_days: 0` is an accepted scope key, so this
-		// needs no hand-written scope to occur in production.
+		// Reachable in production: `window_days: 0` is an accepted scope key
+		// (worker_workgraph.py:82-95), so this needs no hand-written scope.
 		{name: "zero width", fromTS: jan10, toTS: jan10},
-		// Requires a hand-written from > to scope, but the executor accepts it.
+		// Requires a hand-written from > to scope; the executor accepts it,
+		// because _parse_materialize_window has no ordering check either.
 		{name: "inverted", fromTS: jan20, toTS: jan10},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -244,23 +254,19 @@ func TestMaterializeComponentEmptyWindowWritesNothing(t *testing.T) {
 			}
 
 			// POSITIVE CONTROL: without it this test would also pass if the
-			// component were skipped for having NO TIME BOUNDS, which is a
-			// different code path and would prove nothing about the window.
+			// component were skipped for having NO TIME BOUNDS -- a different
+			// code path that proves nothing about the window predicate.
 			if result.Skipped == skippedNoTimeBounds {
 				t.Fatalf("fixture is wrong: component has no time bounds, so the window predicate was never reached")
 			}
 
-			if result.Skipped != skippedOutOfWindow {
-				t.Fatalf("Skipped = %q, want %q -- an empty window admitted a component, "+
-					"and Materializer.Run writes every component it does not skip",
-					result.Skipped, skippedOutOfWindow)
+			if result.Skipped != "" {
+				t.Fatalf("Skipped = %q, want \"\" -- materialize.py:1335 retains a straddling "+
+					"component under an empty window, and this port must match it",
+					result.Skipped)
 			}
-			if result.Investment.WorkUnitID != "" {
-				t.Fatalf("empty window produced work unit %q, want none -- this row would be written",
-					result.Investment.WorkUnitID)
-			}
-			if len(result.RepoEffort) != 0 {
-				t.Fatalf("empty window produced %d repo-effort rows, want 0", len(result.RepoEffort))
+			if result.Investment.WorkUnitID == "" {
+				t.Fatalf("no work unit produced; Python produces one here (materialize.py:1335 does not skip it)")
 			}
 		})
 	}

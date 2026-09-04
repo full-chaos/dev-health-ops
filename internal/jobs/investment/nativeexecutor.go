@@ -204,14 +204,23 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// every prerequisite-gated job behind it. A refusal that strands the chain
 	// is worse than the empty result Python produces.
 	//
-	// A zero-width or inverted window DOES need handling downstream, and this
-	// comment previously claimed the opposite: it said MaterializeComponent
-	// already skips such components. It did not. Its two bounds checks skip a
-	// component lying WHOLLY before or after the interval, and a component that
-	// straddles an empty interval satisfies neither -- so accepting the window
-	// silently WROTE investment rows where Python writes none. Fixed at the
-	// predicate itself (materializecomponent.go): an empty interval now skips
-	// every component, so acceptance yields the zero-record run Python yields.
+	// A zero-width or inverted window is ACCEPTED here and retained downstream,
+	// matching Python exactly. Two earlier claims in this file were wrong and
+	// are corrected here rather than quietly deleted, because each one survived
+	// review by sounding reasonable:
+	//
+	//  1. "MaterializeComponent already skips such components" -- FALSE. Its
+	//     bounds checks skip only a component lying WHOLLY outside the interval;
+	//     a straddling component is retained and written.
+	//  2. "so accepting the window writes rows where Python writes none" --
+	//     also FALSE. materialize.py:1335 is the only date filter in
+	//     materialize_investments and is structurally identical to ours, with
+	//     every feeding fetch id/org-scoped. Python retains and writes too.
+	//
+	// Accepting the window is what matches _parse_materialize_window (no
+	// ordering check); retaining the component is what matches
+	// materialize.py:1335. The resulting rows are questionable in BOTH planes --
+	// filed as its own ticket against Python, not fixed under cover of a port.
 
 	materializer, err := NewMaterializer(executor.reader, executor.writer, provider, executor.logger)
 	if err != nil {

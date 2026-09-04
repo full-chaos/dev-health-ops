@@ -94,13 +94,17 @@
 # recipe's timing table), so this is a conservative UPPER bound, not a
 # CI-equivalent measurement -- re-time it if a faster reference becomes
 # available, and re-time regardless if tests are added.
-# internal/teamownership (CHAOS-4897): weight 20s. NEW package, one
-# Testcontainers-backed test (TestOwnedRepoIDs), same container-plus-
-# migration shape as internal/jobs/workgraph/edges above. MEASURED on bigboy
-# (arm64 compute host) -- `go test -tags=integration -count=1
-# ./internal/teamownership/...`: 14.56s and 18.78s package time across two
-# runs. Rounded up to 20 for headroom, same reasoning as every other entry
-# in this file -- the weight is only used for shard BALANCING. Bigboy runs
+# internal/teamownership (CHAOS-4897): weight 30s. Codex review round 2
+# (2026-09-04, P3) caught this entry going stale ONE COMMIT after it was
+# written: TestOwnedRepoIDsSurvivesAPreMergeRevocation (the round-1 P1
+# red-first proof) is a SECOND Testcontainers-backed test, each starting its
+# own container, same container-plus-migration shape as
+# internal/jobs/workgraph/edges above -- this entry's own header comment
+# said "one test" and sized for one. Re-MEASURED on bigboy (arm64 compute
+# host) with both tests: `go test -tags=integration -count=1
+# ./internal/teamownership/...`: 13.98s + 13.69s = 27.67s package time.
+# Rounded up to 30 for headroom, same reasoning as every other entry in
+# this file -- the weight is only used for shard BALANCING. Bigboy runs
 # roughly 2x local wall-clock (see the bigboy lane recipe's timing table),
 # so this is a conservative UPPER bound, not a CI-equivalent measurement --
 # re-time it if a faster reference becomes available, and re-time
@@ -146,7 +150,7 @@ internal/syncdispatchruntime	6
 internal/syncreconciler	16
 internal/synccoverage	13
 internal/syncroute	3
-internal/teamownership	20
+internal/teamownership	30
 internal/testsupport/chschema	75
 internal/testsupport/computeparity	50
 internal/testsupport/containers	13

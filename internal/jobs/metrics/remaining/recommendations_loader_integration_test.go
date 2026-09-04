@@ -167,21 +167,32 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	assertArgMaxKeysAreUnique(t, ctx, conn)
 }
 
-// assertOwnershipIsResolvedAsOfWindowEnd is the codex-review (2026-09-04, P2)
-// fixture gap closed: every OTHER ownership row in seedLoaderFixture
-// activates well before loaderWindowStart, so no assertion could tell
-// LoadTeamMetricsWindow's ownership lookup apart if it used windowStart
-// instead of windowEnd as `asOf` -- alpha and beta would still resolve their
-// disjoint repos either way, and assertCHAOS4897FixIsPresent would still see
-// the four signals differ, so that mutation could survive undetected.
+// assertOwnershipIsResolvedAsOfWindowEnd closes TWO related codex-review
+// fixture gaps for the same underlying reason: every OTHER ownership row in
+// seedLoaderFixture is either always-active (valid_from long before the
+// window, valid_to NULL) or, before this function's fixtures existed,
+// entirely outside it -- so nothing could tell a wrong `asOf` boundary apart
+// from the right one, in either direction.
 //
-// repoLateAcquired's ownership activates 2026-08-20 -- inside the window, so
-// only windowEnd (09-01) sees it as owned; windowStart (08-01) would not.
-// Alpha's review_latency_p75_hours is therefore the average of repoAlpha's
-// (30.0) and repoLateAcquired's (999.0) p75 -- 514.5 -- ONLY if windowEnd is
-// what actually reached teamownership.OwnedRepoIDs. A windowStart mutation
-// would silently drop back to repoAlpha alone (30.0), a plausible-looking
-// number this fixture is deliberately built to make unmistakable instead.
+// (1, round 1 P2) repoLateAcquired's ownership ACTIVATES 2026-08-20 --
+// inside the window, so only windowEnd (09-01) sees it as owned; windowStart
+// (08-01) would not. Alpha's review_latency_p75_hours is therefore the
+// average of repoAlpha's (30.0) and repoLateAcquired's (999.0) p75 -- 514.5
+// -- ONLY if windowEnd is what actually reached teamownership.OwnedRepoIDs.
+// A windowStart mutation would silently drop back to repoAlpha alone (30.0),
+// a plausible-looking number this fixture is deliberately built to make
+// unmistakable instead.
+//
+// (2, round 2 P2) repoExpiresAtWindowEnd's ownership EXPIRES exactly AT
+// loaderWindowEnd (valid_to = 2026-09-01T00:00:00Z, the same instant used as
+// `asOf`). `OwnedRepoIDs`'s `valid_to > asOf` is a STRICT inequality, so this
+// repo must be EXCLUDED at asOf=windowEnd -- correct code leaves alpha's
+// values exactly as case (1) computed them (514.5 / 0.6950000000000001). A
+// boundary slip (`>=`, or an `asOf` shifted by even one instant before
+// windowEnd, e.g. the codex-round-2-constructed `windowEnd.Add(-time.
+// Millisecond)`) would include repoExpiresAtWindowEnd's deliberately extreme
+// p75/rework values (100000.0 / 0.9999) instead, moving alpha's average by
+// orders of magnitude -- unmistakable, not a plausible near-miss.
 func assertOwnershipIsResolvedAsOfWindowEnd(t *testing.T, alpha MetricsSnapshot) {
 	t.Helper()
 
@@ -581,6 +592,13 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 	// (fully activated by 2026-09-01) rather than windowStart (not yet
 	// activated on 2026-08-01) as its `asOf`.
 	repoLateAcquired := "77777777-7777-7777-7777-777777777777"
+	// Owned by alpha, but ownership EXPIRES exactly AT loaderWindowEnd (see
+	// assertOwnershipExpiryIsExclusiveAtWindowEnd). teamownership.OwnedRepoIDs
+	// filters `valid_to > asOf`, a STRICT inequality -- a row whose valid_to
+	// equals asOf exactly must be excluded, not included. This repo has an
+	// extreme, unmistakable metric row so a wrong `>=` (or any other boundary
+	// slip) changes alpha's aggregate rather than silently agreeing by luck.
+	repoExpiresAtWindowEnd := "88888888-8888-8888-8888-888888888888"
 
 	// work_item_metrics_daily: wip/throughput and cycle time, per team.
 	// The (day, provider, work_scope_id) triple is the argMax key; the
@@ -835,6 +853,10 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		// Deliberately extreme values so a wrong asOf (windowStart, which
 		// excludes this repo) is unmistakable rather than a plausible number.
 		{repoLateAcquired, "2026-08-22", 999.0, 0.99, "2026-08-23 00:00:00"},
+		// repoExpiresAtWindowEnd: see assertOwnershipExpiryIsExclusiveAtWindowEnd.
+		// A MUCH more extreme value than repoLateAcquired's, so this row alone
+		// moving alpha's average is unmistakable even alongside that repo.
+		{repoExpiresAtWindowEnd, "2026-08-10", 100000.0, 0.9999, "2026-08-11 00:00:00"},
 	} {
 		exec(`INSERT INTO repo_metrics_daily
 			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
@@ -883,6 +905,21 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
 		loaderOrgID, loaderTeamA, repoLateAcquired, repoLateAcquired,
 		mustTimestamp(t, "2026-08-20 00:00:00"), mustTimestamp(t, "2026-08-20 00:00:00"))
+	// repoExpiresAtWindowEnd: alpha's ownership is active for most of the
+	// window but EXPIRES exactly at loaderWindowEnd (2026-09-01T00:00:00Z) --
+	// the codex-review (2026-09-04, round-2 P2) boundary this lane's
+	// windowEnd fixture didn't yet cover: OwnedRepoIDs' `valid_to > asOf` is
+	// STRICT, so a row expiring AT asOf must be excluded, not included.
+	// valid_to is bound as a real parameter here (every other row in this
+	// fixture hardcodes a literal NULL) because this is the one row that
+	// needs an actual, non-NULL expiry.
+	exec(`INSERT INTO team_repo_ownership
+		(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+		 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, ?, ?)`,
+		loaderOrgID, loaderTeamA, repoExpiresAtWindowEnd, repoExpiresAtWindowEnd,
+		mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-09-01 00:00:00"),
+		mustTimestamp(t, "2026-01-01 00:00:00"))
 
 	// user_metrics_daily: reviewer gini, team-scoped. Skewed for alpha, even
 	// for beta, so the two teams' gini genuinely differ.

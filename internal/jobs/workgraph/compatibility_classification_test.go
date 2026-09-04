@@ -272,10 +272,13 @@ func TestClassifiedFailureNeverCarriesTheBearerToken(t *testing.T) {
 	}
 }
 
-// Proves the echo-back control above is not vacuous: a body the bridge sends
-// that is NOT the credential does reach the error text, so the token's
-// absence is a property of the token, not of the detail being dropped.
-func TestClassifiedFailureCarriesTheBridgeDetail(t *testing.T) {
+// The inverse of the leak test above, and the reason it is not vacuous: the
+// bridge's own response text does NOT reach the detail at all any more. This
+// replaced an earlier test asserting the opposite -- carrying the bridge's
+// prose was how a JSON-escaped bearer token got through (r1 P1b): an
+// exact-substring redaction cannot match a token that untrusted text has
+// re-encoded, so nothing free-form crosses this boundary now.
+func TestBridgeResponseTextNeverReachesTheDurableDetail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusConflict)
 		_, _ = writer.Write([]byte(`{"detail":{"reason":"ambiguous_refused","state":"ambiguous"}}`))
@@ -286,8 +289,90 @@ func TestClassifiedFailureCarriesTheBridgeDetail(t *testing.T) {
 	if err == nil {
 		t.Fatal("Execute succeeded, want a classified failure")
 	}
-	if !strings.Contains(err.Error(), "ambiguous_refused") {
-		t.Fatalf("Execute = %q, want the bridge's own reason carried", err.Error())
+	detail := compatibilityAmbiguousDetail(err)
+	for _, leaked := range []string{"ambiguous_refused", "detail", "{", "}"} {
+		if strings.Contains(detail, leaked) {
+			t.Fatalf("ledger detail %q carries bridge response text (%q)", detail, leaked)
+		}
+	}
+	// The discriminator that DOES survive: the classification and the status.
+	if !strings.Contains(detail, "status=409") || !errors.Is(err, ErrCompatibilityRefused) {
+		t.Fatalf("detail %q lost the discriminator it is supposed to keep", detail)
+	}
+}
+
+// r1 P1a. http.NewRequestWithContext sets GetBody for a *bytes.Reader, and
+// net/http replays the body on 307/308 -- so a bridge can EXECUTE the request
+// and then redirect. If the redirected hop fails to dial, the error is an
+// ordinary dial failure, which would be classified NotSent and RETRIED,
+// re-running work the bridge already did. Refusing redirects makes the 3xx a
+// response, classified Unknown by status.
+func TestRedirectIsRefusedSoAnExecutedRequestIsNeverRetriedAsNotSent(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var served int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		served++
+		writer.Header().Set("Location", "http://"+dead+"/internal/worker/workgraph/v1/execute")
+		writer.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	executor := newTestExecutor(t, server.URL+"/internal/worker/workgraph/v1/execute", &http.Client{Timeout: 5 * time.Second})
+	_, execErr := executor.Execute(t.Context(), *testClaim(time.Second))
+	if execErr == nil {
+		t.Fatal("Execute succeeded against a redirect to a dead address")
+	}
+	if errors.Is(execErr, ErrCompatibilityNotSent) {
+		t.Fatalf("an executed-then-redirected request was classified NotSent: %v", execErr)
+	}
+	if !errors.Is(execErr, ErrCompatibilityUnknown) {
+		t.Fatalf("Execute = %v, want ErrCompatibilityUnknown", execErr)
+	}
+	if !strings.Contains(execErr.Error(), "status=307") {
+		t.Fatalf("Execute = %q, want the 307 recorded rather than the redirected hop's failure", execErr.Error())
+	}
+	// The redirect must not be FOLLOWED at all -- one request reaches the
+	// bridge, never a replay. Without this the test would still pass if the
+	// body were re-sent and the classification merely happened to differ.
+	if served != 1 {
+		t.Fatalf("bridge saw %d requests, want exactly 1 (the body must never be replayed)", served)
+	}
+}
+
+// A bearer token containing a character that JSON escapes is the exact shape
+// that defeated the first redaction: the raw substring never appears in the
+// response body, only its escaped form does.
+func TestJSONEscapableBearerTokenNeverReachesTheDurableDetail(t *testing.T) {
+	token := `ab"cd`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusInternalServerError)
+		escaped := strings.ReplaceAll(request.Header.Get("Authorization"), `"`, `\"`)
+		_, _ = writer.Write([]byte(`{"detail":"rejected ` + escaped + `"}`))
+	}))
+	defer server.Close()
+	executor, err := NewHTTPCompatibilityExecutor(&http.Client{Timeout: 5 * time.Second},
+		HTTPCompatibilityConfig{
+			Endpoint:    server.URL + "/internal/worker/workgraph/v1/execute",
+			BearerToken: token, AllowInsecureInternal: true,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, execErr := executor.Execute(t.Context(), *testClaim(time.Second))
+	if execErr == nil {
+		t.Fatal("Execute succeeded, want a classified failure")
+	}
+	detail := compatibilityAmbiguousDetail(execErr)
+	for _, form := range []string{token, `ab\"cd`, `ab"cd`, "cd"} {
+		if strings.Contains(detail, form) {
+			t.Fatalf("ledger detail %q carries the bearer token as %q", detail, form)
+		}
 	}
 }
 

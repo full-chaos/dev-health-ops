@@ -77,7 +77,28 @@ func NewHTTPCompatibilityExecutor(client *http.Client, config HTTPCompatibilityC
 	if client == nil || !validCompatibilityEndpoint(config.Endpoint, config.AllowInsecureInternal) || len(config.BearerToken) == 0 || len(config.BearerToken) > 512 {
 		return nil, ErrUnavailable
 	}
-	return &HTTPCompatibilityExecutor{client: client, config: config}, nil
+	// Redirects are REFUSED, and this is a data-safety guard, not hygiene.
+	// http.NewRequestWithContext sets GetBody automatically for a
+	// *bytes.Reader (net/http/request.go), and net/http's redirectBehavior
+	// re-sends the body on 307/308 when GetBody is non-nil
+	// (net/http/client.go). So the bridge can EXECUTE this request and then
+	// redirect -- and if the redirected hop then fails to dial, the only
+	// error this package ever sees is an ordinary dial failure, which
+	// compatibilityTransportSentinel would classify NotSent. That is correct
+	// for a first hop and WRONG here: it would retry work the bridge already
+	// performed. Refusing to follow the redirect removes the ambiguity at
+	// its source -- the 3xx comes back as a response and is classified
+	// Unknown by status, which is the honest answer, since we cannot know
+	// what the bridge did before redirecting.
+	//
+	// The client is COPIED, never mutated: it belongs to the caller and may
+	// be shared with callers that legitimately follow redirects. The shallow
+	// copy deliberately shares Transport, so connection pooling is unaffected.
+	redirectless := *client
+	redirectless.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &HTTPCompatibilityExecutor{client: &redirectless, config: config}, nil
 }
 
 func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Claim) ([]byte, error) {
@@ -115,7 +136,18 @@ func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Cl
 		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "response body exceeded its bound")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, executor.fail(compatibilityStatusSentinel(response.StatusCode), response.StatusCode, string(data))
+		// The bridge's own response text is deliberately NOT persisted. It
+		// is untrusted input on its way to a durable, operator-readable
+		// column, and redacting the bearer token out of it byte-for-byte is
+		// not sufficient: a bridge that echoes the Authorization header
+		// through ordinary JSON encoding produces an ESCAPED form that an
+		// exact-substring redaction does not match (a token containing a
+		// quote arrives as \" and slips straight through). Rather than
+		// chase encodings, nothing free-form crosses this boundary at all --
+		// the sentinel and the HTTP status are the discriminator, and the
+		// bridge's own prose remains available in the bridge's logs.
+		return nil, executor.fail(compatibilityStatusSentinel(response.StatusCode), response.StatusCode,
+			"bridge returned a non-success status")
 	}
 	var decoded struct {
 		Status         string          `json:"status"`
@@ -129,7 +161,10 @@ func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Cl
 		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "success response body could not be decoded")
 	}
 	if decoded.Status != "success" {
-		return nil, executor.fail(ErrCompatibilityRefused, response.StatusCode, "bridge reported status "+decoded.Status)
+		// Same reasoning as the non-2xx branch: decoded.Status is
+		// bridge-controlled text, so it is described, never echoed.
+		return nil, executor.fail(ErrCompatibilityRefused, response.StatusCode,
+			"bridge reported a non-success status in its response body")
 	}
 	if !validEvidence(decoded.OutputEvidence) {
 		return nil, executor.fail(ErrCompatibilityRefused, response.StatusCode, "bridge returned invalid output evidence")
@@ -196,8 +231,12 @@ func compatibilityTransportSentinel(err error) error {
 }
 
 // fail is the only failure constructor used once a bearer token exists on
-// this executor. It redacts that token from the diagnostic before the
-// diagnostic can travel anywhere.
+// this executor. It redacts that token from the diagnostic as a SECOND line
+// of defence; the first is that no free-form bridge response text is passed
+// in here at all (see the non-2xx branch above). Redaction alone is not
+// sufficient, because an exact-substring replacement cannot match a token
+// that untrusted text has re-encoded -- it remains useful for the transport
+// error path, whose text this package does not construct.
 //
 // This is not hypothetical: the detail is built from the bridge's own
 // response body, and a bridge that echoes the Authorization header it was

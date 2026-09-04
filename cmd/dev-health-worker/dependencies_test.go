@@ -751,6 +751,47 @@ func TestSelectedQueuesRejectDuplicateOrMissingBuilderHandlers(t *testing.T) {
 	}
 }
 
+// TestComposeSelectedWorkerFamiliesLogsTheBuilderFailureCause is the
+// CHAOS-4993 regression test: composeSelectedWorkerFamilies's own error
+// return carries no detail (a bare sentinel, no %w wrapping), so before this
+// fix a composition failure gave an operator only
+// "worker_family_composition_failed" and nothing else to diagnose from.
+// dependencies.go now logs the builder's real cause at the point of failure
+// (see the "worker family builder failed" logger.Error call in `build`
+// inside composeSelectedWorkerFamilies) -- but nothing previously asserted
+// that the cause text actually reaches the log surface, as opposed to just
+// making composition fail. This test captures the logger's own output and
+// checks the underlying error's distinctive text is present in it.
+func TestComposeSelectedWorkerFamiliesLogsTheBuilderFailureCause(t *testing.T) {
+	const causeMarker = "synthetic dependency failure: db61f3f4-marker"
+	builderErr := errors.New(causeMarker)
+	sources := workerDependencySources{
+		buildOperational: func(
+			config.Config, workerDatabase, *jobruntime.Registry,
+			jobruntime.Observer, *slog.Logger, *river.Workers,
+		) (workerFamily, error) {
+			return workerFamily{}, builderErr
+		},
+	}
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+
+	_, err := composeSelectedWorkerFamilies(
+		context.Background(), config.Config{}, &fakeWorkerDatabase{}, nil,
+		nil, logger, river.NewWorkers(), sources,
+	)
+	if !errors.Is(err, builderErr) {
+		t.Fatalf("composeSelectedWorkerFamilies() error = %v, want errors.Is(err, builderErr)", err)
+	}
+	if !strings.Contains(logOutput.String(), causeMarker) {
+		t.Fatalf(
+			"composeSelectedWorkerFamilies() logged %q, want it to contain the builder failure cause %q -- "+
+				"the cause did not survive to the log surface",
+			logOutput.String(), causeMarker,
+		)
+	}
+}
+
 func TestProductionDailyBuilderFailsClosedWithoutClickHouse(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	runtimeRegistry, contractRoot := executableHeavyRegistry(t, false)

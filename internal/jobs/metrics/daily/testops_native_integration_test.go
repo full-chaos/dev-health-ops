@@ -129,6 +129,24 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 	if len(pushPipeline) < 2 {
 		t.Fatalf("fixture is vacuous: expected >=2 pipeline groups (nil vs \"\" service_id), got %d", len(pushPipeline))
 	}
+	// r1 P3 non-vacuity guard: at least one group must contain a run that
+	// landed in NO status bucket, which happens only for the NULL-status
+	// winner. If the NULL seed is ever dropped or its status stops being NULL,
+	// every run falls into success/failure/cancelled and the bare-vs-tuple
+	// argMax distinction stops being exercised -- the test would keep passing
+	// while proving nothing about the invariant it exists to protect.
+	sawUnbucketed := false
+	for _, metric := range pushPipeline {
+		if metric.PipelinesCount > metric.SuccessCount+metric.FailureCount+metric.CancelledCount {
+			sawUnbucketed = true
+			break
+		}
+	}
+	if !sawUnbucketed {
+		t.Fatal("fixture is vacuous for the NULL-status case: every run landed in a status bucket, " +
+			"so a bare-argMax regression (which would resolve the NULL winner to a stale non-NULL status) " +
+			"could not be detected")
+	}
 	for index := range rawPipeline {
 		if !samePipelineMetric(rawPipeline[index], pushPipeline[index]) {
 			t.Fatalf("pipeline row %d diverges:\nrowloader=%+v\npushdown =%+v", index, rawPipeline[index], pushPipeline[index])
@@ -376,8 +394,16 @@ func seedTestopsDifferentialFixture(
 	// plus a superseded duplicate whose stale status would flip
 	// success_count if the dedup were dropped.
 	type pipelineSeed struct {
-		runID     string
-		status    string
+		runID string
+		// status is a POINTER so a seed can carry a genuine SQL NULL. r1 (P3)
+		// found the fixture could not detect a bare-argMax regression: every
+		// seeded status was non-NULL, and ClickHouse's argMax SKIPS rows whose
+		// arg is NULL -- so `argMax(status, last_synced)` and
+		// `argMax((status, ...), last_synced)` agree on all-non-NULL data and
+		// disagree only when the WINNER's status is NULL. Without a NULL winner
+		// the test passed either implementation, i.e. it was vacuous for exactly
+		// the invariant its own comment claims to protect.
+		status    *string
 		service   *string
 		queue     float64
 		retry     uint32
@@ -388,16 +414,29 @@ func seedTestopsDifferentialFixture(
 	}
 	emptyService := ""
 	namedService := "svc-1"
+	statusSuccess := "success"
+	statusSuccessPadded := "  SUCCESS  "
+	statusFailed := "failed"
+	statusCancelled := "cancelled"
 	for _, seed := range []pipelineSeed{
-		{runID: "run-1", status: "success", service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 100},
-		{runID: "run-2", status: "  SUCCESS  ", service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 200},
-		{runID: "run-3", status: "failed", service: &emptyService, queue: 0.1, started: inDay, lastSync: synced, duration: 300},
-		{runID: "run-4", status: "cancelled", service: &namedService, queue: 0.1, retry: 3, started: inDay, lastSync: synced, duration: 400},
+		{runID: "run-1", status: &statusSuccess, service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 100},
+		{runID: "run-2", status: &statusSuccessPadded, service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 200},
+		{runID: "run-3", status: &statusFailed, service: &emptyService, queue: 0.1, started: inDay, lastSync: synced, duration: 300},
+		{runID: "run-4", status: &statusCancelled, service: &namedService, queue: 0.1, retry: 3, started: inDay, lastSync: synced, duration: 400},
 		// Superseded copy of run-1: OLDER last_synced, contradictory status.
 		// argMax and FINAL must both discard it.
-		{runID: "run-1", status: "failed", service: nil, queue: 99, started: inDay, lastSync: synced.Add(-2 * time.Hour), duration: 1, wantStale: true},
+		{runID: "run-1", status: &statusFailed, service: nil, queue: 99, started: inDay, lastSync: synced.Add(-2 * time.Hour), duration: 1, wantStale: true},
+		// r1 P3: NULL-status WINNER over a superseded non-NULL version. This is
+		// the ONLY shape that separates tuple-argMax from bare argMax: the tuple
+		// preserves the winner's NULL (FINAL semantics, since RMT keeps the whole
+		// row), whereas `argMax(status, last_synced)` SKIPS the NULL arg and
+		// returns the older "failed". Both readers under differential must agree
+		// that this run's status is NULL, i.e. it counts toward pipelines_count
+		// but toward NO status bucket.
+		{runID: "run-null", status: nil, service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 600},
+		{runID: "run-null", status: &statusFailed, service: nil, queue: 0.1, started: inDay, lastSync: synced.Add(-3 * time.Hour), duration: 600, wantStale: true},
 		// Prior-window run, so coverage's prior snapshot has a run to join.
-		{runID: "run-prior", status: "success", service: nil, queue: 0.1, started: priorDay, lastSync: synced, duration: 500},
+		{runID: "run-prior", status: &statusSuccess, service: nil, queue: 0.1, started: priorDay, lastSync: synced, duration: 500},
 	} {
 		if err := conn.Exec(ctx, `INSERT INTO ci_pipeline_runs
 (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced,

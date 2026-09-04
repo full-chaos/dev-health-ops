@@ -361,6 +361,24 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 	}
 
+	// TOKEN USAGE FIRST, BEFORE the output tables (codex r2 P1).
+	//
+	// Order and error-handling both matter, and both are Python's
+	// (materialize.py:1616 flushes before the post-process/write block;
+	// llm_token_usage.py:53 swallows the failure and returns False).
+	//
+	// Writing it LAST and propagating its error stranded the chain: the three
+	// output batches had already landed, then a token-usage failure returned an
+	// error, handler.work marked the request ambiguous, and the completion
+	// fence was never written -- so durable rows existed while every
+	// prerequisite-gated downstream job stayed blocked, on a BOOKKEEPING write.
+	// Flushing first and swallowing means the worst case is a missing usage row,
+	// which is recoverable, instead of a stranded fence, which is not.
+	if err := m.flushTokenUsage(ctx, cfg, stats); err != nil {
+		m.logger.WarnContext(ctx, "llm token usage write failed; continuing",
+			"run_id", cfg.RunID, "error", err.Error())
+	}
+
 	// WRITE. Same three tables, same order, same "skip the call when empty"
 	// shape as materialize.py:1826-1831.
 	if len(investments) > 0 {
@@ -383,13 +401,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	stats.RepoEffortRecords = len(repoEfforts)
 	stats.Quotes = len(quotes)
 
-	// TOKEN USAGE last, and only counting REAL calls. fallbackCount units never
-	// touched a provider, so they contribute nothing here -- the reference
-	// subtracts them for the same reason (materialize.py:1622-1626).
 	_ = fallbackCount
-	if err := m.flushTokenUsage(ctx, cfg, stats); err != nil {
-		return Stats{}, err
-	}
 
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
@@ -735,14 +747,20 @@ func marshalCategorizationAudit(outcome categorize.CategorizationOutcome) (strin
 	return string(encoded), nil
 }
 
-// resolvedModelName ports the `resolve_model_name(...) or model or provider`
-// chain (materialize.py:1299-1307) with the org-settings lookup omitted --
-// see CHAOS-5006. Model wins when set, provider name is the last resort, and
-// the result is BOTH the token-usage row's model and half the model-version
-// string, so the two can never disagree.
+// resolvedModelName is the model STAMPED into
+// work_unit_investments.categorization_model_version and the llm_token_usage
+// row. It delegates to the same categorize.ResolveModelName the PROVIDER is
+// built from, which is the fix for codex r2's P1.
+//
+// The previous version fell back to cfg.ProviderName, so an empty model_ref --
+// the state the live post-sync producer always creates, since
+// cmd/dev-health-worker/sync_dispatch.go:298-308 sets no ModelRef -- stamped
+// `model=openai` while the provider ran the env-configured model. Every native
+// row then carried a categorization_model_version Python never wrote, so the
+// skip-existing lookup missed every historical row (full re-categorization at
+// LLM cost) and later runs skipped on a key that did not track the real model.
+//
+// The org-settings branch stays omitted (CHAOS-5006).
 func resolvedModelName(cfg Config) string {
-	if cfg.Model != "" {
-		return cfg.Model
-	}
-	return cfg.ProviderName
+	return categorize.ResolveModelName(categorize.ProviderKind(cfg.ProviderName), cfg.Model)
 }

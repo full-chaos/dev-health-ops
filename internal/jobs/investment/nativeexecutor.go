@@ -18,7 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
@@ -215,8 +218,22 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		// work_graph_tasks.py:243 hardcodes persist_evidence_snippets=True on
 		// the worker path -- it is not a scope key and not configurable here.
 		PersistEvidenceSnippets: true,
-		RunID:                   claim.Request.ID,
-		ComputedAt:              now,
+		// A FRESH run id per run, matching Python (codex r2 P1).
+		//
+		// Python generates uuid.uuid4().hex at materialize.py:1292 because the
+		// bridge cannot pass run_id for this kind (worker_workgraph.py:82's
+		// allowlist has no run_id key). Using the durable REQUEST id made every
+		// categorization_run_id differ from Python's in both form (dashed
+		// 36-char vs 32-char hex) and semantics (stable across retries vs fresh
+		// per run) across investments, repo-effort, quotes and token usage.
+		//
+		// The retry-stable id is arguably the better design and is deliberately
+		// NOT smuggled in here: plan.md section 1.4 is explicit that this port
+		// reproduces the current algorithm bit-exactly, and a differential
+		// oracle would flag this column on every row. Proposed as a follow-up
+		// on CHAOS-4441 instead.
+		RunID:      newRunID(),
+		ComputedAt: now,
 	}
 
 	stats, err := materializer.Run(ctx, cfg)
@@ -260,6 +277,13 @@ func (executor *NativeExecutor) buildEvidence(claim workgraph.Claim, stats Stats
 		return nil, fmt.Errorf("encode execution evidence: %w", err)
 	}
 	return encoded, nil
+}
+
+// newRunID is Python's `uuid.uuid4().hex` -- 32 lowercase hex digits, NO
+// dashes. uuid.New().String() gives the dashed 36-character form, which is a
+// different value in a String column that readers group by.
+func newRunID() string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
 // decodeMaterializeScope decodes the request scope STRICTLY.

@@ -132,39 +132,110 @@ func TestExecuteRefusesAProviderKindWithNoNativeClient(t *testing.T) {
 	}
 }
 
-// --- P1-b: the request's model_ref must reach the provider ---
-
-// TestRequestedModelWinsOverTheEnvironment is P1-b.
+// --- model resolution: the STAMP must equal the model that RUNS ---
 //
-// Before the fix the provider factory took no model at all and read LLM_MODEL
-// from the environment, while the executor stamped the REQUESTED model into
-// categorization_model_version and into the skip-existing key. A run would call
-// the env-default model and record the requested one, and the NEXT run would
-// then treat that row as a valid cached result for a model that never ran --
-// the error compounds instead of self-correcting.
-func TestRequestedModelWinsOverTheEnvironment(t *testing.T) {
-	t.Setenv("LLM_MODEL", "gpt-env-default")
-	t.Setenv("LLM_MODEL_OPENAI", "gpt-openai-specific")
+// r1 fixed "model_ref never reached the provider". r2 then found the mirror
+// defect left behind: the durable STAMP still fell back to the provider NAME.
+// The r1 proof (M8) exercised ProviderModel -- the model handed to the provider
+// -- and never touched resolvedModelName, where the stamp is computed. It
+// proved the adjacent function and was recorded as covering the finding. These
+// tests target resolvedModelName ITSELF.
 
-	if got := categorize.ProviderModel("gpt-requested", "LLM_MODEL", "LLM_MODEL_OPENAI"); got != "gpt-requested" {
-		t.Fatalf("model = %q, want %q -- the request's model_ref must beat every env var", got, "gpt-requested")
+// TestStampedModelIsTheModelThatRunsNotTheProviderName is r2's P1.
+//
+// The live post-sync producer sets NO ModelRef (sync_dispatch.go:298-308), so
+// an empty model_ref is the PRODUCTION path, not an edge case.
+func TestStampedModelIsTheModelThatRunsNotTheProviderName(t *testing.T) {
+	t.Setenv("LLM_MODEL", "gpt-env-default")
+	got := resolvedModelName(Config{ProviderName: "openai", Model: ""})
+	if got == "openai" {
+		t.Fatal("stamp fell back to the PROVIDER NAME; it must be the model that actually runs")
+	}
+	if got != "gpt-env-default" {
+		t.Fatalf("stamped model = %q, want the env-configured %q", got, "gpt-env-default")
 	}
 }
 
-// TestAbsentModelFallsBackToTheEnvironmentInOrder is the counter-test: the
-// override must win ONLY when the caller supplied one, and the env chain order
-// must be preserved. Without this, the fix could silently blank the model for
-// every deployment that relies on LLM_MODEL.
-func TestAbsentModelFallsBackToTheEnvironmentInOrder(t *testing.T) {
+// TestStampedModelCannotDriftFromTheProviderModel is the structural guarantee:
+// two call sites independently computing "the model" produced BOTH r1's and
+// r2's findings, so this asserts they share one resolver.
+func TestStampedModelCannotDriftFromTheProviderModel(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"generic_only":             {"LLM_MODEL": "gpt-generic"},
+		"provider_specific_only":   {"LLM_MODEL_OPENAI": "gpt-specific"},
+		"both_generic_wins":        {"LLM_MODEL": "gpt-generic", "LLM_MODEL_OPENAI": "gpt-specific"},
+		"neither_platform_default": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("LLM_MODEL", "")
+			t.Setenv("LLM_MODEL_OPENAI", "")
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			stamp := resolvedModelName(Config{ProviderName: "openai", Model: ""})
+			provider := categorize.ResolveModelName(categorize.ProviderKindOpenAI, "")
+			if stamp != provider {
+				t.Fatalf("stamp %q != provider model %q -- they must not drift", stamp, provider)
+			}
+			if stamp == "" {
+				t.Fatal("resolved to an empty model; the platform default must apply")
+			}
+		})
+	}
+}
+
+// TestRequestedModelWinsOverTheEnvironment keeps r1's fix pinned.
+func TestRequestedModelWinsOverTheEnvironment(t *testing.T) {
 	t.Setenv("LLM_MODEL", "gpt-env-default")
 	t.Setenv("LLM_MODEL_OPENAI", "gpt-openai-specific")
-	if got := categorize.ProviderModel("", "LLM_MODEL", "LLM_MODEL_OPENAI"); got != "gpt-env-default" {
-		t.Fatalf("model = %q, want the FIRST env in the chain %q", got, "gpt-env-default")
+	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, "gpt-requested"); got != "gpt-requested" {
+		t.Fatalf("model = %q, want the request's model_ref %q", got, "gpt-requested")
 	}
+	if got := resolvedModelName(Config{ProviderName: "openai", Model: "gpt-requested"}); got != "gpt-requested" {
+		t.Fatalf("stamp = %q, want %q", got, "gpt-requested")
+	}
+}
 
+// TestGenericEnvBeatsProviderSpecific pins chris's CHAOS-4978 precedence, which
+// INVERTS Python's order. Following Python here would re-open r2's P1: the
+// provider path is ruled generic-first, so a stamp on Python's order would
+// again record a model the run did not use.
+func TestGenericEnvBeatsProviderSpecific(t *testing.T) {
+	t.Setenv("LLM_MODEL", "gpt-generic")
+	t.Setenv("LLM_MODEL_OPENAI", "gpt-specific")
+	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-generic" {
+		t.Fatalf("model = %q, want the GENERIC override %q (CHAOS-4978)", got, "gpt-generic")
+	}
+}
+
+// TestPlatformDefaultAppliesWhenNothingIsConfigured ports
+// DEFAULT_MODEL_BY_PROVIDER: without it an unconfigured deployment stamps an
+// EMPTY model for a run that used the provider's built-in default.
+func TestPlatformDefaultAppliesWhenNothingIsConfigured(t *testing.T) {
 	t.Setenv("LLM_MODEL", "")
-	if got := categorize.ProviderModel("", "LLM_MODEL", "LLM_MODEL_OPENAI"); got != "gpt-openai-specific" {
-		t.Fatalf("model = %q, want the second env %q once the first is empty", got, "gpt-openai-specific")
+	t.Setenv("LLM_MODEL_OPENAI", "")
+	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-5-mini" {
+		t.Fatalf("model = %q, want the platform default %q", got, "gpt-5-mini")
+	}
+}
+
+// TestRunIDIsAFreshPythonStyleHex is r2's run-id P1: Python emits
+// uuid.uuid4().hex -- 32 lowercase hex digits, no dashes, fresh per run.
+func TestRunIDIsAFreshPythonStyleHex(t *testing.T) {
+	first, second := newRunID(), newRunID()
+	if len(first) != 32 {
+		t.Fatalf("run id %q has length %d, want 32 (uuid4().hex)", first, len(first))
+	}
+	if strings.Contains(first, "-") {
+		t.Fatalf("run id %q contains dashes; Python's uuid4().hex has none", first)
+	}
+	if first == second {
+		t.Fatal("run id is not fresh per call; Python generates a new one per run")
+	}
+	for _, r := range first {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("run id %q contains a non-lowercase-hex rune %q", first, r)
+		}
 	}
 }
 

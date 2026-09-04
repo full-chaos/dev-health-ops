@@ -65,15 +65,55 @@ def _slice(start_pattern: str, end_pattern: str) -> str:
     return text[start.start() : end.start()]
 
 
+#: Every spelling bash accepts for a function definition. The first version of
+#: the uniqueness guard below matched only ``name() {`` with exactly one space,
+#: so ``function stop_service { ... }`` -- the keyword form, equally valid and
+#: equally shadowing -- slipped straight past it (found by the peer read). A
+#: guard that enumerates syntax must enumerate ALL of it, or it narrows silently
+#: to the one spelling its author happened to use.
+def _definition_pattern(name: str) -> str:
+    return rf"^(?:function\s+{name}\b|{name}\s*\(\)\s*\{{)"
+
+
 def test_teardown_functions_are_defined_exactly_once():
-    """codex round 3, P2: a duplicate definition makes the slice test a decoy."""
+    """codex round 3, P2: a duplicate definition makes the slice test a decoy.
+
+    Covers both `name() {` (any spacing) and `function name {`.
+    """
     text = SCRIPT.read_text()
     for name in ("service_pgid", "stop_service", "cleanup", "on_signal"):
-        found = re.findall(rf"^{name}\(\) \{{", text, re.M)
+        found = re.findall(_definition_pattern(name), text, re.M)
         assert len(found) == 1, (
-            f"{name}() is defined {len(found)}x in the script; a second "
-            "definition would shadow the one these tests slice out"
+            f"{name} is defined {len(found)}x in the script (counting both "
+            "`name() {` and `function name {`); a second definition would "
+            "shadow the one these tests slice out"
         )
+
+
+@pytest.mark.parametrize(
+    "decoy",
+    [
+        "stop_service() {\n  return 0\n}\n",
+        "stop_service  ()  {\n  return 0\n}\n",
+        "function stop_service {\n  return 0\n}\n",
+        "function stop_service() {\n  return 0\n}\n",
+    ],
+    ids=["paren", "paren-spaced", "keyword", "keyword-paren"],
+)
+def test_a_shadowing_redefinition_is_rejected_in_every_bash_spelling(
+    decoy, tmp_path, monkeypatch
+):
+    """Red -> green for the decoy attack, in each form bash accepts.
+
+    Bash uses the LAST definition, so a second `stop_service` appended after the
+    real one silently replaces it while an anchor-sliced test keeps exercising
+    the first. The keyword form evaded the original guard entirely.
+    """
+    shadowed = tmp_path / "shadowed.sh"
+    shadowed.write_text(SCRIPT.read_text() + "\n" + decoy)
+    monkeypatch.setattr("tests.tooling.test_metrics_proof_teardown.SCRIPT", shadowed)
+    with pytest.raises(AssertionError):
+        test_teardown_functions_are_defined_exactly_once()
 
 
 def _teardown_source() -> str:
@@ -269,3 +309,73 @@ echo RESUMED > {marker}
         f"want death-by-SIGINT (-2, or 130 via a shell) so the run reports "
         f"cancellation rather than success, got {result.returncode}"
     )
+
+
+def test_teardown_is_fast_with_the_cleanup_signal_disposition_in_effect():
+    """The regression that a PASSING CI run hid (run 33869945044).
+
+    `cleanup()` sets ``trap '' INT TERM`` on entry, and an IGNORED disposition is
+    INHERITED across fork. The watchdog is forked after that line, so cancelling
+    it with SIGTERM was a no-op and `wait` blocked for the FULL bound -- per
+    service, every run: worker 11:57:38, reconciler 11:58:38, api 11:59:38, step
+    end 12:00:38. Every service had exited instantly; the 3 minutes were pure
+    watchdog wait, with no escalation warning because `elapsed` is measured
+    around `wait "${pid}"`, which really was fast.
+
+    Every earlier test missed it by calling `stop_service` in ISOLATION, where
+    the disposition is never set -- the defect lives precisely in the
+    interaction the isolation removed. So this one sets the disposition FIRST,
+    exactly as cleanup() does, and asserts on elapsed WALL TIME.
+    """
+    body = (
+        "set -euo pipefail\nTEARDOWN_WAIT_SECS=20\n"
+        + _teardown_source()
+        + """
+# ORDER MIRRORS THE REAL SCRIPT and is load-bearing: the services are forked
+# FIRST (they must NOT inherit the ignore -- in the real run they are launched
+# long before cleanup() is ever entered), and only THEN is the disposition set,
+# as cleanup() does on entry. Setting it first made the services themselves
+# ignore SIGTERM, so even the prompt one took the full bound -- a test-setup
+# artefact, not the defect under test.
+set -m
+( trap "" TERM; while :; do sleep 1; done ) & STUBBORN=$!
+( while :; do sleep 1; done ) & PROMPT=$!
+set +m
+sleep 0.3
+trap '' INT TERM          # what cleanup() does on entry, before forking the watchdog
+start=$SECONDS
+stop_service prompt "$PROMPT"
+echo "PROMPT_ELAPSED=$((SECONDS - start))"
+start=$SECONDS
+stop_service stubborn "$STUBBORN"
+echo "STUBBORN_ELAPSED=$((SECONDS - start))"
+"""
+    )
+    result = _run(body, timeout=120)
+    assert result.returncode == 0, result.stderr
+
+    prompt_match = re.search(r"PROMPT_ELAPSED=(\d+)", result.stdout)
+    stubborn_match = re.search(r"STUBBORN_ELAPSED=(\d+)", result.stdout)
+    # Assert the markers exist rather than indexing a possibly-None match: a
+    # missing marker means the script died before reaching the echo, which is a
+    # different failure and deserves to say so instead of an AttributeError.
+    assert prompt_match is not None, f"no PROMPT_ELAPSED in: {result.stdout!r}"
+    assert stubborn_match is not None, f"no STUBBORN_ELAPSED in: {result.stdout!r}"
+    prompt = int(prompt_match.group(1))
+    stubborn = int(stubborn_match.group(1))
+
+    # A service that exits on SIGTERM must cost ~0s, NOT the bound: the whole
+    # defect was paying the full bound for a service that was already gone.
+    assert prompt <= 5, (
+        f"a service that exits promptly took {prompt}s against a 20s bound -- "
+        "the watchdog was not cancelled (SIGTERM ignored via the inherited "
+        "disposition?)"
+    )
+    # A service that IGNORES SIGTERM legitimately costs the bound, and must
+    # still be reported. This is the control: without it the assertion above
+    # could pass for a stop_service() that never waits for anything at all.
+    assert stubborn >= 20, (
+        f"a SIGTERM-ignoring service took only {stubborn}s against a 20s bound; "
+        "the bound is not being honoured"
+    )
+    assert "ignored SIGTERM" in result.stderr, result.stderr

@@ -252,7 +252,16 @@ stop_service() {
   # api/runner.py matters. See RISK-NOTES.
   if [ -n "${pgid}" ]; then kill -KILL -- -"${pgid}" >/dev/null 2>&1 || true; fi
 
-  kill -TERM "${watchdog}" >/dev/null 2>&1 || true
+  # SIGKILL, not SIGTERM, and the distinction is load-bearing. cleanup() sets
+  # `trap '' INT TERM` on entry (the round-2 re-entrancy fix), and an IGNORED
+  # disposition is INHERITED across fork -- the watchdog is forked after that
+  # line, so a SIGTERM to it is a no-op and the `wait` below blocked for the
+  # FULL bound, per service, every run. Measured in CI run 33869945044: each
+  # service exited instantly, yet teardown took exactly 60s per service
+  # (worker 11:57:38, reconciler 11:58:38, api 11:59:38, step end 12:00:38) --
+  # a silent 3-minute tax on a PASSING job. The watchdog is our own bookkeeping
+  # process with nothing to clean up, and SIGKILL cannot be ignored.
+  kill -KILL "${watchdog}" >/dev/null 2>&1 || true
   wait "${watchdog}" >/dev/null 2>&1 || true
 
   if [ "${elapsed}" -ge "${TEARDOWN_WAIT_SECS}" ]; then

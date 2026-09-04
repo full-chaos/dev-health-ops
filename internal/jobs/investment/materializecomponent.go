@@ -84,6 +84,18 @@ type MaterializeComponentResult struct {
 	// Investment.WorkUnitID.
 	RepoEffort []chwrite.RepoEffortRecord
 	Skipped    string
+	// Bundle is the text bundle this component's assembly built.
+	//
+	// Returned rather than recomputed by the caller because the ORCHESTRATOR
+	// needs it too -- materialize.py's preprocess loop reads text_char_count
+	// and text_source_count to decide LLM-vs-fallback (:1363-1381) and hands
+	// source_block/source_texts/handle_map to categorize_text_bundle. Building
+	// it twice would put two BuildTextBundle call sites on the parity path,
+	// and input_hash (which gates every skip-existing lookup, at real LLM cost
+	// when it drifts) is derived from it -- so the two copies would have to
+	// stay byte-identical forever by convention rather than by construction.
+	// Zero value on either Skipped path: no bundle is built there.
+	Bundle units.TextBundle
 }
 
 const (
@@ -189,7 +201,7 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		}
 	}
 
-	return MaterializeComponentResult{Investment: investment, RepoEffort: repoEffortRecords}, nil
+	return MaterializeComponentResult{Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle}, nil
 }
 
 // dedupeNodeKeys is `list(dict.fromkeys(nodes))` (materialize.py:1321) --

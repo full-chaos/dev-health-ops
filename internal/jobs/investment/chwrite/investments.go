@@ -257,3 +257,99 @@ func (w *Writer) WriteQuotes(ctx context.Context, orgID string, records []QuoteR
 	}
 	return len(records), nil
 }
+
+// TokenUsageRecord is one llm_token_usage row -- the Go counterpart of
+// metrics/llm_token_usage.py's LLMTokenUsageRecord. Column order below matches
+// migrations 052/065/072, the same order cmd/query-api's CacheWriter uses.
+type TokenUsageRecord struct {
+	RunID        string
+	Provider     string
+	Model        string
+	Source       string
+	UseCase      string
+	InputTokens  int
+	OutputTokens int
+	Calls        int
+	ComputedAt   time.Time
+}
+
+// TokenUsageSourceInvestmentMaterialize is the `source` label
+// materialize.py:1509 writes. It is a stored discriminator other consumers
+// group by, so it is a constant rather than a literal at the call site.
+const TokenUsageSourceInvestmentMaterialize = "investment_materialize"
+
+// tokenUsageUseCaseLegacy is write_llm_token_usage's `use_case` default
+// (llm_token_usage.py:23). materialize.py never overrides it, so every row this
+// writer produces carries it.
+const tokenUsageUseCaseLegacy = "legacy"
+
+// WriteTokenUsage ports metrics/llm_token_usage.py:16-55 write_llm_token_usage.
+//
+// # THE ALL-ZERO SKIP IS BEHAVIOUR, NOT AN OPTIMISATION
+//
+// The reference returns early without writing when calls, input and output are
+// all non-positive (:33-34). A run that made no LLM calls at all -- every unit
+// skipped as unchanged, or every one falling back on insufficient evidence --
+// therefore writes NO row rather than a zero row. Dropping this would put a
+// zero-valued row into a table whose consumers SUM it, changing call-count
+// averages for every reader.
+//
+// # WHAT IS DELIBERATELY NOT PORTED
+//
+// Python swallows every write failure and returns False (:53-54). This does
+// NOT: a token-usage write failing means the ClickHouse connection is in
+// trouble, and the caller is mid-materialization with three more writes to do.
+// Reporting it lets the executor decide; the reference's bool return has
+// exactly one caller and that caller ignores it.
+func (w *Writer) WriteTokenUsage(ctx context.Context, orgID string, record TokenUsageRecord) (int, error) {
+	if w == nil || w.conn == nil {
+		return 0, ErrInvalidState
+	}
+	inputTokens := maxInt(0, record.InputTokens)
+	outputTokens := maxInt(0, record.OutputTokens)
+	calls := record.Calls
+	if calls <= 0 && inputTokens <= 0 && outputTokens <= 0 {
+		return 0, nil
+	}
+
+	// `provider or "unknown"` / `model or "unknown"` (:41-42). The defaults are
+	// the reference's and are load-bearing for grouping: an empty provider would
+	// silently form its own bucket alongside the named ones.
+	provider := record.Provider
+	if provider == "" {
+		provider = "unknown"
+	}
+	model := record.Model
+	if model == "" {
+		model = "unknown"
+	}
+	useCase := record.UseCase
+	if useCase == "" {
+		useCase = tokenUsageUseCaseLegacy
+	}
+
+	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO llm_token_usage (
+		org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at
+	)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare llm_token_usage batch: %w", err)
+	}
+	if err := batch.Append(
+		orgID, record.RunID, provider, model, record.Source, useCase,
+		uint64(inputTokens), uint64(outputTokens), uint64(maxInt(0, calls)),
+		record.ComputedAt.UTC(),
+	); err != nil {
+		return 0, fmt.Errorf("append llm_token_usage row: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return 0, fmt.Errorf("send llm_token_usage batch: %w", err)
+	}
+	return 1, nil
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

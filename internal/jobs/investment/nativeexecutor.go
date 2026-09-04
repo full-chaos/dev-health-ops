@@ -1,0 +1,299 @@
+package investment
+
+// nativeexecutor.go is the seam that replaces the Python bridge for
+// investment.materialize.
+//
+// It satisfies workgraph.CompatibilityExecutor -- the SAME interface the HTTP
+// bridge satisfies -- so nothing else in the execution path changes: the
+// handler still claims the request, renews its lease, calls Execute exactly
+// once, and completes the request, which writes the
+// `work_graph_execution_request:<id>` fence that the outbox's
+// prerequisite_completion_key gate reads. Scheduler, reconciler, River and the
+// fence semantics are untouched by construction, not by care.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+)
+
+// defaultWindowDays is run_investment_materialize's `window_days: int = 30`
+// default (work_graph_tasks.py:172). A scope that omits both from_date and
+// to_date gets a 30-day window ending now.
+const defaultWindowDays = 30
+
+// NativeExecutor runs investment.materialize in Go.
+type NativeExecutor struct {
+	reader *chquery.Reader
+	writer *chwrite.Writer
+	logger *slog.Logger
+	// now is injectable so a test can pin the run clock; production passes
+	// time.Now. computed_at is a ReplacingMergeTree VERSION column on all three
+	// output tables, so the clock is not cosmetic -- two runs with the same
+	// stamp collapse into one row.
+	now func() time.Time
+	// newProvider resolves and constructs the LLM provider for one run. A
+	// function rather than a stored Provider because the scope names the
+	// provider and because the run must Close() it, mirroring Python's
+	// `await provider_instance.aclose()` in materialize_investments' finally.
+	newProvider func(requested string) (categorize.Provider, categorize.ProviderKind, error)
+}
+
+// NewNativeExecutor builds the executor. Every collaborator is required.
+func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *slog.Logger) (*NativeExecutor, error) {
+	if reader == nil || writer == nil || logger == nil {
+		return nil, ErrUnavailable
+	}
+	return &NativeExecutor{
+		reader: reader, writer: writer, logger: logger,
+		now:         func() time.Time { return time.Now().UTC() },
+		newProvider: resolveProviderFromEnv,
+	}, nil
+}
+
+func resolveProviderFromEnv(requested string) (categorize.Provider, categorize.ProviderKind, error) {
+	kind, err := categorize.ResolveProviderKind(requested)
+	if err != nil {
+		return nil, "", err
+	}
+	provider, err := categorize.NewProviderFromEnv(kind)
+	if err != nil {
+		return nil, "", err
+	}
+	return provider, kind, nil
+}
+
+// materializeScope is the decoded request scope.
+//
+// The field set is EXACTLY worker_workgraph.py:82-94's allowlist for
+// investment.materialize. Pointer types distinguish "absent" from "present and
+// zero", which matters for every field whose absent-default is not the zero
+// value (window_days defaults to 30, not 0).
+type materializeScope struct {
+	FromDate                    *string  `json:"from_date"`
+	ToDate                      *string  `json:"to_date"`
+	WindowDays                  *int     `json:"window_days"`
+	RepoIDs                     []string `json:"repo_ids"`
+	TeamIDs                     []string `json:"team_ids"`
+	LLMProvider                 *string  `json:"llm_provider"`
+	Force                       *bool    `json:"force"`
+	AllowUnscoped               *bool    `json:"allow_unscoped"`
+	LLMBatchMode                *string  `json:"llm_batch_mode"`
+	LLMBatchMinItems            *int     `json:"llm_batch_min_items"`
+	LLMBatchPollIntervalSeconds *float64 `json:"llm_batch_poll_interval_seconds"`
+	LLMBatchTimeoutSeconds      *float64 `json:"llm_batch_timeout_seconds"`
+}
+
+// Execute runs one investment.materialize request.
+//
+// The returned bytes become work_graph_execution_ledger.output_evidence, and
+// its SHAPE is a compatibility contract, not this function's choice -- see
+// buildEvidence.
+func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Claim) ([]byte, error) {
+	if executor == nil || executor.reader == nil || executor.writer == nil {
+		return nil, workgraph.ErrUnavailable
+	}
+	if claim.Request.Kind != workgraph.KindMaterialize {
+		// A handler wired to the wrong executor is a construction bug. Fail
+		// rather than materialize under a request that meant something else.
+		return nil, fmt.Errorf("native investment executor received kind %q", claim.Request.Kind)
+	}
+
+	scope, err := decodeMaterializeScope(claim.Request.Scope)
+	if err != nil {
+		return nil, err
+	}
+
+	// Batch mode is NOT ported (see materialize.go's header). Python's default
+	// is "sync" (materialize.py:820), so this refuses nothing that runs today
+	// -- but it refuses LOUDLY rather than silently downgrading a
+	// provider_batch request to serial calls, which would change cost and
+	// latency invisibly. Note this also means the Go plane ignores
+	// INVESTMENT_LLM_BATCH_MODE entirely rather than reading a new env var:
+	// an operator who sets it gets a refusal, not a silent divergence.
+	if scope.LLMBatchMode != nil && *scope.LLMBatchMode != "" && *scope.LLMBatchMode != "sync" {
+		return nil, fmt.Errorf(
+			"native investment executor supports llm_batch_mode=sync only, got %q", *scope.LLMBatchMode)
+	}
+
+	requestedProvider := "auto"
+	if scope.LLMProvider != nil && *scope.LLMProvider != "" {
+		requestedProvider = *scope.LLMProvider
+	}
+	provider, kind, err := executor.newProvider(requestedProvider)
+	if err != nil {
+		return nil, fmt.Errorf("resolve llm provider: %w", err)
+	}
+	defer func() { _ = provider.Close() }()
+
+	orgID := claim.Request.OrganizationID
+	allowUnscoped := scope.AllowUnscoped != nil && *scope.AllowUnscoped
+
+	// materialize.py:1196-1202. The `none` provider produces empty completions,
+	// so every unit would fall back to the prior distribution and OVERWRITE
+	// real categorizations with it. Refusing is the reference's behaviour and
+	// the only safe one.
+	if kind == categorize.ProviderKindNone {
+		return nil, errors.New(
+			"llm provider 'none' cannot materialize investment categorizations; " +
+				"configure a real provider or request 'mock' for tests")
+	}
+	// materialize.py:1179-1188: an unscoped run against a REAL provider writes
+	// empty-org rows, which is almost always a mistake and is expensive. mock
+	// is exempt because it costs nothing and is how tests run unscoped.
+	if orgID == "" && kind != categorize.ProviderKindMock && !allowUnscoped {
+		return nil, errors.New(
+			"investment materialize requires a non-empty org for real LLM providers; " +
+				"set allow_unscoped to write empty-org rows intentionally")
+	}
+
+	now := executor.now()
+	fromTS, toTS, err := materializeWindow(scope, now)
+	if err != nil {
+		return nil, err
+	}
+	if !fromTS.Before(toTS) {
+		// runner.py:216-218 rejects this rather than materializing an empty or
+		// inverted window.
+		return nil, fmt.Errorf("materialize window start %s is not before end %s",
+			fromTS.Format(time.RFC3339), toTS.Format(time.RFC3339))
+	}
+
+	materializer, err := NewMaterializer(executor.reader, executor.writer, provider, executor.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := Config{
+		OrgID:   orgID,
+		FromTS:  fromTS,
+		ToTS:    toTS,
+		RepoIDs: scope.RepoIDs,
+		TeamIDs: scope.TeamIDs,
+		Force:   scope.Force != nil && *scope.Force,
+		// llm_concurrency is injected onto the arguments from the REQUEST ROW,
+		// not the scope (worker_workgraph.py:141), which is why it is read off
+		// claim.Request rather than materializeScope.
+		LLMConcurrency: claim.Request.LLMConcurrency,
+		ProviderName:   string(kind),
+		// model_ref is the same story: the row's column, not a scope key.
+		Model: claim.Request.ModelRef,
+		// work_graph_tasks.py:243 hardcodes persist_evidence_snippets=True on
+		// the worker path -- it is not a scope key and not configurable here.
+		PersistEvidenceSnippets: true,
+		RunID:                   claim.Request.ID,
+		ComputedAt:              now,
+	}
+
+	stats, err := materializer.Run(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return executor.buildEvidence(claim, stats)
+}
+
+// buildEvidence reproduces the bridge's output_evidence shape
+// (worker_workgraph.py:404-414) exactly.
+//
+// # WHY THE SHAPE IS COPIED RATHER THAN SIMPLIFIED
+//
+// This value is what already sits in every historical
+// work_graph_execution_ledger.output_evidence row, and readers -- the repair
+// endpoint, the operator CLI readbacks, anything reconstructing what a run did
+// -- parse it. Emitting a tidier native-only shape would leave the column
+// holding two incompatible schemas discriminated by nothing, so a reader would
+// have to guess which era a row came from. The nested "outcome" wrapper carries
+// the same {"status","stats"} the Celery task returned.
+//
+// The result must also stay under workgraph.validEvidence's 4096-byte bound
+// (postgres.go:232); Stats is fixed-width scalars plus a small failure-count
+// map, so it does unless the failure vocabulary grows unboundedly -- which it
+// cannot, FailureClass returns from a closed set.
+func (executor *NativeExecutor) buildEvidence(claim workgraph.Claim, stats Stats) ([]byte, error) {
+	evidence := map[string]any{
+		"kind":                   string(claim.Request.Kind),
+		"model_ref":              claim.Request.ModelRef,
+		"prompt_ref":             claim.Request.PromptRef,
+		"llm_concurrency":        claim.Request.LLMConcurrency,
+		"spend_limit_microunits": claim.Request.SpendLimitMicrounits,
+		"outcome": map[string]any{
+			"status": "success",
+			"stats":  stats,
+		},
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return nil, fmt.Errorf("encode execution evidence: %w", err)
+	}
+	return encoded, nil
+}
+
+// decodeMaterializeScope decodes the request scope STRICTLY.
+//
+// DisallowUnknownFields mirrors the bridge's own `set(scope) - allowed[kind]`
+// refusal (worker_workgraph.py:136-137). Without it, a scope key this port does
+// not know -- one a future Python change adds, or one already used by a caller
+// this port has not seen -- would be silently dropped and the run would proceed
+// with the wrong scope, writing plausible rows for the wrong window.
+func decodeMaterializeScope(raw []byte) (materializeScope, error) {
+	scope := materializeScope{}
+	if len(raw) == 0 {
+		// An absent scope is the org-wide default run, matching a Celery call
+		// with no keyword arguments.
+		return scope, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&scope); err != nil {
+		return materializeScope{}, fmt.Errorf("decode investment.materialize scope: %w", err)
+	}
+	return scope, nil
+}
+
+// materializeWindow ports work_graph_tasks.py:57-81 _parse_materialize_window.
+//
+// # THE to_date +1 DAY IS NOT AN OFF-BY-ONE
+//
+// A supplied to_date is parsed as a DATE and advanced by one day at midnight
+// UTC, making the window END-EXCLUSIVE over whole days -- `to_date=2026-09-04`
+// covers all of the 4th. Dropping the +1 would silently exclude the last day of
+// every explicitly-bounded run. An ABSENT to_date is `now` instead, not
+// midnight, so the two branches are genuinely different instants and not a
+// shared helper.
+func materializeWindow(scope materializeScope, now time.Time) (time.Time, time.Time, error) {
+	toTS := now
+	if scope.ToDate != nil && *scope.ToDate != "" {
+		parsed, err := time.Parse(time.DateOnly, *scope.ToDate)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid to_date %q: %w", *scope.ToDate, err)
+		}
+		toTS = parsed.AddDate(0, 0, 1).UTC()
+	}
+
+	if scope.FromDate != nil && *scope.FromDate != "" {
+		parsed, err := time.Parse(time.DateOnly, *scope.FromDate)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid from_date %q: %w", *scope.FromDate, err)
+		}
+		return parsed.UTC(), toTS, nil
+	}
+
+	windowDays := defaultWindowDays
+	if scope.WindowDays != nil {
+		windowDays = *scope.WindowDays
+	}
+	return toTS.AddDate(0, 0, -windowDays), toTS, nil
+}
+
+// compile-time proof the executor is substitutable for the HTTP bridge. If this
+// stops compiling, the seam has changed and the cutover needs re-reading.
+var _ workgraph.CompatibilityExecutor = (*NativeExecutor)(nil)

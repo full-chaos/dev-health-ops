@@ -630,6 +630,38 @@ jobs:
             --tag "dev-health-go-${TARGET}:security" \
             .
 
+      # CHAOS-5012: the syft installer that anchore/sbom-action runs
+      # internally (curl + checksum verify against a GitHub release) flakes
+      # intermittently -- HTTP 302 redirect followed by a checksum mismatch
+      # on the downloaded binary. The main action checks the runner's Action
+      # tool cache first (getSyftCommand -> cache.find) and only falls back
+      # to its own installer on a cache miss, so warming the cache here with
+      # up to 3 attempts of the same sub-action lets a transient redirect/
+      # checksum flake retry away before the real SBOM step ever needs to
+      # download anything itself.
+      - name: Warm the syft tool cache (attempt 1)
+        id: syft-download-1
+        continue-on-error: true
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.42.3
+
+      - name: Warm the syft tool cache (attempt 2)
+        id: syft-download-2
+        if: steps.syft-download-1.outcome == 'failure'
+        continue-on-error: true
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.42.3
+
+      - name: Warm the syft tool cache (attempt 3)
+        id: syft-download-3
+        if: steps.syft-download-2.outcome == 'failure'
+        continue-on-error: true
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.42.3
+
       - name: Generate ${{ matrix.target }} SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:

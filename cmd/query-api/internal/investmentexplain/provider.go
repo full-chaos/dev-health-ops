@@ -137,23 +137,40 @@ func providerHasRequiredConfig(kind categorize.ProviderKind) bool {
 // real. That is why this is a SEPARATE check from IsLLMAvailable, not a
 // widening of it -- team-lead ruling, CHAOS-4977 codex round 1's #5.
 //
-// #2189 (native Go Ollama support) is the one entry expected to move out
-// of this set once it lands in this branch's base -- re-check
-// goImplementedProviderKinds (providerkind.go) before assuming this set
-// is still accurate; it is NOT derived from that map automatically on
-// purpose, so a future Ollama port must touch both.
+// #2189 (native Go Ollama support) LANDED in this branch's base (merged to
+// main as ce0d58d03) -- categorize.ProviderKindOllama moved into
+// goImplementedProviderKinds, so it is REMOVED from this set below. This is
+// the update this comment itself warned would be needed by hand.
+//
+// #2189 also REMOVED categorize.ProviderKindLMStudio entirely (chris's
+// ruling, CHAOS-4978): Go has no typed kind for bare "lmstudio" anymore,
+// deliberately -- LM Studio is reached via ProviderKindLocal instead. But
+// Python's providers/__init__.py still serves a real "lmstudio" provider
+// name verbatim (llm/providers/__init__.py:31,40,91,339 -- confirmed
+// directly against src, not assumed from the removed constant's absence),
+// and categorize.ResolveProviderKind still resolves and returns "lmstudio"
+// unchanged for an explicit (non-"auto") request -- ResolveProviderKind has
+// no special-case mapping from the STRING "lmstudio" to ProviderKindLocal,
+// only NewProviderFromEnv's construction path for an explicit
+// ProviderKindLocal request reaches an LM-Studio-shaped endpoint via the
+// generic LLM_BASE_URL override. So a request naming "lmstudio" explicitly
+// is exactly as Go-unimplemented as it was before #2189 -- named below as a
+// raw string literal (providerKindLMStudio), the same shape as
+// qwen-local/qwen-lmstudio just below, not resurrected as a categorize
+// constant this package doesn't own.
+//
 // qwen-local/qwen-lmstudio are two MORE provider name strings Python's
-// _KNOWN_PROVIDERS carries (llm/providers/__init__.py:37-48) beyond the
-// nine categorize.ProviderKind constants -- they have no typed constant
-// in the categorize package at all (a pre-existing gap in that package,
-// not introduced here), so they're named as raw string literals rather
-// than invented as new categorize.ProviderKind constants this package
-// doesn't own. Missing them here reproduces exactly the same silent
-// llm_unavailable regression as the five typed kinds above, just for two
-// string values `categorize.ResolveProviderKind` still resolves and
-// returns verbatim for an explicit (non-"auto") request. Caught by codex
-// round 2.
+// _KNOWN_PROVIDERS carries (llm/providers/__init__.py:33-34,47-48) beyond
+// the categorize.ProviderKind constants -- they have no typed constant in
+// the categorize package at all (a pre-existing gap in that package, not
+// introduced here), so they're named as raw string literals rather than
+// invented as new categorize.ProviderKind constants this package doesn't
+// own. Missing them here reproduces exactly the same silent
+// llm_unavailable regression as the typed kinds above, just for string
+// values `categorize.ResolveProviderKind` still resolves and returns
+// verbatim for an explicit (non-"auto") request. Caught by codex round 2.
 const (
+	providerKindLMStudio     categorize.ProviderKind = "lmstudio"
 	providerKindQwenLocal    categorize.ProviderKind = "qwen-local"
 	providerKindQwenLMStudio categorize.ProviderKind = "qwen-lmstudio"
 )
@@ -162,8 +179,7 @@ var goUnsupportedButPythonKnownProviderKinds = map[categorize.ProviderKind]struc
 	categorize.ProviderKindAnthropic: {},
 	categorize.ProviderKindGemini:    {},
 	categorize.ProviderKindQwen:      {},
-	categorize.ProviderKindOllama:    {},
-	categorize.ProviderKindLMStudio:  {},
+	providerKindLMStudio:             {},
 	providerKindQwenLocal:            {},
 	providerKindQwenLMStudio:         {},
 }

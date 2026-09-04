@@ -57,16 +57,20 @@ func TestCompleteInvestmentMixExplanationMockProviderEndToEnd(t *testing.T) {
 
 // TestResolveUnsupportedProviderKindCoversFullPythonKnownSet regresses
 // codex round 2 (P1): Python's _KNOWN_PROVIDERS
-// (llm/providers/__init__.py:37-48) has 11 names, not the 9
+// (llm/providers/__init__.py:37-48) has 11 names, more than the typed
 // categorize.ProviderKind constants -- "qwen-local" and "qwen-lmstudio"
 // are real, distinct provider name strings Python resolves and
 // constructs (llm/providers/__init__.py:369/376) with no typed constant
-// anywhere in this repo. A request for either one must ALSO get the
-// pre-stream 501, not the silent llm_unavailable regression #5's fix was
-// meant to close entirely.
+// anywhere in this repo, and #2189 (CHAOS-4978) additionally removed the
+// categorize.ProviderKindLMStudio constant entirely even though Python's
+// bare "lmstudio" is still a real, served provider name -- see
+// provider.go's goUnsupportedButPythonKnownProviderKinds doc comment. A
+// request for any of these three must ALSO get the pre-stream 501, not
+// the silent llm_unavailable regression #5's fix was meant to close
+// entirely.
 func TestResolveUnsupportedProviderKindCoversFullPythonKnownSet(t *testing.T) {
 	for _, requested := range []string{
-		"anthropic", "gemini", "qwen", "ollama", "lmstudio",
+		"anthropic", "gemini", "qwen", "lmstudio",
 		"qwen-local", "qwen-lmstudio",
 	} {
 		t.Run(requested, func(t *testing.T) {
@@ -78,8 +82,11 @@ func TestResolveUnsupportedProviderKindCoversFullPythonKnownSet(t *testing.T) {
 	}
 
 	// The discriminating half: a kind this port DOES implement must NOT
-	// be flagged unsupported.
-	for _, requested := range []string{"openai", "local", "mock", "none"} {
+	// be flagged unsupported. "ollama" moved here from the unsupported
+	// list above once #2189 (native Go Ollama support) landed in this
+	// branch's base (merged to main as ce0d58d03) -- categorize.
+	// ProviderKindOllama is now in goImplementedProviderKinds.
+	for _, requested := range []string{"openai", "local", "ollama", "mock", "none"} {
 		t.Run(requested, func(t *testing.T) {
 			_, unsupported := ResolveUnsupportedProviderKind(requested)
 			if unsupported {

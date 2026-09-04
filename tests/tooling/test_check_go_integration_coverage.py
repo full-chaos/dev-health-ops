@@ -117,6 +117,9 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # recommendations loader's team-scoping join reads). Merged total: 44.
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
+    # CURRENT TOTAL: 44. Adding one -tags=integration package bumps every
+    # literal below by +1 -- this is the one number to change; the
+    # narrative above is for someone auditing history, not for the bump.
     assert "44 package(s) discovered, 0 denylisted, 44 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift

@@ -368,6 +368,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4989 and CHAOS-4897 landed independently, each written as
     # 42 -> 43 on its own branch: CHAOS-4989's internal/llmorgsettings and
     # CHAOS-4897's internal/teamownership. Merged total: 44.
+    # CURRENT TOTAL: 44 -- the one number to bump when a new
+    # -tags=integration package is added.
     assert "44 package(s) discovered, 0 denylisted, 44 will run" in result.stdout
     assert "integration shard plan: 3 shard(s), 44 package(s)" in result.stdout
 
@@ -411,6 +413,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4989 and CHAOS-4897 landed independently, each written as
     # 42 -> 43 on its own branch: internal/llmorgsettings and
     # internal/teamownership. Merged total: 44.
+    # CURRENT TOTAL: 44 -- the one number to bump.
     assert len(flattened) == len(set(flattened)) == 44
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
@@ -1731,6 +1734,8 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # 41 -> 42 on its own branch: internal/llmorgsettings and
     # internal/teamownership (44 discovered - 1 for the providersync
     # shard-1 package = 43).
+    # CURRENT TOTAL: 43 (== discovered-total-minus-one -- keep this in
+    # sync with the "44" literal above when either changes).
     assert len(selected_packages) == len(set(selected_packages)) == 43
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 

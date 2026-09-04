@@ -182,6 +182,70 @@
 # v4.8.2 -- the warm step reuses the exact RGOMODCACHE/RGOCACHE this script
 # already creates and already cleans up; nothing new to reap.
 #
+# v4.8.4 (2026-09-04) fixes four defects found by lane-s7c-outcomes running
+# v4.8.3 on bigboy (Ubuntu ARM64, user ubuntu):
+#
+#   1. cleanup() and the --reap-mine/--reap-stale subcommands ran `rm -rf`
+#      against this script's own per-round dirs without first making them
+#      writable. Go's own module cache extraction marks directories
+#      read-only (mode 0555) so a build cannot accidentally corrupt an
+#      extracted module; `rm -rf` on such a tree fails file-by-file with
+#      "Permission denied", leaves the directory behind, and buries
+#      whatever the round's REAL failure was underneath that noise. Fixed
+#      via a shared rm_rf_writable() helper: `chmod -R u+w` first, then
+#      `rm -rf`, on the exact dir this run created or the exact reap
+#      candidate the caller named -- never a shared cache, never `go env
+#      GOCACHE`, never $HOME/go/pkg/mod. Same helper used by cleanup() and
+#      by reap_dirs() (--reap-mine / --reap-stale).
+#   2. GOCACHE/GOMODCACHE/GOTMPDIR/the review worktree were keyed on the
+#      review worktree's BASENAME alone. The bigboy lane recipe's own
+#      worked example clones acr into a directory literally named `acr`
+#      (fixed in the recipe text, see its own note), so every lane
+#      following that example got the same key and collided on the same
+#      cache paths -- not a correctness bug, a silent cross-lane cache
+#      collision. Fixed: the naming key is now the basename PLUS an
+#      8-hex-char hash of the worktree's own resolved absolute path
+#      (LANE_KEY), which is unique per checkout no matter what its
+#      directory is called -- the clone basename is no longer load-bearing
+#      for uniqueness. LANE itself is kept as the key's first
+#      dash-delimited segment, so --reap-mine LANE's existing glob match
+#      (`codex-review-*-LANE-*`) still matches every dir this run created.
+#   3. The warm step's `go mod download all` needs a writable
+#      $GOPATH/pkg/sumdb. On bigboy, ~/go and ~/go/pkg are root:root 755,
+#      so a missing-hash lookup fails with an ENOENT under .../pkg/sumdb/...
+#      that reads exactly like a network failure and is not one -- it is a
+#      permission denial one directory up. Fixed: a per-round GOPATH
+#      (RGOPATH) is created under this script's own /tmp scratch, named
+#      and cleaned up the same way RGOTMPDIR already is, unless the caller
+#      sets CODEX_REVIEW_GOPATH; exported into both the warm step's
+#      environment and codex's own sandboxed environment. GOSUMDB
+#      verification stays ON throughout -- this is a permission fix, never
+#      a "turn off checksum verification" fix. A warm-step failure whose
+#      log names a pkg/sumdb path with an unwritable parent now says so
+#      explicitly: "this is a PERMISSION problem, not a network problem."
+#   4. OUTDIR (and the log dir, which is the same directory) was never
+#      created before use. A caller-supplied -o naming a not-yet-existing
+#      directory made the warm step's own log redirect die with "No such
+#      file or directory" before any verdict could be produced, or after
+#      it, depending on timing -- either way, no usable output. Fixed:
+#      `mkdir -p "$OUTDIR"` runs immediately after OUTDIR is resolved,
+#      aborting loudly (non-zero exit, reason on stderr) if it cannot be
+#      created.
+#
+# Also found the same pass: the bigboy recipe's manual pgrep-based codex
+# launch-gate example (`pgrep -f "codex exe[c]" | wc -l`) is unsafe under
+# `set -e -o pipefail` -- pgrep exits 1 on a legitimate ZERO-match count
+# (an idle box, the common and DESIRED reading of that gate), and under
+# pipefail that exit status survives through the `| wc -l` pipe and can
+# kill a caller script that runs the gate as a bare statement, even though
+# zero running rounds is exactly the "safe to launch" answer the gate
+# exists to give. This wrapper does not itself run that gate (it is a
+# manual pre-launch step documented in the recipe, not something
+# codex-review.sh executes), so there is no in-script fix for it -- the
+# recipe text itself is corrected instead (appends `|| true` to the
+# pgrep|wc -l pipeline; see
+# .remember/lanes/lane-oci-image/bigboy-lane-recipe.md).
+#
 # Two subcommands do the reaping for dirs from before this version, or from
 # a round that got SIGKILLed past the trap:
 #
@@ -316,7 +380,12 @@ reap_dirs() {
     if [ "$dry_run" -eq 1 ]; then
       warn "reap: would remove $d"
     else
-      rm -rf "$d"
+      # v4.8.4: chmod before rm -- see rm_rf_writable()'s comment below.
+      # $d has already passed the exact-path shared-cache check above, so
+      # this is always one of this wrapper's OWN prefixed dirs, never the
+      # shared `go env GOCACHE`.
+      chmod -R u+w "$d" 2>/dev/null || true
+      rm -rf "$d" || warn "reap: could not fully remove $d even after chmod -R u+w"
       warn "reap: removed $d"
     fi
     kept=$((kept + 1))
@@ -393,6 +462,12 @@ git -C "$WT" rev-parse --git-dir >/dev/null 2>&1 || die "$WT is not a git worktr
 NAME=${NAME:-$(basename "$WT")}
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}
+# v4.8.4: OUTDIR (and the log dir, which is the same directory -- see V/L
+# below) was never created before use. A caller-supplied -o naming a
+# not-yet-existing directory made the warm step's log redirect die with
+# "No such file or directory" and no verdict at all. Create it now, abort
+# loudly if it cannot be created.
+mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"
 [ -s "$PROMPT" ] || die "prompt file $PROMPT missing or empty"
 
 TIP=${TIP:-$(git -C "$WT" rev-parse HEAD)}
@@ -444,7 +519,28 @@ L="$OUTDIR/$NAME-$TS.log"
 # the dir stays reapable by --reap-stale even then.
 LANE=$(basename "$WT" 2>/dev/null || true)
 case "$LANE" in ''|'.'|'/') LANE=unattributed ;; esac
-RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE-$TS}"
+# v4.8.4: LANE (the worktree basename) alone is not a safe naming key --
+# the bigboy lane recipe's own §10 worked example clones into a directory
+# literally named `acr`, so every lane following that example got the
+# SAME LANE value and collided on the same GOCACHE/GOMODCACHE path (found
+# by lane-s7c-outcomes on bigboy). LANE_KEY appends an 8-hex-char hash of
+# $WT's own resolved absolute path, which is unique per checkout no
+# matter what its directory is called -- the clone basename stops
+# mattering for uniqueness. LANE is kept as LANE_KEY's first
+# dash-delimited segment (e.g. codex-review-gocache-acr-3f9a1c2b-<ts>) so
+# --reap-mine LANE's existing glob (`codex-review-*-LANE-*`) still matches.
+WT_REAL=$(cd "$WT" 2>/dev/null && pwd -P || printf '%s' "$WT")
+if command -v shasum >/dev/null 2>&1; then
+  WT_HASH=$(printf '%s' "$WT_REAL" | shasum -a 256 | cut -c1-8)
+elif command -v sha256sum >/dev/null 2>&1; then
+  WT_HASH=$(printf '%s' "$WT_REAL" | sha256sum | cut -c1-8)
+else
+  # Last resort, still disambiguates two concurrent processes even though
+  # it says nothing about the path itself.
+  WT_HASH=$$
+fi
+LANE_KEY="$LANE-$WT_HASH"
+RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE_KEY-$TS}"
 mkdir -p "$RGOCACHE" || die "cannot create review GOCACHE $RGOCACHE"
 # GOMODCACHE, bounded for the same reason as GOCACHE: an unset GOMODCACHE
 # defaults to $HOME/go/pkg/mod, which read-only denies exactly like the
@@ -452,7 +548,7 @@ mkdir -p "$RGOCACHE" || die "cannot create review GOCACHE $RGOCACHE"
 # widen access to the user's real mod cache just because it happens to be
 # writable there. New in v4.8.2 -- v4.8.1 and earlier left GOMODCACHE
 # unbounded.
-RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE-$TS}"
+RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE_KEY-$TS}"
 mkdir -p "$RGOMODCACHE" || die "cannot create review GOMODCACHE $RGOMODCACHE"
 
 # Resolve the bounds ONCE, into variables, so the warn line below reports
@@ -504,13 +600,13 @@ START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
 # reapable naming scheme. Keyed on LANE+TS rather than $NAME: two concurrent
 # rounds against the same lane with the same explicit -n NAME must still get
 # distinct, individually reapable dirs.
-RW=$(mktemp -d "${TMPDIR:-/tmp}/codex-review-worktree-$LANE-$TS-XXXXXX")
+RW=$(mktemp -d "${TMPDIR:-/tmp}/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
 # /tmp for the same reason as RGOCACHE above.
-RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE-$TS-XXXXXX")
+RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -524,7 +620,27 @@ RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE-$TS-XXXXXX")
 # sort, a python NamedTemporaryFile -- fails the same way, and the reviewer
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
-RTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE-$TS-shell-XXXXXX")
+RTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
+
+# v4.8.4: per-round GOPATH. On bigboy, ~/go and ~/go/pkg are root:root 755
+# (chris chowns this separately -- never this script's job), so an unset
+# GOPATH defaulting to $HOME/go makes `go mod download all` fail trying to
+# create $GOPATH/pkg/sumdb/... -- an ENOENT that reads exactly like a
+# network failure and is not one; it is a permission denial one directory
+# up. Same pattern as RGOTMPDIR/RGOCACHE above: a per-round dir under
+# /tmp, cleaned up by cleanup() below, unless the caller pins
+# CODEX_REVIEW_GOPATH (e.g. to a warm, already-writable GOPATH it manages
+# itself). GOSUMDB verification is left at its default (ON) either way --
+# this fixes a permission problem, it does not relax checksum
+# verification.
+if [ -n "${CODEX_REVIEW_GOPATH:-}" ]; then
+  RGOPATH="$CODEX_REVIEW_GOPATH"
+  mkdir -p "$RGOPATH" || die "cannot create GOPATH $RGOPATH"
+else
+  RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX") \
+    || die "cannot create per-round GOPATH"
+fi
+
 rmdir "$RW"   # git worktree add wants to create it
 # Everything the reviewer left in the worktree, preserved BEFORE the worktree is
 # removed. CF lost a 382k-token round because the reviewer wrote its findings to
@@ -662,24 +778,40 @@ preserve_residue() {
   rm -f "$listing" "$errlog"
 }
 
+# v4.8.4: chmod before rm. Go's own module cache extraction marks
+# directories read-only (mode 0555) so a build cannot accidentally corrupt
+# an extracted module; a plain `rm -rf` on such a tree fails file-by-file
+# with "Permission denied", leaves the directory behind, and buries
+# whatever the round's REAL failure was underneath that noise (found on
+# bigboy by lane-s7c-outcomes running v4.8.3's RGOMODCACHE cleanup).
+#
+# Takes the dir DIRECTLY, never a glob -- every call site below passes one
+# of this run's own exact variables (RGOTMPDIR/RTMPDIR/RGOCACHE/
+# RGOMODCACHE/RGOPATH), so this can never reach a shared cache, `go env
+# GOCACHE`, or $HOME/go/pkg/mod. Always returns 0 (a removal failure is
+# WARNED, not silent, and not fatal) -- the same "never let this be the
+# function's last statement under set -e" reasoning that shaped every
+# if-block in preserve_residue()/cleanup() above: a non-zero return here
+# would abort the REST of cleanup() (the trap handler) under `set -euo
+# pipefail`, silently skipping whatever cleanup steps were still to come.
+rm_rf_writable() {
+  local d="$1"
+  [ -n "$d" ] && [ -d "$d" ] || return 0
+  chmod -R u+w "$d" 2>/dev/null || true
+  rm -rf "$d" 2>/dev/null \
+    || warn "cleanup: could not fully remove $d even after chmod -R u+w -- check for a still-read-only entry or an open file handle"
+  return 0
+}
+
 cleanup() {
   preserve_residue
-  # if-block, NOT `[ … ] && [ … ] && rm -rf` -- same reason as preserve_residue's
-  # neighbours above (lane-4441's read of 232915a7). The && chain returns
-  # non-zero when either test is false. That is harmless ONLY while statements
-  # follow it; the moment it becomes the last statement in cleanup() -- which a
-  # future edit to the three lines below would do silently -- it becomes the
-  # function's exit status, and cleanup() runs from `trap ... EXIT`, so the
-  # whole wrapper would start exiting 1 on a clean round with no other change.
-  if [ -n "${RGOTMPDIR:-}" ] && [ -d "$RGOTMPDIR" ]; then
-    rm -rf "$RGOTMPDIR"
-  fi
+  rm_rf_writable "${RGOTMPDIR:-}"
   # RTMPDIR too, or every round leaves a /tmp/codex-review-gotmp-*-shell-*
-  # behind. Same if-block shape as its neighbours, for the reason documented
-  # above them.
-  if [ -n "${RTMPDIR:-}" ] && [ -d "$RTMPDIR" ]; then
-    rm -rf "$RTMPDIR"
-  fi
+  # behind.
+  rm_rf_writable "${RTMPDIR:-}"
+  # RGOPATH (v4.8.4): the per-round GOPATH scratch dir -- see where it is
+  # created, above. Same rules: this run's own dir, never $HOME/go.
+  rm_rf_writable "${RGOPATH:-}"
   # v4.8.2: GOCACHE/GOMODCACHE, by exact variable and never a glob (see the
   # top-of-file changelog note). Straight rm -rf, not `go clean -cache`
   # scoped to the dir first: for a large cache `go clean -cache` walks and
@@ -688,12 +820,8 @@ cleanup() {
   # explicit opt-out for a caller that wants the old warm-across-rounds
   # cache back (see RGOCACHE above) and will police its own cleanup.
   if [ "${CODEX_KEEP_CACHE:-0}" != 1 ]; then
-    if [ -n "${RGOCACHE:-}" ] && [ -d "$RGOCACHE" ]; then
-      rm -rf "$RGOCACHE"
-    fi
-    if [ -n "${RGOMODCACHE:-}" ] && [ -d "$RGOMODCACHE" ]; then
-      rm -rf "$RGOMODCACHE"
-    fi
+    rm_rf_writable "${RGOCACHE:-}"
+    rm_rf_writable "${RGOMODCACHE:-}"
   else
     warn "CODEX_KEEP_CACHE=1 -- keeping $RGOCACHE and $RGOMODCACHE"
   fi
@@ -750,6 +878,7 @@ WARM_RC=0
     GOCACHE="$RGOCACHE" \
     GOMODCACHE="$RGOMODCACHE" \
     GOTMPDIR="$RGOTMPDIR" \
+    GOPATH="$RGOPATH" \
     TMPDIR="$RTMPDIR" \
     bash -c '
       set -euo pipefail
@@ -776,7 +905,25 @@ WARM_MODCACHE_SIZE=$(du -sh "$RGOMODCACHE" 2>/dev/null | cut -f1)
 WARM_MODCACHE_SIZE=${WARM_MODCACHE_SIZE:-unknown}
 WARM_GOCACHE_SIZE=$(du -sh "$RGOCACHE" 2>/dev/null | cut -f1)
 WARM_GOCACHE_SIZE=${WARM_GOCACHE_SIZE:-unknown}
+# v4.8.4: a warm-step failure whose raw `go` error names an unwritable
+# $GOPATH/pkg/sumdb path (bigboy: ~/go and ~/go/pkg are root:root 755)
+# reads exactly like a network failure -- "open .../pkg/sumdb/
+# sum.golang.org/latest: no such file or directory" -- and is not one.
+# GOPATH is already pointed at RGOPATH above, so this should not fire on
+# a correctly-configured round; if it still does (e.g. a caller-pinned
+# CODEX_REVIEW_GOPATH pointing somewhere unwritable), name the exact path
+# and say plainly that this is a permission problem, not a network one.
 if [ "$WARM_RC" -ne 0 ]; then
+  SUMDB_HIT=$(grep -oE '[^ ]*pkg/sumdb/[^ ]*' "$WARM_LOG" 2>/dev/null | head -1 || true)
+  if [ -n "$SUMDB_HIT" ]; then
+    SUMDB_PARENT=$(dirname "$SUMDB_HIT")
+    while [ -n "$SUMDB_PARENT" ] && [ "$SUMDB_PARENT" != "/" ] && [ ! -e "$SUMDB_PARENT" ]; do
+      SUMDB_PARENT=$(dirname "$SUMDB_PARENT")
+    done
+    if [ -n "$SUMDB_PARENT" ] && [ ! -w "$SUMDB_PARENT" ]; then
+      warn "WARM STEP hit $SUMDB_HIT, whose nearest existing parent ($SUMDB_PARENT) is not writable by this user -- this is a PERMISSION problem, not a network problem. GOPATH for this round was $RGOPATH; if the failing path above is NOT under that, GOPATH did not take effect for this command -- check CODEX_REVIEW_GOPATH."
+    fi
+  fi
   {
     printf 'warm-step: FAILED rc=%s duration=%ss modules=%s modcache=%s gocache=%s\n' \
       "$WARM_RC" "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE"
@@ -855,7 +1002,7 @@ for aux in .codex-review-context.md LEDGER.md; do
 done
 
 warn "round $NAME-$TS: model=$MODEL effort=$EFF tip=$TIP review-worktree=$RW"
-warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE GOTMPDIR=$RGOTMPDIR TMPDIR=$RTMPDIR sandbox=$RSANDBOX"
+warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE GOTMPDIR=$RGOTMPDIR GOPATH=$RGOPATH TMPDIR=$RTMPDIR sandbox=$RSANDBOX"
 # NO PREDICTION ABOUT WHAT THE SANDBOX CAN DO.
 #
 # An earlier draft printed "sandbox=read-only: NOTHING is writable, so
@@ -926,7 +1073,10 @@ if [ "$RSANDBOX" = "workspace-write" ]; then
   # The cache is deliberately NOT moved inside the per-round worktree: that
   # would make it cold every round, which is exactly what the GOCACHE comment
   # above warns against.
-  SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOMODCACHE\",\"$RGOTMPDIR\"]")
+  # RGOPATH added v4.8.4, same reasoning as its neighbours: redundant under
+  # the default /tmp location, load-bearing the moment CODEX_REVIEW_GOPATH
+  # points somewhere else.
+  SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOMODCACHE\",\"$RGOTMPDIR\",\"$RGOPATH\"]")
 fi
 # ROUND PROVENANCE. Written BEFORE codex runs.
 #
@@ -958,8 +1108,8 @@ printf 'round-provenance: %s\n' "$PROV" >> "$L"
 # stderr, which nobody keeps. The log recorded the failures and not the
 # configuration that caused them, so the two could not be correlated after the
 # fact without the operator's terminal scrollback.
-printf 'round-bounds: GOFLAGS=%s GOMAXPROCS=%s GOCACHE=%s GOMODCACHE=%s GOTMPDIR=%s TMPDIR=%s sandbox=%s\n' \
-  "$RGOFLAGS" "$RGOMAXPROCS" "$RGOCACHE" "$RGOMODCACHE" "$RGOTMPDIR" "$RTMPDIR" "$RSANDBOX" >> "$L"
+printf 'round-bounds: GOFLAGS=%s GOMAXPROCS=%s GOCACHE=%s GOMODCACHE=%s GOTMPDIR=%s GOPATH=%s TMPDIR=%s sandbox=%s\n' \
+  "$RGOFLAGS" "$RGOMAXPROCS" "$RGOCACHE" "$RGOMODCACHE" "$RGOTMPDIR" "$RGOPATH" "$RTMPDIR" "$RSANDBOX" >> "$L"
 warn "round-provenance: $PROV"
 
 # NOTE THE APPEND. This redirect was `> "$L"`; it MUST stay `>>` now, or codex
@@ -972,6 +1122,7 @@ warn "round-provenance: $PROV"
     GOCACHE="$RGOCACHE" \
     GOMODCACHE="$RGOMODCACHE" \
     GOTMPDIR="$RGOTMPDIR" \
+    GOPATH="$RGOPATH" \
     TMPDIR="$RTMPDIR" \
     codex exec -m "$MODEL" -c "model_reasoning_effort=\"$EFF\"" \
     ${SANDBOX_ARGS[@]+"${SANDBOX_ARGS[@]}"} \

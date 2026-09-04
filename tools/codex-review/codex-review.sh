@@ -666,19 +666,43 @@ LANE_KEY="$LANE-$WT_HASH"
 # default) rather than re-running `uname -s` at each site -- one source of
 # truth for which branch of the v4.8.6 Linux/macOS split a given line is on.
 #
-# `command -p uname`, not a bare `uname`: a bare invocation resolves through
-# the CALLER's PATH, so a caller-controlled shim earlier on PATH could make
-# this resolve to something other than the real system uname (found by the
-# codex round that reviewed this same v4.8.6 diff, round
-# lane-wrapper-v486-20260904T082800: an exact-but-WRONG token from a
-# PATH-shadowed uname passes the validation below just as legitimately as a
-# real one would, and could route a genuinely-Linux host into the macOS
-# cleanup branch the same way the malformed-uname P1 above did).
-# `command -p` runs the command against a fixed, system-defined default PATH
-# (POSIX; supported by both bash 3.2 and 5.x) instead of the caller's own,
-# closing this off at the same source rather than adding a second guard
-# after the fact.
-HOST_OS="$(command -p uname -s)"
+# `builtin command -p uname`, not a bare `uname` or a plain `command -p
+# uname`:
+#   - a bare invocation resolves `uname` through the CALLER's PATH, so a
+#     caller-controlled shim earlier on PATH could make this resolve to
+#     something other than the real system uname (found by codex round
+#     lane-wrapper-v486-20260904T082800: an exact-but-WRONG token from a
+#     PATH-shadowed uname passes the validation below just as legitimately
+#     as a real one would, and could route a genuinely-Linux host into the
+#     macOS cleanup branch the same way the malformed-uname P1 above did).
+#     `command -p` closes this: it runs `uname` against a fixed,
+#     system-defined default PATH instead of the caller's own.
+#   - but `command` ITSELF is a name a caller's environment can shadow with
+#     a shell FUNCTION (e.g. via `BASH_ENV`, which non-interactive bash
+#     sources before this script runs) -- and a plain `command -p uname -s`
+#     resolves the word `command` the normal way, so a `command() { ... }`
+#     function shadow wins over the real builtin even though `uname`
+#     itself is never touched (found by codex round
+#     lane-wrapper-v486-20260904T084834, EXECUTED: a BASH_ENV-defined
+#     `command` function made this exact line return a forged value).
+#     `builtin` is the fix for THAT: it looks its argument up as a shell
+#     BUILTIN specifically, skipping function (and alias) resolution for
+#     that name -- `builtin command -p uname -s` cannot be redirected by
+#     either a PATH shim OR a shell-function override of `command`.
+#     Measured both attacks directly: a PATH-shadowed uname and a
+#     BASH_ENV-shadowed `command` function are both defeated by this exact
+#     form; neither `command -p uname -s` alone nor `\command -p uname -s`
+#     (backslash only defeats ALIAS lookup, not a function) close the
+#     second one.
+#   - a hostile environment that goes one level further and shadows
+#     `builtin` itself (or `bash` the interpreter, or the coreutils
+#     `uname` binary on disk) is out of scope: at that point the caller
+#     already has full control over this process's entire execution
+#     environment, and no invocation form defends against that -- the
+#     threat model here is "keep an accidental or ordinary-shim PATH/env
+#     quirk from silently deleting the shared cache," not "survive an
+#     adversary who already owns the shell running this script."
+HOST_OS="$(builtin command -p uname -s)"
 # v4.8.6 P1 (found by codex round lane-wrapper-v486-20260904T080604, EXECUTED
 # and independently reproduced): every `[ "$HOST_OS" = Linux ]` check in this
 # file does an EXACT string match, and every site that checks it does so the

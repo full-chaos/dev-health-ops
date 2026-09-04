@@ -97,7 +97,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1000 1007 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1024 1031 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -192,7 +192,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 836 845 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 860 869 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -314,7 +314,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1133 1133 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1157 1157 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -372,7 +372,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1093 1177 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1117 1201 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -471,7 +471,7 @@ fi
 # mkdir -p lines that follow it in the real script. Used ONLY for the (a)
 # default-value check below, so that case never touches the filesystem at
 # all. Starts right after the HOST_OS validation case/esac block ends.
-extract 705 733 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
+extract 729 757 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
 grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
   || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
 if grep -qE '^mkdir -p "\$RGOCACHE"' "$WORK/cache_resolve_value_only.sh"; then
@@ -483,7 +483,7 @@ fi
 # point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
 # never fall through to the real /var/lib/oci-cache default, so their mkdir
 # is always safe.
-extract 705 740 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
+extract 729 764 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
 
 run_cache_resolve_value_only() {
   # $1=WT $2=TS $3=HOST_OS  env GOCACHE/GOMODCACHE/CODEX_REVIEW_GOCACHE/
@@ -608,7 +608,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 836 845 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 860 869 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -649,7 +649,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1025 1044 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1049 1068 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -706,7 +706,7 @@ fi
 # `command -p uname -s` assignment line above it) -- $HOST_OS is set
 # directly, per the file-level SAFETY/DESIGN NOTE.
 # ---------------------------------------------------------------------------
-extract 700 703 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
+extract 724 727 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
 
 # (a) malformed HOST_OS ("Linux\r", set directly, not via a uname stub —
 # see the note above) now DIES with the expected message instead of
@@ -778,19 +778,30 @@ done
 # on PATH could make it resolve to an exact, VALID-looking-but-WRONG token
 # (e.g. a Linux host with a PATH-shadowed `uname` that prints exact
 # "Darwin"), which passes the case/esac guard above just as legitimately as
-# a real value would, then picks the wrong (removal) branch anyway. Fixed:
-# the shipped line is now `HOST_OS="$(command -p uname -s)"` -- `command -p`
-# runs against a fixed, system-defined default PATH, ignoring the caller's
-# PATH (and also bypassing a shell FUNCTION named `uname`, the exact
-# mechanism codex's own repro used). Proof: with a fake `uname` earlier on
-# PATH, confirm (1) a BARE `uname -s` picks up the fake (demonstrating the
-# vulnerability the fix closes existed, i.e. this test's own stubbing
-# technique is real) and (2) `command -p uname -s`, run under the identical
-# poisoned PATH, does NOT -- it returns the REAL host's `uname -s` -- and
-# (3) the ACTUAL shipped HOST_OS assignment line, extracted verbatim, also
-# resolves to the real value under the same poisoned PATH.
+# a real value would, then picks the wrong (removal) branch anyway.
+#
+# v4.8.6 P1, round 3 (lane-wrapper-v486-20260904T084834, EXECUTED): round
+# 2's own first fix, `HOST_OS="$(command -p uname -s)"`, was ITSELF still
+# beatable -- `command` is a NAME, and a caller's environment can shadow it
+# with a shell FUNCTION (e.g. via `BASH_ENV`, which non-interactive bash
+# sources before this script even starts), which wins over the real
+# `command` builtin the exact same way a PATH-shadowed `uname` won over the
+# real `uname`. codex's own repro used exactly that: a `BASH_ENV`-defined
+# `command() { ... }` function.
+#
+# Final fix (this version): `HOST_OS="$(builtin command -p uname -s)"` --
+# `builtin` looks its argument up as a shell BUILTIN specifically, skipping
+# function (and alias) resolution for that name, so neither a PATH shim on
+# `uname` NOR a function shadow of `command` can redirect it. Proof, in
+# order: (1) a BARE `uname -s` is fooled by a PATH-shadowed uname (confirms
+# the PATH-stubbing technique is real); (2) a PLAIN `command -p uname -s`
+# (round 2's fix, without `builtin`) is STILL fooled by a BASH_ENV-shadowed
+# `command` function (confirms round 3's repro shape is real, and that
+# round 2's fix alone was insufficient); (3) `builtin command -p uname -s`
+# defeats BOTH attacks; (4) the ACTUAL shipped HOST_OS assignment line,
+# extracted verbatim, also resolves to the real value under both.
 # ---------------------------------------------------------------------------
-extract 681 681 'HOST_OS="$(command -p uname -s)"' "$WORK/host_os_assign.sh"
+extract 705 705 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
 
 REAL_UNAME_S=$(command -p uname -s)
 make_uname_stub 'TotallyFakeOS'
@@ -802,23 +813,65 @@ else
   notok "v4.8.6 P1 (round 2) setup check: bare 'uname -s' was NOT fooled by the stub (got '$BARE_UNAME_RESULT') -- the test below may not be exercising anything"
 fi
 
-COMMAND_P_UNAME_RESULT=$(PATH="$STUBBIN_UNAME:$PATH" bash -c 'command -p uname -s')
-if [ "$COMMAND_P_UNAME_RESULT" = "$REAL_UNAME_S" ]; then
-  ok "v4.8.6 P1 (round 2) fix mechanism: 'command -p uname -s' ignores the PATH-shadowed uname and returns the real value ('$REAL_UNAME_S')"
+# A shell FUNCTION named `command`, sourced the way BASH_ENV would source
+# it into a non-interactive shell -- codex's own round-3 repro shape.
+BASH_ENV_SHADOW_SCRIPT="$WORK/bash-env-shadow-command.sh"
+cat > "$BASH_ENV_SHADOW_SCRIPT" <<'BASH_ENV_EOF'
+command() {
+  if [ "$1" = "-p" ] && [ "$2" = "uname" ] && [ "$3" = "-s" ]; then
+    printf 'BashEnvFakeOS\n'
+  else
+    builtin command "$@"
+  fi
+}
+BASH_ENV_EOF
+
+PLAIN_COMMAND_P_UNDER_BASH_ENV=$(BASH_ENV="$BASH_ENV_SHADOW_SCRIPT" bash -c 'command -p uname -s')
+if [ "$PLAIN_COMMAND_P_UNDER_BASH_ENV" = "BashEnvFakeOS" ]; then
+  ok "v4.8.6 P1 (round 3) setup check: a PLAIN 'command -p uname -s' (round 2's fix alone) IS fooled by a BASH_ENV-shadowed 'command' function (confirms round 3's repro shape is real, and that round 2's fix by itself was insufficient)"
 else
-  notok "v4.8.6 P1 (round 2) fix mechanism: 'command -p uname -s' did NOT return the real value under a poisoned PATH (got '$COMMAND_P_UNAME_RESULT', wanted '$REAL_UNAME_S')"
+  notok "v4.8.6 P1 (round 3) setup check: plain 'command -p uname -s' was NOT fooled by the BASH_ENV shadow (got '$PLAIN_COMMAND_P_UNDER_BASH_ENV') -- the test below may not be exercising anything"
 fi
 
-SHIPPED_LINE_RESULT=$(
+BUILTIN_COMMAND_P_UNDER_PATH_SHADOW=$(PATH="$STUBBIN_UNAME:$PATH" bash -c 'builtin command -p uname -s')
+if [ "$BUILTIN_COMMAND_P_UNDER_PATH_SHADOW" = "$REAL_UNAME_S" ]; then
+  ok "v4.8.6 P1 fix mechanism: 'builtin command -p uname -s' ignores a PATH-shadowed uname and returns the real value ('$REAL_UNAME_S')"
+else
+  notok "v4.8.6 P1 fix mechanism: 'builtin command -p uname -s' did NOT return the real value under a poisoned PATH (got '$BUILTIN_COMMAND_P_UNDER_PATH_SHADOW', wanted '$REAL_UNAME_S')"
+fi
+
+BUILTIN_COMMAND_P_UNDER_BASH_ENV=$(BASH_ENV="$BASH_ENV_SHADOW_SCRIPT" bash -c 'builtin command -p uname -s')
+if [ "$BUILTIN_COMMAND_P_UNDER_BASH_ENV" = "$REAL_UNAME_S" ]; then
+  ok "v4.8.6 P1 fix mechanism: 'builtin command -p uname -s' ignores a BASH_ENV-shadowed 'command' function and returns the real value ('$REAL_UNAME_S')"
+else
+  notok "v4.8.6 P1 fix mechanism: 'builtin command -p uname -s' did NOT return the real value under a BASH_ENV shadow (got '$BUILTIN_COMMAND_P_UNDER_BASH_ENV', wanted '$REAL_UNAME_S')"
+fi
+
+SHIPPED_LINE_UNDER_PATH_SHADOW=$(
   PATH="$STUBBIN_UNAME:$PATH"
   # shellcheck source=/dev/null
   source "$WORK/host_os_assign.sh"
   printf '%s' "$HOST_OS"
 )
-if [ "$SHIPPED_LINE_RESULT" = "$REAL_UNAME_S" ]; then
-  ok "v4.8.6 P1 (round 2) fix: the ACTUAL shipped HOST_OS assignment line resolves to the real host OS ('$REAL_UNAME_S') even under a PATH-shadowed uname"
+if [ "$SHIPPED_LINE_UNDER_PATH_SHADOW" = "$REAL_UNAME_S" ]; then
+  ok "v4.8.6 P1 fix: the ACTUAL shipped HOST_OS assignment line resolves to the real host OS ('$REAL_UNAME_S') under a PATH-shadowed uname"
 else
-  notok "v4.8.6 P1 (round 2) fix: the shipped HOST_OS assignment line was fooled by the PATH-shadowed uname (got '$SHIPPED_LINE_RESULT', wanted '$REAL_UNAME_S') -- command -p is not doing its job"
+  notok "v4.8.6 P1 fix: the shipped HOST_OS assignment line was fooled by the PATH-shadowed uname (got '$SHIPPED_LINE_UNDER_PATH_SHADOW', wanted '$REAL_UNAME_S')"
+fi
+
+# BASH_ENV is read only when bash STARTS a new non-interactive process --
+# a `(...)` subshell forked from an already-running bash never re-sources
+# it (measured directly: harmless in a subshell, active under `bash -c`) --
+# so this one must spawn a genuinely new bash via `bash -c`, unlike every
+# other subtest in this file.
+SHIPPED_LINE_UNDER_BASH_ENV=$(BASH_ENV="$BASH_ENV_SHADOW_SCRIPT" bash -c '
+  source "'"$WORK"'/host_os_assign.sh"
+  printf "%s" "$HOST_OS"
+')
+if [ "$SHIPPED_LINE_UNDER_BASH_ENV" = "$REAL_UNAME_S" ]; then
+  ok "v4.8.6 P1 fix: the ACTUAL shipped HOST_OS assignment line resolves to the real host OS ('$REAL_UNAME_S') under a BASH_ENV-shadowed 'command' function"
+else
+  notok "v4.8.6 P1 fix: the shipped HOST_OS assignment line was fooled by the BASH_ENV-shadowed 'command' function (got '$SHIPPED_LINE_UNDER_BASH_ENV', wanted '$REAL_UNAME_S') -- 'builtin' is not doing its job"
 fi
 
 # ---------------------------------------------------------------------------
@@ -835,7 +888,7 @@ fi
 # if/else/heredoc block, run it once per host, assert the generated
 # prompt-fragment text matches.
 # ---------------------------------------------------------------------------
-extract 1244 1254 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1268 1278 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu

@@ -200,3 +200,21 @@ func TestDispatchWorksWithNoBlockedObserverAttached(t *testing.T) {
 		t.Fatalf("reconcile calls = %d, want 1 even with no observer", store.calls)
 	}
 }
+
+// The predicate the wiring asks at boot. It must discriminate, or the boot log
+// it drives is decorative -- it would either always fire or never fire.
+func TestSupportsBlockedRunReconcileDiscriminates(t *testing.T) {
+	if !SupportsBlockedRunReconcile(&reconcilingStore{}) {
+		t.Fatal("a store that DOES implement the capability was reported as lacking it")
+	}
+	if SupportsBlockedRunReconcile(&fakeStore{}) {
+		t.Fatal("a store that does NOT implement the capability was reported as having it")
+	}
+	// The production store is the one that actually matters: if this ever
+	// stops holding, the reconcile silently disables itself and only the boot
+	// log would say so.
+	var production Store = (*PostgresStore)(nil)
+	if !SupportsBlockedRunReconcile(production) {
+		t.Fatal("PostgresStore no longer carries the blocked-run reconcile capability")
+	}
+}

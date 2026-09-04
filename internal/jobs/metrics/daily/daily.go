@@ -322,6 +322,22 @@ type blockedRunReconciler interface {
 	ReconcileBlockedRuns(ctx context.Context, orgID string) (BlockedReconcileOutcome, error)
 }
 
+// SupportsBlockedRunReconcile reports whether store carries the optional
+// blocked-run reconcile capability (CHAOS-5040). It exists so the wiring can
+// say so ONCE at construction rather than counting a wiring fact on every
+// pass: a store lacking the method is a permanent, deployment-constant
+// condition, and a per-pass counter for it would be noise that never changes.
+//
+// Exported deliberately rather than duplicating the interface at the call
+// site: a second copy of the method set in another package is free to drift
+// from this one, and the drift would be silent -- the assertion would simply
+// stop matching and the reconcile would disable itself with nobody noticing.
+// One definition, asked from outside.
+func SupportsBlockedRunReconcile(store Store) bool {
+	_, ok := store.(blockedRunReconciler)
+	return ok
+}
+
 // reconcileBlockedRuns keeps this organization's blocked markers in step with
 // live partition state. It runs at the END of the fan-out and is FAIL-OPEN by
 // construction: the marker exists to make a wedged run visible, and a

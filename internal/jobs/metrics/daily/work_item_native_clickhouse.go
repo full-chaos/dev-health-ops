@@ -128,10 +128,22 @@ type workItemBatchConn interface {
 // the row. Every UInt32 destination these writers touch goes through here --
 // team-lead's 2026-09-01 ruling on the file-hotspots port was that a fix for
 // this closes the CLASS, not one column at a time.
-func workItemUInt32s(table, subject string, columns []string, values []int) ([]uint32, error) {
-	checked := make([]uint32, len(values))
-	for index := range values {
-		value, err := checkUint32Range(values[index], table, columns[index], subject)
+// workItemCounter pairs a UInt32 column with the value bound for it, so the
+// two CANNOT be mis-paired. The first version took two parallel slices and
+// indexed `columns[i]` while ranging `values` -- a shorter columns slice
+// PANICKED instead of returning ErrInvalidState, and an equal-length but
+// reordered one silently named the wrong column in the error. Both callers
+// happened to be aligned, which is exactly the kind of "correct today" that
+// stops being true on the next edit.
+type workItemCounter struct {
+	column string
+	value  int
+}
+
+func workItemUInt32s(table, subject string, counters []workItemCounter) ([]uint32, error) {
+	checked := make([]uint32, len(counters))
+	for index, counter := range counters {
+		value, err := checkUint32Range(counter.value, table, counter.column, subject)
 		if err != nil {
 			return nil, err
 		}
@@ -166,17 +178,15 @@ func WriteWorkItemMetricsDaily(
 	for _, row := range rows {
 		counters, err := workItemUInt32s("work_item_metrics_daily",
 			fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
-			[]string{
-				"items_started", "items_completed",
-				"items_started_unassigned", "items_completed_unassigned",
-				"wip_count_end_of_day", "wip_unassigned_end_of_day",
-				"new_bugs_count", "new_items_count",
-			},
-			[]int{
-				row.ItemsStarted, row.ItemsCompleted,
-				row.ItemsStartedUnassigned, row.ItemsCompletedUnassigned,
-				row.WIPCountEndOfDay, row.WIPUnassignedEndOfDay,
-				row.NewBugsCount, row.NewItemsCount,
+			[]workItemCounter{
+				{"items_started", row.ItemsStarted},
+				{"items_completed", row.ItemsCompleted},
+				{"items_started_unassigned", row.ItemsStartedUnassigned},
+				{"items_completed_unassigned", row.ItemsCompletedUnassigned},
+				{"wip_count_end_of_day", row.WIPCountEndOfDay},
+				{"wip_unassigned_end_of_day", row.WIPUnassignedEndOfDay},
+				{"new_bugs_count", row.NewBugsCount},
+				{"new_items_count", row.NewItemsCount},
 			})
 		if err != nil {
 			return 0, err
@@ -225,8 +235,11 @@ func WriteWorkItemUserMetricsDaily(
 	for _, row := range rows {
 		counters, err := workItemUInt32s("work_item_user_metrics_daily",
 			fmt.Sprintf("%s %q user %q", row.Provider, row.WorkScopeID, row.UserIdentity),
-			[]string{"items_started", "items_completed", "wip_count_end_of_day"},
-			[]int{row.ItemsStarted, row.ItemsCompleted, row.WIPCountEndOfDay})
+			[]workItemCounter{
+				{"items_started", row.ItemsStarted},
+				{"items_completed", row.ItemsCompleted},
+				{"wip_count_end_of_day", row.WIPCountEndOfDay},
+			})
 		if err != nil {
 			return 0, err
 		}
@@ -314,8 +327,11 @@ func WriteEstimateCoverageMetricsDaily(
 		teamID, teamName := row.TeamID, row.TeamName
 		counters, err := workItemUInt32s("estimate_coverage_metrics_daily",
 			fmt.Sprintf("%s %q team %q", row.Provider, row.WorkScopeID, row.TeamID),
-			[]string{"estimated_count", "unestimated_count", "backlog_size"},
-			[]int{row.EstimatedCount, row.UnestimatedCount, row.BacklogSize})
+			[]workItemCounter{
+				{"estimated_count", row.EstimatedCount},
+				{"unestimated_count", row.UnestimatedCount},
+				{"backlog_size", row.BacklogSize},
+			})
 		if err != nil {
 			return 0, err
 		}

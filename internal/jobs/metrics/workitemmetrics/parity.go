@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Percentile ports _percentile (compute_work_items.py:39). It returns nil for
@@ -142,18 +144,25 @@ func FlowBreakdown(startedAt, completedAt time.Time, transitions []Transition) (
 // NormalizeTeamID ports normalize_team_id (providers/teams.py:37): a missing,
 // empty, or whitespace-only team id becomes UNASSIGNED_TEAM_ID.
 func NormalizeTeamID(value *string) string {
-	if value == nil || strings.TrimSpace(*value) == "" {
+	if value == nil || pythonparity.Strip(*value) == "" {
 		return UnassignedTeamID
 	}
-	return strings.TrimSpace(*value)
+	return pythonparity.Strip(*value)
 }
 
 // NormalizeTeamName ports normalize_team_name (providers/teams.py:43).
+//
+// Both use pythonparity.Strip, NOT strings.TrimSpace. CPython's str.strip()
+// also strips the four separators U+001C-U+001F, which Go's unicode.IsSpace
+// (Unicode White_Space) does not -- so TrimSpace leaves a U+001C-only team_id
+// as a non-sentinel GROUPING and SORTING key instead of mapping it to
+// "unassigned". pythonparity already encodes exactly that set; writing a
+// TrimFunc here would be a third copy of a rule that has two correct ones.
 func NormalizeTeamName(value *string) string {
-	if value == nil || strings.TrimSpace(*value) == "" {
+	if value == nil || pythonparity.Strip(*value) == "" {
 		return UnassignedTeamName
 	}
-	return strings.TrimSpace(*value)
+	return pythonparity.Strip(*value)
 }
 
 // UnassignedTeamID/UnassignedTeamName port UNASSIGNED_TEAM_ID/

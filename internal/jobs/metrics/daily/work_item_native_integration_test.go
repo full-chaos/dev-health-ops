@@ -82,6 +82,7 @@ type workItemIntegrationGolden struct {
 		LeadTimeHours  *float64 `json:"lead_time_hours"`
 	} `json:"work_item_cycle_times"`
 	EstimateCoverage []struct {
+		Provider         string   `json:"provider"`
 		WorkScopeID      string   `json:"work_scope_id"`
 		TeamID           string   `json:"team_id"`
 		EstimatedCount   int      `json:"estimated_count"`
@@ -106,11 +107,40 @@ func loadWorkItemIntegrationGolden(t *testing.T) workItemIntegrationGolden {
 	if len(golden.Items) == 0 {
 		t.Fatal("golden fixture has no items")
 	}
-	// Without at least one predicate-excluded row, the widening guard below is
-	// vacuous: a predicate that returns everything would still match the
-	// golden. Assert the axis exists rather than trusting the fixture.
+	// The loader-widening guard needs more than "an excluded row exists".
+	//
+	// A non-empty check alone is satisfiable by a row that changes NOTHING when
+	// wrongly loaded. Concretely: retarget the excluded row to
+	// (gitlab, acme/boundary) and a widened predicate loads it, but it joins
+	// the group that scope ALREADY has -- and because estimate coverage creates
+	// a bucket BEFORE skipping terminal items, the emitted counts stay
+	// identical. The guard would still pass while proving nothing. That is the
+	// same present-but-non-discriminating class as CHAOS-5100, arriving inside
+	// the fix written to close it.
+	//
+	// What actually makes the row discriminating is that its GROUP KEY is
+	// disjoint from every group the golden emits: only then does loading it
+	// necessarily ADD a row the golden does not have. Assert that shape, not
+	// its cardinality.
 	if len(golden.PredicateExcludedItems) == 0 {
 		t.Fatal("golden fixture has no predicate_excluded_items -- the loader-widening guard would be vacuous")
+	}
+	emittedScopes := make(map[string]struct{}, len(golden.EstimateCoverage))
+	for _, row := range golden.EstimateCoverage {
+		emittedScopes[row.Provider+"\x00"+row.WorkScopeID] = struct{}{}
+	}
+	for _, item := range golden.PredicateExcludedItems {
+		key := item.Provider + "\x00" + item.WorkScopeID
+		if _, collides := emittedScopes[key]; collides {
+			t.Fatalf(
+				"predicate-excluded item %s has group key (%s, %s), which the golden ALREADY emits: "+
+					"if the predicate were widened this row would join that existing bucket instead of "+
+					"adding one, the readback would be unchanged, and the widening guard would prove "+
+					"nothing. The excluded row's (provider, work_scope_id) must be disjoint from every "+
+					"emitted group.",
+				item.WorkItemID, item.Provider, item.WorkScopeID,
+			)
+		}
 	}
 	return golden
 }

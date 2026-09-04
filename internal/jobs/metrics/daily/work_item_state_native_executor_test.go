@@ -220,6 +220,13 @@ func TestResolveWorkItemPrimaryTeamStripsWhitespaceLikePython(t *testing.T) {
 		{"padded", workItemPrimaryAttribution{TeamID: " team-a ", TeamName: " Core "}, "team-a", "Core"},
 		{"whitespace only", workItemPrimaryAttribution{TeamID: "   ", TeamName: "\t\n"}, unassignedTeamID, unassignedTeamName},
 		{"tab padded", workItemPrimaryAttribution{TeamID: "\tteam-b\t", TeamName: "\tPlatform\t"}, "team-b", "Platform"},
+		// U+001C-U+001F are whitespace to CPython's str.strip() but NOT to Go's
+		// unicode.IsSpace (Unicode White_Space excludes them), so
+		// strings.TrimSpace leaves them in place. Without these two cases the
+		// delegation looks Python-equivalent while a separator-only team_id
+		// stays a live grouping key instead of becoming "unassigned".
+		{"separator padded", workItemPrimaryAttribution{TeamID: "\x1cteam-c\x1f", TeamName: "\x1eData\x1d"}, "team-c", "Data"},
+		{"separator only", workItemPrimaryAttribution{TeamID: "\x1c\x1d\x1e\x1f", TeamName: "\x1c"}, unassignedTeamID, unassignedTeamName},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			teamID, teamName := resolveWorkItemPrimaryTeam(testCase.attribution)

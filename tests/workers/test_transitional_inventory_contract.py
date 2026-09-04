@@ -102,8 +102,11 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # live producer: external_ingest/recompute.py still dispatches it by
     # task-name string (celery.chain fan-out + send_task fallback) that the
     # ticket's own deletion evidence wrongly claimed was already rewritten
-    # to CUT-11. Its row is kept, unchanged in count effect (still counted),
-    # with deletion_evidence_requirement corrected to name the real blocker.
+    # to a native controller -- the actual governing ticket is CHAOS-4427
+    # (Backlog), not CUT-11/CHAOS-3083 as an earlier draft of the row
+    # wrongly cited. Its row is kept, unchanged in count effect (still
+    # counted), with deletion_evidence_requirement corrected to name the
+    # real blocker.
     # = 99.
     assert inventory["row_count"] == 99
 

@@ -461,7 +461,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     "metrics_daily.py": {
         "category": "a",
         "evidence": "`@celery_app.task` (L19 run_daily_metrics); sole Python importer tasks.py:5 -- CHAOS-4439 peer read (PR #2237, lane-5006-provider-kind) found a live producer that CHAOS-4439's own original ticket evidence missed: external_ingest/recompute.py:356 (celery.chain per-repo fan-out) and :397 (send_task repo-less fallback) dispatch it by the exact registered task name `dev_health_ops.workers.tasks.run_daily_metrics`, reachable live from external_ingest/processor.py:414's batch-accept path. Not the same call path as the live daily-metrics route (worker_metrics.py:1682 -> metrics.job_daily, a different module) -- both are real, independent producers of daily-metrics compute today.",
-        "ticket": "CHAOS-4439 (kept -- live producer via external-ingest recompute chain, not yet CUT-11-rewritten)",
+        "ticket": "CHAOS-4439 (kept -- live producer via external-ingest recompute chain; deletion waits on CHAOS-4427, not CUT-11/CHAOS-3083 as an earlier draft wrongly cited)",
     },
     "org_guard.py": {
         "category": "c",

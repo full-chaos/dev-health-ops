@@ -394,7 +394,7 @@
 
 set -euo pipefail
 
-VERSION="4.8.6"
+VERSION="4.8.7"
 
 warn() { printf 'codex-review: %s\n' "$*" >&2; }
 die()  { warn "$*"; exit 1; }
@@ -894,7 +894,7 @@ if [ "$HOST_OS" = Linux ]; then
   # no local re-sanitization needed, and there's only one place left that
   # can ever get this wrong.
   LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
-  # v4.8.6, found by confirmation-pass round #4 on bigboy (P1, mechanism
+  # v4.8.7, found by confirmation-pass round #4 on bigboy (P1, mechanism
   # EXECUTED, independently reproduced by the lane in an isolated temp
   # dir -- never against the real shared /var/lib path): NAME passing
   # NAME_ALLOWLIST_RE proves the STRING is safe, not that the FILESYSTEM

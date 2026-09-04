@@ -445,10 +445,10 @@ fi
 # ---------------------------------------------------------------------------
 VERSION_OUT=$(bash "$SCRIPT" --version)
 VERSION_RC=$?
-if [ "$VERSION_RC" -eq 0 ] && printf '%s' "$VERSION_OUT" | grep -qE '^codex-review\.sh v4\.8\.6$'; then
-  ok "v4.8.6: --version prints 'codex-review.sh v4.8.6' and exits 0 (got '$VERSION_OUT')"
+if [ "$VERSION_RC" -eq 0 ] && printf '%s' "$VERSION_OUT" | grep -qE '^codex-review\.sh v4\.8\.7$'; then
+  ok "v4.8.7: --version prints 'codex-review.sh v4.8.7' and exits 0 (got '$VERSION_OUT')"
 else
-  notok "v4.8.6: --version did not print the expected string (rc=$VERSION_RC, got '$VERSION_OUT')"
+  notok "v4.8.7: --version did not print the expected string (rc=$VERSION_RC, got '$VERSION_OUT')"
 fi
 
 # ---------------------------------------------------------------------------
@@ -956,7 +956,7 @@ fi
 # re-sanitization step any more (a leftover duplicate would be dead code at
 # best and a second place to get it wrong at worst).
 #
-# v4.8.6, confirmation-pass round #4 (P1, mechanism EXECUTED): the block now
+# v4.8.7, confirmation-pass round #4 (P1, mechanism EXECUTED): the block now
 # also does symlink/containment checks (`[ -L ... ]`, `cd ... && pwd -P`) --
 # real filesystem OPERATORS, not commands, so they cannot be intercepted by
 # overriding a `mkdir` shell function the way the pre-round-4 version could
@@ -1056,7 +1056,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# v4.8.6, confirmation-pass round #4 (P1, mechanism EXECUTED, independently
+# v4.8.7, confirmation-pass round #4 (P1, mechanism EXECUTED, independently
 # reproduced by the lane in an isolated temp dir before fixing): a
 # pre-existing SYMLINK at lane-scratch/$NAME was followed silently by
 # `mkdir -p`, and every mktemp call after it then wrote through the

@@ -1012,6 +1012,55 @@ else
   notok "v4.8.6 scratch: macOS scratch bases changed unexpectedly (got: $RESOLVE_SCRATCH_DARWIN; mkdir calls: $(cat "$CALLS_SCRATCH_DARWIN" 2>/dev/null))"
 fi
 
+# ---------------------------------------------------------------------------
+# v4.8.6 (found in the field, same day): a lane keying only on "does stdout
+# contain a VERDICT= line" (not the exit code) misread a FAILED codex round
+# as a real verdict, because the wrapper printed `VERDICT=$V` even when
+# codex exited non-zero and $V was untrustworthy. Fixed: that path now
+# prints `NO VERDICT (codex rc=N)` instead, deliberately NOT shaped like
+# the real `VERDICT=<path>` line, so a naive grep cannot confuse the two.
+# Proof: extract the real RC-check line, run it once with RC=0 (line must
+# NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
+# form, never a VERDICT= line, and exiting 7).
+# ---------------------------------------------------------------------------
+extract 1558 1558 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+
+RC_CHECK_OUT_OK=$(
+  set +e
+  ( RC=0 V="$WORK/some-verdict.md" L="$WORK/some.log"
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/rc_check.sh"
+    printf 'REACHED_PAST_RC_CHECK\n'
+  )
+)
+if printf '%s' "$RC_CHECK_OUT_OK" | grep -q '^REACHED_PAST_RC_CHECK$'; then
+  ok "v4.8.6 NO-VERDICT fix: RC=0 does not trigger the failure branch at all"
+else
+  notok "v4.8.6 NO-VERDICT fix: RC=0 unexpectedly triggered the failure branch ($RC_CHECK_OUT_OK)"
+fi
+
+set +e
+RC_CHECK_OUT_FAIL=$( (
+  RC=7 V="$WORK/some-verdict.md" L="$WORK/some.log"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/rc_check.sh"
+  printf 'REACHED_PAST_RC_CHECK\n'
+) 2>&1 )
+RC_CHECK_EXIT=$?
+set -e
+if [ "$RC_CHECK_EXIT" -eq 7 ] \
+   && printf '%s' "$RC_CHECK_OUT_FAIL" | grep -q 'NO VERDICT (codex rc=7)' \
+   && ! printf '%s' "$RC_CHECK_OUT_FAIL" | grep -q '^VERDICT=' \
+   && ! printf '%s' "$RC_CHECK_OUT_FAIL" | grep -q 'REACHED_PAST_RC_CHECK'; then
+  ok "v4.8.6 NO-VERDICT fix: a non-zero codex rc prints 'NO VERDICT (codex rc=N)', never a VERDICT= line, and exits with that rc"
+else
+  notok "v4.8.6 NO-VERDICT fix: wrong behaviour on RC!=0 (exit=$RC_CHECK_EXIT, out='$RC_CHECK_OUT_FAIL')"
+fi
+
 echo "----"
 echo "passed=$PASS failed=$FAIL"
 [ "$FAIL" -eq 0 ]

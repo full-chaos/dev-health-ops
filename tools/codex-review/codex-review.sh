@@ -1547,7 +1547,15 @@ HEAD_AFTER=$(git -C "$WT" rev-parse HEAD)
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || die "LANE HEAD MOVED during the round ($HEAD_BEFORE -> $HEAD_AFTER). Recover via reflog/origin before anything else."
 
-[ "$RC" -eq 0 ] || { warn "codex exited rc=$RC — read $L"; echo "VERDICT=$V"; exit "$RC"; }
+# v4.8.6 (found in the field the same day: a lane keying only on "does stdout
+# contain a VERDICT= line", not on the exit code, misread a FAILED round as
+# a real verdict). On a non-zero codex exit, $V is not trustworthy -- it may
+# not exist, or may hold a partial/stale write -- so this no longer prints
+# `VERDICT=$V` at all on that path; a caller pattern-matching stdout lines
+# must not be able to mistake this for a real verdict path. `NO VERDICT
+# (codex rc=N)` is deliberately NOT shaped like the real `VERDICT=<path>`
+# line below, so the two cannot be confused by a naive grep.
+[ "$RC" -eq 0 ] || { warn "codex exited rc=$RC — read $L"; printf 'NO VERDICT (codex rc=%s)\n' "$RC"; exit "$RC"; }
 [ -s "$V" ] || die "codex exited 0 but wrote no verdict file — treat as NO VERDICT, re-run; log: $L"
 
 # CITATION NORMALIZATION (v4.8.1, CHAOS-4757 round 2179).

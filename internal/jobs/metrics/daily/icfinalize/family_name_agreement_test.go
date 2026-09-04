@@ -18,9 +18,15 @@ import (
 // family under the same literal it asserts on and therefore cannot detect a
 // mismatch. It is asserted here, against the files themselves.
 
+// FIVE levels, not four. From internal/jobs/metrics/daily/icfinalize the
+// ascent is daily, metrics, jobs, internal, root -- an earlier revision used
+// four and landed on internal/, so every read of job_daily.py failed and BOTH
+// Python-side assertions errored on the clean tree. A path that is wrong fails
+// loudly here, but only because the test reads a file it requires; a path used
+// for an OPTIONAL read would have silently skipped instead.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	return filepath.Join("..", "..", "..", "..")
+	return filepath.Join("..", "..", "..", "..", "..")
 }
 
 func TestFamilyNameMatchesFamiliesJSON(t *testing.T) {

@@ -57,6 +57,7 @@ on:
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
       - 'docker/go-worker.Dockerfile'
+      - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/go_integration_shards.tsv'
@@ -136,6 +137,7 @@ on:
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
       - 'docker/go-worker.Dockerfile'
+      - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/go_integration_shards.tsv'
@@ -651,6 +653,42 @@ jobs:
           ignore-unfixed: false
           exit-code: '1'
           version: v0.70.0
+
+  # CHAOS-5014: docker/query-api.Dockerfile had no CI coverage at all --
+  # unlike docker/go-worker.Dockerfile above, nothing built it, so #2197
+  # landed importing cmd/query-api/internal/investmentexplain (which
+  # reaches internal/pythonparity, internal/jobs/investment/categorize,
+  # internal/jobs/workgraph/units) plus investment_explain_route.go's own
+  # internal/storage/clickhouse import, none of which this Dockerfile's
+  # build context carried, and nothing failed. Build-only, no publish (no
+  # tag anyone deploys from, no push, no families/fan-in change) --
+  # ruled: a build-verification check, not a new published image. Native
+  # arch only (this catches a broken import graph regardless of target
+  # platform; a real publish job, if one is ever wanted, is a separate
+  # decision). Same plain `docker build`/no-buildx-setup shape as
+  # go-container-security above -- NOT `docker/setup-buildx-action`: that
+  # action pulls moby/buildkit straight from Docker Hub before any login
+  # step runs (tests/tooling/test_go_integration_sharding.py's image-pull
+  # allowlist guard caught this immediately), and the runner's own default
+  # builder already builds this Dockerfile fine without it, same as its
+  # sibling job.
+  query-api-container-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build query-api image
+        run: |
+          docker build \
+            --file docker/query-api.Dockerfile \
+            --target runtime \
+            --build-arg VERSION=phase1-ci \
+            --build-arg COMMIT=0000000000000000000000000000000000000000 \
+            --build-arg BUILD_TIME=1970-01-01T00:00:00Z \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --tag query-api:build-check \
+            .
 
   # Runner contract v1.6: exactly one of this job and its self-hosted twin
   # below runs per workflow run -- no aggregator wrapper needed here (a

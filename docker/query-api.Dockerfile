@@ -49,11 +49,25 @@ COPY cmd/query-api ./cmd/query-api
 # reaches (verified: `grep -rn "dev-health-ops/internal\|dev-health-ops/contracts"
 # cmd/query-api` finds no other cross-tree import).
 COPY contracts/graphql/v1 ./contracts/graphql/v1
-# Still NOT `COPY internal ./internal`: query-api imports nothing from the
-# shared repo-root internal/ tree (distinct from cmd/query-api/internal/,
-# which is already copied above with the rest of cmd/query-api) -- add it
-# back only once a resolver actually imports from there or from the
-# dev-health-go module.
+# CHAOS-5014: `COPY internal ./internal` IS now required -- this comment
+# used to say query-api imports nothing from the shared repo-root
+# internal/ tree (distinct from cmd/query-api/internal/, which is already
+# copied above with the rest of cmd/query-api) and that build broke the
+# moment it stopped being true. #2197 added
+# cmd/query-api/internal/investmentexplain (imported by
+# investment_explain_route.go) and it imports internal/pythonparity,
+# internal/jobs/investment/categorize, and internal/jobs/workgraph/units;
+# investment_explain_route.go itself also imports
+# internal/storage/clickhouse directly. None of that reached this
+# Dockerfile's build context, so `go build` failed closed with "cannot
+# find module providing package .../internal/...: import lookup disabled
+# by -mod=readonly" (confirmed by mirroring this exact COPY set in a
+# scratch dir and running `go build ./cmd/query-api/...` there). Copying
+# the WHOLE internal/ tree, not an enumerated subset -- go-worker.Dockerfile
+# already does the same (`COPY internal ./internal`) rather than tracking
+# an exact subpackage list that the next added import would just as
+# easily fall outside of again.
+COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

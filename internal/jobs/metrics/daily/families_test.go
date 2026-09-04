@@ -121,9 +121,24 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["work_item_state"]; got != "post_bridge" {
 		t.Fatalf("work_item_state must be phase=post_bridge (CHAOS-4278, pending CHAOS-4283), got %q", got)
 	}
+	// compounding_risk must stay phase=post_bridge until a finalize-side
+	// native-family hook exists (CHAOS-4287, see families.json's phase_note).
+	// Its input, repo_metrics_daily, is written by repo_user_commit in the SAME
+	// partition, and computeNativeFamilies walks nativeFamilyNames in SORTED
+	// order -- "compounding_risk" sorts BEFORE "repo_user_commit", so a
+	// pre_bridge registration reads the table before this partition's rows
+	// land. Same assertion-pair discipline as work_item_state above: this is
+	// the families.json half, cmd/dev-health-worker/daily.go's registration is
+	// the other.
+	if got := byPhase["compounding_risk"]; got != "post_bridge" {
+		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
+	}
+	// The allowlist, not a blanket exemption: any OTHER family gaining a phase
+	// still has to come through this test deliberately.
+	expectedPostBridge := map[string]bool{"work_item_state": true, "compounding_risk": true}
 	for name, phase := range byPhase {
-		if phase != "" && name != "work_item_state" {
-			t.Fatalf("family %q declares phase=%q -- only work_item_state is expected to be non-default today; update this test if that changes deliberately", name, phase)
+		if phase != "" && !expectedPostBridge[name] {
+			t.Fatalf("family %q declares phase=%q -- only work_item_state and compounding_risk are expected to be non-default today; update this test if that changes deliberately", name, phase)
 		}
 	}
 	// cicd is Wave 1B's first cutover (CHAOS-4292), following repo_user_commit/

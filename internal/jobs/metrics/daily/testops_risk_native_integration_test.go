@@ -110,6 +110,31 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
 		}
 	}
 
+	// Freeze background merges on the seeded source tables BEFORE anything is
+	// written. Without this the engine can collapse the superseded row above
+	// before the executor reads, and a read that lost its FINAL would still
+	// return the version winner -- the assertion would then be passing on the
+	// ENGINE's dedup rather than the QUERY's (CHAOS-4902).
+	//
+	// PER-TABLE, not the bare server-wide form: a scoped stop cannot leak to
+	// other tests even on a shared instance (CHAOS-4953). Restarted with defer
+	// rather than t.Cleanup, because this file tears down with defer and Cleanup
+	// runs after those -- a Cleanup restart would fire against a closed
+	// connection. Own bounded context, and the error is checked, or a failed
+	// restart looks exactly like a successful one.
+	for _, table := range []string{"ci_pipeline_runs", "test_suite_results", "test_case_results", "coverage_snapshots"} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges %s: %v", table, err)
+		}
+		defer func(table string) {
+			resumeCtx, cancelResume := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelResume()
+			if err := conn.Exec(resumeCtx, "SYSTEM START MERGES "+table); err != nil {
+				t.Errorf("resume merges %s: %v", table, err)
+			}
+		}(table)
+	}
+
 	const orgID = "00000000-0000-4000-8000-000000000009"
 	repoID := "00000000-0000-4000-8000-0000000000a1"
 
@@ -120,7 +145,28 @@ INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, fi
 	}
 	if err := conn.Exec(ctx, `
 INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, started_at, finished_at, org_id, last_synced) VALUES
-(toUUID('`+repoID+`'), 'run-1', 'suite-1', 'unit', 10, 9, 1, 0, toDateTime64('2026-08-15 09:01:00', 3, 'UTC'), toDateTime64('2026-08-15 09:05:00', 3, 'UTC'), '`+orgID+`', now64(3))`); err != nil {
+(toUUID('`+repoID+`'), 'run-1', 'suite-1', 'unit', 10, 9, 1, 0, toDateTime64('2026-08-15 09:01:00', 3, 'UTC'), toDateTime64('2026-08-15 09:05:00', 3, 'UTC'), '`+orgID+`', toDateTime64('2026-08-15 10:00:00', 3, 'UTC'))`); err != nil {
+		t.Fatal(err)
+	}
+	// A SUPERSEDED row on the SAME dedup key (repo_id, run_id, suite_id), with an
+	// EARLIER last_synced. This is what makes the confidence_score assertion below
+	// capable of failing (CHAOS-4943).
+	//
+	// Before this row existed the fixture seeded ONE row per key, so FINAL and
+	// no-FINAL returned identical results and all five dedup reads in
+	// testops_risk_native_clickhouse.go survived having their FINAL deleted. The
+	// assertions were fine; there was nothing to deduplicate.
+	//
+	//   with FINAL     newest row only  -> pass_rate 9/10  -> confidence 0.95
+	//   without FINAL  both rows summed -> (9+1)/(10+10)=0.5
+	//                                   -> test_factor 0.3*0.5=0.15, base 0.83
+	//
+	// Version values are EXPLICIT and distinct on both rows rather than now64(3):
+	// two writes can land on equal versions, and equal versions are unorderable by
+	// argMax and by the merge alike, so the winner would be arbitrary.
+	if err := conn.Exec(ctx, `
+INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, started_at, finished_at, org_id, last_synced) VALUES
+(toUUID('`+repoID+`'), 'run-1', 'suite-1', 'unit', 10, 1, 9, 0, toDateTime64('2026-08-15 09:01:00', 3, 'UTC'), toDateTime64('2026-08-15 09:05:00', 3, 'UTC'), '`+orgID+`', toDateTime64('2026-08-15 09:30:00', 3, 'UTC'))`); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `
@@ -132,6 +178,32 @@ INSERT INTO test_case_results (repo_id, run_id, suite_id, case_id, case_name, st
 INSERT INTO coverage_snapshots (repo_id, run_id, snapshot_id, lines_total, lines_covered, line_coverage_pct, org_id, last_synced) VALUES
 (toUUID('`+repoID+`'), 'run-1', 'snap-1', 1000, 900, 90.0, '`+orgID+`', now64(3))`); err != nil {
 		t.Fatal(err)
+	}
+
+	// PRECONDITION: the contested pair must actually EXIST before the executor
+	// reads. Asserted, not inferred from "two inserts happened".
+	//
+	// Without this the fixture can degenerate into its own adjacent case and
+	// still pass, for the adjacent case's reasons: if the superseded row ever
+	// stops landing as a distinct row, "a duplicate proves dedup is load-bearing"
+	// silently becomes "one row proves nothing", the confidence assertion below
+	// goes on passing, and nothing in the output says which case ran. That is
+	// precisely the CHAOS-4943 defect this fixture exists to fix, reappearing
+	// inside the fix.
+	//
+	// Deliberately WITHOUT FINAL -- this counts physical rows, which is the thing
+	// in question. A count with FINAL would collapse them and always read 1.
+	var contested uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM test_suite_results
+WHERE org_id = ? AND repo_id = toUUID(?) AND run_id = 'run-1' AND suite_id = 'suite-1'`,
+		orgID, repoID,
+	).Scan(&contested); err != nil {
+		t.Fatalf("count the contested test_suite_results rows: %v", err)
+	}
+	if contested != 2 {
+		t.Fatalf("contested row count = %d, want 2: the superseded row did not land, so this "+
+			"fixture cannot tell a deduplicating read from a non-deduplicating one", contested)
 	}
 
 	executor, err := NewTestopsRiskExecutor(conn)

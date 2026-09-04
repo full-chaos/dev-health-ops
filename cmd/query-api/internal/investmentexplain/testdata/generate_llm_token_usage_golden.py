@@ -13,9 +13,10 @@ import dataclasses
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from dev_health_ops.metrics.llm_token_usage import write_llm_token_usage
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 OUT_DIR = Path(__file__).parent
 FIXED_COMPUTED_AT = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -23,7 +24,7 @@ FIXED_COMPUTED_AT = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 class _CapturingSink:
     def __init__(self):
-        self.captured: list[Any] = None
+        self.captured: list[Any] | None = None
 
     def write_llm_token_usage(self, rows):
         self.captured = list(rows)
@@ -72,7 +73,7 @@ def main() -> None:
     for case_name, case in CASES.items():
         sink = _CapturingSink()
         persisted = write_llm_token_usage(
-            sink,
+            cast(BaseMetricsSink, sink),
             org_id=case["org_id"],
             provider=case["provider"],
             model=case["model"],

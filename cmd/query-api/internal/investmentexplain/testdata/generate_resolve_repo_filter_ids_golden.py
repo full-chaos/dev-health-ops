@@ -15,12 +15,13 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter, WhatFilter
 from dev_health_ops.api.queries import scopes as scopes_module
 from dev_health_ops.api.services.filtering import resolve_repo_filter_ids
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 OUT_DIR = Path(__file__).parent
 ORG_ID = "org-1"
@@ -83,13 +84,13 @@ async def run_case(
     )
     with mock.patch.object(scopes_module, "query_dicts", _fake_query_dicts):
         resolved = await resolve_repo_filter_ids(
-            sink=object(), filters=filters, org_id=ORG_ID
+            sink=cast(BaseMetricsSink, object()), filters=filters, org_id=ORG_ID
         )
     return {"case": case_name, "resolved": resolved}
 
 
 async def main() -> None:
-    cases = [
+    cases: list[dict[str, Any]] = [
         dict(
             case_name="org_scope_no_repos",
             scope_level="org",

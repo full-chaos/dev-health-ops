@@ -46,8 +46,50 @@ pre-commit:
       run: scripts/run_py_tool.sh ruff check --fix {staged_files}
       stage_fixed: true
     mypy:
-      glob: "*.py"
-      run: scripts/run_py_tool.sh mypy
+      # CHAOS-4843, 4752-go's peer read of #2169, round 1, P3: a bare
+      # `glob: "*.py"` meant a change touching ONLY a config file this gate
+      # actually cares about (mypy.ini, pyproject.toml, ...) never triggered
+      # this command at all -- CI's ci/typecheck_relevance.py explicitly
+      # treats those files as relevant and runs mypy; local silently did not.
+      # This list is the SAME list as ci/typecheck_relevance.py's
+      # RELEVANT_PATTERNS, copied on purpose (not derived at YAML-parse
+      # time -- lefthook.yml cannot import Python) -- kept in sync by
+      # test_lefthook_glob_matches_typecheck_relevance_patterns in
+      # tests/tooling/test_aggregate_gate_results.py, which fails loud the
+      # moment the two lists diverge, the same shape as the CI/local
+      # convergence this whole ticket already established for `mypy .` below.
+      glob:
+        - ".github/workflows/**"
+        - "src/**"
+        - ".gitignore"
+        - ".ignore"
+        - "ruff.toml"
+        - ".ruff.toml"
+        - "mypy.ini"
+        - ".mypy.ini"
+        - "setup.cfg"
+        - "tests/**"
+        - "ci/**"
+        - "migrations/**"
+        - "requirements.txt"
+        - "pyproject.toml"
+        - "uv.lock"
+        - "scripts/**"
+        - "**/*.py"
+        - "lefthook.yml"
+      # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
+      # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
+      # internal/, ci/ and .github/ (196+ Python files, including every
+      # live-Python-oracle generator) from every local run. CI's typecheck job
+      # always runs `mypy .` once triggered -- the whole tree, no files-list
+      # restriction, since an explicit path argument overrides `files`
+      # entirely. Passing `.` here matches that exactly: the third,
+      # independently-drifting set is eliminated rather than kept in sync by
+      # enumeration (the same lesson #2157/CHAOS-4281 already learned for the
+      # workflow's own trigger-path list). `[tool.mypy] files` is left as-is
+      # in pyproject.toml for IDEs and any other bare invocation; it is just
+      # no longer load-bearing for this gate.
+      run: scripts/run_py_tool.sh mypy .
       fail_text: "mypy found type errors. Fix them, or `git commit --no-verify` to bypass (discouraged)."
 
 pre-push:
@@ -62,8 +104,50 @@ pre-push:
       run: scripts/run_py_tool.sh ruff check {push_files}
       fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     mypy:
-      glob: "*.py"
-      run: scripts/run_py_tool.sh mypy
+      # CHAOS-4843, 4752-go's peer read of #2169, round 1, P3: a bare
+      # `glob: "*.py"` meant a change touching ONLY a config file this gate
+      # actually cares about (mypy.ini, pyproject.toml, ...) never triggered
+      # this command at all -- CI's ci/typecheck_relevance.py explicitly
+      # treats those files as relevant and runs mypy; local silently did not.
+      # This list is the SAME list as ci/typecheck_relevance.py's
+      # RELEVANT_PATTERNS, copied on purpose (not derived at YAML-parse
+      # time -- lefthook.yml cannot import Python) -- kept in sync by
+      # test_lefthook_glob_matches_typecheck_relevance_patterns in
+      # tests/tooling/test_aggregate_gate_results.py, which fails loud the
+      # moment the two lists diverge, the same shape as the CI/local
+      # convergence this whole ticket already established for `mypy .` below.
+      glob:
+        - ".github/workflows/**"
+        - "src/**"
+        - ".gitignore"
+        - ".ignore"
+        - "ruff.toml"
+        - ".ruff.toml"
+        - "mypy.ini"
+        - ".mypy.ini"
+        - "setup.cfg"
+        - "tests/**"
+        - "ci/**"
+        - "migrations/**"
+        - "requirements.txt"
+        - "pyproject.toml"
+        - "uv.lock"
+        - "scripts/**"
+        - "**/*.py"
+        - "lefthook.yml"
+      # CHAOS-4843: bare `mypy` (no args) falls back to `[tool.mypy] files =
+      # ["src", "tests", "scripts"]` in pyproject.toml, silently excluding
+      # internal/, ci/ and .github/ (196+ Python files, including every
+      # live-Python-oracle generator) from every local run. CI's typecheck job
+      # always runs `mypy .` once triggered -- the whole tree, no files-list
+      # restriction, since an explicit path argument overrides `files`
+      # entirely. Passing `.` here matches that exactly: the third,
+      # independently-drifting set is eliminated rather than kept in sync by
+      # enumeration (the same lesson #2157/CHAOS-4281 already learned for the
+      # workflow's own trigger-path list). `[tool.mypy] files` is left as-is
+      # in pyproject.toml for IDEs and any other bare invocation; it is just
+      # no longer load-bearing for this gate.
+      run: scripts/run_py_tool.sh mypy .
       fail_text: "mypy found type errors. Run `mypy` locally, fix them, commit, push again. Or `git push --no-verify` to bypass."
     shellcheck-pin:
       # CHAOS-4915. Same pinned version and same file set as CI, from one

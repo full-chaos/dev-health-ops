@@ -79,6 +79,18 @@
 # costs a little packing efficiency while under-stating one can push a shard
 # past the 25-minute job budget. The weight SCALES WITH TEST COUNT here, since
 # almost all of it is container startup -- re-time it if tests are added.
+# internal/testsupport/chschema (CHAOS-4902): weight 75s. MEASURED on bigboy
+# (arm64 compute host, no local Docker available for this lane) -- `go test
+# -tags=integration -count=1 ./internal/testsupport/chschema/...`, both
+# Testcontainers-backed tests sharing one ClickHouse container plus the real
+# migration chain applied via chschema.Apply: 72.615s package time. Rounded
+# up to 75 for headroom, same reasoning as every other entry in this file --
+# the weight is only used for shard BALANCING, so a little over-statement
+# costs packing efficiency while under-stating risks a shard blowing its job
+# budget. Bigboy runs roughly 2x local wall-clock (see the bigboy lane
+# recipe's timing table), so this is a conservative UPPER bound, not a
+# CI-equivalent measurement -- re-time it if a faster reference becomes
+# available, and re-time regardless if tests are added.
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
@@ -119,5 +131,6 @@ internal/syncdispatchruntime	6
 internal/syncreconciler	16
 internal/synccoverage	13
 internal/syncroute	3
+internal/testsupport/chschema	75
 internal/testsupport/computeparity	50
 internal/testsupport/containers	13

@@ -33,8 +33,16 @@ permissions:
   packages: read
 
 concurrency:
-  group: go-quality-${{ github.ref }}
-  cancel-in-progress: true
+  # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed):
+  # standardized from a bare `github.ref` key (which did not distinguish a
+  # pull_request from a same-branch push, and never protected main/
+  # merge_group from cancellation) to the canonical fleet-wide shape --
+  # group by PR number on pull_request, by ref on a push to a non-main
+  # branch, by commit sha on a push to main or on merge_group (never
+  # cancelled -- see go.yml/typecheck.yml/docker-images.yml/
+  # arc-runner-image.yml for the specific incidents this protects).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   go-quality:

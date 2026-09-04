@@ -208,9 +208,69 @@ func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filter
 	return result, nil
 }
 
-// Pr is the resolver for the pr field.
+// Pr is the resolver for the pr field (CHAOS-4980). Wires CHAOS-4924's
+// fetchLinkedIssueRows reader into the linkedIssues sub-field via
+// workgraph.ResolveLinkedIssues; the fast-path-vs-FINAL-oracle dispatch
+// lives entirely inside fetchLinkedIssueRows, so this resolver is
+// flag-oblivious by construction. Same "authorized org always wins"
+// convention as WorkGraphEdges/WorkGraphFlow above -- Python's own
+// resolve_pr (resolvers/pr.py:212) never even receives this field's org_id
+// GraphQL argument, deriving org solely from the request context, so
+// ignoring the argument here (rather than rejecting a mismatch, as
+// Analytics does) is the parity-correct choice for this field specifically.
+//
+// SCOPE NOTE, deliberate (see workgraph.ResolveLinkedIssues's and
+// workgraph.PRCoreRowExists's doc comments for the full rationale): this
+// wires the "does the PR exist" check and linkedIssues only. The PR core
+// row's OWN columns, reviews, and commits (Python's
+// _fetch_pr_row/_fetch_reviews/_fetch_commits) are not yet ported to Go,
+// so a PR that DOES exist gets a PARTIAL PullRequestDetail --
+// id/orgId/repoId/number/linkedIssues only, every other field left at its
+// zero value. An unknown PR/org/repo returns nil, matching resolve_pr's
+// own nil-for-unknown behavior exactly (workgraph.PRCoreRowExists is the
+// cheap existence check that makes this possible without the full
+// core-row port). Tracked as a follow-up ticket, not this one. Separately,
+// and regardless of this resolver's completeness: `pr` has no registered
+// document in query_route.go's digestByOperation, so routeswitch can
+// never make it reachable yet either -- see
+// pr_operation_not_registered_test.go.
 func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model.PullRequestDetail, error) {
-	panic(fmt.Errorf("not implemented: Pr - pr"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	repoID, number, ok := workgraph.ParsePRDetailID(id)
+	if !ok {
+		return nil, nil
+	}
+
+	exists, err := workgraph.PRCoreRowExists(ctx, r.ClickHouse, claims.OrgID, repoID, number)
+	if err != nil {
+		return nil, fmt.Errorf("pr: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	linkedIssues, err := workgraph.ResolveLinkedIssues(ctx, r.ClickHouse, claims.OrgID, repoID, number)
+	if err != nil {
+		return nil, fmt.Errorf("pr: %w", err)
+	}
+
+	return &model.PullRequestDetail{
+		ID:           fmt.Sprintf("%s#pr%d", repoID, number),
+		OrgID:        claims.OrgID,
+		RepoID:       repoID,
+		Number:       number,
+		LinkedIssues: linkedIssues,
+	}, nil
 }
 
 // WorkGraphFlow is the resolver for the workGraphFlow field (CHAOS-4352

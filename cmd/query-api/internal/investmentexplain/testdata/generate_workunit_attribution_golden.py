@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
+from dev_health_ops.api.models.filters import MetricFilter
 from dev_health_ops.api.services import work_units
 from dev_health_ops.external_ingest.ids import derive_work_item_id
 
@@ -220,7 +222,7 @@ def work_item_id_cases() -> dict[str, dict]:
 
 
 def main() -> None:
-    output = {
+    output: dict[str, dict[str, Any]] = {
         "majority_team_for_issues": {},
         "pr_ref_work_item_id": {},
         "extract_issue_ids": {},
@@ -287,7 +289,7 @@ def main() -> None:
         # (filters.why.work_category), matching the function's own real
         # access pattern rather than constructing a full MetricFilter.
         themes, subcategories = work_units._split_category_filters(
-            _Filters(case["work_category"])
+            cast(MetricFilter, _Filters(case["work_category"]))
         )
         output["split_category_filters"][name] = {
             "input": case,

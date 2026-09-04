@@ -80,6 +80,11 @@ EXPECTED_PACKAGES = {
     "internal/syncreconciler",
     "internal/synccoverage",
     "internal/syncroute",
+    # CHAOS-4902: the RMT sweep's own authoritative-count/dedup-key
+    # integration test -- applies the real migration chain to a fresh
+    # ClickHouse container and reads system.tables directly, so a fake
+    # connection cannot prove the population it asserts.
+    "internal/testsupport/chschema",
     "internal/testsupport/computeparity",
     "internal/testsupport/containers",
 }
@@ -347,9 +352,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # branch: CHAOS-4882's internal/storage/postgres/authschema and
     # CHAOS-4769's internal/jobs/workgraph/issueprlinks. The merged total was
     # 39. CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
-    # CHAOS-4977 then added cmd/query-api/internal/investmentexplain: 40 -> 41.
-    assert "41 package(s) discovered, 0 denylisted, 41 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 41 package(s)" in result.stdout
+    # CHAOS-4977 and CHAOS-4902 landed independently, each written as
+    # 40 -> 41 on its own branch: CHAOS-4977's
+    # cmd/query-api/internal/investmentexplain and CHAOS-4902's
+    # internal/testsupport/chschema. The merged total is 42.
+    assert "42 package(s) discovered, 0 denylisted, 42 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 42 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -384,8 +392,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # internal/jobs/workgraph/issueprlinks, each written as 37 -> 38 on its
     # own branch. FLATTENED includes the providersync shard-1 package.
     # CHAOS-4441: 40, not 39 -- internal/jobs/investment/chwrite added.
-    # CHAOS-4977: 41, not 40 -- cmd/query-api/internal/investmentexplain added.
-    assert len(flattened) == len(set(flattened)) == 41
+    # CHAOS-4977 and CHAOS-4902 landed independently, each written as
+    # 40 -> 41 on its own branch (see the "package(s) discovered" note
+    # above). FLATTENED includes the providersync shard-1 package, same
+    # as every other count in this comment block. Merged total: 42.
+    assert len(flattened) == len(set(flattened)) == 42
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1690,9 +1701,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # the packages shards).
     # CHAOS-4441: 39, not 38 -- internal/jobs/investment/chwrite added
     # (40 discovered - 1 for the providersync shard-1 package = 39).
-    # CHAOS-4977: 40, not 39 -- cmd/query-api/internal/investmentexplain
-    # added (41 discovered - 1 for the providersync shard-1 package = 40).
-    assert len(selected_packages) == len(set(selected_packages)) == 40
+    # CHAOS-4977 and CHAOS-4902 landed independently, each written as
+    # 39 -> 40 on its own branch: cmd/query-api/internal/investmentexplain
+    # and internal/testsupport/chschema. Merged total: 41
+    # (42 discovered - 1 for the providersync shard-1 package).
+    assert len(selected_packages) == len(set(selected_packages)) == 41
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -2972,9 +2985,17 @@ def test_every_compose_spelling_is_refused(command: str) -> None:
 # Definitions in tests/tooling that are dead TODAY and not this ticket's to fix.
 # Asserted STILL ORPHANED, so the list cannot rot into a silent exemption.
 _KNOWN_ORPHANS: dict[str, frozenset[str]] = {
-    "test_aggregate_gate_results.py": frozenset(
-        {"_code_filter_patterns", "_job", "_steps"}
-    ),
+    # CHAOS-4843, round 2 of #2169's peer review: _code_filter_patterns is no
+    # longer orphaned -- test_paths_filter_covers_lefthook_yml now calls it.
+    "test_aggregate_gate_results.py": frozenset({"_job", "_steps"}),
+    # `pytestmark` is pytest's own module-level skip-marker hook (CHAOS-4976):
+    # pytest's collector reads it by this exact reserved name, never by an
+    # in-file reference, so it is structurally never "used" from this
+    # detector's AST walk -- not dead code, a different class of orphan than
+    # the row above. Every other tests/tooling module happens not to use this
+    # (otherwise-standard, used elsewhere under tests/) pytest idiom yet, so
+    # the detector has no reason to special-case the name globally today.
+    "test_deploy_prod_go_workers_profile_coverage.py": frozenset({"pytestmark"}),
 }
 
 

@@ -161,13 +161,14 @@ func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Cl
 		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "success response body could not be decoded")
 	}
 	if decoded.Status != "success" {
-		// Refused, and this is the ONLY 2xx path that is: the bridge
-		// explicitly reported something other than success, so it is telling
-		// us it did NOT commit. Contrast the evidence branch below, where it
-		// told us it DID. decoded.Status is bridge-controlled text, so it is
-		// described, never echoed -- same reasoning as the non-2xx branch.
-		return nil, executor.fail(ErrCompatibilityRefused, response.StatusCode,
-			"bridge reported a non-success status in its response body")
+		// UNKNOWN, not Refused. This bridge RAISES on failure -- every
+		// non-success outcome leaves as a 4xx/5xx, never as a 2xx body -- so a
+		// 2xx carrying some other status word is undocumented, which in
+		// practice means version skew between this worker and the bridge. We
+		// cannot tell from an unrecognised word whether it committed, and the
+		// default for "cannot tell" is Unknown.
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode,
+			"bridge reported an unrecognised status in its response body")
 	}
 	if !validEvidence(decoded.OutputEvidence) {
 		// UNKNOWN, not Refused. The bridge just told us it SUCCEEDED, and it
@@ -187,18 +188,46 @@ func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Cl
 	return decoded.OutputEvidence, nil
 }
 
-// compatibilityStatusSentinel places a non-2xx status. 408 and 429 are pulled
-// out of the 4xx range on purpose: neither is a decision about this request's
-// content, and both can be returned after the bridge already started work.
+// refusedStatuses is a CLOSED ALLOWLIST: the ONLY HTTP statuses this package
+// will treat as "the bridge declined without executing". Membership requires a
+// citation in the bridge's own source, not an inference about what a code
+// usually means.
+//
+//	401 -- worker_auth.py:27,39,47,50, every authorize_* helper. The credential
+//	       is rejected before any handler runs.
+//	409 -- worker_workgraph.py:391, "Execution lease is unavailable". The claim
+//	       itself was refused, so no execution began.
+//	422 -- FastAPI request validation, which runs BEFORE the handler by
+//	       construction (measured against the live bridge: a POST of `{}` to the
+//	       pinned execute path returns 422). worker_workgraph.py:438,442,447 also
+//	       raise it explicitly, on the repair endpoint.
+//
+// 403 is deliberately ABSENT. It appears nowhere in worker_workgraph.py or
+// worker_auth.py -- this bridge never emits it -- and a code we cannot cite is
+// exactly the kind of "surely that means declined" reasoning this allowlist
+// exists to stop. If the bridge ever starts returning it, add it here WITH its
+// line, and the table test below will already be failing to remind you.
+var refusedStatuses = map[int]struct{}{
+	401: {},
+	409: {},
+	422: {},
+}
+
+// compatibilityStatusSentinel places a response status.
+//
+// This is a DEFAULT-UNKNOWN classifier, and that direction is the point.
+// Three review rounds each found the same class of defect -- something
+// classified as safe-to-retry that had in fact already executed -- because the
+// old shape enumerated what was UNSAFE and let everything else fall through to
+// "retryable". It now enumerates what is provably SAFE and lets everything else
+// fall through to Unknown, so being wrong costs an unnecessary ambiguous
+// release rather than a duplicate execution. Adding a status to the retryable
+// set is now a deliberate, citable act.
 func compatibilityStatusSentinel(status int) error {
-	switch {
-	case status == http.StatusRequestTimeout || status == http.StatusTooManyRequests:
-		return ErrCompatibilityUnknown
-	case status >= 400 && status < 500:
+	if _, refused := refusedStatuses[status]; refused {
 		return ErrCompatibilityRefused
-	default:
-		return ErrCompatibilityUnknown
 	}
+	return ErrCompatibilityUnknown
 }
 
 // compatibilityTransportSentinel places a client.Do error. Only errors that

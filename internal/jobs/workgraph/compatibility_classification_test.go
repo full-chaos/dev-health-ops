@@ -91,10 +91,13 @@ func TestExecuteClassifiesEveryBridgeResponseReturnSite(t *testing.T) {
 			notWant:  []error{ErrCompatibilityRefused, ErrCompatibilityNotSent},
 		},
 		{
-			name:     "non-success status in a 200 body is refused",
+			// The bridge RAISES on failure, so a non-success word in a 2xx
+			// body is undocumented -- version skew, not a decline. Cannot
+			// prove it did not commit, so Unknown.
+			name:     "unrecognised status in a 200 body is unknown, not refused",
 			response: bridgeResponse{status: http.StatusOK, body: `{"status":"declined"}`},
-			want:     ErrCompatibilityRefused,
-			notWant:  []error{ErrCompatibilityUnknown, ErrCompatibilityNotSent},
+			want:     ErrCompatibilityUnknown,
+			notWant:  []error{ErrCompatibilityRefused, ErrCompatibilityNotSent},
 		},
 		{
 			// r2 P1. The bridge reports success only AFTER committing, so a
@@ -525,6 +528,83 @@ func TestClassificationSentinelsAreDistinctAndWrapErrUnavailable(t *testing.T) {
 			if errors.Is(sentinel, other) {
 				t.Fatalf("%s is indistinguishable from %s", name, otherName)
 			}
+		}
+	}
+}
+
+// The allowlist's own guard. This does NOT restate `refusedStatuses` -- it
+// sweeps every status this executor can plausibly see and asserts that
+// Refused is reachable ONLY for the enumerated codes. A future change that
+// widens the retryable set has to change this test deliberately, which is the
+// whole point: three review rounds each found something classified
+// safe-to-retry that had already executed, and the fix for that class is a
+// default, not another patch.
+func TestOnlyTheCitedStatusesAreEverRefused(t *testing.T) {
+	// Every status in these ranges, not a hand-picked sample -- a sampled
+	// sweep is exactly how the previous shape kept missing one.
+	var swept int
+	for status := 200; status <= 599; status++ {
+		swept++
+		got := compatibilityStatusSentinel(status)
+		_, allowlisted := refusedStatuses[status]
+		if allowlisted {
+			if !errors.Is(got, ErrCompatibilityRefused) {
+				t.Fatalf("status %d is on the allowlist but classified %v", status, got)
+			}
+			continue
+		}
+		if errors.Is(got, ErrCompatibilityRefused) {
+			t.Fatalf("status %d is NOT on the allowlist but was classified Refused -- "+
+				"an uncited status must never be retryable", status)
+		}
+		if !errors.Is(got, ErrCompatibilityUnknown) {
+			t.Fatalf("status %d fell through to %v, want Unknown", status, got)
+		}
+	}
+	if swept != 400 {
+		t.Fatalf("swept %d statuses, want the full 200-599 range", swept)
+	}
+	// The allowlist is exactly the three codes citable in the bridge's source.
+	// If this fails, someone added a code -- check they cited a line for it.
+	if len(refusedStatuses) != 3 {
+		t.Fatalf("allowlist has %d entries, want 3 (401, 409, 422)", len(refusedStatuses))
+	}
+	for _, cited := range []int{401, 409, 422} {
+		if _, ok := refusedStatuses[cited]; !ok {
+			t.Fatalf("status %d is cited in the bridge source but missing from the allowlist", cited)
+		}
+	}
+	// 403 specifically: it reads like a decline, but this bridge never emits
+	// it, so it must NOT be retryable. This is the trap the allowlist exists
+	// to hold shut.
+	if _, present := refusedStatuses[403]; present {
+		t.Fatal("403 is on the allowlist but appears nowhere in the bridge's source")
+	}
+}
+
+// A 2xx whose status word is unrecognised means version skew against a bridge
+// that RAISES on failure, so it cannot be read as "declined".
+func TestUnrecognisedSuccessBodyStatusIsUnknownNotRefused(t *testing.T) {
+	for _, body := range []string{
+		`{"status":"declined"}`,
+		`{"status":"error"}`,
+		`{"status":""}`,
+		`{}`,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(body))
+		}))
+		executor := newTestExecutor(t, server.URL+"/internal/worker/workgraph/v1/execute", &http.Client{Timeout: 5 * time.Second})
+		_, err := executor.Execute(t.Context(), *testClaim(time.Second))
+		server.Close()
+		if err == nil {
+			t.Fatalf("body %s: Execute succeeded unexpectedly", body)
+		}
+		if errors.Is(err, ErrCompatibilityRefused) {
+			t.Fatalf("body %s classified Refused; an unrecognised status word cannot prove the bridge declined", body)
+		}
+		if !errors.Is(err, ErrCompatibilityUnknown) {
+			t.Fatalf("body %s = %v, want Unknown", body, err)
 		}
 	}
 }

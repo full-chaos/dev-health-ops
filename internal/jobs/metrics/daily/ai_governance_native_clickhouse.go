@@ -77,12 +77,33 @@ import (
 // job_daily.py:176-189). The tuple also preserves NULLs, which a bare argMax
 // over a Nullable column silently skips.
 //
-// After the rekey above, each dedup in THIS file projects exactly one non-key
-// column (org_id having moved into the group), so a single-column argMax is
-// correct and no tuple is needed -- the defect requires two aggregates. The
-// same is true of the two ai_tool_allowlist subqueries further down. Do not
-// "consistency-fix" any of them into tuples; do reach for the tuple the moment
-// a second non-key column is projected.
+// THE TUPLE HAS TWO JOBS, AND ONLY ONE OF THEM IS ABOUT TIES.
+//
+// Job 1, tie coherence: two aggregates over one GROUP BY can take values from
+// different rows. Needs two-or-more non-key columns to bite.
+//
+// Job 2, NULL PRESERVATION: `argMax(x, y)` SKIPS rows where x is NULL, so an
+// older non-NULL value silently outlives a genuinely NULL latest one.
+// `argMax(tuple(x), y)` does not, because tuple(NULL) is itself never NULL --
+// the row competes, and tupleElement returns the NULL. This bites at ONE
+// column.
+//
+// The org_id rekey collapsed each dedup to a single non-key column and I
+// dropped the tuples with it -- reasoning only about job 1, on a comment that
+// (two paragraphs above) already spelled out job 2. That reintroduced the
+// NULL-skip on ci_pipeline_runs.status, which is Nullable(String)
+// (000_raw_tables.sql:100): a newer NULL status would lose to an older
+// 'success', marking every AI PR in the repo security-scanned when Python --
+// whose FINAL keeps the NULL and then coalesces -- reports MISSING_SECURITY_SCAN.
+// Found by codex round 2 (P1). A repair is a new piece of code; removing a
+// guard because its OTHER reason no longer applies is how guards die.
+//
+// So: ci_pipeline_runs keeps a tuple for its Nullable `status`.
+// security_alerts.source is `String` NOT NULL (032_security_alerts.sql:4) and
+// git_pull_requests.reviews_count is `UInt32 DEFAULT 0` (000_raw_tables.sql:80),
+// so those two need no tuple -- neither job applies. The ai_tool_allowlist
+// subqueries likewise project only a non-nullable `status`.
+// Pinned by TestGovernanceDedupKeepsANewerNullStatus.
 //
 // Pinned by TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie (tuple
 // coherence) and TestGovernanceDedupIsTenantScoped (the org_id key).
@@ -154,7 +175,7 @@ LEFT JOIN (
     FROM (
         SELECT
             repo_id,
-            argMax(status, last_synced) AS status
+            tupleElement(argMax(tuple(status), last_synced), 1) AS status
         FROM ci_pipeline_runs
         WHERE org_id = ?
         GROUP BY org_id, repo_id, run_id

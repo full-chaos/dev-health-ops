@@ -449,3 +449,94 @@ SELECT reviews_count FROM (
 		t.Fatalf("org B sees reviews_count=%d, want 0", orgBReviews)
 	}
 }
+
+// TestGovernanceDedupKeepsANewerNullStatus is the regression guard for codex
+// round 2's P1 — a NULL-skip I REINTRODUCED while fixing round 1's org_id
+// finding.
+//
+// `argMax(x, y)` skips rows where x is NULL, so an older non-NULL value
+// outlives a genuinely NULL latest one. `argMax(tuple(x), y)` does not, because
+// tuple(NULL) is itself never NULL: the row competes and tupleElement returns
+// the NULL. ci_pipeline_runs.status is Nullable(String)
+// (000_raw_tables.sql:100).
+//
+// Why it matters: Python reads `... FINAL` and then `lower(coalesce(status,”))`,
+// so a newest-NULL status does NOT count as a successful scan. A bare argMax
+// makes Go retain the older 'success' instead, marking every AI PR in that repo
+// security-scanned -- Python emits MISSING_SECURITY_SCAN and reports
+// security_scanned_prs=0, Go emits nothing and reports 1.
+//
+// The assertion compares against `SELECT ... FINAL` rather than a hardcoded
+// expectation, so it states the actual invariant -- "the dedup agrees with
+// FINAL" -- instead of a value that could drift with the fixture.
+func TestGovernanceDedupKeepsANewerNullStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if err := conn.Exec(ctx, `CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    started_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		nullRepo = "00000000-0000-4000-8000-0000000000f1"
+		nullOrg  = "00000000-0000-4000-8000-0000000000f0"
+	)
+	// Older 'success', NEWER NULL, same dedup key.
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES
+(toUUID('`+nullRepo+`'), 'run-1', 'success', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+nullOrg+`'),
+(toUUID('`+nullRepo+`'), 'run-1', NULL, toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+nullOrg+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// What Python's `FINAL` path sees -- the reference answer.
+	var finalScanCount uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE org_id = ? AND lower(coalesce(status, '')) IN ('success','passed','completed')`,
+		nullOrg).Scan(&finalScanCount); err != nil {
+		t.Fatalf("read FINAL reference: %v", err)
+	}
+
+	// What this loader's dedup shape produces.
+	var argMaxScanCount uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM (
+    SELECT repo_id, tupleElement(argMax(tuple(status), last_synced), 1) AS status
+    FROM ci_pipeline_runs WHERE org_id = ?
+    GROUP BY org_id, repo_id, run_id
+)
+WHERE lower(coalesce(status, '')) IN ('success','passed','completed')`,
+		nullOrg).Scan(&argMaxScanCount); err != nil {
+		t.Fatalf("read argMax dedup: %v", err)
+	}
+
+	if argMaxScanCount != finalScanCount {
+		t.Fatalf("dedup counted %d successful scans, FINAL counts %d. A bare argMax over the "+
+			"Nullable `status` column SKIPS the newer NULL row and retains the older 'success', "+
+			"so every AI PR in this repo is marked security-scanned while Python emits "+
+			"MISSING_SECURITY_SCAN. Wrap the projection in tuple() -- tuple(NULL) is never NULL, "+
+			"so the row competes and the NULL survives the unwrap.",
+			argMaxScanCount, finalScanCount)
+	}
+	if finalScanCount != 0 {
+		t.Fatalf("fixture is not exercising the case: FINAL counts %d successful scans, want 0 "+
+			"(the newest row's status is NULL)", finalScanCount)
+	}
+}

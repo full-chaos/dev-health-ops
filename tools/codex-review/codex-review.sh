@@ -22,13 +22,20 @@
 # absolute: zero writable paths exist under it, period. `workspace-write` was
 # then probed the same way and makes both the worktree AND plain /tmp paths
 # (no extra grants needed) writable on Linux, exactly as it already does on
-# macOS. So the sandbox mode picked by default is now host-dependent: Linux
-# defaults to workspace-write (the only mode under which Go can run there at
-# all); macOS keeps read-only (still proven sufficient, see v4.3/v4.4 above).
-# CODEX_REVIEW_SANDBOX, when set explicitly, still overrides this on either
-# host. The GOCACHE/GOTMPDIR/TMPDIR paths themselves are UNCHANGED -- they
-# already sit under /tmp, which workspace-write also permits without needing
-# to move them inside the worktree.
+# macOS. So the sandbox mode picked by default was, AT THE TIME, host-dependent:
+# Linux defaulted to workspace-write (the only mode under which Go could run
+# there at all); macOS kept read-only (still proven sufficient, see v4.3/v4.4
+# above). The GOCACHE/GOTMPDIR/TMPDIR paths themselves are UNCHANGED by any of
+# this -- they already sit under /tmp, which workspace-write also permits
+# without needing to move them inside the worktree.
+#
+# SUPERSEDED v4.8.7 (chris's ruling, 09-04, round-3 confirmation-pass P3 --
+# this whole paragraph was left describing the OLD default after the code
+# changed, exactly the stale-doc trap this file warns against elsewhere):
+# read-only is now the default on BOTH platforms, unconditionally -- a review
+# round is meant to read code, not execute it, so Linux no longer needs
+# workspace-write as its default. `CODEX_REVIEW_SANDBOX`, set explicitly by a
+# caller, still overrides the default on either host, same as always.
 #
 # CORRECTED 2026-09-03 (CHAOS-4925). The claim below used to read "under
 # read-only NOTHING is writable -- not $TMPDIR, not /tmp, ...". That is FALSE
@@ -1423,8 +1430,15 @@ fi
 # with a go.mod at the reviewed tip has any. Gate on the ACTUAL TIP CONTENT
 # ($RW/go.mod, populated by the `git worktree add` above), never the repo
 # name or a flag -- a repo with no go.mod (dev-health-web, acr-frontend)
-# skips the entire step and exports no Go env to codex; a repo WITH go.mod
-# is unaffected and keeps the full warm step, including its loud abort.
+# skips the entire warm-step subshell (no `go` command runs); a repo WITH
+# go.mod is unaffected and keeps the full warm step, including its loud
+# abort. CORRECTED, round-3 confirmation-pass (P2, source-checked): this
+# used to also claim "exports no Go env to codex" -- false, the
+# GOCACHE/GOMODCACHE/GOTMPDIR/GOPATH exports further below into `codex exec`
+# are unconditional regardless of this branch. Harmless in practice (an
+# unused, possibly-cold cache path is inert for a non-Go repo, and the new
+# read-only sandbox default denies writes there anyway), but the comment
+# should not claim otherwise.
 #
 # v4.8.7 addendum (chris, 09-04 15:26 PDT): the warm step's own Go execution
 # happens outside codex's sandbox regardless, so it was never the thing chris
@@ -1434,9 +1448,19 @@ fi
 # separate, narrower ask: an operator-controlled way to skip the warm step
 # ENTIRELY (e.g. a docs-only round where warming Go serves no reviewer that
 # will never run it), without waiting on the v4.8.8 no-Go-in-diff auto-skip.
+# WARM_OK tracks whether the warm step actually ran and proved the module
+# cache offline-resolvable -- round-3 confirmation-pass finding: the prompt
+# text injected further below used to unconditionally claim "already warmed
+# and offline-resolve-proven" regardless of which of these three branches
+# ran (a pre-existing gap for the no-go.mod branch, now ALSO reachable via
+# the new operator skip). Read below, at the point this is consumed, for
+# why that mattered.
+WARM_OK=0
+WARM_SKIP_REASON=""
 if [ "${CODEX_REVIEW_SKIP_WARM:-0}" = "1" ]; then
   printf 'warm-step: SKIPPED (operator)\n' >>"$L"
-  warn "warm: SKIPPED -- CODEX_REVIEW_SKIP_WARM=1, no Go env exported -- proceeding straight to codex"
+  warn "warm: SKIPPED -- CODEX_REVIEW_SKIP_WARM=1, no warm build ran (Go env is still exported to codex exec, unconditionally, further below) -- proceeding straight to codex"
+  WARM_SKIP_REASON="the operator set CODEX_REVIEW_SKIP_WARM=1 for this round"
 elif [ -f "$RW/go.mod" ]; then
   WARM_LOG="$L.warm"
   WARM_OUT="$RGOTMPDIR/warmbuild"
@@ -1518,9 +1542,11 @@ elif [ -f "$RW/go.mod" ]; then
   printf 'warm-step: OK duration=%ss modules=%s modcache=%s gocache=%s resolve=ok\n' \
     "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE" >>"$L"
   warn "warm: OK duration=${WARM_DURATION}s modules=$WARM_MODULES modcache=$WARM_MODCACHE_SIZE gocache=$WARM_GOCACHE_SIZE cached in $RGOMODCACHE"
+  WARM_OK=1
 else
   printf 'warm-step: SKIPPED reason=no-go.mod\n' >>"$L"
-  warn "warm: SKIPPED -- no go.mod at $TIP, nothing to warm, no Go env exported -- proceeding straight to codex"
+  warn "warm: SKIPPED -- no go.mod at $TIP, nothing to warm (Go env is still exported to codex exec, unconditionally, further below) -- proceeding straight to codex"
+  WARM_SKIP_REASON="there is no go.mod at $TIP -- nothing to warm"
 fi
 
 cp "$PROMPT" "$RW/prompt.md"
@@ -1628,12 +1654,30 @@ if [ "$HOST_OS" = Linux ]; then
 else
   MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, retry ONCE with GOMODCACHE=$RGOMODCACHE GOPROXY=off (read-only intent -- never write there; this is the SAME cache named above, not a different one -- a first-attempt sandbox hiccup, not a missing module, is the more likely cause here) before falling back to a source-trace verdict, and say explicitly whether the retry succeeded."
 fi
-cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
+# v4.8.7, confirmation-pass round #3 (P2, mechanism EXECUTED): this text used
+# to be appended UNCONDITIONALLY, regardless of whether the warm step above
+# actually ran -- both the pre-existing no-go.mod branch and the new
+# CODEX_REVIEW_SKIP_WARM branch would still inject "already warmed and
+# offline-resolve-proven", which is simply untrue when nothing was warmed.
+# WARM_OK (set above, alongside the branch that actually ran the proof) now
+# gates which claim gets made -- the reviewer is told the true state either
+# way, never told a proof happened when it did not.
+if [ "$WARM_OK" = "1" ]; then
+  cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
 
 This round's own module cache -- already warmed and offline-resolve-proven
 (via \`GOPROXY=off go test -count=1 -run '^\$' ./...\`) before you started --
 is at $RGOMODCACHE. $MODCACHE_FALLBACK_LINE
 PROMPT_MODCACHE_INFO
+else
+  cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
+
+No Go module cache was warmed for this round ($WARM_SKIP_REASON) -- do not
+assume \`go test\`/\`go build\` will succeed, or succeed quickly, if you
+attempt them (see the READ-ONLY REVIEW POLICY above: you should not be
+running them at all in this round regardless).
+PROMPT_MODCACHE_INFO
+fi
 for aux in .codex-review-context.md LEDGER.md; do
   [ -f "$WT/$aux" ] && cp "$WT/$aux" "$RW/$aux"
 done

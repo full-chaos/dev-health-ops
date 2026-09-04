@@ -103,6 +103,35 @@ const (
 	loaderWindowEnd        = "2026-09-01"
 )
 
+// repoAlpha's and repoLateAcquired's repo_metrics_daily p75/rework values,
+// named so assertOwnershipIsResolvedAsOfWindowEnd can compute its expected
+// averages from the SAME source of truth the seed data uses, with the SAME
+// float64 arithmetic Go itself performs at runtime -- rather than a
+// separately hand-typed decimal literal that has to happen to match the
+// arithmetic's actual rounding (team-lead review: a pinned literal states FP
+// noise, not intent).
+//
+// EXPLICITLY TYPED float64, not left as untyped constants -- this is load-
+// bearing, not stylistic. An UNTYPED `0.40 + 0.99` is folded by the Go
+// compiler at ARBITRARY PRECISION and rounded to float64 only ONCE, at the
+// point of assignment; `avg()` in both ClickHouse and ordinary Go runtime
+// code rounds EACH operand to float64 first and THEN performs float64
+// addition/division, which is a DIFFERENT computation with its own
+// intermediate rounding. Measured directly: untyped constant folding of
+// `(0.40+0.99)/2` gives exactly 0.695; the runtime float64 path (and the
+// real avg() this loader executes) gives 0.6950000000000001 -- a different
+// bit pattern, which sameFloat64's bitwise comparison would then reject as a
+// self-inflicted failure. `float64` typing here forces the SAME two-step
+// per-operand rounding as the runtime path, so the constant expression below
+// reproduces the actual computed value instead of a more "exact" one that
+// avg() never actually produces.
+const (
+	repoAlphaLatency        float64 = 30.0
+	repoAlphaRework         float64 = 0.40
+	repoLateAcquiredLatency float64 = 999.0
+	repoLateAcquiredRework  float64 = 0.99
+)
+
 type pythonSnapshot struct {
 	TeamID                 string   `json:"team_id"`
 	OrgID                  string   `json:"org_id"`
@@ -196,15 +225,15 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 func assertOwnershipIsResolvedAsOfWindowEnd(t *testing.T, alpha MetricsSnapshot) {
 	t.Helper()
 
-	const wantLatency = 514.5 // avg(30.0, 999.0), exact in float64
-	// avg(0.40, 0.99): NOT 0.695 exactly -- neither 0.40 nor 0.99 is exactly
-	// representable in float64, and summing then halving them rounds to the
-	// nearest representable double, which is this value, not the
-	// mathematically exact one. sameFloat64 is a bitwise comparison (this
-	// codebase treats Go/Python float parity as exact throughout), so the
-	// expected constant has to be the actual computed double, not the
-	// decimal literal a calculator would give.
-	const wantRework = 0.6950000000000001
+	// Computed with the SAME arithmetic the loader's avg() performs, from the
+	// SAME named constants the seed data above uses -- not a separately
+	// hand-typed decimal literal. Neither 0.40 nor 0.99 is exactly
+	// representable in float64, so (repoAlphaRework+repoLateAcquiredRework)/2
+	// is not the mathematically exact 0.695; computing it here rather than
+	// pinning a literal states the INTENT (this average) rather than a
+	// snapshot of whatever rounding happened to produce.
+	wantLatency := (repoAlphaLatency + repoLateAcquiredLatency) / 2
+	wantRework := (repoAlphaRework + repoLateAcquiredRework) / 2
 
 	if !alpha.ReviewLatencyP75HoursKnown || !sameFloat64(alpha.ReviewLatencyP75Hours, wantLatency) {
 		t.Errorf("alpha review_latency_p75_hours = %v/%v, want %v/true -- "+
@@ -846,13 +875,13 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		p75, rework float64
 		computedAt  string
 	}{
-		{repoAlpha, "2026-08-02", 30.0, 0.40, "2026-08-03 00:00:00"},
+		{repoAlpha, "2026-08-02", repoAlphaLatency, repoAlphaRework, "2026-08-03 00:00:00"},
 		{repoAlpha, "2026-08-02", 1.0, 0.01, "2026-08-02 00:00:00"}, // superseded
 		{repoBeta, "2026-08-04", 50.0, 0.60, "2026-08-05 00:00:00"},
 		// repoLateAcquired: see assertOwnershipIsResolvedAsOfWindowEnd.
 		// Deliberately extreme values so a wrong asOf (windowStart, which
 		// excludes this repo) is unmistakable rather than a plausible number.
-		{repoLateAcquired, "2026-08-22", 999.0, 0.99, "2026-08-23 00:00:00"},
+		{repoLateAcquired, "2026-08-22", repoLateAcquiredLatency, repoLateAcquiredRework, "2026-08-23 00:00:00"},
 		// repoExpiresAtWindowEnd: see assertOwnershipExpiryIsExclusiveAtWindowEnd.
 		// A MUCH more extreme value than repoLateAcquired's, so this row alone
 		// moving alpha's average is unmistakable even alongside that repo.

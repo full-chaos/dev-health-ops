@@ -878,6 +878,16 @@ jobs:
   dind-smoke-test:
     if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, oci-arc-runners]
+    # CHAOS-4906 (09-04): same job-level serialization as
+    # go-container-reproducibility-self-hosted, own group since this job's
+    # resource profile (a few seconds of docker info/build) is nothing
+    # like reproducibility's -- serializing them together would block a
+    # heavy job behind an unrelated PR's cheap smoke test for no reason.
+    # cancel-in-progress: false for the identical reason: a queued-behind
+    # run waits and still completes, never gets cancelled by the one ahead.
+    concurrency:
+      group: pool-dind-smoke-test
+      cancel-in-progress: false
     timeout-minutes: 5
     steps:
       - name: Confirm a Docker daemon is reachable
@@ -1085,10 +1095,28 @@ jobs:
       vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, oci-arc-runners]
-    # 25m: measured pool wall time under load (~14min, run
-    # 33764964602/33757500905) plus margin, per the contract's own
-    # sizing clause.
-    timeout-minutes: 25
+    # CHAOS-4906 (09-04): job-level group SERIALIZES every run of this job
+    # across every PR/push on the pool -- two concurrent reproducibility
+    # runs (two overlapping PRs, or a PR overlapping a push) is exactly
+    # what turned an 18m03s isolated run into two runs both timing out at
+    # the 20m inner cap (run 33822145677 succeeded alone at 18m03s; run
+    # 33822592791 failed at 20m16s while it overlapped that same run).
+    # `cancel-in-progress: false`: a queued-behind run must WAIT its turn
+    # and still complete, not get cancelled by the one ahead of it -- main
+    # pushes are never cancelled (CHAOS-3948/CHAOS-4921/CHAOS-4946), and a
+    # PR-level cancel-on-repush already comes from the WORKFLOW-level
+    # concurrency group up top; this job-level group is purely about
+    # ordering pool access, not about cancelling anything.
+    concurrency:
+      group: pool-go-container-reproducibility
+      cancel-in-progress: false
+    # 36m (measured 18m03s wall under load, run 33822145677, isolated from
+    # any overlapping pool consumer -- contract v1.6's own sizing clause:
+    # timeout-minutes = max measured wall under load x2). Serialization
+    # above means the NEXT run in the queue no longer has to survive
+    # contention from a concurrent sibling, but the cap still has to
+    # survive ordinary variance in a single, uncontended run.
+    timeout-minutes: 36
     env:
       # CHAOS-4906 pool module cache (09-03): this job has no `setup-go`
       # step of its own (ci/check_go_containers.sh shells out to `go`
@@ -1104,10 +1132,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Verify reproducible Go images
-        # timeout 20m: inner test timeout strictly shorter than the 25m
+        # timeout 30m: inner test timeout strictly shorter than the 36m
         # outer cap, per the contract -- fails loud on a genuine hang
         # instead of an ambiguous job-level cancellation.
-        run: timeout 20m bash ci/check_go_containers.sh reproducible
+        run: timeout 30m bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
     runs-on: ubuntu-latest

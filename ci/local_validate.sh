@@ -1592,9 +1592,20 @@ metrics_readback() {
   # complexity are all still Python-computed per docs/go-migration-matrix.md
   # as of CHAOS-5055) and should retire once the matrix shows zero COMPAT
   # rows for these families.
-  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" - <<'PYEOF' || return 1
-import argparse
+  # Written to a temp file via the printf BUILTIN, never a heredoc: bash
+  # writes a here-document into a pipe it also holds the read end of, which
+  # hangs forever on a host with a small effective pipe buffer (CHAOS-3362/
+  # 3489/4487) -- test_no_ci_script_has_a_heredoc_over_the_measured_pipe_budget
+  # and test_here_redirections_match_the_pinned_allowlist both guard every
+  # script under ci/ against exactly this, unconditionally. A single-argument
+  # printf writes straight to the file with no pipe involved regardless of
+  # payload size.
+  local metrics_readback_py
+  metrics_readback_py="$(mktemp "${TMPDIR:-/tmp}/local-validate-metrics-readback.XXXXXX")" || {
+    printf 'metrics_readback: could not create a temp file for the compute script\n' >&2
+    return 2
+  }
+  printf '%s' 'import argparse
 import asyncio
 import os
 
@@ -1625,7 +1636,13 @@ ns.org = org_id
 rc = job_complexity_db._cmd_metrics_complexity(ns)
 if rc:
     raise SystemExit(rc)
-PYEOF
+' >"${metrics_readback_py}"
+  local metrics_readback_rc
+  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
+    "${PROXY_OFF[@]}" "${PYBIN}" "${metrics_readback_py}"
+  metrics_readback_rc=$?
+  rm -f "${metrics_readback_py}"
+  [ "${metrics_readback_rc}" -eq 0 ] || return 1
 
   printf '   asserting ClickHouse readback (rows with computed_at >= %s, repo_ids ⊆ repos.id)\n' "${run_start}"
   # "incident" is deliberately excluded — see CHAOS-4269. `fixtures generate`

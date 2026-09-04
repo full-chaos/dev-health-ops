@@ -1659,8 +1659,31 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # The other new test this round, TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse
     # (cmd/dev-health-worker), is `-tags=integration`, so it does not touch this
     # count -- the integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1319
-    assert len(expected_integration_tests) == 152
+    # CHAOS-5045 (GitHub TestOps report phase bounded on updated_at): +8 top-level
+    # (1319 -> 1327), of which +1 is integration-tagged (152 -> 153).
+    # Ordinary (+7, github_tests_report_window_test.go): the report-window
+    # disposition needs both directions pinned, because narrowing a sync window
+    # can fail two opposite ways -- re-collecting what it should skip, and
+    # dropping what it must keep. TestGitHubTestsReportPhaseSkipsARunUnchangedSinceAnEarlierWindow
+    # (the red one: asserts the per-run /artifacts request is NOT reissued),
+    # TestGitHubTestsReportPhaseStillCollectsARunUpdatedInsideTheWindow,
+    # TestGitHubTestsReportPhaseGraceCoversOneWindowOfIndexingLag,
+    # TestGitHubTestsReportPhaseNeverSkipsARunWithoutAnUpdatedAt,
+    # TestGitHubTestsReportPhaseFiltersNothingWithoutASinceBound,
+    # TestGitHubTestsReportWindowDispositionIsSharedByBothRoutes,
+    # TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt (GitLab is the
+    # precedent this fix mirrors; asserting its live query keeps the two
+    # providers' report windows from drifting apart silently).
+    # Integration-tagged (+1, github_tests_report_window_integration_test.go):
+    # TestGitHubTestsReportWindowWritesOneRawRowPerKeyAcrossWindows, which needs a
+    # real ClickHouse because its whole point is a raw count read WITHOUT FINAL --
+    # a FINAL readback collapses the duplicate keys and would pass on the
+    # unfixed code, which is exactly why the defect survived unnoticed.
+    # It joins the existing internal/providersync shard row, so
+    # ci/go_integration_shards.tsv needs no new row and its 44-row count is
+    # unchanged.
+    assert len(expected_provider_tests) == 1327
+    assert len(expected_integration_tests) == 153
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1676,7 +1699,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1319
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1327
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1763,7 +1786,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1319
+    assert len(selected_tests) == len(set(selected_tests)) == 1327
     assert set(selected_tests) == expected_tests
 
 

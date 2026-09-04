@@ -1461,6 +1461,19 @@ warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOM
 #
 # What replaces it is measured after the fact rather than predicted before it.
 RC=0
+# v4.8.7 (bigboy codex-auth incident, same day): a non-login shell can lose
+# CODEX_HOME (set in ~/.profile) and every subsequent `codex exec` in this
+# script then reads $HOME/.codex instead of the intended auth directory --
+# on a host where that default has no auth.json, codex fails mid-round with
+# an HTTP 401, AFTER the worktree/warm-step work above already ran, and the
+# failure reads as a codex/model problem rather than what it actually is (a
+# missing/misdirected credential). Fail loudly HERE instead, before any of
+# that work would be wasted a second time: resolve the SAME directory codex
+# itself will use ($CODEX_HOME if set, else $HOME/.codex) and refuse to
+# launch if it has no auth.json.
+CODEX_HOME_EFFECTIVE="${CODEX_HOME:-$HOME/.codex}"
+[ -s "$CODEX_HOME_EFFECTIVE/auth.json" ] \
+  || die "no codex auth found at $CODEX_HOME_EFFECTIVE/auth.json -- refusing to launch a round that would fail mid-way with an HTTP 401 instead of failing loudly now. If this is bigboy, run under 'bash -lc' (so ~/.profile sets CODEX_HOME) or export CODEX_HOME=/home/ubuntu/agents/codex explicitly before retrying."
 # BOUND REVIEWER-SPAWNED GO WORK.
 #
 # Prompt-level scoping does NOT hold: on 09-02 a reviewer widened a

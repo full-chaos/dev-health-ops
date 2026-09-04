@@ -1395,7 +1395,7 @@ grep -qF 'RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"' "$SCRIPT" \
 # NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
 # form, never a VERDICT= line, and exiting 7).
 # ---------------------------------------------------------------------------
-extract 1667 1667 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+extract 1680 1680 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
 
 RC_CHECK_OUT_OK=$(
   set +e
@@ -1431,6 +1431,75 @@ if [ "$RC_CHECK_EXIT" -eq 7 ] \
   ok "v4.8.6 NO-VERDICT fix: a non-zero codex rc prints 'NO VERDICT (codex rc=N)', never a VERDICT= line, and exits with that rc"
 else
   notok "v4.8.6 NO-VERDICT fix: wrong behaviour on RC!=0 (exit=$RC_CHECK_EXIT, out='$RC_CHECK_OUT_FAIL')"
+fi
+
+# ---------------------------------------------------------------------------
+# v4.8.7 (bigboy codex-auth incident, same day): a non-login shell losing
+# CODEX_HOME made `codex exec` silently fall back to $HOME/.codex, which had
+# no auth.json on that host, and the round failed mid-way with an HTTP 401 --
+# AFTER the worktree/warm-step work already ran. Fixed: resolve the same
+# directory codex itself will use ($CODEX_HOME if set, else $HOME/.codex) and
+# die BEFORE launching if it has no auth.json. Proof: extract the real
+# resolution + guard, run it against a throwaway $WORK-scoped fake HOME/
+# CODEX_HOME (never the real ~/.codex on whatever host runs this harness).
+# ---------------------------------------------------------------------------
+extract 1463 1476 'CODEX_HOME_EFFECTIVE=' "$WORK/codex_auth_guard.sh"
+
+FAKE_HOME_NO_AUTH="$WORK/fake-home-no-auth"
+mkdir -p "$FAKE_HOME_NO_AUTH/.codex"
+set +e
+RESOLVE_AUTH_MISSING=$( (
+  HOME="$FAKE_HOME_NO_AUTH"
+  unset CODEX_HOME
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/codex_auth_guard.sh"
+  printf 'REACHED_PAST_GUARD\n'
+) 2>&1 )
+RC_AUTH_MISSING=$?
+set -e
+if [ "$RC_AUTH_MISSING" -ne 0 ] \
+   && printf '%s' "$RESOLVE_AUTH_MISSING" | grep -qi 'no codex auth found' \
+   && ! printf '%s' "$RESOLVE_AUTH_MISSING" | grep -q 'REACHED_PAST_GUARD'; then
+  ok "v4.8.7 codex-auth guard: no auth.json under \$HOME/.codex (CODEX_HOME unset) -- dies before launching, never reaches past the guard"
+else
+  notok "v4.8.7 codex-auth guard: missing auth.json was NOT caught (rc=$RC_AUTH_MISSING, out='$RESOLVE_AUTH_MISSING')"
+fi
+
+FAKE_HOME_WITH_AUTH="$WORK/fake-home-with-auth"
+mkdir -p "$FAKE_HOME_WITH_AUTH/.codex"
+printf '{"fake":"auth-fixture"}\n' > "$FAKE_HOME_WITH_AUTH/.codex/auth.json"
+RESOLVE_AUTH_PRESENT=$(
+  HOME="$FAKE_HOME_WITH_AUTH"
+  unset CODEX_HOME
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/codex_auth_guard.sh"
+  printf 'REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=%s\n' "$CODEX_HOME_EFFECTIVE"
+)
+if printf '%s' "$RESOLVE_AUTH_PRESENT" | grep -q "^REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=$FAKE_HOME_WITH_AUTH/.codex$"; then
+  ok "v4.8.7 codex-auth guard: a real auth.json under \$HOME/.codex (CODEX_HOME unset) passes the guard unharmed"
+else
+  notok "v4.8.7 codex-auth guard: a present auth.json was wrongly rejected or CODEX_HOME_EFFECTIVE resolved wrong (got: $RESOLVE_AUTH_PRESENT)"
+fi
+
+FAKE_CODEX_HOME="$WORK/fake-codex-home-explicit"
+mkdir -p "$FAKE_CODEX_HOME"
+printf '{"fake":"auth-fixture"}\n' > "$FAKE_CODEX_HOME/auth.json"
+RESOLVE_AUTH_EXPLICIT=$(
+  HOME="$FAKE_HOME_NO_AUTH" CODEX_HOME="$FAKE_CODEX_HOME"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/codex_auth_guard.sh"
+  printf 'REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=%s\n' "$CODEX_HOME_EFFECTIVE"
+)
+if printf '%s' "$RESOLVE_AUTH_EXPLICIT" | grep -q "^REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=$FAKE_CODEX_HOME$"; then
+  ok "v4.8.7 codex-auth guard: an explicit \$CODEX_HOME with its own auth.json is honoured over \$HOME/.codex (matches what codex itself would use)"
+else
+  notok "v4.8.7 codex-auth guard: explicit CODEX_HOME was not honoured (got: $RESOLVE_AUTH_EXPLICIT)"
 fi
 
 echo "----"

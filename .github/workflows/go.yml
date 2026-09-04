@@ -469,9 +469,10 @@ jobs:
     # Measured: with #2197/#2199/#2192 pushing minutes apart, #2197's
     # go-container-reproducibility was cancelled at 2m40s -- a required
     # check turned red by a job-level group meant to help it. No
-    # replacement serialization mechanism here; see the 36m/30m sizing
-    # below for how contention is handled instead (accept variance,
-    # size the cap to survive it, not queue jobs against each other).
+    # replacement serialization mechanism here; see the 57m/51m sizing
+    # below (CHAOS-5067) for how contention is handled instead (accept
+    # variance, size the cap to survive it, not queue jobs against each
+    # other).
     timeout-minutes: 5
     steps:
       - name: Confirm a Docker daemon is reachable
@@ -768,7 +769,21 @@ jobs:
     # above means the NEXT run in the queue no longer has to survive
     # contention from a concurrent sibling, but the cap still has to
     # survive ordinary variance in a single, uncontended run.
-    timeout-minutes: 36
+    #
+    # CHAOS-5067 (09-04): the 36m/30m pair above proved too tight under
+    # REAL host contention (load1 100-124 on the oci-arc-runners pool,
+    # concurrent codex rounds + other jobs) -- four runs died at ~30m2xs
+    # with exit 124 / "Canceled: context canceled" against the 30m inner
+    # cap, and a successful rerun still took 28m44s, both past the
+    # 18m03s isolated baseline the 36m/30m pair was sized from. New max
+    # measured wall under load = 28m44s (supersedes 18m03s). Same
+    # contract formula, same rounding (double the exact wall, floor to
+    # whole minutes -- 18m03s x2 = 36m06s -> 36m; 28m44s x2 = 57m28s ->
+    # 57m): outer becomes 57m. Inner keeps the same 6m buffer the
+    # original pair used (36m - 30m = 6m), fixed headroom for
+    # checkout/binary-startup variance rather than a percentage of the
+    # run: 57m - 6m = 51m.
+    timeout-minutes: 57
     env:
       # CHAOS-4906 pool module cache (09-03): this job has no `setup-go`
       # step of its own (ci/check_go_containers.sh shells out to `go`
@@ -784,10 +799,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Verify reproducible Go images
-        # timeout 30m: inner test timeout strictly shorter than the 36m
-        # outer cap, per the contract -- fails loud on a genuine hang
-        # instead of an ambiguous job-level cancellation.
-        run: timeout 30m bash ci/check_go_containers.sh reproducible
+        # timeout 51m: inner test timeout strictly shorter than the 57m
+        # outer cap (CHAOS-5067, 09-04 -- resized from a 28m44s measured
+        # wall under real contention, see the job-level comment above),
+        # per the contract -- fails loud on a genuine hang instead of an
+        # ambiguous job-level cancellation.
+        run: timeout 51m bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
     runs-on: ubuntu-latest

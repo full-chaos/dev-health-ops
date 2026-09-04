@@ -143,7 +143,14 @@ func (loader *ClickHouseLoader) FetchMetricSeriesByScope(
 		scopeExpression = "'global'"
 	}
 
-	innerGroup := append([]string{"day"}, definition.InnerGroupColumns...)
+	// org_id LEADS the group, matching every source table's CURRENT sorting
+	// key (migrations 027/042 prepended it). The org filter above is already
+	// pre-aggregation so this cannot change a row today -- org_id is constant
+	// within the query -- but it makes the tenant boundary STRUCTURAL rather
+	// than dependent on the filter staying where it is. Hoisting that filter
+	// into an outer query is a plausible refactor, and it is exactly what
+	// turns this shape into ai-families' cross-tenant P1.
+	innerGroup := append([]string{"org_id", "day"}, definition.InnerGroupColumns...)
 	query := fmt.Sprintf(`
 SELECT scope_key, day, avg(metric_value) AS value
 FROM (

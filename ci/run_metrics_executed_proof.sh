@@ -162,8 +162,24 @@ stop_service() {
   # from a not-yet-reaped zombie, so it would burn the full bound either way.
   # Arm a watchdog subshell instead: it SIGKILLs the child once the bound
   # expires, and THAT is what makes the `wait` below guaranteed to return.
+  # The watchdog counts in 1s steps rather than one long `sleep`. Cancelling it
+  # below SIGTERMs the subshell, which stops the SIGKILL from ever running --
+  # verified on bigboy -- but the subshell's `sleep` CHILD is not signalled and
+  # survives, reparented to init, for whatever is left of its interval. With one
+  # `sleep 60` that is a 60s orphan per service in GitHub's "Terminate orphan
+  # process" list, i.e. noise in exactly the teardown log this fix exists to
+  # make readable. In 1s steps the orphan lives at most 1s, with no new
+  # dependency (pgrep would be the alternative, and the script deliberately
+  # require_cmd's only go/psql/curl).
   local started="${SECONDS}"
-  ( sleep "${TEARDOWN_WAIT_SECS}"; kill -KILL "${pid}" >/dev/null 2>&1 ) &
+  (
+    waited=0
+    while [ "${waited}" -lt "${TEARDOWN_WAIT_SECS}" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    kill -KILL "${pid}" >/dev/null 2>&1
+  ) &
   local watchdog="$!"
 
   wait "${pid}" >/dev/null 2>&1 || true
@@ -340,18 +356,26 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
   export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
   export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
-  # --shutdown-timeout, CHAOS-5025 (H3): was 7260s (2h1m) -- a second
+  # --shutdown-timeout, CHAOS-5025 (H3): was 7260s (2h1m), a second
   # unbounded-teardown time bomb once cleanup() actually reaches the worker.
-  # Proof jobs run ~11s, so 120s is far above the real drain need and well
-  # under stop_service()'s 60s SIGTERM bound, which escalates to SIGKILL
-  # regardless. NOTE: this comment lives ABOVE the command on purpose -- a `#`
-  # between backslash-continued arguments would comment out every argument
-  # after it, silently.
+  # The replacement must sit UNDER stop_service()'s TEARDOWN_WAIT_SECS (60s),
+  # not merely below the old absurd value: a worker asking for longer than the
+  # harness bound never gets to drain at all, it just gets SIGKILLed at 60s, so
+  # the graceful path can only win if its own timeout finishes first. Observed
+  # proof jobs are ~11s (daily_partition 10887-11376ms, daily_finalize 8102ms)
+  # at concurrency metrics=2/sync=1, so a real drain is ~12s: 30s is ~2.5x the
+  # longest real job and 2x under the bound, which leaves SIGKILL a true
+  # backstop. Truncating an in-flight job here cannot affect the result either
+  # way -- cleanup() runs after the readback assertion has already produced the
+  # pass/fail signal.
+  # NOTE: this comment lives ABOVE the command on purpose -- a `#` between
+  # backslash-continued arguments would comment out every argument after it,
+  # silently.
   exec "${BIN_DIR}/dev-health-worker" \
     --queues=metrics,sync \
     --queue-concurrency=metrics=2,sync=1 \
     --worker-group=heavy \
-    --shutdown-timeout=120s \
+    --shutdown-timeout=30s \
     --http-addr=":${WORKER_HTTP_PORT}" \
     --river-schema=river \
     --domain-database-role="${RIVER_DOMAIN_ROLE}" \

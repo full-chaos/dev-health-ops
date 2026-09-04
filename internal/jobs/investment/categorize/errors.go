@@ -78,6 +78,39 @@ var secretPatterns = []*regexp.Regexp{
 	// <redacted>" just redacts it again, a no-op).
 	regexp.MustCompile(`(?i)(authorization[\s:=]+)['"]?[A-Za-z0-9+/_.~-]+=*(?:\s+[A-Za-z0-9+/_.~-]+=*)?`),
 
+	// (b2) URI userinfo credentials -- a `scheme://user:password@host` DSN
+	// (Postgres, Redis, ClickHouse, an internal gateway URL, ...) quoted
+	// verbatim in a raw provider/proxy diagnostic. Neither (a)'s label
+	// match nor (d)'s length-24 opaque-run heuristic reliably catches this:
+	// a real DB password is often short and carries no "password"/"secret"
+	// label at all -- the '://' + '@' SHAPE is the only reliable signal.
+	// Percent-encoded/special-character passwords (found via lane-4978's
+	// codex round 1, CHAOS-4978 #2189 P1) are covered because the userinfo
+	// class excludes only whitespace/'@', not '%'/'$'/'!'/etc. Go's RE2
+	// engine has no lookahead, so the trailing '@' is consumed as part of
+	// the match rather than merely asserted -- the redacted output is
+	// `scheme://<redacted>host` (the '@' separator itself is dropped along
+	// with the credential; harmless, since only the credential's secrecy
+	// matters here, not preserving the original delimiter).
+	//
+	// codex round 2 (#2189) P1: an earlier version of this pattern also
+	// excluded '/' from the userinfo class (to avoid spanning into a
+	// path after the host). That let a malformed/adversarial diagnostic
+	// whose PASSWORD itself contains a literal, un-percent-encoded
+	// "://" (e.g. "postgres://user:sekret://noted@host") defeat the
+	// match: the '/' exclusion stopped the first match attempt short of
+	// '@', so the regex engine instead matched starting at the INNER
+	// "sekret://noted@" (itself a valid scheme://userinfo@ shape),
+	// leaving "user:sekret" -- half the real credential -- unredacted.
+	// A raw (non-percent-encoded) '/' inside userinfo is already
+	// non-conformant per RFC 3986 (real percent-encoded slashes are
+	// unaffected, see the test cases), so dropping the '/' exclusion
+	// costs nothing on well-formed input and closes this bypass; the
+	// tradeoff is a wider match on adversarial/malformed text, which is
+	// the same "over-redaction is the safe failure mode" tradeoff (d)
+	// above already accepts.
+	regexp.MustCompile(`\b([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s@]+@`),
+
 	// (a) Generic credential-label SUBSTRING match -- deliberately not a
 	// whole-word/whole-label match, so "api_key", "x-api-key",
 	// "webhook_secret", "client_secret" all match via the bare keyword
@@ -192,6 +225,31 @@ func retryAfterFromHeader(header http.Header) time.Duration {
 	return 0
 }
 
+// sanitizedCause ports the same "prevent a leak" philosophy sanitizeMessage
+// already applies to llmError's own Error() string to the CAUSE it retains
+// for errors.Unwrap()/errors.As(). codex round 2 (#2189) P1: llmError kept
+// the raw, unsanitized err as its cause -- Error() was redacted, but a
+// caller that unwraps the returned *llmError (or asserts it to
+// *httpStatusError to read .body directly, exactly what statusCodeOf/
+// headerOf themselves do) got the ORIGINAL, unredacted provider response
+// text, defeating the sanitizer entirely for anything downstream that
+// unwraps rather than calls .Error(). Only httpStatusError's body carries
+// provider-controlled text worth sanitizing here; httpTransportError wraps
+// an OS/network-level error (DNS, TLS, connection refused) that never
+// contains a provider secret, so it passes through unchanged -- rebuilding
+// it would also lose its Unwrap chain to the underlying net error.
+func sanitizedCause(err error) error {
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) {
+		return &httpStatusError{
+			statusCode: statusErr.statusCode,
+			header:     statusErr.header,
+			body:       sanitizeMessage(statusErr.body),
+		}
+	}
+	return err
+}
+
 // classifyProviderError ports errors.py's classify_provider_error: inspect
 // an HTTP status code and the raw error text for well-known patterns from
 // the OpenAI/local-server SDKs, and wrap the result in the canonical kind.
@@ -204,7 +262,7 @@ func classifyProviderError(err error, statusCode int, header http.Header, provid
 	msgLower := strings.ToLower(err.Error())
 
 	base := func(kind llmErrorKind, message string) *llmError {
-		return &llmError{kind: kind, message: message, provider: provider, model: model, cause: err}
+		return &llmError{kind: kind, message: message, provider: provider, model: model, cause: sanitizedCause(err)}
 	}
 
 	// codex round 3 (#2178, bigboy) P2: substring-matching a fixed word

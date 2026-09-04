@@ -1383,7 +1383,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				suites := []testSuiteResultRow(nil)
 				cases := []testCaseResultRow(nil)
 				coverage := []coverageSnapshotRow(nil)
-				if include && (claim.BeforeAt == nil || !pipeline.StartedAt.After(claim.BeforeAt.UTC())) {
+				if include && !githubTestsReportRunOutsideWindow(pipeline, claim) {
 					artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 						Path:  root + "/actions/runs/" + url.PathEscape(pipeline.RunID) + "/artifacts",
 						Query: url.Values{"per_page": {"100"}}, DataKey: "artifacts", MaxPages: 1,

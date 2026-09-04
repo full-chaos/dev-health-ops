@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -58,11 +60,11 @@ func TestAIImpactComputeFamilyAgainstRealClickHouse(t *testing.T) {
     additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
     changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
     last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 		`CREATE TABLE git_pull_request_reviews (
     repo_id UUID, number UInt32, review_id String, reviewer String, state String,
     submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number, review_id)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
 		`CREATE TABLE ai_attribution (
     record_id UUID, org_id UUID, provider LowCardinality(String),
     subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
@@ -111,10 +113,10 @@ QUALIFY ROW_NUMBER() OVER (
 		`CREATE TABLE teams (
     id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
     updated_at DateTime64(6), org_id String
-) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (id)`,
+) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
     id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (id)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 		`CREATE TABLE ai_impact_metrics_daily (
     org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
     day Date, attribution_bucket LowCardinality(String),
@@ -298,5 +300,116 @@ WHERE org_id = ? AND attribution_bucket = 'ai_assisted'`, orgID).Scan(&reviewsPe
 	if totalRows != uint64(before) {
 		t.Fatalf("ai_impact_metrics_daily has %d rows after re-running the same partition, want %d; "+
 			"FINAL should collapse the rewrite onto the identical ORDER BY key", totalRows, before)
+	}
+}
+
+// TestAIImpactDedupIsTenantScoped is this family's half of the codex round 1
+// P1 on #2229: a dedup GROUP BY that omits org_id picks the newest row ACROSS
+// TENANTS. ai_impact had the same defect in three readers.
+//
+// Two orgs legitimately share one repo_id and PR number. Org B's row is NEWER
+// with reviews_count=0; org A's is older with 4. Grouping without org_id lets
+// B's row win globally, A's filter then misses, and A's reviews_per_pr reads
+// as zero -- a metric that looks plausible and is another tenant's.
+//
+// Asserted in BOTH directions so the fix cannot degenerate into pinning one
+// tenant, and against the reviews table too, since that reader had the same
+// omission with a different key shape.
+func TestAIImpactDedupIsTenantScoped(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// CURRENT keys, from the rekey migrations -- not the stale CREATEs.
+	for _, statement := range []string{
+		`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, created_at DateTime64(3, 'UTC'),
+    merged_at Nullable(DateTime64(3, 'UTC')),
+    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
+    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_request_reviews (
+    repo_id UUID, number UInt32, review_id String, reviewer String, state String,
+    submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+	}
+
+	const (
+		sharedRepo = "00000000-0000-4000-8000-00000000ab01"
+		orgA       = "00000000-0000-4000-8000-00000000ab00"
+		orgB       = "00000000-0000-4000-8000-00000000cd00"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
+    changed_files, changes_requested_count, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 3, toDateTime64('2026-09-03 01:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 05:00:00', 3, 'UTC'), 1, 1, 1, 0, 4,
+ toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), 3, toDateTime64('2026-09-03 01:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 05:00:00', 3, 'UTC'), 1, 1, 1, 0, 0,
+ toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// Same shape on the reviews table: B's row is newer and differs in state.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_request_reviews (repo_id, number, review_id, reviewer, state, submitted_at, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 3, 'rv1', 'alice', 'CHANGES_REQUESTED',
+ toDateTime64('2026-09-03 03:00:00', 3, 'UTC'), toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), 3, 'rv1', 'bob', 'APPROVED',
+ toDateTime64('2026-09-03 03:00:00', 3, 'UTC'), toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	repoIDs := []uuid.UUID{uuid.MustParse(sharedRepo)}
+	start := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 1)
+
+	for _, tenant := range []struct {
+		org          string
+		wantReviews  uint32
+		wantRevState string
+	}{
+		{orgA, 4, "CHANGES_REQUESTED"},
+		{orgB, 0, "APPROVED"},
+	} {
+		prs, err := LoadAIImpactPullRequests(ctx, conn, tenant.org, repoIDs, start, end)
+		if err != nil {
+			t.Fatalf("%s: load PRs: %v", tenant.org, err)
+		}
+		if len(prs) != 1 {
+			t.Fatalf("%s: got %d PRs, want 1", tenant.org, len(prs))
+		}
+		if prs[0].ReviewsCount == nil || *prs[0].ReviewsCount != tenant.wantReviews {
+			t.Fatalf("%s: reviews_count=%v, want %d -- the other tenant's newer row won a dedup "+
+				"group that omitted org_id", tenant.org, prs[0].ReviewsCount, tenant.wantReviews)
+		}
+
+		reviews, err := LoadAIImpactReviews(ctx, conn, tenant.org, repoIDs, start, end)
+		if err != nil {
+			t.Fatalf("%s: load reviews: %v", tenant.org, err)
+		}
+		if len(reviews) != 1 {
+			t.Fatalf("%s: got %d reviews, want 1", tenant.org, len(reviews))
+		}
+		if reviews[0].State == nil || *reviews[0].State != tenant.wantRevState {
+			t.Fatalf("%s: review state=%v, want %q -- same cross-tenant dedup defect on the "+
+				"reviews reader, whose key is (org_id, repo_id, number, review_id)",
+				tenant.org, reviews[0].State, tenant.wantRevState)
+		}
 	}
 }

@@ -1,9 +1,16 @@
 package llmorgsettings
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -174,6 +181,15 @@ func TestJsonTruthy(t *testing.T) {
 		{`[0]`, true},     // non-empty list, even one containing a falsy element
 		{`{"a":false}`, true},
 		{`not-valid-json`, false}, // malformed: fail closed, not treated as an override
+
+		// codex round 2, P2: a magnitude too large for float64 is valid
+		// JSON syntax (features_override has no magnitude constraint) --
+		// Python's json.loads/float() silently overflow to +-Inf rather
+		// than raising, and bool(inf) is True. Must NOT fail closed like
+		// a genuinely malformed literal does.
+		{`1e400`, true},  // overflows to +Inf -- nonzero, truthy
+		{`-1e400`, true}, // overflows to -Inf -- nonzero, truthy
+		{`0e400`, false}, // zero mantissa: exactly representable as 0, no overflow at all
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
@@ -181,5 +197,125 @@ func TestJsonTruthy(t *testing.T) {
 				t.Errorf("jsonTruthy(%s) = %v, want %v", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+// fakeQueryRow implements pgx.Row for the hermetic regression test below
+// (codex round 2, P3). scanValues assign to the real Scan destinations
+// positionally via reflection -- a nil entry leaves a nullable (**T)
+// destination nil, mirroring a SQL NULL.
+type fakeQueryRow struct {
+	values []any
+	err    error
+}
+
+func (r fakeQueryRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	for i, d := range dest {
+		if i >= len(r.values) {
+			continue
+		}
+		if err := assignScanDest(d, r.values[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// assignScanDest assigns value into dest -- a pointer produced by one of
+// this package's own QueryRow(...).Scan(&x) call sites. Handles the two
+// shapes those sites actually use: *T (a plain destination) and **T (a
+// destination that is itself a *T field/var, for a nullable column).
+func assignScanDest(dest, value any) error {
+	dv := reflect.ValueOf(dest)
+	if dv.Kind() != reflect.Ptr || dv.IsNil() {
+		return fmt.Errorf("scan destination is not a non-nil pointer: %T", dest)
+	}
+	elem := dv.Elem()
+	if elem.Kind() == reflect.Ptr {
+		if value == nil {
+			elem.Set(reflect.Zero(elem.Type()))
+			return nil
+		}
+		inner := reflect.New(elem.Type().Elem())
+		inner.Elem().Set(reflect.ValueOf(value))
+		elem.Set(inner)
+		return nil
+	}
+	if value == nil {
+		elem.Set(reflect.Zero(elem.Type()))
+		return nil
+	}
+	elem.Set(reflect.ValueOf(value))
+	return nil
+}
+
+// sequencedFakeQueryer is a featureRowQueryer test double, hermetic (no
+// Postgres): it dispatches on a distinctive SQL substring and lets the
+// "organizations" query return a DIFFERENT tier on each successive call
+// -- the one thing a real container-backed test cannot cheaply prove
+// (that the two reads genuinely observe different points in time), but a
+// fake naturally can.
+type sequencedFakeQueryer struct {
+	t *testing.T
+
+	organizationsCalls      int
+	organizationsTierByCall []string // tier returned on the Nth call (1-indexed); last entry repeats past the end
+}
+
+func (f *sequencedFakeQueryer) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	switch {
+	case strings.Contains(sql, "to_regclass"):
+		return fakeQueryRow{values: []any{true}}
+	case strings.Contains(sql, "org_licenses"):
+		return fakeQueryRow{err: pgx.ErrNoRows}
+	case strings.Contains(sql, "FROM organizations"):
+		f.organizationsCalls++
+		idx := f.organizationsCalls - 1
+		if idx >= len(f.organizationsTierByCall) {
+			idx = len(f.organizationsTierByCall) - 1
+		}
+		return fakeQueryRow{values: []any{f.organizationsTierByCall[idx]}}
+	case strings.Contains(sql, "feature_flags"):
+		return fakeQueryRow{values: []any{"team", true, nil, nil}}
+	default:
+		f.t.Fatalf("unexpected query: %s", sql)
+		return nil
+	}
+}
+
+// TestByoLLMFlagState_TierReadsAreIndependent is the codex round 2, P3
+// regression test: the round-1 torn-read fix (splitting the TEAM-tier
+// floor read from the main decision's own tier read) had no committed
+// test proving the two reads are genuinely INDEPENDENT, only that the
+// final DECISION was correct for a few static states. This fakes a tier
+// that changes BETWEEN the two reads (team at the floor check, community
+// by the main decision -- an org downgraded mid-resolution) and asserts
+// the FRESH value drives the main decision, matching Python's own
+// double-read shape. If byoLLMFlagState ever regresses to sharing one
+// read for both purposes, this fails: the floor's stale "team" would
+// also (wrongly) drive the main decision, producing "enabled" instead of
+// "disabled".
+func TestByoLLMFlagState_TierReadsAreIndependent(t *testing.T) {
+	queryer := &sequencedFakeQueryer{
+		t:                       t,
+		organizationsTierByCall: []string{"team", "community"},
+	}
+	orgID := uuid.New()
+
+	state, err := byoLLMFlagState(context.Background(), queryer, orgID, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state != flagStateDisabled {
+		t.Fatalf("state = %q, want %q -- the main decision must use the FRESH "+
+			"(second) tier read, not the floor check's stale first read", state, flagStateDisabled)
+	}
+	if queryer.organizationsCalls != 2 {
+		t.Fatalf("organizations query called %d time(s), want exactly 2 "+
+			"(one for the floor check, one for the main decision, genuinely independent)",
+			queryer.organizationsCalls)
 	}
 }

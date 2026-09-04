@@ -1,10 +1,12 @@
 package llmorgsettings
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -187,8 +189,22 @@ func resolveOrgTierAndLicenseOverrides(
 // value (0.0, -0, 0e0, whitespace padding), silently flipping the
 // license-override decision for any of them.
 func jsonTruthy(raw json.RawMessage) bool {
+	// UseNumber(): decode JSON numbers as json.Number (the raw literal
+	// text), not float64 -- codex round 2, P2: a plain
+	// json.Unmarshal(raw, &any) decodes numbers via strconv.ParseFloat,
+	// which returns AN ERROR for a syntactically valid but
+	// float64-overflowing literal like 1e400 (features_override is a
+	// free-form JSON column with no magnitude constraint -- CHAOS-4989's
+	// own schema comment). The old code's error branch then failed
+	// closed (false), while Python's json.loads("1e400") succeeds
+	// (float("1e400") == inf, no exception) and bool(inf) is True --
+	// silently flipping a TRUTHY license-override value to falsy. This
+	// decoder never errors on magnitude; only a genuine parse failure
+	// reaches the error branch below.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
+	if err := dec.Decode(&value); err != nil {
 		// Malformed JSON for this one override value: fail closed
 		// (falsy) -- matches the "no license override present" outcome
 		// rather than guessing that unparseable content should enable
@@ -200,8 +216,8 @@ func jsonTruthy(raw json.RawMessage) bool {
 		return false
 	case bool:
 		return v
-	case float64:
-		return v != 0
+	case json.Number:
+		return numberTruthy(v)
 	case string:
 		return v != ""
 	case []any:
@@ -211,6 +227,31 @@ func jsonTruthy(raw json.RawMessage) bool {
 	default:
 		return true
 	}
+}
+
+// numberTruthy mirrors Python's bool(float(literal)) for a JSON number
+// literal -- codex round 2's own executed repro
+// (python3 -c 'json.loads("1e400")' -> inf, bool(inf) is True). A
+// magnitude too large for float64 is NOT a parse failure the way a
+// malformed literal is: strconv.ParseFloat returns the correctly-signed
+// +-Inf VALUE alongside a range error for exactly this case (Go's
+// encoding/json's own number grammar already guarantees n is
+// syntactically valid JSON -- UseNumber() only defers the numeric
+// conversion, it does not relax the grammar), so only a genuine,
+// non-range parse error (unreachable in practice, given that grammar
+// guarantee, but not assumed away) fails closed; an overflow uses the
+// returned +-Inf, which is nonzero and therefore truthy, exactly
+// matching Python.
+func numberTruthy(n json.Number) bool {
+	f, err := strconv.ParseFloat(n.String(), 64)
+	if err != nil {
+		var numErr *strconv.NumError
+		if errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) {
+			return f != 0
+		}
+		return false
+	}
+	return f != 0
 }
 
 // decideByoLLM ports decide_feature narrowed to byo_llm's own

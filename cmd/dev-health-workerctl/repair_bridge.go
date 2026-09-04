@@ -45,11 +45,15 @@ func validateReviewEvidence(text string) bool {
 // the operator's exact digits (codex round 1, P1: the default float64
 // decode loses precision above 2^53, silently changing which value gets
 // durably persisted as repair evidence -- e.g. a sequence number attesting
-// 9007199254740993 was previously re-sent as 9007199254740992). The
-// re-encoded size is checked against outputEvidenceMaxBytes as a stand-in
-// for the bridge's own canonical-encoding bound; the bridge remains the
-// actual authority since Go's json.Marshal key ordering is not guaranteed
-// byte-identical to Python's canonical form.
+// 9007199254740993 was previously re-sent as 9007199254740992). The size
+// bound is checked against pythonCanonicalJSONByteLen, not a plain
+// json.Marshal length (codex round 2, P2: Go's json.Marshal emits raw UTF-8
+// for non-ASCII characters, but both bridge models' _canonical/_canonical_json
+// call Python's json.dumps with its DEFAULT ensure_ascii=True, which
+// \uXXXX-escapes every non-ASCII character -- a 4094-byte Go encoding of
+// 1362 euro-sign characters canonicalizes to 8180 bytes in Python, so the
+// naive Go length let a payload the bridge would reject pass the local
+// check).
 func parseOutputEvidence(raw string) (map[string]any, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.UseNumber()
@@ -60,14 +64,55 @@ func parseOutputEvidence(raw string) (map[string]any, error) {
 	if evidence == nil {
 		return nil, errors.New("output-evidence must be a non-null JSON object")
 	}
-	reencoded, err := json.Marshal(evidence)
+	canonicalLength, err := pythonCanonicalJSONByteLen(evidence)
 	if err != nil {
 		return nil, err
 	}
-	if len(reencoded) > outputEvidenceMaxBytes {
-		return nil, fmt.Errorf("output-evidence exceeds %d bytes re-encoded", outputEvidenceMaxBytes)
+	if canonicalLength > outputEvidenceMaxBytes {
+		return nil, fmt.Errorf("output-evidence exceeds %d bytes canonicalized", outputEvidenceMaxBytes)
 	}
 	return evidence, nil
+}
+
+// pythonCanonicalJSONByteLen returns the byte length v would have under
+// Python's `json.dumps(v, sort_keys=True, separators=(",", ":"))` -- the
+// exact call both `_canonical` (worker_workgraph.py:60) and
+// `_canonical_json` (worker_metrics.py:868) make, with json.dumps' DEFAULT
+// ensure_ascii=True in effect (neither call passes ensure_ascii=False). Under
+// ensure_ascii, every character outside ASCII is escaped to `\uXXXX` (6
+// bytes), or a UTF-16 surrogate pair of two `\uXXXX` escapes (12 bytes) for
+// a rune above the Basic Multilingual Plane -- never emitted as raw UTF-8.
+// Go's json.Marshal never does this (it emits UTF-8 directly), so this
+// walks the marshaled bytes as runes and re-prices each one under Python's
+// scheme instead of trusting len(json.Marshal(v)).
+func pythonCanonicalJSONByteLen(v any) (int, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	// Go's json.Marshal HTML-escapes <, >, and & by default; Python's
+	// json.dumps never does. Disable that here so those three ASCII
+	// characters price at 1 byte each, matching Python, instead of Go's
+	// default 6-byte <-style escape -- SetEscapeHTML is unrelated to
+	// the ensure_ascii repricing this function does below, but leaving it
+	// on would overcount those three characters specifically.
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return 0, err
+	}
+	// Encoder.Encode appends a trailing newline Marshal does not; trim it
+	// before counting so this matches json.dumps' own output exactly.
+	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	length := 0
+	for _, r := range string(encoded) {
+		switch {
+		case r < 0x80:
+			length++
+		case r > 0xFFFF:
+			length += 12 // two \uXXXX surrogate-pair escapes
+		default:
+			length += 6 // one \uXXXX escape
+		}
+	}
+	return length, nil
 }
 
 // postWorkerBridge posts a JSON payload to the operational bridge at path,

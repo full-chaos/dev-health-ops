@@ -635,3 +635,66 @@ func TestDispatchWorkgraphRepairRejectsNullOutputEvidenceWithoutCallingTheBridge
 		t.Fatal("dispatchWorkgraphRepair with --output-evidence null called the bridge; want a local rejection")
 	}
 }
+
+// TestRedriveDailyMetricsLedgerErrorsOnAWellFormedButIncompleteBody is codex
+// round 2's P1 red-first proof: a syntactically VALID 200 body that is
+// merely incomplete ({}` or `null`, or missing one of the two fields) must
+// still be a hard error out of redriveDailyMetricsLedgerChunk -- round 1
+// only closed the UNDECODABLE case; a decodable-but-wrong-shape body
+// previously reached ledgerRepairWasIncomplete/dispatchMetrics unnoticed,
+// because their comma-ok reads treat a MISSING field identically to a
+// genuinely-zero one.
+func TestRedriveDailyMetricsLedgerErrorsOnAWellFormedButIncompleteBody(t *testing.T) {
+	for _, body := range []string{`{}`, `null`, `{"repaired": 1}`, `{"skipped_claim_active": 0}`} {
+		t.Run(body, func(t *testing.T) {
+			fake := newFakeBridge(t, http.StatusOK, body)
+			t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+			t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+			result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence")
+			if err == nil {
+				t.Fatalf("redriveDailyMetricsLedger on body %q = nil error, result=%v, want an error", body, result)
+			}
+		})
+	}
+}
+
+// TestPythonCanonicalJSONByteLenMatchesTheBridgesActualEncoding is codex
+// round 2's P2 red-first proof, using the exact case the round executed:
+// 1362 euro-sign characters under Python's json.dumps default
+// ensure_ascii=True canonicalize to 8180 bytes (each euro sign, U+20AC,
+// costs 6 bytes as €), not the 4094 bytes Go's raw-UTF-8 json.Marshal
+// would report.
+func TestPythonCanonicalJSONByteLenMatchesTheBridgesActualEncoding(t *testing.T) {
+	value := map[string]any{"a": strings.Repeat("€", 1362)}
+	length, err := pythonCanonicalJSONByteLen(value)
+	if err != nil {
+		t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
+	}
+	if length != 8180 {
+		t.Fatalf("pythonCanonicalJSONByteLen = %d, want 8180 (matching the bridge's own Python canonicalizer)", length)
+	}
+}
+
+func TestPythonCanonicalJSONByteLenMatchesPlainASCIILength(t *testing.T) {
+	value := map[string]any{"note": "ascii only"}
+	length, err := pythonCanonicalJSONByteLen(value)
+	if err != nil {
+		t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
+	}
+	want := len(`{"note":"ascii only"}`)
+	if length != want {
+		t.Fatalf("pythonCanonicalJSONByteLen = %d, want %d for a plain-ASCII object", length, want)
+	}
+}
+
+// TestParseOutputEvidenceRejectsUnicodePayloadThatExceedsThePythonCanonicalBound
+// is codex round 2's P2 finding exercised through the real dispatch path: a
+// payload whose Go json.Marshal length (4094 bytes) is under the 4096-byte
+// bound but whose Python-canonical (ensure_ascii) length (8180 bytes) is
+// not must be rejected LOCALLY, not just by the bridge.
+func TestParseOutputEvidenceRejectsUnicodePayloadThatExceedsThePythonCanonicalBound(t *testing.T) {
+	raw := `{"a":"` + strings.Repeat("€", 1362) + `"}`
+	if _, err := parseOutputEvidence(raw); err == nil {
+		t.Fatal("parseOutputEvidence accepted a payload whose Python-canonical length exceeds the bridge's bound")
+	}
+}

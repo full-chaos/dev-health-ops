@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/idna"
@@ -66,6 +67,20 @@ func validateBaseURL(ctx context.Context, baseURL string, resolve resolver) (boo
 	rawHost := parsed.Hostname()
 	if rawHost == "" {
 		return false, "LLM base_url is missing a host"
+	}
+	// codex round 3, P2: Go's net/url only checks a port is ALL-DIGIT
+	// syntax (net/url's validOptionalPort), never its magnitude -- unlike
+	// Python's urlsplit.port, which raises ValueError("Port out of range
+	// 0-65535") for e.g. ":65536" (credentials.py:182, caught by
+	// validate_llm_base_url's own try/except ValueError and rejected).
+	// Without this check Go accepted a URL like
+	// "https://host:65536/v1" as a usable BYO endpoint where Python
+	// rejects it outright.
+	if portStr := parsed.Port(); portStr != "" {
+		port, perr := strconv.Atoi(portStr)
+		if perr != nil || port < 0 || port > 65535 {
+			return false, "LLM base_url is invalid: port out of range 0-65535"
+		}
 	}
 	host, reason := normalizeHost(rawHost)
 	if reason != "" {

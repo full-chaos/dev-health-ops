@@ -80,6 +80,7 @@ func TestValidateBaseURL_RejectsUnsafe(t *testing.T) {
 		"https://mixed.example.com/v1",
 		"ftp://api.openai.com/v1",
 		"not-a-url",
+		"https://my-gateway.example.com:65536/v1",
 	} {
 		t.Run(url, func(t *testing.T) {
 			ok, reason := validateBaseURL(context.Background(), url, hermeticResolver)
@@ -88,6 +89,32 @@ func TestValidateBaseURL_RejectsUnsafe(t *testing.T) {
 			}
 			if reason == "" {
 				t.Fatalf("expected a non-empty reason on reject")
+			}
+		})
+	}
+}
+
+// TestValidateBaseURL_RejectsOutOfRangePort is the codex round 3, P2
+// regression: Go's net/url only checks a port is all-digit syntax, never
+// its magnitude, so "https://host:65536/v1" parsed successfully and
+// validateBaseURL never rejected it -- Python's urlsplit.port raises
+// ValueError("Port out of range 0-65535") for the same input
+// (credentials.py:182), and validate_llm_base_url rejects it. 65535 is the
+// boundary-valid case; 65536 and 99999 are one-over and grossly
+// out-of-range.
+func TestValidateBaseURL_RejectsOutOfRangePort(t *testing.T) {
+	for _, tc := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://my-gateway.example.com:65535/v1", true},
+		{"https://my-gateway.example.com:65536/v1", false},
+		{"https://my-gateway.example.com:99999/v1", false},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			ok, reason := validateBaseURL(context.Background(), tc.url, hermeticResolver)
+			if ok != tc.want {
+				t.Fatalf("validateBaseURL(%q) ok=%v reason=%q, want ok=%v", tc.url, ok, reason, tc.want)
 			}
 		})
 	}

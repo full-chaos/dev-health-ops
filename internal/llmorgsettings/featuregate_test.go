@@ -319,3 +319,133 @@ func TestByoLLMFlagState_TierReadsAreIndependent(t *testing.T) {
 			queryer.organizationsCalls)
 	}
 }
+
+// orderedCallQueryer is a featureRowQueryer test double (codex round 3, P1
+// regression) that records the ORDER query kinds are dispatched in,
+// classified by a distinctive SQL substring, and returns one fixed row per
+// kind.
+type orderedCallQueryer struct {
+	t     *testing.T
+	calls []string
+}
+
+func (f *orderedCallQueryer) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	switch {
+	case strings.Contains(sql, "FROM feature_flags"):
+		f.calls = append(f.calls, "feature_flags")
+		return fakeQueryRow{values: []any{"team", true, nil, nil}}
+	case strings.Contains(sql, "org_licenses"):
+		f.calls = append(f.calls, "org_licenses")
+		return fakeQueryRow{values: []any{"community", nil}}
+	default:
+		f.t.Fatalf("unexpected query: %s", sql)
+		return nil
+	}
+}
+
+// TestLoadByoLLMFeatureState_QueriesFeatureBeforeTier is the codex round 3,
+// P1 regression: load_feature_rows_sync (feature_decision_store.py:39-65)
+// queries FeatureFlag/OrgFeatureOverride BEFORE OrgLicense/
+// Organization.tier, in that fixed order, within one function call. An
+// earlier version of loadByoLLMFeatureState read tier/license FIRST and
+// features SECOND -- the reverse order -- which admits a torn-read
+// interleaving Python's own order cannot produce: a concurrent transaction
+// that downgrades the org's tier AND deletes a disabling override,
+// committing between the two reads, lands as OLD tier + NEW (absent)
+// override in the old (reversed) Go order, wrongly enabling BYO -- a
+// combination Python can never observe because it always reads the
+// override before the tier. If loadByoLLMFeatureState ever regresses to
+// the old order, this test's call-order assertion fails even though the
+// single-threaded, non-concurrent decision value alone would look correct.
+func TestLoadByoLLMFeatureState_QueriesFeatureBeforeTier(t *testing.T) {
+	queryer := &orderedCallQueryer{t: t}
+	state, err := loadByoLLMFeatureState(context.Background(), queryer, uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"feature_flags", "org_licenses"}
+	if !reflect.DeepEqual(queryer.calls, want) {
+		t.Fatalf("call order = %v, want %v -- loadByoLLMFeatureState must query the "+
+			"feature/override row BEFORE org tier/license, matching load_feature_rows_sync's "+
+			"own order", queryer.calls, want)
+	}
+	if state.orgTier != "community" {
+		t.Fatalf("state.orgTier = %q, want %q", state.orgTier, "community")
+	}
+}
+
+// singleRowQueryer is a featureRowQueryer test double that answers any
+// query matching a fixed SQL substring with one canned row, and fails the
+// test on any other query -- used below to exercise
+// resolveOrgTierAndLicenseOverrides in isolation.
+type singleRowQueryer struct {
+	t   *testing.T
+	sql string
+	row fakeQueryRow
+}
+
+func (f *singleRowQueryer) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	if !strings.Contains(sql, f.sql) {
+		f.t.Fatalf("unexpected query: %s", sql)
+	}
+	return f.row
+}
+
+// TestResolveOrgTierAndLicenseOverrides_NonObjectOverride is the codex
+// round 3, P2 regression: org_licenses.features_override is a free-form
+// JSON column (models/licensing.py:347), and _decisions_from_rows
+// (feature_decisions.py:79) only treats it as a license-override map when
+// isinstance(raw, dict) -- any other JSON type (array, string, number,
+// bool, null) falls through to {} there, meaning "no license override",
+// NOT a lookup failure. The old code unmarshaled straight into
+// map[string]json.RawMessage and returned a hard error for any non-object
+// top-level value, wrongly making a BYO-configured org's flag resolution
+// fail closed on a value Python treats as simply absent.
+func TestResolveOrgTierAndLicenseOverrides_NonObjectOverride(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"array", `[true]`},
+		{"string", `"enabled"`},
+		{"number", `42`},
+		{"bool", `true`},
+		{"null", `null`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			queryer := &singleRowQueryer{
+				t: t, sql: "org_licenses",
+				row: fakeQueryRow{values: []any{"team", []byte(tc.raw)}},
+			}
+			tier, overrides, err := resolveOrgTierAndLicenseOverrides(context.Background(), queryer, uuid.New())
+			if err != nil {
+				t.Fatalf("unexpected error for non-object features_override %s: %v", tc.raw, err)
+			}
+			if tier != "team" {
+				t.Fatalf("tier = %q, want %q", tier, "team")
+			}
+			if len(overrides) != 0 {
+				t.Fatalf("overrides = %v, want none -- a non-object features_override "+
+					"must be ignored (no license override), not parsed as one", overrides)
+			}
+		})
+	}
+}
+
+// TestResolveOrgTierAndLicenseOverrides_MalformedOverrideStillErrors proves
+// the P2 fix above didn't widen into swallowing genuinely malformed JSON
+// too: Python's ORM already validates JSON on write, so there is no
+// documented Python behavior for unparseable column content -- this must
+// still fail closed (propagate an error), not silently treat corrupt
+// storage as "no override".
+func TestResolveOrgTierAndLicenseOverrides_MalformedOverrideStillErrors(t *testing.T) {
+	queryer := &singleRowQueryer{
+		t: t, sql: "org_licenses",
+		row: fakeQueryRow{values: []any{"team", []byte(`{not-valid-json`)}},
+	}
+	_, _, err := resolveOrgTierAndLicenseOverrides(context.Background(), queryer, uuid.New())
+	if err == nil {
+		t.Fatalf("expected an error for genuinely malformed JSON, got nil")
+	}
+}

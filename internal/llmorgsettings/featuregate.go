@@ -68,33 +68,44 @@ type featureRowQueryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-// loadByoLLMFeatureState reads org tier and the byo_llm feature row as TWO
-// INDEPENDENT queries, deliberately NOT one LEFT-JOIN chain anchored on
-// feature_flags -- mirroring load_feature_rows_sync's own shape, which
-// issues separate session.scalar(s) calls for FeatureFlag/
-// OrgFeatureOverride/OrgLicense/Organization.tier, none of them joined to
-// or gated by another's existence. A single-query version was tried first
-// and had a real bug this package's own integration test caught: when
-// byo_llm's feature_flags row is absent (pre-migration / not yet seeded),
-// anchoring the FROM clause on feature_flags means the WHOLE row -- org
-// tier included -- comes back as pgx.ErrNoRows, silently defaulting an
-// ENTERPRISE org's tier to "community" and failing byoLLMFlagState's
-// TEAM-tier floor for a reason that has nothing to do with the org's real
-// tier. Python never has this coupling (its floor check's org-tier read
-// and its feature-registration check are two separately dispatched
-// queries), so neither should this port.
+// loadByoLLMFeatureState reads the byo_llm feature row and org
+// tier/license-override as TWO INDEPENDENT queries, deliberately NOT one
+// LEFT-JOIN chain anchored on feature_flags -- mirroring
+// load_feature_rows_sync's own shape, which issues separate
+// session.scalar(s) calls for FeatureFlag/OrgFeatureOverride/OrgLicense/
+// Organization.tier, none of them joined to or gated by another's
+// existence. A single-query version was tried first and had a real bug
+// this package's own integration test caught: when byo_llm's feature_flags
+// row is absent (pre-migration / not yet seeded), anchoring the FROM
+// clause on feature_flags means the WHOLE row -- org tier included --
+// comes back as pgx.ErrNoRows, silently defaulting an ENTERPRISE org's
+// tier to "community" and failing byoLLMFlagState's TEAM-tier floor for a
+// reason that has nothing to do with the org's real tier. Python never has
+// this coupling (its floor check's org-tier read and its
+// feature-registration check are two separately dispatched queries), so
+// neither should this port.
+//
+// The feature/override query runs FIRST, tier/license SECOND -- codex
+// round 3, P1: load_feature_rows_sync (feature_decision_store.py:39-65)
+// itself queries FeatureFlag/OrgFeatureOverride BEFORE OrgLicense/
+// Organization.tier, in that fixed order, within one function call. An
+// earlier version of this port read tier/license first and features
+// second -- the REVERSE order -- which admits a torn-read interleaving
+// Python's own order cannot produce: a concurrent transaction that
+// downgrades the org's tier AND deletes a disabling override, committing
+// between these two reads, lands as OLD tier + NEW (absent) override in
+// the old Go order (wrongly enabling BYO), a combination Python can never
+// observe because it always reads the override before the tier. Matching
+// Python's own read order constrains this port's torn-read window to the
+// same reachable-state space as the oracle's, rather than a wider one.
 func loadByoLLMFeatureState(
 	ctx context.Context, queryer featureRowQueryer, orgID uuid.UUID,
 ) (byoLLMFeatureState, error) {
-	orgTier, licenseOverrides, err := resolveOrgTierAndLicenseOverrides(ctx, queryer, orgID)
-	if err != nil {
-		return byoLLMFeatureState{}, err
-	}
-	state := byoLLMFeatureState{minTier: "community", orgTier: orgTier}
+	state := byoLLMFeatureState{minTier: "community"}
 
 	var minTier *string
 	var globallyEnabled *bool
-	err = queryer.QueryRow(ctx, `
+	rowErr := queryer.QueryRow(ctx, `
 SELECT feature.min_tier, feature.is_enabled,
        org_override.is_enabled, org_override.expires_at
 FROM feature_flags AS feature
@@ -103,17 +114,28 @@ LEFT JOIN org_feature_overrides AS org_override
 WHERE feature.key = $1`, byoLLMFeatureKey, orgID).Scan(
 		&minTier, &globallyEnabled, &state.overrideEnabled, &state.overrideExpires,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	switch {
+	case rowErr == nil:
+		state.registered = true
+	case errors.Is(rowErr, pgx.ErrNoRows):
 		// No feature_flags row at all -- feature is not registered
 		// (pre-migration / minimal DB), matching FEATURE_NOT_REGISTERED.
-		// state.orgTier is still the REAL org tier resolved above, not a
-		// coupled default -- the bug this split fixes.
+		// Still fall through to the tier/license read below: Python's
+		// load_feature_rows_sync always reads OrgLicense/Organization.tier
+		// too, regardless of whether the FeatureFlag row was found.
+	default:
+		return byoLLMFeatureState{}, fmt.Errorf("query byo_llm feature state: %w", rowErr)
+	}
+
+	orgTier, licenseOverrides, err := resolveOrgTierAndLicenseOverrides(ctx, queryer, orgID)
+	if err != nil {
+		return byoLLMFeatureState{}, err
+	}
+	state.orgTier = orgTier
+
+	if !state.registered {
 		return state, nil
 	}
-	if err != nil {
-		return state, fmt.Errorf("query byo_llm feature state: %w", err)
-	}
-	state.registered = true
 	if minTier != nil {
 		state.minTier = *minTier
 	}
@@ -147,11 +169,34 @@ func resolveOrgTierAndLicenseOverrides(
 	case err == nil:
 		if len(featuresOverride) != 0 {
 			if jerr := json.Unmarshal(featuresOverride, &licenseOverrides); jerr != nil {
-				// Malformed features_override JSON: Python's own dict-parse
-				// never fails this way (the ORM already validated JSON on
-				// write), so there is no documented Python behavior to
-				// mirror here -- fail closed rather than guess.
-				return "", nil, fmt.Errorf("parse org_licenses.features_override: %w", jerr)
+				var typeErr *json.UnmarshalTypeError
+				if errors.As(jerr, &typeErr) {
+					// features_override is valid JSON but its TOP-LEVEL
+					// value is not a JSON object (array/string/number/
+					// bool/null) -- codex round 3, P2: features_override is
+					// a free-form JSON column (models/licensing.py:347),
+					// and _decisions_from_rows only treats it as a
+					// license-override map when isinstance(raw, dict)
+					// (feature_decisions.py:79); any other JSON type falls
+					// through to {} there, it is NOT a lookup failure.
+					// json.Unmarshal into map[string]json.RawMessage can
+					// only raise UnmarshalTypeError for a non-object
+					// TOP-LEVEL value here -- a json.RawMessage map VALUE
+					// accepts any valid JSON verbatim, so no nested value
+					// can ever trigger this error -- so this branch
+					// unambiguously means "not an object", matching
+					// isinstance(..., dict) is False. licenseOverrides
+					// stays nil (no license override present), not an
+					// error.
+					licenseOverrides = nil
+				} else {
+					// Genuinely malformed JSON syntax: Python's own
+					// dict-parse never fails this way (the ORM already
+					// validated JSON on write), so there is no documented
+					// Python behavior to mirror here -- fail closed rather
+					// than guess.
+					return "", nil, fmt.Errorf("parse org_licenses.features_override: %w", jerr)
+				}
 			}
 		}
 		if licenseTier != nil {

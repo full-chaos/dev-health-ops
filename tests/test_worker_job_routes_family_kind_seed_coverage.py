@@ -94,6 +94,17 @@ class _MigrationModule:
         self.local_aliases: dict[str, ast.expr] = {}
         self.routes_factory_functions: set[str] = set()
         self.routes_variable_names: set[str] = set()
+        # Names ever bound to something OTHER than a routes-table expression
+        # ANYWHERE in the file, in addition to (at some point) a routes-table
+        # expression -- e.g. `routes = _routes(); routes = _audit()` (codex
+        # round 2, P1: rebinding a name after it was marked routes-backed let
+        # a later insert through the SAME name silently count against a
+        # DIFFERENT table). This parser has no flow-sensitive analysis, so a
+        # rebound name is inherently ambiguous from here, and is
+        # deliberately excluded from routes_variable_names AND flagged so
+        # the extractors below can fail closed instead of guessing which
+        # assignment governs at the use site.
+        self.ambiguous_variable_names: set[str] = set()
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target = node.targets[0]
@@ -105,13 +116,28 @@ class _MigrationModule:
                 self.functions[node.name] = node
         # A function is a "routes factory" if it directly returns the
         # worker_job_routes TableClause -- e.g. every migration's own
-        # `def _routes(): return sa.table("worker_job_routes", ...)`.
-        for name, func in self.functions.items():
-            for stmt in ast.walk(func):
-                if isinstance(stmt, ast.Return) and stmt.value is not None:
-                    if _is_routes_table_call(stmt.value):
-                        self.routes_factory_functions.add(name)
-                        break
+        # `def _routes(): return sa.table("worker_job_routes", ...)` -- OR
+        # if it returns a call to another already-known routes factory (a
+        # "factory of a factory": `def _r2(): return _routes()`, codex round
+        # 2, P1). Iterated to a fixed point since a transitive factory's own
+        # dependency may be defined later in the file.
+        changed = True
+        while changed:
+            changed = False
+            for name, func in self.functions.items():
+                if name in self.routes_factory_functions:
+                    continue
+                for stmt in ast.walk(func):
+                    if isinstance(stmt, ast.Return) and stmt.value is not None:
+                        value = stmt.value
+                        if _is_routes_table_call(value) or (
+                            isinstance(value, ast.Call)
+                            and isinstance(value.func, ast.Name)
+                            and value.func.id in self.routes_factory_functions
+                        ):
+                            self.routes_factory_functions.add(name)
+                            changed = True
+                            break
         # Passthrough-filter local aliases, e.g. 0064's
         # `missing = [kind for kind in _KINDS if kind not in existing]`.
         # Resolving through the `if` clause would mean simulating runtime
@@ -124,6 +150,8 @@ class _MigrationModule:
         #
         # The same pass also collects routes-table variable bindings, e.g.
         # `routes = _routes()` or an inline `routes = sa.table("worker_job_routes", ...)`.
+        routes_bound: set[str] = set()
+        non_routes_bound: set[str] = set()
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.Assign)
@@ -146,7 +174,11 @@ class _MigrationModule:
                 and isinstance(value.func, ast.Name)
                 and value.func.id in self.routes_factory_functions
             ):
-                self.routes_variable_names.add(target_name)
+                routes_bound.add(target_name)
+            else:
+                non_routes_bound.add(target_name)
+        self.ambiguous_variable_names = routes_bound & non_routes_bound
+        self.routes_variable_names = routes_bound - self.ambiguous_variable_names
 
     def resolve(self, node: ast.expr) -> tuple[str, ...] | None:
         if isinstance(node, ast.Name):
@@ -160,11 +192,14 @@ class _MigrationModule:
     def is_routes_table_expr(self, node: ast.expr) -> bool:
         """True when `node` provably refers to the worker_job_routes
         TableClause: an inline `sa.table("worker_job_routes", ...)`, a call
-        to a known routes-factory function (`_routes()`), or a variable bound
-        to either of those. False for anything else, INCLUDING a name this
-        module simply doesn't recognize -- unresolvable receivers are not
-        routes ops by definition, they're just unrelated code this parser
-        correctly ignores."""
+        to a known routes-factory function (`_routes()`, transitively), or a
+        variable unambiguously bound to either of those. False for anything
+        else, INCLUDING a name this module simply doesn't recognize --
+        unresolvable receivers are not routes ops by definition, they're
+        just unrelated code this parser correctly ignores. A NAME that is
+        ambiguous (rebound to something else elsewhere in the file) is
+        never True here -- callers must check `is_ambiguous_receiver` first
+        and fail closed rather than silently trust a stale/guessed binding."""
         if _is_routes_table_call(node):
             return True
         if isinstance(node, ast.Name) and node.id in self.routes_variable_names:
@@ -174,6 +209,9 @@ class _MigrationModule:
             and isinstance(node.func, ast.Name)
             and node.func.id in self.routes_factory_functions
         )
+
+    def is_ambiguous_receiver(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id in self.ambiguous_variable_names
 
     def _reachable_functions(self, entry_point: str) -> list[ast.FunctionDef]:
         if entry_point not in self.functions:
@@ -206,26 +244,68 @@ class _MigrationModule:
         ]
 
     def reachable_string_literals(self, entry_point: str) -> list[str]:
-        """Every string literal (plain or f-string constant segment)
-        anywhere in the subtree reachable from `entry_point` -- used only to
-        hunt for raw-SQL statements a structural AST match can't see."""
+        """Every string value this file's code could produce anywhere in the
+        subtree reachable from `entry_point`, constant-folding plain
+        literals, `+` concatenation, and f-strings whose interpolated parts
+        resolve to a known literal name -- used only to hunt for raw-SQL
+        statements a structural AST match can't see. Walking every node
+        (not just the outermost expression) is deliberate: it also resolves
+        each piece of a concatenation individually, which costs nothing
+        extra since duplicates are harmless for a substring search.
+
+        codex round 2, P1: a raw-SQL DML statement assembled from MULTIPLE
+        string literals (`"DELETE " + "FROM " + "worker_job_routes ..."`, or
+        an f-string) was invisible to a per-literal-only scan -- no SINGLE
+        AST string node contained the whole DML phrase, even though the
+        file's actual runtime string did.
+        """
         strings: list[str] = []
         for func in self._reachable_functions(entry_point):
             for node in ast.walk(func):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    strings.append(node.value)
-                elif isinstance(node, ast.JoinedStr):
-                    strings.extend(
-                        value.value
-                        for value in node.values
-                        if isinstance(value, ast.Constant)
-                        and isinstance(value.value, str)
-                    )
+                if isinstance(node, (ast.Constant, ast.BinOp, ast.JoinedStr)):
+                    resolved = self._resolve_string_expr(node)
+                    if resolved is not None:
+                        strings.append(resolved)
         return strings
 
+    def _resolve_string_expr(self, node: ast.expr) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = self._resolve_string_expr(node.left)
+            right = self._resolve_string_expr(node.right)
+            if left is not None and right is not None:
+                return left + right
+            return None
+        if isinstance(node, ast.JoinedStr):
+            parts: list[str] = []
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                    continue
+                if isinstance(value, ast.FormattedValue):
+                    resolved_name = self.resolve(value.value)
+                    if resolved_name and len(resolved_name) == 1:
+                        parts.append(resolved_name[0])
+                        continue
+                return None
+            return "".join(parts)
+        return None
 
-def _file_targets_routes_table(tree: ast.Module) -> bool:
-    return any(_is_routes_table_call(node) for node in ast.walk(tree))
+
+def _file_targets_routes_table(source: str) -> bool:
+    """A cheap, deliberately OVER-inclusive substring pre-filter on the raw
+    source text, not the parsed AST: "does this file mention
+    worker_job_routes ANYWHERE at all" (a `sa.table()`/`sa.Table()` call, a
+    raw-SQL string, a comment, an import, anything). Gating on an AST-only
+    check (only a `sa.table()`/`sa.Table()` CALL node) previously meant a
+    file that touches the table ONLY via raw SQL, with no local table
+    construction at all, skipped analysis entirely -- including the raw-SQL
+    fail-closed check itself, silently defeating it. The real precision
+    work (table identity, resolvability, DML detection) happens in the
+    extractors below; this gate only needs to decide whether it's worth
+    looking at all, so being broad here is free and safe."""
+    return _ROUTES_TABLE_NAME in source
 
 
 # A raw-SQL DML statement naming the routes table directly, e.g.
@@ -306,6 +386,26 @@ def _require_resolved(
     )
 
 
+def _require_unambiguous_receiver(
+    path: Path, call: ast.Call, module: _MigrationModule, receiver: ast.expr
+) -> None:
+    """codex round 2, P1: a name bound to the routes table at one point and
+    rebound to something else later (`routes = _routes(); routes =
+    _audit()`) is inherently ambiguous for a parser with no flow-sensitive
+    analysis -- silently trusting EITHER binding risks either a false miss
+    or, worse, a false accept of an unrelated table's insert as a routes
+    seed. Fail closed instead of guessing."""
+    if module.is_ambiguous_receiver(receiver):
+        raise SeedPatternUnrecognized(
+            f"{path}:{call.lineno}: {ast.unparse(receiver)!r} is bound to "
+            f"the worker_job_routes table at one point in this file and to "
+            f"something else at another -- this parser has no "
+            f"flow-sensitive analysis and cannot tell which binding governs "
+            f"this call. Give the routes table its own unique variable name "
+            f"that is never reassigned, or extend the parser."
+        )
+
+
 def _extract_insert_kinds(
     module: _MigrationModule, call: ast.Call, path: Path
 ) -> tuple[str, ...]:
@@ -317,19 +417,24 @@ def _extract_insert_kinds(
         and isinstance(call.func.value, ast.Call)
         and isinstance(call.func.value.func, ast.Attribute)
         and call.func.value.func.attr == "insert"
-        and module.is_routes_table_expr(call.func.value.func.value)
     ):
-        job_kind_keywords = [kw for kw in call.keywords if kw.arg == "job_kind"]
-        for kw in job_kind_keywords:
-            found.extend(
-                _require_resolved(path, call, kw.value, module.resolve(kw.value))
-            )
-        if not job_kind_keywords and call.args:
-            found.extend(
-                _require_resolved(
-                    path, call, call.args[0], _extract_bulk_list(module, call.args[0])
+        receiver = call.func.value.func.value
+        _require_unambiguous_receiver(path, call, module, receiver)
+        if module.is_routes_table_expr(receiver):
+            job_kind_keywords = [kw for kw in call.keywords if kw.arg == "job_kind"]
+            for kw in job_kind_keywords:
+                found.extend(
+                    _require_resolved(path, call, kw.value, module.resolve(kw.value))
                 )
-            )
+            if not job_kind_keywords and call.args:
+                found.extend(
+                    _require_resolved(
+                        path,
+                        call,
+                        call.args[0],
+                        _extract_bulk_list(module, call.args[0]),
+                    )
+                )
     # bind.execute(X.insert(), [...]) / op.execute(X.insert(), [...]) -- bulk form.
     if (
         isinstance(call.func, ast.Attribute)
@@ -341,25 +446,32 @@ def _extract_insert_kinds(
             isinstance(first, ast.Call)
             and isinstance(first.func, ast.Attribute)
             and first.func.attr == "insert"
-            and module.is_routes_table_expr(first.func.value)
         ):
-            found.extend(
-                _require_resolved(
-                    path, call, call.args[1], _extract_bulk_list(module, call.args[1])
+            receiver = first.func.value
+            _require_unambiguous_receiver(path, call, module, receiver)
+            if module.is_routes_table_expr(receiver):
+                found.extend(
+                    _require_resolved(
+                        path,
+                        call,
+                        call.args[1],
+                        _extract_bulk_list(module, call.args[1]),
+                    )
                 )
-            )
     # op.bulk_insert(routes, [...]) -- 0055's shape.
     if (
         isinstance(call.func, ast.Attribute)
         and call.func.attr == "bulk_insert"
         and len(call.args) >= 2
-        and module.is_routes_table_expr(call.args[0])
     ):
-        found.extend(
-            _require_resolved(
-                path, call, call.args[1], _extract_bulk_list(module, call.args[1])
+        receiver = call.args[0]
+        _require_unambiguous_receiver(path, call, module, receiver)
+        if module.is_routes_table_expr(receiver):
+            found.extend(
+                _require_resolved(
+                    path, call, call.args[1], _extract_bulk_list(module, call.args[1])
+                )
             )
-        )
     return tuple(found)
 
 
@@ -378,8 +490,11 @@ def _extract_delete_kinds(
         and isinstance(call.func.value, ast.Call)
         and isinstance(call.func.value.func, ast.Attribute)
         and call.func.value.func.attr == "delete"
-        and module.is_routes_table_expr(call.func.value.func.value)
     ):
+        return ()
+    receiver = call.func.value.func.value
+    _require_unambiguous_receiver(path, call, module, receiver)
+    if not module.is_routes_table_expr(receiver):
         return ()
     found: list[str] = []
     matched_job_kind_condition = False
@@ -430,9 +545,10 @@ def _extract_delete_kinds(
 def _collect_seed_state(path: Path) -> tuple[set[str], set[str]]:
     """Returns (seeded, retired) kinds this migration's upgrade() (and
     whatever local helpers it calls) reaches."""
-    tree = ast.parse(path.read_text(), filename=str(path))
-    if not _file_targets_routes_table(tree):
+    source = path.read_text()
+    if not _file_targets_routes_table(source):
         return set(), set()
+    tree = ast.parse(source, filename=str(path))
     module = _MigrationModule(tree)
     for text in module.reachable_string_literals("upgrade"):
         if _RAW_SQL_ROUTES_PATTERN.search(text):
@@ -692,3 +808,131 @@ def test_sa_table_capital_t_construction_is_recognized_as_the_routes_table(
     seeded, retired = _collect_seed_state(synthetic)
     assert seeded == {"metrics.remaining.capacity"}
     assert not retired
+
+
+def test_fragmented_raw_sql_retirement_fails_closed(tmp_path: Path) -> None:
+    """Codex round 2, P1: a raw-SQL retirement assembled from MULTIPLE
+    string literals via `+` concatenation -- no SINGLE AST string node
+    contains the whole "DELETE FROM worker_job_routes ..." phrase, so a
+    scan that only checked one literal at a time missed it entirely.
+    """
+    synthetic = tmp_path / "9994_fragmented_raw_sql_retirement.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def upgrade():
+                op.execute(
+                    _routes().insert().values(job_kind="metrics.remaining.capacity")
+                )
+                op.execute(sa.text(
+                    "DELETE " + "FROM " + "worker_job_routes WHERE job_kind = "
+                    "'metrics.remaining.capacity'"
+                ))
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="raw-SQL"):
+        _collect_seed_state(synthetic)
+
+
+def test_pure_raw_sql_file_with_no_table_construction_is_still_detected(
+    tmp_path: Path,
+) -> None:
+    """Codex round 2 follow-up (found by the lane while verifying the round
+    2 fixes, not by codex itself): a file that touches worker_job_routes
+    ONLY via a raw-SQL statement, with no local `sa.table()`/`sa.Table()`
+    call anywhere, used to skip analysis entirely -- the file-level gate
+    only looked for a table CONSTRUCTOR call, so a pure-raw-SQL file never
+    even reached the raw-SQL check meant to catch exactly this.
+    """
+    synthetic = tmp_path / "9993_pure_raw_sql_no_table_construction.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            from alembic import op
+
+            def upgrade():
+                op.execute(
+                    "DELETE FROM worker_job_routes WHERE job_kind = 'metrics.remaining.capacity'"
+                )
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="raw-SQL"):
+        _collect_seed_state(synthetic)
+
+
+def test_rebound_variable_name_fails_closed_instead_of_trusting_a_stale_binding(
+    tmp_path: Path,
+) -> None:
+    """Codex round 2, P1: `routes = _routes(); routes = _audit()` rebinds
+    the SAME name to a different table -- the parser has no flow-sensitive
+    analysis, so trusting either binding is a guess. Must fail closed
+    rather than silently accept an insert through the rebound name as a
+    routes seed (the exact false-accept shape round 1's P1 already found
+    once, recreated a different way).
+    """
+    synthetic = tmp_path / "9992_rebound_routes_variable.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def _audit():
+                return sa.table("audit_log", sa.column("job_kind", sa.String()))
+
+            def upgrade():
+                routes = _routes()
+                routes = _audit()
+                op.execute(routes.insert().values(job_kind="metrics.remaining.capacity"))
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="ambiguous|bound to"):
+        _collect_seed_state(synthetic)
+
+
+def test_factory_of_a_factory_is_recognized_as_the_routes_table(
+    tmp_path: Path,
+) -> None:
+    """Codex round 2, P1: a helper function that returns ANOTHER
+    routes-factory function's call (`def _r2(): return _routes()`), rather
+    than the TableClause directly, must still be recognized as a routes
+    reference -- the previous one-hop-only tracking silently treated an
+    insert/delete through the second-level factory as unrelated code.
+    """
+    synthetic = tmp_path / "9991_factory_of_a_factory.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def _routes2():
+                return _routes()
+
+            def upgrade():
+                op.execute(
+                    _routes2().delete().where(
+                        _routes2().c.job_kind == "metrics.remaining.capacity"
+                    )
+                )
+            """
+        )
+    )
+    seeded, retired = _collect_seed_state(synthetic)
+    assert not seeded
+    assert retired == {"metrics.remaining.capacity"}

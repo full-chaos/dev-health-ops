@@ -1135,8 +1135,19 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, and ``testops_risk`` CHAOS-4294);
+    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294, and
+    ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284);
     naming any other family here has no effect.
+
+    The three CHAOS-4284 names gate WRITES ONLY: their computed values still
+    feed ``compute_release_confidence``/``compute_quality_drag``/
+    ``compute_pipeline_stability`` in-process further down, so the compute runs
+    regardless of this set -- same shape as ``repo_user_commit`` and
+    ``testops_risk``, not ``team_wellbeing``'s compute+write skip. The gate is
+    load-bearing rather than cosmetic: their three target tables are plain
+    ``MergeTree`` with no dedup engine, so a write that is not suppressed after
+    the Go executor already wrote the same ``(org_id, repo_id, day)`` doubles
+    every metric silently instead of erroring.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")

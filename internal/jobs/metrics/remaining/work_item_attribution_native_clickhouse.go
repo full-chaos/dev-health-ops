@@ -640,8 +640,7 @@ func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
 func (executor *WorkItemAttributionExecutor) loadAffectedSubjects(
 	ctx context.Context, orgID string, scope workItemAttributionScopeDecision,
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
-	query := `SELECT work_item_id, provider, type, toString(repo_id), native_team_key,
-       project_key, project_id, project_name, assignees, reporter, org_id
+	query := `SELECT ` + WorkItemDerivationSubjectColumns + `
 FROM work_items FINAL
 WHERE org_id = ?`
 	args := []any{orgID}
@@ -674,8 +673,7 @@ func (executor *WorkItemAttributionExecutor) loadDonorSubjects(
 	if len(donorIDs) == 0 && len(donorKeys) == 0 {
 		return map[string]teamattribution.GithubWorkItemDerivationSubject{}, nil
 	}
-	query := `SELECT work_item_id, provider, type, toString(repo_id), native_team_key,
-       project_key, project_id, project_name, assignees, reporter, org_id
+	query := `SELECT ` + WorkItemDerivationSubjectColumns + `
 FROM work_items FINAL
 WHERE org_id = ? AND (
   has(?, work_item_id)
@@ -684,10 +682,40 @@ WHERE org_id = ? AND (
 	return executor.querySubjects(ctx, query, orgID, donorIDs, donorKeys)
 }
 
+// WorkItemDerivationSubjectColumns is the SELECT list every subject query must
+// use. It is a constant, not repeated per query, because it is paired
+// positionally with the Scan in QueryWorkItemDerivationSubjects -- a column
+// added to one spelling of the list and not the others would mis-bind silently
+// (repo_id into native_team_key, say), which no type error would catch since
+// most of these are strings.
+const WorkItemDerivationSubjectColumns = `work_item_id, provider, type, toString(repo_id), native_team_key,
+       project_key, project_id, project_name, assignees, reporter, org_id`
+
+// QueryWorkItemDerivationSubjects runs a subject query and scans it into the
+// cascade's subject map.
+//
+// Exported (CHAOS-4283 PR2) so the metrics.daily `work_item_attribution` family
+// can supply its OWN predicate -- scoped to one partition's (org, repo, day
+// window) rather than this backstop's org-wide/changed-scope shape -- without
+// re-writing the column list and its positional Scan. The predicate is the part
+// that legitimately differs between the two callers; the column-to-field
+// binding is the part that must not.
+func QueryWorkItemDerivationSubjects(
+	ctx context.Context, conn driver.Conn, query string, args ...any,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	return querySubjectsInto(ctx, conn, query, args...)
+}
+
 func (executor *WorkItemAttributionExecutor) querySubjects(
 	ctx context.Context, query string, args ...any,
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
-	rows, err := executor.conn.Query(ctx, query, args...)
+	return querySubjectsInto(ctx, executor.conn, query, args...)
+}
+
+func querySubjectsInto(
+	ctx context.Context, conn driver.Conn, query string, args ...any,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query work_items: %w", err)
 	}

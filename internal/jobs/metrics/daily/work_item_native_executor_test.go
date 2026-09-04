@@ -357,3 +357,47 @@ func foldStringExpr(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 }
+
+func TestNewWorkItemAttributionExecutorRefusesANilConnection(t *testing.T) {
+	if _, err := NewWorkItemAttributionExecutor(nil); err == nil {
+		t.Fatal("NewWorkItemAttributionExecutor accepted a nil connection; every native family executor must fail closed")
+	}
+}
+
+// TestNilWorkItemAttributionExecutorRefuses covers the nil-receiver arm.
+func TestNilWorkItemAttributionExecutorRefuses(t *testing.T) {
+	var executor *WorkItemAttributionExecutor
+	if _, err := executor.ComputeFamily(context.Background(), Run{}, Partition{}); err == nil {
+		t.Error("a nil WorkItemAttributionExecutor did not refuse")
+	}
+}
+
+// TestWorkItemAttributionSubjectQuerySharesTheLoadWorkItemsPredicate asserts
+// this family selects the SAME rows as the other work-item families.
+//
+// It matters more here than anywhere else: work_item, work_item_estimate and
+// work_item_state all read the attribution rows this family writes. If this
+// family's predicate were narrower, those readers would find NO attribution for
+// items it skipped and silently fall back to unassigned/Unassigned -- a wrong
+// team on a real row, not a missing row, and invisible to every other test.
+func TestWorkItemAttributionSubjectQuerySharesTheLoadWorkItemsPredicate(t *testing.T) {
+	attribution := whereClauseOf(t, "work_item_attribution_native_executor.go", "loadPartitionSubjects")
+	metrics := whereClauseOf(t, "work_item_native_clickhouse.go", "LoadWorkItemMetricsWorkItems")
+
+	if attribution != metrics {
+		t.Errorf(
+			"the attribution family selects a different row set than the families that read it.\n"+
+				"  loadPartitionSubjects:         %s\n"+
+				"  LoadWorkItemMetricsWorkItems:  %s\n"+
+				"Items selected by one and not the other resolve to unassigned in the readers "+
+				"-- a wrong team, not a missing row.",
+			attribution, metrics,
+		)
+	}
+	for _, required := range []string{"created_at < ?", "status != 'done'", "completed_at >= ?"} {
+		if !strings.Contains(attribution, required) {
+			t.Fatalf("extracted predicate %q is missing %q -- the extractor is broken and the "+
+				"equality assertion above is vacuous", attribution, required)
+		}
+	}
+}

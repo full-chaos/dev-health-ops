@@ -90,6 +90,40 @@ import (
 func OwnedRepoIDs(
 	ctx context.Context, conn driver.Conn, orgID, teamID string, asOf time.Time,
 ) ([]uuid.UUID, error) {
+	repoIDTexts, err := ownedRepoIDText(ctx, conn, orgID, teamID, asOf)
+	if err != nil {
+		return nil, err
+	}
+	var repoIDs []uuid.UUID
+	for _, repoIDText := range repoIDTexts {
+		repoID, err := uuid.Parse(repoIDText)
+		if err != nil {
+			return nil, fmt.Errorf("owned repo id %q: %w", repoIDText, err)
+		}
+		// Defense in depth, NOT the mechanism that excludes an unresolvable
+		// provider_access name -- that is the SQL layer's `matched` sentinel
+		// below. A team-lead peer review (2026-09-04, gate-rounds) caught
+		// this exact conflation: an earlier version of this package's own
+		// test removed the sentinel from the SQL and still passed, because
+		// this filter silently absorbed the zero UUID the broken query
+		// leaked. ownedRepoIDText is exported (within the package) precisely
+		// so a test can observe the SQL layer's raw output and prove the
+		// sentinel is load-bearing on its own, independent of this filter.
+		if repoID != uuid.Nil {
+			repoIDs = append(repoIDs, repoID)
+		}
+	}
+	return repoIDs, nil
+}
+
+// ownedRepoIDText runs the owned-repo query and returns the RAW scanned
+// repo_id strings, before uuid.Parse or the uuid.Nil defense-in-depth filter
+// OwnedRepoIDs applies on top. Exists so a test can assert on the SQL
+// layer's own output directly -- see OwnedRepoIDs' comment on why that
+// distinction matters.
+func ownedRepoIDText(
+	ctx context.Context, conn driver.Conn, orgID, teamID string, asOf time.Time,
+) ([]string, error) {
 	// FINAL, not a raw WHERE on valid_to -- team_repo_ownership is a
 	// ReplacingMergeTree(updated_at) keyed on (org_id, provider,
 	// repo_full_name, team_id, source, valid_from), and a revocation is
@@ -108,8 +142,8 @@ func OwnedRepoIDs(
 	// toString(...), not a bare UUID/Nullable(UUID) select: matches the
 	// Python reference exactly, and sidesteps having to reason about what
 	// type clickhouse-go resolves coalesce(Nullable(UUID), UUID) to on the
-	// wire -- a string round-trips unambiguously through uuid.Parse below
-	// regardless.
+	// wire -- a string round-trips unambiguously through uuid.Parse in the
+	// caller regardless.
 	rows, err := conn.Query(ctx, `
         SELECT DISTINCT toString(coalesce(o.repo_id, r.id)) AS repo_id
         FROM team_repo_ownership AS o FINAL
@@ -131,19 +165,13 @@ func OwnedRepoIDs(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var repoIDs []uuid.UUID
+	var repoIDTexts []string
 	for rows.Next() {
 		var repoIDText string
 		if err := rows.Scan(&repoIDText); err != nil {
 			return nil, err
 		}
-		repoID, err := uuid.Parse(repoIDText)
-		if err != nil {
-			return nil, fmt.Errorf("owned repo id %q: %w", repoIDText, err)
-		}
-		if repoID != uuid.Nil {
-			repoIDs = append(repoIDs, repoID)
-		}
+		repoIDTexts = append(repoIDTexts, repoIDText)
 	}
-	return repoIDs, rows.Err()
+	return repoIDTexts, rows.Err()
 }

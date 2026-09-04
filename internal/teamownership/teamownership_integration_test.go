@@ -326,4 +326,31 @@ func TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName(t *testing.T) {
 			"never-synced name must NOT leak in",
 			got, repoAcme, "acme/api", "Acme/API")
 	}
+
+	// Asserts on the SQL layer's OWN raw output, bypassing OwnedRepoIDs'
+	// uuid.Nil defense-in-depth filter entirely (peer review, gate-rounds,
+	// 2026-09-04: the assertion above alone passes even with the SQL
+	// `matched` sentinel deleted, because that Go-side filter silently
+	// absorbs the zero UUID a broken join leaks for an unresolvable name --
+	// so it could never prove the SQL layer itself is correct). Removing
+	// `r.matched = 1` from the query above and reverting to `r.id IS NOT
+	// NULL` must make THIS assertion fail on its own: the never-synced
+	// name's row would then read `coalesce(NULL, r.id)` where r.id is the
+	// LEFT JOIN's zero-value default for an unmatched row (ClickHouse's
+	// behaviour for an unmatched join column, not real NULL) -- landing in
+	// this raw list as the literal zero-UUID string.
+	rawRepoIDs, err := ownedRepoIDText(ctx, conn, orgID, teamID, asOf)
+	if err != nil {
+		t.Fatalf("ownedRepoIDText: %v", err)
+	}
+	for _, rawID := range rawRepoIDs {
+		if rawID == uuid.Nil.String() {
+			t.Fatalf("ownedRepoIDText raw output = %v, contains the zero UUID "+
+				"-- the never-synced provider_access row leaked through the "+
+				"join as coalesce(NULL, r.id) with r.id defaulting to the "+
+				"zero UUID for its unmatched row. The SQL layer's own "+
+				"`matched` sentinel is what is supposed to exclude this "+
+				"BEFORE coalesce ever runs on it -- it did not.", rawRepoIDs)
+		}
+	}
 }

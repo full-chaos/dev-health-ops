@@ -108,14 +108,30 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 	}
 	rows, err := loader.conn.Query(ctx, repoMetricsQuery,
 		clickhouse.Named("org_id", orgID),
-		// A ClickHouse `Date` parameter must be bound as a YYYY-MM-DD STRING,
-		// not a time.Time: the driver serialises a time.Time for {name:Date} as
-		// a full DateTime literal and the server rejects it outright --
-		// "Cannot parse date here: toDateTime('2026-08-24 00:00:00') cannot be
-		// parsed as Date". Same fix and same reasoning as
-		// RecommendationsLoader.windowArguments (recommendations_loader.go:77-97),
-		// and it is also the closer mirror of the wire form Python's
-		// clickhouse-connect sends for a datetime.date.
+		// ANCHOR: bind a Go `string` for EVERY typed {name:Type} query
+		// parameter -- Date, UUID, all of them. This is a property of the
+		// driver, not of any one type. clickhouse-go/v2@v2.47.0
+		// query_parameters.go:32-40 passes a Go string through VERBATIM and
+		// sends everything else through format(), which wraps the value in
+		// single quotes. A wire-level typed parameter is then parsed by the
+		// SERVER, so those quotes become part of the literal and the type
+		// parser rejects it:
+		//
+		//	time.Time -> "Cannot parse date here: toDateTime('2026-08-24
+		//	              00:00:00') cannot be parsed as Date"
+		//	uuid.UUID -> "Cannot parse UUID from String: invalid format,
+		//	              expected 32 hexadecimal digits"
+		//
+		// Array(UUID) is the trap: quoted elements ARE valid inside array
+		// literal syntax, so a []uuid.UUID bind succeeds right next to a
+		// scalar uuid.UUID bind that fails. The passing array bind is not
+		// evidence for the scalar one.
+		//
+		// This comment first said "a Date parameter must be a string"; that
+		// narrow framing is precisely what let the UUID instance below reach
+		// CI. Same root cause as RecommendationsLoader.windowArguments
+		// (recommendations_loader.go:77-97). The string form is also the
+		// closer mirror of the wire form Python's clickhouse-connect sends.
 		clickhouse.Named("day", day.Format(clickHouseDateLayout)),
 		clickhouse.Named("repo_ids", repoIDs),
 	)
@@ -220,8 +236,10 @@ func (loader *ClickHouseLoader) LoadComplexityDelta(
 	midpoint := windowStart.AddDate(0, 0, windowDays/2)
 
 	rows, err := loader.conn.Query(ctx, complexityDeltaQuery,
-		clickhouse.Named("repo_id", repoID),
-		// Date parameters, bound as strings -- see LoadRepoMetrics' note.
+		// .String(): a bare uuid.UUID is a fmt.Stringer and gets quoted. See
+		// the ANCHOR note in LoadRepoMetrics.
+		clickhouse.Named("repo_id", repoID.String()),
+		// Bound as strings -- see the ANCHOR note in LoadRepoMetrics.
 		clickhouse.Named("start", windowStart.Format(clickHouseDateLayout)),
 		clickhouse.Named("mid", midpoint.Format(clickHouseDateLayout)),
 		clickhouse.Named("end", day.Format(clickHouseDateLayout)),

@@ -290,6 +290,18 @@ func assertCHAOS4897FixIsPresent(t *testing.T, alpha, beta MetricsSnapshot) {
 		beta.HotspotChurnOverlap, beta.HotspotChurnOverlapKnown)
 }
 
+// pythonStringOrAbsent renders a pythonSnapshot optional field for a log
+// line: the Python reference encodes an absent value as a JSON null, which
+// decodes to a nil *string -- printed as "<absent>" rather than an empty
+// string, which would be indistinguishable from a genuinely empty value if
+// one ever existed on this field.
+func pythonStringOrAbsent(value *string) string {
+	if value == nil {
+		return "<absent>"
+	}
+	return *value
+}
+
 func sameFloats(a, b []float64) bool {
 	if len(a) != len(b) {
 		return false
@@ -345,15 +357,20 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 		// recommendations_loader.go. Logged, not silently skipped, so a
 		// reader scanning test output can see what each side actually
 		// produced rather than inferring it from an absent assertion.
+		// pythonStringOrAbsent, not a bare %v on a *string: pythonSnapshot's
+		// fields are *string (want.ReviewLatencyP75Hours etc.), and %v on a
+		// pointer prints its ADDRESS, not the value it points to -- caught by
+		// actually reading this log's output on bigboy (0x2871e509a670
+		// instead of a number), not by inspection.
 		t.Logf("%s: CHAOS-4897 owned-repo-scoped fields, Go vs Python (expected to "+
-			"differ): review_latency_p75_hours go=%v/%v py=%v, "+
-			"rework_churn_ratio go=%v/%v py=%v, "+
-			"hotspot_complexity_delta go=%v/%v py=%v, "+
-			"hotspot_churn_overlap go=%v/%v py=%v",
-			teamID, got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours,
-			got.ReworkChurnRatio, got.ReworkChurnRatioKnown, want.ReworkChurnRatio,
-			got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, want.HotspotComplexityDelta,
-			got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, want.HotspotChurnOverlap)
+			"differ): review_latency_p75_hours go=%v/%v py=%s, "+
+			"rework_churn_ratio go=%v/%v py=%s, "+
+			"hotspot_complexity_delta go=%v/%v py=%s, "+
+			"hotspot_churn_overlap go=%v/%v py=%s",
+			teamID, got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, pythonStringOrAbsent(want.ReviewLatencyP75Hours),
+			got.ReworkChurnRatio, got.ReworkChurnRatioKnown, pythonStringOrAbsent(want.ReworkChurnRatio),
+			got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, pythonStringOrAbsent(want.HotspotComplexityDelta),
+			got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, pythonStringOrAbsent(want.HotspotChurnOverlap))
 	} else {
 		compareOptional(t, teamID, "review_latency_p75_hours", got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours)
 		compareOptional(t, teamID, "rework_churn_ratio", got.ReworkChurnRatio, got.ReworkChurnRatioKnown, want.ReworkChurnRatio)

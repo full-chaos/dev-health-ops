@@ -895,11 +895,14 @@ async def test_dispatch_reads_a_real_inserted_routing_row_and_falls_back_after_r
     """
     from dev_health_ops.models.go_api_registry import CandidateBuild, RoutingState
 
-    # CHAOS-5013 removed lookup_routing_state's schema_digest filter, so
-    # this value is no longer load-bearing for the lookup -- kept as a
-    # plain literal because CandidateBuild/RoutingState.schema_digest is
-    # still a NOT NULL column these rows must populate.
-    schema_digest = "sha256:test-schema-digest"
+    # Must be the REAL computed digest, not an arbitrary literal:
+    # lookup_routing_state still filters on schema_digest (CHAOS-5013 kept
+    # that filter -- see its docstring for why dropping it would let
+    # scalar_one_or_none() raise MultipleResultsFound), and the dispatcher
+    # under test calls go_api_dispatcher._current_schema_digest() to get
+    # the value it queries with -- a mismatched literal here would make
+    # step 2 below fall back to Python instead of being served by Go.
+    schema_digest = go_api_dispatcher._current_schema_digest()
     document_digest_value = f"test-digest-{uuid.uuid4()}"
     selected_operation = TEST_OPERATION
     candidate_build = f"test-build-{uuid.uuid4()}"

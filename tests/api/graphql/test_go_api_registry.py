@@ -109,6 +109,7 @@ async def test_lookup_routing_state_returns_none_when_unregistered(
 ) -> None:
     result = await lookup_routing_state(
         session,
+        schema_digest="s1",
         document_digest="d1",
         selected_operation="featureFlags",
     )
@@ -169,6 +170,7 @@ async def test_lookup_routing_state_returns_the_row_once_registered(
 
     result = await lookup_routing_state(
         session,
+        schema_digest="s1",
         document_digest="d1",
         selected_operation="featureFlags",
     )

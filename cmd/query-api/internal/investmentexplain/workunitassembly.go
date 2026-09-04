@@ -131,8 +131,8 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 	if len(opts.ThemeFilters) > 0 || len(opts.SubcategoryFilters) > 0 {
 		filtered := make([]WorkUnitInvestmentRow, 0, len(rows))
 		for _, row := range rows {
-			themeDist := parseDistribution(derefString(row.ThemeDistributionJSON))
-			subcategoryDist := parseDistribution(derefString(row.SubcategoryDistributionJSON))
+			themeDist := zipDistribution(row.ThemeDistributionKeys, row.ThemeDistributionValues)
+			subcategoryDist := zipDistribution(row.SubcategoryDistributionKeys, row.SubcategoryDistributionValues)
 			if matchesCategoryFilter(themeDist, subcategoryDist, opts.ThemeFilters, opts.SubcategoryFilters) {
 				filtered = append(filtered, row)
 			}
@@ -215,8 +215,8 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		if toTS.IsZero() {
 			toTS = opts.EndTS.UTC()
 		}
-		themeDistribution := parseDistributionOrdered(derefString(row.ThemeDistributionJSON))
-		subcategoryDistribution := parseDistributionOrdered(derefString(row.SubcategoryDistributionJSON))
+		themeDistribution := zipDistributionOrdered(row.ThemeDistributionKeys, row.ThemeDistributionValues)
+		subcategoryDistribution := zipDistributionOrdered(row.SubcategoryDistributionKeys, row.SubcategoryDistributionValues)
 		metric := effortMetric(derefString(row.EffortMetric))
 		var effortValue float64
 		if row.EffortValue != nil {

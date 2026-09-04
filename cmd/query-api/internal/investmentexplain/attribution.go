@@ -153,6 +153,50 @@ func parseDistributionOrdered(raw string) []keyValue {
 	return items
 }
 
+// zipDistributionOrdered reads a work_unit_investments theme/subcategory
+// distribution the way it is ACTUALLY stored -- a native ClickHouse
+// Map(String, Float64) column, read via mapKeys(...)/mapValues(...) into
+// two parallel arrays (workunitreader.go's own query) -- rather than
+// parseDistributionOrdered's JSON-string assumption, which the real
+// column never satisfies (see WorkUnitInvestmentRow's own doc comment,
+// workunitreader.go, for the full story: CHAOS-4977 step 7 caught this
+// live, no fixture test ever could). mapKeys/mapValues both iterate the
+// Map's own underlying Array(Tuple(K,V)) storage in the SAME order, so
+// pairing by index is exact -- and that storage order is the row's
+// original insertion order, the same order Python's own driver decode
+// preserves (work_units.py's _parse_distribution branches on
+// isinstance(value, dict) for this real column, never
+// isinstance(value, str)).
+func zipDistributionOrdered(keys []string, values []float64) []keyValue {
+	if len(keys) == 0 {
+		return nil
+	}
+	items := make([]keyValue, len(keys))
+	for i, key := range keys {
+		var value float64
+		if i < len(values) {
+			value = values[i]
+		}
+		items[i] = keyValue{Key: key, Value: value}
+	}
+	return items
+}
+
+// zipDistribution is zipDistributionOrdered's unordered sibling, for a
+// caller that only needs membership/threshold checks
+// (matchesCategoryFilter), not key order.
+func zipDistribution(keys []string, values []float64) map[string]float64 {
+	out := make(map[string]float64, len(keys))
+	for i, key := range keys {
+		var value float64
+		if i < len(values) {
+			value = values[i]
+		}
+		out[key] = value
+	}
+	return out
+}
+
 // parseStructuralPayload ports work_units.py's _parse_structural_payload
 // (work_units.py:100-111), specialized to string input for the same reason
 // parseDistribution is.

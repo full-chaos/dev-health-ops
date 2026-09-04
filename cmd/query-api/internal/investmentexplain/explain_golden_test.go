@@ -53,6 +53,10 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 			*typed, _ = row[i].(time.Time)
 		case *int:
 			*typed, _ = row[i].(int)
+		case *[]string:
+			*typed, _ = row[i].([]string)
+		case *[]float64:
+			*typed, _ = row[i].([]float64)
 		default:
 			// Not needed by this test's fixtures.
 		}
@@ -90,7 +94,8 @@ func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhcli
 				time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
 				strPtr("repo-1"), strPtr("github"),
 				strPtr("churn_loc"), floatPtr(40.0),
-				strPtr(`{"velocity": 40.0}`), strPtr(`{"velocity.feature": 40.0}`), strPtr(`{"issues": ["issue-a"], "prs": []}`),
+				[]string{"velocity"}, []float64{40.0}, []string{"velocity.feature"}, []float64{40.0},
+				strPtr(`{"issues": ["issue-a"], "prs": []}`),
 				floatPtr(0.8), strPtr("high"),
 				strPtr("complete"), strPtr("v1"), strPtr("run-1"),
 				explainFixtureNow,
@@ -100,7 +105,8 @@ func (explainFixtureClient) Query(_ context.Context, statement string, _ []dhcli
 				time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC),
 				strPtr("repo-1"), strPtr("github"),
 				strPtr("churn_loc"), floatPtr(10.0),
-				strPtr(`{"quality": 10.0}`), strPtr(`{"quality.bugfix": 10.0}`), strPtr(`{"issues": ["issue-b"], "prs": []}`),
+				[]string{"quality"}, []float64{10.0}, []string{"quality.bugfix"}, []float64{10.0},
+				strPtr(`{"issues": ["issue-b"], "prs": []}`),
 				floatPtr(0.3), strPtr("low"),
 				strPtr("complete"), strPtr("v1"), strPtr("run-1"),
 				explainFixtureNow,

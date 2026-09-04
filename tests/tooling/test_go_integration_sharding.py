@@ -34,6 +34,13 @@ EXPECTED_PACKAGES = {
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/hotspots",
+    # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
+    # real Map(String, Float64) theme/subcategory columns -- a fake
+    # RowScanner double can hand back any Go type its author declares, so
+    # it can never prove the real clickhouse-go driver's type-conversion
+    # path actually works against the real column type (it didn't, see
+    # workunitreader_seeded_integration_test.go's own header comment).
+    "cmd/query-api/internal/investmentexplain",
     "cmd/query-api/internal/routeswitch",
     "cmd/query-api/internal/workgraph",
     "internal/cacheinvalidation",
@@ -340,8 +347,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # branch: CHAOS-4882's internal/storage/postgres/authschema and
     # CHAOS-4769's internal/jobs/workgraph/issueprlinks. The merged total was
     # 39. CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
-    assert "40 package(s) discovered, 0 denylisted, 40 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 40 package(s)" in result.stdout
+    # CHAOS-4977 then added cmd/query-api/internal/investmentexplain: 40 -> 41.
+    assert "41 package(s) discovered, 0 denylisted, 41 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 41 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -376,7 +384,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # internal/jobs/workgraph/issueprlinks, each written as 37 -> 38 on its
     # own branch. FLATTENED includes the providersync shard-1 package.
     # CHAOS-4441: 40, not 39 -- internal/jobs/investment/chwrite added.
-    assert len(flattened) == len(set(flattened)) == 40
+    # CHAOS-4977: 41, not 40 -- cmd/query-api/internal/investmentexplain added.
+    assert len(flattened) == len(set(flattened)) == 41
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1681,7 +1690,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # the packages shards).
     # CHAOS-4441: 39, not 38 -- internal/jobs/investment/chwrite added
     # (40 discovered - 1 for the providersync shard-1 package = 39).
-    assert len(selected_packages) == len(set(selected_packages)) == 39
+    # CHAOS-4977: 40, not 39 -- cmd/query-api/internal/investmentexplain
+    # added (41 discovered - 1 for the providersync shard-1 package = 40).
+    assert len(selected_packages) == len(set(selected_packages)) == 40
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

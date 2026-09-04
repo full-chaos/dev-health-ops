@@ -39,32 +39,54 @@ func uniqueNonEmpty(values []string) []string {
 // WorkUnitInvestmentRow is one fetch_work_unit_investments result row
 // (work_unit_investments.py:26-79).
 //
-// LEAST SURE, pending live-schema verification once bigboy's testcontainer
-// pause lifts: which of these columns are Nullable in the underlying
-// work_unit_investments table (CHAOS-4547 notes four Nullable columns on
-// this exact CTE) determines whether the pointer fields below are the
-// right Scan destinations -- chosen defensively (Nullable(Float64)/
-// Nullable(String) scan cleanly into *float64/*string with clickhouse-go
-// v2) but not yet proven against a real server.
+// Nullable-column shape confirmed against the real schema (live-schema
+// verification, CHAOS-4977 step 7): matches CHAOS-4547's four Nullable
+// columns on this exact CTE (Nullable(Float64)/Nullable(String) scan
+// cleanly into *float64/*string with clickhouse-go v2).
+//
+// ThemeDistribution{Keys,Values}/SubcategoryDistribution{Keys,Values} are
+// NOT *string despite the "_json" suffix on the underlying columns
+// (theme_distribution_json/subcategory_distribution_json) -- that suffix
+// is a legacy naming artifact from an earlier schema. The REAL columns
+// are Map(String, Float64) (migrations/clickhouse/017_investment_
+// materialize_tables.sql:11-12), and clickhouse-go refuses to scan a Map
+// into a *string outright ("converting Map(String, Float64) to
+// **string is unsupported"). A first draft here assumed a JSON-string
+// column (matching the misleading name, and matching an untested-against-
+// real-ClickHouse code path) -- every golden/fixture test in this
+// package used a fake RowScanner handing back whatever shape the test
+// author declared, so none of them ever exercised the real driver's
+// type-conversion path against the real column type, and this shipped
+// undetected until CHAOS-4977 step 7's live differential ran
+// FetchWorkUnitInvestments against a real, migrated ClickHouse and it
+// failed outright on every row. See the query below (mapKeys/mapValues)
+// and zipDistributionOrdered/zipDistribution (attribution.go) for the
+// fix: read the Map's own key/value arrays directly, in the Map's own
+// storage order (the order Python's own driver ALSO decodes into its
+// dict -- work_units.py's _parse_distribution already branches on
+// isinstance(value, dict) for exactly this real column, never
+// isinstance(value, str)), rather than pretending it's JSON text.
 type WorkUnitInvestmentRow struct {
-	WorkUnitID                  string
-	WorkUnitType                *string
-	WorkUnitName                *string
-	FromTS                      time.Time
-	ToTS                        time.Time
-	RepoID                      *string
-	Provider                    *string
-	EffortMetric                *string
-	EffortValue                 *float64
-	ThemeDistributionJSON       *string
-	SubcategoryDistributionJSON *string
-	StructuralEvidenceJSON      *string
-	EvidenceQuality             *float64
-	EvidenceQualityBand         *string
-	CategorizationStatus        *string
-	CategorizationModelVersion  *string
-	CategorizationRunID         *string
-	ComputedAt                  time.Time
+	WorkUnitID                    string
+	WorkUnitType                  *string
+	WorkUnitName                  *string
+	FromTS                        time.Time
+	ToTS                          time.Time
+	RepoID                        *string
+	Provider                      *string
+	EffortMetric                  *string
+	EffortValue                   *float64
+	ThemeDistributionKeys         []string
+	ThemeDistributionValues       []float64
+	SubcategoryDistributionKeys   []string
+	SubcategoryDistributionValues []float64
+	StructuralEvidenceJSON        *string
+	EvidenceQuality               *float64
+	EvidenceQualityBand           *string
+	CategorizationStatus          *string
+	CategorizationModelVersion    *string
+	CategorizationRunID           *string
+	ComputedAt                    time.Time
 }
 
 // WorkUnitInvestmentsFilter is fetch_work_unit_investments' filter
@@ -123,8 +145,10 @@ SELECT
     provider,
     effort_metric,
     effort_value,
-    theme_distribution_json,
-    subcategory_distribution_json,
+    mapKeys(theme_distribution_json) AS theme_distribution_keys,
+    mapValues(theme_distribution_json) AS theme_distribution_values,
+    mapKeys(subcategory_distribution_json) AS subcategory_distribution_keys,
+    mapValues(subcategory_distribution_json) AS subcategory_distribution_values,
     structural_evidence_json,
     evidence_quality,
     evidence_quality_band,
@@ -156,7 +180,9 @@ LIMIT {limit:UInt64}
 			&row.WorkUnitID, &row.WorkUnitType, &row.WorkUnitName,
 			&row.FromTS, &row.ToTS, &row.RepoID, &row.Provider,
 			&row.EffortMetric, &row.EffortValue,
-			&row.ThemeDistributionJSON, &row.SubcategoryDistributionJSON, &row.StructuralEvidenceJSON,
+			&row.ThemeDistributionKeys, &row.ThemeDistributionValues,
+			&row.SubcategoryDistributionKeys, &row.SubcategoryDistributionValues,
+			&row.StructuralEvidenceJSON,
 			&row.EvidenceQuality, &row.EvidenceQualityBand,
 			&row.CategorizationStatus, &row.CategorizationModelVersion, &row.CategorizationRunID,
 			&row.ComputedAt,

@@ -31,6 +31,16 @@
 # local run of both its Testcontainers-backed tests together (21.575s,
 # breakdown_seeded_integration_test.go + investmentquality_seeded_integration_test.go,
 # each starting its own container).
+# cmd/query-api/internal/investmentexplain (CHAOS-4977 step 7): ONE
+# Testcontainers-backed test (workunitreader_seeded_integration_test.go),
+# a fresh ClickHouse container plus a small DDL/seed chain -- the
+# recurrence guard for the step-7 live-differential finding that
+# FetchWorkUnitInvestments could not scan the real Map(String, Float64)
+# theme/subcategory columns. Weight 20s, same container-plus-migrations
+# shape as internal/jobs/workgraph/edges' own single-test estimate above
+# (this is an ESTIMATE, not a measurement -- re-time from a completed
+# go-storage-integration runner and correct it, and re-time if the file
+# gains tests).
 # internal/jobs/investment/chquery (CHAOS-4441): weight 122s, ceil() of a local
 # run of all seven of its Testcontainers-backed tests together (121.469s). Same
 # shape as internal/streamhandlers above -- almost all of that is ClickHouse
@@ -76,6 +86,7 @@ cmd/dev-health-workerctl	13
 cmd/query-api	15
 cmd/query-api/internal/analytics	22
 cmd/query-api/internal/hotspots	26
+cmd/query-api/internal/investmentexplain	20
 cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2

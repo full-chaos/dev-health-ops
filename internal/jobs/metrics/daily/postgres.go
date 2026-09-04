@@ -84,6 +84,14 @@ const ScheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
 // and must not be widened or reused for this.
 const postSyncGenerationPrefix = "post-sync:"
 
+// ManualDailyGenerationPrefix identifies an operator-triggered `metrics
+// daily-start` run (CHAOS-5055). Exported so manual_run.go's
+// ManualDailyRunGeneration builds the SAME prefix this file's own
+// isManualDailyGeneration matches against, rather than risking the two
+// drifting apart the way the cross-language ScheduledFanoutGenerationPrefix
+// contract above warns about.
+const ManualDailyGenerationPrefix = "manual-daily:"
+
 // PostgresStore is the durable fence around the temporary compatibility
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
@@ -425,6 +433,21 @@ func isPostSyncGeneration(generation string) bool {
 	return strings.HasPrefix(generation, postSyncGenerationPrefix) && len(generation) <= 64
 }
 
+// isManualDailyGeneration reports whether a generation belongs to an
+// operator-triggered `metrics daily-start` run (CHAOS-5055). Deferred
+// repository discovery (empty --repo-id, the CLI's own default/documented
+// path -- see workerctl_dispatch.py's "Omit for every org repository") needs
+// the SAME live-ClickHouse materialize path scheduled fan-out and post-sync
+// runs use -- MaterializeScheduledFanout below -- or a manual daily-start
+// with no explicit repositories permanently fails at materialization (codex
+// adversarial review round 1, P1: Dispatcher.Work treats MaterializeScheduledFanout's
+// ErrInvalidState as jobruntime.Permanent, stranding the run 'running' with
+// no partitions forever) despite the run itself being legitimately deferred-
+// discovery by design.
+func isManualDailyGeneration(generation string) bool {
+	return strings.HasPrefix(generation, ManualDailyGenerationPrefix) && len(generation) <= 64
+}
+
 func normalizeRepositoryPartitions(repositoryIDs []RepositoryID) ([][]RepositoryID, error) {
 	seen := make(map[RepositoryID]struct{}, len(repositoryIDs))
 	repositories := make([]RepositoryID, 0, len(repositoryIDs))
@@ -608,12 +631,16 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 	repositoryIDs []RepositoryID,
 ) (bool, error) {
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
-		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation)) {
+		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation) &&
+			!isManualDailyGeneration(run.Generation)) {
 		return false, ErrInvalidState
 	}
 	trigger := jobruntime.DailyMetricsRunTriggerScheduledFanout
-	if isPostSyncGeneration(run.Generation) {
+	switch {
+	case isPostSyncGeneration(run.Generation):
 		trigger = jobruntime.DailyMetricsRunTriggerPostSync
+	case isManualDailyGeneration(run.Generation):
+		trigger = jobruntime.DailyMetricsRunTriggerManual
 	}
 	// Live ClickHouse discovery has no natural upper bound the way an
 	// explicit StartRunRequest does -- fail loud rather than silently

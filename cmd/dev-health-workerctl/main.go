@@ -1890,8 +1890,51 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 // flags lands on insertRun's ON CONFLICT DO NOTHING idempotency path instead
 // of inserting a second run for the same org/day (same reasoning as
 // manualBackfillGeneration above).
-func manualBackstopTriggerGeneration(family, org, day string) string {
-	return "manual-trigger:" + family + ":" + org + ":" + day
+//
+// scopeDiscriminator MUST be non-empty for any family whose real scope is
+// not fully described by (org, day) -- see
+// manualBackstopTriggerScopeDiscriminator below -- or two genuinely distinct
+// requests (different team, different recommendations window) collide onto
+// the SAME deterministic run identity (codex adversarial review round 1,
+// P1): remaining.deterministicRunID hashes (org, family, generation,
+// scope_key), scope_key is unconditionally the day for every trigger-backstop
+// family (startManualTriggerRun's own doc comment), so generation was the
+// ONLY axis available to keep team-A's and team-B's same-day capacity
+// triggers from being treated as the identical retried request.
+func manualBackstopTriggerGeneration(family, org, day, scopeDiscriminator string) string {
+	generation := "manual-trigger:" + family + ":" + org + ":" + day
+	if scopeDiscriminator != "" {
+		generation += ":" + scopeDiscriminator
+	}
+	return generation
+}
+
+// manualBackstopTriggerScopeDiscriminator returns the extra text
+// manualBackstopTriggerGeneration folds into a trigger-backstop generation
+// for families whose real scope is not fully described by (org, day):
+// capacity and recommendations, both scoped by team (or explicitly "every
+// team"), and recommendations additionally by an evaluation window.
+// Day-scoped families (complexity/dora/release_impact/work_item_attribution)
+// return "" unchanged -- day IS their complete scope, and widening their
+// generation format would needlessly risk the existing
+// TestManualBackstopTriggerGenerationsAreStableAndRequestScoped contract for
+// no benefit.
+func manualBackstopTriggerScopeDiscriminator(family string, teamID *string, allTeams bool, window int) string {
+	switch family {
+	case "capacity":
+		if allTeams {
+			return "all-teams"
+		}
+		return "team:" + *teamID
+	case "recommendations":
+		scope := "all-teams"
+		if teamID != nil {
+			scope = "team:" + *teamID
+		}
+		return fmt.Sprintf("%s:window:%d", scope, window)
+	default:
+		return ""
+	}
 }
 
 // dispatchMetricsRemainingTriggerBackstop handles `metrics remaining
@@ -2062,7 +2105,8 @@ func dispatchMetricsRemainingTriggerBackstop(
 		// rather than print a result with a missing readback hint.
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	generation := manualBackstopTriggerGeneration(*family, *org, dayString)
+	scopeDiscriminator := manualBackstopTriggerScopeDiscriminator(*family, teamID, *allTeams, *window)
+	generation := manualBackstopTriggerGeneration(*family, *org, dayString, scopeDiscriminator)
 	var outcome remaining.ManualBackfillOutcome
 	var startErr error
 	switch *family {

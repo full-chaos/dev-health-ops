@@ -387,7 +387,7 @@ func (store *PostgresStore) startManualTriggerRun(
 		return ManualBackfillOutcome{}, ErrUnavailable
 	}
 
-	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, request.OrganizationID, request.Family, day, generation)
+	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, request.OrganizationID, request.Family, day, generation, request.Scopes[0])
 	if err != nil {
 		return ManualBackfillOutcome{}, err
 	}
@@ -485,6 +485,25 @@ func isSameManualBackfillRequest(runGeneration, generation string) bool {
 	return runGeneration == generation || strings.HasPrefix(runGeneration, generation+":retry-")
 }
 
+// findManualBackfillBlockerScopeFilter returns the jsonb containment filter
+// findManualBackfillBlocker's coverage query applies to partition.scope
+// (CHAOS-5055, codex adversarial review round 1, P1). "{}" for every family
+// except capacity/recommendations -- a no-op containment filter, since
+// `anything @> '{}'` is vacuously true -- preserving their existing
+// day-only coverage semantics exactly. For capacity/recommendations, the
+// caller's own full scope: their scope objects carry no day/backfill_days
+// window semantics to disturb (manualCapacityTriggerScope/
+// manualRecommendationsTriggerScope), so using the whole object as the
+// required subset is exact, not an approximation -- a stored partition whose
+// team_id/window differs from this request's cannot satisfy the containment
+// check and is correctly excluded from blocking it.
+func findManualBackfillBlockerScopeFilter(family string, scope json.RawMessage) json.RawMessage {
+	if family == "capacity" || family == "recommendations" {
+		return scope
+	}
+	return json.RawMessage("{}")
+}
+
 // blockReason names why findManualBackfillBlocker refused a day.
 type blockReason int
 
@@ -549,8 +568,22 @@ const (
 // work_item_attribution caller (RemainingMetricsFanoutProducer.Produce and
 // StartManualBackfillRun both set ScopeKey: day unconditionally), so the
 // fallback is exact for it, not a guess.
+//
+// scope is the FULL canonical Scope this request would insert (the same
+// value startManualTriggerRun passes to normalizeStartRunRequest), used as a
+// jsonb containment filter ONLY for families whose scope carries an identity
+// axis beyond day -- currently capacity (team_id/all_teams) and
+// recommendations (team_id, window). Without it (codex adversarial review
+// round 1, P1), this query's day-range filter alone made team A's succeeded
+// capacity forecast read as "covering" team B's same-day request -- and team
+// A's still-running forecast read as blockReasonInProgress for team B too --
+// because nothing here ever inspected partition.scope's team/window content.
+// Day-scoped families pass an empty "{}" filter (see the call site), which
+// `partition.scope @> '{}'` satisfies vacuously for every row, so their
+// existing multi-day-window coverage behavior (backfill_days > 1, described
+// above) is byte-identical to before this fix.
 func (store *PostgresStore) findManualBackfillBlocker(
-	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string,
+	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string, scope json.RawMessage,
 ) (runID string, reason blockReason, err error) {
 	requested, parseErr := time.Parse("2006-01-02", day)
 	if parseErr != nil {
@@ -566,8 +599,9 @@ JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
   AND run.status IN ('pending', 'running', 'succeeded')
   AND coalesce(partition.scope->>'day', run.scope_key) >= $3
-  AND coalesce(partition.scope->>'day', run.scope_key) <= $4`,
-		organizationID, family, day, upperBound,
+  AND coalesce(partition.scope->>'day', run.scope_key) <= $4
+  AND partition.scope @> $5::jsonb`,
+		organizationID, family, day, upperBound, findManualBackfillBlockerScopeFilter(family, scope),
 	)
 	if err != nil {
 		return "", blockReasonNone, ErrUnavailable

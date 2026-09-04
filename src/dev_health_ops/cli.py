@@ -197,10 +197,14 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     the same table the Go worker's NATIVE `metrics.remaining.recommendations`
     kind writes, on an independent per-team/arbitrary-window schedule with no
     dedup between the two writers. It is now a preview-only diagnostic: it
-    evaluates and prints, but never writes. The org-wide, persisted
-    recommendations compute is `dev-health-workerctl metrics remaining start
-    --family recommendations` (day-scoped, generation-deduped against the
-    scheduler).
+    evaluates and prints, but never writes. The persisted, generation-deduped
+    recommendations compute is `dev-health-workerctl metrics remaining
+    trigger-backstop --family recommendations --team <id>` (or
+    `--all-teams`) `--window <days> --review-evidence <why>` -- NOT `metrics
+    remaining start`, which rejects recommendations outright (it only
+    accepts complexity/dora/release_impact; codex adversarial review round
+    1, P1: this docstring pointed operators at a command guaranteed to
+    return invalid_request).
     """
     import json
     from datetime import date, datetime, timezone
@@ -283,9 +287,10 @@ def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -
         "compute",
         help=(
             "Preview recommendation rules for a team (CHAOS-5055: read-only, "
-            "writes nothing). For the persisted org-wide compute, use "
-            "`dev-health-workerctl metrics remaining start --family "
-            "recommendations`."
+            "writes nothing). For the persisted, deduped compute, use "
+            "`dev-health-workerctl metrics remaining trigger-backstop "
+            "--family recommendations --team <id>|--all-teams --window "
+            "<days> --review-evidence <why>`."
         ),
     )
     compute.add_argument("--team", required=True, help="Team ID to evaluate.")

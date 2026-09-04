@@ -1388,8 +1388,8 @@ func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T)
 // --- CHAOS-5016: `metrics remaining trigger-backstop` ---
 
 func TestManualBackstopTriggerGenerationIsDeterministicAndInputSensitive(t *testing.T) {
-	first := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03")
-	second := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03")
+	first := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03", "")
+	second := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03", "")
 	if first != second {
 		t.Fatalf("same inputs produced different generations: %q vs %q", first, second)
 	}
@@ -1403,13 +1403,73 @@ func TestManualBackstopTriggerGenerationIsDeterministicAndInputSensitive(t *test
 		t.Fatalf("generation collides with an existing trigger-source prefix: %q", first)
 	}
 	variants := []string{
-		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000002", "2026-09-03"),
-		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-02"),
+		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000002", "2026-09-03", ""),
+		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-02", ""),
 	}
 	for _, variant := range variants {
 		if variant == first {
 			t.Fatalf("a different request produced the SAME generation as the baseline: %q", variant)
 		}
+	}
+}
+
+// TestManualBackstopTriggerScopeDiscriminatorDistinguishesTeamAndWindow is
+// the regression test for codex adversarial review round 1, P1: capacity and
+// recommendations trigger-backstop requests used to derive their generation
+// from family+org+day alone, so two genuinely distinct requests (different
+// team, or -- for recommendations -- different window) collided onto the
+// SAME deterministic run identity (remaining.deterministicRunID hashes
+// (org, family, generation, scope_key), and scope_key is unconditionally the
+// day for these families). A second team's/window's request would then read
+// back as "already_covered" or "already_ran" without ever having computed
+// anything.
+func TestManualBackstopTriggerScopeDiscriminatorDistinguishesTeamAndWindow(t *testing.T) {
+	teamA := "00000000-0000-4000-8000-000000000002"
+	teamB := "00000000-0000-4000-8000-000000000003"
+
+	// Day-scoped families never widen -- day IS their complete scope.
+	for _, family := range []string{"complexity", "dora", "release_impact", "work_item_attribution"} {
+		if got := manualBackstopTriggerScopeDiscriminator(family, &teamA, false, 14); got != "" {
+			t.Fatalf("family=%q: scope discriminator = %q, want \"\" (day-scoped families never widen)", family, got)
+		}
+	}
+
+	capacityTeamA := manualBackstopTriggerScopeDiscriminator("capacity", &teamA, false, 0)
+	capacityTeamB := manualBackstopTriggerScopeDiscriminator("capacity", &teamB, false, 0)
+	capacityAllTeams := manualBackstopTriggerScopeDiscriminator("capacity", nil, true, 0)
+	if capacityTeamA == "" || capacityTeamA == capacityTeamB || capacityTeamA == capacityAllTeams {
+		t.Fatalf("capacity discriminators must all differ: team-A=%q team-B=%q all-teams=%q",
+			capacityTeamA, capacityTeamB, capacityAllTeams)
+	}
+
+	recoTeamAWindow7 := manualBackstopTriggerScopeDiscriminator("recommendations", &teamA, false, 7)
+	recoTeamAWindow30 := manualBackstopTriggerScopeDiscriminator("recommendations", &teamA, false, 30)
+	recoTeamBWindow7 := manualBackstopTriggerScopeDiscriminator("recommendations", &teamB, false, 7)
+	recoAllTeamsWindow7 := manualBackstopTriggerScopeDiscriminator("recommendations", nil, true, 7)
+	seen := map[string]string{
+		recoTeamAWindow7:    "team-A/window-7",
+		recoTeamAWindow30:   "team-A/window-30",
+		recoTeamBWindow7:    "team-B/window-7",
+		recoAllTeamsWindow7: "all-teams/window-7",
+	}
+	if len(seen) != 4 {
+		t.Fatalf("recommendations discriminators collided: %#v", seen)
+	}
+
+	// End to end: the full generation must differ too, for the same org/day.
+	org, day := "00000000-0000-4000-8000-000000000001", "2026-09-04"
+	genTeamA := manualBackstopTriggerGeneration("capacity", org, day, capacityTeamA)
+	genTeamB := manualBackstopTriggerGeneration("capacity", org, day, capacityTeamB)
+	if genTeamA == genTeamB {
+		t.Fatalf("capacity generations for two different teams, same org/day, collided: %q", genTeamA)
+	}
+	if len(genTeamA) > 128 || len(genTeamB) > 128 {
+		t.Fatalf("capacity generation exceeds remaining.maxGenerationLength (128 runes): %q / %q", genTeamA, genTeamB)
+	}
+	genReco7 := manualBackstopTriggerGeneration("recommendations", org, day, recoTeamAWindow7)
+	genReco30 := manualBackstopTriggerGeneration("recommendations", org, day, recoTeamAWindow30)
+	if genReco7 == genReco30 {
+		t.Fatalf("recommendations generations for two different windows, same org/day/team, collided: %q", genReco7)
 	}
 }
 

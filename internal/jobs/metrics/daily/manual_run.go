@@ -42,7 +42,7 @@ func ManualDailyRunGeneration(organizationID, day string, repositoryIDs []Reposi
 	sort.Strings(sorted)
 	seed := organizationID + "|" + day + "|" + strings.Join(sorted, ",")
 	sum := sha256.Sum256([]byte(seed))
-	return "manual-daily:" + hex.EncodeToString(sum[:])[:16]
+	return ManualDailyGenerationPrefix + hex.EncodeToString(sum[:])[:16]
 }
 
 // StartManualDailyRun starts an operator-triggered daily-metrics run for one

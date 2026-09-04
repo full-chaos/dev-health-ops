@@ -74,3 +74,43 @@ func TestPostSyncAndScheduledFanoutGenerationPrefixesAreDisjoint(t *testing.T) {
 			scheduled, isScheduledFanoutGeneration(scheduled), isPostSyncGeneration(scheduled))
 	}
 }
+
+// TestManualDailyGenerationPrefixIsDisjointFromScheduledFanoutAndPostSync
+// pins that ManualDailyGenerationPrefix (CHAOS-5055) never overlaps the other
+// two deferred-discovery generation families. MaterializeScheduledFanout
+// accepts all three prefixes for a deferred-discovery run (codex adversarial
+// review round 1, P1: a manual `metrics daily-start` with no --repo-id used
+// to permanently fail materialization because its generation matched
+// neither of the other two) -- if ManualDailyGenerationPrefix ever collided
+// with ScheduledFanoutGenerationPrefix or postSyncGenerationPrefix, a manual
+// run could be misclassified as one of the other two triggers.
+func TestManualDailyGenerationPrefixIsDisjointFromScheduledFanoutAndPostSync(t *testing.T) {
+	manual := ManualDailyGenerationPrefix + "8f7004e018318490"
+	postSync := postSyncGenerationPrefix + "00000000-0000-4000-8000-000000000001"
+	scheduled := ScheduledFanoutGenerationPrefix + "2026-08-25T01:00:00Z"
+
+	if !isManualDailyGeneration(manual) || isScheduledFanoutGeneration(manual) || isPostSyncGeneration(manual) {
+		t.Fatalf("manual-daily generation %q: isManualDailyGeneration=%t isScheduledFanoutGeneration=%t isPostSyncGeneration=%t, want true/false/false",
+			manual, isManualDailyGeneration(manual), isScheduledFanoutGeneration(manual), isPostSyncGeneration(manual))
+	}
+	if isManualDailyGeneration(postSync) {
+		t.Fatalf("post-sync generation %q must not read as manual-daily", postSync)
+	}
+	if isManualDailyGeneration(scheduled) {
+		t.Fatalf("scheduled-fanout generation %q must not read as manual-daily", scheduled)
+	}
+}
+
+// TestManualDailyRunGenerationOutputSatisfiesIsManualDailyGeneration proves
+// the two halves of the CHAOS-5055 fix agree: ManualDailyRunGeneration (which
+// StartManualDailyRun's caller uses to build a real run's generation) must
+// always produce a value isManualDailyGeneration -- and therefore
+// MaterializeScheduledFanout -- accepts, or a real deferred-discovery manual
+// run would still permanently fail at materialization despite this file's
+// own predicate tests passing.
+func TestManualDailyRunGenerationOutputSatisfiesIsManualDailyGeneration(t *testing.T) {
+	generation := ManualDailyRunGeneration("00000000-0000-4000-8000-000000000001", "2026-08-26", nil)
+	if !isManualDailyGeneration(generation) {
+		t.Fatalf("ManualDailyRunGeneration(...) = %q, which isManualDailyGeneration rejects", generation)
+	}
+}

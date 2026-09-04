@@ -346,3 +346,34 @@ func TestCredentials_SourceBound(t *testing.T) {
 		t.Fatalf("got model %q, want %q", model, "gpt-5-mini")
 	}
 }
+
+// TestResolveUsableProvider_NoFeatureFlagsTable is the codex round 1 P2
+// regression: a pre-migration/minimal DB where the feature_flags TABLE
+// itself does not exist (not just an absent row for this org) must
+// resolve as "unregistered" -- backward-compatible, ungated -- matching
+// feature_flag_state's own `if not has_table("feature_flags"): return
+// "unregistered"` early return, which skips the TEAM-tier floor check
+// entirely. Proven with a COMMUNITY-tier org specifically: if the table-
+// missing case were (incorrectly) treated as a fatal error, or as a
+// floor-check failure instead of an early "unregistered" return, this
+// case would come back "" (not usable) instead of the org's own BYO
+// setting.
+func TestResolveUsableProvider_NoFeatureFlagsTable(t *testing.T) {
+	ctx := context.Background()
+	store, pool := newTestStore(t)
+	if _, err := pool.Exec(ctx, `DROP TABLE feature_flags`); err != nil {
+		t.Fatal(err)
+	}
+	orgID := seedOrg(ctx, t, pool, "community")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertSetting(ctx, t, pool, orgID, "api_key", "sk-org")
+
+	got, err := store.ResolveUsableProvider(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "openai" {
+		t.Fatalf("got %q, want %q (missing feature_flags table -> unregistered -> ungated, "+
+			"even for a community-tier org)", got, "openai")
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -181,11 +180,34 @@ func resolveOrgTierAndLicenseOverrides(
 // container, matching decisions.py's `bool(value)` cast on
 // features_override[key] (a raw JSON value, not necessarily a JSON
 // boolean -- org_license.features_override is a free-form JSON column).
+// Decodes the value and applies Python's real truthiness rules
+// (null/false/0/""/[]/{} falsy, everything else truthy) rather than
+// string-matching the raw JSON text -- a text-match on a fixed literal
+// set (codex round 1, P2) missed every OTHER falsy spelling of the same
+// value (0.0, -0, 0e0, whitespace padding), silently flipping the
+// license-override decision for any of them.
 func jsonTruthy(raw json.RawMessage) bool {
-	trimmed := strings.TrimSpace(string(raw))
-	switch trimmed {
-	case "", "null", "false", "0", `""`, "[]", "{}":
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		// Malformed JSON for this one override value: fail closed
+		// (falsy) -- matches the "no license override present" outcome
+		// rather than guessing that unparseable content should enable
+		// BYO LLM for the org.
 		return false
+	}
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case float64:
+		return v != 0
+	case string:
+		return v != ""
+	case []any:
+		return len(v) != 0
+	case map[string]any:
+		return len(v) != 0
 	default:
 		return true
 	}
@@ -247,11 +269,44 @@ func decideByoLLM(state byoLLMFeatureState, evaluatedAt time.Time) string {
 func byoLLMFlagState(
 	ctx context.Context, queryer featureRowQueryer, orgID uuid.UUID, now time.Time,
 ) (string, error) {
-	state, err := loadByoLLMFeatureState(ctx, queryer, orgID)
+	// Table-existence check FIRST, matching feature_flag_state's own
+	// `if not sa.inspect(...).has_table("feature_flags"): return
+	// "unregistered"` -- a pre-migration/minimal DB short-circuits to
+	// "unregistered" WITHOUT ever running the tier floor check, not just
+	// without running the main decision (codex round 1, P2: an earlier
+	// version only special-cased a missing ROW, pgx.ErrNoRows, inside the
+	// feature-row query -- a missing TABLE surfaces as a different
+	// Postgres error there and was wrongly treated as a fatal lookup
+	// failure instead of Python's documented backward-compat path).
+	registered, err := byoLLMFeatureFlagsTableExists(ctx, queryer)
 	if err != nil {
 		return "", err
 	}
-	orgTierFloor, orgFloorOK := tierIndex(state.orgTier)
+	if !registered {
+		return flagStateUnregistered, nil
+	}
+
+	// Floor-check tier read and the main-decision's own tier read
+	// (inside loadByoLLMFeatureState) are DELIBERATELY two independent,
+	// separately-dispatched queries, not one shared read reused for both
+	// -- matching Python's actual double-read shape exactly:
+	// feature_flag_state's own resolve_org_tier call for the floor gate,
+	// then evaluate_org_feature_sync's SEPARATE load_feature_rows_sync
+	// read of Organization.tier/OrgLicense for the real decision. codex
+	// round 1's P1: the FIRST version of this function reused ONE shared
+	// tier read for both purposes, which is a real -- if narrow --
+	// torn-read regression neither plane has when each read is genuinely
+	// independent: an org whose tier is downgraded AND whose blocking
+	// override is deleted in the same committed transaction, landing
+	// between these two reads, must still see the FRESH (post-downgrade)
+	// tier at the main-decision point, not the stale floor-check value.
+	// Reading twice reproduces Python's own window instead of collapsing
+	// it into a narrower one that then behaves differently.
+	floorTier, _, err := resolveOrgTierAndLicenseOverrides(ctx, queryer, orgID)
+	if err != nil {
+		return "", err
+	}
+	orgTierFloor, orgFloorOK := tierIndex(floorTier)
 	if !orgFloorOK {
 		orgTierFloor = 0
 	}
@@ -259,5 +314,25 @@ func byoLLMFlagState(
 	if orgTierFloor < minTierFloor {
 		return flagStateDisabled, nil
 	}
+
+	state, err := loadByoLLMFeatureState(ctx, queryer, orgID)
+	if err != nil {
+		return "", err
+	}
 	return decideByoLLM(state, now), nil
+}
+
+// byoLLMFeatureFlagsTableExists ports feature_flag_state's own
+// `sa.inspect(session.get_bind()).has_table("feature_flags")` check --
+// `to_regclass` is Postgres's own "does this relation exist, in the
+// current search_path" primitive (returns NULL, not an error, when it
+// does not), so this never itself throws the undefined-table error the
+// row-lookup query below would.
+func byoLLMFeatureFlagsTableExists(ctx context.Context, queryer featureRowQueryer) (bool, error) {
+	var exists bool
+	err := queryer.QueryRow(ctx, `SELECT to_regclass('feature_flags') IS NOT NULL`).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check feature_flags table existence: %w", err)
+	}
+	return exists, nil
 }

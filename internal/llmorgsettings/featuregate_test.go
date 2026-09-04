@@ -1,6 +1,7 @@
 package llmorgsettings
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -142,5 +143,43 @@ func TestDecideByoLLM_FloorBypassSanity(t *testing.T) {
 	if got := decideByoLLM(state, time.Now()); got != flagStateEnabled {
 		t.Fatalf("decideByoLLM (no floor) = %q, want enabled -- this is exactly why "+
 			"byoLLMFlagState needs its own floor check ahead of it", got)
+	}
+}
+
+// TestJsonTruthy is the codex round 1 P2 regression: a text-match on a
+// fixed literal set ("0", "[]", "{}", ...) missed every OTHER falsy
+// spelling of the same JSON value (0.0, -0, 0e0, whitespace padding) --
+// this table decodes the JSON and applies Python's real bool(value)
+// truthiness instead.
+func TestJsonTruthy(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{`null`, false},
+		{`false`, false},
+		{`0`, false},
+		{`0.0`, false},
+		{`-0`, false},
+		{`0e0`, false},
+		{`  0  `, false},
+		{`""`, false},
+		{`[]`, false},
+		{`{}`, false},
+		{`true`, true},
+		{`1`, true},
+		{`0.1`, true},
+		{`"false"`, true}, // a non-empty STRING, even one spelling "false", is truthy
+		{`"0"`, true},     // same: non-empty string
+		{`[0]`, true},     // non-empty list, even one containing a falsy element
+		{`{"a":false}`, true},
+		{`not-valid-json`, false}, // malformed: fail closed, not treated as an override
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			if got := jsonTruthy(json.RawMessage(tc.raw)); got != tc.want {
+				t.Errorf("jsonTruthy(%s) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
 	}
 }

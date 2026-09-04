@@ -16,33 +16,54 @@ import (
 // porting the reads in job_daily.py:258 _extract_ai_workflow_for_day that feed
 // extract_review_deployment_incident_edges.
 //
-// # DEDUP: argMax OVER A TUPLE, GROUPED BY THE CURRENT SORTING KEY
+// # DEDUP: FINAL, NOT argMax
 //
-// Same contract as every other native family here, and the same two traps.
+// Both reads use `FINAL`. An earlier version used
+// `argMax(tuple(...), last_synced) GROUP BY <the 027 sorting key>` and that was
+// wrong for a measured reason, not a stylistic one.
 //
-// The GROUP BY must be the sorting key as migration 027 rekeyed it, NOT the
-// key written in the original CREATE TABLE. 014_work_graph.sql still reads
-// `ORDER BY (repo_id, pr_number, commit_hash)`; 027 prepended org_id to that
-// and to git_pull_request_reviews and deployments. Reading the CREATE TABLE
-// and citing it as current is exactly how #2229's round-1 P1 happened.
+// On ClickHouse 26.7.6.57, with 400 keys each holding two rows at an IDENTICAL
+// last_synced across 40 unmerged parts and merges stopped, the SAME query
+// returned 60, 300, 180, 120 and 80 disagreeing keys on five consecutive runs:
+// argMax returned a mix of both values while FINAL returned the last-inserted
+// value every time. They converge only after a merge. (#2229 codex round 3 P1,
+// confirmed by execution.)
 //
-// The projection must be ONE argMax over a tuple, never one argMax per
-// column: two aggregates over the same GROUP BY resolve ties independently and
-// can splice values from different rows into one result (CHAOS-2787). The
-// tuple also preserves NULLs -- argMax(x, v) SKIPS rows where x is NULL, so an
-// older non-NULL value would outlive a genuinely NULL latest one, while
-// tuple(x) is never itself NULL. Both reasons are live here: reviews.state is
-// Nullable(String) and deployments.pull_request_number is Nullable(UInt32).
-// Dropping the tuple because only one of the two reasons applies is what
-// #2229's round-2 P1 was.
+// So argMax is nondeterministic when the version ties, and `last_synced` ties
+// constantly -- a batch sync writes many rows of these tables in the same
+// millisecond. Pre-merge is the normal state during an active sync, which is
+// when this job runs.
 //
-// # PYTHON DOES NOT DEDUP THESE (except deployments)
+// Per site (team-lead ruling, 2026-09-04):
 //
-// job_daily.py reads git_pull_request_reviews with no FINAL and no argMax, so
-// Python's own edge output is merge-timing dependent (CHAOS-5086). It DOES
-// dedup deployments, with `FROM deployments FINAL`. Deduplicating all of them
-// is a deliberate, documented divergence -- Go deterministic where Python is
-// not -- matching the call already approved on #2229.
+//	deployments               Python reads `FROM deployments FINAL`
+//	                          (job_daily.py:415) -> FINAL. Mandatory: this is
+//	                          the "Python reads FINAL" case exactly.
+//	git_pull_request_reviews  Python reads it RAW, with no FINAL and no dedup.
+//	                          Ours is an ADDED dedup on a ReplacingMergeTree,
+//	                          so FINAL: it is what Python's raw read converges
+//	                          to once merges settle, and it is deterministic
+//	                          before that. argMax was neither.
+//	repos (providers loader)  Python's discover_repos uses argMax, not FINAL
+//	                          -> argMax, matching Python.
+//
+// A deterministic tie-break on the argMax version was tried first and
+// rejected: stable, but still disagreeing with Python, because FINAL's tie rule
+// is "last inserted wins" and insertion order is not a column.
+//
+// The tuple-vs-per-column rule (CHAOS-2787) and the NULL-skip rule still apply
+// wherever argMax IS used -- see the repos loader below.
+//
+// One thing the old comment got right and is worth keeping: the GROUP BY of any
+// argMax must be the sorting key as migration 027 rekeyed it, never the key in
+// the original CREATE TABLE. 014_work_graph.sql still reads
+// `ORDER BY (repo_id, pr_number, commit_hash)`. Reading a stale CREATE TABLE
+// and citing it as current is how #2229's round-1 P1 happened, and citing a
+// stale migration the same way is how its round-3 finding on git_commit_stats
+// happened.
+//
+// Python's own merge-timing dependence on the raw reads stays recorded as a
+// pre-existing defect (CHAOS-5086), not silently corrected here.
 
 // LoadWorkGraphEdgeReviews ports the wf_review_rows query (job_daily.py:368).
 //
@@ -60,24 +81,10 @@ func LoadWorkGraphEdgeReviews(
 	}
 
 	rows, err := conn.Query(ctx, `
-SELECT
-    repo_id,
-    number,
-    review_id,
-    tupleElement(latest, 1) AS state,
-    tupleElement(latest, 2) AS submitted_at,
-    tupleElement(latest, 3) AS last_synced
-FROM (
-    SELECT
-        repo_id,
-        number,
-        review_id,
-        argMax(tuple(state, submitted_at, last_synced), last_synced) AS latest
-    FROM git_pull_request_reviews
-    WHERE org_id = ? AND repo_id IN ?
-    GROUP BY org_id, repo_id, number, review_id
-)
-WHERE submitted_at >= ? AND submitted_at < ?
+SELECT repo_id, number, review_id, state, submitted_at, last_synced
+FROM git_pull_request_reviews FINAL
+WHERE org_id = ? AND repo_id IN ?
+  AND submitted_at >= ? AND submitted_at < ?
 ORDER BY repo_id, number, review_id`,
 		organizationID, repositoryUUIDStrings(repoIDs), dayStart.UTC(), dayEnd.UTC(),
 	)
@@ -134,27 +141,11 @@ func LoadWorkGraphEdgeDeployments(
 	}
 
 	rows, err := conn.Query(ctx, `
-SELECT
-    repo_id,
-    deployment_id,
-    tupleElement(latest, 1) AS pull_request_number,
-    tupleElement(latest, 2) AS started_at,
-    tupleElement(latest, 3) AS finished_at,
-    tupleElement(latest, 4) AS deployed_at,
-    tupleElement(latest, 5) AS last_synced
-FROM (
-    SELECT
-        repo_id,
-        deployment_id,
-        argMax(
-            tuple(pull_request_number, started_at, finished_at, deployed_at, last_synced),
-            last_synced
-        ) AS latest
-    FROM deployments
-    WHERE org_id = ? AND repo_id IN ?
-    GROUP BY org_id, repo_id, deployment_id
-)
-WHERE coalesce(deployed_at, finished_at, started_at, last_synced) >= ?
+SELECT repo_id, deployment_id, pull_request_number,
+       started_at, finished_at, deployed_at, last_synced
+FROM deployments FINAL
+WHERE org_id = ? AND repo_id IN ?
+  AND coalesce(deployed_at, finished_at, started_at, last_synced) >= ?
   AND coalesce(deployed_at, finished_at, started_at, last_synced) < ?
 ORDER BY repo_id, deployment_id`,
 		organizationID, repositoryUUIDStrings(repoIDs), dayStart.UTC(), dayEnd.UTC(),

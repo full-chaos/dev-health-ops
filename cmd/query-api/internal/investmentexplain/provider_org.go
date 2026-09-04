@@ -147,8 +147,18 @@ func ResolveModelNameForOrg(
 // internal/llmorgsettings' own doc comment on the one documented gap:
 // this narrows out only the SSRF-fallback AUDIT LOG, never the
 // fallback decision itself).
+//
+// requestedModel is the caller's own explicit model override (the same
+// raw value ResolveModelNameForOrg receives) -- codex round 1 (#2234),
+// P2: an earlier version ignored it here and always re-derived the model
+// from orgSettings.Model, so an explicit request-level model override
+// was reported as "resolved" by ResolveModelNameForOrg but never actually
+// reached the constructed provider when org BYO was the active source.
+// Precedence matches ResolveModelNameForOrg's own explicit-wins step
+// exactly: non-empty requestedModel wins outright, else fall back to the
+// org's stored model.
 func newProviderForOrg(
-	ctx context.Context, kind categorize.ProviderKind, orgID string, orgSettings llmorgsettings.Resolver,
+	ctx context.Context, kind categorize.ProviderKind, orgID, requestedModel string, orgSettings llmorgsettings.Resolver,
 ) (categorize.Provider, error) {
 	if orgSettings != nil {
 		creds, ok, err := orgSettings.Credentials(ctx, orgID, string(kind))
@@ -156,9 +166,12 @@ func newProviderForOrg(
 			return nil, err
 		}
 		if ok {
-			model, err := orgSettings.Model(ctx, orgID, string(kind))
-			if err != nil {
-				return nil, err
+			model := requestedModel
+			if model == "" {
+				model, err = orgSettings.Model(ctx, orgID, string(kind))
+				if err != nil {
+					return nil, err
+				}
 			}
 			return newProviderFromCredentials(kind, creds.APIKey, creds.BaseURL, model)
 		}
@@ -265,7 +278,7 @@ func CompleteInvestmentMixExplanationForOrg(
 		}
 	}
 
-	provider, err := newProviderForOrg(ctx, kind, orgID, orgSettings)
+	provider, err := newProviderForOrg(ctx, kind, orgID, requestedModel, orgSettings)
 	if err != nil {
 		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, fmt.Errorf("construct llm provider: %w", err)
 	}

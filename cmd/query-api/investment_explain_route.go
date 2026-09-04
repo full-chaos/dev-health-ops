@@ -171,14 +171,34 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 	// construction: it only means an ENCRYPTED org settings row can never
 	// decrypt (internal/llmorgsettings.Store.loadRawSettings treats that
 	// exactly like a corrupt row -- skipped, not fatal). A plaintext org
-	// setting row still resolves. Error deliberately discarded, not
-	// logged: NewFernetDecryptor's own error carries no secret material
-	// (it only reports "key not configured"), but there is nothing
-	// actionable for an operator to do differently at this call site --
-	// the CONFIGURED check happens once, at whichever admin path writes
-	// an encrypted row in the first place.
-	decryptor, _ := providerfoundation.NewFernetDecryptor(
+	// setting row still resolves. NewFernetDecryptor's own error carries
+	// no secret material (it only reports "key not configured"), but a
+	// silently-degraded route -- every encrypted BYO org silently
+	// rerouted to platform credentials with zero operator signal -- is
+	// exactly the class of bug this ticket exists to fix (codex round 1,
+	// #2234, P1). Logged once at startup so an operator has a signal to
+	// notice, even though there is nothing this call site itself can do
+	// differently.
+	//
+	// codex round 1's P1 also names a NARROWER, still-open gap this log
+	// line does not close: a WRONG (present but incorrect) key is
+	// accepted here without error -- NewFernetDecryptor only validates
+	// that a key is configured, not that it is the RIGHT one -- and every
+	// subsequent per-row Decrypt() call then fails silently inside
+	// loadRawSettings (matches Python's own `except ValueError: continue`
+	// -- deliberate parity, see that function's doc comment), with no
+	// telemetry at any layer. Closing that fully needs per-decrypt-failure
+	// telemetry inside internal/llmorgsettings itself, a larger design
+	// change; deferred pending a team-lead ruling, same pattern as this
+	// package's own documented SSRF-fallback-audit-log gap.
+	decryptor, decryptorErr := providerfoundation.NewFernetDecryptor(
 		secrets.NewValue(os.Getenv("SETTINGS_ENCRYPTION_KEY")), os.Getenv("SETTINGS_ENCRYPTION_SALT"))
+	if decryptorErr != nil {
+		log.Printf(
+			"investment/explain: SETTINGS_ENCRYPTION_KEY is not configured (%v) -- every ENCRYPTED org BYO LLM setting will be skipped and that org's requests will silently use the platform default provider instead",
+			decryptorErr,
+		)
+	}
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
 
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv())

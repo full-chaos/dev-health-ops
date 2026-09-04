@@ -120,7 +120,7 @@ func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 	}
 
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		provider, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", resolver)
+		provider, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", resolver)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -152,6 +152,39 @@ func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 	}
 }
 
+// TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel is the codex
+// round 1 (#2234), P2 regression: an earlier version ignored the
+// caller's own explicit requestedModel parameter here and always
+// re-derived the model from orgSettings.Model, so a request-level model
+// override was reported as "resolved" by ResolveModelNameForOrg but
+// never reached the actual provider construction when org BYO was the
+// active source -- Python passes the request model straight into
+// get_provider, applying the same override.
+func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
+	resolver := &fakeOrgResolver{
+		credentials: llmorgsettings.Credentials{
+			APIKey:  "org-secret-key",
+			BaseURL: "https://org-gateway.example.com/v1",
+		},
+		credentialsOK: true,
+		model:         "org-chosen-model",
+	}
+
+	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
+		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "request-model", resolver)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	if !captured.credentialsCalled {
+		t.Fatal("expected newProviderFromCredentials to be called for a matched BYO org")
+	}
+	if captured.credentialsModel != "request-model" {
+		t.Errorf("Model = %q, want the explicit request-level override, not the org's stored model", captured.credentialsModel)
+	}
+}
+
 // TestNewProviderForOrg_FallsBackToEnvWhenNotMatched is the second proof
 // team-lead's ruling asked for: a non-BYO org (or an org whose settings
 // don't match kind) still uses the platform environment, unchanged.
@@ -166,7 +199,7 @@ func TestNewProviderForOrg_FallsBackToEnvWhenNotMatched(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", tc.orgSettings); err != nil {
+				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", tc.orgSettings); err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 			})
@@ -187,7 +220,7 @@ func TestNewProviderForOrg_PropagatesCredentialsLookupError(t *testing.T) {
 	sentinel := errors.New("byo_llm feature flag state could not be determined")
 	resolver := &fakeOrgResolver{credentialsErr: sentinel}
 	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", resolver)
+		_, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "", resolver)
 		if !errors.Is(err, sentinel) {
 			t.Fatalf("err = %v, want it to wrap the resolver's sentinel error", err)
 		}
@@ -371,7 +404,7 @@ func TestNewProviderForOrg_CallsFallbackTelemetryHook(t *testing.T) {
 	t.Cleanup(func() { logOrgBaseURLSSRFFallback = origHook })
 
 	withCapturedProviderConstruction(t, func(c *capturedConstruction) {
-		if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-42", resolver); err != nil {
+		if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-42", "", resolver); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

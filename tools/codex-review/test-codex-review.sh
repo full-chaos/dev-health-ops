@@ -88,7 +88,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 965 972 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 987 994 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -178,7 +178,7 @@ esac
 # via the same rm_rf_writable() defect-1 already proved, confirming the
 # trap tears it down.
 # ---------------------------------------------------------------------------
-extract 801 810 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 823 832 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -300,7 +300,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1098 1098 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1120 1120 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -358,7 +358,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1058 1142 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1080 1164 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -452,7 +452,7 @@ fi
 # that follow it in the real script (those start right after line 698 --
 # see codex-review.sh). Used ONLY for the (a) default-value check below, so
 # that case never touches the filesystem at all.
-extract 641 698 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_value_only.sh"
+extract 641 720 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_value_only.sh"
 grep -qF 'HOST_OS="$(uname -s)"' "$WORK/cache_resolve_value_only.sh" \
   || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the HOST_OS resolution line" >&2; exit 1; }
 grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
@@ -466,7 +466,7 @@ fi
 # point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
 # never fall through to the real /var/lib/oci-cache default, so their mkdir
 # is always safe.
-extract 641 705 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_full.sh"
+extract 641 727 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/cache_resolve_full.sh"
 
 make_uname_stub Linux
 
@@ -584,7 +584,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with HOST_OS forced to Darwin there).
 # ---------------------------------------------------------------------------
-extract 801 810 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 823 832 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 make_uname_stub Linux
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
@@ -630,7 +630,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 990 1009 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1012 1031 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -668,6 +668,107 @@ if grep -qF "$DARWIN_GOPATH" "$CALLS_DARWIN" && grep -qF "$DARWIN_GOCACHE" "$CAL
 else
   notok "v4.8.6h: cleanup() on macOS did not remove its own per-round dirs as before -- $(tr '\n' ' ' < "$CALLS_DARWIN")"
 fi
+
+# ---------------------------------------------------------------------------
+# v4.8.6 P1 (found by codex round lane-wrapper-v486-20260904T080604, EXECUTED
+# and independently reproduced by the lane before this fix): every
+# `[ "$HOST_OS" = Linux ]` check does an exact string match, and a malformed
+# `uname -s` output (e.g. a trailing `\r` from a wrapped uname) failed that
+# match at EVERY site -- including cleanup()'s removal branch. Combined with
+# the SUPPORTED CODEX_REVIEW_GOCACHE/CODEX_REVIEW_GOMODCACHE override
+# pointed at the real shared /var/lib/oci-cache paths (a documented use of
+# those overrides), this misrouted a genuinely-Linux host into the
+# macOS/`else` removal branch and called rm_rf_writable on the shared bigboy
+# cache -- the exact "delete the shared cache" incident class this whole
+# version exists to prevent. Fix: HOST_OS is validated immediately after
+# resolution; anything other than exact `Linux` or `Darwin` now `die`s
+# before any cache path is even resolved.
+# ---------------------------------------------------------------------------
+extract 668 690 'HOST_OS="$(uname -s)"' "$WORK/host_os_validate.sh"
+grep -qF 'case "$HOST_OS" in' "$WORK/host_os_validate.sh" \
+  || { echo "FAIL: extracted host_os_validate.sh does not contain the validation case block" >&2; exit 1; }
+
+make_uname_stub_raw() {
+  # Unlike make_uname_stub() above (which prints its argument as literal
+  # %s data, so a caller-supplied "\r" stays two harmless characters), this
+  # embeds the argument as printf's OWN FORMAT STRING inside the generated
+  # stub -- so an escape sequence like \r is interpreted by printf AT STUB
+  # RUNTIME, reproducing the exact codex-round repro shape
+  # (`uname() { printf "Linux\r\n"; }`) byte-for-byte, including a REAL
+  # embedded carriage return the shell's command substitution does not
+  # strip (unlike a plain trailing \n, which command substitution always
+  # strips regardless of this bug).
+  local raw="$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "%s"\n' "$raw"
+  } > "$STUBBIN_UNAME/uname"
+  chmod +x "$STUBBIN_UNAME/uname"
+}
+
+# (a) malformed HOST_OS ("Linux\r") now DIES before resolving any cache path
+# -- run under set +e / capture rc, same discipline as the other die-path
+# probes in this file.
+make_uname_stub_raw 'Linux\r\n'
+set +e
+HOSTOS_MALFORMED_OUT=$( (
+  PATH="$STUBBIN_UNAME:$PATH"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/host_os_validate.sh"
+  printf 'UNEXPECTEDLY REACHED, HOST_OS=%q\n' "$HOST_OS"
+) 2>&1 )
+RC_HOSTOS_MALFORMED=$?
+set -e
+if [ "$RC_HOSTOS_MALFORMED" -ne 0 ] && printf '%s' "$HOSTOS_MALFORMED_OUT" | grep -qi 'unrecognised or malformed'; then
+  ok "v4.8.6 P1 fix: a malformed uname -s output (embedded CR) DIES with the expected message instead of silently resolving a cache branch"
+else
+  notok "v4.8.6 P1 fix: malformed uname -s output did NOT die as expected (rc=$RC_HOSTOS_MALFORMED, out='$HOSTOS_MALFORMED_OUT')"
+fi
+
+# (b) MUTATION negative control: the exact same probe, run against the
+# validation block with its case/esac guard stripped (simulating the
+# pre-fix file) -- must NOT die, proving (a) above actually exercises the
+# fix rather than dying for an unrelated reason.
+sed '/^case "\$HOST_OS" in$/,/^esac$/d' "$WORK/host_os_validate.sh" > "$WORK/host_os_validate_unfixed.sh"
+grep -qF 'case "$HOST_OS" in' "$WORK/host_os_validate_unfixed.sh" \
+  && { echo "FAIL: mutation strip of host_os_validate_unfixed.sh did not remove the case block -- fix the sed pattern" >&2; exit 1; }
+set +e
+HOSTOS_UNFIXED_OUT=$(
+  PATH="$STUBBIN_UNAME:$PATH"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/host_os_validate_unfixed.sh"
+  printf 'REACHED, HOST_OS=%q\n' "$HOST_OS"
+) 2>&1
+RC_HOSTOS_UNFIXED=$?
+set -e
+if [ "$RC_HOSTOS_UNFIXED" -eq 0 ] && printf '%s' "$HOSTOS_UNFIXED_OUT" | grep -q '^REACHED'; then
+  ok "v4.8.6 P1 negative control: the same malformed input, with the guard stripped, silently resolves instead of dying (confirms the bug shape the fix closes)"
+else
+  notok "v4.8.6 P1 negative control: stripping the guard did not reproduce the pre-fix silent-resolve behaviour (rc=$RC_HOSTOS_UNFIXED, out='$HOSTOS_UNFIXED_OUT') -- the positive result above may not be testing what it claims to"
+fi
+
+# (c) legitimate exact values ("Linux", "Darwin") still pass through
+# unharmed -- guard against an overzealous fix that rejects valid input.
+for legit_os in Linux Darwin; do
+  make_uname_stub "$legit_os"
+  LEGIT_OUT=$(
+    PATH="$STUBBIN_UNAME:$PATH"
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/host_os_validate.sh"
+    printf '%s' "$HOST_OS"
+  )
+  if [ "$LEGIT_OUT" = "$legit_os" ]; then
+    ok "v4.8.6 P1 fix: legitimate HOST_OS='$legit_os' still passes the validation unharmed"
+  else
+    notok "v4.8.6 P1 fix: legitimate HOST_OS='$legit_os' was rejected or altered (got '$LEGIT_OUT')"
+  fi
+done
 
 echo "----"
 echo "passed=$PASS failed=$FAIL"

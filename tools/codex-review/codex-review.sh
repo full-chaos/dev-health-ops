@@ -666,6 +666,28 @@ LANE_KEY="$LANE-$WT_HASH"
 # default) rather than re-running `uname -s` at each site -- one source of
 # truth for which branch of the v4.8.6 Linux/macOS split a given line is on.
 HOST_OS="$(uname -s)"
+# v4.8.6 P1 (found by codex round lane-wrapper-v486-20260904T080604, EXECUTED
+# and independently reproduced): every `[ "$HOST_OS" = Linux ]` check in this
+# file does an EXACT string match, and every site that checks it does so the
+# SAME way -- but "the same wrong way" is still wrong. A malformed uname
+# output (measured: a wrapped `uname` emitting a trailing `\r`, e.g. under an
+# unusual shell/CI wrapper) fails the exact-match at EVERY site consistently,
+# which sounds safe but is not: a caller that has set CODEX_REVIEW_GOCACHE/
+# CODEX_REVIEW_GOMODCACHE to literal /var/lib/oci-cache paths (a SUPPORTED,
+# documented override -- this file's own v4.8.2 comment describes pointing
+# CODEX_REVIEW_GOCACHE at "a warm, already-writable" cache) on a host that
+# genuinely IS Linux still gets misrouted into the macOS/`else` branch
+# everywhere `$HOST_OS` is checked -- INCLUDING cleanup()'s removal branch,
+# which then calls rm_rf_writable on the real shared bigboy cache. This is
+# exactly the "go clean -cache on the shared cache" incident class this file
+# already warns about elsewhere, reached through a detection bug rather than
+# a cleanup bug. Fail closed HERE, immediately, rather than letting an
+# unrecognised value silently pick a branch at every downstream site: only
+# the two host kernels this file actually branches on are accepted.
+case "$HOST_OS" in
+  Linux | Darwin) ;;
+  *) die "unrecognised or malformed 'uname -s' output '$HOST_OS' -- refusing to guess whether this host's Go caches are the fleet-shared bigboy volume (Linux) or a per-round /tmp cache (Darwin/other); an unexpected value here must never silently fall through to a cache-removal branch" ;;
+esac
 
 # v4.8.6 (chris's ruling, 2026-09-04, RE-RULED 07:37 PDT -- see the
 # top-of-file changelog's "RULING HISTORY" note for the full story and why

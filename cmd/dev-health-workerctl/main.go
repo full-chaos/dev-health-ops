@@ -903,39 +903,6 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	}
 }
 
-// dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):
-// the operator entry point that repairs a daily-metrics run stranded because
-// River discarded the ONE metrics.daily_finalize job CompletePartition ever
-// enqueues for it (fixed idempotency key, permanently deduped by the
-// outbox), leaving the run status='running' forever despite 100% of its
-// partitions having succeeded. Exactly one of --run/--all-complete selects
-// the scope: --run repairs one named run; --all-complete sweeps every
-// organization for runs in this exact stranded shape (bounded by --limit)
-// and redrives each one found. Mirrors `metrics daily-redrive`'s shape
-// (WORKER_OPERATOR_TOKEN authentication via configureRuntime,
-// --review-evidence required, quiet flags, JSON result) and, like it,
-// deliberately bypasses joboperator.Service's Action/audit pipeline.
-//
-// CHAOS-4409: a run's finalize ledger row (metric_compatibility_executions,
-// worker_kind='daily', operation='finalize') can be stuck 'ambiguous' or
-// stuck-'executing' the exact same way a partition row can -- the api
-// process that owned the original finalize claim died before any exception
-// handler ran, or a progress-having finalize failure never got a human
-// /repair call. Before CHAOS-4409, this command republished a fresh
-// metrics.daily_finalize job straight into that wall: ClaimFinalize->
-// Finalize reaches the Python bridge fine, but _reserve_execution refuses
-// the IDENTICAL execution identity 409 ambiguous_refused forever, because
-// nothing had ever repaired the finalize row specifically (the bridge's own
-// bulk-redrive endpoint only ever selected operation='partition' rows).
-// Prod evidence: 13 daily_metrics_runs stuck in exactly the CHAOS-4389
-// stranded shape whose finalize ledger row was the thing actually blocking
-// them -- `daily-finalize --run` answered JobCancelError ambiguous_refused
-// on every one, forever. This now calls the SAME bulk-redrive endpoint
-// `daily-redrive` already calls for partitions (CHAOS-4304's ordering
-// requirement applies identically here: the ledger repair MUST land before
-// any finalize job publishes, not after) and aborts on the same
-// skipped_claim_active>0 signal daily-redrive already treats as unsafe to
-// proceed past.
 // dispatchMetricsDailyBlocked handles `metrics daily-blocked` (CHAOS-5040):
 // the read-only operator view of runs that can never reach finalize. It
 // writes nothing -- there is deliberately no --repair here, because the only
@@ -992,6 +959,39 @@ func dispatchMetricsDailyBlocked(
 	})
 }
 
+// dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):
+// the operator entry point that repairs a daily-metrics run stranded because
+// River discarded the ONE metrics.daily_finalize job CompletePartition ever
+// enqueues for it (fixed idempotency key, permanently deduped by the
+// outbox), leaving the run status='running' forever despite 100% of its
+// partitions having succeeded. Exactly one of --run/--all-complete selects
+// the scope: --run repairs one named run; --all-complete sweeps every
+// organization for runs in this exact stranded shape (bounded by --limit)
+// and redrives each one found. Mirrors `metrics daily-redrive`'s shape
+// (WORKER_OPERATOR_TOKEN authentication via configureRuntime,
+// --review-evidence required, quiet flags, JSON result) and, like it,
+// deliberately bypasses joboperator.Service's Action/audit pipeline.
+//
+// CHAOS-4409: a run's finalize ledger row (metric_compatibility_executions,
+// worker_kind='daily', operation='finalize') can be stuck 'ambiguous' or
+// stuck-'executing' the exact same way a partition row can -- the api
+// process that owned the original finalize claim died before any exception
+// handler ran, or a progress-having finalize failure never got a human
+// /repair call. Before CHAOS-4409, this command republished a fresh
+// metrics.daily_finalize job straight into that wall: ClaimFinalize->
+// Finalize reaches the Python bridge fine, but _reserve_execution refuses
+// the IDENTICAL execution identity 409 ambiguous_refused forever, because
+// nothing had ever repaired the finalize row specifically (the bridge's own
+// bulk-redrive endpoint only ever selected operation='partition' rows).
+// Prod evidence: 13 daily_metrics_runs stuck in exactly the CHAOS-4389
+// stranded shape whose finalize ledger row was the thing actually blocking
+// them -- `daily-finalize --run` answered JobCancelError ambiguous_refused
+// on every one, forever. This now calls the SAME bulk-redrive endpoint
+// `daily-redrive` already calls for partitions (CHAOS-4304's ordering
+// requirement applies identically here: the ledger repair MUST land before
+// any finalize job publishes, not after) and aborts on the same
+// skipped_claim_active>0 signal daily-redrive already treats as unsafe to
+// proceed past.
 func dispatchMetricsDailyFinalize(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {

@@ -586,13 +586,6 @@ func TestParseOutputEvidenceRejectsNonObjectJSON(t *testing.T) {
 	}
 }
 
-func TestParseOutputEvidenceRejectsOversizedPayload(t *testing.T) {
-	oversized := `{"note":"` + strings.Repeat("x", outputEvidenceMaxBytes) + `"}`
-	if _, err := parseOutputEvidence(oversized); err == nil {
-		t.Fatal("parseOutputEvidence on an oversized object = nil error, want a rejection")
-	}
-}
-
 func TestValidateReviewEvidenceRejectsOverlongText(t *testing.T) {
 	if validateReviewEvidence(strings.Repeat("x", reviewEvidenceMaxBytes+1)) {
 		t.Fatal("validateReviewEvidence accepted text over the bridge's 2048-byte bound")
@@ -655,47 +648,6 @@ func TestRedriveDailyMetricsLedgerErrorsOnAWellFormedButIncompleteBody(t *testin
 				t.Fatalf("redriveDailyMetricsLedger on body %q = nil error, result=%v, want an error", body, result)
 			}
 		})
-	}
-}
-
-// TestPythonCanonicalJSONByteLenMatchesTheBridgesActualEncoding is codex
-// round 2's P2 red-first proof, using the exact case the round executed:
-// 1362 euro-sign characters under Python's json.dumps default
-// ensure_ascii=True canonicalize to 8180 bytes (each euro sign, U+20AC,
-// costs 6 bytes as €), not the 4094 bytes Go's raw-UTF-8 json.Marshal
-// would report.
-func TestPythonCanonicalJSONByteLenMatchesTheBridgesActualEncoding(t *testing.T) {
-	value := map[string]any{"a": strings.Repeat("€", 1362)}
-	length, err := pythonCanonicalJSONByteLen(value)
-	if err != nil {
-		t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
-	}
-	if length != 8180 {
-		t.Fatalf("pythonCanonicalJSONByteLen = %d, want 8180 (matching the bridge's own Python canonicalizer)", length)
-	}
-}
-
-func TestPythonCanonicalJSONByteLenMatchesPlainASCIILength(t *testing.T) {
-	value := map[string]any{"note": "ascii only"}
-	length, err := pythonCanonicalJSONByteLen(value)
-	if err != nil {
-		t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
-	}
-	want := len(`{"note":"ascii only"}`)
-	if length != want {
-		t.Fatalf("pythonCanonicalJSONByteLen = %d, want %d for a plain-ASCII object", length, want)
-	}
-}
-
-// TestParseOutputEvidenceRejectsUnicodePayloadThatExceedsThePythonCanonicalBound
-// is codex round 2's P2 finding exercised through the real dispatch path: a
-// payload whose Go json.Marshal length (4094 bytes) is under the 4096-byte
-// bound but whose Python-canonical (ensure_ascii) length (8180 bytes) is
-// not must be rejected LOCALLY, not just by the bridge.
-func TestParseOutputEvidenceRejectsUnicodePayloadThatExceedsThePythonCanonicalBound(t *testing.T) {
-	raw := `{"a":"` + strings.Repeat("€", 1362) + `"}`
-	if _, err := parseOutputEvidence(raw); err == nil {
-		t.Fatal("parseOutputEvidence accepted a payload whose Python-canonical length exceeds the bridge's bound")
 	}
 }
 
@@ -836,76 +788,6 @@ func TestRedriveLedgerBridgeResponseRejectsFractionalCounts(t *testing.T) {
 		{"fractional_repaired", `{"repaired":1.5,"skipped_claim_active":0}`, true},
 		{"whole_number_as_float_literal_still_ok", `{"repaired":1,"skipped_claim_active":0}`, false},
 	})
-}
-
-// TestPythonCanonicalJSONByteLenMatchesPythonOnExponentNotation is round 3's
-// P2 (first finding) red-first proof, using Python's own exact measured
-// figures: json.Number preserves the operator's literal lexeme ("1e+09"),
-// but Python's json.loads parses any number containing '.'/'e'/'E' as a
-// float and re-serializes it via float repr -- "1e+09" canonicalizes to
-// "1000000000.0", eleven bytes longer than the six-byte lexeme.
-func TestPythonCanonicalJSONByteLenMatchesPythonOnExponentNotation(t *testing.T) {
-	decodeUseNumber := func(raw string) map[string]any {
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.UseNumber()
-		var value map[string]any
-		if err := decoder.Decode(&value); err != nil {
-			t.Fatalf("decode fixture: %v", err)
-		}
-		return value
-	}
-	t.Run("single_value", func(t *testing.T) {
-		length, err := pythonCanonicalJSONByteLen(decodeUseNumber(`{"n":1e9}`))
-		if err != nil {
-			t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
-		}
-		if length != 18 { // python: json.dumps({"n":1e9}, sort_keys=True, separators=(",",":")) == 18 bytes
-			t.Fatalf("pythonCanonicalJSONByteLen = %d, want 18 (python measured)", length)
-		}
-	})
-	t.Run("680_element_array_matches_codex_own_measurement", func(t *testing.T) {
-		raw := `{"a":[` + strings.Repeat("1e9,", 679) + "1e9]}"
-		length, err := pythonCanonicalJSONByteLen(decodeUseNumber(raw))
-		if err != nil {
-			t.Fatalf("pythonCanonicalJSONByteLen: %v", err)
-		}
-		if length != 8847 { // python: json.dumps({"a": [1e9]*680}, sort_keys=True, separators=(",",":")) == 8847 bytes
-			t.Fatalf("pythonCanonicalJSONByteLen = %d, want 8847 (python measured, matches codex round 3's own repro)", length)
-		}
-	})
-}
-
-// TestParseOutputEvidenceRejectsExponentPayloadThatExceedsThePythonCanonicalBound
-// exercises the fix through the real dispatch path: a payload whose RAW/Go
-// re-marshaled length is under the 4096-byte bound but whose Python-canonical
-// length (after Python reparses the exponent notation as a float) is not
-// must be rejected LOCALLY.
-func TestParseOutputEvidenceRejectsExponentPayloadThatExceedsThePythonCanonicalBound(t *testing.T) {
-	raw := `{"a":[` + strings.Repeat("1e9,", 679) + "1e9]}"
-	if len(raw) >= outputEvidenceMaxBytes {
-		t.Fatalf("test fixture itself is %d bytes, want it under %d so the OLD (buggy) check would have accepted it", len(raw), outputEvidenceMaxBytes)
-	}
-	if _, err := parseOutputEvidence(raw); err == nil {
-		t.Fatal("parseOutputEvidence accepted an exponent-notation payload whose Python-canonical length exceeds the bridge's bound")
-	}
-}
-
-func TestPythonFloatReprMatchesPythonMeasuredCases(t *testing.T) {
-	for _, testCase := range []struct {
-		name  string
-		value float64
-		want  string
-	}{
-		{"whole_number_in_fixed_range", 1e9, "1000000000.0"},
-		{"simple_fraction", 0.5, "0.5"},
-		{"small_magnitude_scientific", 1.5e-7, "1.5e-07"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := pythonFloatRepr(testCase.value); got != testCase.want {
-				t.Fatalf("pythonFloatRepr(%v) = %q, want %q (python measured)", testCase.value, got, testCase.want)
-			}
-		})
-	}
 }
 
 // TestPostWorkerBridgeRelaysNonObjectNon2xxBodiesInsteadOfErroring is round

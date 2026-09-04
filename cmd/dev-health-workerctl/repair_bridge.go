@@ -7,26 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// Byte bounds mirrored from the bridge's own Pydantic models (codex round 1,
-// P2) -- worker_workgraph.py's RepairRequest.review_evidence and
-// worker_metrics.py's MetricExecutionRepairRequest.review_evidence both bound
-// review evidence at 2048 UTF-8 bytes; both models' output_evidence is bound
-// by _MAX_EVIDENCE_BYTES=4096 on its CANONICAL re-encoding. Checking these
-// locally saves a guaranteed-422 round trip; the bridge's own check is still
-// the actual authority (these are pre-checks, not the enforcement point).
-const (
-	reviewEvidenceMaxBytes = 2048
-	outputEvidenceMaxBytes = 4096
-)
+// reviewEvidenceMaxBytes mirrors the bridge's own Pydantic bound
+// (worker_workgraph.py's RepairRequest.review_evidence /
+// worker_metrics.py's MetricExecutionRepairRequest.review_evidence, both
+// 2048 UTF-8 bytes on the field as submitted -- a plain string, not a JSON
+// re-encoding, so a plain len() check is exact, unlike output_evidence's
+// size bound below). Checking locally saves a guaranteed-422 round trip;
+// the bridge's own check is still the actual authority.
+const reviewEvidenceMaxBytes = 2048
 
 // bridgeResponseBodyCap bounds how much of a bridge response postWorkerBridge
 // reads. postWorkerBridge reads bridgeResponseBodyCap+1 bytes and treats a
@@ -55,15 +50,21 @@ func validateReviewEvidence(text string) bool {
 // the operator's exact digits (codex round 1, P1: the default float64
 // decode loses precision above 2^53, silently changing which value gets
 // durably persisted as repair evidence -- e.g. a sequence number attesting
-// 9007199254740993 was previously re-sent as 9007199254740992). The size
-// bound is checked against pythonCanonicalJSONByteLen, not a plain
-// json.Marshal length (codex round 2, P2: Go's json.Marshal emits raw UTF-8
-// for non-ASCII characters, but both bridge models' _canonical/_canonical_json
-// call Python's json.dumps with its DEFAULT ensure_ascii=True, which
-// \uXXXX-escapes every non-ASCII character -- a 4094-byte Go encoding of
-// 1362 euro-sign characters canonicalizes to 8180 bytes in Python, so the
-// naive Go length let a payload the bridge would reject pass the local
-// check).
+// 9007199254740993 was previously re-sent as 9007199254740992).
+//
+// This deliberately does NOT locally enforce the bridge's output_evidence
+// size bound (_MAX_EVIDENCE_BYTES=4096 on its CANONICAL Python re-encoding,
+// worker_workgraph.py:445/worker_metrics.py:686). Two codex rounds
+// (round 2, P2: Go's json.Marshal emits raw UTF-8 where Python's
+// ensure_ascii \uXXXX-escapes non-ASCII characters; round 3, P2: json.Number
+// preserves the operator's literal lexeme, e.g. "1e+09", but Python
+// re-serializes any number with '.'/'e'/'E' via its own float repr,
+// "1000000000.0") both found real gaps in trying to REPLICATE Python's
+// json.dumps canonicalization in Go well enough to predict this bound --
+// team-lead's ruling after the second finding: this is the wrong tool for
+// the job. The bridge's own 422 IS the size verdict; postWorkerBridge
+// already relays it verbatim (see the non-2xx raw_response path), so an
+// oversized payload costs one round trip, never a silent acceptance.
 func parseOutputEvidence(raw string) (map[string]any, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.UseNumber()
@@ -74,183 +75,7 @@ func parseOutputEvidence(raw string) (map[string]any, error) {
 	if evidence == nil {
 		return nil, errors.New("output-evidence must be a non-null JSON object")
 	}
-	canonicalLength, err := pythonCanonicalJSONByteLen(evidence)
-	if err != nil {
-		return nil, err
-	}
-	if canonicalLength > outputEvidenceMaxBytes {
-		return nil, fmt.Errorf("output-evidence exceeds %d bytes canonicalized", outputEvidenceMaxBytes)
-	}
 	return evidence, nil
-}
-
-// pythonCanonicalJSONByteLen returns the byte length v would have under
-// Python's `json.dumps(v, sort_keys=True, separators=(",", ":"))` -- the
-// exact call both `_canonical` (worker_workgraph.py:60) and
-// `_canonical_json` (worker_metrics.py:868) make, with json.dumps' DEFAULT
-// ensure_ascii=True in effect (neither call passes ensure_ascii=False).
-//
-// This walks v RECURSIVELY and re-prices each scalar under Python's own
-// rules, rather than trusting Go's json.Marshal output (codex round 2, P2:
-// Go emits raw UTF-8 for non-ASCII characters, Python's ensure_ascii
-// \uXXXX-escapes them -- fixed below in pythonJSONStringByteLen; codex
-// round 3, P2: json.Number PRESERVES THE OPERATOR'S LITERAL LEXEME, e.g.
-// "1e+09", but Python's json.loads parses any number containing '.'/'e'/'E'
-// as a float and Python's json.dumps re-serializes that float via its own
-// repr -- "1e+09" canonicalizes to "1000000000.0", not "1e+09" -- so
-// re-marshaling the Go-side json.Number verbatim silently undercounts any
-// payload using exponent/decimal notation; fixed via pythonNumberRepr).
-// v must be built from a parseOutputEvidence-style decode (UseNumber()):
-// map[string]any, []any, json.Number, string, bool, or nil.
-func pythonCanonicalJSONByteLen(v any) (int, error) {
-	switch value := v.(type) {
-	case nil:
-		return len("null"), nil
-	case bool:
-		if value {
-			return len("true"), nil
-		}
-		return len("false"), nil
-	case string:
-		return pythonJSONStringByteLen(value), nil
-	case json.Number:
-		repr, err := pythonNumberRepr(value)
-		if err != nil {
-			return 0, err
-		}
-		return len(repr), nil
-	case float64:
-		// Reachable only if a caller passes a plain Go float64 rather than
-		// a UseNumber()-decoded json.Number; kept for defensiveness, not
-		// exercised by parseOutputEvidence's own decode path.
-		return len(pythonFloatRepr(value)), nil
-	case map[string]any:
-		length := 2 // { }
-		first := true
-		for key, mapValue := range value {
-			if !first {
-				length++ // ,
-			}
-			first = false
-			length += pythonJSONStringByteLen(key)
-			length++ // :
-			valueLength, err := pythonCanonicalJSONByteLen(mapValue)
-			if err != nil {
-				return 0, err
-			}
-			length += valueLength
-		}
-		return length, nil
-	case []any:
-		length := 2 // [ ]
-		for index, item := range value {
-			if index > 0 {
-				length++ // ,
-			}
-			itemLength, err := pythonCanonicalJSONByteLen(item)
-			if err != nil {
-				return 0, err
-			}
-			length += itemLength
-		}
-		return length, nil
-	default:
-		return 0, fmt.Errorf("pythonCanonicalJSONByteLen: unsupported type %T", v)
-	}
-}
-
-// pythonJSONStringByteLen is the byte length Python's json.dumps(s) (with
-// its default ensure_ascii=True) would produce for the JSON-string encoding
-// of s, including its two surrounding quotes.
-func pythonJSONStringByteLen(s string) int {
-	length := 2 // the opening and closing quote
-	for _, r := range s {
-		switch {
-		case r == '"' || r == '\\':
-			length += 2 // \" or \\
-		case r == '\n' || r == '\r' || r == '\t':
-			length += 2 // \n, \r, or \t
-		case r < 0x20:
-			length += 6 // \u00XX for any other control character
-		case r < 0x80:
-			length++
-		case r > 0xFFFF:
-			length += 12 // a UTF-16 surrogate pair, two \uXXXX escapes
-		default:
-			length += 6 // one \uXXXX escape
-		}
-	}
-	return length
-}
-
-// pythonNumberRepr returns the exact text Python's json.dumps would emit
-// for the JSON number number decodes to. A lexeme with no '.', 'e', or 'E'
-// parses in Python as an arbitrary-precision int and round-trips through
-// json.dumps UNCHANGED (Go's json.Number already preserves this lexeme
-// verbatim, which is round 1's UseNumber() fix). A lexeme WITH any of
-// those (decimal point or exponent) parses as a Python float, which
-// json.dumps re-serializes via float repr -- never the original lexeme.
-func pythonNumberRepr(number json.Number) (string, error) {
-	lexeme := number.String()
-	if !strings.ContainsAny(lexeme, ".eE") {
-		return lexeme, nil
-	}
-	value, err := number.Float64()
-	if err != nil {
-		return "", fmt.Errorf("output-evidence numeric value %q: %w", lexeme, err)
-	}
-	return pythonFloatRepr(value), nil
-}
-
-// pythonFloatRepr renders f the way CPython's float.__repr__ (which
-// json.dumps calls for every Python float) does: the shortest decimal
-// string that round-trips to f, in FIXED notation with an explicit ".0" for
-// a whole number whenever f's decimal exponent is in [-4, 17) -- CPython's
-// own threshold -- and in scientific notation outside that range. Go's
-// strconv has no equivalent formatter (its 'g' verb picks scientific
-// notation based on significant-digit count, not this fixed exponent
-// threshold, and never appends ".0"), so this derives the exponent from
-// Go's own shortest round-trip scientific form and re-renders it under
-// Python's rule.
-func pythonFloatRepr(f float64) string {
-	switch {
-	case math.IsNaN(f):
-		return "NaN"
-	case math.IsInf(f, 1):
-		return "Infinity"
-	case math.IsInf(f, -1):
-		return "-Infinity"
-	}
-	scientific := strconv.FormatFloat(f, 'e', -1, 64)
-	exponent := pythonFloatSciExponent(scientific)
-	if exponent >= -4 && exponent < 17 {
-		fixed := strconv.FormatFloat(f, 'f', -1, 64)
-		if !strings.ContainsRune(fixed, '.') {
-			fixed += ".0"
-		}
-		return fixed
-	}
-	// Residual, not byte-proven against Python at this magnitude: outside
-	// [-4, 17) both Go's 'e' verb and Python's repr use scientific
-	// notation with a signed, zero-padded-to-2-digit exponent, and every
-	// measured case agrees -- but no evidence payload realistically
-	// reaches 1e17 or 1e-4, so this is intentionally not chased further.
-	return scientific
-}
-
-// pythonFloatSciExponent extracts the decimal exponent from a Go
-// strconv.FormatFloat(f, 'e', -1, 64) string (e.g. "1e+09" -> 9,
-// "1.234e-05" -> -5).
-func pythonFloatSciExponent(scientific string) int {
-	index := strings.IndexByte(scientific, 'e')
-	if index < 0 {
-		return 0
-	}
-	exponent, err := strconv.Atoi(scientific[index+1:])
-	if err != nil {
-		return 0
-	}
-	return exponent
 }
 
 // requiredFieldValidator is implemented by every strict bridge-2xx-response

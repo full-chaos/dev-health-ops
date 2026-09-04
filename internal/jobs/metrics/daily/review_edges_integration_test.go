@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/reviewedges"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -506,5 +509,105 @@ SELECT reviewer, author, org_id FROM review_edges_daily ORDER BY reviewer`)
 	}
 	if got[0].reviewer != "ReviewerA" {
 		t.Errorf("reviewer = %q, want org A's own \"ReviewerA\"", got[0].reviewer)
+	}
+}
+
+// TestReviewEdgesFinalIsDeterministicOnALastSyncedTie pins the reason this
+// family reads FINAL rather than argMax.
+//
+// Python reads these tables raw, so the dedup is something this port ADDS; an
+// added dedup on a ReplacingMergeTree uses FINAL. The property that matters is
+// behaviour on a version TIE, which is not an exotic case here -- a re-sync
+// writing several columns in one batch stamps them with the same last_synced by
+// construction. argMax is nondeterministic on a tie; FINAL keeps the
+// last-inserted row.
+//
+// The POSITIVE CONTROL is the point of this test, not decoration. A test that
+// merely observes "FINAL returned one row" proves nothing unless the same
+// fixture could have returned two -- a negative result on a setup that cannot
+// exhibit the effect is meaningless. So the control reads the SAME rows WITHOUT
+// FINAL first and asserts it sees BOTH, establishing that the collapse below is
+// doing work.
+func TestReviewEdgesFinalIsDeterministicOnALastSyncedTie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range reviewEdgesSchema {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const (
+		orgA = "00000000-0000-4000-8000-0000000000f0"
+		repo = "00000000-0000-4000-8000-0000000000f1"
+		tie  = "2026-08-24 09:00:00.000"
+	)
+
+	// Two snapshots of ONE PR with an IDENTICAL last_synced, inserted as two
+	// SEPARATE statements so "last inserted" is unambiguous -- within a single
+	// multi-row INSERT the order is an implementation detail this test must not
+	// depend on.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests
+(repo_id, number, author_name, author_email, created_at, merged_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 1, 'First', 'first@example.com', '2026-08-24 08:00:00.000', NULL, '`+tie+`', '`+orgA+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests
+(repo_id, number, author_name, author_email, created_at, merged_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 1, 'Second', 'second@example.com', '2026-08-24 08:00:00.000', NULL, '`+tie+`', '`+orgA+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	// POSITIVE CONTROL: without FINAL the same fixture yields BOTH rows. If this
+	// ever reports 1, the fixture stopped being able to exhibit a tie at all and
+	// every assertion below became vacuous -- fail loudly rather than pass.
+	var raw uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM git_pull_requests WHERE org_id = ? AND repo_id = ?`,
+		orgA, repo,
+	).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != 2 {
+		t.Fatalf(
+			"positive control: raw read returned %d row(s), want 2 -- the fixture can no "+
+				"longer exhibit a last_synced tie, so this test proves nothing", raw,
+		)
+	}
+
+	// FINAL collapses the tie to exactly one row, and keeps the LAST inserted.
+	loader, err := reviewedges.NewClickHouseLoader(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	prs, err := loader.LoadPullRequests(ctx, orgA, []uuid.UUID{uuid.MustParse(repo)}, start, start.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("FINAL returned %d row(s) %+v, want exactly 1", len(prs), prs)
+	}
+	if prs[0].AuthorEmail != "second@example.com" {
+		t.Errorf(
+			"FINAL kept author_email %q, want %q (the LAST-inserted row on an equal-version tie)",
+			prs[0].AuthorEmail, "second@example.com",
+		)
 	}
 }

@@ -34,6 +34,12 @@ import (
 const (
 	defaultContractRoot      = "contracts/jobs/v1"
 	workerFinalizationBuffer = 60 * time.Second
+
+	// reasonShutdownTimeoutBelowDrainBudget is the bounded reason code for a
+	// --shutdown-timeout below the drain-budget floor. Named so the producer,
+	// the log site, and the test assert on ONE string rather than three copies
+	// of a literal that can drift apart (CHAOS-5034).
+	reasonShutdownTimeoutBelowDrainBudget = "shutdown_timeout_below_drain_budget"
 )
 
 var errWorkerDependencyUnavailable = errors.New("worker readiness dependency is unavailable")
@@ -59,6 +65,30 @@ func (dependencyFailure) Unwrap() error { return errWorkerDependencyUnavailable 
 func (failure dependencyFailure) DependencyReason() string { return failure.reason }
 
 func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
+
+// preserveDependencyReason keeps an error that ALREADY names its own failing
+// construction site, and only attaches fallback to one that does not.
+//
+// CHAOS-5034: without this, a specific cause was flattened twice on its way out.
+// buildWorkerDependencies correctly recorded
+// `shutdown_timeout_below_drain_budget`, then queuesReady() replaced it with the
+// bare sentinel, and its caller replaced that with
+// `queue_coverage_validation_failed` -- so an operator who had merely set
+// --shutdown-timeout below the drain-budget floor was told the worker's queue
+// COVERAGE was wrong, which is a different fault with a different fix. It cost
+// an hour of diagnosis on PR #2212. Same swallowed-cause class CHAOS-4993 fixed
+// one level up, and the same preserve-don't-flatten shape cmd/dev-health-
+// scheduler/main.go already uses for errSchedulerActivationUnavailable.
+func preserveDependencyReason(err error, fallback string) error {
+	if err == nil {
+		return nil
+	}
+	var failure dependencyFailure
+	if errors.As(err, &failure) && failure.reason != "" {
+		return err
+	}
+	return dependencyUnavailable(fallback)
+}
 
 type workerDatabase interface {
 	DomainReady(context.Context) error
@@ -352,7 +382,15 @@ type workerDependencies struct {
 	reportedUnsupportedContracts string
 	shutdownGrace                time.Duration
 	workerDrainBudget            time.Duration
-	workerGroup                  string
+	// longestQueueTimeout and requiredShutdownGrace are the two numbers that
+	// decide the drain-budget contract. They are recorded even when the contract
+	// PASSES, because buildWorkerDependencies has no logger (it is assigned by
+	// its caller on the next line) -- so the failure cannot be reported where it
+	// is detected, and the caller needs the operands to say anything useful
+	// beyond a reason code. See CHAOS-5034.
+	longestQueueTimeout   time.Duration
+	requiredShutdownGrace time.Duration
+	workerGroup           string
 }
 
 type preclaimReadinessComponent struct {
@@ -765,9 +803,13 @@ func configureWorkerDependenciesWithSources(
 	dependencies.startup.Queues = active.queues
 	if len(active.handlers) > 0 || len(active.queues) > 0 {
 		if err := dependencies.queuesReady(ctx); err != nil {
+			// queuesReady now names its own fault; do not overwrite it with the
+			// coverage reason, which is only one of the three it can report
+			// (CHAOS-5034).
+			dependencies.logStartupContractFailure(err)
 			_ = closeWorkerFamily(active)
 			dependencies.close()
-			return nil, dependencyUnavailable("queue_coverage_validation_failed")
+			return nil, preserveDependencyReason(err, "queue_coverage_validation_failed")
 		}
 	}
 	// CHAOS-4029 (codex round 3, P2): re-seed the claim clock now that
@@ -1245,6 +1287,8 @@ func buildWorkerDependencies(
 	// (CHAOS-3873). An unset timeout is derived from the selection; an operator
 	// who set one explicitly still gets a hard, attributable failure.
 	requiredGrace := longestTimeout + workerFinalizationBuffer
+	dependencies.longestQueueTimeout = longestTimeout
+	dependencies.requiredShutdownGrace = requiredGrace
 	// Only an unset timeout is derived. A value the operator chose -- including
 	// one that happens to equal the default -- still fails closed, so the
 	// contract check keeps its teeth.
@@ -1253,7 +1297,7 @@ func buildWorkerDependencies(
 	}
 	dependencies.workerDrainBudget = dependencies.shutdownGrace - workerFinalizationBuffer
 	if dependencies.workerDrainBudget < longestTimeout {
-		dependencies.startupErr = dependencyUnavailable("shutdown_timeout_below_drain_budget")
+		dependencies.startupErr = dependencyUnavailable(reasonShutdownTimeoutBelowDrainBudget)
 		return dependencies
 	}
 	// Queues and Handlers stay empty here on purpose: they are filled in only by
@@ -1544,17 +1588,63 @@ func (dependencies *workerDependencies) jobRegistryReady(context.Context) error 
 	return nil
 }
 
+// logStartupContractFailure reports the OPERANDS behind a startup-contract
+// refusal, at the one place a logger exists.
+//
+// The reason code is deliberately a compile-time constant -- it must never carry
+// interpolated input, so that logging it cannot leak a DSN or a secret -- which
+// means the numbers an operator actually needs are not in it. Without them,
+// `shutdown_timeout_below_drain_budget` says the configured value is too low but
+// not what it must be raised TO, and the floor is not a constant: it is derived
+// from the longest timeout among the SELECTED queues, so it differs per
+// deployment. On PR #2212 that gap turned a one-line config fix into an hour of
+// source reading (CHAOS-5034).
+func (dependencies *workerDependencies) logStartupContractFailure(err error) {
+	if dependencies == nil || dependencies.logger == nil {
+		return
+	}
+	var failure dependencyFailure
+	if !errors.As(err, &failure) ||
+		failure.reason != reasonShutdownTimeoutBelowDrainBudget {
+		return
+	}
+	dependencies.logger.Error(
+		"worker startup contract refused the configured shutdown timeout",
+		"error_category", "dependency_configuration_failed",
+		"reason", failure.reason,
+		"configured_shutdown_timeout", dependencies.shutdownGrace.String(),
+		"required_shutdown_timeout", dependencies.requiredShutdownGrace.String(),
+		"longest_queue_timeout", dependencies.longestQueueTimeout.String(),
+		"finalization_buffer", workerFinalizationBuffer.String(),
+		"computed_drain_budget", dependencies.workerDrainBudget.String(),
+	)
+}
+
 // queuesReady is the production call site for exact startup validation. It
 // proves the registry's executable coverage, the constructed queue consumers,
 // and the deployment budget in one place, so no other readiness path can
 // approve a partially constructed queue selection.
 func (dependencies *workerDependencies) queuesReady(context.Context) error {
-	if dependencies == nil || dependencies.registryErr != nil ||
-		dependencies.runtimeRegistry == nil || dependencies.startupErr != nil {
+	if dependencies == nil || dependencies.runtimeRegistry == nil {
 		return errWorkerDependencyUnavailable
 	}
+	// Three distinct faults used to leave here as one sentinel (CHAOS-5034): a
+	// registry that never loaded, a startup contract that was already violated
+	// during construction, and genuine queue-coverage drift. Only the last is
+	// actually about queue coverage; reporting the other two as coverage
+	// failures sends an operator to the wrong knob.
+	if dependencies.registryErr != nil {
+		return preserveDependencyReason(
+			dependencies.registryErr, "worker_job_registry_unavailable",
+		)
+	}
+	if dependencies.startupErr != nil {
+		return preserveDependencyReason(
+			dependencies.startupErr, "worker_startup_contract_failed",
+		)
+	}
 	if err := dependencies.runtimeRegistry.ValidateStartup(dependencies.startup); err != nil {
-		return errWorkerDependencyUnavailable
+		return dependencyUnavailable("queue_coverage_validation_failed")
 	}
 	return nil
 }

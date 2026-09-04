@@ -2208,3 +2208,117 @@ func TestSyncRunRollupBumpedMetricAppearsExactlyOnceAcrossBothFamilies(t *testin
 		}
 	}
 }
+
+// TestQueuesReadyNamesTheShutdownTimeoutViolationNotQueueCoverage is CHAOS-5034
+// evidence. A --shutdown-timeout below the drain-budget floor was reported as
+// `queue_coverage_validation_failed`, sending an operator to the worker's queue
+// COVERAGE -- a different fault with a different fix -- while the real cause,
+// `shutdown_timeout_below_drain_budget`, was discarded twice on its way out:
+// once by queuesReady() replacing it with the bare sentinel, once by its caller
+// replacing that with the coverage reason. On PR #2212 that cost an hour.
+//
+// Asserting errors.Is(..., errWorkerDependencyUnavailable) is what let this
+// survive: every one of these faults satisfies it. The reason CODE is the only
+// thing that distinguishes them, so that is what this asserts.
+func TestQueuesReadyNamesTheShutdownTimeoutViolationNotQueueCoverage(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	dependencies := buildWorkerDependencies(context.Background(), config.Config{
+		Queues:                  []string{"coverage", "heartbeat", "retention", "webhooks"},
+		WorkerQueueConcurrency:  map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+		ShutdownTimeout:         30 * time.Second,
+		ShutdownTimeoutExplicit: true,
+	}, sources)
+	defer dependencies.close()
+
+	if dependencies.startupErr == nil {
+		t.Fatal("an explicit 30s shutdown timeout must violate the drain-budget contract")
+	}
+
+	err := dependencies.queuesReady(context.Background())
+	if err == nil {
+		t.Fatal("queuesReady() = nil, want the startup contract refusal")
+	}
+	// Still the same sentinel for every caller matching on it.
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("queuesReady() error = %v, want the dependency sentinel", err)
+	}
+
+	var failure dependencyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("queuesReady() error = %v, want a reason-carrying dependencyFailure", err)
+	}
+	if failure.DependencyReason() != reasonShutdownTimeoutBelowDrainBudget {
+		t.Fatalf(
+			"reason = %q, want %q (a coverage reason here is the CHAOS-5034 defect)",
+			failure.DependencyReason(), reasonShutdownTimeoutBelowDrainBudget,
+		)
+	}
+	if failure.DependencyReason() == "queue_coverage_validation_failed" {
+		t.Fatal("queue coverage is a different fault with a different fix")
+	}
+
+	// The operands an operator needs are not in the reason code, by design, so
+	// they must be recorded for the log site: 7200s longest + 60s buffer.
+	if dependencies.longestQueueTimeout <= 0 {
+		t.Fatalf("longestQueueTimeout = %s, want the selection's longest timeout", dependencies.longestQueueTimeout)
+	}
+	wantRequired := dependencies.longestQueueTimeout + workerFinalizationBuffer
+	if dependencies.requiredShutdownGrace != wantRequired {
+		t.Fatalf(
+			"requiredShutdownGrace = %s, want %s (longest %s + buffer %s)",
+			dependencies.requiredShutdownGrace, wantRequired,
+			dependencies.longestQueueTimeout, workerFinalizationBuffer,
+		)
+	}
+	if dependencies.shutdownGrace >= dependencies.requiredShutdownGrace {
+		t.Fatalf(
+			"configured grace %s is not below the floor %s -- the fixture no longer violates the contract",
+			dependencies.shutdownGrace, dependencies.requiredShutdownGrace,
+		)
+	}
+}
+
+// TestQueuesReadyStillReportsQueueCoverageWhenCoverageIsActuallyWrong is the
+// CONTROL for the test above: making the specific reason survive must not make
+// every failure report as a shutdown-timeout violation. Genuine coverage drift
+// must still say so.
+func TestQueuesReadyStillReportsQueueCoverageWhenCoverageIsActuallyWrong(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	dependencies := buildWorkerDependencies(context.Background(), config.Config{
+		Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+	}, sources)
+	defer dependencies.close()
+	if dependencies.startupErr != nil {
+		t.Fatalf("fixture must pass the startup contract, got %v", dependencies.startupErr)
+	}
+
+	// Constructed coverage that does not match the selection: queues declared,
+	// no handlers -- exactly what ValidateStartup exists to reject.
+	dependencies.startup.Queues = []jobruntime.QueueBudget{{Queue: "coverage", MaxWorkers: 1}}
+	dependencies.startup.Handlers = nil
+
+	err := dependencies.queuesReady(context.Background())
+	if err == nil {
+		t.Fatal("queuesReady() = nil, want a coverage refusal")
+	}
+	var failure dependencyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("queuesReady() error = %v, want a reason-carrying dependencyFailure", err)
+	}
+	if failure.DependencyReason() != "queue_coverage_validation_failed" {
+		t.Fatalf(
+			"reason = %q, want queue_coverage_validation_failed; the CHAOS-5034 fix must not "+
+				"relabel genuine coverage drift",
+			failure.DependencyReason(),
+		)
+	}
+}

@@ -51,6 +51,25 @@ const (
 
 func ptr(value float64) *float64 { return &value }
 
+// opaque defeats constant folding. Go evaluates untyped constant arithmetic at
+// arbitrary precision AT COMPILE TIME, so a float64 expression built entirely
+// from literals can be folded to a correctly-rounded result that the running
+// CPU never computes. A test that feeds literals therefore cannot observe an
+// arm64 FMA contraction at all: it passes whether or not the rounding barriers
+// in compute.go are present, which makes it a test of nothing.
+//
+// This is not hypothetical. An earlier probe in this lane compared four
+// barrier variants and reported all four as matching -- the folding hid every
+// difference. Re-running with //go:noinline inputs separated them immediately.
+//
+//go:noinline
+func opaque(value float64) float64 { return value }
+
+// opaquePtr is opaque for the pointer-valued Inputs fields.
+//
+//go:noinline
+func opaquePtr(value float64) *float64 { return &value }
+
 // goldenCases mirrors the Python generator's CASES list -- same order, same
 // values. Any divergence here is a test bug, and the frozen-golden comparison
 // below is what catches it: a case present in one list and not the other shows
@@ -202,12 +221,16 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 // float64 conversions -- so dropping a barrier in compute.go reddens this test
 // on arm64 even if the frozen golden happened to pick benign inputs.
 func TestWeightedSumIsSeparatelyRoundedNotFused(t *testing.T) {
+	// opaquePtr, NOT ptr: with plain literals the compiler folds the whole
+	// weighted sum at arbitrary precision and this test can never see an FMA
+	// contraction. See opaque's comment -- a four-variant probe using literals
+	// reported all four variants identical.
 	inputs := Inputs{
-		ReworkChurn:       ptr(0.1234567890123457),
-		ComplexityDelta:   ptr(0.0987654321098765),
-		ReviewLatencyP90H: ptr(17.371717171717171),
-		SingleOwnerRatio:  ptr(0.3141592653589793),
-		OwnershipGini:     ptr(0.2718281828459045),
+		ReworkChurn:       opaquePtr(0.1234567890123457),
+		ComplexityDelta:   opaquePtr(0.0987654321098765),
+		ReviewLatencyP90H: opaquePtr(17.371717171717171),
+		SingleOwnerRatio:  opaquePtr(0.3141592653589793),
+		OwnershipGini:     opaquePtr(0.2718281828459045),
 	}
 	record := Compute(
 		goldenDay(), "repo", "org", inputs, goldenStamp(),

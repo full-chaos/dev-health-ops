@@ -33,10 +33,11 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 
 // DEDUP, AND WHY IT CHANGES NUMBERS (read before comparing against Python).
 //
-// Both source tables are ReplacingMergeTree(last_synced), and Python's
-// load_git_rows queries them RAW: no FINAL, no argMax, no ORDER BY
-// (loaders/clickhouse.py:283-320). That has two consequences Python lives with
-// today:
+// Both source tables are ReplacingMergeTree(last_synced) -- git_pull_requests
+// and git_pull_request_reviews, 000_raw_tables.sql:61 and :86, rekeyed by
+// migration 027 to lead with org_id. Python's load_git_rows queries them RAW:
+// no FINAL, no argMax, no ORDER BY (loaders/clickhouse.py:283-320). That has
+// two consequences Python lives with today:
 //
 //   - PR rows: `pr_author_map[(repo_id, number)] = ...` is a last-write-wins
 //     dict assignment over an UNORDERED result set, so on a re-synced PR the
@@ -44,55 +45,56 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 //   - REVIEW rows: every raw row is counted, so a re-synced review is counted
 //     TWICE and inflates reviews_count.
 //
-// These queries deduplicate with `argMax(tuple(...), last_synced) GROUP BY <the
-// table's own ORDER BY key>` -- never FINAL under aggregation (CHAOS-5045).
+// # WHY FINAL AND NOT argMax
 //
-// That makes the PR author deterministic and stops the review double-count.
-// The second one is a genuine behaviour change: for an org with re-ingested
-// reviews, native reviews_count is LOWER than Python's, and correct. Recorded
-// in RISK-NOTES rather than smuggled in.
+// Python reads raw, so the dedup below is something this port ADDS rather than
+// mirrors. An ADDED dedup on a ReplacingMergeTree table uses FINAL, not argMax
+// (fleet rule, three arms: mirror Python's FINAL; an ADDED dedup is FINAL; a
+// plain-MergeTree table or a Python argMax is mirrored as-is and disclosed).
 //
-// # ONE argMax OVER A TUPLE, NOT N INDEPENDENT argMax CALLS
+// The reason is determinism on a version TIE, and ties are not exotic here: a
+// re-sync that writes several columns in one batch stamps them with the same
+// last_synced BY CONSTRUCTION. On such a tie:
 //
-// Several argMax aggregates over the same GROUP BY each choose their own
-// winning row independently, and on a last_synced TIE they can choose
-// DIFFERENT ones -- synthesising a "Frankenstein" row that never existed in the
-// table, e.g. an author_email from one snapshot beside an author_name from
-// another. Ties are not exotic here: a re-sync that writes several columns in
-// one batch stamps them with the same last_synced by construction.
+//   - argMax picks nondeterministically -- and several argMax aggregates over
+//     one GROUP BY each pick INDEPENDENTLY, so they can assemble a
+//     "Frankenstein" row that never existed in the table (an author_email from
+//     one snapshot beside an author_name from another). Collapsing them into a
+//     single argMax(tuple(...)) fixes the Frankenstein half but leaves WHICH
+//     row wins undefined.
+//   - FINAL is deterministic: the last-inserted row wins, and it wins for the
+//     whole row at once, so the Frankenstein class cannot arise either.
 //
-// Packing the columns into a single argMax(tuple(...)) makes ONE row win for
-// all of them, and tupleElement unpacks it. The window predicate reads its
-// columns out of the same tuple for the same reason -- filtering on an
-// independently-argMax'd created_at could admit a PR on one snapshot's
-// timestamps while reporting another snapshot's author.
+// FINAL is also what the table's own background merge will eventually do, so
+// this read agrees with the table's settled state instead of racing it.
 //
-// Rule found by lane-port-ai-families; applied across this lane.
+// This does NOT weaken the double-count fix: FINAL collapses a re-synced review
+// to one row exactly as the argMax form did, and
+// TestReviewEdgesComputeFamilyDeduplicatesResyncedRows still pins it, now
+// alongside an identical-last_synced tie case with a positive control.
 //
-// The compute itself is untouched by this, which is why the frozen golden
-// still compares bit-exact: the golden feeds identical rows to both sides, and
-// the divergence lives entirely in WHICH rows the loader hands over. Only the
-// integration test can see it, and it pins it.
+// The behaviour change against Python stands and is deliberate: for an org with
+// re-ingested reviews, native reviews_count is LOWER than Python's, and
+// correct. Recorded in RISK-NOTES rather than smuggled in.
+//
+// The window predicate stays AFTER the dedup -- with FINAL the WHERE applies to
+// the collapsed row, so a PR is admitted on its WINNING snapshot's timestamps
+// and reported with that same snapshot's author. Filtering pre-dedup could
+// admit a row on a stale snapshot's created_at.
+
 const pullRequestsQuery = `
 SELECT
     repo_id,
     number,
-    tupleElement(latest, 1) AS author_email,
-    tupleElement(latest, 2) AS author_name
-FROM (
-    SELECT
-        repo_id,
-        number,
-        argMax(tuple(author_email, author_name, created_at, merged_at), last_synced) AS latest
-    FROM git_pull_requests
-    WHERE repo_id IN {repo_ids:Array(UUID)}
-      AND org_id = {org_id:String}
-    GROUP BY org_id, repo_id, number
-)
-WHERE (tupleElement(latest, 3) >= {start:DateTime64(3, 'UTC')} AND tupleElement(latest, 3) < {end:DateTime64(3, 'UTC')})
-   OR (tupleElement(latest, 4) IS NOT NULL
-       AND tupleElement(latest, 4) >= {start:DateTime64(3, 'UTC')}
-       AND tupleElement(latest, 4) < {end:DateTime64(3, 'UTC')})
+    author_email,
+    author_name
+FROM git_pull_requests FINAL
+WHERE repo_id IN {repo_ids:Array(UUID)}
+  AND org_id = {org_id:String}
+  AND ((created_at >= {start:DateTime64(3, 'UTC')} AND created_at < {end:DateTime64(3, 'UTC')})
+    OR (merged_at IS NOT NULL
+        AND merged_at >= {start:DateTime64(3, 'UTC')}
+        AND merged_at < {end:DateTime64(3, 'UTC')}))
 ORDER BY repo_id, number`
 
 // LoadPullRequests returns the day's PR rows, deduplicated and ordered.
@@ -156,21 +158,13 @@ const reviewsQuery = `
 SELECT
     repo_id,
     number,
-    tupleElement(latest, 1) AS reviewer,
-    tupleElement(latest, 2) AS submitted_at
-FROM (
-    SELECT
-        repo_id,
-        number,
-        review_id,
-        argMax(tuple(reviewer, submitted_at), last_synced) AS latest
-    FROM git_pull_request_reviews
-    WHERE repo_id IN {repo_ids:Array(UUID)}
-      AND org_id = {org_id:String}
-    GROUP BY org_id, repo_id, number, review_id
-)
-WHERE tupleElement(latest, 2) >= {start:DateTime64(3, 'UTC')}
-  AND tupleElement(latest, 2) < {end:DateTime64(3, 'UTC')}
+    reviewer,
+    submitted_at
+FROM git_pull_request_reviews FINAL
+WHERE repo_id IN {repo_ids:Array(UUID)}
+  AND org_id = {org_id:String}
+  AND submitted_at >= {start:DateTime64(3, 'UTC')}
+  AND submitted_at < {end:DateTime64(3, 'UTC')}
 ORDER BY repo_id, number, review_id`
 
 // LoadReviews returns the day's review rows, deduplicated and ordered.

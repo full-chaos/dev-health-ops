@@ -292,6 +292,9 @@ type Dispatcher struct {
 	store      Store
 	publisher  Publisher
 	discoverer RepositoryDiscoverer
+	// blockedObserver counts CHAOS-5040 blocked-run marker transitions.
+	// Optional: nil is a silent no-op.
+	blockedObserver jobruntime.DailyMetricsBlockedRunObserver
 }
 
 func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscoverer) (*Dispatcher, error) {
@@ -299,6 +302,58 @@ func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscov
 		return nil, ErrUnavailable
 	}
 	return &Dispatcher{store: store, publisher: publisher, discoverer: discoverer}, nil
+}
+
+// SetBlockedRunObserver attaches the CHAOS-5040 blocked-run counters. Nil is
+// a silent no-op, matching every other observer here.
+func (handler *Dispatcher) SetBlockedRunObserver(observer jobruntime.DailyMetricsBlockedRunObserver) {
+	if handler != nil {
+		handler.blockedObserver = observer
+	}
+}
+
+// blockedRunReconciler is the narrow, OPTIONAL capability the dispatch
+// fan-out uses to keep the blocked marker current. It is deliberately NOT on
+// the Store interface: this is a visibility concern, and putting it there
+// would force every implementation -- including the test fakes that have
+// nothing to do with it -- to carry a method they never call. The type
+// assertion below mirrors how the observers in this package are wired.
+type blockedRunReconciler interface {
+	ReconcileBlockedRuns(ctx context.Context, orgID string) (BlockedReconcileOutcome, error)
+}
+
+// reconcileBlockedRuns keeps this organization's blocked markers in step with
+// live partition state. It runs at the END of the fan-out and is FAIL-OPEN by
+// construction: the marker exists to make a wedged run visible, and a
+// visibility mechanism must never be able to fail the job that computes the
+// day's metrics. Every error path here returns without touching the caller's
+// result -- the same rule the lease observers in this package follow, for the
+// same reason.
+//
+// This is the periodic tick. The daily fan-out is genuinely scheduled
+// (fixed-scheduler entry daily_metrics_fanout, DailyAt(1, 0), per
+// organization), whereas the stranded-finalize sweep it might otherwise have
+// hung off is NOT periodic -- FindStrandedFinalizeRuns has exactly one
+// non-test caller, the workerctl CLI, so hanging this off it would mean a
+// wedged run only becomes visible once an operator already went looking,
+// which is the situation the marker exists to end.
+func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizationID string) {
+	reconciler, ok := handler.store.(blockedRunReconciler)
+	if !ok {
+		return
+	}
+	outcome, err := reconciler.ReconcileBlockedRuns(ctx, organizationID)
+	if err != nil {
+		return
+	}
+	if handler.blockedObserver == nil {
+		return
+	}
+	// Both are reported every pass, including zeros: a series that
+	// disappears when nothing changed cannot be told apart from a reconcile
+	// that stopped running.
+	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("marked", outcome.Marked)
+	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("cleared", outcome.Cleared)
 }
 
 func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsDispatchArgs]) error {
@@ -346,6 +401,8 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 			return jobruntime.Retryable(err)
 		}
 	}
+	// Last, so it can never affect what this job actually had to do.
+	handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	return nil
 }
 

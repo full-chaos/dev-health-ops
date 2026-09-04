@@ -150,6 +150,25 @@ WHERE partition.run_id = run.id
 	}
 	outcome.PermanentReset = int(resetCommand.RowsAffected())
 
+	// Clear the CHAOS-5040 blocked marker for the runs this pass just made
+	// live again. This is NOT a second definition of "blocked": step 1 above
+	// has, by construction, given every run it touched at least one
+	// dispatchable ('failed') partition, so the predicate is now false for
+	// exactly these runs. Doing it here rather than waiting for the next
+	// daily reconcile is a latency optimisation -- without it an operator who
+	// redrives would still see the run reported blocked until the next
+	// fan-out, and would reasonably conclude the redrive had not worked. The
+	// periodic reconcile remains the backstop and the source of truth; if
+	// this statement were removed entirely the marker would still be correct
+	// by the next pass.
+	if _, err := tx.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET blocked_at = NULL, blocked_reason = NULL, updated_at = $1
+WHERE org_id = $2::uuid AND target_day BETWEEN $3 AND $4
+  AND status = 'running' AND blocked_at IS NOT NULL`, now, orgID, from, to); err != nil {
+		return outcome, ErrUnavailable
+	}
+
 	// Step 2: every dispatchable (pending/failed) partition in scope --
 	// including partitions this pass just reset in step 1, and any partition
 	// that already sat 'failed' unreachable because nothing had ever

@@ -168,6 +168,12 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				// CHAOS-5040: the fan-out is the only genuinely periodic,
+				// per-organization thing in this family, so it is where the
+				// blocked-run marker is kept current.
+				if blockedObserver, ok := observer.(jobruntime.DailyMetricsBlockedRunObserver); ok {
+					handler.SetBlockedRunObserver(blockedObserver)
+				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsDispatchArgs](
 					registry, spec, handler, dailyDependencies,
 				)

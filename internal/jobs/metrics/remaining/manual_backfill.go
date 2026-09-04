@@ -51,17 +51,51 @@ var ErrManualBackfillGenerationExhausted = errors.New(
 // ErrUnsupportedManualBackfillFamily is returned for a family this command
 // has no day-scoped default partition scope for.
 var ErrUnsupportedManualBackfillFamily = errors.New(
-	"remaining metrics family is not day-scoped for manual backfill (supported: dora, complexity, release_impact)",
+	"remaining metrics family is not day-scoped for manual backfill (supported: dora, complexity, release_impact, work_item_attribution)",
 )
 
-// ManualBackfillDayScopedFamilies lists the families StartManualBackfillRun
-// accepts, in the stable order the CLI prints them in help text. capacity,
-// recommendations, and membership_backfill are valid remaining-metrics
-// families (families.json) but their scopes are not day-keyed (capacity
-// needs a GenerationSeed; recommendations/membership_backfill scope by
-// window/repo set, not a calendar day), so a "--day" backfill has no
-// well-defined meaning for them.
+// ManualBackfillDayScopedFamilies lists the families the `metrics remaining
+// start` CLI verb accepts, in the stable order it prints them in help text.
+// capacity, recommendations, and membership_backfill are valid
+// remaining-metrics families (families.json) but their scopes are not
+// day-keyed (capacity needs a GenerationSeed; recommendations/
+// membership_backfill scope by window/repo set, not a calendar day), so a
+// "--day" backfill has no well-defined meaning for them.
+//
+// work_item_attribution (CHAOS-5016) is deliberately NOT listed here even
+// though manualBackfillDayScope (below) supports it: `start`'s readback_hint
+// assumes every family's writes table has a "day" column
+// (manualBackfillReadbackTable, cmd/dev-health-workerctl/main.go) which is
+// true for complexity/dora/release_impact but false for
+// work_item_attribution's own tables (work_item_team_attributions and
+// work_item_attribution_backstop_runs are keyed on computed_at/completed_at,
+// no day column at all). It is reachable only through the purpose-built
+// `metrics remaining trigger-backstop` verb instead (ManualBackstopTriggerFamilies
+// below), which builds its own correct readback hint.
 var ManualBackfillDayScopedFamilies = []string{"complexity", "dora", "release_impact"}
+
+// ManualBackstopTriggerFamilies lists the families `metrics remaining
+// trigger-backstop` (CHAOS-5016) accepts -- deliberately its OWN, narrower
+// list, not an alias for ManualBackfillDayScopedFamilies above.
+//
+// trigger-backstop exists specifically to allow --day=today (behind an
+// explicit --today flag), which `metrics remaining start` refuses for every
+// family in ManualBackfillDayScopedFamilies (main.go's dispatchMetricsRemaining,
+// "today itself is ALSO excluded" -- a real P1 fix for a proven dora race:
+// dora's post-sync and fixed-schedule triggers both target ONLY the current
+// UTC day, so a same-day manual run can commit and release its advisory lock
+// before an automatic trigger starts a separate generation for the identical
+// day, and both eventually execute and append duplicate rows).
+// work_item_attribution has no such race -- its Scope carries no day-window
+// at all (manualBackfillDayScope's case above), ComputeOrg is watermark-
+// driven and safely re-entrant (a second call before the first's marker
+// commits just recomputes the same still-detected scope), and its day is
+// only ever a run/partition dedup label. Extending this list to a NEW family
+// requires the same "no per-day computation window, watermark-driven,
+// re-entrant" review this comment documents for work_item_attribution --
+// never just alias it to ManualBackfillDayScopedFamilies wholesale, or
+// dora's excluded-today race reopens through this verb.
+var ManualBackstopTriggerFamilies = []string{"work_item_attribution"}
 
 // manualBackfillDayScope builds a day-scoped family's default partition
 // scope for a single day, byte-for-byte matching the field values
@@ -70,6 +104,17 @@ var ManualBackfillDayScopedFamilies = []string{"complexity", "dora", "release_im
 // release_impact's recomputation_window_days=7) -- so a manually started
 // partition is indistinguishable, once dispatched, from one the fixed
 // schedule would have created for that day.
+//
+// work_item_attribution (CHAOS-5016) is the one case here whose returned
+// scope does NOT embed day at all: producers.go's
+// work_item_attribution_daily_fanout binding always builds the same static
+// {"version":1,"org_wide":true} placeholder, because
+// WorkItemAttributionExecutor.ComputeOrg (work_item_attribution_native_clickhouse.go)
+// takes only an org id and derives its own affected set from the
+// work_item_attribution_backstop_runs watermark at call time -- the day
+// argument here is used ONLY as this run's ScopeKey (run/partition identity
+// and findManualBackfillBlocker's coverage key), never as a computation
+// window. day is intentionally unused in this branch, not a bug.
 func manualBackfillDayScope(family, day string) (json.RawMessage, error) {
 	switch family {
 	case "dora":
@@ -86,6 +131,8 @@ func manualBackfillDayScope(family, day string) (json.RawMessage, error) {
 			"version": 1, "day": day, "backfill_days": 1,
 			"recomputation_window_days": 7,
 		})
+	case "work_item_attribution":
+		return json.Marshal(map[string]any{"version": 1, "org_wide": true})
 	default:
 		return nil, ErrUnsupportedManualBackfillFamily
 	}
@@ -345,6 +392,19 @@ const (
 // Bounded to anchors in [day, day+maxDayScopedBackfillDays-1] so this stays
 // a targeted range read on the (org_id, family) index shape, not a full
 // per-organization table scan.
+//
+// Keyed on run.scope_key rather than partition.scope->>'day': every day-scoped
+// family's fixed-schedule/manual-backfill run sets ScopeKey to the same day
+// string it (may) also embed in the partition scope
+// (RemainingMetricsFanoutProducer.Produce and StartManualBackfillRun both set
+// ScopeKey: day unconditionally, for every family), so this is behavior-
+// preserving for dora/complexity/release_impact. work_item_attribution
+// (CHAOS-5016) is the reason it changed: its scope is the static
+// {"version":1,"org_wide":true} placeholder with no "day" field at all, so
+// partition.scope->>'day' reads NULL for it and would silently exclude every
+// one of its rows from this query -- a coverage check that never finds
+// anything covered defeats the whole point of asking. run.scope_key exists
+// for every family and is never null, so this one change covers both.
 func (store *PostgresStore) findManualBackfillBlocker(
 	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string,
 ) (runID string, reason blockReason, err error) {
@@ -354,13 +414,13 @@ func (store *PostgresStore) findManualBackfillBlocker(
 	}
 	upperBound := requested.AddDate(0, 0, maxDayScopedBackfillDays-1).Format("2006-01-02")
 	rows, err := tx.Query(ctx, `
-SELECT run.id::text, run.generation, run.status, partition.status, partition.scope->>'day',
+SELECT run.id::text, run.generation, run.status, partition.status, run.scope_key,
        coalesce((partition.scope->>'backfill_days')::int, 1), partition.output_evidence
 FROM public.remaining_metric_partitions AS partition
 JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
   AND run.status IN ('pending', 'running', 'succeeded')
-  AND partition.scope->>'day' >= $3 AND partition.scope->>'day' <= $4`,
+  AND run.scope_key >= $3 AND run.scope_key <= $4`,
 		organizationID, family, day, upperBound,
 	)
 	if err != nil {

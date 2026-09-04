@@ -14,20 +14,47 @@ import (
 
 // The dedup rule for every reader in this file, stated once.
 //
-// Each source table is a ReplacingMergeTree(last_synced), so `FINAL` and
-// `argMax(..., last_synced) GROUP BY <the table's exact ORDER BY key>` select
+// Each source table is a ReplacingMergeTree, so `FINAL` and
+// `argMax(..., <version>) GROUP BY <the table's CURRENT sorting key>` select
 // the same row -- but argMax does it merge-independently, which is why the
 // standing rule prefers it and forbids FINAL underneath an aggregation.
 //
-// EVERY dedup below takes ONE argMax over a tuple and unwraps it with
-// tupleElement. One argMax PER COLUMN is wrong: two aggregates over the same
-// GROUP BY resolve ties independently, so on a shared last_synced they can
-// take values from DIFFERENT physical rows and emit a row that never existed.
-// This file was written after that defect was found in
-// ai_governance_native_clickhouse.go; see that file's doc comment and
-// TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie for the full account.
-// The tuple form also preserves NULLs, which a bare argMax over a Nullable
-// column silently skips.
+// # THE GROUP BY IS THE CURRENT SORTING KEY, AND IT STARTS WITH org_id
+//
+//	git_pull_requests         (org_id, repo_id, number)             027:63
+//	git_pull_request_reviews  (org_id, repo_id, number, review_id)  027:64
+//	teams                     (org_id, id)                          027
+//	repos                     (org_id, id)                          027
+//
+// Read those from 027_add_org_id_to_sorting_keys.py and
+// 042_rmt_org_id_dedup_keys.py, which REBUILT these tables. The CREATE
+// statements in 000_raw_tables.sql / 002_teams.sql are stale for all of them,
+// and migration 024's note that org_id is "not part of the sorting key" was
+// true when written and is now false.
+//
+// This matters because two orgs legitimately share a repo_id. A GROUP BY that
+// omits org_id makes argMax pick the newest row ACROSS TENANTS, and the org
+// filter then misses -- one tenant's PR silently answers for another's. The
+// sibling ai_governance loader shipped exactly that defect and codex round 1
+// on #2229 caught it; these readers had it too, in three places.
+//
+// With org_id in the group, the org filter sits BEFORE the dedup: other
+// tenants form different groups, so filtering early is the same answer and
+// prunes the scan.
+//
+// # ONE argMax OVER A TUPLE WHEN MORE THAN ONE NON-KEY COLUMN
+//
+// Two aggregates over the same GROUP BY resolve ties INDEPENDENTLY: on a
+// shared version column one can take its value from row A while another takes
+// row B, emitting a row that never existed. Where a dedup projects more than
+// one non-key column -- as the PR, review and teams readers do -- take a
+// SINGLE argMax over a tuple and unwrap with tupleElement (discover_repos'
+// shape for CHAOS-2787, job_daily.py:176-189). The tuple also preserves NULLs,
+// which a bare argMax over a Nullable column silently skips.
+//
+// org_id is deliberately NOT in those tuples any more: it is a group key now,
+// so carrying it as a projection would be redundant and would re-suggest the
+// filter-after-dedup shape that the wrong key made necessary.
 
 // LoadAIImpactPullRequests reads the PR rows compute_ai_impact_metrics_daily
 // consumes, over Python's window: created_at in [start, end) OR merged_at
@@ -62,27 +89,25 @@ FROM (
         tupleElement(latest, 4) AS changes_requested_count,
         tupleElement(latest, 5) AS additions,
         tupleElement(latest, 6) AS deletions,
-        tupleElement(latest, 7) AS changed_files,
-        tupleElement(latest, 8) AS org_id
+        tupleElement(latest, 7) AS changed_files
     FROM (
         SELECT
             repo_id,
             number,
             argMax(
                 tuple(created_at, merged_at, reviews_count, changes_requested_count,
-                      additions, deletions, changed_files, org_id),
+                      additions, deletions, changed_files),
                 last_synced
             ) AS latest
         FROM git_pull_requests
-        WHERE repo_id IN ?
-        GROUP BY repo_id, number
+        WHERE org_id = ? AND repo_id IN ?
+        GROUP BY org_id, repo_id, number
     )
 )
-WHERE org_id = ?
-  AND ((created_at >= ? AND created_at < ?)
+WHERE ((created_at >= ? AND created_at < ?)
     OR (merged_at IS NOT NULL AND merged_at >= ? AND merged_at < ?))
 ORDER BY repo_id, number`,
-		repositoryUUIDStrings(repoIDs), organizationID,
+		organizationID, repositoryUUIDStrings(repoIDs),
 		start.UTC(), end.UTC(), start.UTC(), end.UTC(),
 	)
 	if err != nil {
@@ -147,22 +172,21 @@ FROM (
         number,
         review_id,
         tupleElement(latest, 1) AS state,
-        tupleElement(latest, 2) AS submitted_at,
-        tupleElement(latest, 3) AS org_id
+        tupleElement(latest, 2) AS submitted_at
     FROM (
         SELECT
             repo_id,
             number,
             review_id,
-            argMax(tuple(state, submitted_at, org_id), last_synced) AS latest
+            argMax(tuple(state, submitted_at), last_synced) AS latest
         FROM git_pull_request_reviews
-        WHERE repo_id IN ?
-        GROUP BY repo_id, number, review_id
+        WHERE org_id = ? AND repo_id IN ?
+        GROUP BY org_id, repo_id, number, review_id
     )
 )
-WHERE org_id = ? AND submitted_at >= ? AND submitted_at < ?
+WHERE submitted_at >= ? AND submitted_at < ?
 ORDER BY repo_id, number, review_id`,
-		repositoryUUIDStrings(repoIDs), organizationID, start.UTC(), end.UTC(),
+		organizationID, repositoryUUIDStrings(repoIDs), start.UTC(), end.UTC(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load ai impact reviews: %w", err)
@@ -406,15 +430,15 @@ FROM (
         id,
         tupleElement(latest, 1) AS name,
         tupleElement(latest, 2) AS repo_patterns,
-        tupleElement(latest, 3) AS is_active,
-        tupleElement(latest, 4) AS org_id
+        tupleElement(latest, 3) AS is_active
     FROM (
-        SELECT id, argMax(tuple(name, repo_patterns, is_active, org_id), updated_at) AS latest
+        SELECT id, argMax(tuple(name, repo_patterns, is_active), updated_at) AS latest
         FROM teams
-        GROUP BY id
+        WHERE org_id = ?
+        GROUP BY org_id, id
     )
 )
-WHERE org_id = ? AND is_active = 1
+WHERE is_active = 1
 ORDER BY id`, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("load ai impact teams: %w", err)

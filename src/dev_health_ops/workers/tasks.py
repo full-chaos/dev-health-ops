@@ -2,6 +2,7 @@ import dev_health_ops.workers.external_ingest_recompute  # noqa: F401
 from dev_health_ops.workers.external_ingest_reconciler import (
     prune_external_ingest_batches,
 )
+from dev_health_ops.workers.metrics_daily import run_daily_metrics
 from dev_health_ops.workers.queue_monitor import monitor_queue_depths
 from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
 from dev_health_ops.workers.report_task import execute_saved_report
@@ -53,6 +54,7 @@ __all__ = [
     "prune_external_ingest_batches",
     "prune_rate_limit_observations",
     "reconcile_sync_dispatch",
+    "run_daily_metrics",
     "run_investment_materialize",
     "run_investment_materialize_chunk",
     "finalize_investment_materialize_partitioned",

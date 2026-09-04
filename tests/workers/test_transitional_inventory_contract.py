@@ -90,15 +90,22 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # daily backstop, no Celery predecessor) -- every registry_kind row from
     # operational.billing_notification onward re-anchored +32 lines to match
     # the new kind's own object shifting registry.json.
-    # = 102, - 4 removed under CHAOS-4439: the celery_task rows for
-    # run_daily_metrics (metrics_daily.py), run_complexity_job and
-    # run_dora_metrics (metrics_extra.py), and sync_team_drift
-    # (team_drift_sync.py). All three modules were dead Celery-only code
-    # with zero production callers (absent from beat_schedule, absent from
-    # the ask-dev acceptance Celery fleet) and were deleted outright, along
-    # with their dedicated test files; no re-anchor target exists because
-    # nothing still imports them.
-    assert inventory["row_count"] == 98
+    # = 102, - 3 removed under CHAOS-4439: the celery_task rows for
+    # run_complexity_job and run_dora_metrics (metrics_extra.py), and
+    # sync_team_drift (team_drift_sync.py). All three surfaces were dead
+    # Celery-only code with zero production callers (absent from
+    # beat_schedule, absent from the ask-dev acceptance Celery fleet) and
+    # were deleted outright, along with their dedicated test files; no
+    # re-anchor target exists because nothing still imports them.
+    # run_daily_metrics (metrics_daily.py) was in CHAOS-4439's original
+    # scope too but a peer read (PR #2237, lane-5006-provider-kind) found a
+    # live producer: external_ingest/recompute.py still dispatches it by
+    # task-name string (celery.chain fan-out + send_task fallback) that the
+    # ticket's own deletion evidence wrongly claimed was already rewritten
+    # to CUT-11. Its row is kept, unchanged in count effect (still counted),
+    # with deletion_evidence_requirement corrected to name the real blocker.
+    # = 99.
+    assert inventory["row_count"] == 99
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

@@ -1597,10 +1597,28 @@ metrics_readback() {
   # cicd/deployments/incidents/tests seeding never touches git data at all.
   # CLICKHOUSE_URI in the environment, not --clickhouse-uri in argv: same
   # reason as --sink above. assert_metrics_executed_proof.py reads the env.
+  # CHAOS-4794: cicd/deploy/.../file_hotspots are REPO_DAY_FAMILIES entries
+  # only -- this list never included a TEAM_DAY_FAMILIES entry, missing
+  # team_wellbeing (CHAOS-4276) since it landed and now also work_item_state
+  # (CHAOS-4278). Both are computed by the `metrics daily --backfill 7` call
+  # above already (compute_team_wellbeing_metrics_daily and
+  # compute_work_item_state_durations_daily both run in-process inside
+  # compute_daily_metrics, using the work_items/transitions `fixtures
+  # generate` seeds unconditionally -- see generate_work_item_transitions in
+  # fixtures/runner.py), so no extra seeding/compute call is needed here.
+  # team_cognitive_load and recommendations (the other two TEAM_DAY_FAMILIES
+  # entries) are deliberately NOT added: team_cognitive_load resolves team_id
+  # from repo ownership only and this fixture org has none configured, so it
+  # legitimately writes zero rows here (not a proof failure, but
+  # assert_metrics_executed_proof.py's team_readback treats zero as a hard
+  # FAIL with no carve-out) -- and recommendations isn't computed by `metrics
+  # daily` at all (separate `recommendations compute` CLI, no seeding call
+  # exists in this stage). Adding either would break this stage on a
+  # non-defect.
   CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
     --org-id "${METRICS_READBACK_ORG_ID}" \
     --run-start "${run_start}" \
-    --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots
+    --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots team_wellbeing work_item_state
 }
 
 print_summary() {

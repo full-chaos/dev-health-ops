@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -163,8 +162,11 @@ func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr 
 	}
 	// Same friction-by-design bar as `metrics daily-redrive`
 	// (main.go:797-814): no default, no generic hardcoded string, the
-	// operator states in their own words what they verified.
-	if strings.TrimSpace(*reviewEvidence) == "" {
+	// operator states in their own words what they verified. codex round 1,
+	// P2: also bounded to the bridge's own 2048-byte limit (worker_workgraph.py
+	// RepairRequest.review_evidence) so an overlong value fails locally
+	// instead of reaching the bridge only to 422.
+	if !validateReviewEvidence(*reviewEvidence) {
 		return writeError(stderr, "invalid_request")
 	}
 	payload := map[string]any{
@@ -177,8 +179,8 @@ func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr 
 		if trimmedOutputEvidence == "" {
 			return writeError(stderr, "invalid_request")
 		}
-		var evidence map[string]any
-		if err := json.Unmarshal([]byte(trimmedOutputEvidence), &evidence); err != nil {
+		evidence, err := parseOutputEvidence(trimmedOutputEvidence)
+		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
 		payload["output_evidence"] = evidence

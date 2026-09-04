@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -52,8 +51,10 @@ func dispatchMetricsExecutionRepair(ctx context.Context, args []string, stdout, 
 		return writeError(stderr, "invalid_request")
 	}
 	// Same friction-by-design bar as `metrics daily-redrive` and `workgraph
-	// repair`: no default, no generic hardcoded string.
-	if strings.TrimSpace(*reviewEvidence) == "" {
+	// repair`: no default, no generic hardcoded string. codex round 1, P2:
+	// also bounded to the bridge's own 2048-byte limit (worker_metrics.py
+	// MetricExecutionRepairRequest.review_evidence).
+	if !validateReviewEvidence(*reviewEvidence) {
 		return writeError(stderr, "invalid_request")
 	}
 	payload := map[string]any{
@@ -67,8 +68,8 @@ func dispatchMetricsExecutionRepair(ctx context.Context, args []string, stdout, 
 		if trimmedOutputEvidence == "" {
 			return writeError(stderr, "invalid_request")
 		}
-		var evidence map[string]any
-		if err := json.Unmarshal([]byte(trimmedOutputEvidence), &evidence); err != nil {
+		evidence, err := parseOutputEvidence(trimmedOutputEvidence)
+		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
 		payload["output_evidence"] = evidence

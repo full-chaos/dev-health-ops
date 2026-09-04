@@ -523,3 +523,115 @@ func TestPostWorkerBridgeReturnsStatusAndBodyOnNon2xxWithoutError(t *testing.T) 
 		t.Fatalf("body = %v, want the decoded conflict detail", body)
 	}
 }
+
+// TestPostWorkerBridgeErrorsOnAnUndecodableBody is codex round 1's P1
+// red-first proof: a malformed/truncated 200 body must be a hard Go error,
+// never silently substituted with a decodable-looking map a caller's
+// type-asserted reads (redriveDailyMetricsLedgerChunk's
+// chunkResult["repaired"].(float64), comma-ok) can mistake for
+// {repaired:0, skipped_claim_active:0} -- which previously let
+// dispatchMetrics proceed to redrive partitions against an unrepaired
+// ledger, exactly the CHAOS-4304 hazard the gate exists to prevent.
+func TestPostWorkerBridgeErrorsOnAnUndecodableBody(t *testing.T) {
+	fake := newFakeBridge(t, http.StatusOK, `not-json`)
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
+	_, body, err := postWorkerBridge(context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	if err == nil {
+		t.Fatalf("postWorkerBridge on an undecodable 200 body = nil error, want an error; body=%v", body)
+	}
+}
+
+// TestRedriveDailyMetricsLedgerErrorsRatherThanSilentlyZeroingOnAMalformedBody
+// exercises the actual caller chain the P1 finding traced through: a
+// malformed 200 from the daily-metrics redrive endpoint must surface as an
+// error out of redriveDailyMetricsLedgerChunk, not as a fully-populated
+// {repaired:0, skipped_claim_active:0} that ledgerRepairWasIncomplete would
+// read as "safe to proceed."
+func TestRedriveDailyMetricsLedgerErrorsRatherThanSilentlyZeroingOnAMalformedBody(t *testing.T) {
+	fake := newFakeBridge(t, http.StatusOK, `not-json`)
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence")
+	if err == nil {
+		t.Fatalf("redriveDailyMetricsLedger on a malformed 200 body = nil error, result=%v, want an error", result)
+	}
+}
+
+// TestParseOutputEvidencePreservesLargeIntegerPrecision is codex round 1's
+// P2 red-first proof: decoding into map[string]any WITHOUT UseNumber()
+// converts every JSON number to float64, which cannot represent integers
+// above 2^53 exactly -- 9007199254740993 silently becomes 9007199254740992
+// on re-marshal, changing the durably-persisted repair evidence from what
+// the operator actually typed.
+func TestParseOutputEvidencePreservesLargeIntegerPrecision(t *testing.T) {
+	evidence, err := parseOutputEvidence(`{"source_sequence": 9007199254740993}`)
+	if err != nil {
+		t.Fatalf("parseOutputEvidence: %v", err)
+	}
+	reencoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	if !strings.Contains(string(reencoded), "9007199254740993") {
+		t.Fatalf("re-encoded payload = %s, want it to contain the exact input digits 9007199254740993 (lost precision)", reencoded)
+	}
+}
+
+func TestParseOutputEvidenceRejectsNonObjectJSON(t *testing.T) {
+	for _, input := range []string{"null", "42", "[]", `"a string"`, "true"} {
+		if _, err := parseOutputEvidence(input); err == nil {
+			t.Errorf("parseOutputEvidence(%q) = nil error, want a rejection (not a JSON object)", input)
+		}
+	}
+}
+
+func TestParseOutputEvidenceRejectsOversizedPayload(t *testing.T) {
+	oversized := `{"note":"` + strings.Repeat("x", outputEvidenceMaxBytes) + `"}`
+	if _, err := parseOutputEvidence(oversized); err == nil {
+		t.Fatal("parseOutputEvidence on an oversized object = nil error, want a rejection")
+	}
+}
+
+func TestValidateReviewEvidenceRejectsOverlongText(t *testing.T) {
+	if validateReviewEvidence(strings.Repeat("x", reviewEvidenceMaxBytes+1)) {
+		t.Fatal("validateReviewEvidence accepted text over the bridge's 2048-byte bound")
+	}
+	if !validateReviewEvidence(strings.Repeat("x", reviewEvidenceMaxBytes)) {
+		t.Fatal("validateReviewEvidence rejected text exactly at the 2048-byte bound")
+	}
+	if validateReviewEvidence("   ") {
+		t.Fatal("validateReviewEvidence accepted whitespace-only text")
+	}
+}
+
+// TestDispatchWorkgraphRepairRejectsNullOutputEvidenceWithoutCallingTheBridge
+// is codex round 1's P2 finding on the CLI's own dispatch path (not just the
+// parser unit): --output-evidence null previously unmarshalled successfully
+// into a nil map and was sent as literal JSON null, which the bridge only
+// ever rejected server-side. It must now fail closed locally.
+func TestDispatchWorkgraphRepairRejectsNullOutputEvidenceWithoutCallingTheBridge(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
+	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
+
+	var stdout, stderr bytes.Buffer
+	code := dispatchWorkgraphRepair(context.Background(), []string{
+		"--request", testAmbiguousRequestID,
+		"--resolution", "confirm_succeeded",
+		"--expected-attempt-count", "1",
+		"--review-evidence", "checked",
+		"--output-evidence", "null",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("dispatchWorkgraphRepair with --output-evidence null = 0, want non-zero")
+	}
+	if called {
+		t.Fatal("dispatchWorkgraphRepair with --output-evidence null called the bridge; want a local rejection")
+	}
+}

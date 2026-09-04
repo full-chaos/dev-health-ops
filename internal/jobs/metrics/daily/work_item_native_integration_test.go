@@ -151,10 +151,28 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Column types mirror the production migrations
-	// (009_raw_work_items.sql, 001_metrics_v2.sql + 002/003/006/024,
-	// 063_estimate_coverage_metrics.sql). story_points and assignees carry
-	// their REAL types -- that is the point of item (2) above.
+	// Column types AND SORTING KEYS mirror production. The keys come from the
+	// LATEST migration that touched each table, which for five of these is a
+	// PYTHON migration, not a .sql one:
+	//
+	//   042_rmt_org_id_dedup_keys.py    work_items                  (org_id, repo_id, work_item_id)
+	//                                   work_item_transitions       (org_id, repo_id, work_item_id, occurred_at)
+	//   027_add_org_id_to_sorting_keys.py
+	//                                   work_item_metrics_daily     (org_id, provider, day, work_scope_id, team_id)
+	//                                   work_item_user_metrics_daily(org_id, provider, work_scope_id, user_identity, day)
+	//                                   work_item_cycle_times       (org_id, provider, work_item_id)
+	//
+	// An earlier version of this fixture copied the keys from
+	// 009_raw_work_items.sql / 001_metrics_v2.sql -- the tables' ORIGINAL DDL,
+	// pre-rekey -- and so declared org_id-less keys that production has not
+	// used since CHAOS-2290. That is not a cosmetic drift: on the stale
+	// work_item_cycle_times key, two tenants' rows for one work_item_id
+	// COLLAPSE under ReplacingMergeTree, which production does not do. A
+	// fixture that dedups differently from production can only prove things
+	// about a schema nobody runs.
+	//
+	// story_points and assignees carry their REAL types -- that is the point of
+	// item (2) above.
 	for _, statement := range []string{
 		`CREATE TABLE work_items (
     repo_id UUID, work_item_id String, provider String, status String,
@@ -164,12 +182,12 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     completed_at Nullable(DateTime64(3, 'UTC')), closed_at Nullable(DateTime64(3, 'UTC')),
     story_points Nullable(Float64),
     org_id String, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id)`,
 		`CREATE TABLE work_item_transitions (
     repo_id UUID, work_item_id String, occurred_at DateTime64(3, 'UTC'), provider String,
     from_status String, to_status String, from_status_raw String, to_status_raw String,
     actor String, org_id String, last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id, occurred_at)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at)`,
 		`CREATE TABLE work_item_team_attributions (
     org_id String, repo_id UUID, work_item_id String, provider String,
     team_id Nullable(String), team_name Nullable(String),
@@ -189,14 +207,14 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     new_bugs_count UInt32, new_items_count UInt32, defect_intro_rate Float64,
     wip_congestion_ratio Float64, predictability_score Float64,
     computed_at DateTime('UTC'), org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, day, work_scope_id, team_id)`,
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id)`,
 		`CREATE TABLE work_item_user_metrics_daily (
     day Date, provider String, work_scope_id String, user_identity String,
     team_id String, team_name String,
     items_started UInt32, items_completed UInt32, wip_count_end_of_day UInt32,
     cycle_time_p50_hours Nullable(Float64), cycle_time_p90_hours Nullable(Float64),
     computed_at DateTime('UTC'), org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (provider, work_scope_id, user_identity, day)`,
+) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day)`,
 		`CREATE TABLE work_item_cycle_times (
     work_item_id String, provider String, day Date, work_scope_id String,
     team_id Nullable(String), team_name Nullable(String), assignee Nullable(String),
@@ -207,7 +225,7 @@ func TestWorkItemExecutorsRoundTripAgainstRealClickHouse(t *testing.T) {
     active_time_hours Float64 DEFAULT 0, wait_time_hours Float64 DEFAULT 0,
     flow_efficiency Float64 DEFAULT 0,
     computed_at DateTime('UTC'), org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (provider, work_item_id)`,
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_item_id)`,
 		`CREATE TABLE estimate_coverage_metrics_daily (
     day Date, provider String, work_scope_id String,
     team_id Nullable(String), team_name Nullable(String),
@@ -251,25 +269,21 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 			t.Fatal(err)
 		}
 	}
-	// A second tenant in the SAME repo, so a missing org predicate in any of
-	// the three loaders shows up as an extra row rather than as nothing at all.
+	// A second tenant in the SAME repo REUSING an org A work_item_id.
 	//
-	// Its work_item_id is DELIBERATELY DIFFERENT from every org A id. An
-	// earlier version reused golden.Items[0]'s id to make the collision
-	// obvious -- which was wrong: production `work_items` is
-	// ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id), and
-	// org_id is NOT in that key. Same repo + same work_item_id is therefore the
-	// SAME ROW to the engine, so FINAL would collapse the two tenants into one,
-	// with equal last_synced making the survivor arbitrary. That would have
-	// silently deleted an org A item from the fixture and made this test's
-	// expectations non-deterministic -- while the cross-tenant guard it was
-	// written to provide proved nothing at all.
+	// Under the CURRENT production key -- (org_id, repo_id, work_item_id), set
+	// by 042_rmt_org_id_dedup_keys.py -- these are two DISTINCT rows that
+	// coexist, so this is the strongest form of the cross-tenant guard: only
+	// the `org_id = ?` predicate can exclude it, since repo and id are both
+	// shared.
 	//
-	// Keeping the repo the same and the id distinct is what actually isolates
-	// the ORG predicate: the repo filter cannot exclude this row, so only
-	// `org_id = ?` can.
+	// It was briefly changed to a distinct id after this fixture appeared to
+	// collapse the two tenants. That collapse was real but the diagnosis was
+	// half right: the cause was this fixture declaring the PRE-rekey key
+	// (repo_id, work_item_id), not anything about sharing an id. With the key
+	// corrected to production's, sharing the id is safe AND is the better test.
 	if err := itemBatch.Append(
-		repo, "gh:other-tenant-1", golden.Items[0].Provider, "in_progress",
+		repo, golden.Items[0].WorkItemID, golden.Items[0].Provider, "in_progress",
 		"", "acme/other-tenant", "", "", "task", []string{"mallory"},
 		day, &day, nil, nil, (*float64)(nil), orgB, synced,
 	); err != nil {

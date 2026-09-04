@@ -157,47 +157,143 @@ type Admission struct {
 	// TargetPrefix the dependency's target_work_item_id must start with, so a
 	// raw kind cannot admit a row pointing at the wrong id space.
 	TargetPrefix string
+	// TargetValidator, when non-nil, is an ADDITIONAL grammar check beyond
+	// TargetPrefix. nil for an admission whose id space has no narrower shape
+	// to enforce here -- linear_attachment matches Python's own gate exactly
+	// (prefix only), so it stays nil deliberately, not by oversight.
+	//
+	// github_closing_reference sets this (codex round 1 on #2174, P2): a
+	// prefix-only check admits ANY "gh:..." string that happens to exist in
+	// work_items, including one the real writer
+	// (github_work_items_rows.go:779-780, node.Number < 1 skipped) could never
+	// produce -- e.g. "gh:owner/repo#0". Without this, admission relies
+	// entirely on an invariant (every "gh:"-prefixed work_items row is
+	// well-formed) holding across every writer of that table forever, not
+	// just this one. Confirmed reachable, not merely argued: Derive(inputs)
+	// with a seeded gh:owner/repo#0 work_items row wrote a native link before
+	// this fix.
+	TargetValidator func(target string) bool
+}
+
+// isWellFormedGithubIssueTarget mirrors the grammar the real writer enforces
+// (github_work_items_rows.go:779-780): gh:<owner>/<repo>#<positive-int>. The
+// repo slug may itself contain "#" (same LAST-separator reasoning as
+// ParsePRSource), so this splits on the LAST "#", not the first.
+func isWellFormedGithubIssueTarget(target string) bool {
+	body := strings.TrimPrefix(target, "gh:")
+	index := strings.LastIndex(body, "#")
+	if index < 0 {
+		return false
+	}
+	repoSlug, number := body[:index], body[index+1:]
+	if repoSlug == "" || number == "" {
+		return false
+	}
+	n, ok := parseGithubIssueNumber(number)
+	return ok && n >= 1
+}
+
+// parseGithubIssueNumber is the SINGLE definition of what a well-formed
+// GitHub issue/PR number string looks like -- the exact domain the writer
+// (github_work_items_rows.go:784: `strconv.Itoa(node.Number)`, guarded by
+// `node.Number < 1` at :781) can produce, never a broader one. Any test
+// that needs to build or validate a "gh:owner/repo#N" target should call
+// this rather than reimplementing the check, so there is one place that
+// answers "can the producer actually emit this."
+//
+// STRUCTURAL fix (codex round 3 on #2174, P2 -- the third distinct class
+// found in this hand-rolled validator, hence structural rather than
+// another incremental patch): `node.Number` is Go's platform `int` --
+// SIGNED, 64-bit on every platform this ships to -- but the validator
+// used to parse with `ParseUint(number, 10, 64)`, an UNSIGNED 64-bit
+// domain. That domain is strictly wider than what strconv.Itoa(int(...))
+// can ever produce: `ParseUint` accepts "9223372036854775808" (2^63),
+// which overflows int64 and can never be the output of
+// `strconv.Itoa` on a real `node.Number` value. `ParseInt(number, 10,
+// strconv.IntSize)` matches the producer's actual signed domain exactly,
+// closing the class rather than the one value that happened to be found.
+//
+// The canonical round-trip (`strconv.Itoa(int(n)) == number`) catches
+// every OTHER non-canonical numeral in the same single check: a leading
+// zero ("01"), a leading '+' sign (ParseInt accepts one, Itoa never
+// emits one), and anything else that parses but isn't the exact string
+// the writer's own formatter would produce for that value.
+func parseGithubIssueNumber(number string) (int, bool) {
+	n, err := strconv.ParseInt(number, 10, strconv.IntSize)
+	if err != nil {
+		return 0, false
+	}
+	if strconv.Itoa(int(n)) != number {
+		return 0, false
+	}
+	return int(n), true
 }
 
 // DefaultAdmissions is the ACTIVE admission table: the raw kinds this producer
 // will turn into mapping rows today.
 //
-// It holds Linear alone, deliberately. That makes the Go active set IDENTICAL
-// to the live Python gate (_is_linear_pr_attachment_dependency, a Linear
-// literal), which is what lets the parity oracle be a plain statement rather
-// than one with an asterisk for the whole window in which both planes are
-// write-capable. See ReservedAdmissions for why the other two are not here yet.
+// CHAOS-4771 (below) is why this table is no longer required to equal the live
+// Python gate exactly: Go is SANCTIONED to lead Python's admission set, the
+// same direction #2121's variant-C confidence policy already took (a Go
+// post-step writing edges Python never wrote, ranked correctly by
+// last-writer-wins on version). That is the intended shape of the cutover, not
+// a divergence hazard -- as long as every admitted row carries its own
+// provenance and the version ranking that decides collisions is proven, which
+// CHAOS-4769 (below) is precisely what proves.
+//
+// github_closing_reference (CHAOS-4757 slice A) is activated here.
+// Precondition, now satisfied: migration 084
+// (`084_issue_pr_provenance_version_precedence.py`) makes `work_graph_issue_pr`
+// rank by provenance before recency (`version_rank = rank(provenance)*2^45 +
+// last_synced`, native=3 highest), so a row this admission writes -- stamped
+// Provenance: ProvenanceNative, same as every other admitted kind -- now beats
+// a colliding explicit_text/heuristic row unconditionally, regardless of which
+// plane wrote which row first. Before that migration, admitting this kind
+// would have let Python's text-parse fallback (`_build_issue_pr_edges`,
+// builder.py:1352) discard the provider's own closing reference on a
+// (org_id, repo_id, work_item_id, pr_number) collision -- inverting the
+// standing rule that provider-attached is PRIMARY. See
+// TestIssuePRProvenanceCollisionSurvivesMerge
+// (provenance_collision_integration_test.go) for the mechanism proof; it is
+// generic over provenance strings, not over RelationshipTypeRaw, so it already
+// covers this admission -- Derive stamps ProvenanceNative for every admitted
+// kind, github_closing_reference included, so no kind-specific collision test
+// is needed on top of it.
+//
+// jira_dev_status (CHAOS-4757 slice B, PR6) is activated here too. Same
+// precondition as github_closing_reference above (migration 084 is generic
+// over provenance, not per-kind) and a Go writer already existed
+// (`extractJiraDevStatusDependencies`, internal/providersync/jira_dev_status.go)
+// before this move, same shape as github_closing_reference before its own
+// activation PR.
+//
+// No TargetValidator here, deliberately: the target this writer emits is not
+// CONSTRUCTED from a raw external number the way github_closing_reference's
+// is (`"gh:" + repoFullName + "#" + strconv.Itoa(node.Number)`, where a
+// malformed API response could yield "#0"). jira_dev_status's target is
+// `item.WorkItemID` -- the SAME WorkItemID this Jira issue's own `work_items`
+// row already uses (jira_atlassian_route.go:274-277) -- so there is no
+// separate parsing/construction step that could diverge from what
+// `work_items` actually holds; the two are the identical value by
+// construction, not merely expected to agree.
 var DefaultAdmissions = []Admission{
 	{RelationshipTypeRaw: "linear_attachment", TargetPrefix: "linear:"},
+	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:", TargetValidator: isWellFormedGithubIssueTarget},
+	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
 }
 
 // ReservedAdmissions are the raw kinds whose shape is FROZEN and implemented
 // but which this producer must not admit yet. Promoting one is a one-line move
 // into DefaultAdmissions -- no other code changes.
 //
-//   - `github_closing_reference` (CHAOS-4757 slice A). lane-4757's Go PR will
-//     start writing these rows. Admitting them BEFORE CHAOS-4769 is fixed makes
-//     that defect reachable: Python's fallback text-parse writer
-//     (`_build_issue_pr_edges`, builder.py:1352) can mint the SAME
-//     (org_id, repo_id, work_item_id, pr_number) from a "closes #N" PR body,
-//     stamped with build time, while this producer stamps the dependency row's
-//     earlier `last_synced`. `work_graph_issue_pr` is a
-//     ReplacingMergeTree(last_synced), so the text-parsed row would WIN and the
-//     provider's own closing reference would be discarded -- inverting the
-//     standing rule that provider-attached is PRIMARY and text parsing is
-//     FALLBACK. Ruling (team-lead, 2026-09-01): fix CHAOS-4769 on the Go readers
-//     first, activate this second, in its own PR with before/after evidence.
-//   - `jira_dev_status` (CHAOS-4757 slice B). No writer exists on either plane;
-//     both planes' Jira normalizers cover issue-to-issue `issuelinks` only.
-//     Reserved until a Jira ingestion writer exists.
-//
-// Declaring them here rather than leaving them undeclared is the point: the
-// shape is agreed and tested, so activation is a decision, not an
-// implementation.
-var ReservedAdmissions = []Admission{
-	{RelationshipTypeRaw: "github_closing_reference", TargetPrefix: "gh:"},
-	{RelationshipTypeRaw: "jira_dev_status", TargetPrefix: "jira:"},
-}
+// Empty today: both prior entries (github_closing_reference, jira_dev_status)
+// are activated above. Declared as an empty slice rather than removed, so a
+// future reserved kind has a place to land and this comment survives to
+// explain the promotion mechanism -- see TestReservedAdmissionsIsCurrentlyEmpty,
+// which documents this state explicitly rather than letting it be implicit
+// (a future addition here is then a deliberate act that test must be updated
+// for, not a silent drift).
+var ReservedAdmissions = []Admission{}
 
 // DependencyRow is one `work_item_dependencies` row, trimmed to the columns the
 // derivation reads.
@@ -258,6 +354,19 @@ type Inputs struct {
 
 	// Admissions defaults to DefaultAdmissions when empty.
 	Admissions []Admission
+
+	// ReservedAdmissions defaults to the package-level ReservedAdmissions when
+	// nil. TEST-ONLY override seam: production callers never set this --
+	// ReservedAdmissions is empty today (PR6), and the "reserved kind is seen
+	// but not admitted" mechanism (ReservedSeenByRawKind, the
+	// not-yet-activated path) has no real kind left to exercise it against.
+	// Tests inject a synthetic entry here to keep that mechanism covered for
+	// whatever the NEXT reserved kind turns out to be, without touching the
+	// real (empty) table. Explicitly nil-vs-empty: nil defers to the package
+	// var; an explicitly EMPTY non-nil slice would mean "no reserved kinds for
+	// this call," which no real or test caller currently needs but the
+	// distinction is kept available.
+	ReservedAdmissions []Admission
 }
 
 // RejectionReason names why a candidate dependency row produced no link. The
@@ -374,6 +483,12 @@ func Derive(inputs Inputs) Result {
 	if len(admissions) == 0 {
 		admissions = DefaultAdmissions
 	}
+	// nil (not just empty) is the defer-to-package-default signal -- see
+	// Inputs.ReservedAdmissions's doc for why the distinction is kept.
+	reservedAdmissions := ReservedAdmissions
+	if inputs.ReservedAdmissions != nil {
+		reservedAdmissions = inputs.ReservedAdmissions
+	}
 
 	result := Result{
 		AdmittedByRawKind:     make(map[string]int),
@@ -448,7 +563,7 @@ func Derive(inputs Inputs) Result {
 	for _, dependency := range inputs.Dependencies {
 		admission, admissible := admit(admissions, dependency)
 		if !admissible {
-			if kind, ok := reservedRawKind(dependency.RelationshipTypeRaw); ok {
+			if kind, ok := reservedRawKind(reservedAdmissions, dependency.RelationshipTypeRaw); ok {
 				result.ReservedSeenByRawKind[kind]++
 			}
 			result.Rejected[ReasonNotAdmissible]++
@@ -522,10 +637,16 @@ func Derive(inputs Inputs) Result {
 // raw kind can never admit a target in another provider's id space.
 func admit(admissions []Admission, dependency DependencyRow) (Admission, bool) {
 	for _, admission := range admissions {
-		if dependency.RelationshipTypeRaw == admission.RelationshipTypeRaw &&
-			strings.HasPrefix(dependency.TargetWorkItemID, admission.TargetPrefix) {
-			return admission, true
+		if dependency.RelationshipTypeRaw != admission.RelationshipTypeRaw {
+			continue
 		}
+		if !strings.HasPrefix(dependency.TargetWorkItemID, admission.TargetPrefix) {
+			continue
+		}
+		if admission.TargetValidator != nil && !admission.TargetValidator(dependency.TargetWorkItemID) {
+			continue
+		}
+		return admission, true
 	}
 	return Admission{}, false
 }
@@ -546,8 +667,8 @@ func admit(admissions []Admission, dependency DependencyRow) (Admission, bool) {
 // finding"; recording the disagreement rather than deferring, because the
 // counter exists precisely to make the activation decision evidence-based and a
 // silent zero is the one answer it must never give wrongly.
-func reservedRawKind(relationshipTypeRaw string) (string, bool) {
-	for _, reserved := range ReservedAdmissions {
+func reservedRawKind(reservedAdmissions []Admission, relationshipTypeRaw string) (string, bool) {
+	for _, reserved := range reservedAdmissions {
 		if relationshipTypeRaw == reserved.RelationshipTypeRaw {
 			return reserved.RelationshipTypeRaw, true
 		}

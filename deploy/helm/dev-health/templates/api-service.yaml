@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "api" "context" $) | nindent 4 }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.api.service.type }}
   selector:
     {{- include "dev-health.componentSelectorLabels" (dict "component" "api" "context" $) | nindent 4 }}
   ports:
@@ -15,4 +15,7 @@ spec:
       port: {{ .Values.api.port }}
       targetPort: http
       protocol: TCP
+      {{- with .Values.api.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
 {{- end }}

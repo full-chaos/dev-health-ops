@@ -448,16 +448,18 @@ jobs:
   dind-smoke-test:
     if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, oci-arc-runners]
-    # CHAOS-4906 (09-04): same job-level serialization as
-    # go-container-reproducibility-self-hosted, own group since this job's
-    # resource profile (a few seconds of docker info/build) is nothing
-    # like reproducibility's -- serializing them together would block a
-    # heavy job behind an unrelated PR's cheap smoke test for no reason.
-    # cancel-in-progress: false for the identical reason: a queued-behind
-    # run waits and still completes, never gets cancelled by the one ahead.
-    concurrency:
-      group: pool-dind-smoke-test
-      cancel-in-progress: false
+    # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
+    # here and on go-container-reproducibility-self-hosted, then REVERTED
+    # the same day -- GitHub's concurrency semantics allow at most ONE
+    # running AND ONE pending job per group; a THIRD event's job then
+    # cancels the still-pending second one, `cancel-in-progress: false`
+    # notwithstanding (that setting only protects a job already RUNNING).
+    # Measured: with #2197/#2199/#2192 pushing minutes apart, #2197's
+    # go-container-reproducibility was cancelled at 2m40s -- a required
+    # check turned red by a job-level group meant to help it. No
+    # replacement serialization mechanism here; see the 36m/30m sizing
+    # below for how contention is handled instead (accept variance,
+    # size the cap to survive it, not queue jobs against each other).
     timeout-minutes: 5
     steps:
       - name: Confirm a Docker daemon is reachable
@@ -665,21 +667,21 @@ jobs:
       vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, oci-arc-runners]
-    # CHAOS-4906 (09-04): job-level group SERIALIZES every run of this job
-    # across every PR/push on the pool -- two concurrent reproducibility
-    # runs (two overlapping PRs, or a PR overlapping a push) is exactly
-    # what turned an 18m03s isolated run into two runs both timing out at
-    # the 20m inner cap (run 33822145677 succeeded alone at 18m03s; run
-    # 33822592791 failed at 20m16s while it overlapped that same run).
-    # `cancel-in-progress: false`: a queued-behind run must WAIT its turn
-    # and still complete, not get cancelled by the one ahead of it -- main
-    # pushes are never cancelled (CHAOS-3948/CHAOS-4921/CHAOS-4946), and a
-    # PR-level cancel-on-repush already comes from the WORKFLOW-level
-    # concurrency group up top; this job-level group is purely about
-    # ordering pool access, not about cancelling anything.
-    concurrency:
-      group: pool-go-container-reproducibility
-      cancel-in-progress: false
+    # CHAOS-4906 (09-04): a job-level `concurrency:` group was added here
+    # the same day to serialize pool access (two concurrent
+    # reproducibility runs turned an 18m03s isolated run into two runs
+    # both timing out at the then 20m inner cap: run 33822145677 succeeded
+    # alone at 18m03s, run 33822592791 failed at 20m16s while it overlapped
+    # that same run) -- then REVERTED a few hours later, same day: GitHub's
+    # concurrency semantics allow at most ONE running AND ONE pending job
+    # per group; a THIRD event's job then cancels the still-pending SECOND
+    # one, `cancel-in-progress: false` notwithstanding (that setting only
+    # protects a job already RUNNING, not one waiting behind it). Measured:
+    # with #2197/#2199/#2192 pushing minutes apart, #2197's
+    # go-container-reproducibility -- a REQUIRED check -- was cancelled at
+    # 2m40s by this exact mechanism, turning it red. No replacement
+    # serialization here; the 36m/30m sizing below is the actual answer to
+    # contention -- accept the variance, size the cap to survive it.
     # 36m (measured 18m03s wall under load, run 33822145677, isolated from
     # any overlapping pool consumer -- contract v1.6's own sizing clause:
     # timeout-minutes = max measured wall under load x2). Serialization

@@ -235,15 +235,32 @@ ORDER BY a.subject_type, a.subject_id, a.source`,
 	var artifacts []aigovernance.Artifact
 	for rows.Next() {
 		var (
-			orgID               string
-			repoID              *uuid.UUID
-			subjectType         string
-			subjectID           string
-			observedAt          time.Time
-			declaredAI          bool
-			humanReviewed       *bool
-			securityScanned     *bool
-			licenseFinding      bool
+			orgID       string
+			repoID      *uuid.UUID
+			subjectType string
+			subjectID   string
+			observedAt  time.Time
+			// BOOLEAN COLUMNS ARE UInt8 ON THE WIRE, NOT Bool.
+			//
+			// ClickHouse comparison and IN operators yield UInt8, so
+			// `a.source IN (...)` and `finding.finding_count > 0` arrive as
+			// UInt8, and `if(cond, x, NULL)` arrives as Nullable(UInt8). The
+			// driver matches the DECLARED column type, so a *bool target (and
+			// therefore a **bool argument to Scan) is rejected outright --
+			// which is what CI's go-storage-integration shard caught on the
+			// first version of this file, exactly the driver-type class this
+			// package's integration test exists to find and that no unit test
+			// with a fake scanner can.
+			//
+			// Scanned at the wire type and converted below rather than asking
+			// the driver to coerce: the two `if(...)` projections are genuinely
+			// nullable (a non-pull_request subject yields NULL, which is
+			// Optional[bool] in Python and must stay distinct from false), and
+			// the two bare comparisons are not.
+			declaredAI          uint8
+			humanReviewed       *uint8
+			securityScanned     *uint8
+			licenseFinding      uint8
 			toolName            string
 			modelName           string
 			toolAllowlistStatus string
@@ -277,10 +294,10 @@ ORDER BY a.subject_type, a.subject_id, a.source`,
 			AIDetected:                 true,
 			SensitiveRepo:              false,
 			RepoAllowsAI:               true,
-			DeclaredAI:                 declaredAI,
-			HumanReviewed:              humanReviewed,
-			SecurityScanned:            securityScanned,
-			LicenseOrDependencyFinding: licenseFinding,
+			DeclaredAI:                 declaredAI != 0,
+			HumanReviewed:              optionalGovernanceBool(humanReviewed),
+			SecurityScanned:            optionalGovernanceBool(securityScanned),
+			LicenseOrDependencyFinding: licenseFinding != 0,
 			// _optional_str maps BOTH None and "" to None (loaders.py:179).
 			ToolName:            optionalGovernanceString(toolName),
 			ModelName:           optionalGovernanceString(modelName),
@@ -305,6 +322,19 @@ ORDER BY a.subject_type, a.subject_id, a.source`,
 		return nil, fmt.Errorf("iterate ai governance artifact rows: %w", err)
 	}
 	return artifacts, nil
+}
+
+// optionalGovernanceBool converts a Nullable(UInt8) scan target into the
+// Optional[bool] the compute kernel expects. NULL stays nil, which is
+// _artifact_from_row's `_optional_bool(None) -> None` -- and that distinction
+// is load-bearing: evaluate_artifact tests `human_reviewed is not True`, so
+// UNKNOWN and False both violate, but only False is a stated answer.
+func optionalGovernanceBool(value *uint8) *bool {
+	if value == nil {
+		return nil
+	}
+	converted := *value != 0
+	return &converted
 }
 
 func optionalGovernanceString(value string) *string {

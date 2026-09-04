@@ -812,13 +812,44 @@ START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
 # reapable naming scheme. Keyed on LANE+TS rather than $NAME: two concurrent
 # rounds against the same lane with the same explicit -n NAME must still get
 # distinct, individually reapable dirs.
-RW=$(mktemp -d "${TMPDIR:-/tmp}/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
+#
+# v4.8.6 (chris's ruling, same day, after a bigboy boot-drive-full incident):
+# on Linux, EVERY wrapper-owned per-round scratch dir below -- the review
+# worktree, Go's own work dir, and the shell TMPDIR override -- moves under
+# /var/lib/oci-cache/lane-scratch/<lane>/ instead of /tmp. <lane> is $NAME,
+# the same value the round's own verdict/log filenames are keyed on. This is
+# a FLEET-MANDATED location, not an optional nicety: fails closed (die) if
+# that root cannot be created, rather than silently falling back to /tmp and
+# quietly violating the ruling on a host where the mount is missing or
+# unwritable. macOS is UNCHANGED -- still /tmp, for the sandbox-writability
+# reasons documented throughout this file (v4.3/v4.4).
+#
+# KNOWN RESIDUAL GAP, not fixed by this change: reap_bases() (top of file,
+# --reap-mine/--reap-stale) still scans only /tmp and $TMPDIR. On Linux, a
+# round's OWN cleanup() trap already removes RW/RGOTMPDIR/RTMPDIR
+# unconditionally regardless of where they live, so normal operation is
+# unaffected -- this only means a round that gets SIGKILLed before its trap
+# runs now leaves an orphan under lane-scratch that --reap-stale cannot see.
+# Flagged for a follow-up, not blocking this change.
+if [ "$HOST_OS" = Linux ]; then
+  LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
+  mkdir -p "$LANE_SCRATCH_ROOT" \
+    || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"
+  RW_BASE="$LANE_SCRATCH_ROOT"
+  RGOTMPDIR_BASE="$LANE_SCRATCH_ROOT"
+  RTMPDIR_BASE="$LANE_SCRATCH_ROOT"
+else
+  RW_BASE="${TMPDIR:-/tmp}"
+  RGOTMPDIR_BASE="/tmp"
+  RTMPDIR_BASE="/tmp"
+fi
+RW=$(mktemp -d "$RW_BASE/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
-# /tmp for the same reason as RGOCACHE above.
-RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
+# /tmp (macOS) / lane-scratch (Linux) for the same reason as RGOCACHE above.
+RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -832,7 +863,7 @@ RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 # sort, a python NamedTemporaryFile -- fails the same way, and the reviewer
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
-RTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
+RTMPDIR=$(mktemp -d "$RTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
 
 # v4.8.4 introduced a per-round GOPATH because bigboy's ~/go and ~/go/pkg
 # used to be root:root 755, and an unset GOPATH defaulting to $HOME/go made
@@ -1243,6 +1274,14 @@ download blocked, a denied cache path, anything else), say so explicitly and
 in those words -- "go test unavailable" -- and label every remaining claim
 in your verdict EXECUTED or ARGUED, so a reader can tell a run result from a
 source-trace inference at a glance.
+
+If a `go test`/`go run`/`go build` fails with `creating work dir: ... mkdir
+...: operation not permitted`, RETRY IT EXACTLY ONCE before concluding go is
+unavailable. Measured directly (two lanes, macOS read-only sandbox): the
+FIRST invocation in a round can hit this even though GOTMPDIR/GOCACHE are
+correctly pointed at a writable path, and an immediate retry with no other
+change succeeds a few seconds later. One retry only -- if it fails a second
+time, that is a real "go test unavailable", not a hiccup, and you say so.
 STANDING_RULES
 # Second heredoc, UNQUOTED delimiter on purpose: this one interpolates the
 # round's actual RGOMODCACHE/HOME paths at generation time, so the reviewer
@@ -1259,16 +1298,27 @@ STANDING_RULES
 # IS now that persistent, shared cache (or a caller-set explicit location) --
 # $HOME/go/pkg/mod is the ruling's own LEGACY path, no lane writes there any
 # more, so it is likely stale or empty and routing a reviewer's retry at it
-# is directionless guidance at best. Host-branched: Linux gets no fallback
-# path suggestion at all (a lookup failure against the persistent shared
-# cache is a real gap worth reporting, not a location problem to route
-# around); macOS is UNCHANGED, since its $RGOMODCACHE stays a per-round
-# cache and $HOME/go/pkg/mod remains the same sensible last resort it always
-# was there.
+# is directionless guidance at best. Linux gets no fallback path suggestion
+# at all (a lookup failure against the persistent shared cache is a real gap
+# worth reporting, not a location problem to route around).
+#
+# v4.8.6 addendum (chris via team-lead, same day): $HOME/go/pkg/mod is not a
+# safe suggestion on macOS EITHER -- it names a DIFFERENT USER's cache on
+# any host other than this one, and even here it is an unrelated, unwarmed
+# location with no particular reason to have what the round needs. The
+# macOS branch now quotes the round's OWN resolved $RGOMODCACHE (the same
+# value already stated above, and the one already warmed and
+# offline-resolve-proven before the round started) instead of switching
+# location at all. This is not redundant: it ties into the
+# "creating work dir" retry-once rule immediately below in the standing
+# rules -- on macOS a `go test` module-lookup failure inside the sandbox is
+# more often a transient read-only-sandbox hiccup on the FIRST invocation
+# than a genuinely missing module (measured by two lanes), so retrying the
+# SAME cache is the correct move, not hunting for a different one.
 if [ "$HOST_OS" = Linux ]; then
   MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, that means the persistent shared cache above is genuinely missing something -- say so explicitly (name the missing module) and fall back to a source-trace verdict. Do NOT retry against \$HOME/go/pkg/mod: that path is legacy and no lane writes to it, so it is not a meaningful fallback."
 else
-  MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, retry ONCE with GOMODCACHE=$HOME/go/pkg/mod GOPROXY=off (read-only intent -- never write there) before falling back to a source-trace verdict, and say explicitly which GOMODCACHE you ended up using."
+  MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, retry ONCE with GOMODCACHE=$RGOMODCACHE GOPROXY=off (read-only intent -- never write there; this is the SAME cache named above, not a different one -- a first-attempt sandbox hiccup, not a missing module, is the more likely cause here) before falling back to a source-trace verdict, and say explicitly whether the retry succeeded."
 fi
 cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
 

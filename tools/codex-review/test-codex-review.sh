@@ -97,7 +97,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1024 1031 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1055 1062 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -192,7 +192,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 860 869 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 891 900 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -314,7 +314,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1157 1157 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1188 1188 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -372,7 +372,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1117 1201 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1148 1232 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -608,7 +608,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 860 869 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 891 900 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -649,7 +649,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1049 1068 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1080 1099 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -875,20 +875,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# v4.8.6 P2 (round 2, lane-wrapper-v486-20260904T082800, EXECUTED): the
-# reviewer-facing module-cache fallback text used to unconditionally point a
-# retry at $HOME/go/pkg/mod -- correct pre-v4.8.6 (the round's own cache was
-# COLD, so the host's real long-lived default module cache was the only
-# useful fallback), but that path is now the ruling's own LEGACY path (no
-# lane writes there) on Linux, where $RGOMODCACHE already IS the persistent
-# shared cache -- so the old fallback text pointed a reviewer's retry at a
-# location the fix itself says nobody should rely on. Fixed: the fallback
-# line is host-branched -- Linux gets no location-based fallback at all
-# (report the gap instead), macOS is unchanged. Proof: extract the real
-# if/else/heredoc block, run it once per host, assert the generated
-# prompt-fragment text matches.
+# v4.8.6 P2 (round 2, lane-wrapper-v486-20260904T082800, EXECUTED, plus a
+# team-lead-directed addendum the same day): the reviewer-facing
+# module-cache fallback text used to unconditionally point a retry at
+# $HOME/go/pkg/mod -- correct pre-v4.8.6 (the round's own cache was COLD, so
+# the host's real long-lived default module cache was the only useful
+# fallback), but that path is now the ruling's own LEGACY path (no lane
+# writes there) on Linux, where $RGOMODCACHE already IS the persistent
+# shared cache. Fixed: Linux gets no location-based fallback at all (report
+# the gap instead). ADDENDUM: $HOME/go/pkg/mod is not a safe suggestion on
+# macOS EITHER -- it names a different user's cache on any host but this
+# one -- so macOS was changed too, to quote the round's OWN resolved
+# $RGOMODCACHE (the same value already stated in the sentence before it)
+# instead of switching location. Proof: extract the real if/else/heredoc
+# block, run it once per host, assert the generated prompt-fragment text.
 # ---------------------------------------------------------------------------
-extract 1268 1278 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1318 1328 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
@@ -915,10 +917,99 @@ FALLBACK_DARWIN=$(
   source "$WORK/modcache_fallback.sh"
   cat "$RW/prompt.md"
 )
-if printf '%s' "$FALLBACK_DARWIN" | grep -q "retry ONCE with GOMODCACHE=$WORK/darwin-home/go/pkg/mod"; then
-  ok "v4.8.6 P2 fix: on macOS, the reviewer prompt still suggests the \$HOME/go/pkg/mod retry fallback (unchanged)"
+if printf '%s' "$FALLBACK_DARWIN" | grep -q "retry ONCE with GOMODCACHE=$WORK/darwin-modcache" \
+   && ! printf '%s' "$FALLBACK_DARWIN" | grep -q 'go/pkg/mod'; then
+  ok "v4.8.6 P2 fix (addendum): on macOS, the reviewer prompt suggests retrying the round's OWN resolved GOMODCACHE, never \$HOME/go/pkg/mod"
 else
-  notok "v4.8.6 P2 fix: macOS fallback text changed unexpectedly ($FALLBACK_DARWIN)"
+  notok "v4.8.6 P2 fix (addendum): macOS fallback text does not quote the round's own GOMODCACHE, or still mentions go/pkg/mod ($FALLBACK_DARWIN)"
+fi
+
+# ---------------------------------------------------------------------------
+# v4.8.6 addendum (team-lead, two-lane measurement): a `go test`/`run`/
+# `build` failing with "creating work dir: ... operation not permitted" on
+# the FIRST invocation (macOS read-only sandbox) can succeed on an
+# immediate retry with no other change. The injected STANDING_RULES prompt
+# text must tell the reviewer to retry exactly once before declaring go
+# unavailable. Proof: extract the real STANDING_RULES heredoc BODY (between
+# its literal open/close marker lines in the shipped script) and check it.
+# ---------------------------------------------------------------------------
+extract 1243 1284 'go test unavailable' "$WORK/standing_rules_body.txt"
+if grep -q "creating work dir" "$WORK/standing_rules_body.txt" \
+   && grep -qi "RETRY IT EXACTLY ONCE" "$WORK/standing_rules_body.txt"; then
+  ok "v4.8.6 addendum: the injected prompt tells the reviewer to retry exactly once on a 'creating work dir' failure"
+else
+  notok "v4.8.6 addendum: the injected prompt is missing the retry-once-on-creating-work-dir instruction"
+fi
+
+# ---------------------------------------------------------------------------
+# v4.8.6 addendum (chris via team-lead, bigboy boot-drive-full incident): on
+# Linux, every wrapper-owned per-round scratch dir (review worktree, Go's
+# work dir, shell TMPDIR) moves under
+# /var/lib/oci-cache/lane-scratch/<lane>/ instead of /tmp, fails closed if
+# that root cannot be created. macOS is unchanged. Proof: extract the real
+# if/else/fi block (value only -- stops before the mktemp calls that
+# actually use these bases, so this never touches a real filesystem path);
+# `mkdir` itself is shadowed by a recording stub so even the Linux branch's
+# `mkdir -p "$LANE_SCRATCH_ROOT"` never touches the real /var/lib on
+# whatever host runs this harness.
+# ---------------------------------------------------------------------------
+extract 834 845 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
+grep -qF '/var/lib/oci-cache/lane-scratch/$NAME' "$WORK/lane_scratch_root.sh" \
+  || { echo "FAIL: extracted lane_scratch_root.sh does not contain the expected lane-scratch path template" >&2; exit 1; }
+
+run_lane_scratch_root() {
+  local host_os="$1" name="$2" tmpdir_val="$3" mkdir_calls_file="$4" mkdir_should_fail="$5"
+  : > "$mkdir_calls_file"
+  (
+    HOST_OS="$host_os" NAME="$name" TMPDIR="$tmpdir_val"
+    # NEVER calls the real mkdir, in either branch -- this stub only
+    # records the call and returns success/failure as configured, so
+    # even the "success" case cannot create a real directory under
+    # /var/lib on whatever host runs this harness.
+    mkdir() {
+      printf '%s\n' "$*" >> "$mkdir_calls_file"
+      [ "$mkdir_should_fail" = 1 ] && return 1
+      return 0
+    }
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/lane_scratch_root.sh"
+    printf 'RW_BASE=%s\nRGOTMPDIR_BASE=%s\nRTMPDIR_BASE=%s\n' "$RW_BASE" "$RGOTMPDIR_BASE" "$RTMPDIR_BASE"
+  )
+}
+
+CALLS_SCRATCH_LINUX="$WORK/mkdir-calls-linux.txt"
+RESOLVE_SCRATCH_LINUX=$(run_lane_scratch_root Linux test-lane-486 "$WORK/unused-tmpdir" "$CALLS_SCRATCH_LINUX" 0)
+if printf '%s' "$RESOLVE_SCRATCH_LINUX" | grep -q '^RW_BASE=/var/lib/oci-cache/lane-scratch/test-lane-486$' \
+   && printf '%s' "$RESOLVE_SCRATCH_LINUX" | grep -q '^RGOTMPDIR_BASE=/var/lib/oci-cache/lane-scratch/test-lane-486$' \
+   && printf '%s' "$RESOLVE_SCRATCH_LINUX" | grep -q '^RTMPDIR_BASE=/var/lib/oci-cache/lane-scratch/test-lane-486$' \
+   && grep -q '/var/lib/oci-cache/lane-scratch/test-lane-486' "$CALLS_SCRATCH_LINUX"; then
+  ok "v4.8.6 scratch: on Linux, RW/RGOTMPDIR/RTMPDIR all base under /var/lib/oci-cache/lane-scratch/<lane>, and that root is what gets mkdir -p'd (never the real filesystem here -- mkdir is stubbed)"
+else
+  notok "v4.8.6 scratch: Linux scratch bases wrong (got: $RESOLVE_SCRATCH_LINUX; mkdir calls: $(cat "$CALLS_SCRATCH_LINUX"))"
+fi
+
+CALLS_SCRATCH_FAIL="$WORK/mkdir-calls-fail.txt"
+set +e
+RESOLVE_SCRATCH_FAIL=$(run_lane_scratch_root Linux test-lane-486-fail "$WORK/unused-tmpdir" "$CALLS_SCRATCH_FAIL" 1 2>&1)
+RC_SCRATCH_FAIL=$?
+set -e
+if [ "$RC_SCRATCH_FAIL" -ne 0 ] && printf '%s' "$RESOLVE_SCRATCH_FAIL" | grep -qi 'refusing to silently fall back'; then
+  ok "v4.8.6 scratch: fails CLOSED (dies) when the Linux scratch root cannot be created, instead of silently falling back to /tmp"
+else
+  notok "v4.8.6 scratch: did not fail closed on an unwritable Linux scratch root (rc=$RC_SCRATCH_FAIL, out='$RESOLVE_SCRATCH_FAIL')"
+fi
+
+CALLS_SCRATCH_DARWIN="$WORK/mkdir-calls-darwin.txt"
+RESOLVE_SCRATCH_DARWIN=$(run_lane_scratch_root Darwin test-lane-486 "$WORK/fake-tmpdir-486" "$CALLS_SCRATCH_DARWIN" 0)
+if printf '%s' "$RESOLVE_SCRATCH_DARWIN" | grep -qF "RW_BASE=$WORK/fake-tmpdir-486" \
+   && printf '%s' "$RESOLVE_SCRATCH_DARWIN" | grep -q '^RGOTMPDIR_BASE=/tmp$' \
+   && printf '%s' "$RESOLVE_SCRATCH_DARWIN" | grep -q '^RTMPDIR_BASE=/tmp$' \
+   && [ ! -s "$CALLS_SCRATCH_DARWIN" ]; then
+  ok "v4.8.6 scratch: macOS bases are UNCHANGED (\$TMPDIR / literal /tmp), and no mkdir -p is called at all in this block on macOS (unchanged from before)"
+else
+  notok "v4.8.6 scratch: macOS scratch bases changed unexpectedly (got: $RESOLVE_SCRATCH_DARWIN; mkdir calls: $(cat "$CALLS_SCRATCH_DARWIN" 2>/dev/null))"
 fi
 
 echo "----"

@@ -2497,3 +2497,81 @@ func TestUnrelatedStartupFaultDoesNotStealTheContractReason(t *testing.T) {
 		t.Fatalf("configure error = %v, want the dependency sentinel to still match", err)
 	}
 }
+
+// TestComposedWorkerWithSurvivingHandlerStillNamesTheShutdownViolation covers a
+// worker that composes with a surviving executable handler and a violated
+// shutdown contract, and asserts the specific reason survives.
+//
+// WHAT IT DOES NOT DO, stated so nobody mistakes it: it does NOT reach the
+// caller guard at the queuesReady() call site. Measured, not assumed -- with
+// this test alone the coverage profile still reports that line as `1 0`, and
+// mutating the guard back to the unconditional relabel leaves this test GREEN.
+// The error it observes comes from the composition branch earlier in the
+// function. Codex round 3's P2 (that guard is unexercised) therefore STANDS; it
+// is not closed by this test.
+//
+// Reaching that guard needs composition to succeed AND at least one executable
+// handler to survive AND the contract to be violated, simultaneously. Demoting
+// every operational kind kills the handlers, which skips the queuesReady block
+// altogether; demoting a subset (as here) keeps a handler but the refusal still
+// arrives from the composition branch first. I could not construct the
+// combination in a unit fixture.
+func TestComposedWorkerWithSurvivingHandlerStillNamesTheShutdownViolation(t *testing.T) {
+	// demotedContractRoot copies the checked-in contract tree, which it resolves
+	// relative to the repo root, so the chdir precedes it.
+	t.Chdir(filepath.Join("..", ".."))
+	// Demote all BUT heartbeat: demoting every operational kind leaves zero
+	// executable handlers, and the caller's queuesReady block is then skipped
+	// entirely -- so the guard under test is never reached. One surviving handler
+	// is what makes composition succeed AND keep the block live.
+	demoted := []string{
+		jobcontract.KindBillingNotification,
+		jobcontract.KindWebhookDelivery,
+		jobcontract.KindRetentionCleanup,
+		jobcontract.KindSyncCoverageRefresh,
+	}
+	_, contractRoot := demotedContractRoot(t, demoted...)
+	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	sources.newRiverClientID = func() string { return "test-client" }
+
+	_, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Service:                 "dev-health-worker",
+			Queues:                  []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency:  map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:     "river",
+			ShutdownTimeout:         30 * time.Second,
+			ShutdownTimeoutExplicit: true,
+		},
+		health.NewRegistry(100*time.Millisecond),
+		sources,
+	)
+	if err == nil {
+		t.Fatal("an explicit 30s shutdown timeout must not configure successfully")
+	}
+	var failure dependencyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("configure error = %v, want a reason-carrying dependencyFailure", err)
+	}
+	if failure.DependencyReason() == "queue_coverage_validation_failed" {
+		t.Fatal(
+			"the caller relabelled a shutdown-contract violation as queue coverage -- " +
+				"this is the exact masking CHAOS-5034 removes, on the path a " +
+				"successfully composed worker actually takes",
+		)
+	}
+	if failure.DependencyReason() != reasonShutdownTimeoutBelowDrainBudget {
+		t.Fatalf(
+			"reason = %q, want %q",
+			failure.DependencyReason(), reasonShutdownTimeoutBelowDrainBudget,
+		)
+	}
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("configure error = %v, want the dependency sentinel to still match", err)
+	}
+}

@@ -850,15 +850,23 @@ func configureWorkerDependenciesWithSources(
 			// (buildWorkerDependencies runs before the logger is assigned), so a
 			// second call would emit the SAME line twice for one failure.
 			//
-			// HONEST NOTE on coverage: reaching this line means composition
-			// SUCCEEDED, which requires a non-nil registry and an unviolated
-			// startup contract -- so queuesReady() here can only return the
-			// coverage reason or nil, and preserveDependencyReason is currently
-			// a no-op in practice. It is kept because it stops this site from
-			// silently re-flattening if queuesReady ever gains a new reason, but
-			// it is DEFENSIVE, not load-bearing today: mutating it back to the
-			// unconditional relabel leaves the whole package green. Do not read
-			// the passing suite as proof that this specific line is exercised.
+			// CORRECTION (codex r3 P2). An earlier version of this comment claimed
+			// this line could only ever see the coverage reason, because reaching
+			// it means composition succeeded. That reasoning was WRONG:
+			// buildWorkerDependencies records a contract violation and returns
+			// early, but the registry and descriptors are already populated by
+			// then, so a worker whose families compose cleanly can still arrive
+			// here with a NAMED startupErr. This guard is therefore
+			// LOAD-BEARING, not decorative -- without it such a worker is told
+			// its queue coverage is wrong.
+			//
+			// It is also UNCOVERED: the coverage profile reports this line `1 0`
+			// across the whole suite, and mutating it back to the unconditional
+			// relabel leaves every test green. Reaching it requires composition
+			// to succeed AND an executable handler to survive AND the contract to
+			// be violated at once; that combination resisted construction in a
+			// unit fixture. Do not read the passing suite as proof this line
+			// works -- it is asserted by source trace only.
 			_ = closeWorkerFamily(active)
 			dependencies.close()
 			return nil, preserveDependencyReason(err, "queue_coverage_validation_failed")

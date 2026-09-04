@@ -45,7 +45,7 @@ type batchingConn struct {
 func (conn *batchingConn) Query(
 	_ context.Context, _ string, _ ...any,
 ) (chdriver.Rows, error) {
-	return nil, errRecommendationsUnavailable
+	return nil, ErrRecommendationsUnavailable
 }
 
 func (conn *batchingConn) PrepareBatch(
@@ -365,7 +365,7 @@ func (conn *queryRecordingConn) Query(
 	_ context.Context, query string, _ ...any,
 ) (chdriver.Rows, error) {
 	conn.queries = append(conn.queries, query)
-	return nil, errRecommendationsUnavailable
+	return nil, ErrRecommendationsUnavailable
 }
 
 // TestAWhitespaceTeamIDStaysScopedToThatTeam pins a parity divergence found in

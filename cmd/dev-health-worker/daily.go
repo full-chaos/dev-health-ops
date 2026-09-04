@@ -30,13 +30,14 @@ const metricsQueue = "metrics"
 // claim_liveness_test.go's TestClaimLivenessObserverUnwrapReturnsTheEmbeddedCollector
 // for the proof). Mirrors provider_sync.go's identical fallback.
 //
-// Round-2 codex finding, #2177 (CHAOS-4282): the membership wiring below used
-// to do the bare assertion inline with no fallback, so it silently never
-// matched in production -- every membership run/prune-failure counter was
-// dead despite passing every unit test (those construct
-// *jobruntime.MetricsCollector directly, never wrapped). Extracted here so
-// the resolution logic itself is unit-testable without constructing the rest
-// of buildDailyWorker's dependencies.
+// Round-2 codex finding, #2177 (CHAOS-4282): the membership wiring used to do
+// the bare assertion inline with no fallback, so it silently never matched in
+// production -- every membership run/prune-failure counter was dead despite
+// passing every unit test (those construct *jobruntime.MetricsCollector
+// directly, never wrapped). Round-2 codex finding, #2173 (same class, this
+// PR): the recommendations readiness wiring had the identical bare-assertion
+// gap. Extracted here so the resolution logic itself is unit-testable
+// without constructing the rest of buildDailyWorker's dependencies.
 func metricsCollectorFromObserver(observer jobruntime.Observer) *jobruntime.MetricsCollector {
 	if collector, ok := observer.(*jobruntime.MetricsCollector); ok {
 		return collector
@@ -413,6 +414,54 @@ func buildDailyWorker(
 			}
 		}
 
+		// CHAOS-3092: the recommendations kind computes natively too. Same
+		// per-kind discipline as dora/capacity above -- a refusal takes THIS
+		// KIND out of service and leaves its siblings registered, with a
+		// positive signal rather than a metric that merely stops moving.
+		var recommendationsExecutor *remaining.RecommendationsExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingRecommendations
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			// orgID "" -- the executor is a family-wide singleton, not bound to
+			// one org. ComputePartition always supplies the real org per call,
+			// and LoadTeamMetricsWindow re-scopes the loader to it (see
+			// recommendations_loader.go), so the constructor's own orgID never
+			// gates a live query.
+			executor, executorErr := remaining.NewRecommendationsExecutor(
+				context.Background(), metricsClickHouse, postgresDatabase.pools.Domain, "",
+			)
+			if executorErr != nil {
+				logger.Error(
+					"recommendations native executor refused; the recommendations "+
+						"kind will not be served and its partitions will accumulate "+
+						"unclaimed. Every other remaining kind is unaffected.",
+					"error", executorErr,
+					"reason", recommendationsRefusalReason(executorErr),
+				)
+				if refusalObserver, ok := observer.(recommendationsRefusalObserver); ok {
+					_ = refusalObserver.ObserveRecommendationsRefused(
+						recommendationsRefusalReason(executorErr))
+				}
+			} else {
+				if collector := metricsCollectorFromObserver(observer); collector != nil {
+					executor.SetReadinessObserver(
+						remaining.CollectorReadinessObserver{Collector: collector})
+				}
+				executor.SetReadinessLogger(logger)
+				recommendationsExecutor = executor
+			}
+		}
+
 		// CHAOS-4282: the membership-backfill kind computes natively too --
 		// no-LLM, projected from theme/subcategory distributions the
 		// (still-Python) LLM materializer already persisted. Same per-kind
@@ -506,8 +555,15 @@ func buildDailyWorker(
 					workers, registry, spec, store, membershipExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingRecommendations:
+				if recommendationsExecutor == nil {
+					// Refused above. Skip rather than register a handler around
+					// a nil executor, which would claim partitions and fail
+					// each one.
+					continue
+				}
+				// Native, not `compatibility` -- this is the CHAOS-3092 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingRecommendationsArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, recommendationsExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingReleaseImpact:
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
@@ -824,6 +880,32 @@ func capacityRefusalReason(err error) string {
 		return jobruntime.CapacityRefusedSchemaIncompatible
 	}
 	return jobruntime.CapacityRefusedInspectFailed
+}
+
+// recommendationsRefusalObserver is the narrow capability the recommendations
+// cutover needs to make a refusal visible, kept local so a collector without
+// it degrades to log-only rather than failing the build.
+type recommendationsRefusalObserver interface {
+	ObserveRecommendationsRefused(reason string) error
+}
+
+// recommendationsRefusalReason maps a construction error onto the closed label
+// set. The four are distinguished because they call for different actions: an
+// unavailable ClickHouse connection is transient and self-heals, a missing
+// Postgres pool means the worker itself was wired without the store the
+// readiness gate reads, an incompatible schema means finish or roll back a
+// migration, and anything else means look at ClickHouse itself.
+func recommendationsRefusalReason(err error) string {
+	switch {
+	case errors.Is(err, remaining.ErrRecommendationsUnavailable):
+		return jobruntime.RecommendationsRefusedUnavailable
+	case errors.Is(err, remaining.ErrRecommendationsPostgresUnavailable):
+		return jobruntime.RecommendationsRefusedPostgresUnavailable
+	case errors.Is(err, remaining.ErrRecommendationsSchemaIncompatible):
+		return jobruntime.RecommendationsRefusedSchemaIncompatible
+	default:
+		return jobruntime.RecommendationsRefusedInspectFailed
+	}
 }
 
 // membershipRefusalObserver is the narrow capability the membership-backfill

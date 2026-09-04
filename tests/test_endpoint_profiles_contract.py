@@ -85,9 +85,11 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 311, len(rest)
+    # +1 CHAOS-5049: POST /internal/worker/metric-executions/v1/sweep-dead-claims
+    assert len(rest) == 312, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 370, len(rows)
+    # +1 CHAOS-5049: the sweep-dead-claims surface.
+    assert len(rows) == 371, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -107,8 +109,9 @@ def test_classification_summary_matches_the_baseline():
     rows = inventory["rows"]
     protected = [r for r in rows if r["classification"] == "protected"]
     public = [r for r in rows if r["classification"] == "public"]
-    # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms.
-    assert len(protected) == 343, len(protected)
+    # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms,
+    # + 1 CHAOS-5049 sweep-dead-claims (protected, repair-token class).
+    assert len(protected) == 344, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

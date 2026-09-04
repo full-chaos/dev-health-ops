@@ -86,11 +86,21 @@ const (
 	// the infinity comes out of the loader's ARITHMETIC rather than being
 	// stored directly -- which is how it would actually arise in production.
 	// Its own org, so the primary fixture's assertions are undisturbed.
-	loaderInfOrgID    = "org-loader-infinite"
-	loaderTeamA       = "team-alpha"
-	loaderTeamB       = "team-beta"
-	loaderWindowStart = "2026-08-01"
-	loaderWindowEnd   = "2026-09-01"
+	loaderInfOrgID = "org-loader-infinite"
+	loaderTeamA    = "team-alpha"
+	loaderTeamB    = "team-beta"
+	// A team in the PRIMARY org with NO team_repo_ownership rows at all --
+	// the empty-ownership boundary team-lead asked to pin explicitly: a team
+	// that owns zero repos must get ABSENT for the four CHAOS-4897 signals,
+	// never an org-wide fallback (that fallback was the original defect's
+	// exact shape). Deliberately in loaderOrgID, alongside alpha/beta and
+	// their real repo_metrics_daily/repo_complexity_daily/file_hotspot_daily
+	// rows, so an absent result here is provably "no owned repos", not
+	// "no data existed to find" (loaderEmptyOrgID already covers that
+	// different case, where the ORG itself has no rows anywhere).
+	loaderTeamNoOwnedRepos = "team-gamma-no-owned-repos"
+	loaderWindowStart      = "2026-08-01"
+	loaderWindowEnd        = "2026-09-01"
 )
 
 type pythonSnapshot struct {
@@ -151,8 +161,64 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	}
 
 	assertCHAOS4897FixIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
+	assertZeroOwnedReposIsAbsentNotOrgWide(t, ctx, conn, loader, windowStart, windowEnd)
 	assertHotspotBoundaryIsMeasured(t, ctx, conn, dsn)
 	assertArgMaxKeysAreUnique(t, ctx, conn)
+}
+
+// assertZeroOwnedReposIsAbsentNotOrgWide pins the empty-ownership boundary
+// directly (team-lead, CHAOS-4897 review): a team with NO team_repo_ownership
+// rows must see the four owned-repo-scoped signals as ABSENT, never falling
+// back to the org-wide read across loaderOrgID's real repoAlpha/repoBeta
+// data. That fallback-on-empty is the exact shape of the original defect, so
+// this is checked as its own assertion rather than folded into the
+// alpha/beta comparison, which never exercises a zero-repo team at all.
+func assertZeroOwnedReposIsAbsentNotOrgWide(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	loader *RecommendationsLoader, windowStart, windowEnd time.Time,
+) {
+	t.Helper()
+
+	got, err := loader.LoadTeamMetricsWindow(ctx, loaderTeamNoOwnedRepos, loaderOrgID, windowStart, windowEnd)
+	if err != nil {
+		t.Fatalf("go loader (%s): %v", loaderTeamNoOwnedRepos, err)
+	}
+
+	// PRECONDITION: confirm the team genuinely has zero rows in
+	// team_repo_ownership for this org -- if the fixture accidentally seeded
+	// one, every assertion below would pass vacuously for the wrong reason.
+	var ownershipRows uint64
+	if scanErr := conn.QueryRow(ctx,
+		"SELECT count() FROM team_repo_ownership WHERE org_id = ? AND team_id = ?",
+		loaderOrgID, loaderTeamNoOwnedRepos,
+	).Scan(&ownershipRows); scanErr != nil {
+		t.Fatalf("count team_repo_ownership rows for %s: %v", loaderTeamNoOwnedRepos, scanErr)
+	}
+	if ownershipRows != 0 {
+		t.Fatalf("precondition failed: %s has %d team_repo_ownership row(s) in %s; "+
+			"this assertion needs a team that owns NOTHING",
+			loaderTeamNoOwnedRepos, ownershipRows, loaderOrgID)
+	}
+
+	for _, signal := range []struct {
+		name  string
+		known bool
+		value float64
+	}{
+		{"review_latency_p75_hours", got.ReviewLatencyP75HoursKnown, got.ReviewLatencyP75Hours},
+		{"rework_churn_ratio", got.ReworkChurnRatioKnown, got.ReworkChurnRatio},
+		{"hotspot_complexity_delta", got.HotspotComplexityDeltaKnown, got.HotspotComplexityDelta},
+		{"hotspot_churn_overlap", got.HotspotChurnOverlapKnown, got.HotspotChurnOverlap},
+	} {
+		if signal.known {
+			t.Errorf("team with zero owned repos: %s is PRESENT (%v) -- expected ABSENT. "+
+				"loaderOrgID has real repoAlpha/repoBeta data (owned by alpha/beta, not this "+
+				"team), so a present value here means the owned-repo filter fell back to an "+
+				"unscoped, org-wide read on empty ownership -- exactly the CHAOS-4897 defect "+
+				"this fix closes.",
+				signal.name, signal.value)
+		}
+	}
 }
 
 // assertCHAOS4897FixIsPresent executes the FIX rather than describing it.

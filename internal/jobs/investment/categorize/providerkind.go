@@ -90,24 +90,73 @@ func detectConfiguredProviderKind() (ProviderKind, bool) {
 	return "", false
 }
 
+// OrgProviderResolver resolves an org's usable BYO provider kind as a raw
+// provider name string, "" when the org has none usable (unconfigured,
+// incomplete, SSRF-rejected, or feature-gated off -- see
+// internal/llmorgsettings.Store.ResolveUsableProvider, the production
+// implementation). A non-nil error is the ONLY case ResolveProviderKindForOrg
+// treats as fatal: internal/llmorgsettings' own contract is that error
+// return is reserved for a byo_llm feature-flag lookup that genuinely could
+// not be answered for an org WITH BYO settings configured (fail closed,
+// never silently reroute that org's traffic to the platform default -- see
+// that package's doc comment). This package takes the resolver as a plain
+// function type, not a llmorgsettings.Store parameter, so it never depends
+// on Postgres directly -- callers pass a Store method value
+// (store.ResolveUsableProvider satisfies this type exactly).
+type OrgProviderResolver func(ctx context.Context, orgID string) (string, error)
+
 // ResolveProviderKind ports providers/__init__.py's resolve_provider_name,
-// narrowed to the platform-default path: org BYO resolution
-// (resolve_usable_org_llm_provider, backed by org settings storage) has no
-// Go port, since no Go caller threads an org_id through this package yet.
-// An explicit, non-"auto" request is honored as deliberate caller intent,
-// exactly as the Python source comments it -- never silently overridden by
-// LLM_PROVIDER or auto-detection.
+// narrowed to the platform-default path: org BYO resolution has no org_id
+// or resolver to consult. Equivalent to
+// ResolveProviderKindForOrg(context.Background(), requested, "", nil) --
+// kept as a separate, stable-signature entry point for every existing
+// caller that has no org context to offer (this package's own tests
+// included). See ResolveProviderKindForOrg for the org-aware path
+// CHAOS-5006 added.
 func ResolveProviderKind(requested string) (ProviderKind, error) {
+	return ResolveProviderKindForOrg(context.Background(), requested, "", nil)
+}
+
+// ResolveProviderKindForOrg ports providers/__init__.py's
+// resolve_provider_name IN FULL, org BYO resolution included (CHAOS-5006:
+// the "auto" branch previously always picked the platform provider,
+// silently diverging from Python whenever an org's own BYO provider
+// should have won -- a divergence #2197's unsupported-provider 501 guard
+// could not catch, because both sides name Go-supported kinds). resolveOrg
+// nil is treated exactly as "no org configured any BYO provider" (never
+// consulted) -- a caller with no org context (or no Postgres wiring yet)
+// gets IDENTICAL behavior to the pre-fix ResolveProviderKind.
+//
+// Precedence, matching Python's resolve_provider_name line for line:
+// explicit non-"auto" request > LLM_PROVIDER=none/mock operator kill-switch
+// > org BYO (checked BEFORE an explicit platform LLM_PROVIDER value, not
+// after -- a tenant's BYO configuration must not be overridden by the
+// platform default env) > explicit platform LLM_PROVIDER > env
+// auto-detection > error.
+func ResolveProviderKindForOrg(
+	ctx context.Context, requested string, orgID string, resolveOrg OrgProviderResolver,
+) (ProviderKind, error) {
 	if normalized := normalizeProviderKind(requested); normalized != providerKindAuto {
 		return normalized, nil
 	}
 
 	envKind := normalizeProviderKind(os.Getenv("LLM_PROVIDER"))
 	// Operator kill-switch / explicit disable: LLM_PROVIDER=none or mock
-	// must not be overridden by auto-detection.
+	// must not be overridden by auto-detection OR by org BYO.
 	if envKind == ProviderKindNone || envKind == ProviderKindMock {
 		return envKind, nil
 	}
+
+	if resolveOrg != nil {
+		orgProvider, err := resolveOrg(ctx, orgID)
+		if err != nil {
+			return "", err
+		}
+		if orgProvider != "" {
+			return normalizeProviderKind(orgProvider), nil
+		}
+	}
+
 	if envKind != providerKindAuto {
 		return envKind, nil
 	}

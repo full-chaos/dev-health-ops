@@ -111,6 +111,7 @@ internal/joboutbox	12
 internal/jobrescue	5
 internal/jobroute	6
 internal/jobruntime	5
+internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130
 internal/jobs/metrics/daily	6

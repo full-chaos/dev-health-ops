@@ -172,6 +172,18 @@ func TestDeriveRejectsRawKindPointingAtTheWrongIDSpace(t *testing.T) {
 	assertSingleRejection(t, Derive(inputs), ReasonNotAdmissible)
 }
 
+// TestDeriveRejectsGithubClosingReferenceRawKindPointingAtTheWrongIDSpace is
+// the github_closing_reference counterpart to the linear_attachment case
+// above (codex round 1 on #2174, P3: the wrong-id-space test existed for
+// linear_attachment only). A github_closing_reference row whose target is a
+// Linear id is malformed the same way, in the other direction.
+func TestDeriveRejectsGithubClosingReferenceRawKindPointingAtTheWrongIDSpace(t *testing.T) {
+	inputs := baseInputs()
+	inputs.Dependencies[0].RelationshipTypeRaw = "github_closing_reference"
+	inputs.Dependencies[0].TargetWorkItemID = testLinear
+	assertSingleRejection(t, Derive(inputs), ReasonNotAdmissible)
+}
+
 // TestDeriveIsFirstWinsOnDuplicateIdentity pins Python's first-wins behaviour
 // (builder.py:764-767). Two dependency rows reaching the same
 // (work_item, repo, pr) identity must produce ONE row, and it must be the
@@ -389,5 +401,37 @@ func TestDeriveRefusesAnEmptyOrg(t *testing.T) {
 	}
 	if !result.Balanced() {
 		t.Fatalf("accounting does not balance: %+v", result)
+	}
+}
+
+// TestParseGithubIssueNumber is the direct, exhaustive proof for
+// parseGithubIssueNumber's domain (codex round 3 on #2174, P2): the exact
+// signed-int64 domain strconv.Itoa(node.Number) can produce
+// (github_work_items_rows.go:781,784), never a broader one.
+func TestParseGithubIssueNumber(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		number string
+		want   int
+		wantOK bool
+	}{
+		{"one", "1", 1, true},
+		{"MaxInt64 -- the boundary VALUE itself must be accepted", "9223372036854775807", 9223372036854775807, true},
+		{"2^63 overflows int64 -- one past MaxInt64, must be rejected", "9223372036854775808", 0, false},
+		{"zero parses, the >=1 gate is the caller's job, not this function's", "0", 0, true},
+		{"negative parses, the >=1 gate is the caller's job, not this function's", "-1", -1, true},
+		{"leading plus sign -- ParseInt accepts it, Itoa never emits one", "+1", 0, false},
+		{"leading zero", "01", 0, false},
+		{"multiple leading zeros", "007", 0, false},
+		{"non-numeric", "abc", 0, false},
+		{"empty", "", 0, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := parseGithubIssueNumber(testCase.number)
+			if ok != testCase.wantOK || (ok && got != testCase.want) {
+				t.Fatalf("parseGithubIssueNumber(%q) = (%d, %v), want (%d, %v)",
+					testCase.number, got, ok, testCase.want, testCase.wantOK)
+			}
+		})
 	}
 }

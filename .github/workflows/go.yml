@@ -212,42 +212,35 @@ concurrency:
   # Cost, stated plainly: a branch pushed with no PR open gets no Go run until
   # the PR is opened. Branch protection gates on the PR, so nothing merges
   # unproven -- what is lost is early feedback before a PR exists.
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  # Historical (round 6, CHAOS-4676): a live-proof commit demonstrated the
-  # shared group cancelling an earlier `push` run when `pull_request` arrived at
-  # the same SHA. That cross-event arbitration no longer occurs on feature
-  # branches, because `push` no longer fires there -- see CHAOS-4814 above. The
-  # group still bounds the workflow to ONE live fan-out per branch (~13 jobs,
-  # several at a 25-minute cap) by cancelling a superseded re-push.
   #
-  # merge_group runs must not be cancelled: a burst of merges lands several
-  # within the same group in quick succession, and with an unconditional
-  # cancel-in-progress every one but the last gets cancelled before
-  # go-storage-integration finishes — so most merges never get a real
-  # pass/fail, only "cancelled". integration.yml (push-to-main integration
-  # suite) already sets cancel-in-progress: false for the same reason;
-  # docs-cloudflare.yml uses this same event-conditional pattern.
+  # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed)
+  # replaced the shared head_ref/ref_name key above with the canonical
+  # fleet-wide shape: PR number for pull_request, ref for a push to a
+  # non-main branch (none exist today -- push is main-only), commit sha for
+  # a push to main or a merge_group entry. Practical effect on the ordinary
+  # case is NONE -- push only ever fires on main, so a feature-branch PR's
+  # group was already the only run on that branch either way. The one edge
+  # case that changes is a main-headed PR (real precedent: #1274) racing an
+  # actual main push: previously they deliberately SHARED the `head_ref ||
+  # ref_name` group (CHAOS-4676) so GitHub's own queue would arbitrate a
+  # single winner -- which is exactly what caused CHAOS-4676's incident
+  # (the loser left a CANCELLED required check-run, branch protection
+  # BLOCKED with everything green). Under the canonical key the PR gets its
+  # own PR-number group and the push gets its own sha group -- they can no
+  # longer collide or cancel each other at all, at the cost of occasionally
+  # running both instead of arbitrating to one. A stronger guarantee for a
+  # rarer, cheaper cost.
   #
-  # Direct pushes to `main` must also not be cancelled, for the identical
-  # reason (CHAOS-3948): main is never a PR's head branch in this repo's
-  # normal flow, so a main push never actually races a pull_request run --
-  # but a burst of fast-follow merges to main WOULD cancel each other's Go
-  # coverage if this were left unconditionally true, the same failure mode
-  # merge_group already guards against.
-  #
-  # The exemption MUST use the same effective-branch expression as the
-  # group key above (codex round 6, CHAOS-4676): `github.ref_name` alone is
-  # WRONG for a `pull_request` event, where it is the synthetic
-  # `<pr-number>/merge` ref, never the literal string `main` -- even when
-  # the PR's actual head branch IS `main` (real, not hypothetical: PR #1274
-  # in this repo had `headRefName: main`). Comparing raw `ref_name` let
-  # such a PR's run carry `cancel-in-progress=true` while still sharing the
-  # `Go-main` group (via `head_ref`) with an in-progress direct-main push,
-  # reintroducing the exact CHAOS-3948 burst-cancellation problem this
-  # exemption exists to prevent. `head_ref || ref_name` closes it: a push
-  # to main (head_ref empty, falls to ref_name `main`) and a main-headed PR
-  # (head_ref `main` directly) are now exempted identically.
-  cancel-in-progress: ${{ github.event_name != 'merge_group' && (github.head_ref || github.ref_name) != 'main' }}
+  # merge_group runs must still not be cancelled: a burst of merges lands
+  # several within the same group in quick succession, and cancelling all
+  # but the last before go-storage-integration finishes means most merges
+  # never get a real pass/fail, only "cancelled". The canonical key achieves
+  # this the same way it protects main: merge_group entries are sha-keyed,
+  # never colliding with each other, and the cancel expression below only
+  # ever fires for `pull_request` or a non-main `push` -- `merge_group` is
+  # neither, so it is structurally never cancelled, same as before.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -419,16 +412,31 @@ jobs:
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
   # lane-4904-acr-runners/contract-v1.6-signed.md -- supersedes v1.5.1's
-  # fallback-poller pattern for routed jobs). Both self-hosted jobs added
-  # by this PR (the storage-integration shards, and go-container-
-  # reproducibility further down) need a working Docker daemon --
-  # testcontainers for the shards' throwaway ClickHouse, real container
-  # builds for the reproducibility check. Byte-identical precondition job
-  # to docker-images.yml's own dind-smoke-test (#2180), which has not
-  # proven this pool's dind capability in production either (that PR is
-  # still open) -- this proves it independently for go.yml's own use, per
-  # the contract's "docker-socket/testcontainers jobs only after the
-  # pool's dind is proven for that job" clause.
+  # fallback-poller pattern for routed jobs). go-container-reproducibility
+  # further down needs a working Docker daemon for its real container
+  # builds. Byte-identical precondition job to docker-images.yml's own
+  # dind-smoke-test (#2180), which has not proven this pool's dind
+  # capability in production either (that PR is still open) -- this
+  # proves it independently for go.yml's own use, per the contract's
+  # "docker-socket/testcontainers jobs only after the pool's dind is
+  # proven for that job" clause.
+  #
+  # go-storage-integration-shard was ALSO routed through this pool in an
+  # earlier version of this PR; reverted (chris ruling 09-03, via CF): 5
+  # of its 6 shard legs timed out at the pool's 25m inner cap under real
+  # co-tenancy (5-8 concurrent pods across ops+acr, plus two bigboy-native
+  # suites and a codex round sharing the same 16-core box), measured
+  # against the SAME shards' consistent ~12min wall on hosted runners
+  # (6 green runs, 11m27s-12m44s, never close to 20min) -- a genuine 2x+
+  # contention penalty, not a cache-cold or timeout-sizing problem
+  # (GOMODCACHE/GOCACHE were confirmed warm throughout, zero `go:
+  # downloading` lines in any failed shard's log). The pool has no
+  # additional cores to give this suite (chris: maxRunners stays 8,
+  # hosted-60 is the intended overflow for contention-sensitive suites).
+  # go-container-reproducibility and this dind-smoke-test precondition
+  # stay on the pool -- both passed clean on the same warm-cache run
+  # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
+  # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
     if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, oci-arc-runners]
@@ -463,17 +471,14 @@ jobs:
           fi
           echo "docker build + run succeeded: ${output}"
 
-  # Runner contract v1.6: exactly one of this job and its self-hosted twin
-  # below runs per workflow run, gated on complementary conditions over
-  # the SAME SELF_HOSTED_RUNNERS variable (+ the same fork-PR exclusion) --
-  # never both, never neither. Both share the same templated `name:`, so
-  # flipping the variable never leaves a stuck or renamed required check.
+  # Hosted-only (chris ruling 09-03, via CF, after a measured pool
+  # contention penalty -- see the comment above dind-smoke-test above):
+  # this job briefly had a self-hosted twin gated on SELF_HOSTED_RUNNERS,
+  # same shape as go-container-reproducibility below. Reverted; the pool
+  # stays for go-container-reproducibility only.
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
     needs: go-storage-integration-plan
-    if: >-
-      vars.SELF_HOSTED_RUNNERS != 'enabled' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -533,126 +538,32 @@ jobs:
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
-  go-storage-integration-shard-self-hosted:
-    name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
-    needs: [go-storage-integration-plan, dind-smoke-test]
-    if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, oci-arc-runners]
-    # 30m: measured pool wall time under load (9.1-17.6min per shard, run
-    # 33764964602/33757500905) plus real margin, per the contract's
-    # "sized from measured pool wall time under load" clause -- not the
-    # v1.5.1 poller's double-bound-against-cancellation-ambiguity
-    # reasoning (retired with the poller itself), just a genuine outer
-    # safety net now that there is no fallback catching a hang.
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
-    env:
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
-      # CHAOS-4906 pool module cache (09-03): a warm, persistent GOMODCACHE/
-      # GOCACHE shared by every job on this pool (helm rev 6 -- see the
-      # oci-arc-runners `runner` container env, hostPath at
-      # /var/lib/oci-arc-runners/go-cache on bigboy), so the cold
-      # `go: downloading testcontainers-go` measured on this job's first
-      # pool run does not repeat on every one of up to 8 concurrent runner
-      # pods. Restated here explicitly rather than relying only on the pod
-      # env, so a reader of this file sees the real cache location without
-      # needing to know the helm values. NEVER run `go clean -cache` or
-      # `go clean -modcache` against this path in any job on this pool --
-      # it is shared, cross-job and cross-repo; cleanup ownership is the
-      # pool's, not this job's.
-      GOMODCACHE: /mnt/go-cache/mod
-      GOCACHE: /mnt/go-cache/build
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-          # `false`: actions/setup-go's own cache defaults to `true`, which
-          # restores/saves a GitHub Actions cache TARBALL into whatever
-          # GOMODCACHE/GOCACHE reports -- here, the pool's persistent,
-          # concurrently-shared hostPath (above). Extracting a possibly
-          # stale tarball into a directory OTHER matrix legs and other
-          # jobs are simultaneously reading/writing on this single-node
-          # pool is a real corruption risk, not just wasted redundancy
-          # with the persistent cache that already does this job. The
-          # persistent mount IS the cache; GH's own layer would fight it.
-          cache: false
-
-      - name: Set up Python 3.14 for the ClickHouse migration chain
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Install locked ClickHouse migration dependencies
-        run: python -m pip install --no-deps -r ci/requirements-clickhouse-migrations.txt
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pre-pull pinned test dependency images with bounded retry
-        run: bash ci/check_go.sh integration-prepull
-
-      - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
-        # timeout 25m: the contract's own "inner test timeouts strictly
-        # shorter [than the job's timeout-minutes]" clause -- a genuine
-        # hung test still gets a goroutine dump and an actionable failure
-        # instead of an ambiguous job-level cancellation, with 5m headroom
-        # under the 30m outer cap for checkout/setup/pre-pull.
-        run: timeout 25m bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
-
   # Preserve the existing required-check contract while the implementation
   # fans out behind it. fail-fast is disabled above, so this job observes the
   # aggregate result only after every shard has reached a terminal state.
-  #
-  # Runner contract v1.6: needs BOTH legs (exactly one runs per the
-  # variable, the other reports "skipped") -- a leg that ran must have
-  # succeeded, and at least one leg must have actually run (both skipped
-  # is a routing bug, not a passing state).
   go-storage-integration:
     name: go-storage-integration
-    if: ${{ always() }}
     needs:
       - go-storage-integration-plan
       - go-storage-integration-shard
-      - go-storage-integration-shard-self-hosted
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
-      SHARD_SELF_HOSTED_RESULT: ${{ needs.go-storage-integration-shard-self-hosted.result }}
     steps:
-      - name: Require the plan and whichever shard leg ran to have passed
+      - name: Require the plan and every shard to have passed
         run: |
           set -euo pipefail
           if [ "${PLAN_RESULT}" != "success" ]; then
             echo "integration plan result: ${PLAN_RESULT}" >&2
             exit 1
           fi
-          if [ "${SHARD_RESULT}" = "failure" ] || [ "${SHARD_RESULT}" = "cancelled" ]; then
-            echo "hosted shard leg result: ${SHARD_RESULT}" >&2
+          if [ "${SHARD_RESULT}" != "success" ]; then
+            echo "shard result: ${SHARD_RESULT}" >&2
             exit 1
           fi
-          if [ "${SHARD_SELF_HOSTED_RESULT}" = "failure" ] || [ "${SHARD_SELF_HOSTED_RESULT}" = "cancelled" ]; then
-            echo "self-hosted shard leg result: ${SHARD_SELF_HOSTED_RESULT}" >&2
-            exit 1
-          fi
-          if [ "${SHARD_RESULT}" = "skipped" ] && [ "${SHARD_SELF_HOSTED_RESULT}" = "skipped" ]; then
-            echo "both the hosted and self-hosted shard legs were skipped -- exactly one must run per the SELF_HOSTED_RUNNERS variable; this is a routing bug, not a passing state" >&2
-            exit 1
-          fi
-          echo "all deterministic Go integration shards passed (hosted=${SHARD_RESULT}, self-hosted=${SHARD_SELF_HOSTED_RESULT})"
+          echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
     runs-on: ubuntu-latest

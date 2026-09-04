@@ -107,9 +107,14 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # cmd/query-api/internal/investmentexplain and CHAOS-4902's
     # internal/testsupport/chschema (the RMT sweep's own authoritative-count
     # integration test). Merged total: 42.
+    # CHAOS-4989 added internal/llmorgsettings (42 -> 43 discovered, 42 -> 43
+    # will run): the org-scoped BYO LLM settings read path's own
+    # TestResolveUsableProvider_PrecedenceMatrix/TestCredentials_SourceBound
+    # run against a real Postgres container (feature_flags/
+    # org_feature_overrides/org_licenses/organizations/settings schema).
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
-    assert "42 package(s) discovered, 0 denylisted, 42 will run" in result.stdout
+    assert "43 package(s) discovered, 0 denylisted, 43 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

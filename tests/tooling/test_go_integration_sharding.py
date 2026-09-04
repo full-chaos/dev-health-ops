@@ -64,6 +64,10 @@ EXPECTED_PACKAGES = {
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
     "internal/jobs/workgraph/issueprlinks",
+    # CHAOS-4989: the org-scoped BYO LLM settings read path's own
+    # feature_flags/org_feature_overrides/org_licenses/organizations/
+    # settings precedence matrix runs against a real Postgres container.
+    "internal/llmorgsettings",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -356,8 +360,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 40 -> 41 on its own branch: CHAOS-4977's
     # cmd/query-api/internal/investmentexplain and CHAOS-4902's
     # internal/testsupport/chschema. The merged total is 42.
-    assert "42 package(s) discovered, 0 denylisted, 42 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 42 package(s)" in result.stdout
+    # CHAOS-4989 added internal/llmorgsettings: 42 -> 43.
+    assert "43 package(s) discovered, 0 denylisted, 43 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 43 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -396,7 +401,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 40 -> 41 on its own branch (see the "package(s) discovered" note
     # above). FLATTENED includes the providersync shard-1 package, same
     # as every other count in this comment block. Merged total: 42.
-    assert len(flattened) == len(set(flattened)) == 42
+    # CHAOS-4989 added internal/llmorgsettings: 42 -> 43.
+    assert len(flattened) == len(set(flattened)) == 43
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1712,7 +1718,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # 39 -> 40 on its own branch: cmd/query-api/internal/investmentexplain
     # and internal/testsupport/chschema. Merged total: 41
     # (42 discovered - 1 for the providersync shard-1 package).
-    assert len(selected_packages) == len(set(selected_packages)) == 41
+    # CHAOS-4989 added internal/llmorgsettings: 42, not 41
+    # (43 discovered - 1 for the providersync shard-1 package).
+    assert len(selected_packages) == len(set(selected_packages)) == 42
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

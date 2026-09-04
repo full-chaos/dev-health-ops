@@ -193,6 +193,13 @@ service_pgid() {
 stop_service() {
   local name="$1" pid="$2"
   [ -n "${pid}" ] || return 0
+  # Refuse anything that is not a plausible child pid BEFORE any signal is sent
+  # (codex r3 P3). service_pgid() already declines to resolve a group for pid<=1,
+  # but that only suppressed the GROUP form -- the direct `kill -TERM "${pid}"`
+  # below would still have fired, so running as root in a container this would
+  # have signalled PID 1. A teardown helper must never be able to signal init.
+  case "${pid}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "${pid}" -gt 1 ] || return 0
   kill -0 "${pid}" >/dev/null 2>&1 || return 0
 
   # Capture the group id NOW, while the leader is still alive. `ps` cannot report
@@ -266,7 +273,10 @@ cleanup() {
     return "${rc}"
   fi
   CLEANUP_DONE=1
-  trap '' EXIT INT TERM
+  # Block re-entry from a second signal while tearing down, but do NOT clear the
+  # EXIT trap here -- on_signal() below manages that, because clearing EXIT from
+  # inside cleanup is what let a cancelled run fall through and resume.
+  trap '' INT TERM
   # Kill ORDER is load-bearing (CHAOS-5025), not cosmetic. dev-health-worker is
   # the API's only client (--operational-bridge-url below), so the API must be
   # signalled LAST. The old loop signalled it FIRST and then blocked on an
@@ -280,7 +290,24 @@ cleanup() {
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
-trap cleanup EXIT INT TERM
+# A trapped INT/TERM runs the handler and then RESUMES the script -- it does not
+# exit (codex r3 P1). With `cleanup` bound directly to INT/TERM, a cancelled run
+# tore down its services, deleted TMP_DIR, and then carried on executing the
+# proof against nothing; the previous re-entrancy fix made it worse by also
+# ignoring every later signal, so the run could no longer be stopped at all.
+# Handle signals explicitly: tear down once, drop the EXIT trap so cleanup does
+# not run twice, restore the signal's default disposition, and re-raise it so
+# the script dies of the signal and reports 128+signum rather than continuing.
+on_signal() {
+  local sig="$1"
+  cleanup
+  trap - EXIT
+  trap - "${sig}"
+  kill -"${sig}" "$$"
+}
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 wait_for_http_ready() {
   local name="$1" url="$2" log_file="$3" pid_var_name="$4"

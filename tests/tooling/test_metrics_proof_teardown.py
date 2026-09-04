@@ -42,13 +42,38 @@ PRELUDE = "set -euo pipefail\nTEARDOWN_WAIT_SECS=1\n"
 
 
 def _slice(start_pattern: str, end_pattern: str) -> str:
+    """Slice the shipped source between two anchors, both required to be UNIQUE.
+
+    Uniqueness is the whole guard (codex round 3, P2). With only "first match"
+    semantics a script could carry a WORKING decoy definition before the anchor
+    and a BROKEN real one after it: bash uses the later definition, while these
+    tests would happily exercise the decoy and report green. That was
+    demonstrated -- 13 tests passed against a `stop_service()` that returned
+    without signalling any real service.
+    """
     text = SCRIPT.read_text()
+    starts = re.findall(start_pattern, text, re.M)
+    ends = re.findall(end_pattern, text, re.M)
+    assert len(starts) == 1, (
+        f"anchor {start_pattern!r} occurs {len(starts)}x, want exactly 1"
+    )
+    assert len(ends) == 1, f"anchor {end_pattern!r} occurs {len(ends)}x, want exactly 1"
     start = re.search(start_pattern, text, re.M)
     end = re.search(end_pattern, text, re.M)
-    assert start is not None, f"anchor not found: {start_pattern}"
-    assert end is not None, f"anchor not found: {end_pattern}"
+    assert start is not None and end is not None
     assert start.start() < end.start()
     return text[start.start() : end.start()]
+
+
+def test_teardown_functions_are_defined_exactly_once():
+    """codex round 3, P2: a duplicate definition makes the slice test a decoy."""
+    text = SCRIPT.read_text()
+    for name in ("service_pgid", "stop_service", "cleanup", "on_signal"):
+        found = re.findall(rf"^{name}\(\) \{{", text, re.M)
+        assert len(found) == 1, (
+            f"{name}() is defined {len(found)}x in the script; a second "
+            "definition would shadow the one these tests slice out"
+        )
 
 
 def _teardown_source() -> str:
@@ -126,13 +151,25 @@ stop_service stubborn "$SERVICE"
     assert "escalated to SIGKILL" in result.stderr, result.stderr
 
 
-def test_stop_service_is_a_noop_for_empty_or_bogus_pids():
+def test_stop_service_never_signals_init_or_a_bogus_pid(tmp_path):
+    """codex round 3, P3: the previous version of this test could SIGTERM pid 1.
+
+    `service_pgid()` declines to resolve a group for pid<=1, but that only
+    suppressed the GROUP form -- the direct `kill -TERM "${pid}"` still fired, so
+    as root in a container this would have signalled init. Asserting "it returned
+    0" hid that, because signalling pid 1 also returns 0. Shadow `kill` and
+    assert NOTHING was signalled at all, including `kill -0`.
+    """
+    log = tmp_path / "kill.log"
     body = (
         PRELUDE
         + _teardown_source()
-        + """
+        + f"""
+kill() {{ echo "KILL $*" >> {log}; return 0; }}
 stop_service none ""
 stop_service bogus "not-a-pid"
+stop_service negative "-1"
+stop_service zero "0"
 stop_service init "1"
 echo REACHED_END
 """
@@ -140,6 +177,10 @@ echo REACHED_END
     result = _run(body)
     assert result.returncode == 0, result.stderr
     assert "REACHED_END" in result.stdout
+    recorded = log.read_text() if log.exists() else ""
+    assert recorded == "", (
+        f"stop_service signalled something it must refuse: {recorded!r}"
+    )
 
 
 @pytest.mark.parametrize("bad", ["abc", "12.5", "0", "-5", "999999", "60s"])
@@ -194,4 +235,37 @@ def test_worker_shutdown_timeout_stays_at_the_contract_minimum():
         "the proof's worker shutdown-timeout must stay at the contract minimum "
         "(7200s longest selected timeout + 60s workerFinalizationBuffer); see "
         "cmd/dev-health-worker/dependencies.go"
+    )
+
+
+def test_a_cancelled_run_tears_down_and_exits_instead_of_resuming(tmp_path):
+    """codex round 3, P1: a trapped signal runs the handler and then RESUMES.
+
+    Bound directly to INT/TERM, `cleanup` tore down the services, deleted
+    TMP_DIR, and the script carried on executing the proof against nothing. This
+    exercises the REAL trap wiring -- `on_signal` and the `trap` lines, not just
+    the helpers above -- which is the coverage gap round 3 named.
+    """
+    full = _slice(r"^service_pgid\(\) \{", r"^trap 'on_signal TERM' TERM$")
+    full += "trap 'on_signal TERM' TERM\n"
+    marker = tmp_path / "resumed"
+    body = f"""set -euo pipefail
+TMP_DIR="$(mktemp -d)"
+API_PID=""; WORKER_PID=""; RECONCILER_PID=""
+TEARDOWN_WAIT_SECS=1
+{full}
+set -m
+( trap "" TERM; while :; do sleep 1; done ) & WORKER_PID=$!
+set +m
+( sleep 0.3; kill -INT $$ ) &
+sleep 5
+echo RESUMED > {marker}
+"""
+    result = _run(body, timeout=45)
+    assert not marker.exists(), "the script resumed after a cancellation signal"
+    # subprocess reports death-by-signal as -signum; a shell in between would
+    # report the same thing as 128+signum. Accept either spelling, reject 0.
+    assert result.returncode in (-2, 130), (
+        f"want death-by-SIGINT (-2, or 130 via a shell) so the run reports "
+        f"cancellation rather than success, got {result.returncode}"
     )

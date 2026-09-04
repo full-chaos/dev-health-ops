@@ -372,7 +372,9 @@
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
 #   -n NAME   round name prefix (default: worktree basename) -> NAME-<ts>.md/.log
-#   -m MODEL  model (default: $CODEX_REVIEW_MODEL, else gpt-5.6-terra)
+#   -m MODEL  model (default: $CODEX_REVIEW_MODEL, else gpt-5.6-luna --
+#             chris's ruling 09-04 15:32 PDT: reverted from gpt-5.6-terra,
+#             unclear terra was giving more review accuracy)
 #   -e EFF    reasoning effort (default: $CODEX_REVIEW_EFFORT, else xhigh)
 #   -p FILE   prompt file (default: prompt.md in the lane worktree)
 #   -t SHA    tip to review (default: HEAD of the lane worktree)
@@ -558,7 +560,7 @@ case "${1:-}" in
     ;;
 esac
 
-WT="$PWD" NAME="" MODEL="${CODEX_REVIEW_MODEL:-gpt-5.6-terra}" EFF="${CODEX_REVIEW_EFFORT:-xhigh}"
+WT="$PWD" NAME="" MODEL="${CODEX_REVIEW_MODEL:-gpt-5.6-luna}" EFF="${CODEX_REVIEW_EFFORT:-xhigh}"
 PROMPT="" TIP="" OUTDIR="" KEEP=0 ALLOW_UNPUSHED=0
 while getopts 'w:n:m:e:p:t:o:kU' f; do
   case "$f" in
@@ -862,20 +864,29 @@ fi
 RGOFLAGS="${GOFLAGS_STRIPPED:+$GOFLAGS_STRIPPED }${CODEX_REVIEW_GOFLAGS:--p=2}"
 RGOMAXPROCS="${CODEX_REVIEW_GOMAXPROCS:-4}"
 
-# Sandbox mode. read-only is the historical default and stays the default on
-# macOS, where /tmp is proven writable under it (see v4.3/v4.4 above).
+# Sandbox mode. read-only is the historical default on macOS, where /tmp is
+# proven writable under it (see v4.3/v4.4 above).
 #
-# On Linux it cannot be the default: probed on bigboy (v4.8 note above),
-# read-only there grants ZERO writable paths, so every Go command dies before
-# it can create its work dir or build cache -- there is no path this wrapper
-# could point GOTMPDIR/GOCACHE at that would help, because none exists.
-# workspace-write is therefore the Linux default; it is not a widening choice,
-# it is the only mode in which Go executes there at all. CODEX_REVIEW_SANDBOX,
-# when the caller sets it explicitly, always wins over this host default.
-case "$HOST_OS" in
-  Linux) RSANDBOX="${CODEX_REVIEW_SANDBOX:-workspace-write}" ;;
-  *)     RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}" ;;
-esac
+# Linux USED TO default to workspace-write here: probed on bigboy (v4.8 note
+# above), read-only there grants ZERO writable paths, so every Go command
+# dies before it can create its work dir or build cache -- there was no path
+# this wrapper could point GOTMPDIR/GOCACHE at that would help, because none
+# existed. That was the right call when the goal was letting the REVIEWER
+# run Go itself inside the round.
+#
+# CHANGED 09-04 (chris's ruling, 15:26 PDT): "codex should not be running
+# tests and go lang like it's been doing" -- a review round is a code-READING
+# exercise now, not a code-EXECUTING one (see the STANDING RULES read-only
+# policy appended to every prompt, below). read-only is therefore the default
+# on BOTH platforms: on Linux this deliberately means the reviewer's own `go
+# test`/`go build` CANNOT run inside the round any more -- that is the
+# intended effect, not a regression of the v4.8 finding above. The wrapper's
+# OWN pre-round warm step (further below) is unaffected either way: it runs
+# entirely OUTSIDE this sandbox, via the wrapper's own `env`+bash, before
+# codex ever starts. CODEX_REVIEW_SANDBOX, when a caller sets it explicitly
+# (e.g. a launcher that still wants workspace-write for a specific reason),
+# always wins over this default -- opt-in, not opt-out.
+RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}"
 case "$RSANDBOX" in
   read-only | workspace-write) ;;
   *) die "CODEX_REVIEW_SANDBOX must be read-only or workspace-write, got '$RSANDBOX'" ;;
@@ -1414,7 +1425,19 @@ fi
 # name or a flag -- a repo with no go.mod (dev-health-web, acr-frontend)
 # skips the entire step and exports no Go env to codex; a repo WITH go.mod
 # is unaffected and keeps the full warm step, including its loud abort.
-if [ -f "$RW/go.mod" ]; then
+#
+# v4.8.7 addendum (chris, 09-04 15:26 PDT): the warm step's own Go execution
+# happens outside codex's sandbox regardless, so it was never the thing chris
+# flagged ("codex should not be running tests and go lang") -- that concern is
+# the REVIEWER's own exec blocks, closed above by the read-only sandbox
+# default and the STANDING RULES read-only policy below. This override is a
+# separate, narrower ask: an operator-controlled way to skip the warm step
+# ENTIRELY (e.g. a docs-only round where warming Go serves no reviewer that
+# will never run it), without waiting on the v4.8.8 no-Go-in-diff auto-skip.
+if [ "${CODEX_REVIEW_SKIP_WARM:-0}" = "1" ]; then
+  printf 'warm-step: SKIPPED (operator)\n' >>"$L"
+  warn "warm: SKIPPED -- CODEX_REVIEW_SKIP_WARM=1, no Go env exported -- proceeding straight to codex"
+elif [ -f "$RW/go.mod" ]; then
   WARM_LOG="$L.warm"
   WARM_OUT="$RGOTMPDIR/warmbuild"
   WARM_START=$(date +%s)
@@ -1514,6 +1537,16 @@ cat >> "$RW/prompt.md" <<'STANDING_RULES'
 
 STANDING RULES FOR EVERY ROUND (appended by the wrapper; not optional):
 
+READ-ONLY REVIEW POLICY (chris's ruling, 09-04): this round is a code-READING
+exercise, not a code-EXECUTING one. Do not run `go test`, `go build`, `go
+run`, `go vet`, or any other language build/test/run command, regardless of
+whether the sandbox you are given would technically permit it. Your exec
+blocks should be limited to inspection commands: `git`, `rg`/`grep`, `cat`,
+`sed`, `awk`, `ls`, `diff`, and similar read-only tools against the files
+already in this worktree. If verifying a claim genuinely requires executing
+code, name the specific proof you would need and label it ARGUED/unrun in
+your verdict -- do not run it yourself in this round, even if you could.
+
 Never run docker or compose commands, and never connect to a running service.
 The shared stack (containers named `dev-health-*`, the shared compose project,
 any ClickHouse/Postgres/Redis reachable on this host) belongs to other people
@@ -1537,6 +1570,12 @@ passes on arm64 while the x86 case it was meant to catch is still broken
 (CHAOS-4818 / #2142's NaN sign-bit reds appeared ONLY in CI). A green from the
 wrong architecture is worse than no green, because it is indistinguishable
 from a real one in your verdict. Say the check is CI-only and move on.
+
+The next two paragraphs are LEGACY and apply only on a round where an
+operator has explicitly opted this round into `workspace-write` (the READ-ONLY
+REVIEW POLICY above governs the default): if that is not this round, running
+`go test` is out of scope regardless of what the sandbox would technically
+allow, and you should not attempt it.
 
 If `go test` is unavailable to you in this sandbox for any reason (module
 download blocked, a denied cache path, anything else), say so explicitly and

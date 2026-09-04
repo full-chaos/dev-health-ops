@@ -99,7 +99,7 @@ extract() {
 # The two helpers every extracted block below may call, pulled verbatim
 # from the top of codex-review.sh (same lines the real script defines
 # them at) so the extracted blocks run with production-identical warn/die.
-extract 399 400 'warn() {' "$WORK/helpers.sh"
+extract 401 402 'warn() {' "$WORK/helpers.sh"
 
 # A stub `uname` on PATH -- used ONLY by the dedicated "command -p closes off
 # a PATH-shadowed uname" test near the end of this file. Nothing else uses
@@ -123,7 +123,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1296 1303 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1307 1314 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -175,7 +175,7 @@ rm -rf "$D1B" 2>/dev/null || true
 # it sits entirely BEFORE the HOST_OS resolution line, so it has no
 # HOST_OS dependency of its own.
 # ---------------------------------------------------------------------------
-extract 716 738 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
+extract 718 740 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
 
 mkdir -p "$WORK/lane-a/acr" "$WORK/lane-b/acr"
 LANE_KEY_A=$(
@@ -218,7 +218,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 1132 1141 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 1143 1152 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -289,7 +289,7 @@ fi
 # run the real `mkdir -p "$OUTDIR"` line against a not-yet-existing path,
 # assert it now exists.
 # ---------------------------------------------------------------------------
-extract 657 657 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
+extract 659 659 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
 
 OUTDIR_TEST="$WORK/does/not/exist/yet"
 [ ! -e "$OUTDIR_TEST" ] || { echo "FAIL: test setup bug, $OUTDIR_TEST already exists" >&2; exit 1; }
@@ -313,7 +313,7 @@ fi
 # run the real TS/V/L/touch block verbatim against a fresh OUTDIR, assert
 # $L exists (and is empty) right after, well before any warm-step logic.
 # ---------------------------------------------------------------------------
-extract 670 682 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
+extract 672 684 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
 
 OUTDIR_LOG_TEST="$WORK/log-test-outdir"
 mkdir -p "$OUTDIR_LOG_TEST"
@@ -340,7 +340,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1457 1457 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1480 1480 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -398,7 +398,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1417 1502 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1437 1524 'if [ "${CODEX_REVIEW_SKIP_WARM:-0}" = "1" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -497,7 +497,7 @@ fi
 # mkdir -p lines that follow it in the real script. Used ONLY for the (a)
 # default-value check below, so that case never touches the filesystem at
 # all. Starts right after the HOST_OS validation case/esac block ends.
-extract 814 832 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
+extract 816 834 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
 grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
   || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
 if grep -qE '^mkdir -p "\$RGOCACHE"' "$WORK/cache_resolve_value_only.sh"; then
@@ -509,7 +509,7 @@ fi
 # point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
 # never fall through to the real /var/lib/oci-cache default, so their mkdir
 # is always safe.
-extract 814 839 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
+extract 816 841 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
 
 run_cache_resolve_value_only() {
   # $1=WT $2=TS $3=HOST_OS  env GOCACHE/GOMODCACHE/CODEX_REVIEW_GOCACHE/
@@ -634,7 +634,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 1132 1141 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 1143 1152 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -675,7 +675,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1321 1340 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1332 1351 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -732,7 +732,7 @@ fi
 # `command -p uname -s` assignment line above it) -- $HOST_OS is set
 # directly, per the file-level SAFETY/DESIGN NOTE.
 # ---------------------------------------------------------------------------
-extract 799 802 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
+extract 801 804 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
 
 # (a) malformed HOST_OS ("Linux\r", set directly, not via a uname stub —
 # see the note above) now DIES with the expected message instead of
@@ -827,7 +827,7 @@ done
 # defeats BOTH attacks; (4) the ACTUAL shipped HOST_OS assignment line,
 # extracted verbatim, also resolves to the real value under both.
 # ---------------------------------------------------------------------------
-extract 780 780 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
+extract 782 782 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
 
 REAL_UNAME_S=$(command -p uname -s)
 make_uname_stub 'TotallyFakeOS'
@@ -916,7 +916,7 @@ fi
 # instead of switching location. Proof: extract the real if/else/heredoc
 # block, run it once per host, assert the generated prompt-fragment text.
 # ---------------------------------------------------------------------------
-extract 1587 1597 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1626 1636 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
@@ -959,7 +959,7 @@ fi
 # unavailable. Proof: extract the real STANDING_RULES heredoc BODY (between
 # its literal open/close marker lines in the shipped script) and check it.
 # ---------------------------------------------------------------------------
-extract 1515 1553 'go test unavailable' "$WORK/standing_rules_body.txt"
+extract 1538 1592 'go test unavailable' "$WORK/standing_rules_body.txt"
 if grep -q "creating work dir" "$WORK/standing_rules_body.txt" \
    && grep -qi "RETRY IT EXACTLY ONCE" "$WORK/standing_rules_body.txt"; then
   ok "v4.8.6 addendum: the injected prompt tells the reviewer to retry exactly once on a 'creating work dir' failure"
@@ -994,7 +994,7 @@ fi
 # prefix itself is still asserted separately, against the UNMODIFIED
 # extracted text, immediately below.
 # ---------------------------------------------------------------------------
-extract 909 979 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
+extract 920 990 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
 grep -qF 'LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"' "$WORK/lane_scratch_root.sh" \
   || { echo "FAIL: extracted lane_scratch_root.sh does not contain the expected lane-scratch path template" >&2; exit 1; }
 if grep -qE '^\s*SAFE_LANE_NAME=' "$WORK/lane_scratch_root.sh"; then
@@ -1197,10 +1197,10 @@ rm -rf "$SYMLINK_TARGET" "$FAKE_LANE_SCRATCH_PARENT/attacked-lane"
 # own merits; a separate dedicated test below covers the full block's
 # actual (safe) behaviour for NAME=''.
 # ---------------------------------------------------------------------------
-extract 574 624 'NAME_ALLOWLIST_RE=' "$WORK/name_validate.sh"
+extract 576 626 'NAME_ALLOWLIST_RE=' "$WORK/name_validate.sh"
 grep -qF "NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*\$'" "$WORK/name_validate.sh" \
   || { echo "FAIL: extracted name_validate.sh does not contain the expected allowlist regex -- line numbers drifted or the regex changed" >&2; exit 1; }
-extract 602 624 'NAME_ALLOWLIST_RE=' "$WORK/name_check_only.sh"
+extract 604 626 'NAME_ALLOWLIST_RE=' "$WORK/name_check_only.sh"
 
 run_name_check_only() {
   local name="$1"
@@ -1351,7 +1351,7 @@ fi
 # the real gate immediately followed by the real V/L lines in one sequence
 # and showing execution never gets past the gate.
 # ---------------------------------------------------------------------------
-extract 671 672 'V="$OUTDIR/$NAME-$TS.md"' "$WORK/name_sites_vl.sh"
+extract 673 674 'V="$OUTDIR/$NAME-$TS.md"' "$WORK/name_sites_vl.sh"
 
 # Reuse the same resolved-vs-lexical path helper the earlier traversal fix
 # established: a raw string prefix match on "$OUTDIR/../../.." would still
@@ -1421,7 +1421,7 @@ grep -qF 'RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"' "$SCRIPT" \
 # NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
 # form, never a VERDICT= line, and exiting 7).
 # ---------------------------------------------------------------------------
-extract 1827 1827 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+extract 1866 1866 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
 
 RC_CHECK_OUT_OK=$(
   set +e
@@ -1485,7 +1485,7 @@ fi
 # any of RW/RGOTMPDIR/RTMPDIR/worktree/warm-step code (their own extracts
 # below start at line 909+, all after this guard's line 647-649).
 # ---------------------------------------------------------------------------
-extract 647 649 'CODEX_HOME_EFFECTIVE=' "$WORK/codex_auth_guard.sh"
+extract 649 651 'CODEX_HOME_EFFECTIVE=' "$WORK/codex_auth_guard.sh"
 
 STUBBIN_CODEX="$WORK/stubbin-codex"
 mkdir -p "$STUBBIN_CODEX"
@@ -1587,8 +1587,8 @@ fi
 # SEPARATELY, so the test can inject the race in between -- something a
 # single straight-line execution of the real script cannot do to itself.
 # ---------------------------------------------------------------------------
-extract 909 979 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_setup.sh"
-extract 1039 1107 'verify_scratch_containment() {' "$WORK/lane_scratch_rw_verify.sh"
+extract 920 990 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_setup.sh"
+extract 1050 1118 'verify_scratch_containment() {' "$WORK/lane_scratch_rw_verify.sh"
 grep -qF 'verify_scratch_containment "$RW"' "$WORK/lane_scratch_rw_verify.sh" \
   || { echo "FAIL: extracted lane_scratch_rw_verify.sh does not contain the RW verification call" >&2; exit 1; }
 
@@ -1666,7 +1666,7 @@ fi
 # interposed between them -- the same technique used to independently
 # verify this finding before writing the fix.
 # ---------------------------------------------------------------------------
-extract 1039 1065 'verify_scratch_containment() {' "$WORK/verify_scratch_containment_only.sh"
+extract 1050 1076 'verify_scratch_containment() {' "$WORK/verify_scratch_containment_only.sh"
 
 FAKE_SIBLING_PARENT="$WORK/fake-sibling-parent"
 mkdir -p "$FAKE_SIBLING_PARENT/lane-mine" "$FAKE_SIBLING_PARENT/lane-victim/scratch-XXXXXX"
@@ -1768,7 +1768,7 @@ rm -rf "$FAKE_TOCTOU_PARENT" "$TOCTOU_ATTACK_TARGET" "$TOCTOU_ATTACK_TARGET_NEG"
 # worktree-add + verification block; a pre-planted symlink at the vacant
 # RW slot pointing at a separate real directory.
 # ---------------------------------------------------------------------------
-extract 1347 1375 'worktree add --detach' "$WORK/worktree_add_verify.sh"
+extract 1358 1386 'worktree add --detach' "$WORK/worktree_add_verify.sh"
 grep -qF 'git rev-parse --show-toplevel' "$WORK/worktree_add_verify.sh" \
   || { echo "FAIL: extracted worktree_add_verify.sh does not contain the post-add toplevel check" >&2; exit 1; }
 
@@ -1843,6 +1843,70 @@ else
 fi
 (cd "$WT_FIXTURE" && git worktree prune 2>/dev/null || true)
 rm -rf "$FAKE_WT_PARENT" "$WT_ATTACK_TARGET" "$WT_ATTACK_TARGET_NEG"
+
+# ---------------------------------------------------------------------------
+# v4.8.7 (chris's ruling, 09-04 15:26/15:32 PDT): CODEX_REVIEW_SKIP_WARM
+# operator override, default sandbox -> read-only on both platforms, default
+# model -> gpt-5.6-luna. Reuses $WORK/warm_step.sh, already extracted above
+# (defect a/b/c block) -- same real if/elif/else/fi, no second extraction.
+# ---------------------------------------------------------------------------
+L_SKIP="$WORK/skip-warm.log"
+: > "$L_SKIP"
+set +e
+SKIP_WARM_OUT=$( (
+  set -e
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  L="$L_SKIP"
+  CODEX_REVIEW_SKIP_WARM=1
+  # shellcheck source=/dev/null
+  source "$WORK/warm_step.sh"
+) 2>&1 )
+RC_SKIP_WARM=$?
+set -e
+if [ "$RC_SKIP_WARM" -eq 0 ] \
+   && grep -q '^warm-step: SKIPPED (operator)$' "$L_SKIP" \
+   && printf '%s' "$SKIP_WARM_OUT" | grep -qi 'SKIPPED -- CODEX_REVIEW_SKIP_WARM=1'; then
+  ok "v4.8.7 CODEX_REVIEW_SKIP_WARM=1: warm step skipped unconditionally, no Go env touched"
+else
+  notok "v4.8.7 CODEX_REVIEW_SKIP_WARM=1: did not skip as expected (log='$(cat "$L_SKIP" 2>/dev/null)', out='$SKIP_WARM_OUT')"
+fi
+
+L_NOSKIP="$WORK/noskip-warm.log"
+: > "$L_NOSKIP"
+mkdir -p "$WORK/no-go-mod-dir"
+set +e
+NOSKIP_WARM_OUT=$( (
+  set -e
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  L="$L_NOSKIP"
+  unset CODEX_REVIEW_SKIP_WARM
+  RW="$WORK/no-go-mod-dir"
+  TIP="deadbeef"
+  # shellcheck source=/dev/null
+  source "$WORK/warm_step.sh"
+) 2>&1 )
+RC_NOSKIP_WARM=$?
+set -e
+if [ "$RC_NOSKIP_WARM" -eq 0 ] && grep -q '^warm-step: SKIPPED reason=no-go.mod$' "$L_NOSKIP"; then
+  ok "v4.8.7 CODEX_REVIEW_SKIP_WARM unset + no go.mod: falls through to the pre-existing no-go.mod skip, unchanged"
+else
+  notok "v4.8.7 CODEX_REVIEW_SKIP_WARM unset + no go.mod: pre-existing behavior broke (log='$(cat "$L_NOSKIP" 2>/dev/null)', out='$NOSKIP_WARM_OUT')"
+fi
+
+if grep -q 'MODEL="\${CODEX_REVIEW_MODEL:-gpt-5.6-luna}"' "$SCRIPT"; then
+  ok "v4.8.7 default model is gpt-5.6-luna (chris 15:32 PDT ruling)"
+else
+  notok "v4.8.7 default model is not gpt-5.6-luna as expected"
+fi
+
+if grep -q 'RSANDBOX="\${CODEX_REVIEW_SANDBOX:-read-only}"' "$SCRIPT" \
+   && ! grep -q 'RSANDBOX="\${CODEX_REVIEW_SANDBOX:-workspace-write}"' "$SCRIPT"; then
+  ok "v4.8.7 default sandbox is read-only unconditionally (no per-OS workspace-write default remains)"
+else
+  notok "v4.8.7 default sandbox is not unconditionally read-only as expected"
+fi
 
 echo "----"
 echo "passed=$PASS failed=$FAIL"

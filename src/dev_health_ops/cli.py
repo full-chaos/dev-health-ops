@@ -191,7 +191,17 @@ def _cmd_maintenance_scrub_error_text(ns: argparse.Namespace) -> int:
 
 
 def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
-    """Compute rule-based recommendations for a team and persist via ClickHouse sink."""
+    """Preview rule-based recommendations for a team (CHAOS-5055: read-only).
+
+    This used to persist its results via ``sink.write_recommendations`` --
+    the same table the Go worker's NATIVE `metrics.remaining.recommendations`
+    kind writes, on an independent per-team/arbitrary-window schedule with no
+    dedup between the two writers. It is now a preview-only diagnostic: it
+    evaluates and prints, but never writes. The org-wide, persisted
+    recommendations compute is `dev-health-workerctl metrics remaining start
+    --family recommendations` (day-scoped, generation-deduped against the
+    scheduler).
+    """
     import json
     from datetime import date, datetime, timezone
 
@@ -222,47 +232,61 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
         )
         window = str(window_days)
 
+    # Read-only client: this command must never reach write_recommendations.
     sink = ClickHouseMetricsSink(dsn=analytics_db)
     loader = ClickHouseMetricsLoader(client=sink.client, org_id=org_id)
     engine = RuleEngine(registry=recommendations_registry, loader=loader, now=now)
 
     try:
         # Full state: fired recommendations AND explicit fired=False tombstones
-        # so a recovered signal is cleared, not left lingering (CHAOS-2373).
+        # so a recovered signal is cleared, not left lingering (CHAOS-2373) --
+        # kept for parity with the persisted path's own semantics even though
+        # this command no longer writes either kind.
         records = engine.evaluate_state(team_id=team_id, window=window, org_id=org_id)
     except Exception as exc:
         logging.getLogger(__name__).error(
             "Recommendations evaluation failed for team=%r: %s", team_id, exc
         )
         return 1
-
-    sink.write_recommendations(records)
-    sink.close()
+    finally:
+        sink.close()
 
     fired = [r for r in records if r.fired]
     log = logging.getLogger(__name__)
     log.info(
-        "recommendations compute: team=%r window=%s fired=%d rows=%d",
+        "recommendations preview (not persisted): team=%r window=%s fired=%d rows=%d",
         team_id,
         window,
         len(fired),
         len(records),
     )
     if getattr(ns, "output_json", False):
-        import sys
         from dataclasses import asdict
 
         print(
             json.dumps([asdict(r) for r in fired], default=str),
             file=sys.stdout,
         )
+    else:
+        for record in fired:
+            print(
+                f"[fired] {record.team_id} {record.rule_id} "
+                f"({record.severity}): {record.title} -- {record.rationale}"
+            )
+        if not fired:
+            print(f"no recommendations fired for team={team_id!r} window={window}")
     return 0
 
 
 def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -> None:
     compute = subparsers.add_parser(
         "compute",
-        help="Evaluate recommendation rules for a team and write results to ClickHouse.",
+        help=(
+            "Preview recommendation rules for a team (CHAOS-5055: read-only, "
+            "writes nothing). For the persisted org-wide compute, use "
+            "`dev-health-workerctl metrics remaining start --family "
+            "recommendations`."
+        ),
     )
     compute.add_argument("--team", required=True, help="Team ID to evaluate.")
     compute.add_argument(
@@ -487,15 +511,19 @@ _REQUIREMENT_ORDER: tuple[str, ...] = (
 
 _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # --- metrics (ClickHouse analytics store) ---
-    ("metrics", "daily"): frozenset({_REQ_CLICKHOUSE}),
-    ("metrics", "dora"): frozenset({_REQ_CLICKHOUSE}),
-    ("metrics", "complexity"): frozenset({_REQ_CLICKHOUSE}),
-    ("metrics", "release-impact"): frozenset({_REQ_CLICKHOUSE}),
+    # CHAOS-5055: daily/rebuild/dora/complexity/release-impact dispatch to
+    # dev-health-workerctl (worker/Postgres-scoped) instead of connecting to
+    # ClickHouse directly -- they need --org, not --analytics-db/CLICKHOUSE_URI.
+    ("metrics", "daily"): frozenset({_REQ_ORG}),
+    ("metrics", "dora"): frozenset({_REQ_ORG}),
+    ("metrics", "complexity"): frozenset({_REQ_ORG}),
+    ("metrics", "release-impact"): frozenset({_REQ_ORG}),
     ("metrics", "validate-flags"): frozenset({_REQ_CLICKHOUSE}),
-    ("metrics", "rebuild"): frozenset({_REQ_CLICKHOUSE}),
+    ("metrics", "rebuild"): frozenset({_REQ_ORG}),
     ("metrics", "compounding-risk"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
-    # capacity takes its ClickHouse DSN via its own required --db flag.
-    ("metrics", "capacity"): frozenset({_REQ_SINK_DB}),
+    # CHAOS-5055: capacity dispatches to dev-health-workerctl instead of
+    # taking its own ClickHouse DSN -- needs --org, not --db/CLICKHOUSE_URI.
+    ("metrics", "capacity"): frozenset({_REQ_ORG}),
     # --- sync (persist to ClickHouse analytics store) ---
     ("sync", "git"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "prs"): frozenset({_REQ_CLICKHOUSE}),
@@ -712,14 +740,10 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
     from dev_health_ops.fixtures import runner as fixtures_runner
     from dev_health_ops.metrics import (
-        job_capacity,
-        job_complexity_db,
         job_compounding_risk,
-        job_daily,
-        job_dora,
         job_ff_validation,
-        job_release_impact,
         job_work_items,
+        workerctl_dispatch,
     )
     from dev_health_ops.processors import sync as sync_processor
     from dev_health_ops.providers import teams as teams_provider
@@ -780,11 +804,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="metrics_command", required=True
     )
 
-    job_daily.register_commands(metrics_subparsers)
-    job_complexity_db.register_commands(metrics_subparsers)
-    job_dora.register_commands(metrics_subparsers)
-    job_capacity.register_commands(metrics_subparsers)
-    job_release_impact.register_commands(metrics_subparsers)
+    workerctl_dispatch.register_commands(metrics_subparsers)
+    workerctl_dispatch.register_trigger_backstop_commands(metrics_subparsers)
+    workerctl_dispatch.register_capacity_trigger_command(metrics_subparsers)
     job_ff_validation.register_commands(metrics_subparsers)
     job_compounding_risk.register_commands(metrics_subparsers)
 

@@ -763,6 +763,58 @@ func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 	}
 }
 
+// TestDispatchMetricsDailyStartValidatesFlagsBeforeTouchingTheBackend pins
+// CHAOS-5055's `metrics daily-start` verb (the replacement backing
+// `dev-hops metrics daily`/`rebuild`): every flag-shape rejection must
+// return invalid_request before ever reaching runtime.pools/registry (an
+// empty &operatorRuntime{} would otherwise panic or report a misleading
+// operator_backend_unavailable for what is really a bad request).
+func TestDispatchMetricsDailyStartValidatesFlagsBeforeTouchingTheBackend(t *testing.T) {
+	const org = "00000000-0000-4000-8000-000000000001"
+	cases := map[string][]string{
+		"invalid org": {
+			"daily-start", "--org", "not-a-uuid", "--day", "2026-08-01",
+		},
+		"invalid day": {
+			"daily-start", "--org", org, "--day", "not-a-date",
+		},
+		"invalid to": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--to", "not-a-date",
+		},
+		"to before day": {
+			"daily-start", "--org", org, "--day", "2026-08-10", "--to", "2026-08-01",
+		},
+		"range exceeds manualBackfillMaxDays": {
+			"daily-start", "--org", org, "--day", "2026-01-01", "--to", "2026-12-31",
+		},
+		"invalid repo-id": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--repo-id", "not-a-uuid",
+		},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, args, &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+// TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid
+// distinguishes a bad request (above) from a genuinely unconfigured operator
+// runtime once the request itself is well-formed.
+func TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-start", "--org", "00000000-0000-4000-8000-000000000001", "--day", "2026-08-01",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 const invalidRequestJSON = "{\"error\":{\"code\":\"invalid_request\"}}\n"
 
 // TestDispatchProvidersyncUnknownSubcommandIsInvalidRequest pins the
@@ -1373,8 +1425,8 @@ func TestManualBackstopTriggerReadbackHintCoversEveryAllowedFamily(t *testing.T)
 			t.Fatalf("family %q is in remaining.ManualBackstopTriggerFamilies but has no readback hint", family)
 		}
 	}
-	if _, ok := manualBackstopTriggerReadbackHint("dora", "00000000-0000-4000-8000-000000000001"); ok {
-		t.Fatal("dora unexpectedly has a trigger-backstop readback hint -- it is not in ManualBackstopTriggerFamilies")
+	if _, ok := manualBackstopTriggerReadbackHint("membership_backfill", "00000000-0000-4000-8000-000000000001"); ok {
+		t.Fatal("membership_backfill unexpectedly has a trigger-backstop readback hint -- it is not in ManualBackstopTriggerFamilies")
 	}
 }
 
@@ -1389,21 +1441,104 @@ func TestDispatchMetricsRemainingTriggerBackstopRequiresReviewEvidence(t *testin
 	}
 }
 
-// TestDispatchMetricsRemainingTriggerBackstopRejectsDayScopedFamily proves
-// dora (a real manualBackfillDayScope family) is refused here even though
-// it is accepted by `start` -- ManualBackstopTriggerFamilies is a
-// deliberately separate, narrower allowlist precisely so this verb's
-// --today override can never reach dora and reopen the race `start`'s
-// today-exclusion exists to prevent.
-func TestDispatchMetricsRemainingTriggerBackstopRejectsDayScopedFamily(t *testing.T) {
+// TestDispatchMetricsRemainingTriggerBackstopAcceptsDayScopedFamiliesUniformly
+// (CHAOS-5055, superseding the prior day-scoped-family exclusion this test
+// used to assert): team-lead's final ruling is ONE uniform flag policy for
+// every family trigger-backstop accepts, not a per-family fork -- dora,
+// complexity, and release_impact now reach exactly the same
+// operator_backend_unavailable a zero-value &operatorRuntime{} produces for
+// any other valid, well-formed request (proving they cleared the
+// family/org/evidence/day gates, the only things this layer can prove
+// without a real backend). The --today gate itself (still required to
+// target today, unconditionally for every family) is unchanged --
+// dispatchMetricsRemainingTriggerBackstop's gating code was never
+// family-conditional.
+func TestDispatchMetricsRemainingTriggerBackstopAcceptsDayScopedFamiliesUniformly(t *testing.T) {
+	for _, family := range []string{"dora", "complexity", "release_impact"} {
+		t.Run(family, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+				"remaining", "trigger-backstop", "--family", family,
+				"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+			}, &stdout, &stderr)
+			if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopStillRequiresTodayExplicitly
+// pins that the uniform policy still refuses a same-day dispatch without
+// --today, for a family added under CHAOS-5055 exactly as it already did
+// for work_item_attribution.
+func TestDispatchMetricsRemainingTriggerBackstopStillRequiresTodayExplicitly(t *testing.T) {
+	todayUTC := time.Now().UTC().Truncate(24 * time.Hour).Format("2006-01-02")
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
-		"remaining", "trigger-backstop", "--family", "dora",
+		"remaining", "trigger-backstop", "--family", "dora", "--day", todayUTC,
 		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != invalidRequestJSON {
-		t.Fatalf("dora not rejected by trigger-backstop: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		t.Fatalf("today without --today not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopRequiresExactlyOneTeamFlagForCapacityAndRecommendations
+// pins capacityScope's own all_teams-XOR-team_id requirement (scopes.go) at
+// the CLI layer: neither flag, or both, must be invalid_request before ever
+// reaching the store -- for capacity AND recommendations, but NOT for any
+// other family (which ignores both flags entirely).
+func TestDispatchMetricsRemainingTriggerBackstopRequiresExactlyOneTeamFlagForCapacityAndRecommendations(t *testing.T) {
+	baseArgs := func(family string, extra ...string) []string {
+		return append([]string{
+			"remaining", "trigger-backstop", "--family", family,
+			"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		}, extra...)
+	}
+	for _, family := range []string{"capacity", "recommendations"} {
+		t.Run(family+"/neither flag", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(family), &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+		t.Run(family+"/both flags", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(
+				family, "--team", "00000000-0000-4000-8000-000000000002", "--all-teams",
+			), &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+		t.Run(family+"/invalid team uuid", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(
+				family, "--team", "not-a-uuid",
+			), &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+		t.Run(family+"/--all-teams alone reaches the backend", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(family, "--all-teams"), &stdout, &stderr)
+			if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+	// A day-scoped family must ignore both flags entirely -- neither given is
+	// its normal, already-covered case (see AcceptsDayScopedFamiliesUniformly).
+	t.Run("dora ignores missing team flags", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs("dora"), &stdout, &stderr)
+		if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+	})
 }
 
 func TestDispatchMetricsRemainingTriggerBackstopRejectsUnknownFamily(t *testing.T) {

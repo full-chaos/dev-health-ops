@@ -782,6 +782,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	switch args[0] {
 	case "remaining":
 		return dispatchMetricsRemaining(ctx, runtime, args[1:], stdout, stderr)
+	case "daily-start":
+		return dispatchMetricsDailyStart(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-redrive":
 		flags := quietFlags("metrics daily-redrive")
 		org := flags.String("org", "", "organization id (uuid)")
@@ -899,6 +901,88 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// dispatchMetricsDailyStart handles `metrics daily-start` (CHAOS-5055): the
+// operator entry point that dispatches a daily-metrics run for one
+// (organization, day-range[, repository set]) through the SAME StartRunTx
+// coordinator transaction the post-sync and fixed-schedule fanout paths use.
+// This is the intended replacement for `dev-hops metrics daily`/`rebuild`
+// calling run_daily_metrics_job directly: that bare-Python path never passed
+// skip_families the way worker_metrics.py's own bridge call does, so it
+// recomputed AND rewrote every native family (file_hotspots included -- a
+// SUM-aggregated, non-dedup table) on top of whatever the worker had already
+// written for the same scope. Dispatching through the worker instead means
+// the worker decides the native/bridge split, exactly as it does for every
+// other trigger source.
+func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	flags := quietFlags("metrics daily-start")
+	org := flags.String("org", "", "organization id (uuid)")
+	day := flags.String("day", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
+	var repoIDs stringList
+	flags.Var(&repoIDs, "repo-id", "repository uuid to scope this run to (repeatable); omit for every org repository (deferred discovery, same as the fixed-schedule fanout)")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	fromDay, err := time.Parse("2006-01-02", *day)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toRaw := *to
+	if toRaw == "" {
+		toRaw = *day
+	}
+	toDay, err := time.Parse("2006-01-02", toRaw)
+	if err != nil || toDay.Before(fromDay) {
+		return writeError(stderr, "invalid_request")
+	}
+	// Reuses `metrics remaining start`'s own range bound (manualBackfillMaxDays,
+	// 31): both are operator-triggered day-range fanouts over the same
+	// per-day StartRunTx-style dispatch shape, so a single mistyped year
+	// cannot silently create a month's worth of runs beyond that either.
+	if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
+		return writeError(stderr, "invalid_request")
+	}
+	repositoryIDs := make([]daily.RepositoryID, 0, len(repoIDs))
+	for _, id := range repoIDs {
+		if _, err := uuid.Parse(id); err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		repositoryIDs = append(repositoryIDs, daily.RepositoryID(id))
+	}
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	var results []daily.ManualDailyRunOutcome
+	for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
+		dayString := cursor.Format("2006-01-02")
+		generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
+		outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		results = append(results, outcome)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"days": results,
+		// deferred_discovery is true when no --repo-id was given: the run(s)
+		// cover every org repository, resolved later by the worker from live
+		// ClickHouse identity, not this command's own (possibly stale) view
+		// of the org's repository set.
+		"deferred_discovery": len(repositoryIDs) == 0,
+	})
 }
 
 // dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):
@@ -1602,7 +1686,12 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 	switch args[0] {
 	case "start":
 		flags := quietFlags("metrics remaining start")
-		family := flags.String("family", "", "day-scoped remaining-metrics family (complexity, dora, release_impact)")
+		// CHAOS-4254: derived from the family list itself so this help text
+		// can never silently drift from ManualBackfillDayScopedFamilies again
+		// (capacity/recommendations/membership_backfill are deliberately NOT
+		// in that list -- see its own doc comment -- and work_item_attribution
+		// has its own separate `trigger-backstop` verb/family list below).
+		family := flags.String("family", "", "day-scoped remaining-metrics family ("+strings.Join(remaining.ManualBackfillDayScopedFamilies, ", ")+")")
 		day := flags.String("day", "", "first target day, inclusive (YYYY-MM-DD, UTC)")
 		to := flags.String("to", "", "last target day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 		org := flags.String("org", "", "organization id (uuid)")
@@ -1756,6 +1845,36 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 			"ClickHouse: SELECT run_id, completed_at, promoted_reason FROM work_item_attribution_backstop_runs FINAL WHERE org_id = '%s' ORDER BY completed_at DESC LIMIT 5",
 			org,
 		), true
+	case "complexity":
+		// repo_complexity_daily is a plain MergeTree (not Replacing) -- no
+		// FINAL needed, every row is a distinct write.
+		return fmt.Sprintf(
+			"ClickHouse: SELECT repo_id, day, computed_at FROM repo_complexity_daily WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "dora":
+		return fmt.Sprintf(
+			"ClickHouse: SELECT repo_id, day, metric_name, computed_at FROM dora_metrics_daily WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "release_impact":
+		return fmt.Sprintf(
+			"ClickHouse: SELECT repo_id, day, computed_at FROM release_impact_daily WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "capacity":
+		// capacity_forecasts IS ReplacingMergeTree(computed_at) -- FINAL
+		// collapses to the latest forecast per key.
+		return fmt.Sprintf(
+			"ClickHouse: SELECT forecast_id, team_id, computed_at FROM capacity_forecasts FINAL WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "recommendations":
+		// recommendations_daily IS ReplacingMergeTree(computed_at).
+		return fmt.Sprintf(
+			"ClickHouse: SELECT team_id, rule_id, fired, computed_at FROM recommendations_daily FINAL WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
 	default:
 		return "", false
 	}
@@ -1861,11 +1980,14 @@ func dispatchMetricsRemainingTriggerBackstop(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
 	flags := quietFlags("metrics remaining trigger-backstop")
-	family := flags.String("family", "work_item_attribution", "fixed-schedule backstop family to trigger now (work_item_attribution)")
+	family := flags.String("family", "work_item_attribution", "fixed-schedule backstop family to trigger now ("+strings.Join(remaining.ManualBackstopTriggerFamilies, ", ")+")")
 	org := flags.String("org", "", "organization id (uuid)")
 	day := flags.String("day", "", "dedup key for the run this trigger becomes, NOT a compute window (YYYY-MM-DD, UTC) -- defaults to yesterday UTC; today requires --today")
 	today := flags.Bool("today", false, "REQUIRED to target today's UTC date -- otherwise --day=today is refused; a same-day manual run COEXISTS with (never suppresses) tonight's own 02:30Z occurrence, but both compete for this family's max_concurrency=1 worker slot (families.json), so today should be an explicit choice, not an accident")
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this backstop is being triggered manually (e.g. \"CHAOS-5016 -- chris wants same-day confirmation, not waiting for the 02:30Z schedule\")")
+	team := flags.String("team", "", "team id (uuid) to scope this trigger to -- capacity/recommendations only, exactly one of --team/--all-teams required for those families; ignored for every other family")
+	allTeams := flags.Bool("all-teams", false, "scope this trigger to every team in the organization -- capacity/recommendations only; ignored for every other family")
+	window := flags.Int("window", 14, "evaluation window in days -- recommendations only, ignored for every other family (default: 14, matching the fixed-schedule fanout)")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
@@ -1876,6 +1998,20 @@ func dispatchMetricsRemainingTriggerBackstop(
 		return writeError(stderr, "invalid_request")
 	}
 	if strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	// capacity/recommendations scope by team, not by day-window -- exactly
+	// one of --team/--all-teams is required for them (mirroring
+	// capacityScope's own all_teams-XOR-team_id validation, scopes.go);
+	// every other family ignores both flags entirely.
+	var teamID *string
+	if strings.TrimSpace(*team) != "" {
+		if _, err := uuid.Parse(*team); err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		teamID = team
+	}
+	if (*family == "capacity" || *family == "recommendations") && (teamID != nil) == *allTeams {
 		return writeError(stderr, "invalid_request")
 	}
 	todayUTC := time.Now().UTC().Truncate(24 * time.Hour)
@@ -1927,7 +2063,16 @@ func dispatchMetricsRemainingTriggerBackstop(
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	generation := manualBackstopTriggerGeneration(*family, *org, dayString)
-	outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+	var outcome remaining.ManualBackfillOutcome
+	var startErr error
+	switch *family {
+	case "capacity":
+		outcome, startErr = store.StartManualCapacityTriggerRun(ctx, *org, dayString, generation, teamID, *allTeams, publisher)
+	case "recommendations":
+		outcome, startErr = store.StartManualRecommendationsTriggerRun(ctx, *org, dayString, generation, teamID, *window, publisher)
+	default:
+		outcome, startErr = store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+	}
 	status := "started"
 	switch {
 	case errors.Is(startErr, remaining.ErrDayAlreadyCovered):

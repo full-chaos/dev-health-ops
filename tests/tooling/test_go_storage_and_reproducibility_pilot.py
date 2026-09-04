@@ -168,12 +168,14 @@ def test_reproducibility_self_hosted_depends_on_dind_smoke_test() -> None:
 def test_reproducibility_self_hosted_real_work_has_a_shorter_inner_timeout() -> None:
     job = _job(_REPRO_SELF_HOSTED)
     job_timeout = job.get("timeout-minutes")
-    assert job_timeout == 36, (
+    assert job_timeout == 57, (
         f"{WORKFLOW_PATH.name}: {_REPRO_SELF_HOSTED!r}'s timeout-minutes "
-        f"({job_timeout!r}) does not match the contract's sizing (36m --  "
-        "measured 18m03s isolated wall x2, run 33822145677, per the "
-        "contract's own 'timeout-minutes = measured wall under load x2' "
-        "clause)"
+        f"({job_timeout!r}) does not match the contract's sizing (57m -- "
+        "CHAOS-5067, 09-04: measured 28m44s wall under real contention "
+        "(4 runs died at ~30m2xs against the prior 30m inner cap under "
+        "load1 100-124) x2, per the contract's own 'timeout-minutes = "
+        "measured wall under load x2' clause; supersedes the earlier "
+        "36m/18m03s-isolated sizing)"
     )
     step = _step_by_name(job, _REPRO_RUN_STEP)
     run_text = step.get("run")

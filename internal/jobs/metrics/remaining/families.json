@@ -14,7 +14,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only persisted git_files and git_blame contents can be scanned; missing historical contents are skipped and max_files remains a hard bound.",
-      "parity_state": "numerical_oracle"
+      "parity_state": "numerical_oracle",
+      "port": "pending"
     },
     {
       "name": "dora",
@@ -28,7 +29,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only already-synced canonical deployments and incidents are eligible; no provider API reconstruction is performed.",
-      "parity_state": "numerical_oracle"
+      "parity_state": "numerical_oracle",
+      "port": "go"
     },
     {
       "name": "release_impact",
@@ -42,7 +44,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The existing seven-day late-data recomputation window and retained telemetry buckets define the recoverable history.",
-      "parity_state": "partial_numerical_oracle"
+      "parity_state": "partial_numerical_oracle",
+      "port": "pending"
     },
     {
       "name": "capacity",
@@ -56,7 +59,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The configured throughput history window remains authoritative; deterministic replay additionally requires a persisted generation seed.",
-      "parity_state": "partial_numerical_oracle"
+      "parity_state": "partial_numerical_oracle",
+      "port": "go"
     },
     {
       "name": "recommendations",
@@ -70,7 +74,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Evaluation only reads finalized persisted daily metric partitions and preserves explicit non-fired tombstones.",
-      "parity_state": "inventory_only"
+      "parity_state": "inventory_only",
+      "port": "go"
     },
     {
       "name": "membership_backfill",
@@ -84,7 +89,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The full current work graph is projected from existing persisted investments; components without a current persisted categorization are skipped and no LLM is invoked.",
-      "parity_state": "inventory_only"
+      "parity_state": "inventory_only",
+      "port": "go"
     },
     {
       "name": "work_item_attribution",
@@ -98,7 +104,8 @@
       "route": "river",
       "rollback_route": "none",
       "historical_limitation": "CHAOS-3092 PR-B: a scoped daily backstop for the staleness window the sync-time deriver's incremental watermark leaves open (an ownership-table change with no corresponding item re-sync). Not a full re-derivation of every work item every day like the retired Python sweep -- only items whose repo/project ownership changed since the last backstop run, or every item org-wide when identities/teams (admin membership) changed.",
-      "parity_state": "partial_numerical_oracle"
+      "parity_state": "partial_numerical_oracle",
+      "port": "go"
     }
   ]
 }

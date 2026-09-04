@@ -35,7 +35,24 @@ def test_whitespace_is_tolerated(monkeypatch):
     assert runner._graceful_shutdown_seconds() == 45
 
 
-@pytest.mark.parametrize("raw", ["", "   ", "abc", "12.5", "0", "-1", "-3600"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        "abc",
+        "12.5",
+        "0",
+        "-1",
+        "-3600",
+        # codex round 1, P1: rejecting only zero/negative left the hole open --
+        # any positive integer was passed straight through, so a 1000-year value
+        # restored the unbounded shutdown under a different spelling.
+        "3601",
+        "31557600000",
+        "999999999999999999999",
+    ],
+)
 def test_never_falls_back_to_unbounded(monkeypatch, raw):
     """A junk, zero, or negative override must NOT disable the bound.
 
@@ -70,3 +87,43 @@ def test_run_api_server_passes_the_bound_to_uvicorn(monkeypatch):
     )
     assert runner.run_api_server(ns) == 0
     assert captured["timeout_graceful_shutdown"] == 77
+
+
+def test_upper_bound_is_finite_and_enforced(monkeypatch):
+    """codex round 1, P1: the bound needs a ceiling, not just a floor."""
+    assert runner.MAX_GRACEFUL_SHUTDOWN_SECONDS > 0
+    assert (
+        runner.DEFAULT_GRACEFUL_SHUTDOWN_SECONDS <= runner.MAX_GRACEFUL_SHUTDOWN_SECONDS
+    )
+
+    monkeypatch.setenv(
+        runner.GRACEFUL_SHUTDOWN_SECONDS_ENV,
+        str(runner.MAX_GRACEFUL_SHUTDOWN_SECONDS),
+    )
+    assert runner._graceful_shutdown_seconds() == (runner.MAX_GRACEFUL_SHUTDOWN_SECONDS)
+
+    monkeypatch.setenv(
+        runner.GRACEFUL_SHUTDOWN_SECONDS_ENV,
+        str(runner.MAX_GRACEFUL_SHUTDOWN_SECONDS + 1),
+    )
+    assert runner._graceful_shutdown_seconds() == (
+        runner.DEFAULT_GRACEFUL_SHUTDOWN_SECONDS
+    )
+
+
+def test_this_variable_is_scrubbed_not_kept():
+    """codex round 1, P3 (narrow half).
+
+    The contract test in tests/test_env_isolation_contract.py only asserts that
+    the checked-in list MATCHES the derivation -- moving a name into
+    KEEP_ENV_NAMES and regenerating keeps that test green while the real src/
+    read stays live in the ambient environment. That general weakness belongs to
+    the guard's owner, but this PR introduced the variable, so pin THIS one
+    directly rather than relying on a contract that can be satisfied both ways.
+    """
+    from tests import _env_isolation
+
+    name = runner.GRACEFUL_SHUTDOWN_SECONDS_ENV
+    assert name in _env_isolation.SCRUB_ENV_NAMES
+    assert name not in _env_isolation.KEEP_ENV_NAMES
+    assert name in _env_isolation.discover_src_env_names()

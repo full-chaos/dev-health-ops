@@ -16,6 +16,13 @@ from dev_health_ops.logging_config import configure_logging, uvicorn_log_config
 # cancelled 5h40m later. Bound it.
 GRACEFUL_SHUTDOWN_SECONDS_ENV = "DEV_HEALTH_API_GRACEFUL_SHUTDOWN_SECONDS"
 DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30
+# An upper bound is as load-bearing as the lower one (codex r1 P1). Rejecting 0
+# and negatives while accepting any positive integer left the hole wide open:
+# 31_557_600_000 seconds is 1000 years, which IS the unbounded shutdown this
+# change exists to remove -- just spelled differently. One hour is far past any
+# legitimate drain (k8s terminationGracePeriodSeconds defaults to 30s) and still
+# finite.
+MAX_GRACEFUL_SHUTDOWN_SECONDS = 3600
 
 
 def _graceful_shutdown_seconds() -> int:
@@ -42,12 +49,13 @@ def _graceful_shutdown_seconds() -> int:
         )
         return DEFAULT_GRACEFUL_SHUTDOWN_SECONDS
 
-    if value <= 0:
+    if value <= 0 or value > MAX_GRACEFUL_SHUTDOWN_SECONDS:
         logger.warning(
-            "Ignoring non-positive %s=%r (an unbounded shutdown is what "
-            "CHAOS-5025 fixed); using %ss",
+            "Ignoring out-of-range %s=%r (want 1..%s; an effectively unbounded "
+            "shutdown is what CHAOS-5025 fixed); using %ss",
             GRACEFUL_SHUTDOWN_SECONDS_ENV,
             raw,
+            MAX_GRACEFUL_SHUTDOWN_SECONDS,
             DEFAULT_GRACEFUL_SHUTDOWN_SECONDS,
         )
         return DEFAULT_GRACEFUL_SHUTDOWN_SECONDS

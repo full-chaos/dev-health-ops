@@ -150,27 +150,62 @@ RECONCILER_PID=""
 # pinned the whole job until GitHub's 6h cancel (run 33822295135: the proof
 # itself PASSED at 00:41:40Z, then teardown hung for 5h55m).
 TEARDOWN_WAIT_SECS="${METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}"
+# Validate it (codex r1 P2). An unvalidated value is not merely untidy: `[ x -lt
+# abc ]` FAILS inside the watchdog's `while` and the `elapsed` `if`, and `set -e`
+# does NOT exit on a failing condition in either context -- so a typo'd override
+# silently turned graceful teardown into an IMMEDIATE SIGKILL with the escalation
+# warning suppressed too (executed: `TEARDOWN_WAIT_SECS=abc` -> child killed, no
+# WARNING line). Fail closed to the default, loudly, exactly as the API-side
+# parser does for its own env var.
+if ! printf '%s' "${TEARDOWN_WAIT_SECS}" | grep -Eq '^[0-9]+$' \
+   || [ "${TEARDOWN_WAIT_SECS}" -lt 1 ] || [ "${TEARDOWN_WAIT_SECS}" -gt 3600 ]; then
+  echo "WARNING: ignoring METRICS_PROOF_TEARDOWN_WAIT_SECS='${TEARDOWN_WAIT_SECS}' (want an integer 1..3600); using 60s." >&2
+  TEARDOWN_WAIT_SECS=60
+fi
+
+# Resolve a service's process-GROUP id, but ONLY when it leads its own group.
+#
+# Why the check is load-bearing and not defensive noise: WITHOUT `set -m` a bash
+# background job stays in the SCRIPT's own process group (measured: job pid
+# 84573, pgid 84350 == the script's), so a bare `kill -- -"$pid"` would signal
+# THIS SCRIPT. The services below are launched under `set -m` precisely so each
+# leads its own group -- but nothing here may DEPEND on that having worked, so
+# an unverified pgid is simply not used.
+service_pgid() {
+  local pid="$1" pgid
+  case "${pid}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "${pid}" -gt 1 ] || return 0
+  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ')"
+  [ -n "${pgid}" ] && [ "${pgid}" = "${pid}" ] && printf '%s' "${pgid}"
+}
 
 stop_service() {
   local name="$1" pid="$2"
   [ -n "${pid}" ] || return 0
   kill -0 "${pid}" >/dev/null 2>&1 || return 0
 
+  # Capture the group id NOW, while the leader is still alive. `ps` cannot report
+  # it once the leader has been reaped, and the surviving descendants are exactly
+  # the case this exists for -- the first version of this fix looked the pgid up
+  # AFTER `wait` returned, got nothing, and left the child running (the very
+  # defect it was written to close).
+  local pgid
+  pgid="$(service_pgid "${pid}")"
+
+  if [ -n "${pgid}" ]; then kill -TERM -- -"${pgid}" >/dev/null 2>&1 || true; fi
   kill -TERM "${pid}" >/dev/null 2>&1 || true
 
   # bash has no timed `wait`, and polling `kill -0` cannot tell a live process
   # from a not-yet-reaped zombie, so it would burn the full bound either way.
-  # Arm a watchdog subshell instead: it SIGKILLs the child once the bound
+  # Arm a watchdog subshell instead: it SIGKILLs the service once the bound
   # expires, and THAT is what makes the `wait` below guaranteed to return.
-  # The watchdog counts in 1s steps rather than one long `sleep`. Cancelling it
-  # below SIGTERMs the subshell, which stops the SIGKILL from ever running --
-  # verified on bigboy -- but the subshell's `sleep` CHILD is not signalled and
-  # survives, reparented to init, for whatever is left of its interval. With one
-  # `sleep 60` that is a 60s orphan per service in GitHub's "Terminate orphan
-  # process" list, i.e. noise in exactly the teardown log this fix exists to
-  # make readable. In 1s steps the orphan lives at most 1s, with no new
-  # dependency (pgrep would be the alternative, and the script deliberately
-  # require_cmd's only go/psql/curl).
+  # It counts in 1s steps rather than one long `sleep`: cancelling the watchdog
+  # SIGTERMs the subshell, which stops the SIGKILL from running (verified on
+  # bigboy) but does NOT signal its `sleep` child, which survives reparented to
+  # init for the rest of the interval. With one `sleep 60` that is a 60s orphan
+  # per service in GitHub's "Terminate orphan process" list -- noise in exactly
+  # the teardown log this change exists to make readable. 1s steps bound it to 1s
+  # with no new dependency.
   local started="${SECONDS}"
   (
     waited=0
@@ -178,12 +213,23 @@ stop_service() {
       sleep 1
       waited=$((waited + 1))
     done
-    kill -KILL "${pid}" >/dev/null 2>&1
+    if [ -n "${pgid}" ]; then kill -KILL -- -"${pgid}" >/dev/null 2>&1 || true; fi
+    kill -KILL "${pid}" >/dev/null 2>&1 || true
   ) &
   local watchdog="$!"
 
   wait "${pid}" >/dev/null 2>&1 || true
   local elapsed=$((SECONDS - started))
+
+  # The leader is reaped, but descendants in its group can outlive it (codex r1
+  # P2, executed: a wrapper that exits on TERM leaving a TERM-ignoring child made
+  # the old cleanup() return with that child still running). Sweep the group.
+  # NOT covered, deliberately: children the API starts with start_new_session=True
+  # (worker_metrics.py's metric-compat subprocesses) are in their OWN session by
+  # design, and no group signal from here can reach them -- that is the API's own
+  # shutdown to perform, and it is precisely why the graceful-shutdown bound in
+  # api/runner.py matters. See RISK-NOTES.
+  if [ -n "${pgid}" ]; then kill -KILL -- -"${pgid}" >/dev/null 2>&1 || true; fi
 
   kill -TERM "${watchdog}" >/dev/null 2>&1 || true
   wait "${watchdog}" >/dev/null 2>&1 || true
@@ -327,6 +373,15 @@ PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
   --set=ON_ERROR_STOP=1 \
   -c "UPDATE sync_dispatch_transport_routes SET transport='river', rollback_transport='celery', generation=generation+1, updated_at=now() WHERE kind IN ('post_sync','dispatch_sync_run','finalize_sync_run','reference_discovery') AND transport <> 'river';"
 
+# Job control ON for the three service launches (codex r1 P2). Without `set -m`
+# a background job stays in THIS script's process group, which makes a group
+# signal in signal_service() both useless (it would not isolate the service) and
+# dangerous (it would target the script). With it, each service's PGID == its
+# PID, so the group form reaches the service's descendants and nothing else.
+# Turned back off straight after the launches so the rest of the script keeps
+# its normal non-job-control behaviour.
+set -m
+
 echo "==> starting dev-hops api (the Go worker's operational bridge)"
 JWT_SECRET_KEY="$(SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" python3 -c "import hashlib, os; print(hashlib.sha256(os.environ['SETTINGS_ENCRYPTION_KEY'].encode()).hexdigest())")"
 # Overridable to a path OUTSIDE TMP_DIR (matching LIVE_E2E_API_LOG_FILE in
@@ -409,6 +464,8 @@ RECONCILER_LOG_FILE="${METRICS_PROOF_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.
 ) >"${RECONCILER_LOG_FILE}" 2>&1 &
 RECONCILER_PID="$!"
 wait_for_http_ready "dev-health-reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${RECONCILER_LOG_FILE}" RECONCILER_PID
+
+set +m
 
 RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
 # Ordering contract (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows

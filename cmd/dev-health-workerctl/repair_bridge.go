@@ -115,6 +115,117 @@ func pythonCanonicalJSONByteLen(v any) (int, error) {
 	return length, nil
 }
 
+// requiredFieldValidator is implemented by every strict bridge-2xx-response
+// shape decodeStrictBridgeResponse validates against. Codex rounds 1 and 2
+// both found the SAME CLASS of defect on the daily-redrive ledger response
+// specifically (round 1: an undecodable body silently read as a
+// decodable-looking zero result; round 2: a syntactically valid but
+// INCOMPLETE body -- `{}`, `null`, or missing one field -- did too), just
+// two different instances of it. Per-instance patches (main.go's field
+// presence checks, now removed) fixed the one caller that happened to do
+// typed field reads; this interface plus postWorkerBridge's generic type
+// parameter below make EVERY bridge-response consumer in workerctl declare
+// and enforce its own expected 2xx shape, so a future verb cannot add a new
+// instance of the same class by skipping validation the way the original
+// code did.
+type requiredFieldValidator interface {
+	// validateRequiredFields reports every required field that decoded as
+	// nil (absent, or present with the wrong JSON type -- json.Unmarshal
+	// itself already rejects a field whose JSON type cannot convert to the
+	// Go field's type, e.g. a string where a number was expected, as a
+	// decode error before this method ever runs).
+	validateRequiredFields() error
+}
+
+// decodeStrictBridgeResponse decodes raw response bytes into a fresh T
+// (every field of T MUST be a pointer type, so an absent field decodes to
+// nil rather than a zero value indistinguishable from "the bridge said
+// zero/empty") and then runs T's own validateRequiredFields. It rejects:
+// invalid JSON; a top-level JSON array/scalar where an object was expected
+// (a struct-typed Unmarshal target errors on those); a field present with
+// the wrong JSON type (also a json.Unmarshal error, e.g. UnmarshalTypeError);
+// and -- via validateRequiredFields, since unmarshaling top-level JSON
+// `null`/`{}` into a struct pointer succeeds with every field left nil, not
+// an error -- any required field that is simply absent.
+// DisallowUnknownFields is deliberately NOT set: an unrecognized field the
+// bridge adds later must never fail a round-trip, only a missing or
+// wrong-typed REQUIRED field does.
+func decodeStrictBridgeResponse[T any, PT interface {
+	*T
+	requiredFieldValidator
+}](body []byte) (*T, error) {
+	var value T
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil, fmt.Errorf("bridge response does not match the expected shape: %w", err)
+	}
+	if err := PT(&value).validateRequiredFields(); err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
+// redriveLedgerBridgeResponse is `POST /internal/worker/daily-metrics/v1/redrive`'s
+// 2xx shape (`_bulk_redrive_ambiguous_executions`'s `return {"repaired":
+// repaired, "skipped_claim_active": skipped}`, worker_metrics.py:1535).
+type redriveLedgerBridgeResponse struct {
+	Repaired           *float64 `json:"repaired"`
+	SkippedClaimActive *float64 `json:"skipped_claim_active"`
+}
+
+func (r *redriveLedgerBridgeResponse) validateRequiredFields() error {
+	if r.Repaired == nil {
+		return errors.New(`bridge response missing required numeric field "repaired"`)
+	}
+	if r.SkippedClaimActive == nil {
+		return errors.New(`bridge response missing required numeric field "skipped_claim_active"`)
+	}
+	return nil
+}
+
+// workgraphRepairBridgeResponse is `POST
+// /internal/worker/workgraph/v1/executions/{id}/repair`'s 2xx shape
+// (worker_workgraph.py:523's `return {"status": "repaired", "request_id":
+// str(request_id)}`).
+type workgraphRepairBridgeResponse struct {
+	Status    *string `json:"status"`
+	RequestID *string `json:"request_id"`
+}
+
+func (r *workgraphRepairBridgeResponse) validateRequiredFields() error {
+	if r.Status == nil {
+		return errors.New(`bridge response missing required string field "status"`)
+	}
+	if r.RequestID == nil {
+		return errors.New(`bridge response missing required string field "request_id"`)
+	}
+	return nil
+}
+
+// metricExecutionRepairBridgeResponse is `POST
+// /internal/worker/metric-executions/v1/{id}/repair`'s 2xx shape --
+// `_repair_execution` returns `{"status": "already_applied"|"repaired",
+// "execution_id": ..., "state": ...}` on both its idempotent-replay path
+// (worker_metrics.py:1331-1335) and its real-repair path
+// (worker_metrics.py:1409-1413).
+type metricExecutionRepairBridgeResponse struct {
+	Status      *string `json:"status"`
+	ExecutionID *string `json:"execution_id"`
+	State       *string `json:"state"`
+}
+
+func (r *metricExecutionRepairBridgeResponse) validateRequiredFields() error {
+	if r.Status == nil {
+		return errors.New(`bridge response missing required string field "status"`)
+	}
+	if r.ExecutionID == nil {
+		return errors.New(`bridge response missing required string field "execution_id"`)
+	}
+	if r.State == nil {
+		return errors.New(`bridge response missing required string field "state"`)
+	}
+	return nil
+}
+
 // postWorkerBridge posts a JSON payload to the operational bridge at path,
 // authenticating with the token resolved from tokenEnvKey. It is the shared
 // client every operator repair verb uses (CHAOS-5042's workgraph/metric
@@ -128,13 +239,27 @@ func pythonCanonicalJSONByteLen(v any) (int, error) {
 // status -- CHAOS-5042's repair verbs print the bridge's response verbatim
 // on every outcome (including 401/409/422/500), not just 2xx, so an operator
 // can see exactly why a repair was refused. err is non-nil only for a
-// transport-level failure (bad config, network error, undecodable body) that
-// never produced a real bridge response to show.
+// transport-level failure (bad config, network error, undecodable body, or a
+// 2xx body that fails T's strict shape validation) that never produced a
+// usable bridge response.
+//
+// T is the caller's expected 2xx response shape (one of the
+// *BridgeResponse types above) -- postWorkerBridge decodes the response
+// TWICE on a 2xx: once loosely into the map[string]any every caller prints
+// verbatim regardless of status, and once strictly via
+// decodeStrictBridgeResponse[T] purely as a validation gate (its typed
+// result is discarded; only a shape error propagates). A non-2xx status
+// (401/409/422/500, whose body shape is `{"detail": "..."}`, not T's shape)
+// skips strict validation entirely -- only the loose map decode applies, so
+// an error response's own shape is never held to a success shape's contract.
 //
 // The token itself is NEVER included in the returned error or logged --
 // resolveRequired's platformsecrets.Value keeps it out of %v/%s formatting,
 // and Reveal() is called only to build the Authorization header below.
-func postWorkerBridge(
+func postWorkerBridge[T any, PT interface {
+	*T
+	requiredFieldValidator
+}](
 	ctx context.Context, tokenEnvKey, path string, payload map[string]any,
 ) (statusCode int, body map[string]any, err error) {
 	baseURL, ok := resolveRequired("WORKER_OPERATIONAL_BRIDGE_URL", os.LookupEnv)
@@ -183,6 +308,20 @@ func postWorkerBridge(
 			return response.StatusCode, nil, fmt.Errorf(
 				"bridge returned status %d with an undecodable body (%d bytes): %w",
 				response.StatusCode, len(responseBody), unmarshalErr,
+			)
+		}
+	}
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		// codex round 2, P1: a syntactically VALID but INCOMPLETE 2xx body
+		// (`{}`, `null`, or missing a field) decoded successfully above and
+		// previously reached a caller's own ad hoc field-presence checks
+		// unevenly -- some callers had them, some didn't, and the class kept
+		// reappearing. Every 2xx response now goes through the SAME strict
+		// shape check regardless of which verb called postWorkerBridge.
+		if _, shapeErr := decodeStrictBridgeResponse[T, PT](responseBody); shapeErr != nil {
+			return response.StatusCode, nil, fmt.Errorf(
+				"bridge returned status %d but its body failed shape validation: %w",
+				response.StatusCode, shapeErr,
 			)
 		}
 	}

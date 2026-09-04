@@ -92,7 +92,7 @@ func dispatchMetricsExecutionRepair(ctx context.Context, args []string, stdout, 
 			"payload":       payload,
 		})
 	}
-	status, body, err := postWorkerBridge(
+	status, body, err := postWorkerBridge[metricExecutionRepairBridgeResponse](
 		ctx, "WORKER_METRIC_REPAIR_TOKEN",
 		path,
 		payload,

@@ -1815,8 +1815,13 @@ func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, review
 	}
 	// CHAOS-5042: shares postWorkerBridge (repair_bridge.go) with the
 	// workgraph/metric-execution repair verbs -- same auth/timeout/decode
-	// shape, just a different token env var and path.
-	status, decoded, err := postWorkerBridge(
+	// shape, just a different token env var, path, and expected 2xx response
+	// shape (redriveLedgerBridgeResponse). codex rounds 1 and 2 both found
+	// the same CLASS of defect here (an undecodable body, then a decodable
+	// but incomplete one) -- postWorkerBridge's strict shape validation on
+	// every 2xx response (repair_bridge.go) is the fix for the class, not a
+	// second one-off check bolted onto this call site specifically.
+	status, decoded, err := postWorkerBridge[redriveLedgerBridgeResponse](
 		ctx, "WORKER_METRIC_REPAIR_TOKEN", "/internal/worker/daily-metrics/v1/redrive", requestPayload,
 	)
 	if err != nil {
@@ -1824,22 +1829,6 @@ func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, review
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("ledger redrive returned status %d", status)
-	}
-	// codex round 2, P1: a syntactically VALID 200 body that is merely
-	// incomplete (`{}`, `null`, or missing one of the two fields) previously
-	// decoded successfully and reached ledgerRepairWasIncomplete/dispatchMetrics'
-	// comma-ok reads unnoticed -- those default a MISSING field to 0/false
-	// exactly like a genuinely empty "nothing to repair, nothing skipped"
-	// result, so an incomplete response was silently indistinguishable from a
-	// real one and dispatchMetrics would still proceed to redrive partitions.
-	// Round 1 already closed the UNDECODABLE case (postWorkerBridge now
-	// errors on that); this closes the DECODABLE-BUT-WRONG-SHAPE case by
-	// requiring both fields to actually be present as numbers.
-	if _, ok := decoded["repaired"].(float64); !ok {
-		return nil, fmt.Errorf("ledger redrive response missing numeric %q field", "repaired")
-	}
-	if _, ok := decoded["skipped_claim_active"].(float64); !ok {
-		return nil, fmt.Errorf("ledger redrive response missing numeric %q field", "skipped_claim_active")
 	}
 	return decoded, nil
 }

@@ -512,7 +512,7 @@ func TestPostWorkerBridgeReturnsStatusAndBodyOnNon2xxWithoutError(t *testing.T) 
 	fake := newFakeBridge(t, http.StatusConflict, `{"detail":"conflict"}`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
 	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
-	status, body, err := postWorkerBridge(context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
 	if err != nil {
 		t.Fatalf("postWorkerBridge on a 409: err = %v, want nil", err)
 	}
@@ -536,7 +536,7 @@ func TestPostWorkerBridgeErrorsOnAnUndecodableBody(t *testing.T) {
 	fake := newFakeBridge(t, http.StatusOK, `not-json`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
 	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
-	_, body, err := postWorkerBridge(context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	_, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
 	if err == nil {
 		t.Fatalf("postWorkerBridge on an undecodable 200 body = nil error, want an error; body=%v", body)
 	}
@@ -697,4 +697,88 @@ func TestParseOutputEvidenceRejectsUnicodePayloadThatExceedsThePythonCanonicalBo
 	if _, err := parseOutputEvidence(raw); err == nil {
 		t.Fatal("parseOutputEvidence accepted a payload whose Python-canonical length exceeds the bridge's bound")
 	}
+}
+
+// --- decodeStrictBridgeResponse class guards -----------------------------
+//
+// Team-lead ruling after codex rounds 1+2 both found the SAME CLASS of
+// defect on the daily-redrive response specifically (undecodable, then
+// decodable-but-incomplete): one shared strict decoder for every bridge
+// response shape in workerctl, with one class-guard table test PER response
+// type covering {}/null/[]/missing-each-field/wrong-type-each-field/extra
+// fields -- not a patch on the one instance that happened to get caught.
+
+// shapeGuardCase is one row of a class-guard table: body is the raw bytes a
+// bridge might return, wantErr says whether decodeStrictBridgeResponse must
+// reject it.
+type shapeGuardCase struct {
+	name    string
+	body    string
+	wantErr bool
+}
+
+// runShapeGuardCases exercises decodeStrictBridgeResponse[T] against every
+// case in a class-guard table -- one instantiation of this per response
+// type below, so the same assertions run identically across all three
+// shapes instead of being hand-duplicated per type.
+func runShapeGuardCases[T any, PT interface {
+	*T
+	requiredFieldValidator
+}](t *testing.T, cases []shapeGuardCase) {
+	t.Helper()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := decodeStrictBridgeResponse[T, PT]([]byte(testCase.body))
+			if testCase.wantErr && err == nil {
+				t.Fatalf("decodeStrictBridgeResponse(%s) = nil error, want a rejection", testCase.body)
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("decodeStrictBridgeResponse(%s) = %v, want no error", testCase.body, err)
+			}
+		})
+	}
+}
+
+func TestRedriveLedgerBridgeResponseShapeGuard(t *testing.T) {
+	runShapeGuardCases[redriveLedgerBridgeResponse](t, []shapeGuardCase{
+		{"valid", `{"repaired":1,"skipped_claim_active":0}`, false},
+		{"valid_with_extra_field", `{"repaired":1,"skipped_claim_active":0,"future_field":"x"}`, false},
+		{"empty_object", `{}`, true},
+		{"null", `null`, true},
+		{"array", `[]`, true},
+		{"missing_repaired", `{"skipped_claim_active":0}`, true},
+		{"missing_skipped_claim_active", `{"repaired":1}`, true},
+		{"repaired_wrong_type", `{"repaired":"1","skipped_claim_active":0}`, true},
+		{"skipped_claim_active_wrong_type", `{"repaired":1,"skipped_claim_active":"0"}`, true},
+	})
+}
+
+func TestWorkgraphRepairBridgeResponseShapeGuard(t *testing.T) {
+	runShapeGuardCases[workgraphRepairBridgeResponse](t, []shapeGuardCase{
+		{"valid", `{"status":"repaired","request_id":"` + testAmbiguousRequestID + `"}`, false},
+		{"valid_with_extra_field", `{"status":"repaired","request_id":"` + testAmbiguousRequestID + `","future_field":1}`, false},
+		{"empty_object", `{}`, true},
+		{"null", `null`, true},
+		{"array", `[]`, true},
+		{"missing_status", `{"request_id":"` + testAmbiguousRequestID + `"}`, true},
+		{"missing_request_id", `{"status":"repaired"}`, true},
+		{"status_wrong_type", `{"status":1,"request_id":"` + testAmbiguousRequestID + `"}`, true},
+		{"request_id_wrong_type", `{"status":"repaired","request_id":1}`, true},
+	})
+}
+
+func TestMetricExecutionRepairBridgeResponseShapeGuard(t *testing.T) {
+	runShapeGuardCases[metricExecutionRepairBridgeResponse](t, []shapeGuardCase{
+		{"valid", `{"status":"repaired","execution_id":"` + testAmbiguousExecutionID + `","state":"succeeded"}`, false},
+		{"valid_with_extra_field", `{"status":"repaired","execution_id":"` + testAmbiguousExecutionID + `","state":"succeeded","future_field":true}`, false},
+		{"empty_object", `{}`, true},
+		{"null", `null`, true},
+		{"array", `[]`, true},
+		{"missing_status", `{"execution_id":"` + testAmbiguousExecutionID + `","state":"succeeded"}`, true},
+		{"missing_execution_id", `{"status":"repaired","state":"succeeded"}`, true},
+		{"missing_state", `{"status":"repaired","execution_id":"` + testAmbiguousExecutionID + `"}`, true},
+		{"status_wrong_type", `{"status":1,"execution_id":"` + testAmbiguousExecutionID + `","state":"succeeded"}`, true},
+		{"execution_id_wrong_type", `{"status":"repaired","execution_id":1,"state":"succeeded"}`, true},
+		{"state_wrong_type", `{"status":"repaired","execution_id":"` + testAmbiguousExecutionID + `","state":1}`, true},
+	})
 }

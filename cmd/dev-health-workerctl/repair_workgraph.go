@@ -206,7 +206,7 @@ func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr 
 			"payload":       payload,
 		})
 	}
-	status, body, err := postWorkerBridge(
+	status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](
 		ctx, "WORKER_WORKGRAPH_REPAIR_TOKEN",
 		path,
 		payload,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -12,18 +13,40 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var familyJobKinds = map[string]string{
-	"capacity":              jobcontract.KindRemainingCapacity,
-	"complexity":            jobcontract.KindRemainingComplexity,
-	"dora":                  jobcontract.KindRemainingDORA,
-	"membership_backfill":   jobcontract.KindRemainingMembership,
-	"recommendations":       jobcontract.KindRemainingRecommendations,
-	"release_impact":        jobcontract.KindRemainingReleaseImpact,
-	"work_item_attribution": jobcontract.KindRemainingWorkItemAttribution,
+// familyJobKinds is derived from families.json (the single source for the
+// family->kind mapping, CHAOS-5007) exactly once, instead of being a
+// separately hand-maintained map: a hardcoded copy is what let
+// "work_item_attribution" go missing here while every other artifact
+// (families.json, registry.json, migration-state.json, the Python mirror)
+// still had it, turning one silently-dropped map entry into a full "daily"
+// family composition crash (CHAOS-4993, CHAOS-3092 PR-B). Deriving it
+// removes the class of bug rather than just testing for it.
+var (
+	familyJobKindsOnce sync.Once
+	familyJobKinds     map[string]string
+)
+
+func loadFamilyJobKinds() map[string]string {
+	familyJobKindsOnce.Do(func() {
+		inventory, err := Load()
+		if err != nil {
+			// families.json is //go:embed'ed and Validate()-checked by Load()
+			// itself; a failure here means the embedded artifact is corrupt,
+			// which is a build-time defect, not a runtime condition any
+			// caller of JobKindForFamily can meaningfully recover from.
+			panic(fmt.Sprintf("remaining: families.json failed to load: %v", err))
+		}
+		kinds := make(map[string]string, len(inventory.Families))
+		for _, family := range inventory.Families {
+			kinds[family.Name] = family.RouteKey
+		}
+		familyJobKinds = kinds
+	})
+	return familyJobKinds
 }
 
 func JobKindForFamily(family string) (string, bool) {
-	kind, ok := familyJobKinds[family]
+	kind, ok := loadFamilyJobKinds()[family]
 	return kind, ok
 }
 

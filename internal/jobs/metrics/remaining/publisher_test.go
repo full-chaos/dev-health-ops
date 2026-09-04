@@ -35,18 +35,27 @@ func testPublisher(t *testing.T) *PostgresPublisher {
 	return &PostgresPublisher{producer: producer, registry: registry}
 }
 
-// TestJobKindForFamilyCoversEveryRegisteredFamily is the CHAOS-4993
-// recurrence guard: familyJobKinds is a fourth hardcoded family->kind table,
-// separate from families.json, registry.json, migration-state.json and the
-// Python job_contracts mirror, and nothing enforced that a new family's entry
-// landed here too. Its absence for "work_item_attribution" made
+// TestJobKindForFamilyCoversEveryRegisteredFamily is the CHAOS-4993/CHAOS-5007
+// recurrence guard. familyJobKinds used to be a fourth hardcoded family->kind
+// table, separate from families.json, registry.json, migration-state.json and
+// the Python job_contracts mirror, and nothing enforced that a new family's
+// entry landed here too -- its absence for "work_item_attribution" made
 // NewPartitionHandler refuse with ErrUnavailable for every partition of that
 // kind, which daily.go's registration loop turned into a full "daily" family
 // composition failure (worker_family_composition_failed) instead of a
 // graceful per-kind skip -- reproduced live against a migrated ClickHouse in
-// TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse. This test
-// needs no database or container: it walks the real families.json inventory
-// and asserts JobKindForFamily resolves every entry to its registered kind.
+// TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse.
+//
+// CHAOS-5007 removed that hardcoded map: JobKindForFamily now derives
+// directly from families.json (see loadFamilyJobKinds), so this specific
+// pairing can no longer drift by construction. This test stays as the
+// vacuous-pass guard (a families.json that decoded to zero families would
+// make every loop below trivially pass) and as a locked-in contract that
+// JobKindForFamily's behavior actually matches the inventory it claims to be
+// derived from. TestJobKindForFamilyResolvesToARegisteredContractDescriptor
+// below covers the axis this test can no longer catch on its own: whether
+// the resolved kind is a REAL registered job kind, not just an internally
+// self-consistent one.
 func TestJobKindForFamilyCoversEveryRegisteredFamily(t *testing.T) {
 	inventory, err := Load()
 	if err != nil {
@@ -63,6 +72,66 @@ func TestJobKindForFamilyCoversEveryRegisteredFamily(t *testing.T) {
 		}
 		if kind != family.RouteKey {
 			t.Errorf("familyJobKinds[%q] = %q, want %q (families.json's route_key)", family.Name, kind, family.RouteKey)
+		}
+	}
+}
+
+// TestJobKindForFamilyResolvesToARegisteredContractDescriptor is the
+// CHAOS-5007 parity test between families.json and registry.json (the two
+// of the four family->kind tables that were never cross-checked against each
+// other outside a live-database integration test): every family's resolved
+// job kind must actually exist in the checked-in contract registry.
+// PublishPartitionTx calls exactly this lookup, via publisher.registry.
+// Descriptor(kind), on the live publish path -- a route_key with no matching
+// registry entry surfaces there as ErrUnavailable per-partition, the same
+// swallowed-cause shape CHAOS-4993 is about, except for a mismatch this test
+// now catches in `go test`, before it ever reaches a running worker.
+func TestJobKindForFamilyResolvesToARegisteredContractDescriptor(t *testing.T) {
+	registry := loadContractRegistry(t)
+	inventory, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Families) == 0 {
+		t.Fatal("families.json produced no families -- test would pass vacuously")
+	}
+	for _, family := range inventory.Families {
+		kind, ok := JobKindForFamily(family.Name)
+		if !ok {
+			t.Errorf("JobKindForFamily(%q) resolved to nothing", family.Name)
+			continue
+		}
+		if _, ok := registry.Descriptor(kind); !ok {
+			t.Errorf(
+				"family %q resolves to kind %q, which registry.json has no descriptor for "+
+					"(add it to contracts/jobs/v1/registry.json and migration-state.json)",
+				family.Name, kind,
+			)
+		}
+	}
+}
+
+// TestJobKindForFamilyUnknownFamilyReturnsFalseWithoutPanicking guards the
+// sync.Once-cached derivation in loadFamilyJobKinds (CHAOS-5007): the ONLY
+// panic path there is families.json itself failing to decode/validate (a
+// build-time defect in the embedded artifact), never a per-call lookup miss.
+// An unregistered family name -- typos, a retired family, a family that
+// exists in some OTHER inventory -- must come back as ("", false) like an
+// ordinary map miss, exactly as it did before the map was derived from
+// families.json instead of hand-written.
+func TestJobKindForFamilyUnknownFamilyReturnsFalseWithoutPanicking(t *testing.T) {
+	for _, family := range []string{
+		"",
+		"not_a_real_family",
+		"metrics.remaining.capacity", // a kind string, not a family name
+		"CAPACITY",                   // wrong case
+	} {
+		kind, ok := JobKindForFamily(family)
+		if ok {
+			t.Errorf("JobKindForFamily(%q) = (%q, true), want (\"\", false)", family, kind)
+		}
+		if kind != "" {
+			t.Errorf("JobKindForFamily(%q) kind = %q, want empty string on a miss", family, kind)
 		}
 	}
 }

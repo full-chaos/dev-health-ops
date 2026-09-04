@@ -238,11 +238,12 @@ func buildGitHubEstimateCoverageMetricsDaily(
 	derived teamattribution.GithubWorkItemDerivationContext,
 ) ([]githubEstimateCoverageMetricsDailyRow, error) {
 	items := make([]workitemmetrics.Item, 0, len(rows.WorkItems))
-	for _, item := range rows.WorkItems {
+	for index, item := range rows.WorkItems {
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
 			return nil, err
 		}
 		items = append(items, workitemmetrics.Item{
+			SourceIndex: index,
 			WorkItemID:  item.WorkItemID,
 			Provider:    item.Provider,
 			Type:        item.Type,
@@ -258,7 +259,7 @@ func buildGitHubEstimateCoverageMetricsDaily(
 
 	computed := workitemmetrics.ComputeEstimateCoverage(
 		dayUTC, items,
-		workitemmetrics.AssertAligned(workItemMetricSourceIDs(rows), items, workItemMetricResolver(rows, derived)),
+		workitemmetrics.AssertAligned(len(rows.WorkItems), items, workItemMetricResolver(rows, derived)),
 	)
 	stamp := githubWorkItemDerivedStamp(computedAt, githubEstimateCoverageStampPrecision)
 	result := make([]githubEstimateCoverageMetricsDailyRow, 0, len(computed))

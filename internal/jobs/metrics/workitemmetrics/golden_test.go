@@ -156,8 +156,9 @@ func parseGoldenTimePointer(t *testing.T, value *string) *time.Time {
 func goldenInputs(t *testing.T, fixture goldenFixture) ([]Item, []Transition, Resolver) {
 	t.Helper()
 	items := make([]Item, 0, len(fixture.Items))
-	for _, row := range fixture.Items {
+	for index, row := range fixture.Items {
 		items = append(items, Item{
+			SourceIndex: index,
 			WorkItemID:  row.WorkItemID,
 			Provider:    row.Provider,
 			Type:        row.Type,
@@ -453,48 +454,64 @@ func checkTimePointer(t *testing.T, label, field string, got, want *time.Time) {
 }
 
 // TestAssertAlignedRejectsAReorderedProjection is the regression test for
-// codex r1's P2 on the previous version, which compared only cardinality.
+// codex r1's P2 (cardinality-only) AND r2's P2 (id-keyed, which accepted a
+// reordering between two source rows sharing an id).
 //
-// Equal length is necessary and says nothing about order. A reordered
-// projection resolves each item against another item's attribution -- two real
-// rows, both silently wrong, no error anywhere. This is the exact construction
-// codex supplied.
+// The projection here carries SourceIndex values that do not match their
+// positions, which is what a reordering actually is.
 func TestAssertAlignedRejectsAReorderedProjection(t *testing.T) {
-	sourceIDs := []string{"A", "B"}
-	reordered := []Item{{WorkItemID: "B"}, {WorkItemID: "A"}}
-
+	reordered := []Item{{WorkItemID: "B", SourceIndex: 1}, {WorkItemID: "A", SourceIndex: 0}}
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
 			t.Fatal(
-				"AssertAligned accepted a REORDERED projection of equal length. " +
-					"Every resolver answer would attribute one work item using " +
-					"another's ownership -- plausible, non-empty, undetectable output.",
-			)
+				"AssertAligned accepted a REORDERED projection. Every resolver answer " +
+					"would attribute one work item using another's ownership.")
 		}
-		if message, ok := recovered.(string); ok && !strings.Contains(message, "index 0") {
-			t.Errorf("panic did not name the diverging index: %s", message)
+		if message, ok := recovered.(string); ok && !strings.Contains(message, "position 0") {
+			t.Errorf("panic did not name the diverging position: %s", message)
 		}
 	}()
-	AssertAligned(sourceIDs, reordered, func(int) Attribution { return Attribution{} })
+	AssertAligned(2, reordered, func(int) Attribution { return Attribution{} })
+}
+
+// TestAssertAlignedRejectsAReorderedDuplicateIDProjection is codex r2's exact
+// construction, and the reason this guard keys on SourceIndex rather than on
+// work_item_id.
+//
+// The Resolver contract chose INDEXES precisely so two source rows may share an
+// id. An id-keyed check therefore compares equal at every position for
+// [dup, dup] while the resolver reads the wrong row -- executed against the
+// previous version as "AssertAligned duplicate reorder accepted: true". Only an
+// index check distinguishes them.
+func TestAssertAlignedRejectsAReorderedDuplicateIDProjection(t *testing.T) {
+	swapped := []Item{{WorkItemID: "dup", SourceIndex: 1}, {WorkItemID: "dup", SourceIndex: 0}}
+	defer func() {
+		if recover() == nil {
+			t.Fatal(
+				"AssertAligned accepted a reordering between two DISTINCT source rows " +
+					"sharing one work_item_id -- the exact case an id-keyed check cannot see")
+		}
+	}()
+	AssertAligned(2, swapped, func(int) Attribution { return Attribution{} })
 }
 
 // TestAssertAlignedAcceptsAFaithfulProjection is the positive control: without
-// it, a guard that panicked unconditionally would pass the test above and be
-// indistinguishable from a correct one.
+// it, a guard that panicked unconditionally would pass every test above and be
+// indistinguishable from a correct one. Duplicate ids are FINE when order is
+// preserved -- that is the contract.
 func TestAssertAlignedAcceptsAFaithfulProjection(t *testing.T) {
-	sourceIDs := []string{"A", "B"}
-	faithful := []Item{{WorkItemID: "A"}, {WorkItemID: "B"}}
-	AssertAligned(sourceIDs, faithful, func(int) Attribution { return Attribution{} })
+	faithful := []Item{{WorkItemID: "dup", SourceIndex: 0}, {WorkItemID: "dup", SourceIndex: 1}}
+	AssertAligned(2, faithful, func(int) Attribution { return Attribution{} })
 }
 
-// TestAssertAlignedRejectsALengthMismatch keeps the original cardinality arm
-// covered -- the new identity check must not have replaced it.
+// TestAssertAlignedRejectsALengthMismatch keeps the cardinality arm covered --
+// the index check must not have replaced it.
 func TestAssertAlignedRejectsALengthMismatch(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("AssertAligned accepted a projection that dropped a row")
 		}
 	}()
-	AssertAligned([]string{"A", "B"}, []Item{{WorkItemID: "A"}}, func(int) Attribution { return Attribution{} })
+	AssertAligned(2, []Item{{WorkItemID: "A", SourceIndex: 0}}, func(int) Attribution { return Attribution{} })
 }

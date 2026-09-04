@@ -392,6 +392,59 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
             completed_at=_hour(8),
             closed_at=_hour(22),
         ),
+        # EXCLUSIVE-END BOUNDARY. The window is half-open [start, end), and no
+        # other item sits exactly on `end`, so flipping any boundary test from
+        # `!x.Before(end)` to `x.After(end)` -- or the equivalent in
+        # inHalfOpenDay -- passes both the frozen corpus and the live rot guard
+        # (codex r2 P2; their scan reported `created_at at-day-end 0`).
+        # END_AT is 2026-08-25T00:00:00Z: this item is created AT the exclusive
+        # end and must be EXCLUDED entirely.
+        _item(
+            "gh:28",
+            project_id="acme/boundary",
+            status="todo",
+            created_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        ),
+        # INCLUSIVE-START BOUNDARY, the other side of the same class: created,
+        # started and completed exactly AT `start`, which must be INCLUDED.
+        _item(
+            "gh:29",
+            project_id="acme/boundary",
+            status="done",
+            created_at=_hour(0),
+            started_at=_hour(0),
+            completed_at=_hour(0),
+            assignees=["nina"],
+        ),
+        # STARTED/COMPLETED exactly at the exclusive end -- must NOT count as
+        # started or completed today, and closed_at at `end` must not make the
+        # item terminal within the window.
+        _item(
+            "gh:30",
+            project_id="acme/boundary",
+            status="done",
+            created_at=datetime(2026, 8, 20, tzinfo=timezone.utc),
+            started_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        ),
+        # NON-GITHUB provider IN SCOPE, sharing the boundary scope so it is
+        # reached by the same loader predicate. This is what gives the LIVE
+        # ORACLE authority over the loader's provider-agnosticism: appending
+        # `AND provider = 'github'` to the Go loaders drops this row, which the
+        # integration readback then sees as a missing scope. Codex r2 P2 showed
+        # the Go-to-Go predicate guard could not catch that on its own.
+        _item(
+            "gitlab:1",
+            provider="gitlab",
+            project_id="acme/boundary",
+            status="done",
+            created_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+            started_at=_hour(5),
+            completed_at=_hour(11),
+            assignees=["oscar"],
+            story_points=1.0,
+        ),
         # OPEN items carrying story_points, in their own scope, so estimate
         # coverage produces a real FRACTION (1/3) rather than only the 0.0 and
         # None a corpus of terminal-or-unestimated items can reach.
@@ -437,6 +490,13 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
         _transition("gh:20", _hour(0, 30), "todo", "backlog"),
         # ...and one AFTER completed_at, which must be ignored
         _transition("gh:20", _hour(23, 30), "done", "canceled"),
+        # `waiting` and `review_requested` are Python WAIT_STATUSES no corpus
+        # transition reached, so removing either arm from waitStatuses left both
+        # frozen parity and the live rot guard green (codex r2 P3). gh:12 now
+        # walks through both.
+        _transition("gh:12", _hour(3), "in_progress", "waiting"),
+        _transition("gh:12", _hour(6), "waiting", "review_requested"),
+        _transition("gh:12", _hour(9), "review_requested", "in_progress"),
         # gh:7 sits in a wait status for its whole cycle -> flow_efficiency 0
         _transition("gh:7", _hour(7, 30), "in_progress", "waiting_for_review"),
         # a transition for an item with no cycle time -> never consulted

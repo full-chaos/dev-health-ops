@@ -209,7 +209,7 @@ func buildWorkItemMetricTripletForProvider(
 
 	triplet := workitemmetrics.ComputeDailyTriplet(
 		day, items, transitions,
-		workitemmetrics.AssertAligned(workItemMetricSourceIDs(rows), items, workItemMetricResolver(rows, derived)),
+		workitemmetrics.AssertAligned(len(rows.WorkItems), items, workItemMetricResolver(rows, derived)),
 	)
 	return githubWorkItemMetricTriplet{
 		MetricsDaily:     githubWorkItemMetricsDailyRows(triplet.MetricsDaily, computedAt, claim.OrgID),
@@ -222,11 +222,12 @@ func buildWorkItemMetricTripletForProvider(
 // compute's input, asserting tenancy in row order (see the caller's comment).
 func workItemMetricItems(claim Claim, rows githubWorkItemRows) ([]workitemmetrics.Item, error) {
 	items := make([]workitemmetrics.Item, 0, len(rows.WorkItems))
-	for _, item := range rows.WorkItems {
+	for index, item := range rows.WorkItems {
 		if item.OrgID != claim.OrgID || item.Provider != claim.Provider || item.CreatedAt.IsZero() {
 			return nil, ErrInvalidConfiguration
 		}
 		items = append(items, workitemmetrics.Item{
+			SourceIndex: index,
 			WorkItemID:  item.WorkItemID,
 			Provider:    item.Provider,
 			Type:        item.Type,
@@ -240,16 +241,6 @@ func workItemMetricItems(claim Claim, rows githubWorkItemRows) ([]workitemmetric
 		})
 	}
 	return items, nil
-}
-
-// workItemMetricSourceIDs is the source row order AssertAligned checks the
-// projection against, item for item.
-func workItemMetricSourceIDs(rows githubWorkItemRows) []string {
-	ids := make([]string, 0, len(rows.WorkItems))
-	for _, item := range rows.WorkItems {
-		ids = append(ids, item.WorkItemID)
-	}
-	return ids
 }
 
 // workItemMetricResolver runs the live teamattribution cascade LAZILY, once per

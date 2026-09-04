@@ -121,7 +121,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 			scope.day,
 			projected,
 			workItemMetricsTransitions(transitions),
-			workitemmetrics.AssertAligned(workItemMetricsSourceIDs(sorted), projected, workItemMetricsResolver(sorted, attributions)),
+			workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
 		)
 
 		written, err := WriteWorkItemMetricsDaily(
@@ -190,20 +190,11 @@ func sortWorkItemMetricsRows(items []workItemMetricsRow) []workItemMetricsRow {
 	return sorted
 }
 
-// workItemMetricsSourceIDs is the source row order AssertAligned checks the
-// projection against, item for item.
-func workItemMetricsSourceIDs(rows []workItemMetricsRow) []string {
-	ids := make([]string, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.WorkItemID)
-	}
-	return ids
-}
-
 func workItemMetricsItems(rows []workItemMetricsRow) []workitemmetrics.Item {
 	items := make([]workitemmetrics.Item, 0, len(rows))
-	for _, row := range rows {
+	for index, row := range rows {
 		items = append(items, workitemmetrics.Item{
+			SourceIndex: index,
 			WorkItemID:  row.WorkItemID,
 			Provider:    row.Provider,
 			Type:        row.Type,

@@ -39,6 +39,19 @@
       "team_id": "unassigned",
       "team_name": "Unassigned",
       "unestimated_count": 1,
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "backlog_size": 1,
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "day": "2026-08-24",
+      "estimated_count": 0,
+      "org_id": "",
+      "provider": "github",
+      "ratio": 0.0,
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "unestimated_count": 1,
       "work_scope_id": "acme/by-name"
     },
     {
@@ -118,6 +131,19 @@
       "team_name": "Unassigned",
       "unestimated_count": 1,
       "work_scope_id": "acme/unmapped"
+    },
+    {
+      "backlog_size": 0,
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "day": "2026-08-24",
+      "estimated_count": 0,
+      "org_id": "",
+      "provider": "gitlab",
+      "ratio": null,
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "unestimated_count": 0,
+      "work_scope_id": "acme/boundary"
     },
     {
       "backlog_size": 0,
@@ -623,6 +649,78 @@
       "assignees": [],
       "closed_at": null,
       "completed_at": null,
+      "created_at": "2026-08-25T00:00:00Z",
+      "native_team_key": null,
+      "project_id": "acme/boundary",
+      "project_key": null,
+      "project_name": null,
+      "provider": "github",
+      "started_at": null,
+      "status": "todo",
+      "story_points": null,
+      "type": "task",
+      "work_item_id": "gh:28",
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "assignees": [
+        "nina"
+      ],
+      "closed_at": null,
+      "completed_at": "2026-08-24T00:00:00Z",
+      "created_at": "2026-08-24T00:00:00Z",
+      "native_team_key": null,
+      "project_id": "acme/boundary",
+      "project_key": null,
+      "project_name": null,
+      "provider": "github",
+      "started_at": "2026-08-24T00:00:00Z",
+      "status": "done",
+      "story_points": null,
+      "type": "task",
+      "work_item_id": "gh:29",
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "assignees": [],
+      "closed_at": "2026-08-25T00:00:00Z",
+      "completed_at": "2026-08-25T00:00:00Z",
+      "created_at": "2026-08-20T00:00:00Z",
+      "native_team_key": null,
+      "project_id": "acme/boundary",
+      "project_key": null,
+      "project_name": null,
+      "provider": "github",
+      "started_at": "2026-08-25T00:00:00Z",
+      "status": "done",
+      "story_points": null,
+      "type": "task",
+      "work_item_id": "gh:30",
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "assignees": [
+        "oscar"
+      ],
+      "closed_at": null,
+      "completed_at": "2026-08-24T11:00:00Z",
+      "created_at": "2026-08-22T00:00:00Z",
+      "native_team_key": null,
+      "project_id": "acme/boundary",
+      "project_key": null,
+      "project_name": null,
+      "provider": "gitlab",
+      "started_at": "2026-08-24T05:00:00Z",
+      "status": "done",
+      "story_points": 1.0,
+      "type": "task",
+      "work_item_id": "gitlab:1",
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "assignees": [],
+      "closed_at": null,
+      "completed_at": null,
       "created_at": "2026-08-20T00:00:00Z",
       "native_team_key": null,
       "project_id": "acme/backlog",
@@ -851,6 +949,30 @@
       "source": "unassigned",
       "team_id": null,
       "team_name": null,
+      "work_item_id": "gh:28"
+    },
+    {
+      "source": "unassigned",
+      "team_id": null,
+      "team_name": null,
+      "work_item_id": "gh:29"
+    },
+    {
+      "source": "unassigned",
+      "team_id": null,
+      "team_name": null,
+      "work_item_id": "gh:30"
+    },
+    {
+      "source": "unassigned",
+      "team_id": null,
+      "team_name": null,
+      "work_item_id": "gitlab:1"
+    },
+    {
+      "source": "unassigned",
+      "team_id": null,
+      "team_name": null,
       "work_item_id": "gh:21"
     },
     {
@@ -908,6 +1030,24 @@
       "occurred_at": "2026-08-24T23:30:00Z",
       "to_status": "canceled",
       "work_item_id": "gh:20"
+    },
+    {
+      "from_status": "in_progress",
+      "occurred_at": "2026-08-24T03:00:00Z",
+      "to_status": "waiting",
+      "work_item_id": "gh:12"
+    },
+    {
+      "from_status": "waiting",
+      "occurred_at": "2026-08-24T06:00:00Z",
+      "to_status": "review_requested",
+      "work_item_id": "gh:12"
+    },
+    {
+      "from_status": "review_requested",
+      "occurred_at": "2026-08-24T09:00:00Z",
+      "to_status": "in_progress",
+      "work_item_id": "gh:12"
     },
     {
       "from_status": "in_progress",
@@ -1029,14 +1169,14 @@
       "work_scope_id": "acme/platform"
     },
     {
-      "active_time_hours": 12.0,
+      "active_time_hours": 6.0,
       "assignee": "dave",
       "completed_at": "2026-08-24T14:00:00Z",
       "computed_at": "2026-08-25T06:30:15.123456Z",
       "created_at": "2026-08-23T00:00:00Z",
       "cycle_time_hours": 12.0,
       "day": "2026-08-24",
-      "flow_efficiency": 1.0,
+      "flow_efficiency": 0.5,
       "lead_time_hours": 38.0,
       "org_id": "",
       "provider": "github",
@@ -1045,7 +1185,7 @@
       "team_id": "team-payments",
       "team_name": "Payments",
       "type": "task",
-      "wait_time_hours": 0.0,
+      "wait_time_hours": 6.0,
       "work_item_id": "gh:12",
       "work_scope_id": "acme/payments"
     },
@@ -1239,6 +1379,48 @@
       "work_scope_id": "acme/dual"
     },
     {
+      "active_time_hours": null,
+      "assignee": "nina",
+      "completed_at": "2026-08-24T00:00:00Z",
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "created_at": "2026-08-24T00:00:00Z",
+      "cycle_time_hours": 0.0,
+      "day": "2026-08-24",
+      "flow_efficiency": null,
+      "lead_time_hours": 0.0,
+      "org_id": "",
+      "provider": "github",
+      "started_at": "2026-08-24T00:00:00Z",
+      "status": "done",
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "type": "task",
+      "wait_time_hours": null,
+      "work_item_id": "gh:29",
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "active_time_hours": 6.0,
+      "assignee": "oscar",
+      "completed_at": "2026-08-24T11:00:00Z",
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "created_at": "2026-08-22T00:00:00Z",
+      "cycle_time_hours": 6.0,
+      "day": "2026-08-24",
+      "flow_efficiency": 1.0,
+      "lead_time_hours": 59.0,
+      "org_id": "",
+      "provider": "gitlab",
+      "started_at": "2026-08-24T05:00:00Z",
+      "status": "done",
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "type": "task",
+      "wait_time_hours": 0.0,
+      "work_item_id": "gitlab:1",
+      "work_scope_id": "acme/boundary"
+    },
+    {
       "active_time_hours": 21.45433819638889,
       "assignee": "bob",
       "completed_at": "2026-08-24T22:41:03.271828Z",
@@ -1288,6 +1470,34 @@
       "wip_count_end_of_day": 1,
       "wip_unassigned_end_of_day": 1,
       "work_scope_id": ""
+    },
+    {
+      "bug_completed_ratio": 0.0,
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "cycle_time_p50_hours": 0.0,
+      "cycle_time_p90_hours": 0.0,
+      "day": "2026-08-24",
+      "defect_intro_rate": 0.0,
+      "items_completed": 1,
+      "items_completed_unassigned": 0,
+      "items_started": 1,
+      "items_started_unassigned": 0,
+      "lead_time_p50_hours": 0.0,
+      "lead_time_p90_hours": 0.0,
+      "new_bugs_count": 0,
+      "new_items_count": 1,
+      "org_id": "",
+      "predictability_score": 1.0,
+      "provider": "github",
+      "story_points_completed": 0.0,
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "wip_age_p50_hours": null,
+      "wip_age_p90_hours": null,
+      "wip_congestion_ratio": 0.0,
+      "wip_count_end_of_day": 0,
+      "wip_unassigned_end_of_day": 0,
+      "work_scope_id": "acme/boundary"
     },
     {
       "bug_completed_ratio": 0.0,
@@ -1488,6 +1698,34 @@
     {
       "bug_completed_ratio": 0.0,
       "computed_at": "2026-08-25T06:30:15.123456Z",
+      "cycle_time_p50_hours": 6.0,
+      "cycle_time_p90_hours": 6.0,
+      "day": "2026-08-24",
+      "defect_intro_rate": 0.0,
+      "items_completed": 1,
+      "items_completed_unassigned": 0,
+      "items_started": 1,
+      "items_started_unassigned": 0,
+      "lead_time_p50_hours": 59.0,
+      "lead_time_p90_hours": 59.0,
+      "new_bugs_count": 0,
+      "new_items_count": 0,
+      "org_id": "",
+      "predictability_score": 1.0,
+      "provider": "gitlab",
+      "story_points_completed": 1.0,
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "wip_age_p50_hours": null,
+      "wip_age_p90_hours": null,
+      "wip_congestion_ratio": 0.0,
+      "wip_count_end_of_day": 0,
+      "wip_unassigned_end_of_day": 0,
+      "work_scope_id": "acme/boundary"
+    },
+    {
+      "bug_completed_ratio": 0.0,
+      "computed_at": "2026-08-25T06:30:15.123456Z",
       "cycle_time_p50_hours": 14.5,
       "cycle_time_p90_hours": 14.9,
       "day": "2026-08-24",
@@ -1557,6 +1795,21 @@
       "user_identity": "unassigned",
       "wip_count_end_of_day": 1,
       "work_scope_id": ""
+    },
+    {
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "cycle_time_p50_hours": 0.0,
+      "cycle_time_p90_hours": 0.0,
+      "day": "2026-08-24",
+      "items_completed": 1,
+      "items_started": 1,
+      "org_id": "",
+      "provider": "github",
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "user_identity": "nina",
+      "wip_count_end_of_day": 0,
+      "work_scope_id": "acme/boundary"
     },
     {
       "computed_at": "2026-08-25T06:30:15.123456Z",
@@ -1707,6 +1960,21 @@
       "user_identity": "unassigned",
       "wip_count_end_of_day": 1,
       "work_scope_id": "acme/unmapped"
+    },
+    {
+      "computed_at": "2026-08-25T06:30:15.123456Z",
+      "cycle_time_p50_hours": 6.0,
+      "cycle_time_p90_hours": 6.0,
+      "day": "2026-08-24",
+      "items_completed": 1,
+      "items_started": 1,
+      "org_id": "",
+      "provider": "gitlab",
+      "team_id": "unassigned",
+      "team_name": "Unassigned",
+      "user_identity": "oscar",
+      "wip_count_end_of_day": 0,
+      "work_scope_id": "acme/boundary"
     },
     {
       "computed_at": "2026-08-25T06:30:15.123456Z",

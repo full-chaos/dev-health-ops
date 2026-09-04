@@ -82,7 +82,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 		rows := workitemmetrics.ComputeEstimateCoverage(
 			scope.day,
 			projected,
-			workitemmetrics.AssertAligned(workItemMetricsSourceIDs(sorted), projected, workItemMetricsResolver(sorted, attributions)),
+			workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
 		)
 
 		written, err := WriteEstimateCoverageMetricsDaily(

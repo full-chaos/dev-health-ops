@@ -56,7 +56,17 @@ type Item struct {
 	// The unassigned COUNTERS (:1214/:1220/:1315) instead test
 	// `assignee is None`, which an empty string passes. Keeping a *string
 	// (rather than a string plus a bool) is what preserves both answers.
-	Assignee    *string
+	Assignee *string
+	// SourceIndex is the item's position in the CALLER's source rows, carried
+	// through the projection so AssertAligned can verify alignment exactly.
+	//
+	// It exists because work_item_id is NOT a per-row identity: the Resolver
+	// contract deliberately keys on index precisely so two rows sharing an id
+	// need not collapse. Verifying alignment by id therefore accepts a
+	// reordering between two distinct rows that share one -- codex r2 P2,
+	// executed: "AssertAligned duplicate reorder accepted: true". The index is
+	// the thing the contract is actually about, so it is the thing to check.
+	SourceIndex int
 	CreatedAt   time.Time
 	StartedAt   *time.Time
 	CompletedAt *time.Time

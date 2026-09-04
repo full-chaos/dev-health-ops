@@ -345,6 +345,21 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	if err != nil {
 		return jobruntime.Retryable(err)
 	}
+	// CHAOS-5049 dead-claim sweep. BEFORE the publish loop, deliberately: the
+	// rows it clears belong to PREVIOUS runs, so it must not be gated on this
+	// run's publishes succeeding. Fail-open -- it returns nothing, so it cannot
+	// fail this job -- and idempotent, which it has to be: when a publish fails
+	// this function is re-run by River, so the sweep executes again on every
+	// attempt. A row it moved to 'ambiguous' no longer matches the endpoint's
+	// `state = 'executing'` predicate, so a repeat finds fewer rows rather than
+	// re-sweeping the same ones.
+	//
+	// lane-compat-classify's CHAOS-5041 reconcile lands in this same function,
+	// deliberately AFTER the loop as the last statement before `return nil`, so
+	// that a visibility marker can never affect what the job had to do. The two
+	// are adjacent, not overlapping: the publish loop sits between them.
+	handler.sweepDeadClaimExecutions(ctx, runID)
+
 	for _, partition := range partitions {
 		if partition.ID == "" || partition.RunID != runID {
 			return jobruntime.Permanent(ErrInvalidState)

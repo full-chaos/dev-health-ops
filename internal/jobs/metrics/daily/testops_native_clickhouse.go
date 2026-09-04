@@ -45,38 +45,43 @@ import (
 //   - coverage_snapshots is reduced to the single latest snapshot per repo
 //     in ClickHouse (ORDER BY ... LIMIT 1).
 //
-// # Dedup: argMax over a TUPLE, never FINAL under aggregation
+// # Dedup: FINAL, read-for-read with Python
 //
 // Every source table is ReplacingMergeTree(last_synced), so a row is only
-// authoritative after dedup. These readers dedup with
-// `argMax((cols...), last_synced) GROUP BY <the table's exact ORDER BY key>`
-// rather than FINAL, for two reasons:
+// authoritative after dedup. These readers use FINAL, matching Python's own
+// reads line for line (loaders/clickhouse.py:1307, 1390, 1442, 1444, 1460,
+// 1581, 1594, 1640).
 //
-//  1. It is merge-independent. CHAOS-5045 found GitHub's TestOps ARTIFACTS
-//     phase re-projecting the same test_case_results rows on every hourly
-//     unit (raw/uniq 1.86 for repo 920f9442, and up to 5x). Those duplicates
-//     are only collapsed by FINAL at query time or by a background merge
-//     that may not have run; an argMax over the sorting key is correct
-//     either way, and correct DURING the window where lane-5045's fix has
-//     not yet been deployed.
-//  2. It composes with aggregation. FINAL inside a subquery that is then
-//     grouped is both slower and easy to get subtly wrong.
+// An earlier revision of this file used `argMax(tuple(...), last_synced)
+// GROUP BY <sorting key>` instead, on the reasoning that it is
+// merge-independent and composes with aggregation. That was REVERTED
+// (2026-09-04, fleet ruling measured on a real ClickHouse):
 //
-// The argMax argument is a TUPLE, not a bare column, on purpose: ClickHouse's
-// argMax SKIPS rows whose arg is NULL, so `argMax(status, last_synced)` over
-// a Nullable(String) can return an OLDER non-null status when the newest row
-// legitimately has status NULL -- silently un-doing the dedup. A tuple value
-// is never itself NULL (only its elements are), so every row participates and
-// the winner is genuinely the max-last_synced row. tupleElement then unpacks
-// it.
+//   - argMax is NONDETERMINISTIC on a version-column TIE. Given two rows with
+//     the same sorting key and the same last_synced, it may return either.
+//   - FINAL is deterministic on the same input: last-inserted wins.
 //
-// # The day-window filter sits OUTSIDE the dedup
+// And last_synced CAN tie here. The testops writer batches per projection
+// (internal/providersync/github_tests_effects_clickhouse.go:62,91,120,152,
+// 185,218) and stamps every row in a pass from ONE normalizedAt, so
+// last_synced is BATCH-CONSTANT, not per-row. CHAOS-5045's duplicates come
+// from re-projection ACROSS passes and do carry distinct timestamps -- but two
+// rows sharing a sorting key WITHIN one pass (a JUnit report containing the
+// same case twice, a merged report) share last_synced exactly. Uniqueness is
+// not provable from the source, and the rule is that argMax requires provable
+// per-key uniqueness. It does not have it, so FINAL it is.
 //
-// Python filters the FINAL (i.e. already-deduped) row's started_at. Applying
-// the window before the GROUP BY would let a stale duplicate's timestamp
-// decide whether the run is in scope. Every reader here therefore filters on
-// the primary-key prefix (org_id, repo_id) inside, and applies the time
-// window to the deduped result outside.
+// The 200k cap removal does NOT depend on argMax and is unaffected: what
+// removes the materialisation is the PUSHDOWN in loadNativeTestopsCaseGroups
+// (GROUP BY case_name, returning one row per case name instead of one per
+// case ROW), and that reduction works identically on top of FINAL.
+//
+// # The day-window filter
+//
+// With FINAL the window predicate sits in the same WHERE clause, exactly as
+// Python writes it: FINAL resolves the row first, so the filter always sees
+// the winning version. The outside-the-dedup placement the argMax form needed
+// is gone with it.
 //
 // # Ordering
 //
@@ -123,32 +128,11 @@ func loadNativeTestopsPipelineRuns(
 	start, end time.Time,
 ) error {
 	rows, err := conn.Query(ctx, `
-SELECT
-  tupleElement(winner, 1) AS status,
-  tupleElement(winner, 2) AS queued_at,
-  tupleElement(winner, 3) AS started_at,
-  tupleElement(winner, 4) AS finished_at,
-  tupleElement(winner, 5) AS duration_seconds,
-  tupleElement(winner, 6) AS queue_seconds,
-  tupleElement(winner, 7) AS retry_count,
-  tupleElement(winner, 8) AS team_id,
-  tupleElement(winner, 9) AS service_id,
-  org_id,
-  run_id
-FROM (
-  SELECT
-    org_id,
-    run_id,
-    argMax(
-      (status, queued_at, started_at, finished_at, duration_seconds,
-       queue_seconds, retry_count, team_id, service_id),
-      last_synced
-    ) AS winner
-  FROM ci_pipeline_runs
-  WHERE org_id = ? AND repo_id = ?
-  GROUP BY org_id, repo_id, run_id
-)
-WHERE tupleElement(winner, 3) >= ? AND tupleElement(winner, 3) < ?
+SELECT status, queued_at, started_at, finished_at, duration_seconds, queue_seconds,
+       retry_count, team_id, service_id, org_id, run_id
+FROM ci_pipeline_runs FINAL
+WHERE org_id = ? AND repo_id = ?
+  AND started_at >= ? AND started_at < ?
 ORDER BY run_id`,
 		orgID, repoID, start.UTC(), end.UTC())
 	if err != nil {
@@ -192,38 +176,12 @@ func loadNativeTestopsSuites(
 	start, end time.Time,
 ) error {
 	rows, err := conn.Query(ctx, `
-SELECT
-  run_id,
-  suite_id,
-  tupleElement(winner, 1) AS total_count,
-  tupleElement(winner, 2) AS passed_count,
-  tupleElement(winner, 3) AS failed_count,
-  tupleElement(winner, 4) AS skipped_count,
-  tupleElement(winner, 5) AS error_count,
-  tupleElement(winner, 6) AS quarantined_count,
-  tupleElement(winner, 7) AS duration_seconds,
-  tupleElement(winner, 8) AS started_at,
-  tupleElement(winner, 9) AS finished_at,
-  tupleElement(winner, 10) AS team_id,
-  tupleElement(winner, 11) AS service_id,
-  org_id
-FROM (
-  SELECT
-    org_id,
-    run_id,
-    suite_id,
-    argMax(
-      (total_count, passed_count, failed_count, skipped_count, error_count,
-       quarantined_count, duration_seconds, started_at, finished_at,
-       team_id, service_id),
-      last_synced
-    ) AS winner
-  FROM test_suite_results
-  WHERE org_id = ? AND repo_id = ?
-  GROUP BY org_id, repo_id, run_id, suite_id
-)
-WHERE coalesce(tupleElement(winner, 8), tupleElement(winner, 9)) >= ?
-  AND coalesce(tupleElement(winner, 8), tupleElement(winner, 9)) < ?
+SELECT run_id, suite_id, total_count, passed_count, failed_count, skipped_count,
+       error_count, quarantined_count, duration_seconds, started_at, finished_at,
+       team_id, service_id, org_id
+FROM test_suite_results FINAL
+WHERE org_id = ? AND repo_id = ?
+  AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
 ORDER BY run_id, suite_id`,
 		orgID, repoID, start.UTC(), end.UTC())
 	if err != nil {
@@ -280,51 +238,26 @@ func loadNativeTestopsCaseGroups(
 	rows, err := conn.Query(ctx, `
 SELECT
   case_name,
-  groupUniqArray(status) AS statuses,
+  groupUniqArray(ifNull(toString(status), '')) AS statuses,
   max(retry_attempt) AS max_retry
-FROM (
-  SELECT
-    run_id,
-    suite_id,
-    tupleElement(winner, 1) AS case_name,
-    tupleElement(winner, 2) AS status,
-    tupleElement(winner, 3) AS retry_attempt
-  FROM (
-    SELECT
-      org_id,
-      run_id,
-      suite_id,
-      argMax((case_name, ifNull(toString(status), ''), retry_attempt), last_synced) AS winner
-    FROM test_case_results
-    WHERE org_id = ? AND repo_id = ?
-    GROUP BY org_id, repo_id, run_id, suite_id, case_id
-  )
-)
-WHERE case_name != ''
+FROM test_case_results FINAL
+WHERE org_id = ? AND repo_id = ? AND case_name != ''
   AND run_id IN (
-    SELECT run_id FROM (
-      SELECT run_id, argMax((started_at, finished_at), last_synced) AS w
-      FROM test_suite_results
-      WHERE org_id = ? AND repo_id = ?
-      GROUP BY org_id, repo_id, run_id, suite_id
-    )
-    WHERE coalesce(tupleElement(w, 1), tupleElement(w, 2)) >= ?
-      AND coalesce(tupleElement(w, 1), tupleElement(w, 2)) < ?
+    SELECT run_id FROM test_suite_results FINAL
+    WHERE org_id = ? AND repo_id = ?
+      AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
   )
   AND (run_id, suite_id) IN (
-    SELECT run_id, suite_id FROM (
-      SELECT run_id, suite_id, argMax((started_at, finished_at), last_synced) AS w
-      FROM test_suite_results
-      WHERE org_id = ? AND repo_id = ?
-      GROUP BY org_id, repo_id, run_id, suite_id
-    )
-    WHERE coalesce(tupleElement(w, 1), tupleElement(w, 2)) < ?
+    SELECT run_id, suite_id FROM test_suite_results FINAL
+    WHERE org_id = ? AND repo_id = ?
+      AND coalesce(started_at, finished_at) < ?
   )
 GROUP BY case_name
 ORDER BY case_name`,
 		orgID, repoID,
 		orgID, repoID, start.UTC(), end.UTC(),
 		orgID, repoID, end.UTC())
+
 	if err != nil {
 		return fmt.Errorf("load native testops case groups: %w", err)
 	}
@@ -367,53 +300,22 @@ func loadNativeHistoricalFailedCaseNames(
 ) (map[string]struct{}, error) {
 	rows, err := conn.Query(ctx, `
 SELECT DISTINCT c.case_name AS case_name
-FROM (
-  SELECT
-    run_id,
-    suite_id,
-    tupleElement(winner, 1) AS case_name,
-    tupleElement(winner, 2) AS status
-  FROM (
-    SELECT
-      org_id, run_id, suite_id,
-      argMax((case_name, ifNull(toString(status), '')), last_synced) AS winner
-    FROM test_case_results
-    WHERE org_id = ? AND repo_id = ?
-    GROUP BY org_id, repo_id, run_id, suite_id, case_id
-  )
-) AS c
-INNER JOIN (
-  SELECT
-    run_id,
-    suite_id,
-    tupleElement(w, 1) AS started_at,
-    tupleElement(w, 2) AS finished_at
-  FROM (
-    SELECT org_id, run_id, suite_id, argMax((started_at, finished_at), last_synced) AS w
-    FROM test_suite_results
-    WHERE org_id = ? AND repo_id = ?
-    GROUP BY org_id, repo_id, run_id, suite_id
-  )
-) AS s ON (s.run_id = c.run_id) AND (s.suite_id = c.suite_id)
-WHERE coalesce(s.started_at, s.finished_at) >= ?
-  AND coalesce(s.started_at, s.finished_at) < ?
+FROM test_case_results AS c FINAL
+INNER JOIN test_suite_results AS s FINAL
+  ON (s.repo_id = c.repo_id) AND (s.run_id = c.run_id) AND (s.suite_id = c.suite_id) AND (s.org_id = c.org_id)
+WHERE coalesce(s.started_at, s.finished_at) >= ? AND coalesce(s.started_at, s.finished_at) < ?
   AND lower(trim(c.status)) IN (?, ?, ?, ?, ?, ?)
   AND s.run_id NOT IN (
-    SELECT run_id FROM (
-      SELECT run_id, argMax((started_at, finished_at), last_synced) AS w2
-      FROM test_suite_results
-      WHERE org_id = ? AND repo_id = ?
-      GROUP BY org_id, repo_id, run_id, suite_id
-    )
-    WHERE coalesce(tupleElement(w2, 1), tupleElement(w2, 2)) >= ?
-      AND coalesce(tupleElement(w2, 1), tupleElement(w2, 2)) < ?
+    SELECT run_id FROM test_suite_results FINAL
+    WHERE org_id = ? AND repo_id = ?
+      AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
   )
+  AND s.repo_id = ? AND s.org_id = ?
 ORDER BY case_name`,
-		orgID, repoID,
-		orgID, repoID,
 		start.UTC(), end.UTC(),
 		"failure", "failed", "error", "errors", "timeout", "timed_out",
-		orgID, repoID, end.UTC(), currentDayEnd.UTC())
+		orgID, repoID, end.UTC(), currentDayEnd.UTC(),
+		repoID, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("load native testops historical failed case names: %w", err)
 	}
@@ -455,51 +357,15 @@ func loadNativeTestopsLatestCoverage(
 	ctx context.Context, conn testopsNativeConn, orgID string, repoID uuid.UUID, start, end time.Time,
 ) ([]testops.CoverageSnapshotRow, error) {
 	rows, err := conn.Query(ctx, `
-SELECT
-  c.run_id AS run_id,
-  c.snapshot_id AS snapshot_id,
-  c.lines_total AS lines_total,
-  c.lines_covered AS lines_covered,
-  c.line_coverage_pct AS line_coverage_pct,
-  c.branch_coverage_pct AS branch_coverage_pct,
-  c.team_id AS team_id,
-  c.service_id AS service_id,
-  c.org_id AS org_id
-FROM (
-  SELECT
-    org_id,
-    run_id,
-    snapshot_id,
-    tupleElement(winner, 1) AS lines_total,
-    tupleElement(winner, 2) AS lines_covered,
-    tupleElement(winner, 3) AS line_coverage_pct,
-    tupleElement(winner, 4) AS branch_coverage_pct,
-    tupleElement(winner, 5) AS team_id,
-    tupleElement(winner, 6) AS service_id
-  FROM (
-    SELECT
-      org_id, run_id, snapshot_id,
-      argMax(
-        (lines_total, lines_covered, line_coverage_pct, branch_coverage_pct, team_id, service_id),
-        last_synced
-      ) AS winner
-    FROM coverage_snapshots
-    WHERE org_id = ? AND repo_id = ?
-    GROUP BY org_id, repo_id, run_id, snapshot_id
-  )
-) AS c
-INNER JOIN (
-  -- ci_pipeline_runs.started_at is NOT Nullable, so a bare argMax is safe
-  -- here: the NULL-skipping the tuple form defuses elsewhere cannot apply.
-  SELECT run_id, argMax(started_at, last_synced) AS started_at
-  FROM ci_pipeline_runs
-  WHERE org_id = ? AND repo_id = ?
-  GROUP BY org_id, repo_id, run_id
-) AS p ON (p.run_id = c.run_id)
-WHERE p.started_at >= ? AND p.started_at < ?
+SELECT c.run_id, c.snapshot_id, c.lines_total, c.lines_covered,
+       c.line_coverage_pct, c.branch_coverage_pct, c.team_id, c.service_id, c.org_id
+FROM coverage_snapshots AS c FINAL
+INNER JOIN ci_pipeline_runs AS p FINAL
+  ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id) AND (p.org_id = c.org_id)
+WHERE p.started_at >= ? AND p.started_at < ? AND p.repo_id = ? AND p.org_id = ?
 ORDER BY c.run_id DESC, c.snapshot_id DESC
 LIMIT 1`,
-		orgID, repoID, orgID, repoID, start.UTC(), end.UTC())
+		start.UTC(), end.UTC(), repoID, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("load native testops coverage snapshot: %w", err)
 	}

@@ -110,6 +110,8 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 
 	seedTestopsDifferentialFixture(ctx, t, conn, orgID, repoID, day)
 
+	assertTieFixtureActuallyTies(ctx, t, conn, orgID, repoID)
+
 	// ---------------- testops_pipeline ----------------
 	pushAccumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), nil)
 	if err := loadNativeTestopsPipelineRuns(ctx, conn, pushAccumulator, orgID, repoID, start, end); err != nil {
@@ -426,6 +428,19 @@ func seedTestopsDifferentialFixture(
 		// Superseded copy of run-1: OLDER last_synced, contradictory status.
 		// argMax and FINAL must both discard it.
 		{runID: "run-1", status: &statusFailed, service: nil, queue: 99, started: inDay, lastSync: synced.Add(-2 * time.Hour), duration: 1, wantStale: true},
+		// TIE FIXTURE (2026-09-04 fleet ruling): two rows, SAME sorting key
+		// (org_id, repo_id, run_id), IDENTICAL last_synced, DIFFERENT payload.
+		// This is the case the readers' dedup must resolve deterministically,
+		// and the case the previous argMax form could NOT: argMax may return
+		// either row on a version tie, FINAL returns the last-inserted one.
+		//
+		// The old fixture gave every row a distinct last_synced, so it could
+		// never exhibit this at all -- a green result said nothing about the
+		// class, which is exactly the "negative repro that could not have shown
+		// the effect" trap. assertTieFixtureActuallyTies below is the positive
+		// control proving the tie is really present in the table.
+		{runID: "run-tie", status: &statusSuccess, service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 700},
+		{runID: "run-tie", status: &statusFailed, service: nil, queue: 0.1, started: inDay, lastSync: synced, duration: 700, wantStale: true},
 		// r1 P3: NULL-status WINNER over a superseded non-NULL version. This is
 		// the ONLY shape that separates tuple-argMax from bare argMax: the tuple
 		// preserves the winner's NULL (FINAL semantics, since RMT keeps the whole
@@ -621,4 +636,36 @@ func sameStrPtr(a, b *string) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// assertTieFixtureActuallyTies is the POSITIVE CONTROL for the tie fixture.
+//
+// A test that asserts "the readers handle a version tie" proves nothing if the
+// table never actually contains one -- and the previous fixture did not, because
+// every seeded row carried a distinct last_synced. So before any tie assertion
+// runs, this checks the table itself: some (run_id) under this org/repo must
+// have TWO physical rows sharing ONE last_synced value.
+//
+// It queries WITHOUT FINAL on purpose. FINAL would collapse the duplicate and
+// report one row, which is precisely the state this control exists to rule out.
+func assertTieFixtureActuallyTies(
+	ctx context.Context, t *testing.T, conn driver.Conn, orgID string, repoID uuid.UUID,
+) {
+	t.Helper()
+	var tied uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM (
+  SELECT run_id, last_synced, count() AS n
+  FROM ci_pipeline_runs
+  WHERE org_id = ? AND repo_id = ?
+  GROUP BY run_id, last_synced
+  HAVING n > 1
+)`, orgID, repoID).Scan(&tied); err != nil {
+		t.Fatalf("tie-fixture positive control: %v", err)
+	}
+	if tied == 0 {
+		t.Fatal("tie fixture is absent: no (run_id, last_synced) has more than one physical row, " +
+			"so nothing in this test exercises version-tie resolution and a green result would " +
+			"prove nothing about it")
+	}
 }

@@ -627,7 +627,10 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // "compounding_risk" (CHAOS-4287) is post_bridge for its own reason and
 // carries the same consequence: unregistered means every observation for it is
 // refused, and the family's absence becomes invisible rather than counted.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "review_edges", "benchmarking"}
+//
+// "work_graph_edges" (CHAOS-4286) added itself the same way as the families
+// listed above.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "review_edges", "benchmarking", "work_graph_edges"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

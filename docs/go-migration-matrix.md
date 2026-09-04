@@ -210,7 +210,7 @@ function directly, even for families whose worker kind is now native:
 | testops_pipeline | COMPAT-Python | Python: `compute_testops.py:105 compute_pipeline_metrics_daily` | CHAOS-4284 |
 | testops_risk | NATIVE | Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4294 (Done) |
 | testops_test | COMPAT-Python | Python: `compute_testops.py:207 compute_test_metrics_daily` | CHAOS-4284 |
-| work_graph_edges | COMPAT-Python | Python: `ai_workflow.py extract_review_deployment_incident_edges` | CHAOS-4286 |
+| work_graph_edges | NATIVE | Python: `ai_workflow.py extract_review_deployment_incident_edges` | CHAOS-4286 |
 | work_item | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- post_bridge, reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily` | CHAOS-4283 |
 | work_item_attribution | COMPAT-Python | Python: `compute_work_items.py:1189 compute_work_item_team_attributions` (full daily compute -- distinct from §3's native staleness-only backstop of the same table) | CHAOS-4283 |
 | work_item_estimate | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- post_bridge, same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |

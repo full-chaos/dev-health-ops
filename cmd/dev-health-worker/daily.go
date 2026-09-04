@@ -807,6 +807,29 @@ func dailyNativeFamilyRegistrations(
 			"error", fileRiskHotspotsErr,
 		)
 	}
+	// CHAOS-4286: work_graph_edges. Same fail-open construction policy, and
+	// PRE-BRIDGE: it reads raw sync tables plus the shared incident
+	// projection (LoadIncidentsStarted), never another compat family's daily
+	// output.
+	//
+	// The "auto" argument is the daily job's `provider`, which discover_repos
+	// falls back to when a repo's own provider column is empty or literally
+	// "unknown" (job_daily.py:194). It is NOT a guess: the compatibility
+	// bridge passes no provider at all, so the Python side runs on
+	// discover_repos' own default, which is "auto" (job_daily.py:127).
+	// Consequence worth knowing when reading rows: "auto" is a real, expected
+	// value in these tables' provider columns.
+	if workGraphEdgesExecutor, workGraphEdgesErr := daily.NewWorkGraphEdgesExecutor(clickhouseConnection, "auto"); workGraphEdgesErr == nil {
+		native["work_graph_edges"] = workGraphEdgesExecutor
+	} else {
+		logger.Error(
+			"work_graph_edges native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", workGraphEdgesErr,
+		)
+	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as
 	// every other native family above.
 	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {

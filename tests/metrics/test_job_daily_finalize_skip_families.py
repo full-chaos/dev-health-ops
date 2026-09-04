@@ -50,6 +50,19 @@ class _RecordingSink:
     async def get_all_teams(self) -> list[Any]:
         return []
 
+    def query_dicts(self, *_: Any, **__: Any) -> list[Any]:
+        """Several CHAOS-4365 writers that run AFTER the IC block query the
+        sink directly. Answering with no rows here is the structural fix --
+        the earlier revision chased them one monkeypatch at a time and each
+        fix simply revealed the next caller."""
+        return []
+
+    def write_team_metrics(self, rows: Any) -> None:
+        return None
+
+    def write_compounding_risk(self, rows: Any) -> None:
+        return None
+
 
 class _FakeLoader:
     async def load_user_metrics_rolling_30d(

@@ -277,3 +277,81 @@ FROM ai_governance_coverage_daily FINAL WHERE org_id = ?`, orgID).
 		t.Fatalf("coverage rows = %d after two runs, want 1 -- the rewrite must collapse", coverageRows)
 	}
 }
+
+// TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie is the regression guard
+// for the independent-argMax defect this file's own first version shipped with
+// (CHAOS-2787's class).
+//
+// It seeds TWO physical git_pull_requests rows for one (repo_id, number) that
+// share an IDENTICAL last_synced but disagree on BOTH reviews_count AND
+// org_id. With one argMax per column the two aggregates resolve that tie
+// independently, and the query can emit reviews_count from one row beside
+// org_id from the other -- a row that never existed in the table. With a
+// single argMax over a tuple, both values come from whichever row wins.
+//
+// THE ASSERTION HAS TO BE ON THE PAIR. Checking reviews_count alone, or
+// org_id alone, passes under BOTH implementations, because each individual
+// value is legitimately one of the two seeded values either way. Only "these
+// two came from the SAME row" separates them -- which is why the seeded rows
+// disagree on both columns at once, and why the check below accepts exactly
+// two whole-row outcomes and nothing in between.
+//
+// The tie is ordinary, not contrived: last_synced is DateTime64(3) stamped
+// from datetime.now(), and the writer inserts a fresh row per sync rather than
+// short-circuiting, so two versions of one key in the same millisecond is
+// routine.
+func TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if err := conn.Exec(ctx, `CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		tieRepoID = "00000000-0000-4000-8000-0000000000c1"
+		tieOrgA   = "00000000-0000-4000-8000-0000000000c0"
+		tieOrgB   = "00000000-0000-4000-8000-0000000000d0"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+tieRepoID+`'), 1, 5, toDateTime64('2026-09-03 11:00:00.000', 3, 'UTC'), '`+tieOrgA+`'),
+(toUUID('`+tieRepoID+`'), 1, 9, toDateTime64('2026-09-03 11:00:00.000', 3, 'UTC'), '`+tieOrgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact dedup shape LoadGovernanceArtifacts uses, in isolation.
+	var reviewsCount uint32
+	var resolvedOrgID string
+	if err := conn.QueryRow(ctx, `
+SELECT tupleElement(latest, 1), tupleElement(latest, 2)
+FROM (
+    SELECT repo_id, number, argMax(tuple(reviews_count, org_id), last_synced) AS latest
+    FROM git_pull_requests
+    GROUP BY repo_id, number
+)`).Scan(&reviewsCount, &resolvedOrgID); err != nil {
+		t.Fatalf("read deduped row: %v", err)
+	}
+
+	consistent := (reviewsCount == 5 && resolvedOrgID == tieOrgA) ||
+		(reviewsCount == 9 && resolvedOrgID == tieOrgB)
+	if !consistent {
+		t.Fatalf("dedup emitted reviews_count=%d with org_id=%s -- that PAIR exists in no seeded row. "+
+			"Two independent argMax aggregates resolved the last_synced tie differently; the seeded "+
+			"rows were (5, %s) and (9, %s).", reviewsCount, resolvedOrgID, tieOrgA, tieOrgB)
+	}
+}

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import textwrap
 from pathlib import Path
 
@@ -55,16 +56,37 @@ def _literal_str_or_strings(node: ast.expr) -> tuple[str, ...] | None:
     return None
 
 
+def _is_routes_table_call(node: ast.AST) -> bool:
+    """`sa.table("worker_job_routes", ...)`, the inline TableClause shape
+    every migration in this history uses (usually inside a `_routes()`
+    helper, occasionally inlined directly, e.g. 0055's `upgrade()`)."""
+    return bool(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "table"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == _ROUTES_TABLE_NAME
+    )
+
+
 class _MigrationModule:
     """Resolves module-level name -> literal str/tuple(str) for one migration
-    file, and finds which local functions are reachable (by direct call) from
-    a given entry point -- this codebase's migrations routinely delegate
-    upgrade()/downgrade() to _seed_*/_remove_*/_retarget-style helpers."""
+    file, finds which local functions are reachable (by direct call) from a
+    given entry point -- this codebase's migrations routinely delegate
+    upgrade()/downgrade() to _seed_*/_remove_*/_retarget-style helpers -- and
+    tracks which local names actually refer to the worker_job_routes
+    TableClause, as opposed to some other table the same file happens to
+    touch (codex round 1, P1/P2: without this, an insert into an unrelated
+    table could falsely satisfy seed coverage, and a delete against an
+    unrelated table could falsely trip the fail-closed guard)."""
 
     def __init__(self, tree: ast.Module) -> None:
         self.constants: dict[str, tuple[str, ...]] = {}
         self.functions: dict[str, ast.FunctionDef] = {}
         self.local_aliases: dict[str, ast.expr] = {}
+        self.routes_factory_functions: set[str] = set()
+        self.routes_variable_names: set[str] = set()
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target = node.targets[0]
@@ -74,6 +96,15 @@ class _MigrationModule:
                         self.constants[target.id] = literal
             elif isinstance(node, ast.FunctionDef):
                 self.functions[node.name] = node
+        # A function is a "routes factory" if it directly returns the
+        # worker_job_routes TableClause -- e.g. every migration's own
+        # `def _routes(): return sa.table("worker_job_routes", ...)`.
+        for name, func in self.functions.items():
+            for stmt in ast.walk(func):
+                if isinstance(stmt, ast.Return) and stmt.value is not None:
+                    if _is_routes_table_call(stmt.value):
+                        self.routes_factory_functions.add(name)
+                        break
         # Passthrough-filter local aliases, e.g. 0064's
         # `missing = [kind for kind in _KINDS if kind not in existing]`.
         # Resolving through the `if` clause would mean simulating runtime
@@ -83,6 +114,9 @@ class _MigrationModule:
         # migration COULD insert still counts as seeded. Scanned file-wide
         # (not per-function) since these migrations never shadow a name
         # across two different helpers.
+        #
+        # The same pass also collects routes-table variable bindings, e.g.
+        # `routes = _routes()` or an inline `routes = sa.table("worker_job_routes", ...)`.
         for node in ast.walk(tree):
             if not (
                 isinstance(node, ast.Assign)
@@ -90,6 +124,7 @@ class _MigrationModule:
                 and isinstance(node.targets[0], ast.Name)
             ):
                 continue
+            target_name = node.targets[0].id
             value = node.value
             if isinstance(value, ast.ListComp) and len(value.generators) == 1:
                 generator = value.generators[0]
@@ -98,7 +133,13 @@ class _MigrationModule:
                     and isinstance(generator.target, ast.Name)
                     and value.elt.id == generator.target.id
                 ):
-                    self.local_aliases[node.targets[0].id] = generator.iter
+                    self.local_aliases[target_name] = generator.iter
+            if _is_routes_table_call(value) or (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id in self.routes_factory_functions
+            ):
+                self.routes_variable_names.add(target_name)
 
     def resolve(self, node: ast.expr) -> tuple[str, ...] | None:
         if isinstance(node, ast.Name):
@@ -109,38 +150,89 @@ class _MigrationModule:
             return None
         return _literal_str_or_strings(node)
 
-    def reachable_calls(self, entry_point: str) -> list[ast.Call]:
+    def is_routes_table_expr(self, node: ast.expr) -> bool:
+        """True when `node` provably refers to the worker_job_routes
+        TableClause: an inline `sa.table("worker_job_routes", ...)`, a call
+        to a known routes-factory function (`_routes()`), or a variable bound
+        to either of those. False for anything else, INCLUDING a name this
+        module simply doesn't recognize -- unresolvable receivers are not
+        routes ops by definition, they're just unrelated code this parser
+        correctly ignores."""
+        if _is_routes_table_call(node):
+            return True
+        if isinstance(node, ast.Name) and node.id in self.routes_variable_names:
+            return True
+        return bool(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in self.routes_factory_functions
+        )
+
+    def _reachable_functions(self, entry_point: str) -> list[ast.FunctionDef]:
         if entry_point not in self.functions:
             return []
         seen: set[str] = set()
         queue = [entry_point]
-        calls: list[ast.Call] = []
+        reached: list[ast.FunctionDef] = []
         while queue:
             name = queue.pop()
             if name in seen or name not in self.functions:
                 continue
             seen.add(name)
-            for node in ast.walk(self.functions[name]):
-                if not isinstance(node, ast.Call):
-                    continue
-                calls.append(node)
-                if isinstance(node.func, ast.Name) and node.func.id in self.functions:
+            func = self.functions[name]
+            reached.append(func)
+            for node in ast.walk(func):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id in self.functions
+                ):
                     queue.append(node.func.id)
-        return calls
+        return reached
+
+    def reachable_calls(self, entry_point: str) -> list[ast.Call]:
+        return [
+            node
+            for func in self._reachable_functions(entry_point)
+            for node in ast.walk(func)
+            if isinstance(node, ast.Call)
+        ]
+
+    def reachable_string_literals(self, entry_point: str) -> list[str]:
+        """Every string literal (plain or f-string constant segment)
+        anywhere in the subtree reachable from `entry_point` -- used only to
+        hunt for raw-SQL statements a structural AST match can't see."""
+        strings: list[str] = []
+        for func in self._reachable_functions(entry_point):
+            for node in ast.walk(func):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    strings.append(node.value)
+                elif isinstance(node, ast.JoinedStr):
+                    strings.extend(
+                        value.value
+                        for value in node.values
+                        if isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                    )
+        return strings
 
 
 def _file_targets_routes_table(tree: ast.Module) -> bool:
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "table"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value == _ROUTES_TABLE_NAME
-        ):
-            return True
-    return False
+    return any(_is_routes_table_call(node) for node in ast.walk(tree))
+
+
+# A raw-SQL DML statement naming the routes table directly, e.g.
+# `op.execute(sa.text("DELETE FROM worker_job_routes WHERE ..."))` -- a shape
+# no structural extractor below can verify (codex round 1, P1: a raw-SQL
+# retirement was silently invisible to the parser, leaving a genuinely
+# deleted route counted as still live). Detected as its own fail-closed
+# check, independent of the structural insert/delete extractors.
+_RAW_SQL_ROUTES_PATTERN = re.compile(
+    r"\b(insert\s+into|delete\s+from|update)\s+"
+    + re.escape(_ROUTES_TABLE_NAME)
+    + r"\b",
+    re.IGNORECASE,
+)
 
 
 def _dict_job_kind_value(node: ast.expr) -> ast.expr | None:
@@ -218,6 +310,7 @@ def _extract_insert_kinds(
         and isinstance(call.func.value, ast.Call)
         and isinstance(call.func.value.func, ast.Attribute)
         and call.func.value.func.attr == "insert"
+        and module.is_routes_table_expr(call.func.value.func.value)
     ):
         job_kind_keywords = [kw for kw in call.keywords if kw.arg == "job_kind"]
         for kw in job_kind_keywords:
@@ -241,6 +334,7 @@ def _extract_insert_kinds(
             isinstance(first, ast.Call)
             and isinstance(first.func, ast.Attribute)
             and first.func.attr == "insert"
+            and module.is_routes_table_expr(first.func.value)
         ):
             found.extend(
                 _require_resolved(
@@ -252,6 +346,7 @@ def _extract_insert_kinds(
         isinstance(call.func, ast.Attribute)
         and call.func.attr == "bulk_insert"
         and len(call.args) >= 2
+        and module.is_routes_table_expr(call.args[0])
     ):
         found.extend(
             _require_resolved(
@@ -265,13 +360,18 @@ def _extract_delete_kinds(
     module: _MigrationModule, call: ast.Call, path: Path
 ) -> tuple[str, ...]:
     """X.delete().where(routes.c.job_kind.in_(NAME)) or
-    X.delete().where(routes.c.job_kind == NAME) -- a retirement/removal."""
+    X.delete().where(routes.c.job_kind == NAME) -- a retirement/removal.
+    Only counted when X is provably the worker_job_routes table (codex round
+    1, P2): a delete against some OTHER table in a file that merely
+    references worker_job_routes elsewhere is not a routes op at all, and
+    must not trip the fail-closed guard below."""
     if not (
         isinstance(call.func, ast.Attribute)
         and call.func.attr == "where"
         and isinstance(call.func.value, ast.Call)
         and isinstance(call.func.value.func, ast.Attribute)
         and call.func.value.func.attr == "delete"
+        and module.is_routes_table_expr(call.func.value.func.value)
     ):
         return ()
     found: list[str] = []
@@ -327,6 +427,19 @@ def _collect_seed_state(path: Path) -> tuple[set[str], set[str]]:
     if not _file_targets_routes_table(tree):
         return set(), set()
     module = _MigrationModule(tree)
+    for text in module.reachable_string_literals("upgrade"):
+        if _RAW_SQL_ROUTES_PATTERN.search(text):
+            raise SeedPatternUnrecognized(
+                f"{path}: found a raw-SQL statement naming "
+                f"{_ROUTES_TABLE_NAME} directly ({text!r}) -- this parser "
+                f"only understands the SQLAlchemy Core insert()/delete() "
+                f"forms every other migration in this history uses, and "
+                f"cannot verify a raw-SQL statement is a seed or a "
+                f"retirement (codex round 1, P1: a raw-SQL retirement was "
+                f"previously silently invisible, leaving a genuinely "
+                f"deleted route counted as still live). Rewrite the "
+                f"migration to use insert()/delete(), or extend this parser."
+            )
     seeded: set[str] = set()
     retired: set[str] = set()
     for call in module.reachable_calls("upgrade"):
@@ -430,3 +543,108 @@ def test_parser_fails_closed_on_an_unresolvable_job_kind_value(tmp_path: Path) -
     )
     with pytest.raises(SeedPatternUnrecognized, match="job_kind"):
         _collect_seed_state(synthetic)
+
+
+def test_insert_into_an_unrelated_table_does_not_satisfy_seed_coverage(
+    tmp_path: Path,
+) -> None:
+    """Codex round 1, P1: a migration that references worker_job_routes
+    somewhere (satisfying the file-level marker) but inserts a job_kind-
+    shaped row into a DIFFERENT table must NOT count as seeding that kind --
+    the old parser only checked the FILE, never the actual insert TARGET.
+    """
+    synthetic = tmp_path / "9998_false_seed_unrelated_table.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def _audit():
+                return sa.table("some_audit_table", sa.column("job_kind", sa.String()))
+
+            def upgrade():
+                routes = _routes()
+                op.get_bind().execute(
+                    _audit().insert().values(job_kind="metrics.remaining.capacity")
+                )
+            """
+        )
+    )
+    seeded, retired = _collect_seed_state(synthetic)
+    assert "metrics.remaining.capacity" not in seeded, (
+        "an insert into an unrelated table was wrongly counted as a "
+        "worker_job_routes seed"
+    )
+    assert not retired
+
+
+def test_raw_sql_retirement_fails_closed_instead_of_going_unnoticed(
+    tmp_path: Path,
+) -> None:
+    """Codex round 1, P1: a route seeded via the recognized insert() shape
+    and later retired via raw SQL (`op.execute(sa.text("DELETE FROM
+    worker_job_routes ..."))`) used to leave the kind counted as still live
+    -- the structural extractors have no way to see a raw-SQL statement, and
+    silently seeing nothing is exactly the failure mode this guard exists to
+    prevent. Must now fail closed instead.
+    """
+    synthetic = tmp_path / "9997_raw_sql_route_retirement.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def upgrade():
+                op.get_bind().execute(
+                    _routes().insert().values(job_kind="metrics.remaining.capacity")
+                )
+                op.execute(sa.text(
+                    "DELETE FROM worker_job_routes WHERE job_kind = 'metrics.remaining.capacity'"
+                ))
+            """
+        )
+    )
+    with pytest.raises(SeedPatternUnrecognized, match="raw-SQL"):
+        _collect_seed_state(synthetic)
+
+
+def test_delete_against_an_unrelated_table_does_not_trip_the_fail_closed_guard(
+    tmp_path: Path,
+) -> None:
+    """Codex round 1, P2 (this round's own disclosed weakest point,
+    confirmed real): a `.delete().where(...)` against some OTHER table, in a
+    file that merely references worker_job_routes elsewhere, must not raise
+    SeedPatternUnrecognized -- it is not a routes operation at all.
+    """
+    synthetic = tmp_path / "9996_unrelated_delete.py"
+    synthetic.write_text(
+        textwrap.dedent(
+            """
+            import sqlalchemy as sa
+            from alembic import op
+
+            def _routes():
+                return sa.table("worker_job_routes", sa.column("job_kind", sa.String()))
+
+            def _audit():
+                return sa.table("unrelated_audit", sa.column("status", sa.String()))
+
+            def upgrade():
+                routes = _routes()
+                op.get_bind().execute(
+                    _audit().delete().where(_audit().c.status == "obsolete")
+                )
+            """
+        )
+    )
+    seeded, retired = _collect_seed_state(synthetic)
+    assert not seeded
+    assert not retired

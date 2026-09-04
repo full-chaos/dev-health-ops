@@ -217,11 +217,10 @@ def test_reproducibility_self_hosted_has_no_poll_step() -> None:
     # Structural confirmation the v1.5.1 fallback-poller pattern (pick-
     # runner, job_status()/gh api polling, steps.own.outputs.run_here) was
     # actually retired for this job, not left dangling alongside the new
-    # gate. This does not assert the poller is gone from the whole file:
-    # go-arm64-numeric-parity (#2145) still uses it, and its conversion to
-    # v1.6 is an explicit, separately-tracked follow-up -- a file-wide "no
-    # pick-runner job anywhere" assertion would be testing a decision this
-    # PR never made.
+    # gate. This does not assert the poller is gone from the whole file --
+    # see test_no_pick_runner_job_survives_anywhere_in_the_file below for
+    # that file-wide claim, which only became true once the stacked v1.6
+    # pool-expansion PR also converted go-arm64-numeric-parity.
     job = _job(_REPRO_SELF_HOSTED)
     needs = _needs(job)
     assert "pick-runner" not in needs, (
@@ -249,6 +248,22 @@ def test_reproducibility_self_hosted_has_no_poll_step() -> None:
             "references steps.own.outputs.run_here -- contract v1.6 "
             "retires the fallback poller's ownership-decision step"
         )
+
+
+def test_no_pick_runner_job_survives_anywhere_in_the_file() -> None:
+    # CHAOS-4906 follow-up (the v1.6 pool-expansion PR, stacked on this
+    # one): go-arm64-numeric-parity converted from the v1.5.1 poller to
+    # v1.6 too, so the whole file is now poller-free -- promoted from the
+    # narrower per-job check above (which deliberately did NOT make this
+    # file-wide claim while go-arm64-numeric-parity still used the
+    # poller).
+    document = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8")) or {}
+    jobs = document.get("jobs") or {}
+    assert "pick-runner" not in jobs, (
+        f"{WORKFLOW_PATH.name}: a 'pick-runner' job still exists -- the "
+        "v1.5.1 fallback-poller pattern was supposed to be fully retired "
+        "from this file"
+    )
 
 
 def test_storage_integration_shard_is_hosted_only() -> None:

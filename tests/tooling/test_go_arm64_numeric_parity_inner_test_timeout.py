@@ -16,20 +16,21 @@ the test binary even starts.
 The fix pattern (the "double bound"): an INNER `go test -timeout` shorter
 than the OUTER job's `timeout-minutes` fires first, on its own terms, with a
 goroutine dump -- an actionable signal distinct from an ambiguous job
-cancellation the poll logic has to interpret. `go.yml`'s two arm64-numeric-
-parity `go test` invocations (the self-hosted attempt job, and the fallback
-job's own real-work path when the switch is off or the attempt is
-unclaimed) run the IDENTICAL command by construction (both mirror the same
-job before this PR split it into two legs) -- both need the same inner
-bound, or one of them silently keeps relying on the outer cap alone.
+cancellation. `go.yml`'s two arm64-numeric-parity `go test` invocations
+(the hosted leg and the self-hosted leg -- CHAOS-4906 converted this job to
+runner contract v1.6's complementary-`if:`/shared-`name:` shape, retiring
+#2145's original pick-runner/attempt/fallback poller trio) run the
+IDENTICAL command by construction -- both need the same inner bound, or one
+of them silently keeps relying on the outer cap alone.
 
 WHAT THIS ASSERTS
 -----------------
 Both `go test` invocations in go.yml's arm64-numeric-parity jobs carry an
 explicit `-timeout` shorter than EITHER job's own `timeout-minutes` (10 for
-the self-hosted attempt, 20 for the fallback) -- proving the inner bound is
-load-bearing (fires first) rather than a number picked without checking it
-actually sits inside both outer caps.
+both legs, the job's pre-poller baseline -- v1.6 has no fallback-poll
+budget to size for) -- proving the inner bound is load-bearing (fires
+first) rather than a number picked without checking it actually sits
+inside both outer caps.
 """
 
 from __future__ import annotations
@@ -44,13 +45,12 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "go.yml"
 
-# (job name, step id or step name substring) -- the step id differs from the
-# F2 guard's target step ("wait"); this one has no explicit `id:`, so it is
-# found by its `name:`, same technique _filter_step-style helpers elsewhere
-# in tests/tooling use for a step with no id.
+# Job IDs, not the shared `name:` -- v1.6's two legs share one `name:`
+# (go-arm64-numeric-parity) but are distinct job KEYS in the YAML, which is
+# what `_job()` below looks up.
 _TARGET_JOBS = [
+    "go-arm64-numeric-parity",
     "go-arm64-numeric-parity-self-hosted",
-    "go-arm64-numeric-parity-fallback",
 ]
 _STEP_NAME = "Run FMA bit-pattern goldens on real arm64"
 _GO_TEST_TIMEOUT = re.compile(r"go test\b[^\n]*?-timeout[ =](\S+)")
@@ -104,8 +104,10 @@ def _leading_command_words(line: str, count: int) -> list[str] | None:
     `CI_STAGE=arm64` is unaffected. (2) a real `if go test ...; then :; fi`
     line was missed entirely, because `if` was never stripped from the
     front before checking command position -- fixed by also stripping
-    `_LEADING_KEYWORDS` (shared with the F2 same-run guard's identical
-    reasoning -- see test_go_arm64_runner_fallback_same_run_lookup.py).
+    `_LEADING_KEYWORDS`. (Originally shared reasoning with the v1.5.1
+    poller's F2 same-run guard, test_go_arm64_runner_fallback_same_run_lookup.py
+    -- deleted when CHAOS-4906 converted this job to runner contract v1.6,
+    which retired the poller and the same-run job-list lookup it guarded.)
     """
     try:
         tokens = shlex.split(_strip_line_continuation(line), comments=True, posix=False)

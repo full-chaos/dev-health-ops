@@ -622,6 +622,31 @@ NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
 if ! (LC_ALL=C; [[ "$NAME" =~ $NAME_ALLOWLIST_RE ]]); then
   die "-n/round name '$NAME' is not a safe path/filename component -- must be non-empty, start with a letter or digit, and contain only letters, digits, '.', '_', '-' afterward, with NO embedded newline (this also rejects '.', '..', and anything containing '/' or a line break). Refusing to guess a substitute."
 fi
+# v4.8.7 (bigboy codex-auth incident, same day; PLACEMENT and MECHANISM both
+# fixed by confirmation-pass round #1 on this branch -- P1/P2, both EXECUTED):
+# the first version of this guard lived right before the `codex exec`
+# launch (search RC=0 below) -- by then the review worktree was already
+# created (git worktree add) and the warm step had already run, so it did
+# NOT prevent the wasted work it was written to prevent; it only produced a
+# clearer error message after the fact. Moved here, right after NAME
+# resolution, before ANY mktemp/worktree/warm work below. The first
+# version also equated "usable Codex credentials" with a non-empty
+# $CODEX_HOME/auth.json -- codex also supports keyring-backed credential
+# storage (cli_auth_credentials_store="keyring" in its own config, no
+# auth.json involved at all), which the file check would have wrongly
+# rejected, and a non-empty-but-malformed auth.json would have PASSED the
+# check only to fail later inside codex anyway. Fixed: ask codex itself,
+# via its own `login status` subcommand (measured: ~40ms, no network
+# round-trip observed, purely local credential-store inspection) --
+# whatever storage mechanism is actually configured, this is the same
+# check `codex exec` itself would effectively make. Output is discarded
+# (never parsed -- only the exit code matters); CODEX_HOME_EFFECTIVE is
+# still resolved, for the die message only, so a caller gets an actionable
+# hint about WHERE codex looked without this script re-deriving codex's
+# own auth-validity logic.
+CODEX_HOME_EFFECTIVE="${CODEX_HOME:-$HOME/.codex}"
+codex login status >/dev/null 2>&1 \
+  || die "codex reports not logged in (checked via 'codex login status', CODEX_HOME resolves to $CODEX_HOME_EFFECTIVE) -- refusing to launch a round that would fail mid-way with an HTTP 401 instead of failing loudly now. If this is bigboy, run under 'bash -lc' (so ~/.profile sets CODEX_HOME) or export CODEX_HOME=/home/ubuntu/agents/codex explicitly before retrying."
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}
 # v4.8.4: OUTDIR (and the log dir, which is the same directory -- see V/L
@@ -952,13 +977,39 @@ else
   RGOTMPDIR_BASE="/tmp"
   RTMPDIR_BASE="/tmp"
 fi
+# v4.8.7 (confirmation-pass round #1 on this branch, P1, EXECUTED): the
+# LANE_SCRATCH_ROOT containment check above only proves the path was safe
+# AT CHECK TIME -- each `mktemp` call below re-resolves its base path
+# fresh, so a replacement (the lane dir removed and a symlink planted in
+# its place, in the gap between the check and a specific mktemp call)
+# would still be followed silently, unverified. Close it the same way the
+# root itself is closed: verify EVERY path this wrapper creates under the
+# lane root, immediately after creating it -- not a symlink, and its real
+# path is still contained under the real lane parent. A no-op on macOS
+# (LANE_SCRATCH_PARENT_REAL is never set there; nothing to verify against).
+verify_scratch_containment() {
+  local created="$1" label="$2"
+  [ "$HOST_OS" = Linux ] || return 0
+  if [ -L "$created" ]; then
+    die "$label ($created) is a SYMLINK immediately after creation -- refusing to use it (this looks like a race, not an accident)"
+  fi
+  local real
+  real=$(cd "$created" && pwd -P) \
+    || die "cannot resolve the physical path of $label ($created) after creating it"
+  case "$real" in
+    "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
+    *) die "$label ($created) resolves to '$real', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it" ;;
+  esac
+}
 RW=$(mktemp -d "$RW_BASE/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
+verify_scratch_containment "$RW" "review worktree scratch dir (RW)"
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
 # /tmp (macOS) / lane-scratch (Linux) for the same reason as RGOCACHE above.
 RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
+verify_scratch_containment "$RGOTMPDIR" "Go work dir (RGOTMPDIR)"
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -973,6 +1024,7 @@ RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
 RTMPDIR=$(mktemp -d "$RTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
+verify_scratch_containment "$RTMPDIR" "shell TMPDIR (RTMPDIR)"
 
 # v4.8.4 introduced a per-round GOPATH because bigboy's ~/go and ~/go/pkg
 # used to be root:root 755, and an unset GOPATH defaulting to $HOME/go made
@@ -1213,6 +1265,34 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add failed"
+# v4.8.7 (confirmation-pass round #1 on this branch, P1, EXECUTED,
+# PRE-EXISTING pattern since v4.8.2, now closed at point of use): $RW is
+# `mktemp -d`'d, then `rmdir`'d a few lines above ("git worktree add wants
+# to create it"), leaving a vacant, but real, path for potentially a
+# while before this line runs (cache resolution, GOPATH setup, etc. all
+# happen in between). An actor able to create entries in the lane
+# directory in that window can plant a symlink at that exact vacant path;
+# `git worktree add` follows it and writes the whole worktree outside the
+# lane, unverified. This is DETECTION at point of use, not prevention of
+# the race itself -- actually preventing it would need a private staging
+# directory `git worktree add` never has to `rmdir` its way into (flagged
+# as a v4.8.8+ redesign candidate, not attempted here). Verify immediately
+# after: not a symlink, and `git rev-parse --show-toplevel` from inside it
+# (git's OWN notion of where this worktree actually lives, not our own
+# assumption) resolves under the real lane-scratch parent.
+if [ "$HOST_OS" = Linux ]; then
+  if [ -L "$RW" ]; then
+    die "the review worktree $RW is a SYMLINK immediately after 'git worktree add' -- refusing to use it (this looks like a race, not an accident: a symlink was likely planted in the vacant slot between the earlier rmdir and this worktree add)"
+  fi
+  RW_TOPLEVEL=$(cd "$RW" && git rev-parse --show-toplevel 2>/dev/null) \
+    || die "cannot resolve the review worktree's own toplevel via 'git rev-parse --show-toplevel' after worktree add"
+  RW_TOPLEVEL_REAL=$(cd "$RW_TOPLEVEL" && pwd -P) \
+    || die "cannot resolve the physical path of the review worktree toplevel ($RW_TOPLEVEL)"
+  case "$RW_TOPLEVEL_REAL" in
+    "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
+    *) die "the review worktree's own toplevel (per git rev-parse --show-toplevel) resolves to '$RW_TOPLEVEL_REAL', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it (git worktree add may have followed a symlink planted in the vacant slot)" ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # v4.8.3 WARM STEP -- runs OUTSIDE the codex sandbox, in this wrapper's own
@@ -1461,19 +1541,6 @@ warn "go bounds: GOFLAGS=$RGOFLAGS GOMAXPROCS=$RGOMAXPROCS GOCACHE=$RGOCACHE GOM
 #
 # What replaces it is measured after the fact rather than predicted before it.
 RC=0
-# v4.8.7 (bigboy codex-auth incident, same day): a non-login shell can lose
-# CODEX_HOME (set in ~/.profile) and every subsequent `codex exec` in this
-# script then reads $HOME/.codex instead of the intended auth directory --
-# on a host where that default has no auth.json, codex fails mid-round with
-# an HTTP 401, AFTER the worktree/warm-step work above already ran, and the
-# failure reads as a codex/model problem rather than what it actually is (a
-# missing/misdirected credential). Fail loudly HERE instead, before any of
-# that work would be wasted a second time: resolve the SAME directory codex
-# itself will use ($CODEX_HOME if set, else $HOME/.codex) and refuse to
-# launch if it has no auth.json.
-CODEX_HOME_EFFECTIVE="${CODEX_HOME:-$HOME/.codex}"
-[ -s "$CODEX_HOME_EFFECTIVE/auth.json" ] \
-  || die "no codex auth found at $CODEX_HOME_EFFECTIVE/auth.json -- refusing to launch a round that would fail mid-way with an HTTP 401 instead of failing loudly now. If this is bigboy, run under 'bash -lc' (so ~/.profile sets CODEX_HOME) or export CODEX_HOME=/home/ubuntu/agents/codex explicitly before retrying."
 # BOUND REVIEWER-SPAWNED GO WORK.
 #
 # Prompt-level scoping does NOT hold: on 09-02 a reviewer widened a

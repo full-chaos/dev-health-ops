@@ -52,8 +52,34 @@ SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SCRIPT="$SELF_DIR/codex-review.sh"
 [ -s "$SCRIPT" ] || { echo "FAIL: cannot find $SCRIPT" >&2; exit 1; }
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/codex-review-test-XXXXXX")
+# v4.8.7 (confirmation-pass round #1 on codex-review-wrapper-v487, P3,
+# EXECUTED): this used to honor an inherited $TMPDIR
+# ("${TMPDIR:-/tmp}") -- fine when this harness runs standalone, but when
+# it runs FROM INSIDE a codex round on bigboy (the prompt tells the
+# reviewer it MAY run this harness as part of its own verification), the
+# wrapper's own `env TMPDIR="$RTMPDIR" codex exec ...` has already pointed
+# TMPDIR at the real Linux lane-scratch redirect -- so $WORK landed under
+# the REAL /var/lib/oci-cache/lane-scratch, not a generic scratch
+# location, directly contradicting every "never touches the real
+# /var/lib/oci-cache" claim made throughout this file's own tests.
+# Measured: a round's own harness run showed exactly this. The trap below
+# still cleans it up either way, so this was never a lasting artifact --
+# but the SAFETY CLAIM was false, and a future assertion or relocation
+# technique built on top of "$WORK is always safely outside the real
+# path" would have been built on sand. Fixed: always use plain /tmp for
+# the harness's OWN top-level scratch dir, regardless of what TMPDIR the
+# environment (including the wrapper's own round) happens to have set --
+# this harness's assertions about $WORK are about ITS OWN safety, not
+# about reproducing the wrapper's TMPDIR redirection (which is exercised
+# separately, deliberately, via the relocation technique inside $WORK).
+WORK=$(mktemp -d "/tmp/codex-review-test-XXXXXX")
 trap 'chmod -R u+w "$WORK" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+case "$WORK" in
+  /var/lib/oci-cache/*)
+    echo "FAIL: harness \$WORK ('$WORK') landed under /var/lib/oci-cache despite forcing plain /tmp -- something is very wrong, refusing to run any test against it" >&2
+    exit 1
+    ;;
+esac
 
 PASS=0
 FAIL=0
@@ -97,7 +123,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1164 1171 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1216 1223 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -149,7 +175,7 @@ rm -rf "$D1B" 2>/dev/null || true
 # it sits entirely BEFORE the HOST_OS resolution line, so it has no
 # HOST_OS dependency of its own.
 # ---------------------------------------------------------------------------
-extract 691 713 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
+extract 716 738 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
 
 mkdir -p "$WORK/lane-a/acr" "$WORK/lane-b/acr"
 LANE_KEY_A=$(
@@ -192,7 +218,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 1000 1009 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 1052 1061 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -263,7 +289,7 @@ fi
 # run the real `mkdir -p "$OUTDIR"` line against a not-yet-existing path,
 # assert it now exists.
 # ---------------------------------------------------------------------------
-extract 632 632 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
+extract 657 657 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
 
 OUTDIR_TEST="$WORK/does/not/exist/yet"
 [ ! -e "$OUTDIR_TEST" ] || { echo "FAIL: test setup bug, $OUTDIR_TEST already exists" >&2; exit 1; }
@@ -287,7 +313,7 @@ fi
 # run the real TS/V/L/touch block verbatim against a fresh OUTDIR, assert
 # $L exists (and is empty) right after, well before any warm-step logic.
 # ---------------------------------------------------------------------------
-extract 645 657 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
+extract 670 682 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
 
 OUTDIR_LOG_TEST="$WORK/log-test-outdir"
 mkdir -p "$OUTDIR_LOG_TEST"
@@ -314,7 +340,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1297 1297 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1377 1377 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -372,7 +398,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1257 1341 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1337 1421 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -471,7 +497,7 @@ fi
 # mkdir -p lines that follow it in the real script. Used ONLY for the (a)
 # default-value check below, so that case never touches the filesystem at
 # all. Starts right after the HOST_OS validation case/esac block ends.
-extract 789 807 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
+extract 814 832 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
 grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
   || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
 if grep -qE '^mkdir -p "\$RGOCACHE"' "$WORK/cache_resolve_value_only.sh"; then
@@ -483,7 +509,7 @@ fi
 # point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
 # never fall through to the real /var/lib/oci-cache default, so their mkdir
 # is always safe.
-extract 789 814 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
+extract 814 839 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
 
 run_cache_resolve_value_only() {
   # $1=WT $2=TS $3=HOST_OS  env GOCACHE/GOMODCACHE/CODEX_REVIEW_GOCACHE/
@@ -608,7 +634,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 1000 1009 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 1052 1061 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -649,7 +675,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1189 1208 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1241 1260 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -706,7 +732,7 @@ fi
 # `command -p uname -s` assignment line above it) -- $HOST_OS is set
 # directly, per the file-level SAFETY/DESIGN NOTE.
 # ---------------------------------------------------------------------------
-extract 774 777 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
+extract 799 802 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
 
 # (a) malformed HOST_OS ("Linux\r", set directly, not via a uname stub —
 # see the note above) now DIES with the expected message instead of
@@ -801,7 +827,7 @@ done
 # defeats BOTH attacks; (4) the ACTUAL shipped HOST_OS assignment line,
 # extracted verbatim, also resolves to the real value under both.
 # ---------------------------------------------------------------------------
-extract 755 755 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
+extract 780 780 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
 
 REAL_UNAME_S=$(command -p uname -s)
 make_uname_stub 'TotallyFakeOS'
@@ -890,7 +916,7 @@ fi
 # instead of switching location. Proof: extract the real if/else/heredoc
 # block, run it once per host, assert the generated prompt-fragment text.
 # ---------------------------------------------------------------------------
-extract 1427 1437 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1507 1517 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
@@ -933,7 +959,7 @@ fi
 # unavailable. Proof: extract the real STANDING_RULES heredoc BODY (between
 # its literal open/close marker lines in the shipped script) and check it.
 # ---------------------------------------------------------------------------
-extract 1355 1393 'go test unavailable' "$WORK/standing_rules_body.txt"
+extract 1435 1473 'go test unavailable' "$WORK/standing_rules_body.txt"
 if grep -q "creating work dir" "$WORK/standing_rules_body.txt" \
    && grep -qi "RETRY IT EXACTLY ONCE" "$WORK/standing_rules_body.txt"; then
   ok "v4.8.6 addendum: the injected prompt tells the reviewer to retry exactly once on a 'creating work dir' failure"
@@ -968,7 +994,7 @@ fi
 # prefix itself is still asserted separately, against the UNMODIFIED
 # extracted text, immediately below.
 # ---------------------------------------------------------------------------
-extract 884 954 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
+extract 909 979 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
 grep -qF 'LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"' "$WORK/lane_scratch_root.sh" \
   || { echo "FAIL: extracted lane_scratch_root.sh does not contain the expected lane-scratch path template" >&2; exit 1; }
 if grep -qE '^\s*SAFE_LANE_NAME=' "$WORK/lane_scratch_root.sh"; then
@@ -1325,7 +1351,7 @@ fi
 # the real gate immediately followed by the real V/L lines in one sequence
 # and showing execution never gets past the gate.
 # ---------------------------------------------------------------------------
-extract 646 647 'V="$OUTDIR/$NAME-$TS.md"' "$WORK/name_sites_vl.sh"
+extract 671 672 'V="$OUTDIR/$NAME-$TS.md"' "$WORK/name_sites_vl.sh"
 
 # Reuse the same resolved-vs-lexical path helper the earlier traversal fix
 # established: a raw string prefix match on "$OUTDIR/../../.." would still
@@ -1395,7 +1421,7 @@ grep -qF 'RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"' "$SCRIPT" \
 # NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
 # form, never a VERDICT= line, and exiting 7).
 # ---------------------------------------------------------------------------
-extract 1680 1680 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+extract 1747 1747 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
 
 RC_CHECK_OUT_OK=$(
   set +e
@@ -1434,21 +1460,54 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# v4.8.7 (bigboy codex-auth incident, same day): a non-login shell losing
-# CODEX_HOME made `codex exec` silently fall back to $HOME/.codex, which had
-# no auth.json on that host, and the round failed mid-way with an HTTP 401 --
-# AFTER the worktree/warm-step work already ran. Fixed: resolve the same
-# directory codex itself will use ($CODEX_HOME if set, else $HOME/.codex) and
-# die BEFORE launching if it has no auth.json. Proof: extract the real
-# resolution + guard, run it against a throwaway $WORK-scoped fake HOME/
-# CODEX_HOME (never the real ~/.codex on whatever host runs this harness).
+# v4.8.7 (bigboy codex-auth incident, same day; PLACEMENT and MECHANISM both
+# fixed by confirmation-pass round #1 on this branch): a non-login shell
+# losing CODEX_HOME made `codex exec` silently fall back to $HOME/.codex,
+# which had no auth.json on that host, and the round failed mid-way with an
+# HTTP 401 -- AFTER the worktree/warm-step work already ran.
+#
+# Mechanism (P1/P2, round #1): the first version of this guard checked ONLY
+# for a non-empty $CODEX_HOME_EFFECTIVE/auth.json -- codex also supports
+# keyring-backed credentials (no auth.json at all), which that check would
+# wrongly reject, and a malformed-but-non-empty auth.json would wrongly
+# pass. Fixed: ask codex itself via `codex login status` (exit code only,
+# output discarded). Proof here stubs a fake `codex` binary on PATH (this
+# harness never has real codex credentials to test against, and must not
+# depend on whether the host running it happens to be logged in) that
+# returns a controlled exit code for `login status`, and confirms the real
+# extracted guard reacts correctly to each.
+#
+# Placement (P2, round #1): the first version lived right before the
+# `codex exec` launch, AFTER the review worktree was created and the warm
+# step had already run -- it did not prevent the wasted work it was meant
+# to prevent. Moved to right after NAME resolution; proof: the guard now
+# extracts as part of the SAME region as NAME_ALLOWLIST_RE, well before
+# any of RW/RGOTMPDIR/RTMPDIR/worktree/warm-step code (their own extracts
+# below start at line 909+, all after this guard's line 647-649).
 # ---------------------------------------------------------------------------
-extract 1463 1476 'CODEX_HOME_EFFECTIVE=' "$WORK/codex_auth_guard.sh"
+extract 647 649 'CODEX_HOME_EFFECTIVE=' "$WORK/codex_auth_guard.sh"
+
+STUBBIN_CODEX="$WORK/stubbin-codex"
+mkdir -p "$STUBBIN_CODEX"
+make_codex_login_stub() {
+  local rc="$1"
+  cat > "$STUBBIN_CODEX/codex" <<STUB_CODEX
+#!/usr/bin/env bash
+if [ "\$1" = "login" ] && [ "\$2" = "status" ]; then
+  exit $rc
+fi
+echo "stub codex: unexpected invocation: \$*" >&2
+exit 99
+STUB_CODEX
+  chmod +x "$STUBBIN_CODEX/codex"
+}
 
 FAKE_HOME_NO_AUTH="$WORK/fake-home-no-auth"
 mkdir -p "$FAKE_HOME_NO_AUTH/.codex"
+make_codex_login_stub 1
 set +e
 RESOLVE_AUTH_MISSING=$( (
+  PATH="$STUBBIN_CODEX:$PATH"
   HOME="$FAKE_HOME_NO_AUTH"
   unset CODEX_HOME
   # shellcheck source=/dev/null
@@ -1460,18 +1519,17 @@ RESOLVE_AUTH_MISSING=$( (
 RC_AUTH_MISSING=$?
 set -e
 if [ "$RC_AUTH_MISSING" -ne 0 ] \
-   && printf '%s' "$RESOLVE_AUTH_MISSING" | grep -qi 'no codex auth found' \
+   && printf '%s' "$RESOLVE_AUTH_MISSING" | grep -qi 'codex reports not logged in' \
    && ! printf '%s' "$RESOLVE_AUTH_MISSING" | grep -q 'REACHED_PAST_GUARD'; then
-  ok "v4.8.7 codex-auth guard: no auth.json under \$HOME/.codex (CODEX_HOME unset) -- dies before launching, never reaches past the guard"
+  ok "v4.8.7 codex-auth guard: 'codex login status' exit 1 (CODEX_HOME unset) -- dies before launching, never reaches past the guard"
 else
-  notok "v4.8.7 codex-auth guard: missing auth.json was NOT caught (rc=$RC_AUTH_MISSING, out='$RESOLVE_AUTH_MISSING')"
+  notok "v4.8.7 codex-auth guard: a failing 'codex login status' was NOT caught (rc=$RC_AUTH_MISSING, out='$RESOLVE_AUTH_MISSING')"
 fi
 
-FAKE_HOME_WITH_AUTH="$WORK/fake-home-with-auth"
-mkdir -p "$FAKE_HOME_WITH_AUTH/.codex"
-printf '{"fake":"auth-fixture"}\n' > "$FAKE_HOME_WITH_AUTH/.codex/auth.json"
+make_codex_login_stub 0
 RESOLVE_AUTH_PRESENT=$(
-  HOME="$FAKE_HOME_WITH_AUTH"
+  PATH="$STUBBIN_CODEX:$PATH"
+  HOME="$FAKE_HOME_NO_AUTH"
   unset CODEX_HOME
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
@@ -1479,16 +1537,16 @@ RESOLVE_AUTH_PRESENT=$(
   source "$WORK/codex_auth_guard.sh"
   printf 'REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=%s\n' "$CODEX_HOME_EFFECTIVE"
 )
-if printf '%s' "$RESOLVE_AUTH_PRESENT" | grep -q "^REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=$FAKE_HOME_WITH_AUTH/.codex$"; then
-  ok "v4.8.7 codex-auth guard: a real auth.json under \$HOME/.codex (CODEX_HOME unset) passes the guard unharmed"
+if printf '%s' "$RESOLVE_AUTH_PRESENT" | grep -q "^REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=$FAKE_HOME_NO_AUTH/.codex$"; then
+  ok "v4.8.7 codex-auth guard: 'codex login status' exit 0 (CODEX_HOME unset, default \$HOME/.codex resolution for the die message) passes the guard unharmed"
 else
-  notok "v4.8.7 codex-auth guard: a present auth.json was wrongly rejected or CODEX_HOME_EFFECTIVE resolved wrong (got: $RESOLVE_AUTH_PRESENT)"
+  notok "v4.8.7 codex-auth guard: a succeeding 'codex login status' was wrongly rejected or CODEX_HOME_EFFECTIVE resolved wrong (got: $RESOLVE_AUTH_PRESENT)"
 fi
 
 FAKE_CODEX_HOME="$WORK/fake-codex-home-explicit"
 mkdir -p "$FAKE_CODEX_HOME"
-printf '{"fake":"auth-fixture"}\n' > "$FAKE_CODEX_HOME/auth.json"
 RESOLVE_AUTH_EXPLICIT=$(
+  PATH="$STUBBIN_CODEX:$PATH"
   HOME="$FAKE_HOME_NO_AUTH" CODEX_HOME="$FAKE_CODEX_HOME"
   # shellcheck source=/dev/null
   source "$WORK/helpers.sh"
@@ -1497,10 +1555,211 @@ RESOLVE_AUTH_EXPLICIT=$(
   printf 'REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=%s\n' "$CODEX_HOME_EFFECTIVE"
 )
 if printf '%s' "$RESOLVE_AUTH_EXPLICIT" | grep -q "^REACHED_PAST_GUARD CODEX_HOME_EFFECTIVE=$FAKE_CODEX_HOME$"; then
-  ok "v4.8.7 codex-auth guard: an explicit \$CODEX_HOME with its own auth.json is honoured over \$HOME/.codex (matches what codex itself would use)"
+  ok "v4.8.7 codex-auth guard: an explicit \$CODEX_HOME resolves into the die-message string over \$HOME/.codex (matches what codex itself would use); 'codex login status' (not a file check) is what actually gates"
 else
-  notok "v4.8.7 codex-auth guard: explicit CODEX_HOME was not honoured (got: $RESOLVE_AUTH_EXPLICIT)"
+  notok "v4.8.7 codex-auth guard: explicit CODEX_HOME was not honoured for the die-message resolution (got: $RESOLVE_AUTH_EXPLICIT)"
 fi
+
+# ---------------------------------------------------------------------------
+# v4.8.7 (team-lead directive, round #1): prove the auth guard's PLACEMENT,
+# not just its mechanism -- it must fire before ANY of RW/RGOTMPDIR/RTMPDIR/
+# the review worktree/the warm step exist. Derive both line numbers from the
+# real shipped file (never hardcode them -- that would silently stop meaning
+# anything the moment either site drifts) and assert the guard's line is
+# strictly before the first scratch-creating line.
+# ---------------------------------------------------------------------------
+AUTH_GUARD_LINE=$(grep -n "^codex login status" "$SCRIPT" | head -1 | cut -d: -f1)
+FIRST_SCRATCH_LINE=$(grep -n '^RW=\$(mktemp' "$SCRIPT" | head -1 | cut -d: -f1)
+if [ -n "$AUTH_GUARD_LINE" ] && [ -n "$FIRST_SCRATCH_LINE" ] && [ "$AUTH_GUARD_LINE" -lt "$FIRST_SCRATCH_LINE" ]; then
+  ok "v4.8.7 codex-auth guard placement: the guard (line $AUTH_GUARD_LINE) is structurally before the first scratch-creating line, RW=\$(mktemp...) (line $FIRST_SCRATCH_LINE) -- guaranteed to fire before any of that work runs"
+else
+  notok "v4.8.7 codex-auth guard placement: guard line ($AUTH_GUARD_LINE) is NOT before the first scratch-creating line ($FIRST_SCRATCH_LINE) -- the guard no longer prevents the wasted work it exists to prevent"
+fi
+
+# ---------------------------------------------------------------------------
+# v4.8.7, confirmation-pass round #1 (P1, EXECUTED): the LANE_SCRATCH_ROOT
+# containment check only proves the path was safe AT CHECK TIME -- each
+# `mktemp` call re-resolves its base path fresh, so a replacement (the lane
+# dir swapped for a symlink AFTER the check, before a specific mktemp call)
+# is still followed silently unless verified again at the point of use.
+# Proof: extract the LANE_SCRATCH_ROOT resolution (up to but NOT including
+# the RW mktemp) and the verify_scratch_containment()+RW-mktemp block
+# SEPARATELY, so the test can inject the race in between -- something a
+# single straight-line execution of the real script cannot do to itself.
+# ---------------------------------------------------------------------------
+extract 909 979 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_setup.sh"
+extract 990 1005 'verify_scratch_containment() {' "$WORK/lane_scratch_rw_verify.sh"
+grep -qF 'verify_scratch_containment "$RW"' "$WORK/lane_scratch_rw_verify.sh" \
+  || { echo "FAIL: extracted lane_scratch_rw_verify.sh does not contain the RW verification call" >&2; exit 1; }
+
+FAKE_TOCTOU_PARENT="$WORK/fake-toctou-parent"
+mkdir -p "$FAKE_TOCTOU_PARENT"
+sed "s#/var/lib/oci-cache/lane-scratch#$FAKE_TOCTOU_PARENT#g" \
+  "$WORK/lane_scratch_setup.sh" > "$WORK/lane_scratch_setup_relocated.sh"
+
+run_toctou_setup() {
+  local name="$1" race_setup="$2"
+  (
+    HOST_OS=Linux NAME="$name" TMPDIR="$WORK/unused-tmpdir"
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$WORK/lane_scratch_setup_relocated.sh"
+    # RACE INJECTION POINT: this is exactly where an attacker able to
+    # create entries in the lane-scratch parent would have to win the
+    # race in real life -- LANE_SCRATCH_ROOT_REAL/RW_BASE are already
+    # captured as strings above, but nothing has read the filesystem
+    # again yet. Simulate winning it: remove the just-validated real
+    # directory and replace it with a symlink to a separate target.
+    eval "$race_setup"
+    LANE_KEY="toctou-test" TS="19700101T000000"
+    # shellcheck source=/dev/null
+    source "$WORK/lane_scratch_rw_verify.sh"
+    printf 'RW=%s\n' "$RW"
+  )
+}
+
+TOCTOU_ATTACK_TARGET="$WORK/toctou-attack-target"
+mkdir -p "$TOCTOU_ATTACK_TARGET"
+set +e
+RESOLVE_TOCTOU_ATTACK=$(run_toctou_setup toctou-lane "rm -rf \"\$LANE_SCRATCH_ROOT_REAL\"; ln -s \"$TOCTOU_ATTACK_TARGET\" \"\$LANE_SCRATCH_ROOT_REAL\"" 2>&1)
+RC_TOCTOU_ATTACK=$?
+set -e
+if [ "$RC_TOCTOU_ATTACK" -ne 0 ] \
+   && printf '%s' "$RESOLVE_TOCTOU_ATTACK" | grep -qi 'SYMLINK immediately after creation\|NOT contained under the real lane-scratch parent'; then
+  ok "v4.8.7 TOCTOU fix: replacing the validated lane root with a symlink between validation and the RW mktemp is CAUGHT by the post-mktemp verify (dies, never returns an RW path)"
+else
+  notok "v4.8.7 TOCTOU fix: the post-validation symlink swap was NOT caught (rc=$RC_TOCTOU_ATTACK, out='$RESOLVE_TOCTOU_ATTACK')"
+fi
+echo "target contents after TOCTOU attack attempt:"; find "$TOCTOU_ATTACK_TARGET" -mindepth 1
+
+RESOLVE_TOCTOU_NORMAL=$(run_toctou_setup toctou-lane-normal ':')
+if printf '%s' "$RESOLVE_TOCTOU_NORMAL" | grep -qF "$FAKE_TOCTOU_PARENT/toctou-lane-normal"; then
+  ok "v4.8.7 TOCTOU fix: with no race, RW still resolves and is created normally under the lane root"
+else
+  notok "v4.8.7 TOCTOU fix: normal (no-race) case broke (got: $RESOLVE_TOCTOU_NORMAL)"
+fi
+
+# Negative control: the same race, but sourcing a version of the RW block
+# with the verify_scratch_containment CALL removed (mechanism unchanged,
+# just unused) -- reconstructs the pre-round-1 shape, proving the race is
+# real when nothing checks for it.
+sed '/^verify_scratch_containment "\$RW"/d' "$WORK/lane_scratch_rw_verify.sh" > "$WORK/lane_scratch_rw_verify_unfixed.sh"
+grep -qF 'verify_scratch_containment "$RW"' "$WORK/lane_scratch_rw_verify_unfixed.sh" \
+  && { echo "FAIL: mutation strip did not remove the RW verify call -- fix the sed pattern" >&2; exit 1; }
+TOCTOU_ATTACK_TARGET_NEG="$WORK/toctou-attack-target-neg"
+mkdir -p "$TOCTOU_ATTACK_TARGET_NEG"
+RESOLVE_TOCTOU_NEG=$(
+  HOST_OS=Linux NAME=toctou-lane-neg TMPDIR="$WORK/unused-tmpdir"
+  # shellcheck source=/dev/null
+  source "$WORK/helpers.sh"
+  # shellcheck source=/dev/null
+  source "$WORK/lane_scratch_setup_relocated.sh"
+  rm -rf "$LANE_SCRATCH_ROOT_REAL"
+  ln -s "$TOCTOU_ATTACK_TARGET_NEG" "$LANE_SCRATCH_ROOT_REAL"
+  LANE_KEY="toctou-test-neg" TS="19700101T000000"
+  # shellcheck source=/dev/null
+  source "$WORK/lane_scratch_rw_verify_unfixed.sh"
+  printf 'RW=%s\n' "$RW"
+)
+RW_NEG=$(printf '%s' "$RESOLVE_TOCTOU_NEG" | sed -n 's/^RW=//p')
+RW_NEG_REAL=""
+[ -n "$RW_NEG" ] && [ -d "$RW_NEG" ] && RW_NEG_REAL=$(cd "$RW_NEG" && pwd -P)
+TOCTOU_ATTACK_TARGET_NEG_REAL=$(cd "$TOCTOU_ATTACK_TARGET_NEG" && pwd -P)
+RW_NEG_UNDER_TARGET=0
+case "$RW_NEG_REAL" in
+  "$TOCTOU_ATTACK_TARGET_NEG_REAL"/*) RW_NEG_UNDER_TARGET=1 ;;
+esac
+if [ -n "$RW_NEG_REAL" ] && [ "$RW_NEG_UNDER_TARGET" -eq 1 ]; then
+  ok "v4.8.7 TOCTOU negative control: without the verify call, the same race DOES redirect RW into the attacker's target, confirming the positive test above exercises the real fix"
+else
+  notok "v4.8.7 TOCTOU negative control: without the verify call, the race did not redirect RW as expected (RW_NEG_REAL='$RW_NEG_REAL', target='$TOCTOU_ATTACK_TARGET_NEG_REAL') -- the positive test above may not be exercising the real bug"
+fi
+rm -rf "$FAKE_TOCTOU_PARENT" "$TOCTOU_ATTACK_TARGET" "$TOCTOU_ATTACK_TARGET_NEG"
+
+# ---------------------------------------------------------------------------
+# v4.8.7, confirmation-pass round #1 (P1, EXECUTED, PRE-EXISTING pattern
+# since v4.8.2): RW is mktemp'd, rmdir'd ("git worktree add wants to create
+# it"), then re-created by `git worktree add` potentially much later.
+# Proof: a real, throwaway git repo fixture; the real extracted
+# worktree-add + verification block; a pre-planted symlink at the vacant
+# RW slot pointing at a separate real directory.
+# ---------------------------------------------------------------------------
+extract 1267 1295 'worktree add --detach' "$WORK/worktree_add_verify.sh"
+grep -qF 'git rev-parse --show-toplevel' "$WORK/worktree_add_verify.sh" \
+  || { echo "FAIL: extracted worktree_add_verify.sh does not contain the post-add toplevel check" >&2; exit 1; }
+
+WT_FIXTURE="$WORK/wt-fixture-repo"
+mkdir -p "$WT_FIXTURE"
+( cd "$WT_FIXTURE" && git init -q && git -c user.email=t@t.example -c user.name=test commit --allow-empty -q -m init )
+WT_FIXTURE_TIP=$(cd "$WT_FIXTURE" && git rev-parse HEAD)
+FAKE_WT_PARENT="$WORK/fake-wt-lane-scratch-parent"
+mkdir -p "$FAKE_WT_PARENT"
+# Resolved via pwd -P, NOT the lexical string -- on macOS $WORK itself sits
+# under a real ancestor symlink (/tmp -> /private/tmp), and the real
+# extracted block resolves RW_TOPLEVEL_REAL the same way (pwd -P). Passing
+# the lexical path here would make every comparison fail for a reason that
+# has nothing to do with the fix under test.
+FAKE_WT_PARENT_REAL=$(cd "$FAKE_WT_PARENT" && pwd -P)
+
+run_worktree_add_verify() {
+  local rw="$1" script="$2"
+  (
+    HOST_OS=Linux WT="$WT_FIXTURE" TIP="$WT_FIXTURE_TIP" RW="$rw" \
+      LANE_SCRATCH_PARENT_REAL="$FAKE_WT_PARENT_REAL"
+    # shellcheck source=/dev/null
+    source "$WORK/helpers.sh"
+    # shellcheck source=/dev/null
+    source "$script"
+    printf 'REACHED_END RW=%s\n' "$RW"
+  )
+}
+
+RW_WT_NORMAL="$FAKE_WT_PARENT/rw-normal"
+set +e
+RESOLVE_WT_NORMAL=$(run_worktree_add_verify "$RW_WT_NORMAL" "$WORK/worktree_add_verify.sh" 2>&1)
+RC_WT_NORMAL=$?
+set -e
+if [ "$RC_WT_NORMAL" -eq 0 ] && printf '%s' "$RESOLVE_WT_NORMAL" | grep -q '^REACHED_END' && [ -e "$RW_WT_NORMAL/.git" ]; then
+  ok "v4.8.7 worktree-add race fix: the normal (no-race) case still creates a real worktree and passes verification"
+else
+  notok "v4.8.7 worktree-add race fix: the normal case broke (got: $RESOLVE_WT_NORMAL)"
+fi
+
+RW_WT_ATTACK="$FAKE_WT_PARENT/rw-attacked"
+WT_ATTACK_TARGET="$WORK/wt-attack-target"
+mkdir -p "$WT_ATTACK_TARGET"
+ln -s "$WT_ATTACK_TARGET" "$RW_WT_ATTACK"
+set +e
+RESOLVE_WT_ATTACK=$(run_worktree_add_verify "$RW_WT_ATTACK" "$WORK/worktree_add_verify.sh" 2>&1)
+RC_WT_ATTACK=$?
+set -e
+if [ "$RC_WT_ATTACK" -ne 0 ] \
+   && printf '%s' "$RESOLVE_WT_ATTACK" | grep -qi 'SYMLINK immediately after' \
+   && ! printf '%s' "$RESOLVE_WT_ATTACK" | grep -q '^REACHED_END'; then
+  ok "v4.8.7 worktree-add race fix: a symlink pre-planted at the vacant RW slot is CAUGHT after 'git worktree add' follows it (dies, never reaches past the check)"
+else
+  notok "v4.8.7 worktree-add race fix: the pre-planted symlink was NOT caught (rc=$RC_WT_ATTACK, out='$RESOLVE_WT_ATTACK')"
+fi
+(cd "$WT_FIXTURE" && git worktree prune 2>/dev/null || true)
+
+# Negative control: the bare `git worktree add` line alone, no verification
+# -- reconstructs the pre-round-1 shape (this exact pattern predates this
+# PR, from v4.8.2), confirming the race is real when nothing checks for it.
+# This is the SAME live repro the round itself demonstrated.
+RW_WT_ATTACK_NEG="$FAKE_WT_PARENT/rw-attacked-neg"
+WT_ATTACK_TARGET_NEG="$WORK/wt-attack-target-neg"
+mkdir -p "$WT_ATTACK_TARGET_NEG"
+ln -s "$WT_ATTACK_TARGET_NEG" "$RW_WT_ATTACK_NEG"
+( cd "$WT_FIXTURE" && git worktree add --detach "$RW_WT_ATTACK_NEG" "$WT_FIXTURE_TIP" >/dev/null )
+WT_ATTACK_TARGET_NEG_REAL=$(cd "$WT_ATTACK_TARGET_NEG" && pwd -P)
+if [ -e "$WT_ATTACK_TARGET_NEG/.git" ] && [ -L "$RW_WT_ATTACK_NEG" ]; then
+  ok "v4.8.7 worktree-add race negative control: the bare 'git worktree add' (no verification) DOES write through the pre-planted symlink into the attacker's target, confirming the positive test above exercises the real, pre-existing bug"
+else
+  notok "v4.8.7 worktree-add race negative control: the bare worktree add did not follow the symlink as expected (target real='$WT_ATTACK_TARGET_NEG_REAL', .git present=$([ -e "$WT_ATTACK_TARGET_NEG/.git" ] && echo yes || echo no))"
+fi
+(cd "$WT_FIXTURE" && git worktree prune 2>/dev/null || true)
+rm -rf "$FAKE_WT_PARENT" "$WT_ATTACK_TARGET" "$WT_ATTACK_TARGET_NEG"
 
 echo "----"
 echo "passed=$PASS failed=$FAIL"

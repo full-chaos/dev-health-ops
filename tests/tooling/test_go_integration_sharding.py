@@ -2973,6 +2973,14 @@ _KNOWN_ORPHANS: dict[str, frozenset[str]] = {
     "test_aggregate_gate_results.py": frozenset(
         {"_code_filter_patterns", "_job", "_steps"}
     ),
+    # `pytestmark` is pytest's own module-level skip-marker hook (CHAOS-4976):
+    # pytest's collector reads it by this exact reserved name, never by an
+    # in-file reference, so it is structurally never "used" from this
+    # detector's AST walk -- not dead code, a different class of orphan than
+    # the row above. Every other tests/tooling module happens not to use this
+    # (otherwise-standard, used elsewhere under tests/) pytest idiom yet, so
+    # the detector has no reason to special-case the name globally today.
+    "test_deploy_prod_go_workers_profile_coverage.py": frozenset({"pytestmark"}),
 }
 
 

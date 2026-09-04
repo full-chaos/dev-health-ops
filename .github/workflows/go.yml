@@ -865,6 +865,83 @@ jobs:
         id: plan
         run: bash ci/check_go.sh integration-shard-plan
 
+  # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
+  # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
+  # lane-4904-acr-runners/contract-v1.6-signed.md -- supersedes v1.5.1's
+  # fallback-poller pattern for routed jobs). go-container-reproducibility
+  # further down needs a working Docker daemon for its real container
+  # builds. Byte-identical precondition job to docker-images.yml's own
+  # dind-smoke-test (#2180), which has not proven this pool's dind
+  # capability in production either (that PR is still open) -- this
+  # proves it independently for go.yml's own use, per the contract's
+  # "docker-socket/testcontainers jobs only after the pool's dind is
+  # proven for that job" clause.
+  #
+  # go-storage-integration-shard was ALSO routed through this pool in an
+  # earlier version of this PR; reverted (chris ruling 09-03, via CF): 5
+  # of its 6 shard legs timed out at the pool's 25m inner cap under real
+  # co-tenancy (5-8 concurrent pods across ops+acr, plus two bigboy-native
+  # suites and a codex round sharing the same 16-core box), measured
+  # against the SAME shards' consistent ~12min wall on hosted runners
+  # (6 green runs, 11m27s-12m44s, never close to 20min) -- a genuine 2x+
+  # contention penalty, not a cache-cold or timeout-sizing problem
+  # (GOMODCACHE/GOCACHE were confirmed warm throughout, zero `go:
+  # downloading` lines in any failed shard's log). The pool has no
+  # additional cores to give this suite (chris: maxRunners stays 8,
+  # hosted-60 is the intended overflow for contention-sensitive suites).
+  # go-container-reproducibility and this dind-smoke-test precondition
+  # stay on the pool -- both passed clean on the same warm-cache run
+  # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
+  # sensitive the way six simultaneous shard legs are.
+  dind-smoke-test:
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    # CHAOS-4906 (09-04): same job-level serialization as
+    # go-container-reproducibility-self-hosted, own group since this job's
+    # resource profile (a few seconds of docker info/build) is nothing
+    # like reproducibility's -- serializing them together would block a
+    # heavy job behind an unrelated PR's cheap smoke test for no reason.
+    # cancel-in-progress: false for the identical reason: a queued-behind
+    # run waits and still completes, never gets cancelled by the one ahead.
+    concurrency:
+      group: pool-dind-smoke-test
+      cancel-in-progress: false
+    timeout-minutes: 5
+    steps:
+      - name: Confirm a Docker daemon is reachable
+        run: |
+          set -euo pipefail
+          if ! docker info > docker-info.txt 2>&1; then
+            echo "FATAL: docker info failed on this oci-arc-runners pod, no reachable Docker daemon -- see docker-info.txt in the job log for the actual error." >&2
+            cat docker-info.txt >&2
+            exit 1
+          fi
+          echo "docker info succeeded:"
+          cat docker-info.txt
+
+      - name: Confirm the daemon can actually build and run a container
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          trap 'rm -rf -- "${workdir}"' EXIT
+          printf 'FROM busybox\nCMD ["echo", "dind-smoke-test-ok"]\n' > "${workdir}/Dockerfile"
+          if ! docker build -t dind-smoke-test:local "${workdir}"; then
+            echo "FATAL: docker build failed on this oci-arc-runners pod, the daemon answers docker info but cannot build an image." >&2
+            exit 1
+          fi
+          output="$(docker run --rm dind-smoke-test:local)"
+          docker rmi dind-smoke-test:local > /dev/null 2>&1 || true
+          if [ "${output}" != "dind-smoke-test-ok" ]; then
+            echo "FATAL: built the smoke-test image but docker run produced ${output@Q}, expected dind-smoke-test-ok." >&2
+            exit 1
+          fi
+          echo "docker build + run succeeded: ${output}"
+
+  # Hosted-only (chris ruling 09-03, via CF, after a measured pool
+  # contention penalty -- see the comment above dind-smoke-test above):
+  # this job briefly had a self-hosted twin gated on SELF_HOSTED_RUNNERS,
+  # same shape as go-container-reproducibility below. Reverted; the pool
+  # stays for go-container-reproducibility only.
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
     needs: go-storage-integration-plan
@@ -932,7 +1009,6 @@ jobs:
   # aggregate result only after every shard has reached a terminal state.
   go-storage-integration:
     name: go-storage-integration
-    if: ${{ always() }}
     needs:
       - go-storage-integration-plan
       - go-storage-integration-shard
@@ -942,12 +1018,15 @@ jobs:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
     steps:
-      - name: Require the plan and every integration shard to pass
+      - name: Require the plan and every shard to have passed
         run: |
           set -euo pipefail
-          if [ "${PLAN_RESULT}" != "success" ] || [ "${SHARD_RESULT}" != "success" ]; then
+          if [ "${PLAN_RESULT}" != "success" ]; then
             echo "integration plan result: ${PLAN_RESULT}" >&2
-            echo "integration shard aggregate result: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
+          if [ "${SHARD_RESULT}" != "success" ]; then
+            echo "shard result: ${SHARD_RESULT}" >&2
             exit 1
           fi
           echo "all deterministic Go integration shards passed"
@@ -1009,7 +1088,16 @@ jobs:
           exit-code: '1'
           version: v0.70.0
 
+  # Runner contract v1.6: exactly one of this job and its self-hosted twin
+  # below runs per workflow run -- no aggregator wrapper needed here (a
+  # single job, unlike the shard matrix above), since both share the same
+  # `name:` directly and branch protection resolves the required check on
+  # that name regardless of which leg actually ran.
   go-container-reproducibility:
+    name: go-container-reproducibility
+    if: >-
+      vars.SELF_HOSTED_RUNNERS != 'enabled' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -1017,6 +1105,55 @@ jobs:
 
       - name: Verify reproducible Go images
         run: bash ci/check_go_containers.sh reproducible
+
+  go-container-reproducibility-self-hosted:
+    name: go-container-reproducibility
+    needs: dind-smoke-test
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    # CHAOS-4906 (09-04): job-level group SERIALIZES every run of this job
+    # across every PR/push on the pool -- two concurrent reproducibility
+    # runs (two overlapping PRs, or a PR overlapping a push) is exactly
+    # what turned an 18m03s isolated run into two runs both timing out at
+    # the 20m inner cap (run 33822145677 succeeded alone at 18m03s; run
+    # 33822592791 failed at 20m16s while it overlapped that same run).
+    # `cancel-in-progress: false`: a queued-behind run must WAIT its turn
+    # and still complete, not get cancelled by the one ahead of it -- main
+    # pushes are never cancelled (CHAOS-3948/CHAOS-4921/CHAOS-4946), and a
+    # PR-level cancel-on-repush already comes from the WORKFLOW-level
+    # concurrency group up top; this job-level group is purely about
+    # ordering pool access, not about cancelling anything.
+    concurrency:
+      group: pool-go-container-reproducibility
+      cancel-in-progress: false
+    # 36m (measured 18m03s wall under load, run 33822145677, isolated from
+    # any overlapping pool consumer -- contract v1.6's own sizing clause:
+    # timeout-minutes = max measured wall under load x2). Serialization
+    # above means the NEXT run in the queue no longer has to survive
+    # contention from a concurrent sibling, but the cap still has to
+    # survive ordinary variance in a single, uncontended run.
+    timeout-minutes: 36
+    env:
+      # CHAOS-4906 pool module cache (09-03): this job has no `setup-go`
+      # step of its own (ci/check_go_containers.sh shells out to `go`
+      # directly), so it already inherits GOMODCACHE/GOCACHE from the pod
+      # env (helm rev 6, oci-arc-runners `runner` container -- hostPath at
+      # /var/lib/oci-arc-runners/go-cache on bigboy). Restated here for a
+      # reader of this file, not because it changes behaviour. NEVER run
+      # `go clean -cache`/`go clean -modcache` against this path -- shared,
+      # cross-job, cross-repo; cleanup ownership is the pool's.
+      GOMODCACHE: /mnt/go-cache/mod
+      GOCACHE: /mnt/go-cache/build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify reproducible Go images
+        # timeout 30m: inner test timeout strictly shorter than the 36m
+        # outer cap, per the contract -- fails loud on a genuine hang
+        # instead of an ambiguous job-level cancellation.
+        run: timeout 30m bash ci/check_go_containers.sh reproducible
 
   river-compatibility:
     runs-on: ubuntu-latest

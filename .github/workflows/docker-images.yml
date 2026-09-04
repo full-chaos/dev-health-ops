@@ -84,8 +84,17 @@ concurrency:
   # reaches the publish step gets the moving tags, regardless of start
   # order. See the "Determine whether this build is main's current head"
   # step in each merge job.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.ref || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed)
+  # narrowed the sha fallback below from "every non-PR event" to "a push
+  # to main, or a merge_group entry, or a dispatch naming no explicit
+  # ref" specifically, and widened `cancel-in-progress` to also cancel a
+  # stale push on a non-main branch (none exists today -- push is
+  # main-only -- so this is a no-op in practice, kept for consistency).
+  # The CHAOS-4921 protection itself is unchanged: two different commits'
+  # pushes to main, or two merge_group entries, still never share a group
+  # and so can never cancel or displace each other's image build.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.ref || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read

@@ -8,18 +8,20 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
   # CHAOS-4906 fleet audit (09-03): this workflow's own triggers today are
   # `push` (main only) and `workflow_dispatch` -- no `pull_request` at all
   # -- so `github.event.pull_request.number` in the group key above is
-  # currently always empty and this fix is a no-op in practice, not a live
-  # queue-inflation fix (unlike codeql-analysis.yml's identical-looking
-  # `false`, which DOES fire on `pull_request` today). Fixed anyway, both
-  # for consistency with the pattern used elsewhere and so this doesn't
-  # silently become a live gap the moment a `pull_request` trigger is
-  # added here later. Scoped to `pull_request` only -- a push to main must
-  # never cancel another.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # currently always empty. Originally scoped `cancel-in-progress` to
+  # `pull_request` only ("a push to main must never cancel another"), which
+  # given the triggers above meant cancellation was ALWAYS off here. Now
+  # the canonical fleet-wide shape per chris's 09-03 15:20 ruling
+  # (incident-informed): a push to a non-main branch would cancel a stale
+  # run (no-op today -- push is main-only -- kept for consistency and so
+  # this doesn't silently become a gap if that trigger widens later), but a
+  # push to main is still sha-keyed and never cancelled, same protection as
+  # before.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
   contents: read

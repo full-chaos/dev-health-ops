@@ -77,13 +77,27 @@ func TestPercentileRankEmptyIsAHalf(t *testing.T) {
 	}
 }
 
-// No tie: mean and weak agree, so this case can NOT discriminate. Kept
-// deliberately, with that stated, so nobody later mistakes it for coverage of
-// the convention.
-func TestPercentileRankWithoutTiesCannotDiscriminate(t *testing.T) {
-	got := PercentileRank([]float64{1, 2, 3, 4}, 3)
-	if got != 0.5 {
+// The genuinely non-discriminating shape: the value is ABSENT from the vector,
+// so countEqual is 0 and mean == weak == countLess/n. Kept deliberately, and
+// labelled, so nobody later mistakes it for coverage of the convention.
+//
+// This test was WRONG in its first revision, in two ways at once, and the
+// suite caught both: it used PercentileRank([1,2,3,4], 3), where the value is
+// PRESENT, so countEqual is 1 and the answer is 0.625 (mean) vs 0.75 (weak) --
+// the case discriminates after all, and 0.5 was simply the wrong expectation.
+// "No duplicate values in the vector" is not the same condition as "no ties
+// with the value being ranked", and only the second one makes the conventions
+// agree.
+func TestPercentileRankWithAValueAbsentFromTheVectorCannotDiscriminate(t *testing.T) {
+	// 2.5 is absent: countLess=2, countEqual=0 -> 2/4 under BOTH conventions.
+	if got := PercentileRank([]float64{1, 2, 3, 4}, 2.5); got != 0.5 {
 		t.Fatalf("PercentileRank = %v, want 0.5", got)
+	}
+	// The contrast, proving the distinction above is real: the SAME vector with
+	// a value that IS present does discriminate.
+	if got := PercentileRank([]float64{1, 2, 3, 4}, 3); got != 0.625 {
+		t.Fatalf("PercentileRank(present value) = %v, want 0.625 (mean rank); "+
+			"weak rank would be 0.75", got)
 	}
 }
 

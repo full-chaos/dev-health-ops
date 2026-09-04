@@ -17,6 +17,15 @@ import (
 
 // blockedFixture builds one run with the partition statuses named, so each
 // case below differs ONLY in the partition state the predicate reads.
+// The two running shapes, kept as constants so a test cannot silently mean the
+// wrong one. An EXPIRED lease is the stranded shape codex review round 2 found:
+// the final River attempt died after ClaimPartition succeeded, so the row is
+// 'running' forever with nothing left to reclaim it.
+const (
+	runningLiveLease    = "running_live_lease"
+	runningExpiredLease = "running_expired_lease"
+)
+
 type blockedFixture struct {
 	runID          string
 	orgID          string
@@ -31,14 +40,31 @@ func seedBlockedRun(
 		fixture.runID, fixture.orgID, now); err != nil {
 		t.Fatal(err)
 	}
-	for ordinal, status := range fixture.partitionState {
-		var reason any
-		if status == "failed_permanent" {
+	for ordinal, state := range fixture.partitionState {
+		// 'running' is not one state but two, and the difference decides
+		// whether the run can still advance. The fixture now carries
+		// production's ck_daily_metrics_partition_lease, so a running row MUST
+		// carry a claim_token and a lease -- writing "running" with neither,
+		// which this helper used to do, describes a row production forbids.
+		status, reason, lease := state, any(nil), any(nil)
+		switch state {
+		case "failed_permanent":
 			reason = "ambiguous_refused"
+		case runningLiveLease:
+			status, lease = "running", now.Add(10*time.Minute)
+		case runningExpiredLease:
+			status, lease = "running", now.Add(-time.Minute)
+		case "running":
+			t.Fatalf("partition %d: use %q or %q, never a bare \"running\" -- "+
+				"the lease is the whole question", ordinal, runningLiveLease, runningExpiredLease)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at,failure_reason) VALUES ($1,$2,$3,'[]'::jsonb,$4,0,$5,$5,$6)`,
-			uuid.NewString(), fixture.runID, ordinal, status, now, reason); err != nil {
-			t.Fatalf("seeding partition %d status=%s: %v", ordinal, status, err)
+		var token any
+		if lease != nil {
+			token = uuid.NewString()
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at,failure_reason,claim_token,lease_expires_at) VALUES ($1,$2,$3,'[]'::jsonb,$4,0,$5,$5,$6,$7::uuid,$8)`,
+			uuid.NewString(), fixture.runID, ordinal, status, now, reason, token, lease); err != nil {
+			t.Fatalf("seeding partition %d state=%s: %v", ordinal, state, err)
 		}
 	}
 }
@@ -113,12 +139,31 @@ func TestReconcileBlockedRunsMarksOnlyRunsThatCanNeverFinish(t *testing.T) {
 			wantBlocked: false,
 		},
 		{
-			// ClaimPartition reclaims a 'running' partition whose lease has
-			// expired, so progress is still possible. Treating "running" as
-			// stuck would mark healthy in-flight runs.
-			name:        "failed_permanent alongside a running is not blocked",
-			partitions:  []string{"failed_permanent", "running"},
+			// A LIVE lease means a worker is holding the partition right now,
+			// so the run is healthy in-flight work and must not be marked.
+			name:        "failed_permanent alongside a live-lease running is not blocked",
+			partitions:  []string{"failed_permanent", runningLiveLease},
 			wantBlocked: false,
+		},
+		{
+			// codex review round 2 (P2). This case previously read "running is
+			// not blocked", justified by "ClaimPartition reclaims an expired
+			// lease, so progress is still possible". The first half is true --
+			// classifyLease's leaseReclaimable branch does exactly that -- but
+			// the conclusion does not follow: ClaimPartition has to be CALLED,
+			// and only a metrics.daily_partition job calls it. DispatchablePartitions
+			// returns only 'pending'/'failed' (postgres.go), so once the final
+			// River attempt dies after claiming, nothing automatic ever
+			// re-publishes a job for that row and nothing ever reclaims it.
+			//
+			// redrive.go:188 already treats this exact shape as redrivable.
+			// Leaving the marker disagreeing with the redrive would mean two
+			// definitions of "stuck" in one package -- the drift this design
+			// avoids everywhere else.
+			name:        "failed_permanent alongside an expired-lease running IS blocked",
+			partitions:  []string{"failed_permanent", runningExpiredLease},
+			wantBlocked: true,
+			wantReason:  BlockedReasonPartialPartitionsPermanent,
 		},
 		{
 			name:        "all succeeded is not blocked",
@@ -554,5 +599,101 @@ func TestRedriveClearsOnlyTheRunsItActuallyReset(t *testing.T) {
 	}
 	if stillPermanent != 1 {
 		t.Fatalf("failed_permanent partitions on the untouched run = %d, want 1", stillPermanent)
+	}
+}
+
+// codex review round 2, P2 -- the finding this test exists to hold closed.
+//
+// A run holding [succeeded, failed_permanent, running-with-EXPIRED-lease] is
+// permanently stranded when the final River attempt died AFTER ClaimPartition
+// succeeded and its attempt budget is spent. The old predicate read any
+// 'running' partition as "something can still happen" and left the run
+// unmarked -- the marker staying silent on exactly the kind of freeze it
+// exists to expose.
+//
+// The two assertions have to be made TOGETHER. Asserting only that the run is
+// marked would not show the run is genuinely stuck, and asserting only that
+// nothing is dispatchable would not show the marker noticed. Together they say:
+// nothing automatic can advance this run, AND the marker says so.
+func TestAnExpiredLeaseRunningPartitionLeavesTheRunStrandedAndMarked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	orgID := uuid.NewString()
+	runID := uuid.NewString()
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	// Seeded through the shared helper, so the row satisfies production's
+	// ck_daily_metrics_partition_lease -- claim_token and lease_expires_at both
+	// present, the lease simply in the past. A hand-written row without a token
+	// would describe a state production cannot hold.
+	seedBlockedRun(t, ctx, pool, blockedFixture{
+		runID: runID, orgID: orgID,
+		partitionState: []string{"succeeded", "failed_permanent", runningExpiredLease},
+	}, now)
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now }
+
+	// Leg 1: nothing automatic can advance this run. DispatchablePartitions is
+	// what the fan-out publishes from, and it returns only 'pending'/'failed',
+	// so the expired-lease row is invisible to it. ClaimPartition WOULD reclaim
+	// that row -- but only a metrics.daily_partition job calls ClaimPartition,
+	// and nothing here will ever create one.
+	dispatchable, err := store.DispatchablePartitions(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatchable) != 0 {
+		t.Fatalf("DispatchablePartitions = %#v, want empty -- if this is non-empty "+
+			"the run is not stranded and the premise of this test is wrong", dispatchable)
+	}
+
+	// Leg 2: the marker must say so.
+	outcome, err := store.ReconcileBlockedRuns(ctx, orgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Marked != 1 {
+		t.Fatalf("Marked = %d, want 1 -- a run nothing can advance was left unmarked", outcome.Marked)
+	}
+	blocked, reason := readMarker(t, ctx, pool, runID)
+	if !blocked {
+		t.Fatal("the stranded run carries no blocked marker")
+	}
+	if reason != BlockedReasonPartialPartitionsPermanent {
+		t.Fatalf("reason = %q, want %q -- some partitions succeeded, so a redrive "+
+			"decision needs to know partial output exists",
+			reason, BlockedReasonPartialPartitionsPermanent)
+	}
+
+	// Control, and the reason this cannot be "mark anything with a running
+	// partition": the SAME shape with a LIVE lease is healthy in-flight work
+	// and must stay unmarked. Without this the fix could be a blanket
+	// "running means stuck", which would mark every run being worked on.
+	liveRunID := uuid.NewString()
+	seedBlockedRun(t, ctx, pool, blockedFixture{
+		runID: liveRunID, orgID: orgID,
+		partitionState: []string{"succeeded", "failed_permanent", runningLiveLease},
+	}, now)
+	if _, err := store.ReconcileBlockedRuns(ctx, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, _ := readMarker(t, ctx, pool, liveRunID); blocked {
+		t.Fatal("a run whose partition is held under a LIVE lease was marked blocked -- " +
+			"that is healthy in-flight work")
 	}
 }

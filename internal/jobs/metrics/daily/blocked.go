@@ -14,12 +14,24 @@ import (
 // which is indistinguishable from legitimately in-flight work. That is the
 // silent shape CHAOS-4970 hit in prod on 2026-09-01.
 //
-// A 'running' partition with an expired lease is deliberately NOT treated as
-// blocking-free on the grounds that it is stuck: ClaimPartition reclaims that
-// exact shape, so the run can still make progress and must not be marked. The
-// predicate below therefore asks whether ANY partition is in a state other
-// than 'succeeded' or 'failed_permanent' -- pending, failed and running all
-// mean something can still happen.
+// "Something can still happen" is decided by the LEASE, not by the status
+// alone. 'pending' and 'failed' are re-published by the fan-out, and a
+// 'running' partition under a LIVE lease is being worked on right now. But a
+// 'running' partition whose lease has EXPIRED is stranded: ClaimPartition
+// would reclaim that exact row, yet only a metrics.daily_partition job ever
+// calls ClaimPartition, and DispatchablePartitions returns nothing but
+// 'pending'/'failed' (postgres.go), so once the final River attempt dies after
+// claiming, nothing automatic re-publishes a job for it and nothing reclaims
+// it.
+//
+// This was wrong until codex review round 2 on #2224, which is worth recording
+// because the error was in the reasoning, not the SQL: the earlier comment
+// argued "ClaimPartition reclaims an expired lease, so the run can still make
+// progress". The premise is true and the conclusion does not follow -- a
+// mechanism that nothing invokes cannot make progress. RedriveStrandedPartitions
+// (redrive.go, step 2) already treated this shape as redrivable, so the marker
+// and the redrive held two different definitions of "stuck" in one package.
+// They now share one.
 const (
 	// BlockedReasonAllPartitionsPermanent marks a run whose partitions are
 	// ALL failed_permanent -- nothing succeeded at all.
@@ -78,6 +90,13 @@ WITH decided AS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
                  AND partition.status NOT IN ('succeeded', 'failed_permanent')
+                 -- An expired lease does NOT keep the run alive: nothing
+                 -- automatic will ever reclaim it. Same boundary
+                 -- RedriveStrandedPartitions uses, so both agree on "stuck".
+                 AND NOT (
+                     partition.status = 'running'
+                     AND partition.lease_expires_at < $2::timestamptz
+                 )
            ) AS blocked,
            NOT EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition

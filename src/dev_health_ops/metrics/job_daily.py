@@ -1932,6 +1932,22 @@ async def run_daily_metrics_job(
         # policy events permanently, which is the exact defect the Go port's
         # deterministic event_id exists to fix.
         skip_ai_governance_write = "ai_governance" in skip_families
+        # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
+        # Same write-only-skip shape as repo_user_commit above --
+        # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
+        # below (verified by grep, not assumed), so compute stays unconditional
+        # and only the write is gated.
+        #
+        # ai_impact_metrics_daily is a ReplacingMergeTree whose ORDER BY key
+        # (org_id, team_id, repo_id, work_type, day, attribution_bucket) fully
+        # covers the producer's grouping, so an ungated double-write would
+        # eventually collapse rather than accumulate. The gate is still
+        # required: until a merge runs, both versions are live, and readers
+        # that do not dedup would double-count -- and the two paths disagree
+        # wherever the Go port's fixes apply (the uint64 revert-rule widening,
+        # and the incident reader's CHAOS-4269 valid_from guard), so which copy
+        # wins would decide the answer.
+        skip_ai_impact_write = "ai_impact" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1963,7 +1979,7 @@ async def run_daily_metrics_job(
             if not skip_ai_governance_write:
                 s.write_ai_policy_events(ai_policy_events)
                 s.write_ai_governance_coverage_daily(ai_governance_coverage)
-            if ai_impact_metrics:
+            if ai_impact_metrics and not skip_ai_impact_write:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
                 s.write_ai_workflow_runs(ai_workflow_runs)

@@ -829,6 +829,21 @@ func dailyNativeFamilyRegistrations(
 			"error", aiGovernanceErr,
 		)
 	}
+	// CHAOS-4280: ai_impact. Same fail-open construction policy, and
+	// PRE-BRIDGE like the rest: it reads only raw sync tables plus the
+	// incident family's own reader, never another compat family's daily
+	// output. Repo-scoped, unlike ai_governance above.
+	if aiImpactExecutor, aiImpactErr := daily.NewAIImpactExecutor(clickhouseConnection); aiImpactErr == nil {
+		native["ai_impact"] = aiImpactExecutor
+	} else {
+		logger.Error(
+			"ai_impact native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiImpactErr,
+		)
+	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as
 	// every other native family above.
 	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {

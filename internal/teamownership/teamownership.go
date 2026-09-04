@@ -66,9 +66,24 @@ import (
 func OwnedRepoIDs(
 	ctx context.Context, conn driver.Conn, orgID, teamID string, asOf time.Time,
 ) ([]uuid.UUID, error) {
+	// FINAL, not a raw WHERE on valid_to -- team_repo_ownership is a
+	// ReplacingMergeTree(updated_at) keyed on (org_id, provider,
+	// repo_full_name, team_id, source, valid_from), and a revocation is
+	// written as a REPLACEMENT row under that same key with a newer
+	// updated_at and valid_to=now (team_repo_ownership_derivation_clickhouse.go's
+	// retractTeamRepoOwnershipRows). Immediately after such a write and
+	// before the background merge collapses the two physical rows, a plain
+	// WHERE (valid_to IS NULL OR valid_to > asOf) sees BOTH versions and
+	// admits the row via its stale, not-yet-merged valid_to=NULL copy --
+	// resurrecting a just-revoked repo (codex adversarial review, 2026-09-04,
+	// P1 finding). FINAL forces the logical merge at query time, so the
+	// WHERE clause below evaluates only the latest version's valid_to,
+	// exactly matching the established pattern for reading this same table
+	// in loadTeamRepoOwnershipActiveInferredRows
+	// (team_repo_ownership_derivation_clickhouse.go).
 	rows, err := conn.Query(ctx, `
         SELECT DISTINCT repo_id
-        FROM team_repo_ownership
+        FROM team_repo_ownership FINAL
         WHERE org_id = ?
           AND team_id = ?
           AND repo_id IS NOT NULL

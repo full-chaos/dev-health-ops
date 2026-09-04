@@ -161,9 +161,54 @@ func TestRecommendationsLoaderMatchesPythonAgainstClickHouse(t *testing.T) {
 	}
 
 	assertCHAOS4897FixIsPresent(t, snapshots[loaderTeamA], snapshots[loaderTeamB])
+	assertOwnershipIsResolvedAsOfWindowEnd(t, snapshots[loaderTeamA])
 	assertZeroOwnedReposIsAbsentNotOrgWide(t, ctx, conn, loader, windowStart, windowEnd)
 	assertHotspotBoundaryIsMeasured(t, ctx, conn, dsn)
 	assertArgMaxKeysAreUnique(t, ctx, conn)
+}
+
+// assertOwnershipIsResolvedAsOfWindowEnd is the codex-review (2026-09-04, P2)
+// fixture gap closed: every OTHER ownership row in seedLoaderFixture
+// activates well before loaderWindowStart, so no assertion could tell
+// LoadTeamMetricsWindow's ownership lookup apart if it used windowStart
+// instead of windowEnd as `asOf` -- alpha and beta would still resolve their
+// disjoint repos either way, and assertCHAOS4897FixIsPresent would still see
+// the four signals differ, so that mutation could survive undetected.
+//
+// repoLateAcquired's ownership activates 2026-08-20 -- inside the window, so
+// only windowEnd (09-01) sees it as owned; windowStart (08-01) would not.
+// Alpha's review_latency_p75_hours is therefore the average of repoAlpha's
+// (30.0) and repoLateAcquired's (999.0) p75 -- 514.5 -- ONLY if windowEnd is
+// what actually reached teamownership.OwnedRepoIDs. A windowStart mutation
+// would silently drop back to repoAlpha alone (30.0), a plausible-looking
+// number this fixture is deliberately built to make unmistakable instead.
+func assertOwnershipIsResolvedAsOfWindowEnd(t *testing.T, alpha MetricsSnapshot) {
+	t.Helper()
+
+	const wantLatency = 514.5 // avg(30.0, 999.0), exact in float64
+	// avg(0.40, 0.99): NOT 0.695 exactly -- neither 0.40 nor 0.99 is exactly
+	// representable in float64, and summing then halving them rounds to the
+	// nearest representable double, which is this value, not the
+	// mathematically exact one. sameFloat64 is a bitwise comparison (this
+	// codebase treats Go/Python float parity as exact throughout), so the
+	// expected constant has to be the actual computed double, not the
+	// decimal literal a calculator would give.
+	const wantRework = 0.6950000000000001
+
+	if !alpha.ReviewLatencyP75HoursKnown || !sameFloat64(alpha.ReviewLatencyP75Hours, wantLatency) {
+		t.Errorf("alpha review_latency_p75_hours = %v/%v, want %v/true -- "+
+			"repoLateAcquired (owned starting 2026-08-20, inside the window) is "+
+			"missing from the average. Either the ownership lookup's `asOf` "+
+			"regressed from windowEnd to windowStart (windowStart predates "+
+			"repoLateAcquired's valid_from, so it would see the repo as not yet "+
+			"owned), or the fixture's ownership row for it did not land.",
+			alpha.ReviewLatencyP75Hours, alpha.ReviewLatencyP75HoursKnown, wantLatency)
+	}
+	if !alpha.ReworkChurnRatioKnown || !sameFloat64(alpha.ReworkChurnRatio, wantRework) {
+		t.Errorf("alpha rework_churn_ratio = %v/%v, want %v/true -- same "+
+			"windowEnd-vs-windowStart boundary as review_latency_p75_hours above",
+			alpha.ReworkChurnRatio, alpha.ReworkChurnRatioKnown, wantRework)
+	}
 }
 
 // assertZeroOwnedReposIsAbsentNotOrgWide pins the empty-ownership boundary
@@ -529,6 +574,13 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 
 	repoAlpha := "11111111-1111-1111-1111-111111111111"
 	repoBeta := "22222222-2222-2222-2222-222222222222"
+	// Owned by alpha starting MID-WINDOW (2026-08-20, strictly between
+	// loaderWindowStart and loaderWindowEnd) -- see
+	// assertOwnershipIsResolvedAsOfWindowEnd. Its own repo_metrics_daily row
+	// is only correctly included if the owned-repo lookup uses windowEnd
+	// (fully activated by 2026-09-01) rather than windowStart (not yet
+	// activated on 2026-08-01) as its `asOf`.
+	repoLateAcquired := "77777777-7777-7777-7777-777777777777"
 
 	// work_item_metrics_daily: wip/throughput and cycle time, per team.
 	// The (day, provider, work_scope_id) triple is the argMax key; the
@@ -779,6 +831,10 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 		{repoAlpha, "2026-08-02", 30.0, 0.40, "2026-08-03 00:00:00"},
 		{repoAlpha, "2026-08-02", 1.0, 0.01, "2026-08-02 00:00:00"}, // superseded
 		{repoBeta, "2026-08-04", 50.0, 0.60, "2026-08-05 00:00:00"},
+		// repoLateAcquired: see assertOwnershipIsResolvedAsOfWindowEnd.
+		// Deliberately extreme values so a wrong asOf (windowStart, which
+		// excludes this repo) is unmistakable rather than a plausible number.
+		{repoLateAcquired, "2026-08-22", 999.0, 0.99, "2026-08-23 00:00:00"},
 	} {
 		exec(`INSERT INTO repo_metrics_daily
 			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
@@ -815,6 +871,18 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 			loaderOrgID, seed.team, seed.repo, seed.repo,
 			mustTimestamp(t, "2026-01-01 00:00:00"), mustTimestamp(t, "2026-01-01 00:00:00"))
 	}
+	// repoLateAcquired: alpha's ownership activates 2026-08-20, strictly
+	// between loaderWindowStart (08-01) and loaderWindowEnd (09-01). See
+	// assertOwnershipIsResolvedAsOfWindowEnd -- this is the codex-review
+	// (2026-09-04, P2) fixture gap: every OTHER ownership row in this file
+	// activates well before either window bound, so no existing assertion
+	// could tell a windowEnd `asOf` apart from a windowStart one.
+	exec(`INSERT INTO team_repo_ownership
+		(org_id, provider, team_id, repo_id, repo_full_name, match_type,
+		 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 0, 1, 0, ?, NULL, ?)`,
+		loaderOrgID, loaderTeamA, repoLateAcquired, repoLateAcquired,
+		mustTimestamp(t, "2026-08-20 00:00:00"), mustTimestamp(t, "2026-08-20 00:00:00"))
 
 	// user_metrics_daily: reviewer gini, team-scoped. Skewed for alpha, even
 	// for beta, so the two teams' gini genuinely differ.

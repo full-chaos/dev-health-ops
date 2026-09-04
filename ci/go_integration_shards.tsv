@@ -94,6 +94,18 @@
 # recipe's timing table), so this is a conservative UPPER bound, not a
 # CI-equivalent measurement -- re-time it if a faster reference becomes
 # available, and re-time regardless if tests are added.
+# internal/teamownership (CHAOS-4897): weight 20s. NEW package, one
+# Testcontainers-backed test (TestOwnedRepoIDs), same container-plus-
+# migration shape as internal/jobs/workgraph/edges above. MEASURED on bigboy
+# (arm64 compute host) -- `go test -tags=integration -count=1
+# ./internal/teamownership/...`: 14.56s and 18.78s package time across two
+# runs. Rounded up to 20 for headroom, same reasoning as every other entry
+# in this file -- the weight is only used for shard BALANCING. Bigboy runs
+# roughly 2x local wall-clock (see the bigboy lane recipe's timing table),
+# so this is a conservative UPPER bound, not a CI-equivalent measurement --
+# re-time it if a faster reference becomes available, and re-time
+# regardless if tests are added (weight scales with TEST COUNT here, same
+# as its container-plus-migration siblings above).
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
@@ -134,6 +146,7 @@ internal/syncdispatchruntime	6
 internal/syncreconciler	16
 internal/synccoverage	13
 internal/syncroute	3
+internal/teamownership	20
 internal/testsupport/chschema	75
 internal/testsupport/computeparity	50
 internal/testsupport/containers	13

@@ -1125,6 +1125,32 @@ else
   notok "v4.8.6 multi-line NAME fix, green check: the real gate did NOT reject the multi-line value (rc=$RC_MULTILINE_GREEN, out='$RESOLVE_MULTILINE_GREEN')"
 fi
 
+# ---------------------------------------------------------------------------
+# team-lead directive, after the round-#3 finding: assert explicitly that
+# the allowlist rejects OTHER control characters too, not just the one
+# byte (newline) the round happened to use -- CR, TAB, and a low
+# non-printable byte adjacent to where a NUL would be (a REAL NUL cannot
+# be represented in a bash string or passed through argv at all -- C
+# strings, which is what argv entries are, terminate at the first NUL, so
+# "NAME contains a NUL" is not a reachable shape via -n in the first place;
+# this is noted rather than tested, since there is nothing to execute).
+# `[A-Za-z0-9._-]` under LC_ALL=C is a closed allowlist -- every one of
+# these bytes falls outside it structurally, the same way `/` and `..` do.
+# ---------------------------------------------------------------------------
+for CTRL_DESC_VAL in "CR:$(printf 'lane\rx')" "TAB:$(printf 'lane\tx')" "low-nonprintable(0x01):$(printf 'lane\001x')"; do
+  CTRL_DESC="${CTRL_DESC_VAL%%:*}"
+  CTRL_NAME="${CTRL_DESC_VAL#*:}"
+  set +e
+  RESOLVE_CTRL=$(run_name_check_only "$CTRL_NAME" 2>&1)
+  RC_CTRL=$?
+  set -e
+  if [ "$RC_CTRL" -ne 0 ] && printf '%s' "$RESOLVE_CTRL" | grep -qi 'not a safe path/filename component'; then
+    ok "v4.8.6 NAME allowlist gate, control-char sweep: NAME containing $CTRL_DESC is REJECTED by the real gate"
+  else
+    notok "v4.8.6 NAME allowlist gate, control-char sweep: NAME containing $CTRL_DESC was NOT rejected (rc=$RC_CTRL, out='$RESOLVE_CTRL')"
+  fi
+done
+
 # Negative control: strip the gate's if/die block and confirm the same bad
 # values do NOT die -- proves the tests above exercise the real fix, not a
 # harness quirk.

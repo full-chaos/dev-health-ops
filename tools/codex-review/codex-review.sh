@@ -600,8 +600,27 @@ NAME=${NAME:-$(basename "$WT")}
 # locale. Refuse outright on anything else -- no silent rewriting, no
 # best-effort basename-and-hope.
 NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
-if ! printf '%s' "$NAME" | LC_ALL=C grep -Eq "$NAME_ALLOWLIST_RE"; then
-  die "-n/round name '$NAME' is not a safe path/filename component -- must be non-empty, start with a letter or digit, and contain only letters, digits, '.', '_', '-' afterward (this also rejects '.', '..', and anything containing '/'). Refusing to guess a substitute."
+# v4.8.6, found by confirmation-pass round #3 on bigboy, EXECUTED, independently
+# reproduced by the lane: `printf '%s' "$NAME" | grep -Eq "$RE"` is LINE-oriented
+# -- grep -q succeeds if ANY line of its input matches, and `^`/`$` in the ERE
+# anchor to LINE boundaries, not the whole string's boundaries. A NAME
+# containing an embedded newline with a SAFE first line and a malicious
+# second line (e.g. NAME=$'lane\n../../../escaped/owned') therefore passed
+# this gate -- the first line alone satisfied the regex -- and the full
+# multi-line value then reached `mkdir -p` as one argument whose later
+# `/../` components are still real path separators to mkdir, escaping the
+# mandated root. Fixed: bash's OWN `[[ =~ ]]` matches the ENTIRE string in
+# one pass, no per-line splitting, so the same regex now actually enforces
+# what it was written to enforce. This is the one place in this script
+# where `[[` is used instead of the POSIX `[`/`case` idiom everywhere
+# else -- deliberately: `[[ =~ ]]` is bash-builtin regex matching over the
+# whole argument, and no POSIX-`[`-compatible construct offers that same
+# guarantee without re-introducing this exact line-splitting hazard via an
+# external tool. Run inside a subshell so `LC_ALL=C` (character-class
+# determinism, same reasoning as the old grep invocation) is scoped to
+# just this check, never leaking into the rest of the script's locale.
+if ! (LC_ALL=C; [[ "$NAME" =~ $NAME_ALLOWLIST_RE ]]); then
+  die "-n/round name '$NAME' is not a safe path/filename component -- must be non-empty, start with a letter or digit, and contain only letters, digits, '.', '_', '-' afterward, with NO embedded newline (this also rejects '.', '..', and anything containing '/' or a line break). Refusing to guess a substitute."
 fi
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}

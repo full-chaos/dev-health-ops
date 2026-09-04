@@ -97,7 +97,7 @@ STUB_UNAME
 # Proof: build a 0555 tree, source the real rm_rf_writable() verbatim, call
 # it, assert the tree is gone.
 # ---------------------------------------------------------------------------
-extract 1097 1104 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
+extract 1116 1123 'rm_rf_writable() {' "$WORK/rm_rf_writable.sh"
 
 D1="$WORK/modcache-shaped"
 mkdir -p "$D1/cache/download/example.com/pkg/@v"
@@ -149,7 +149,7 @@ rm -rf "$D1B" 2>/dev/null || true
 # it sits entirely BEFORE the HOST_OS resolution line, so it has no
 # HOST_OS dependency of its own.
 # ---------------------------------------------------------------------------
-extract 672 694 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
+extract 691 713 'LANE_KEY="$LANE-$WT_HASH"' "$WORK/lane_key.sh"
 
 mkdir -p "$WORK/lane-a/acr" "$WORK/lane-b/acr"
 LANE_KEY_A=$(
@@ -192,7 +192,7 @@ esac
 # as GOPATH; then remove it via the same rm_rf_writable() defect-1 already
 # proved, confirming the trap tears it down.
 # ---------------------------------------------------------------------------
-extract 933 942 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
+extract 952 961 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath.sh"
 
 TS="19700101T000000-test"
 LANE_KEY="test-lane-$$"
@@ -263,7 +263,7 @@ fi
 # run the real `mkdir -p "$OUTDIR"` line against a not-yet-existing path,
 # assert it now exists.
 # ---------------------------------------------------------------------------
-extract 613 613 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
+extract 632 632 'mkdir -p "$OUTDIR" || die "cannot create output directory $OUTDIR"' "$WORK/outdir.sh"
 
 OUTDIR_TEST="$WORK/does/not/exist/yet"
 [ ! -e "$OUTDIR_TEST" ] || { echo "FAIL: test setup bug, $OUTDIR_TEST already exists" >&2; exit 1; }
@@ -287,7 +287,7 @@ fi
 # run the real TS/V/L/touch block verbatim against a fresh OUTDIR, assert
 # $L exists (and is empty) right after, well before any warm-step logic.
 # ---------------------------------------------------------------------------
-extract 626 638 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
+extract 645 657 ': >"$L" || die "cannot create round log $L"' "$WORK/create-log.sh"
 
 OUTDIR_LOG_TEST="$WORK/log-test-outdir"
 mkdir -p "$OUTDIR_LOG_TEST"
@@ -314,7 +314,7 @@ fi
 # run the real WARM_MODULES line verbatim against a nonexistent RGOMODCACHE,
 # under set -euo pipefail, and assert the NEXT line still runs.
 # ---------------------------------------------------------------------------
-extract 1230 1230 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
+extract 1249 1249 'WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name' "$WORK/warm_modules.sh"
 
 # NOTE: each probe below is run as `set +e; ( set -euo pipefail; ... ); RC=$?;
 # set -e` rather than `( ... ) || true`. Bash disables -e propagation for
@@ -372,7 +372,7 @@ fi
 # that only proves the WARM branch actually runs (c) — not a full real Go
 # build, which this harness has no repo fixture for.
 # ---------------------------------------------------------------------------
-extract 1190 1274 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
+extract 1209 1293 'if [ -f "$RW/go.mod" ]; then' "$WORK/warm_step.sh"
 grep -qF 'reason=no-go.mod' "$WORK/warm_step.sh" \
   || { echo "FAIL: extracted warm_step.sh block does not contain the SKIPPED branch" >&2; exit 1; }
 
@@ -471,7 +471,7 @@ fi
 # mkdir -p lines that follow it in the real script. Used ONLY for the (a)
 # default-value check below, so that case never touches the filesystem at
 # all. Starts right after the HOST_OS validation case/esac block ends.
-extract 770 788 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
+extract 789 807 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_value_only.sh"
 grep -qF '/var/lib/oci-cache/go-build' "$WORK/cache_resolve_value_only.sh" \
   || { echo "FAIL: extracted cache_resolve_value_only.sh does not contain the shared-GOCACHE default" >&2; exit 1; }
 if grep -qE '^mkdir -p "\$RGOCACHE"' "$WORK/cache_resolve_value_only.sh"; then
@@ -483,7 +483,7 @@ fi
 # point at $WORK-scoped fake paths (override or macOS per-round /tmp) and
 # never fall through to the real /var/lib/oci-cache default, so their mkdir
 # is always safe.
-extract 770 795 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
+extract 789 814 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cache_resolve_full.sh"
 
 run_cache_resolve_value_only() {
   # $1=WT $2=TS $3=HOST_OS  env GOCACHE/GOMODCACHE/CODEX_REVIEW_GOCACHE/
@@ -608,7 +608,7 @@ rm -rf "${RGOCACHE_D:-/nonexistent-guard}" "${RGOMODCACHE_D:-/nonexistent-guard}
 # safety concern here. macOS keeps its per-round mktemp'd GOPATH (already
 # proved as "defect 3" above, with $HOST_OS set directly to Darwin there).
 # ---------------------------------------------------------------------------
-extract 933 942 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
+extract 952 961 'RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX")' "$WORK/rgopath_v486.sh"
 FAKE_HOME_GP="$WORK/fake-home-gopath"
 mkdir -p "$FAKE_HOME_GP"
 unset CODEX_REVIEW_GOPATH GOPATH 2>/dev/null || true
@@ -649,7 +649,7 @@ fi
 # that only records its argument (never touches disk), once per host, and
 # assert which paths it was called with.
 # ---------------------------------------------------------------------------
-extract 1122 1141 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
+extract 1141 1160 'if [ "$HOST_OS" = Linux ]; then' "$WORK/cleanup_cache_branch.sh"
 grep -qF 'rm_rf_writable "${RGOCACHE:-}"' "$WORK/cleanup_cache_branch.sh" \
   || { echo "FAIL: extracted cleanup_cache_branch.sh does not contain the RGOCACHE removal call" >&2; exit 1; }
 
@@ -706,7 +706,7 @@ fi
 # `command -p uname -s` assignment line above it) -- $HOST_OS is set
 # directly, per the file-level SAFETY/DESIGN NOTE.
 # ---------------------------------------------------------------------------
-extract 755 758 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
+extract 774 777 'case "$HOST_OS" in' "$WORK/host_os_validate.sh"
 
 # (a) malformed HOST_OS ("Linux\r", set directly, not via a uname stub —
 # see the note above) now DIES with the expected message instead of
@@ -801,7 +801,7 @@ done
 # defeats BOTH attacks; (4) the ACTUAL shipped HOST_OS assignment line,
 # extracted verbatim, also resolves to the real value under both.
 # ---------------------------------------------------------------------------
-extract 736 736 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
+extract 755 755 'HOST_OS="$(builtin command -p uname -s)"' "$WORK/host_os_assign.sh"
 
 REAL_UNAME_S=$(command -p uname -s)
 make_uname_stub 'TotallyFakeOS'
@@ -890,7 +890,7 @@ fi
 # instead of switching location. Proof: extract the real if/else/heredoc
 # block, run it once per host, assert the generated prompt-fragment text.
 # ---------------------------------------------------------------------------
-extract 1360 1370 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
+extract 1379 1389 'MODCACHE_FALLBACK_LINE=' "$WORK/modcache_fallback.sh"
 
 FALLBACK_LINUX=$(
   RW="$WORK/fallback-rw-linux" HOST_OS=Linux RGOMODCACHE=/var/lib/oci-cache/go-mod HOME=/home/ubuntu
@@ -933,7 +933,7 @@ fi
 # unavailable. Proof: extract the real STANDING_RULES heredoc BODY (between
 # its literal open/close marker lines in the shipped script) and check it.
 # ---------------------------------------------------------------------------
-extract 1288 1326 'go test unavailable' "$WORK/standing_rules_body.txt"
+extract 1307 1345 'go test unavailable' "$WORK/standing_rules_body.txt"
 if grep -q "creating work dir" "$WORK/standing_rules_body.txt" \
    && grep -qi "RETRY IT EXACTLY ONCE" "$WORK/standing_rules_body.txt"; then
   ok "v4.8.6 addendum: the injected prompt tells the reviewer to retry exactly once on a 'creating work dir' failure"
@@ -961,7 +961,7 @@ fi
 # re-sanitization step any more (a leftover duplicate would be dead code at
 # best and a second place to get it wrong at worst).
 # ---------------------------------------------------------------------------
-extract 865 887 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
+extract 884 906 'LANE_SCRATCH_ROOT=' "$WORK/lane_scratch_root.sh"
 grep -qF 'LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"' "$WORK/lane_scratch_root.sh" \
   || { echo "FAIL: extracted lane_scratch_root.sh does not contain the expected lane-scratch path template" >&2; exit 1; }
 if grep -qE '^\s*SAFE_LANE_NAME=' "$WORK/lane_scratch_root.sh"; then
@@ -1056,10 +1056,10 @@ fi
 # own merits; a separate dedicated test below covers the full block's
 # actual (safe) behaviour for NAME=''.
 # ---------------------------------------------------------------------------
-extract 574 605 'NAME_ALLOWLIST_RE=' "$WORK/name_validate.sh"
+extract 574 624 'NAME_ALLOWLIST_RE=' "$WORK/name_validate.sh"
 grep -qF "NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*\$'" "$WORK/name_validate.sh" \
   || { echo "FAIL: extracted name_validate.sh does not contain the expected allowlist regex -- line numbers drifted or the regex changed" >&2; exit 1; }
-extract 602 605 'NAME_ALLOWLIST_RE=' "$WORK/name_check_only.sh"
+extract 602 624 'NAME_ALLOWLIST_RE=' "$WORK/name_check_only.sh"
 
 run_name_check_only() {
   local name="$1"
@@ -1073,15 +1073,15 @@ run_name_check_only() {
   )
 }
 
-for BAD_NAME in '..' '.' '' 'a/b' '../../../../tmp'; do
+for BAD_NAME in '..' '.' '' 'a/b' '../../../../tmp' "$(printf 'lane\n../../../escaped/owned')"; do
   set +e
   RESOLVE_NAME_BAD=$(run_name_check_only "$BAD_NAME" 2>&1)
   RC_NAME_BAD=$?
   set -e
   if [ "$RC_NAME_BAD" -ne 0 ] && printf '%s' "$RESOLVE_NAME_BAD" | grep -qi 'not a safe path/filename component'; then
-    ok "v4.8.6 NAME allowlist gate: NAME='$BAD_NAME' is REJECTED (dies) by the real gate"
+    ok "v4.8.6 NAME allowlist gate: NAME=$(printf '%q' "$BAD_NAME") is REJECTED (dies) by the real gate"
   else
-    notok "v4.8.6 NAME allowlist gate: NAME='$BAD_NAME' was NOT rejected (rc=$RC_NAME_BAD, out='$RESOLVE_NAME_BAD')"
+    notok "v4.8.6 NAME allowlist gate: NAME=$(printf '%q' "$BAD_NAME") was NOT rejected (rc=$RC_NAME_BAD, out='$RESOLVE_NAME_BAD')"
   fi
 done
 
@@ -1090,6 +1090,39 @@ if [ "$RESOLVE_NAME_LEGIT" = 'NAME=my-legit-lane_1.2' ]; then
   ok "v4.8.6 NAME allowlist gate: a legitimate NAME ('my-legit-lane_1.2') still passes the real gate unharmed"
 else
   notok "v4.8.6 NAME allowlist gate: a legitimate NAME was wrongly rejected or altered (got: $RESOLVE_NAME_LEGIT)"
+fi
+
+# ---------------------------------------------------------------------------
+# v4.8.6, found by confirmation-pass round #3 on bigboy, EXECUTED,
+# independently reproduced by the lane: the FIRST version of this gate
+# piped NAME through `grep -Eq`, which is LINE-oriented -- grep -q succeeds
+# if ANY line of a multi-line input matches, and `^`/`$` anchor to LINE
+# boundaries, not the whole string's. NAME=$'lane\n../../../escaped/owned'
+# has a safe first line ("lane") that alone satisfies the regex, so the
+# old grep-based gate accepted the whole (dangerous) multi-line value.
+# Fixed: bash's own `[[ =~ ]]`, which matches the entire string in one
+# pass. Proof: reconstruct the OLD grep-based check as an explicit mutation
+# (never re-run historical vulnerable code from git history -- this is a
+# same-shape rebuild of the exact line this file used to have) and show it
+# WOULD have accepted the multi-line value (red); the REAL shipped gate
+# rejects the same value (green, already proven by the loop above, cited
+# again here for the pairing).
+# ---------------------------------------------------------------------------
+MULTILINE_NAME=$(printf 'lane\n../../../escaped/owned')
+OLD_GREP_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+if printf '%s' "$MULTILINE_NAME" | LC_ALL=C grep -Eq "$OLD_GREP_RE"; then
+  ok "v4.8.6 multi-line NAME fix, red check: the OLD grep-based mechanism (reconstructed, same regex) DOES accept the multi-line value, confirming the historical vulnerability shape was real"
+else
+  notok "v4.8.6 multi-line NAME fix, red check: could not reproduce the old grep-based mechanism accepting the multi-line value -- the red/green pair below may not prove anything"
+fi
+set +e
+RESOLVE_MULTILINE_GREEN=$(run_name_check_only "$MULTILINE_NAME" 2>&1)
+RC_MULTILINE_GREEN=$?
+set -e
+if [ "$RC_MULTILINE_GREEN" -ne 0 ] && printf '%s' "$RESOLVE_MULTILINE_GREEN" | grep -qi 'not a safe path/filename component'; then
+  ok "v4.8.6 multi-line NAME fix, green check: the REAL shipped gate (bash [[ =~ ]]) rejects the same multi-line value the old grep-based mechanism accepted"
+else
+  notok "v4.8.6 multi-line NAME fix, green check: the real gate did NOT reject the multi-line value (rc=$RC_MULTILINE_GREEN, out='$RESOLVE_MULTILINE_GREEN')"
 fi
 
 # Negative control: strip the gate's if/die block and confirm the same bad
@@ -1151,7 +1184,7 @@ fi
 # the real gate immediately followed by the real V/L lines in one sequence
 # and showing execution never gets past the gate.
 # ---------------------------------------------------------------------------
-extract 627 628 'V="$OUTDIR/$NAME-$TS.md"' "$WORK/name_sites_vl.sh"
+extract 646 647 'V="$OUTDIR/$NAME-$TS.md"' "$WORK/name_sites_vl.sh"
 
 # Reuse the same resolved-vs-lexical path helper the earlier traversal fix
 # established: a raw string prefix match on "$OUTDIR/../../.." would still
@@ -1221,7 +1254,7 @@ grep -qF 'RESIDUE_DIR="$OUTDIR/$NAME-$TS-worktree-residue"' "$SCRIPT" \
 # NOT fire) and once with RC=7 (line must fire, printing the NO-VERDICT
 # form, never a VERDICT= line, and exiting 7).
 # ---------------------------------------------------------------------------
-extract 1600 1600 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
+extract 1619 1619 'NO VERDICT (codex rc=' "$WORK/rc_check.sh"
 
 RC_CHECK_OUT_OK=$(
   set +e

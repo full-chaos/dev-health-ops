@@ -257,10 +257,30 @@ func buildDailyWorker(
 					}
 				}
 				if len(nativeFamilies) > 0 {
-					handler.SetNativeFamilies(nativeFamilies)
+					if err := handler.SetNativeFamilies(nativeFamilies); err != nil {
+						// families.json's ordering is unusable. Every family
+						// stays on the Python compatibility bridge -- the same
+						// degradation a refused executor already causes, and
+						// far safer than an order in which a reader precedes
+						// its writer.
+						logger.Error(
+							"native daily families NOT registered: families.json "+
+								"run order could not be derived. Every daily family "+
+								"stays on the Python compatibility bridge until this "+
+								"is fixed.",
+							"error", err,
+						)
+					}
 				}
 				if len(postBridgeFamilies) > 0 {
-					handler.SetPostBridgeNativeFamilies(postBridgeFamilies)
+					if err := handler.SetPostBridgeNativeFamilies(postBridgeFamilies); err != nil {
+						logger.Error(
+							"post_bridge daily families NOT registered: families.json "+
+								"run order could not be derived. Those families stay on "+
+								"the Python compatibility bridge until this is fixed.",
+							"error", err,
+						)
+					}
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](
 					registry, spec, handler, dailyDependencies,

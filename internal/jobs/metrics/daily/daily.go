@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -585,17 +584,39 @@ func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMe
 // simply never leaves the compatibility path; see NativeFamilyExecutor's
 // doc comment for the runtime (per-partition) fail-open policy on top of
 // that construction-time decision.
-func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) {
+func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) error {
 	if handler == nil {
-		return
+		return nil
 	}
-	handler.nativeFamilies = families
 	names := make([]string, 0, len(families))
 	for name := range families {
 		names = append(names, name)
 	}
-	sort.Strings(names)
-	handler.nativeFamilyNames = names
+	registry, err := LoadRegistry()
+	if err != nil {
+		return err
+	}
+	// CHAOS-4283 PR2: run order comes from families.json's `after` edges, not
+	// from sort.Strings. Alphabetical order silently put the readers of
+	// work_item_team_attributions ahead of the family that writes it.
+	//
+	// On error we register NOTHING and return it. That is deliberate on both
+	// counts. Registering nothing is fail-SAFE, not fail-open: an unregistered
+	// family is computed by the Python compatibility bridge exactly as it was
+	// before any native executor existed, which is the same degradation policy
+	// a refused executor already follows. What we must never do is fall back to
+	// alphabetical -- that produces a plausible order in which a reader
+	// precedes its writer, which is the very defect this ordering exists to
+	// prevent, reintroduced through the error path.
+	ordered, err := FamilyRunOrder(registry, names)
+	if err != nil {
+		handler.nativeFamilies = nil
+		handler.nativeFamilyNames = nil
+		return err
+	}
+	handler.nativeFamilies = families
+	handler.nativeFamilyNames = ordered
+	return nil
 }
 
 // SetPostBridgeNativeFamilies registers the families.json families that
@@ -606,17 +627,32 @@ func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFam
 // SetNativeFamilies exactly (REPLACES its map on every call, sorts names for
 // deterministic iteration) -- the only difference is WHEN the dispatcher
 // runs these executors, in Work.
-func (handler *PartitionHandler) SetPostBridgeNativeFamilies(families map[string]NativeFamilyExecutor) {
+func (handler *PartitionHandler) SetPostBridgeNativeFamilies(families map[string]NativeFamilyExecutor) error {
 	if handler == nil {
-		return
+		return nil
 	}
-	handler.postBridgeFamilies = families
 	names := make([]string, 0, len(families))
 	for name := range families {
 		names = append(names, name)
 	}
-	sort.Strings(names)
-	handler.postBridgeFamilyNames = names
+	registry, err := LoadRegistry()
+	if err != nil {
+		return err
+	}
+	// post_bridge families get the SAME `after` treatment as pre_bridge ones.
+	// Today no post_bridge family depends on another, so the result equals the
+	// alphabetical order it replaced -- but leaving this phase on sort.Strings
+	// would mean the ordering guarantee silently depended on WHICH phase a
+	// family happened to be in, and CHAOS-5078 moves families between phases.
+	ordered, err := FamilyRunOrder(registry, names)
+	if err != nil {
+		handler.postBridgeFamilies = nil
+		handler.postBridgeFamilyNames = nil
+		return err
+	}
+	handler.postBridgeFamilies = families
+	handler.postBridgeFamilyNames = ordered
+	return nil
 }
 
 // SetNativeFamilyObserver wires the optional telemetry observer for native

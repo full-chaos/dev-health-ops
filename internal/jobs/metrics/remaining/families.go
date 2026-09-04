@@ -43,6 +43,23 @@ type Family struct {
 	RollbackRoute         string   `json:"rollback_route"`
 	HistoricalLimitation  string   `json:"historical_limitation"`
 	ParityState           string   `json:"parity_state"`
+	// Port mirrors internal/jobs/metrics/daily/families.json's own "port"
+	// field ("go"/"pending"): whether cmd/dev-health-worker/daily.go's
+	// per-kind switch (daily.go:571-634) passes this family's partitions to
+	// a native Go executor ("go") or the Python compatibility bridge
+	// ("pending"). PythonSources deliberately stays populated for "go"
+	// families too -- same as daily/families.json -- because it records
+	// historical/pre-cutover lineage, not current routing; Port is the field
+	// that answers "who runs this today." Added 2026-09-04 (CHAOS-5030):
+	// before this field existed, every family here appeared Python-routed
+	// from python_sources alone, which was stale for 5 of the 7 rows and is
+	// exactly the "told done" drift class this contract exists to prevent.
+	// Cross-checked against the mechanically Go-AST-derived
+	// contracts/native-families/v1/native-families.json by
+	// cmd/dev-health-worker/native_families_artifact_test.go -- that
+	// artifact, not this hand-set field, is the actual source of truth if
+	// the two ever disagree.
+	Port string `json:"port"`
 }
 
 func Load() (Inventory, error) {
@@ -70,7 +87,8 @@ func (inventory Inventory) Validate() error {
 			family.ClickHouseWriteBudget < 1 || family.ClickHouseWriteBudget > 2 ||
 			!validRoutePair(family.Route, family.RollbackRoute) ||
 			!strings.HasPrefix(family.RouteKey, "metrics.remaining.") ||
-			family.Replay == "" || family.HistoricalLimitation == "" || family.ParityState == "" {
+			family.Replay == "" || family.HistoricalLimitation == "" || family.ParityState == "" ||
+			(family.Port != "go" && family.Port != "pending") {
 			return fmt.Errorf("remaining metrics family %q is incomplete", family.Name)
 		}
 		if _, duplicate := routes[family.RouteKey]; duplicate {

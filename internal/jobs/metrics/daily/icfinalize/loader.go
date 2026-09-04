@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
@@ -66,10 +67,15 @@ GROUP BY identity_id`
 
 // LoadRollingStats reads the 30-day rolling window for one organization.
 //
-// The Date and String parameters are bound as Go STRINGS, not as time.Time or
-// a typed wrapper: clickhouse-go's typed-parameter binding does not round-trip
-// {x:Date} the way the Python driver does, and a mismatch there fails at query
-// time rather than at compile time.
+// Named parameters come from clickhouse.Named (the top-level package), NOT
+// driver.Named -- driver has no Named, and the mistake is a BUILD failure, not
+// a runtime one, which is worth knowing because a build failure and a passing
+// mutation proof are indistinguishable by exit code alone.
+//
+// The Date parameters bind as Go STRINGS, matching the fleet rule for typed CH
+// params and the precedent this package already sets: repouser/clickhouse.go
+// passes dateTimeArgument(t), a formatted string, for its own {start:DateTime}
+// binds rather than a time.Time.
 func LoadRollingStats(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) ([]RollingStat, error) {
@@ -77,9 +83,9 @@ func LoadRollingStats(
 	start := end.AddDate(0, 0, -rollingWindowDays)
 
 	rows, err := conn.Query(ctx, rollingStatsSQL,
-		driver.Named("start", start.Format("2006-01-02")),
-		driver.Named("end", end.Format("2006-01-02")),
-		driver.Named("org_id", orgID),
+		clickhouse.Named("start", start.Format("2006-01-02")),
+		clickhouse.Named("end", end.Format("2006-01-02")),
+		clickhouse.Named("org_id", orgID),
 	)
 	if err != nil {
 		return nil, err

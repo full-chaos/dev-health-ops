@@ -257,3 +257,103 @@ INSERT INTO git_pull_request_reviews
 		t.Errorf("author = %q, want new@example.com (the in-window PR)", author)
 	}
 }
+
+// TestReviewEdgesTupleDedupTakesTheWholeWinningRowIncludingItsNulls pins the
+// argMax(tuple(...)) form's NULL behaviour, which is the half of the dedup
+// change no unit test can reach and no frozen golden can see.
+//
+// # Why this differs from N independent argMax calls
+//
+// ClickHouse aggregate functions SKIP rows whose argument is NULL. With one
+// argMax per column, a PR whose NEWEST row has a NULL author_email but whose
+// OLDER row has a value returns the STALE value -- the dedup surfaces a
+// composite that never existed, and does so while claiming to surface "the
+// latest". CHAOS-4547 verified that mechanism against a live ClickHouse.
+//
+// A tuple is never NULL, so argMax(tuple(...), last_synced) cannot null-skip:
+// it returns the whole winning row, NULLs included. That is what a
+// ReplacingMergeTree actually holds -- per-column latest-non-NULL is not a
+// state the table can ever be in -- so the tuple form is the one that emulates
+// FINAL, and the independent form was the divergence.
+//
+// Concretely here: the newest row for PR 1 has author_email NULL and
+// author_name 'Newest'. The tuple form must therefore resolve the author from
+// the NAME ('Newest'), not from the older row's email. If someone splits this
+// back into per-column argMax, the author becomes 'stale@example.com' and this
+// test says so.
+func TestReviewEdgesTupleDedupTakesTheWholeWinningRowIncludingItsNulls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range reviewEdgesSchema {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const (
+		org  = "00000000-0000-4000-8000-0000000000d0"
+		repo = "00000000-0000-4000-8000-0000000000d1"
+	)
+
+	// OLDER row: author_email present. NEWER row: author_email NULL, name set.
+	// Independent argMax(author_email, last_synced) would skip the NULL and
+	// return 'stale@example.com'; the tuple form returns the newer row whole.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests
+(repo_id, number, author_name, author_email, created_at, merged_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 1, 'Stale',  'stale@example.com', '2026-08-24 08:00:00.000', NULL, '2026-08-24 08:00:00.000', '`+org+`'),
+(toUUID('`+repo+`'), 1, 'Newest', NULL,                '2026-08-24 08:00:00.000', NULL, '2026-08-24 10:00:00.000', '`+org+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_request_reviews
+(repo_id, number, review_id, reviewer, state, submitted_at, last_synced, org_id) VALUES
+(toUUID('`+repo+`'), 1, 'r1', 'Bob', 'APPROVED', '2026-08-24 11:00:00.000', '2026-08-24 11:00:00.000', '`+org+`')
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewReviewEdgesExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.ComputeFamily(ctx,
+		Run{ID: "run-d", OrganizationID: org, TargetDay: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)},
+		Partition{ID: "partition-d", RunID: "run-d", RepoIDs: []RepositoryID{RepositoryID(repo)}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var author string
+	if err := conn.QueryRow(ctx,
+		`SELECT author FROM review_edges_daily WHERE org_id = ?`, org,
+	).Scan(&author); err != nil {
+		t.Fatal(err)
+	}
+	if author == "stale@example.com" {
+		t.Fatal(
+			"author resolved to the OLDER row's email -- the dedup is null-skipping per column, " +
+				"which means it has been split back into independent argMax calls (CHAOS-4547)",
+		)
+	}
+	if author != "Newest" {
+		t.Errorf(
+			"author = %q, want \"Newest\": the winning row has a NULL email, so the identity "+
+				"must fall through to that same row's NAME, not to another row's email",
+			author,
+		)
+	}
+}

@@ -69,3 +69,17 @@ e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
 # precedent above.
 3ec0adda70431279f6a1b9c2abbb3d446646fd94:internal/jobs/investment/categorize/errors_test.go:generic-api-key:17
 3ec0adda7:internal/jobs/investment/categorize/errors_test.go:generic-api-key:17
+
+# CHAOS-4441 (#2227): a fabricated UUID-shaped claim token in a unit-test
+# fixture, `workgraph.Claim{Token: "1f2e3d4c-..."}` in
+# materializeClaim(). It is not a credential -- the workgraph store's claim
+# token is a per-execution lease fence minted by Postgres at claim time, and
+# this literal exists only so a Claim value passes validUUID() in a test that
+# never reaches a store. Nothing to rotate.
+#
+# Fingerprinted rather than edited: gitleaks scans `git log -p` PER COMMIT, so
+# the finding lives in 3a3cc1e50's own diff and renaming the literal in a LATER
+# commit cannot remove it from the range. Same reasoning, and same both-forms
+# convention, as the CHAOS-2690 precedent and the errors_test.go entry above.
+3a3cc1e50a277091c30098aa6494f31e329caf4f:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
+3a3cc1e50:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83

@@ -189,12 +189,24 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if err != nil {
 		return nil, err
 	}
-	if !fromTS.Before(toTS) {
-		// runner.py:216-218 rejects this rather than materializing an empty or
-		// inverted window.
-		return nil, fmt.Errorf("materialize window start %s is not before end %s",
-			fromTS.Format(time.RFC3339), toTS.Format(time.RFC3339))
-	}
+	// NO ORDERING REJECTION -- deliberately (codex r3 P1).
+	//
+	// An earlier version refused `from >= to`, citing runner.py:216-218. That
+	// citation was from the WRONG ENTRY POINT: runner.py is the `dev-hops` CLI,
+	// which the bridge never calls. The path this executor replaces is
+	// worker_workgraph.py -> work_graph_tasks.py:57-81 `_parse_materialize_window`,
+	// which has NO ordering check at all, and `window_days: 0` is an ACCEPTED
+	// scope key (worker_workgraph.py:82-95).
+	//
+	// So Python answers a zero-width window with a successful zero-record run,
+	// while refusing here returned before any read -- handler.work then marked
+	// the request ambiguous and never published the completion fence, blocking
+	// every prerequisite-gated job behind it. A refusal that strands the chain
+	// is worse than the empty result Python produces.
+	//
+	// A zero-width or inverted window needs no special handling downstream:
+	// MaterializeComponent already skips a component whose bounds fall outside
+	// [FromTS, ToTS), so an empty window simply skips everything.
 
 	materializer, err := NewMaterializer(executor.reader, executor.writer, provider, executor.logger)
 	if err != nil {

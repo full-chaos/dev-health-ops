@@ -285,7 +285,15 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			// Errors from the flush are deliberately swallowed: the run is
 			// already failing on a more important error, and replacing that
 			// cause with a bookkeeping error would hide why it aborted.
-			_ = m.flushTokenUsage(ctx, cfg, stats)
+			// LOGGED, not discarded (codex r3 P3). The flush error must not
+			// REPLACE the provider failure that is aborting the run -- that
+			// would hide why it aborted -- but discarding it silently loses the
+			// only signal that a billed run's accounting row went missing.
+			// Python emits a debug traceback here (llm_token_usage.py:53-54).
+			if flushErr := m.flushTokenUsage(ctx, cfg, stats); flushErr != nil {
+				m.logger.WarnContext(ctx, "llm token usage write failed on the deterministic-abort path",
+					"run_id", cfg.RunID, "error", flushErr.Error())
+			}
 			return Stats{}, err
 		}
 	}
@@ -450,46 +458,66 @@ func (m *Materializer) categorizePending(
 		fatalErr error
 		wg       sync.WaitGroup
 	)
-	tokens := make(chan struct{}, limit)
 
-	for _, entry := range pending {
-		wg.Add(1)
-		go func(entry preprocessed) {
-			defer wg.Done()
+	// A FIXED WORKER POOL, not a goroutine per component (codex r3 P2).
+	//
+	// The previous shape launched one goroutine per pending component and used a
+	// buffered channel as a token bucket. That bounds concurrent PROVIDER CALLS
+	// but not goroutines: with a blocked provider, 250k evidence-bearing
+	// components meant 250k goroutines, 249,999 of them parked on the channel,
+	// able to exhaust worker memory before post-processing ever ran. The comment
+	// called it "bounded" because the thing it bounded was the visible one.
+	//
+	// Here `limit` goroutines drain a channel instead, so both the call
+	// concurrency AND the goroutine count are bounded by the same number, and
+	// the memory cost is independent of corpus size.
+	work := make(chan preprocessed)
+	go func() {
+		defer close(work)
+		for _, entry := range pending {
 			select {
-			case tokens <- struct{}{}:
+			case work <- entry:
 			case <-callCtx.Done():
 				return
 			}
-			defer func() { <-tokens }()
+		}
+	}()
 
-			outcome, err := categorize.CategorizeTextBundle(callCtx, entry.result.Bundle, categorize.CategorizeOptions{
-				Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model,
-			})
+	for worker := 0; worker < limit; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for entry := range work {
+				outcome, err := categorize.CategorizeTextBundle(callCtx, entry.result.Bundle, categorize.CategorizeOptions{
+					Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model,
+				})
 
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				// A cancellation caused by our OWN abort is not a new failure
-				// and must not be counted as one, or the failure tally would
-				// report every in-flight unit as having failed independently.
-				if fatalErr != nil && errors.Is(err, context.Canceled) {
-					return
+				mu.Lock()
+				if err != nil {
+					// A cancellation caused by our OWN abort is not a new
+					// failure; counting it would report every in-flight unit as
+					// having failed independently.
+					if fatalErr != nil && errors.Is(err, context.Canceled) {
+						mu.Unlock()
+						continue
+					}
+					class := categorize.FailureClass(err)
+					stats.LLMFailureCounts[class]++
+					stats.LLMFailures++
+					if categorize.IsDeterministicFailure(err) && fatalErr == nil {
+						fatalErr = err
+						cancel()
+					}
+					mu.Unlock()
+					continue
 				}
-				class := categorize.FailureClass(err)
-				stats.LLMFailureCounts[class]++
-				stats.LLMFailures++
-				if categorize.IsDeterministicFailure(err) && fatalErr == nil {
-					fatalErr = err
-					cancel()
-				}
-				return
+				outcomes[entry.index] = outcome
+				stats.LLMCalls += outcome.LLMCalls
+				stats.LLMInputTokens += outcome.InputTokens
+				stats.LLMOutputTokens += outcome.OutputTokens
+				mu.Unlock()
 			}
-			outcomes[entry.index] = outcome
-			stats.LLMCalls += outcome.LLMCalls
-			stats.LLMInputTokens += outcome.InputTokens
-			stats.LLMOutputTokens += outcome.OutputTokens
-		}(entry)
+		}()
 	}
 	wg.Wait()
 
@@ -507,10 +535,20 @@ func (m *Materializer) categorizePending(
 // all-zero skip inside WriteTokenUsage means a run that made no calls still
 // writes nothing.
 func (m *Materializer) flushTokenUsage(ctx context.Context, cfg Config, stats Stats) error {
-	// context.WithoutCancel: on the abort path the caller's ctx may already be
-	// cancelled by our own deterministic-failure cancel, and a cancelled ctx
-	// would turn "record what we spent" into a no-op exactly when it matters.
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	// ctx is honoured, NOT detached (codex r3 P1).
+	//
+	// This previously used context.WithoutCancel, added for the deterministic-
+	// abort path. That was wrong twice over. First, the abort cancels only the
+	// CHILD callCtx (see categorizePending), never Run's ctx, so detaching was
+	// never needed for the case it was written for. Second, it created a real
+	// hazard: handler.work cancels the executor context when the LEASE is lost
+	// (workgraph/handler.go:146-149), and a detached write would then persist an
+	// llm_token_usage row for a run that was abandoned mid-flight -- no
+	// completion fence, and the retry mints a fresh run id, so the row belongs
+	// to nothing.
+	//
+	// A lost lease means "stop writing", and that has to include bookkeeping.
+	writeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if _, err := m.writer.WriteTokenUsage(writeCtx, cfg.OrgID, chwrite.TokenUsageRecord{
 		RunID:        cfg.RunID,

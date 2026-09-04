@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,21 +338,73 @@ func (c recordingConn) PrepareBatch(ctx context.Context, _ string, _ ...driver.P
 	return recordingBatch{appended: c.appended}, nil
 }
 
-// TestTokenUsageIsWrittenEvenWhenTheCallerContextIsCancelled is P2-a's
-// load-bearing half.
+// TestTokenUsageIsNotWrittenWhenTheContextIsCancelled is codex r3's P1, and it
+// is the INVERSION of the test that used to live here.
 //
-// The deterministic-failure abort cancels the run's own context, so a naive
-// flush would inherit that cancellation and silently write nothing at exactly
-// the moment the accounting matters — an aborted run still spent whatever it
-// spent, and nobody reconciles a failed run's cost. context.WithoutCancel is
-// what makes the write survive.
-func TestTokenUsageIsWrittenEvenWhenTheCallerContextIsCancelled(t *testing.T) {
+// The previous version asserted that a cancelled caller context STILL wrote a
+// token-usage row, and it passed — because the code used context.WithoutCancel.
+// Both were wrong together, which is why the mutation proof looked healthy: M10
+// reddened when WithoutCancel was removed, so the test appeared load-bearing
+// while pinning the wrong boundary.
+//
+// The boundary that actually matters is the LEASE. handler.work cancels the
+// executor context when lease renewal fails (workgraph/handler.go:146-149), and
+// a detached write then persists llm_token_usage for a run that was abandoned
+// mid-flight: no completion fence, and the retry mints a fresh run id, so the
+// row belongs to nothing. A lost lease means stop writing, bookkeeping
+// included.
+//
+// The deterministic-abort path is unaffected: it cancels only the child
+// callCtx, never Run's ctx, so the flush there still runs.
+func TestTokenUsageIsNotWrittenWhenTheContextIsCancelled(t *testing.T) {
 	appended := 0
-	writer, err := chwrite.NewWriter(recordingConn{appended: &appended})
+	materializer := tokenUsageMaterializer(t, &appended)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel() // stands in for handler.work's lease-lost cancellation
+
+	err := materializer.flushTokenUsage(cancelled, tokenUsageConfig(), Stats{
+		LLMCalls: 3, LLMInputTokens: 120, LLMOutputTokens: 45,
+	})
+	if err == nil {
+		t.Fatal("flushTokenUsage succeeded under a cancelled context; a lost lease must stop the write")
+	}
+	if appended != 0 {
+		t.Fatalf("wrote %d token-usage rows under a cancelled context, want 0 -- the row would belong to an abandoned run", appended)
+	}
+}
+
+// TestTokenUsageIsWrittenWhenTheContextIsLive is the POSITIVE CONTROL for the
+// test above. Without it, the inverted assertion would also pass if
+// flushTokenUsage were broken outright and never wrote anything at all.
+func TestTokenUsageIsWrittenWhenTheContextIsLive(t *testing.T) {
+	appended := 0
+	materializer := tokenUsageMaterializer(t, &appended)
+
+	if err := materializer.flushTokenUsage(context.Background(), tokenUsageConfig(), Stats{
+		LLMCalls: 3, LLMInputTokens: 120, LLMOutputTokens: 45,
+	}); err != nil {
+		t.Fatalf("flushTokenUsage on a live context: %v", err)
+	}
+	if appended != 1 {
+		t.Fatalf("wrote %d token-usage rows on a live context, want 1", appended)
+	}
+}
+
+func tokenUsageConfig() Config {
+	return Config{
+		OrgID: "70d529e0-3c06-4597-8480-794fd02328b6", RunID: "run-1",
+		ProviderName: "openai", Model: "gpt-5-nano", ComputedAt: stubNow(),
+	}
+}
+
+func tokenUsageMaterializer(t *testing.T, appended *int) *Materializer {
+	t.Helper()
+	writer, err := chwrite.NewWriter(recordingConn{appended: appended})
 	if err != nil {
 		t.Fatalf("build writer: %v", err)
 	}
-	reader, err := chquery.NewReader(recordingConn{appended: &appended})
+	reader, err := chquery.NewReader(recordingConn{appended: appended})
 	if err != nil {
 		t.Fatalf("build reader: %v", err)
 	}
@@ -358,19 +412,7 @@ func TestTokenUsageIsWrittenEvenWhenTheCallerContextIsCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build materializer: %v", err)
 	}
-
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel() // the abort path's own cancel, already fired
-
-	if err := materializer.flushTokenUsage(cancelled, Config{
-		OrgID: "70d529e0-3c06-4597-8480-794fd02328b6", RunID: "run-1",
-		ProviderName: "openai", Model: "gpt-5-nano", ComputedAt: stubNow(),
-	}, Stats{LLMCalls: 3, LLMInputTokens: 120, LLMOutputTokens: 45}); err != nil {
-		t.Fatalf("flushTokenUsage under a cancelled context: %v", err)
-	}
-	if appended != 1 {
-		t.Fatalf("wrote %d token-usage rows, want 1 -- an aborted run must still record what it spent", appended)
-	}
+	return materializer
 }
 
 // TestFlushSkipsAnAllZeroRunEvenOnTheAbortPath keeps the fix from turning the
@@ -399,4 +441,152 @@ func TestFlushSkipsAnAllZeroRunEvenOnTheAbortPath(t *testing.T) {
 	if appended != 0 {
 		t.Fatalf("wrote %d rows for a run that made no calls, want 0", appended)
 	}
+}
+
+// TestZeroWidthWindowIsAcceptedNotRefused is codex r3's second P1.
+//
+// `window_days: 0` is an ACCEPTED scope key on the bridge
+// (worker_workgraph.py:82-95) and `_parse_materialize_window`
+// (work_graph_tasks.py:57-81) applies NO ordering check, so Python answers a
+// zero-width window with a successful zero-record run.
+//
+// The executor used to refuse it, citing runner.py:216-218 -- the `dev-hops`
+// CLI, an entry point the bridge never calls. That refusal returned before any
+// read, so handler.work marked the request ambiguous and never published the
+// completion fence, blocking every prerequisite-gated job behind it. A refusal
+// that strands the chain is worse than the empty result Python produces.
+//
+// Asserted at the window layer rather than end-to-end: reaching Run needs a
+// ClickHouse reader, and the defect was the refusal itself.
+func TestZeroWidthWindowIsAcceptedNotRefused(t *testing.T) {
+	zero := 0
+	from, to, err := materializeWindow(materializeScope{WindowDays: &zero}, stubNow())
+	if err != nil {
+		t.Fatalf("materializeWindow refused a zero-width window: %v", err)
+	}
+	if !from.Equal(to) {
+		t.Fatalf("expected a zero-width window, got from=%s to=%s", from, to)
+	}
+
+	// And the executor must not refuse it either.
+	//
+	// The provider MUST SUCCEED here. An earlier version of this test used a
+	// refusing provider, and provider resolution happens BEFORE the window is
+	// computed -- so Execute short-circuited on the provider error and the
+	// window assertion was unreachable. It passed, and mutation M17 (restoring
+	// the rejection) did NOT redden it: the test constrained nothing. Same
+	// shape as the nil-collaborator mistake earlier in this file.
+	//
+	// With a mock provider, Execute reaches the window, then the materializer,
+	// then the first ClickHouse read -- which fails on the recording connection.
+	// That fetch error is the PROOF the window was accepted: a restored
+	// rejection returns before any read and yields the window error instead.
+	appended := 0
+	reader, err := chquery.NewReader(recordingConn{appended: &appended})
+	if err != nil {
+		t.Fatalf("build reader: %v", err)
+	}
+	writer, err := chwrite.NewWriter(recordingConn{appended: &appended})
+	if err != nil {
+		t.Fatalf("build writer: %v", err)
+	}
+	executor := &NativeExecutor{
+		reader: reader, writer: writer,
+		logger: testLogger(), now: stubNow,
+		newProvider: func(string, string) (categorize.Provider, categorize.ProviderKind, error) {
+			return categorize.MockProvider{}, categorize.ProviderKindMock, nil
+		},
+	}
+	_, execErr := executor.Execute(context.Background(), materializeClaim(t, `{"window_days":0}`))
+	if execErr == nil {
+		t.Fatal("expected the run to fail at the ClickHouse read, which is what proves the window was accepted")
+	}
+	if strings.Contains(execErr.Error(), "is not before end") {
+		t.Fatalf("executor still refuses a zero-width window: %v", execErr)
+	}
+	if !strings.Contains(execErr.Error(), "fetch work graph edges") {
+		t.Fatalf("expected to reach the edge fetch (proving the window passed), got: %v", execErr)
+	}
+}
+
+// TestCategorizeFanOutIsBoundedByLimit is codex r3's P2.
+//
+// The previous shape launched one goroutine PER COMPONENT and used a buffered
+// channel as a token bucket. That bounds concurrent provider CALLS but not
+// goroutines: with a blocked provider, a large corpus parks one goroutine per
+// pending unit and can exhaust worker memory before post-processing runs. The
+// comment called the fan-out "bounded" because the bounded thing was the
+// visible one.
+//
+// This measures the goroutine DELTA across a fan-out over many units with a
+// provider that blocks until released, so a regression to goroutine-per-unit
+// shows up as a delta scaling with the corpus rather than with `limit`.
+func TestCategorizeFanOutIsBoundedByLimit(t *testing.T) {
+	const units = 500
+	const limit = 4
+
+	release := make(chan struct{})
+	provider := &blockingProvider{release: release}
+
+	materializer, err := NewMaterializer(unusedReader(t), unusedWriter(t), provider, testLogger())
+	if err != nil {
+		t.Fatalf("build materializer: %v", err)
+	}
+
+	pending := make([]preprocessed, units)
+	for i := range pending {
+		pending[i] = preprocessed{index: i}
+	}
+	outcomes := map[int]categorize.CategorizationOutcome{}
+	stats := Stats{LLMFailureCounts: map[string]int{}}
+
+	before := runtime.NumGoroutine()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = materializer.categorizePending(context.Background(),
+			Config{LLMConcurrency: limit, ProviderName: "mock"}, pending, outcomes, &stats)
+	}()
+
+	// Let the pool fill and block.
+	for waited := 0; provider.inFlight() < limit && waited < 200; waited++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	peak := runtime.NumGoroutine() - before
+	close(release)
+	<-done
+
+	// Generous ceiling: the pool plus the feeder plus test/runtime noise. The
+	// point is that it does NOT scale with `units` -- the old shape would show
+	// a delta near 500 here.
+	if peak > limit+20 {
+		t.Fatalf("goroutine delta %d exceeds the bound for limit=%d over %d units -- the fan-out is not pool-bounded", peak, limit, units)
+	}
+}
+
+// blockingProvider parks every call until released, so the fan-out's goroutine
+// footprint can be measured at its peak.
+type blockingProvider struct {
+	release chan struct{}
+	mu      sync.Mutex
+	active  int
+}
+
+func (p *blockingProvider) Complete(ctx context.Context, _ categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	p.mu.Lock()
+	p.active++
+	p.mu.Unlock()
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+	}
+	return categorize.CompletionResult{}, errRefuseForTest
+}
+
+func (p *blockingProvider) Close() error { return nil }
+
+func (p *blockingProvider) inFlight() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.active
 }

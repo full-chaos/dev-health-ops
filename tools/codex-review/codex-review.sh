@@ -126,6 +126,62 @@
 #      CODEX_KEEP_CACHE=1 is the opt-in for a caller that wants the old warm
 #      cache back and will police its own cleanup.
 #
+# v4.8.3 (2026-09-04) closes the cold-sandbox gap documented in
+# .claude/skills/codex-review/SKILL.md ("Wrapper v4.8.2 cold-sandbox gap"):
+# codex's sandbox blocks proxy.golang.org, so a round starting from this
+# script's own COLD per-round GOMODCACHE/GOCACHE (v4.8.2 above) could not
+# download modules inside the sandbox and silently fell back to a
+# gofmt/diff-only, source-trace verdict instead of an executed one (bigboy,
+# 2026-09-04 01:51Z, the first round after the v4.8.2 install). Two changes:
+#
+#   1. A WARM step now runs in the review worktree, OUTSIDE the codex
+#      sandbox, right after `git worktree add` and before `codex exec`:
+#      `go mod download all`, then `go build ./... && go vet ./...`, then the
+#      same build+vet pair again with `-tags=integration` -- all against this
+#      round's OWN RGOMODCACHE/RGOCACHE (never a shared or mounted cache, and
+#      never /mnt/go-cache) and bounded by the same RGOFLAGS/-p and
+#      GOMAXPROCS the reviewer's own sandboxed build already uses. Build
+#      output is redirected to a scratch dir under RGOTMPDIR (`-o`) so the
+#      warm build cannot leave binaries in the worktree for preserve_residue
+#      to trip over. Duration and the module count (zip files under
+#      "$RGOMODCACHE/cache/download") are logged to the round .log as a
+#      `warm-step:` line, machine-parseable the same way `round-bounds:` is.
+#      The warm build's LAST step is an offline resolve proof --
+#      `GOPROXY=off go test -count=1 -run '^$' ./...` (compiles every test
+#      binary the sandbox's own `go test` would need, runs none of them,
+#      and cannot reach the network) -- so a warm-step OK genuinely means
+#      the sandbox's `go test` will not need proxy.golang.org, not just
+#      that `go build`/`go vet` succeeded. Cache sizes (`du -sh` of
+#      RGOMODCACHE/RGOCACHE) are logged alongside duration and module count
+#      for the same reason team-lead relayed from a live manually-warmed
+#      round (lane-structure-memory r2): to size-compare a wrapper-warmed
+#      round against a hand-warmed one.
+#   2. If the warm step fails, the round ABORTS before codex ever starts:
+#      non-zero exit, the failure plus the warm build's own output appended
+#      to the round .log, and a loud message on stderr. A cold sandbox must
+#      never silently degrade to a gofmt-only verdict -- this replaces the
+#      manual workaround SKILL.md documented as "MANDATORY until v4.8.3
+#      ships".
+#
+# The reviewer prompt template (the STANDING_RULES block appended to every
+# round's prompt.md) gains two additions: (a) if `go test` is unavailable
+# inside the sandbox, the reviewer must say so explicitly ("go test
+# unavailable") and label every remaining claim EXECUTED or ARGUED, rather
+# than let an unlabelled claim read as executed by default; (b) the round's
+# actual RGOMODCACHE path is named in the prompt, and if `go test` still
+# fails on a module lookup once inside the sandbox (the warm step proves
+# the cache resolves OUTSIDE the sandbox; it cannot prove the sandbox can
+# see that same cache), the reviewer is told to retry once against the
+# HOST'S OWN module cache (GOMODCACHE=$HOME/go/pkg/mod, GOPROXY=off,
+# read-only intent -- never granted a writable_roots entry, so a stray
+# write attempt there fails the same way a read-only sandbox would deny it)
+# before falling back to a source-trace verdict, and to say which GOMODCACHE
+# it ended up using.
+#
+# Per-round cache naming and the trap-EXIT self-clean are UNCHANGED from
+# v4.8.2 -- the warm step reuses the exact RGOMODCACHE/RGOCACHE this script
+# already creates and already cleans up; nothing new to reap.
+#
 # Two subcommands do the reaping for dirs from before this version, or from
 # a round that got SIGKILLed past the trap:
 #
@@ -648,6 +704,92 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add failed"
+
+# ---------------------------------------------------------------------------
+# v4.8.3 WARM STEP -- runs OUTSIDE the codex sandbox, in this wrapper's own
+# shell, against the round's own RGOMODCACHE/RGOCACHE (created above), BEFORE
+# codex starts. See the v4.8.3 changelog note near the top of this file: the
+# sandbox blocks proxy.golang.org, so a round starting from a cold per-round
+# module cache cannot download anything once inside it and silently falls
+# back to a gofmt/diff-only verdict. This is the only point in the round
+# where that download can happen at all.
+#
+# Bounded by the SAME RGOFLAGS/-p and GOMAXPROCS the reviewer's own sandboxed
+# build is bounded by -- this is host-side work on the shared machine, not
+# exempt from the fleet load rule just because it runs before the sandbox
+# does. Build output goes to a scratch dir under RGOTMPDIR via `-o` so the
+# warm build's binaries do not land in $RW, where preserve_residue would
+# either warn about them (>10MB) or copy them as if they were reviewer
+# output.
+#
+# A failure here ABORTS THE ROUND before codex ever starts: `set -euo
+# pipefail` is already active in this script, so `die` below both prints on
+# stderr and appends the warm build's own output to the round .log, then
+# exits non-zero -- a cold sandbox can never silently degrade to a
+# source-trace-only verdict.
+#
+# The LAST step of the warm build is an OFFLINE RESOLVE PROOF: `GOPROXY=off
+# go test -count=1 -run '^$' ./...` compiles every test binary (matching no
+# test name, so nothing actually RUNS) with the network proxy disabled --
+# if any module the test build needs is not already sitting in
+# RGOMODCACHE, this fails instead of reaching out to proxy.golang.org. That
+# is exactly the property that matters: it proves, outside the sandbox,
+# that the sandbox's `go test` will not need the network it does not have.
+# Mirrors the manual proof team-lead relayed from a live round
+# (lane-structure-memory r2: `go mod download` + `go build ./...` into the
+# round caches, then one `go test -count=1` on a single test to prove the
+# graph resolves offline).
+WARM_LOG="$L.warm"
+WARM_OUT="$RGOTMPDIR/warmbuild"
+WARM_START=$(date +%s)
+warn "warm: go mod download + build/vet (+ -tags=integration) + offline resolve proof in $RW against $RGOMODCACHE, outside the sandbox ..."
+WARM_RC=0
+( cd "$RW" && env \
+    GOFLAGS="$RGOFLAGS" \
+    GOMAXPROCS="$RGOMAXPROCS" \
+    GOCACHE="$RGOCACHE" \
+    GOMODCACHE="$RGOMODCACHE" \
+    GOTMPDIR="$RGOTMPDIR" \
+    TMPDIR="$RTMPDIR" \
+    bash -c '
+      set -euo pipefail
+      mkdir -p "$1"
+      go mod download all
+      go build -o "$1/" ./...
+      go vet ./...
+      go build -tags=integration -o "$1/" ./...
+      go vet -tags=integration ./...
+      GOPROXY=off go test -count=1 -run "^\$" ./...
+    ' _ "$WARM_OUT" ) >"$WARM_LOG" 2>&1 || WARM_RC=$?
+WARM_END=$(date +%s)
+WARM_DURATION=$((WARM_END - WARM_START))
+# Module count: zip files under the round's own GOMODCACHE download dir.
+# 2>/dev/null so a cache that never got far enough to create this path (e.g.
+# `go mod download` itself failed) reports 0 rather than erroring the count.
+WARM_MODULES=$(find "$RGOMODCACHE/cache/download" -name '*.zip' 2>/dev/null | wc -l | tr -d ' ')
+# Cache sizes (team-lead's ask, to size-compare against a manually warmed
+# round like lane-structure-memory's 432M mod / 587M build). `du -sh` on a
+# dir this script itself created and already mkdir'd, so it always exists;
+# `|| true` + a fallback field covers the (unexpected) case du itself is
+# missing or errors, rather than aborting the round over a reporting line.
+WARM_MODCACHE_SIZE=$(du -sh "$RGOMODCACHE" 2>/dev/null | cut -f1)
+WARM_MODCACHE_SIZE=${WARM_MODCACHE_SIZE:-unknown}
+WARM_GOCACHE_SIZE=$(du -sh "$RGOCACHE" 2>/dev/null | cut -f1)
+WARM_GOCACHE_SIZE=${WARM_GOCACHE_SIZE:-unknown}
+if [ "$WARM_RC" -ne 0 ]; then
+  {
+    printf 'warm-step: FAILED rc=%s duration=%ss modules=%s modcache=%s gocache=%s\n' \
+      "$WARM_RC" "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE"
+    printf -- '--- warm step output (%s) ---\n' "$WARM_LOG"
+    cat "$WARM_LOG" 2>/dev/null || true
+  } >>"$L" 2>/dev/null || true
+  warn "WARM STEP FAILED after ${WARM_DURATION}s (rc=$WARM_RC, $WARM_MODULES module(s) cached in $RGOMODCACHE) -- a cold sandbox must never silently degrade to a gofmt-only verdict. See $L and $WARM_LOG. ABORTING before codex starts."
+  die "warm step failed for $TIP -- round aborted, no codex round was started"
+fi
+printf 'warm-step: OK duration=%ss modules=%s modcache=%s gocache=%s resolve=ok\n' \
+  "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE" >>"$L"
+warn "warm: OK duration=${WARM_DURATION}s modules=$WARM_MODULES modcache=$WARM_MODCACHE_SIZE gocache=$WARM_GOCACHE_SIZE cached in $RGOMODCACHE"
+
 cp "$PROMPT" "$RW/prompt.md"
 # STANDING SAFETY LINE, appended to every prompt regardless of what the lane
 # wrote. A #2134 round composed and "quoted" a
@@ -685,7 +827,29 @@ passes on arm64 while the x86 case it was meant to catch is still broken
 (CHAOS-4818 / #2142's NaN sign-bit reds appeared ONLY in CI). A green from the
 wrong architecture is worse than no green, because it is indistinguishable
 from a real one in your verdict. Say the check is CI-only and move on.
+
+If `go test` is unavailable to you in this sandbox for any reason (module
+download blocked, a denied cache path, anything else), say so explicitly and
+in those words -- "go test unavailable" -- and label every remaining claim
+in your verdict EXECUTED or ARGUED, so a reader can tell a run result from a
+source-trace inference at a glance.
 STANDING_RULES
+# Second heredoc, UNQUOTED delimiter on purpose: this one interpolates the
+# round's actual RGOMODCACHE/HOME paths at generation time, so the reviewer
+# gets literal, copy-pasteable paths rather than shell variables it would
+# have to resolve itself inside the sandbox. Kept separate from the
+# single-quoted STANDING_RULES block above so that block's own `$`/backtick
+# markdown-code-span characters never need escaping.
+cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
+
+This round's own module cache -- already warmed and offline-resolve-proven
+(via \`GOPROXY=off go test -count=1 -run '^\$' ./...\`) before you started --
+is at $RGOMODCACHE. If \`go test\` still fails on a module lookup once you
+are inside the sandbox, retry ONCE with GOMODCACHE=$HOME/go/pkg/mod
+GOPROXY=off (read-only intent -- never write there) before falling back to
+a source-trace verdict, and say explicitly which GOMODCACHE you ended up
+using.
+PROMPT_MODCACHE_INFO
 for aux in .codex-review-context.md LEDGER.md; do
   [ -f "$WT/$aux" ] && cp "$WT/$aux" "$RW/$aux"
 done
@@ -764,7 +928,7 @@ if [ "$RSANDBOX" = "workspace-write" ]; then
   # above warns against.
   SANDBOX_ARGS+=(-c "sandbox_workspace_write.writable_roots=[\"$RGOCACHE\",\"$RGOMODCACHE\",\"$RGOTMPDIR\"]")
 fi
-# ROUND PROVENANCE. Written BEFORE codex runs, as the first line of the log.
+# ROUND PROVENANCE. Written BEFORE codex runs.
 #
 # verify-round-repros.py's MISVENUED class treats a round as CI only when this
 # line carries a run id, and defaults everything else to LOCAL. Without the
@@ -779,7 +943,11 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
 else
   PROV="local host=$(uname -n) arch=$(uname -m)"
 fi
-printf 'round-provenance: %s\n' "$PROV" > "$L"
+# APPEND, not truncate (v4.8.3): the warm-step line above is now the actual
+# first line of $L. This used to be `> "$L"` when provenance really was the
+# first write to the log; changing it back to `>` here would silently erase
+# the warm-step result every round.
+printf 'round-provenance: %s\n' "$PROV" >> "$L"
 # The BOUNDS line goes into the log directly beneath provenance, not only to
 # stderr (team-lead, CHAOS-4925). Both facts a reader needs about a round --
 # WHERE it ran and WHAT environment it was given -- are then adjacent and

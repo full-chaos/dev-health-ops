@@ -189,40 +189,27 @@ def test_reproducibility_self_hosted_real_work_has_a_shorter_inner_timeout() -> 
     )
 
 
-def test_pool_jobs_serialize_via_job_level_concurrency() -> None:
-    # CHAOS-4906 (09-04): a run isolated on the pool (33822145677, 18m03s,
-    # SUCCESS) and the same commit's twin overlapping a sibling pool run
-    # (33822592791/33815131351-era failures, both timing out at the then
-    # 20m inner cap) prove two concurrent reproducibility runs contend
-    # badly enough to fail outright. Job-level concurrency SERIALIZES the
-    # pool's use of each of these jobs across every PR/push, rather than
-    # letting GitHub schedule them to overlap freely; `cancel-in-progress`
-    # stays false so a queued-behind run waits its turn and still
-    # completes, instead of being cancelled by the one ahead of it (main
-    # pushes are never cancelled either way -- CHAOS-3948/CHAOS-4921/
-    # CHAOS-4946).
-    cases = [
-        (_REPRO_SELF_HOSTED, "pool-go-container-reproducibility"),
-        (_DIND_JOB, "pool-dind-smoke-test"),
-    ]
-    for job_name, expected_group in cases:
+def test_pool_jobs_have_no_job_level_concurrency_group() -> None:
+    # CHAOS-4906 (09-04): job-level `concurrency:` groups were added to
+    # these two jobs the same day to serialize pool access, then REVERTED
+    # a few hours later. GitHub's concurrency semantics allow at most ONE
+    # running AND ONE pending job per group; a THIRD event's job then
+    # cancels the still-pending SECOND one, `cancel-in-progress: false`
+    # notwithstanding (that setting only protects a job already RUNNING,
+    # never one waiting behind it). Measured: with #2197/#2199/#2192
+    # pushing minutes apart, #2197's go-container-reproducibility -- a
+    # REQUIRED check -- was cancelled at 2m40s by this exact mechanism,
+    # turning a green check red. A future edit re-adding a job-level
+    # `concurrency:` block to either job would silently reintroduce this;
+    # this test exists so that edit fails loud instead.
+    for job_name in (_REPRO_SELF_HOSTED, _DIND_JOB):
         job = _job(job_name)
-        concurrency = job.get("concurrency")
-        assert isinstance(concurrency, dict), (
-            f"{WORKFLOW_PATH.name}: {job_name!r} has no job-level "
-            "`concurrency:` block -- pool runs of this job can overlap "
-            "and contend"
-        )
-        assert concurrency.get("group") == expected_group, (
-            f"{WORKFLOW_PATH.name}: {job_name!r}'s concurrency group "
-            f"({concurrency.get('group')!r}) does not match the expected "
-            f"{expected_group!r}"
-        )
-        assert concurrency.get("cancel-in-progress") is False, (
-            f"{WORKFLOW_PATH.name}: {job_name!r}'s cancel-in-progress "
-            f"({concurrency.get('cancel-in-progress')!r}) must be `false` "
-            "-- a queued-behind pool run waits and still completes, it is "
-            "never cancelled by the one ahead of it"
+        assert "concurrency" not in job, (
+            f"{WORKFLOW_PATH.name}: {job_name!r} has a job-level "
+            f"`concurrency:` block ({job.get('concurrency')!r}) -- this "
+            "was tried and reverted 09-04 (a required check got cancelled "
+            "at 2m40s by GitHub's one-running-one-pending-per-group rule); "
+            "see this test's docstring before re-adding it"
         )
 
 

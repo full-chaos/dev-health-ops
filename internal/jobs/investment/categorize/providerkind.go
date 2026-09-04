@@ -234,6 +234,50 @@ var _ Provider = unimplementedProvider{}
 // any other file, and this source file never hardcodes a credential VALUE,
 // only the variable NAMES Python's own config module already uses.
 func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
+	return NewProviderFromEnvWithModel(kind, "")
+}
+
+// ProviderModel is the model-resolution rule: an explicitly requested model
+// WINS over every environment variable, and an empty request falls back to the
+// env chain in order.
+//
+// Exported and pure so the rule can be pinned by a test directly, rather than
+// through an accessor added to a provider struct purely so a test can read it
+// back -- the rule is the thing worth pinning, not the field.
+//
+// Mirrors resolve_model_name's precedence (llm/providers/__init__.py), where an
+// explicit model short-circuits before any env lookup.
+func ProviderModel(requested string, envNames ...string) string {
+	if requested != "" {
+		return requested
+	}
+	return firstNonEmptyEnv(envNames...)
+}
+
+// NewProviderFromEnvWithModel is NewProviderFromEnv with an explicit model
+// override that WINS over every environment variable.
+//
+// This exists because a caller that knows which model it wants -- the
+// investment.materialize executor, which carries the request row's
+// `model_ref` -- must be able to say so. Python does exactly this:
+// materialize_investments passes `model=config.llm_model` into get_provider
+// (materialize.py:1189-1195), and resolve_model_name treats an explicit model
+// as winning over any env lookup (llm/providers/__init__.py's
+// resolve_model_name, mirrored in cmd/query-api's ResolveModelName).
+//
+// Dropping the override is not a cosmetic loss (codex r1 P1-b): the executor
+// stamps the REQUESTED model into work_unit_investments.categorization_model_version
+// and into the skip-existing lookup key, so calling the env-default model
+// while recording the requested one writes a row that the next run will treat
+// as a valid cached result FOR A MODEL THAT NEVER RAN. The error compounds
+// rather than self-correcting.
+//
+// An empty model means "no explicit request", which is the pre-existing
+// env-only behaviour NewProviderFromEnv keeps.
+func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, error) {
+	explicit := func(envNames ...string) string {
+		return ProviderModel(model, envNames...)
+	}
 	switch kind {
 	case ProviderKindMock:
 		return MockProvider{}, nil
@@ -255,7 +299,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 			// on ANY provider -- e.g. pointing everything at one
 			// OpenAI-compatible endpoint/model without touching each
 			// provider-specific var individually.
-			Model: firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OPENAI"),
+			Model: explicit("LLM_MODEL", "LLM_MODEL_OPENAI"),
 		}), nil
 
 	case ProviderKindLocal:
@@ -267,7 +311,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
 			// Generic-first, same ruling as openai above.
-			Model:  firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"),
+			Model:  explicit("LLM_MODEL", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"),
 			APIKey: firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
@@ -281,7 +325,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		// -- OLLAMA_* stays as the native provider's own override tier.
 		return NewOllamaProvider(OllamaProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OLLAMA", "OLLAMA_MODEL"),
+			Model:   explicit("LLM_MODEL", "LLM_MODEL_OLLAMA", "OLLAMA_MODEL"),
 			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 

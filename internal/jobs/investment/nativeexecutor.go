@@ -45,7 +45,10 @@ type NativeExecutor struct {
 	// function rather than a stored Provider because the scope names the
 	// provider and because the run must Close() it, mirroring Python's
 	// `await provider_instance.aclose()` in materialize_investments' finally.
-	newProvider func(requested string) (categorize.Provider, categorize.ProviderKind, error)
+	// The model argument is load-bearing, not decorative: the request row's
+	// model_ref must reach the PROVIDER, not merely the model-version string
+	// (codex r1 P1-b).
+	newProvider func(requested, model string) (categorize.Provider, categorize.ProviderKind, error)
 }
 
 // NewNativeExecutor builds the executor. Every collaborator is required.
@@ -60,12 +63,34 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 	}, nil
 }
 
-func resolveProviderFromEnv(requested string) (categorize.Provider, categorize.ProviderKind, error) {
+func resolveProviderFromEnv(requested, model string) (categorize.Provider, categorize.ProviderKind, error) {
 	kind, err := categorize.ResolveProviderKind(requested)
 	if err != nil {
 		return nil, "", err
 	}
-	provider, err := categorize.NewProviderFromEnv(kind)
+	// REFUSE a kind this port has no real client for (codex r1 P1-a).
+	//
+	// NewProviderFromEnv returns an `unimplementedProvider` with a NIL ERROR
+	// for anthropic/gemini/qwen. Left unchecked, every Complete() fails, the
+	// failure classifies as non-deterministic, the run CONTINUES, and every
+	// unit is written with a fallback distribution and status
+	// llm_task_failed -- while Python has a real client for all three. That
+	// is a wrong answer that looks healthy, and it is the same silent-
+	// degradation shape CHAOS-2476 filed ("silently persists MOCK
+	// categorization when no API key set"). IsProviderKindImplemented exists
+	// for exactly this check.
+	if !categorize.IsProviderKindImplemented(kind) {
+		return nil, "", fmt.Errorf(
+			"llm provider kind %q has no native Go client yet; refusing rather than "+
+				"writing fallback categorizations over real data", kind)
+	}
+	// model is the request row's model_ref. Python passes it into get_provider
+	// (materialize.py:1189-1195); dropping it here would call the env-default
+	// model while STAMPING the requested one into
+	// categorization_model_version -- and the skip-existing lookup would then
+	// treat that wrong-model row as a valid cached result for the requested
+	// model, so the error compounds instead of self-correcting.
+	provider, err := categorize.NewProviderFromEnvWithModel(kind, model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -129,7 +154,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if scope.LLMProvider != nil && *scope.LLMProvider != "" {
 		requestedProvider = *scope.LLMProvider
 	}
-	provider, kind, err := executor.newProvider(requestedProvider)
+	provider, kind, err := executor.newProvider(requestedProvider, claim.Request.ModelRef)
 	if err != nil {
 		return nil, fmt.Errorf("resolve llm provider: %w", err)
 	}
@@ -251,6 +276,24 @@ func decodeMaterializeScope(raw []byte) (materializeScope, error) {
 		// with no keyword arguments.
 		return scope, nil
 	}
+	// REJECT a non-object scope (codex r1 P2-b). `null`, a bare string, a
+	// number and an array are all valid JSON, and workgraph's publisher only
+	// checks json.Valid -- so a `scope = 'null'::jsonb` row reaches here. Go's
+	// decoder would happily unmarshal `null` into a ZERO-VALUE struct, which
+	// this executor reads as "no scope supplied" and runs as an ORG-WIDE
+	// 30-day materialization. The bridge refuses it instead
+	// (worker_workgraph.py:71-73, `if not isinstance(scope, dict)`), so the
+	// same durable row is a no-write on Python and an org-wide write on Go.
+	// Decoding into a map first is what makes `null` distinguishable from `{}`.
+	var probe map[string]any
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return materializeScope{}, fmt.Errorf("decode investment.materialize scope: %w", err)
+	}
+	if probe == nil {
+		return materializeScope{}, errors.New(
+			"investment.materialize scope must be a JSON object; got null or a non-object")
+	}
+
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&scope); err != nil {

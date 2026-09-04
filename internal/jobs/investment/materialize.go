@@ -273,6 +273,19 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// CATEGORIZE.
 	if len(pending) > 0 {
 		if err := m.categorizePending(ctx, cfg, pending, outcomes, &stats); err != nil {
+			// FLUSH TOKEN USAGE BEFORE ABORTING (codex r1 P2-a).
+			//
+			// A deterministic failure aborts the run, but the calls made
+			// before it were really billed. Python flushes usage and only
+			// THEN re-raises (materialize.py:1583-1600); returning straight
+			// out here would skip the single WriteTokenUsage below and lose
+			// every token this run already spent -- silently, since the run
+			// fails and nobody reconciles a failed run's cost.
+			//
+			// Errors from the flush are deliberately swallowed: the run is
+			// already failing on a more important error, and replacing that
+			// cause with a bookkeeping error would hide why it aborted.
+			_ = m.flushTokenUsage(ctx, cfg, stats)
 			return Stats{}, err
 		}
 	}
@@ -374,17 +387,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// touched a provider, so they contribute nothing here -- the reference
 	// subtracts them for the same reason (materialize.py:1622-1626).
 	_ = fallbackCount
-	if _, err := m.writer.WriteTokenUsage(ctx, cfg.OrgID, chwrite.TokenUsageRecord{
-		RunID:        cfg.RunID,
-		Provider:     cfg.ProviderName,
-		Model:        resolvedModelName(cfg),
-		Source:       chwrite.TokenUsageSourceInvestmentMaterialize,
-		InputTokens:  stats.LLMInputTokens,
-		OutputTokens: stats.LLMOutputTokens,
-		Calls:        stats.LLMCalls,
-		ComputedAt:   cfg.ComputedAt,
-	}); err != nil {
-		return Stats{}, fmt.Errorf("write llm_token_usage: %w", err)
+	if err := m.flushTokenUsage(ctx, cfg, stats); err != nil {
+		return Stats{}, err
 	}
 
 	m.logger.InfoContext(ctx, "investment materialization complete",
@@ -480,6 +484,33 @@ func (m *Materializer) categorizePending(
 	if fatalErr != nil {
 		return fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
 			categorize.FormatFailureSummary(len(outcomes), stats.LLMFailureCounts), fatalErr)
+	}
+	return nil
+}
+
+// flushTokenUsage writes the run's llm_token_usage row.
+//
+// Reached from BOTH the success path and the deterministic-failure abort, which
+// is the whole point: an aborted run still spent whatever it spent, and the
+// all-zero skip inside WriteTokenUsage means a run that made no calls still
+// writes nothing.
+func (m *Materializer) flushTokenUsage(ctx context.Context, cfg Config, stats Stats) error {
+	// context.WithoutCancel: on the abort path the caller's ctx may already be
+	// cancelled by our own deterministic-failure cancel, and a cancelled ctx
+	// would turn "record what we spent" into a no-op exactly when it matters.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if _, err := m.writer.WriteTokenUsage(writeCtx, cfg.OrgID, chwrite.TokenUsageRecord{
+		RunID:        cfg.RunID,
+		Provider:     cfg.ProviderName,
+		Model:        resolvedModelName(cfg),
+		Source:       chwrite.TokenUsageSourceInvestmentMaterialize,
+		InputTokens:  stats.LLMInputTokens,
+		OutputTokens: stats.LLMOutputTokens,
+		Calls:        stats.LLMCalls,
+		ComputedAt:   cfg.ComputedAt,
+	}); err != nil {
+		return fmt.Errorf("write llm_token_usage: %w", err)
 	}
 	return nil
 }

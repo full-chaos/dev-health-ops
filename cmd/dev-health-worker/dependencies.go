@@ -805,10 +805,22 @@ func configureWorkerDependenciesWithSources(
 		// contract artifact must stay live-but-unready with a nil error
 		// (TestMissingContractArtifactsFailRegistryAndQueueChecks), and an early
 		// refusal turned that documented behaviour into a hard failure.
-		if dependencies.startupErr != nil {
-			return nil, preserveDependencyReason(
-				dependencies.startupErr, "worker_startup_contract_failed",
-			)
+		// Only a NAMED startupErr may displace the composition reason (codex r2
+		// P1). startupErr is NOT exclusive to the drain-budget contract: it is
+		// also set to the BARE sentinel, carrying no reason at all, for faults
+		// unrelated to it -- an absent River client-ID source and out-of-range
+		// queue concurrency among them, six sites in total. Treating "non-nil"
+		// as "contract failure" made preserveDependencyReason attach
+		// `worker_startup_contract_failed` to those and hide the real composeErr.
+		//
+		// That is WORSE than the defect this PR fixes, not a variant of it: the
+		// original was vague, this was confidently wrong, and a confident wrong
+		// reason sends an operator somewhere specific and false. A bare sentinel
+		// names nothing, so composeErr -- which is specific, and is logged just
+		// above -- is the better report.
+		var namedStartup dependencyFailure
+		if errors.As(dependencies.startupErr, &namedStartup) && namedStartup.reason != "" {
+			return nil, dependencies.startupErr
 		}
 		return nil, dependencyUnavailable("worker_family_composition_failed")
 	}

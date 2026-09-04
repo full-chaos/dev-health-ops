@@ -2441,3 +2441,59 @@ func TestQueuesReadyNamesARegistryFailureNotQueueCoverage(t *testing.T) {
 		t.Fatalf("reason = %q, want worker_job_registry_unavailable", failure.DependencyReason())
 	}
 }
+
+// TestUnrelatedStartupFaultDoesNotStealTheContractReason pins codex round 2's P1.
+//
+// `startupErr` is NOT exclusive to the drain-budget contract: it is also set to
+// the BARE sentinel, carrying no reason, for unrelated faults (an absent River
+// client-ID source, out-of-range queue concurrency -- six sites). The first
+// version of the composition branch tested only `startupErr != nil`, so
+// preserveDependencyReason attached `worker_startup_contract_failed` to those
+// and hid the real composition fault.
+//
+// That inverts this PR's own defect and is worse than it: the original reason
+// was vague, this one was confidently wrong, and a confident wrong reason sends
+// an operator somewhere specific and false.
+func TestUnrelatedStartupFaultDoesNotStealTheContractReason(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	// Sets startupErr to the BARE sentinel: a fault with nothing to do with the
+	// shutdown-timeout contract.
+	sources.newRiverClientID = nil
+
+	_, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Service:                "dev-health-worker",
+			Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+		},
+		health.NewRegistry(100*time.Millisecond),
+		sources,
+	)
+	if err == nil {
+		t.Fatal("an absent River client-ID source must not configure successfully")
+	}
+	var failure dependencyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("configure error = %v, want a reason-carrying dependencyFailure", err)
+	}
+	if failure.DependencyReason() == "worker_startup_contract_failed" {
+		t.Fatalf(
+			"an unrelated startup fault reported the contract reason %q -- a bare "+
+				"sentinel names nothing and must not displace the specific "+
+				"composition fault",
+			failure.DependencyReason(),
+		)
+	}
+	if failure.DependencyReason() == reasonShutdownTimeoutBelowDrainBudget {
+		t.Fatalf("unrelated fault reported the shutdown reason %q", failure.DependencyReason())
+	}
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("configure error = %v, want the dependency sentinel to still match", err)
+	}
+}

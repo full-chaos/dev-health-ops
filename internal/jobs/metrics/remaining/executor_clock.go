@@ -82,3 +82,16 @@ func (executor *CapacityExecutor) nowOrRefuse() (time.Time, error) {
 func (executor *RecommendationsExecutor) nowOrRefuse() (time.Time, error) {
 	return clockOrRefuse("RecommendationsExecutor", executor.nowUTC)
 }
+
+// nowOrRefuse yields this executor's instant, refusing an uninjected clock.
+//
+// #2177's own clock-guard violation, not inherited from the merge: this used
+// to be a nil-safe `wallClock()` accessor copying recommendations' OLD
+// pre-CHAOS-4954 pattern (membership_native.go), the same shape this file's
+// own doc comment names as wrong for a kind whose nowUTC is the sole source.
+// NewMembershipExecutor sets nowUTC unconditionally on its only
+// non-nil-returning path, same as DORA/Capacity/Recommendations, so a nil
+// clock here is exactly as unreachable in production as it is for them.
+func (executor *MembershipExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("MembershipExecutor", executor.nowUTC)
+}

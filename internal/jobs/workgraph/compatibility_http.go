@@ -161,13 +161,28 @@ func (executor *HTTPCompatibilityExecutor) Execute(ctx context.Context, claim Cl
 		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode, "success response body could not be decoded")
 	}
 	if decoded.Status != "success" {
-		// Same reasoning as the non-2xx branch: decoded.Status is
-		// bridge-controlled text, so it is described, never echoed.
+		// Refused, and this is the ONLY 2xx path that is: the bridge
+		// explicitly reported something other than success, so it is telling
+		// us it did NOT commit. Contrast the evidence branch below, where it
+		// told us it DID. decoded.Status is bridge-controlled text, so it is
+		// described, never echoed -- same reasoning as the non-2xx branch.
 		return nil, executor.fail(ErrCompatibilityRefused, response.StatusCode,
 			"bridge reported a non-success status in its response body")
 	}
 	if !validEvidence(decoded.OutputEvidence) {
-		return nil, executor.fail(ErrCompatibilityRefused, response.StatusCode, "bridge returned invalid output evidence")
+		// UNKNOWN, not Refused. The bridge just told us it SUCCEEDED, and it
+		// only says that after committing -- worker_workgraph.py returns
+		// {"status": "success", ...} on the far side of the execution, with
+		// every failure path above it raising instead. So a success whose
+		// evidence we cannot use means the work HAPPENED and only the proof is
+		// missing or malformed (a serialization fault, a version skew, a
+		// truncated field). Calling that Refused would make it retryable and
+		// re-run an execution that already applied -- the precise data-safety
+		// failure this classification exists to prevent. Grouping it with the
+		// status != "success" case above was wrong for exactly that reason:
+		// the two look adjacent and mean opposite things.
+		return nil, executor.fail(ErrCompatibilityUnknown, response.StatusCode,
+			"bridge reported success with unusable output evidence")
 	}
 	return decoded.OutputEvidence, nil
 }

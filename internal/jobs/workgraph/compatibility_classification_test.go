@@ -97,10 +97,21 @@ func TestExecuteClassifiesEveryBridgeResponseReturnSite(t *testing.T) {
 			notWant:  []error{ErrCompatibilityUnknown, ErrCompatibilityNotSent},
 		},
 		{
-			name:     "missing output evidence in a 200 body is refused",
+			// r2 P1. The bridge reports success only AFTER committing, so a
+			// success whose evidence is unusable means the work HAPPENED and
+			// only the proof was lost. Refused would make it retryable and
+			// re-run an applied execution; this case previously codified
+			// exactly that mistake.
+			name:     "success with unusable output evidence is unknown, never refused",
 			response: bridgeResponse{status: http.StatusOK, body: `{"status":"success"}`},
-			want:     ErrCompatibilityRefused,
-			notWant:  []error{ErrCompatibilityUnknown, ErrCompatibilityNotSent},
+			want:     ErrCompatibilityUnknown,
+			notWant:  []error{ErrCompatibilityRefused, ErrCompatibilityNotSent},
+		},
+		{
+			name:     "success with a non-object output evidence is unknown",
+			response: bridgeResponse{status: http.StatusOK, body: `{"status":"success","output_evidence":1}`},
+			want:     ErrCompatibilityUnknown,
+			notWant:  []error{ErrCompatibilityRefused, ErrCompatibilityNotSent},
 		},
 		{
 			// The body is read before the status is judged, so an oversize

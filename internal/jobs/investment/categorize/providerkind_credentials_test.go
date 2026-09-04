@@ -1,6 +1,9 @@
 package categorize
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -84,21 +87,67 @@ func TestNewProviderFromCredentialsLocalFallsBackWithEmptyBaseURL(t *testing.T) 
 	}
 }
 
+// TestNewProviderFromCredentialsOllamaUsesExplicitValues codex round 3
+// (#2234), P1 fix: org-BYO "ollama" now constructs *LocalProvider (the
+// OpenAI-compatible client Python's own OllamaProvider actually is), not
+// *OllamaProvider (the native /api/chat client) -- see the case's own
+// doc comment in providerkind.go for why NewProviderFromEnv's sibling
+// case is deliberately left unchanged.
 func TestNewProviderFromCredentialsOllamaUsesExplicitValues(t *testing.T) {
 	provider, err := NewProviderFromCredentials(
-		ProviderKindOllama, "org-key", "https://org-ollama.example.com", "gemma3:4b")
+		ProviderKindOllama, "org-key", "https://org-ollama.example.com/v1", "gemma3:4b")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	ollamaProvider := provider.(*OllamaProvider)
-	if ollamaProvider.cfg.BaseURL != "https://org-ollama.example.com" {
-		t.Errorf("BaseURL = %q, want the explicit argument", ollamaProvider.cfg.BaseURL)
+	localProvider, ok := provider.(*LocalProvider)
+	if !ok {
+		t.Fatalf("provider = %T, want *LocalProvider (OpenAI-compatible, matching Python's OllamaProvider)", provider)
 	}
-	if ollamaProvider.cfg.APIKey != "org-key" {
-		t.Errorf("APIKey = %q, want the explicit argument", ollamaProvider.cfg.APIKey)
+	if localProvider.cfg.BaseURL != "https://org-ollama.example.com/v1" {
+		t.Errorf("BaseURL = %q, want the explicit argument", localProvider.cfg.BaseURL)
 	}
-	if ollamaProvider.cfg.Model != "gemma3:4b" {
-		t.Errorf("Model = %q, want the explicit argument", ollamaProvider.cfg.Model)
+	if localProvider.cfg.APIKey != "org-key" {
+		t.Errorf("APIKey = %q, want the explicit argument", localProvider.cfg.APIKey)
+	}
+	if localProvider.cfg.Model != "gemma3:4b" {
+		t.Errorf("Model = %q, want the explicit argument", localProvider.cfg.Model)
+	}
+}
+
+// TestReviewReproOrgBYOOllamaV1URLHitsChatCompletionsNotNativeAPIChat is
+// the EXECUTED red/green proof for codex round 3's P1. Before the fix,
+// this failed: NewProviderFromCredentials(ProviderKindOllama, ...)
+// returned *OllamaProvider, whose Complete posts to
+// BaseURL+"/api/chat" (ollamaprovider.go:202) -- for the org's stored
+// "/v1" base_url (Python's own default shape, local.py:42) that is
+// ".../v1/api/chat", a path the OpenAI-compatible server behind it
+// doesn't serve. After the fix it constructs *LocalProvider, which
+// posts to BaseURL+"/chat/completions" (localprovider.go:195) --
+// ".../v1/chat/completions", the correct OpenAI-compatible route.
+func TestReviewReproOrgBYOOllamaV1URLHitsChatCompletionsNotNativeAPIChat(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	provider, err := NewProviderFromCredentials(ProviderKindOllama, "org-key", srv.URL+"/v1", "gemma3:4b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := provider.(*LocalProvider); !ok {
+		t.Fatalf("provider = %T, want *LocalProvider", provider)
+	}
+	if _, err := provider.Complete(context.Background(), CompletionRequest{
+		Prompt:        "user",
+		SystemMessage: "system",
+	}); err != nil {
+		t.Fatalf("Complete against the controlled OpenAI-compatible endpoint failed: %v", err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("server saw path %q, want \"/v1/chat/completions\" (native \"/v1/api/chat\" would mean the P1 regressed)", gotPath)
 	}
 }
 

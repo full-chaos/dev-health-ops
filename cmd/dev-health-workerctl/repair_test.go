@@ -128,8 +128,12 @@ func TestDispatchWorkgraphRepairRetrySafeRejectsOutputEvidence(t *testing.T) {
 func TestDispatchWorkgraphRepairSendsExpectedPathTokenAndPayload(t *testing.T) {
 	fake := newFakeBridge(t, http.StatusOK, `{"status":"repaired","request_id":"`+testAmbiguousRequestID+`"}`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "workgraph-secret-token")
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "unrelated-metric-token")
+	// codex round crossed with chris's own ruling (CHAOS-5042, "over-engineering"):
+	// workgraph repair authorizes with WORKER_METRIC_REPAIR_TOKEN, the SAME
+	// token `metrics daily-redrive`/`metrics execution-repair` use -- not a
+	// distinct WORKER_WORKGRAPH_REPAIR_TOKEN. worker_auth.py's
+	// authorize_workgraph_repair delegates to authorize_metric_repair.
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "shared-repair-token")
 
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphRepair(context.Background(), []string{
@@ -148,8 +152,8 @@ func TestDispatchWorkgraphRepairSendsExpectedPathTokenAndPayload(t *testing.T) {
 	if fake.lastMethod != http.MethodPost {
 		t.Fatalf("request method = %q, want POST", fake.lastMethod)
 	}
-	if fake.lastAuth != "Bearer workgraph-secret-token" {
-		t.Fatalf("Authorization = %q, want the WORKGRAPH token, not the metric-repair token", fake.lastAuth)
+	if fake.lastAuth != "Bearer shared-repair-token" {
+		t.Fatalf("Authorization = %q, want the shared WORKER_METRIC_REPAIR_TOKEN", fake.lastAuth)
 	}
 	if resolution, _ := fake.lastBody["resolution"].(string); resolution != "confirm_succeeded" {
 		t.Fatalf("request resolution = %v, want confirm_succeeded", fake.lastBody["resolution"])
@@ -176,7 +180,7 @@ func TestDispatchWorkgraphRepairPrintsBridgeResponseVerbatimOnEveryStatus(t *tes
 		t.Run(http.StatusText(statusCase.status), func(t *testing.T) {
 			fake := newFakeBridge(t, statusCase.status, statusCase.body)
 			t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-			t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "workgraph-secret-token")
+			t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "workgraph-secret-token")
 
 			var stdout, stderr bytes.Buffer
 			code := dispatchWorkgraphRepair(context.Background(), []string{
@@ -201,7 +205,7 @@ func TestDispatchWorkgraphRepairNeverPrintsTheToken(t *testing.T) {
 	const secretToken = "workgraph-token-must-never-appear-in-output"
 	fake := newFakeBridge(t, http.StatusUnauthorized, `{"detail":"Unauthorized"}`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", secretToken)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", secretToken)
 
 	var stdout, stderr bytes.Buffer
 	dispatchWorkgraphRepair(context.Background(), []string{
@@ -220,7 +224,7 @@ func TestDispatchWorkgraphRepairNeverPrintsTheToken(t *testing.T) {
 // not just the inner helper.
 func TestDispatchWorkgraphRepairFailsClosedWithoutConfiguredToken(t *testing.T) {
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", "http://unused.invalid")
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "")
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "")
 
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphRepair(context.Background(), []string{
@@ -230,7 +234,7 @@ func TestDispatchWorkgraphRepairFailsClosedWithoutConfiguredToken(t *testing.T) 
 		"--review-evidence", "checked",
 	}, &stdout, &stderr)
 	if code == 0 {
-		t.Fatal("dispatchWorkgraphRepair with no WORKER_WORKGRAPH_REPAIR_TOKEN = 0, want fail-closed")
+		t.Fatal("dispatchWorkgraphRepair with no WORKER_METRIC_REPAIR_TOKEN = 0, want fail-closed")
 	}
 }
 
@@ -243,7 +247,7 @@ func TestDispatchWorkgraphRepairDryRunNeverCallsTheBridgeAndRedactsTheToken(t *t
 	}))
 	t.Cleanup(server.Close)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", secretToken)
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", secretToken)
 
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphRepair(context.Background(), []string{
@@ -349,8 +353,9 @@ func TestDispatchMetricsExecutionRepairConfirmSucceededRequiresOutputEvidence(t 
 func TestDispatchMetricsExecutionRepairSendsExpectedPathTokenAndPayload(t *testing.T) {
 	fake := newFakeBridge(t, http.StatusOK, `{"status":"repaired","execution_id":"`+testAmbiguousExecutionID+`","state":"succeeded"}`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
+	// (chris ruling, CHAOS-5042: workgraph repair shares this same token --
+	// no separate WORKER_WORKGRAPH_REPAIR_TOKEN exists to cross-check against.)
 	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "metric-secret-token")
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "unrelated-workgraph-token")
 
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetricsExecutionRepair(context.Background(), []string{
@@ -511,8 +516,8 @@ func TestPostWorkerBridgeReturnsStatusAndBodyOnNon2xxWithoutError(t *testing.T) 
 	// transport-level failure (bad config, network error) is a Go error.
 	fake := newFakeBridge(t, http.StatusConflict, `{"detail":"conflict"}`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
-	status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+	status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_METRIC_REPAIR_TOKEN", "/x", map[string]any{})
 	if err != nil {
 		t.Fatalf("postWorkerBridge on a 409: err = %v, want nil", err)
 	}
@@ -535,8 +540,8 @@ func TestPostWorkerBridgeReturnsStatusAndBodyOnNon2xxWithoutError(t *testing.T) 
 func TestPostWorkerBridgeErrorsOnAnUndecodableBody(t *testing.T) {
 	fake := newFakeBridge(t, http.StatusOK, `not-json`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
-	_, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+	_, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_METRIC_REPAIR_TOKEN", "/x", map[string]any{})
 	if err == nil {
 		t.Fatalf("postWorkerBridge on an undecodable 200 body = nil error, want an error; body=%v", body)
 	}
@@ -611,7 +616,7 @@ func TestDispatchWorkgraphRepairRejectsNullOutputEvidenceWithoutCallingTheBridge
 	}))
 	t.Cleanup(server.Close)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
 
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphRepair(context.Background(), []string{
@@ -811,8 +816,8 @@ func TestPostWorkerBridgeRelaysNonObjectNon2xxBodiesInsteadOfErroring(t *testing
 		t.Run(testCase.name, func(t *testing.T) {
 			fake := newFakeBridge(t, testCase.status, testCase.body)
 			t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-			t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
-			status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+			t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+			status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_METRIC_REPAIR_TOKEN", "/x", map[string]any{})
 			if err != nil {
 				t.Fatalf("postWorkerBridge on a non-object non-2xx body: err = %v, want nil (relayed, not a transport error)", err)
 			}
@@ -833,8 +838,8 @@ func TestPostWorkerBridgeRelaysNonObjectNon2xxBodiesInsteadOfErroring(t *testing
 func TestPostWorkerBridgeStillErrorsOnAnUndecodable2xxBody(t *testing.T) {
 	fake := newFakeBridge(t, http.StatusOK, `not-json`)
 	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", fake.server.URL)
-	t.Setenv("WORKER_WORKGRAPH_REPAIR_TOKEN", "t")
-	_, _, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_WORKGRAPH_REPAIR_TOKEN", "/x", map[string]any{})
+	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "t")
+	_, _, err := postWorkerBridge[workgraphRepairBridgeResponse](context.Background(), "WORKER_METRIC_REPAIR_TOKEN", "/x", map[string]any{})
 	if err == nil {
 		t.Fatal("postWorkerBridge on an undecodable 200 body = nil error, want an error")
 	}

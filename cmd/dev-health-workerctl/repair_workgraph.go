@@ -20,13 +20,11 @@ import (
 // lease_expires_at both NULL) forward; before this file, no Go caller ever
 // reached it and the row sat there until repaired by hand against the
 // database. Mirrors `metrics daily-redrive`'s CLI/auth/JSON-result
-// conventions (main.go's dispatchMetrics), but authenticates with
-// WORKER_WORKGRAPH_REPAIR_TOKEN -- a token distinct from
-// WORKER_METRIC_REPAIR_TOKEN and from the worker bridge's own
-// WORKER_OPERATIONAL_BRIDGE_TOKEN (worker_auth.py:31-40) -- because a
-// workgraph repair authorizes writes to a different row shape (LLM-backed
-// investment/workgraph executions, not metrics partitions) and must not be
-// reachable by either of those other capabilities.
+// conventions (main.go's dispatchMetrics), and authenticates with the SAME
+// WORKER_METRIC_REPAIR_TOKEN -- chris ruling, CHAOS-5042 ("over-engineering"):
+// workgraph and metric-execution repair share ONE operator repair token,
+// not two distinct ones. worker_auth.py's authorize_workgraph_repair
+// delegates to authorize_metric_repair for exactly this reason.
 func dispatchWorkgraph(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return writeError(stderr, "invalid_request")
@@ -133,8 +131,10 @@ ORDER BY request.updated_at`, orgFilter)
 // dispatchWorkgraphRepair calls the Python bridge's repair endpoint
 // directly -- it deliberately does NOT go through joboperator.Service's
 // Action/audit pipeline, the same scope choice `metrics daily-redrive`
-// already made (main.go:773-777), gated only by
-// WORKER_WORKGRAPH_REPAIR_TOKEN. It takes no *operatorRuntime/DB connection
+// already made (main.go:773-777), gated only by WORKER_METRIC_REPAIR_TOKEN
+// (the SAME token `metrics daily-redrive`/`metrics execution-repair` use --
+// chris ruling, CHAOS-5042: one shared operator repair token, not a
+// distinct one per repair endpoint). It takes no *operatorRuntime/DB connection
 // at all: the repair endpoint is the sole source of truth for whether
 // --request/--expected-attempt-count still name a live, unleased ambiguous
 // row (worker_workgraph.py:468-478's FOR UPDATE read), so there is nothing
@@ -207,7 +207,7 @@ func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr 
 		})
 	}
 	status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](
-		ctx, "WORKER_WORKGRAPH_REPAIR_TOKEN",
+		ctx, "WORKER_METRIC_REPAIR_TOKEN",
 		path,
 		payload,
 	)

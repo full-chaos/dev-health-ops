@@ -18,8 +18,9 @@ import (
 // (worker_metrics.py:2946-2954) for ONE metric_compatibility_executions row
 // an operator has already reviewed, using the SAME WORKER_METRIC_REPAIR_TOKEN
 // daily-redrive already requires (worker_auth.py:19-28 --
-// authorize_metric_repair, not the workgraph repair's distinct token).
-// Exists because the bulk endpoint only ever authorizes retry_safe
+// authorize_metric_repair -- also the token `workgraph repair` uses, chris
+// ruling CHAOS-5042: one shared operator repair token, not a distinct one
+// per repair endpoint). Exists because the bulk endpoint only ever authorizes retry_safe
 // (main.go:797-811's "a bulk path cannot inspect per-row evidence" note) --
 // the 4 daily compat executions this ticket found whose output already
 // exists in file_hotspot_daily need confirm_succeeded specifically, which

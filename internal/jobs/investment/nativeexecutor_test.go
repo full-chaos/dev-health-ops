@@ -552,6 +552,17 @@ func TestCategorizeFanOutIsBoundedByLimit(t *testing.T) {
 	for waited := 0; provider.inFlight() < limit && waited < 200; waited++ {
 		time.Sleep(5 * time.Millisecond)
 	}
+	// POSITIVE CONTROL -- the loop above is a WAIT, not a proof of arrival, and
+	// without this assertion the goroutine bound below passes VACUOUSLY: if
+	// categorization never starts, the wait simply expires, `peak` is ~0, and
+	// `peak > limit+20` is false. Codex confirmed it by short-circuiting
+	// categorizePending before pool creation -- the test still passed, in 1.04s.
+	// This is the fourth time a proof in this PR asserted on a path its own setup
+	// never reached (M8, M10, M17), so the control is stated rather than implied.
+	if reached := provider.inFlight(); reached < limit {
+		t.Fatalf("categorization never reached the worker pool: inFlight=%d, want >= %d -- "+
+			"the goroutine bound below would pass vacuously", reached, limit)
+	}
 	peak := runtime.NumGoroutine() - before
 	close(release)
 	<-done

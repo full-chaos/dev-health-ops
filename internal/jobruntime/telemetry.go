@@ -1101,6 +1101,30 @@ type MetricsCollector struct {
 	capacitySkippedScopes uint64
 	capacityRefusals      map[string]uint64
 
+	// Native membership-backfill compute (CHAOS-4282, CHAOS-2439/2433).
+	// membershipRuns counts ComputeOrg calls (one per org-wide or repo-scoped
+	// run), not partitions -- a partition and a run are the same thing for
+	// this kind, but the field is named for what it counts, not for the
+	// caller's vocabulary. Skipped units and dropped edges/nodes both matter
+	// for the same reason capacitySkippedScopes does: a run that projected
+	// nothing is otherwise indistinguishable from one that had nothing to
+	// project.
+	membershipRuns                uint64
+	membershipComponents          uint64
+	membershipMatched             uint64
+	membershipSkipped             uint64
+	membershipRowsWritten         uint64
+	membershipOversizedComponents uint64
+	membershipDroppedEdges        uint64
+	membershipDroppedNodes        uint64
+	// membershipPruneFailures counts a retention prune (keep-latest-2) that
+	// failed (codex round 1, #2177, P2). The partition still succeeds --
+	// retention is best-effort by design -- so without this counter a
+	// PERSISTENT prune failure was invisible: old generations would
+	// accumulate with no signal anywhere.
+	membershipPruneFailures uint64
+	membershipRefusals      map[string]uint64
+
 	// Compatibility-bridge partitions (CHAOS-4243). Before this, the bridge
 	// could only ever report a status code, so a partition that wrote real
 	// data and a partition that silently wrote nothing were indistinguishable
@@ -2316,12 +2340,18 @@ const (
 	// distinct from finding it wrong, because the remedies differ: an
 	// unreachable database is transient, an incompatible one is a migration.
 	RecommendationsRefusedInspectFailed = "inspect_failed"
+	// RecommendationsRefusedPostgresUnavailable is a nil Postgres pool --
+	// distinct from the ClickHouse case because the remedy differs: this one
+	// means the worker itself was wired without the store the readiness gate
+	// reads (CHAOS-2373), never a transient metrics-store outage.
+	RecommendationsRefusedPostgresUnavailable = "postgres_unavailable"
 )
 
 var recommendationsRefusalReasons = []string{
 	RecommendationsRefusedUnavailable,
 	RecommendationsRefusedSchemaIncompatible,
 	RecommendationsRefusedInspectFailed,
+	RecommendationsRefusedPostgresUnavailable,
 }
 
 // ObserveRecommendationsRefused records that the native recommendations
@@ -2539,13 +2569,87 @@ func (collector *MetricsCollector) ObserveCapacityRefused(reason string) error {
 	return nil
 }
 
+// Membership backfill refusal reasons (CHAOS-4282, CHAOS-2439/2433). Closed
+// set, bounded label cardinality, same discipline as
+// doraRefusalReasons/capacityRefusalReasons. Two of these have no capacity
+// counterpart: clickhouse_unavailable is reachable because this executor
+// (unlike capacity/dora, whose ClickHouse pool is provisioned unconditionally
+// alongside every other daily kind) is opened lazily and only when this kind
+// is actually selected -- see daily.go's construction block -- and
+// writer_unavailable is reachable because this kind's writer is a SEPARATE
+// wiring parameter from its ClickHouse connection (membership_write.go's
+// MembershipWriter interface), so the two can fail independently.
+const (
+	MembershipRefusedUnavailable        = "clickhouse_unavailable"
+	MembershipRefusedWriterUnavailable  = "writer_unavailable"
+	MembershipRefusedSchemaIncompatible = "schema_incompatible"
+	MembershipRefusedInspectFailed      = "inspect_failed"
+)
+
+var membershipRefusalReasons = []string{
+	MembershipRefusedUnavailable,
+	MembershipRefusedWriterUnavailable,
+	MembershipRefusedSchemaIncompatible,
+	MembershipRefusedInspectFailed,
+}
+
+// ObserveMembershipRefused records that the native membership-backfill
+// executor refused to build, by reason -- the positive signal an alert can
+// bind to, since a family whose job is a safety-net backstop can otherwise go
+// quiet for a long time before anyone notices it stopped running at all.
+func (collector *MetricsCollector) ObserveMembershipRefused(reason string) error {
+	if !slices.Contains(membershipRefusalReasons, reason) {
+		return fmt.Errorf("unknown membership backfill refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.membershipRefusals == nil {
+		collector.membershipRefusals = map[string]uint64{}
+	}
+	collector.membershipRefusals[reason]++
+	return nil
+}
+
+// ObserveMembershipRun records one completed native membership-backfill run
+// (one org, or one repo scope within it). Every count must be >= 0; matched +
+// skipped is NOT required to equal components here, because a caller reports
+// per-run totals, not a per-row partition the way ObserveWorkGraphIssueEdges
+// does -- there is no single "total" this run's counts must sum to.
+func (collector *MetricsCollector) ObserveMembershipRun(
+	components, matched, skipped, rowsWritten, oversizedComponents, droppedEdges, droppedNodes int,
+) error {
+	if components < 0 || matched < 0 || skipped < 0 || rowsWritten < 0 ||
+		oversizedComponents < 0 || droppedEdges < 0 || droppedNodes < 0 {
+		return errors.New("membership backfill run counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.membershipRuns++
+	collector.membershipComponents += uint64(components)
+	collector.membershipMatched += uint64(matched)
+	collector.membershipSkipped += uint64(skipped)
+	collector.membershipRowsWritten += uint64(rowsWritten)
+	collector.membershipOversizedComponents += uint64(oversizedComponents)
+	collector.membershipDroppedEdges += uint64(droppedEdges)
+	collector.membershipDroppedNodes += uint64(droppedNodes)
+	return nil
+}
+
+// ObserveMembershipPruneFailed records one failed retention prune. See the
+// counter's own doc comment for why this exists (codex round 1, #2177, P2).
+func (collector *MetricsCollector) ObserveMembershipPruneFailed() {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.membershipPruneFailures++
+}
+
 // compatibilityBridgeFamilies is the closed set of remaining-metrics families
 // still routed through the Python compatibility bridge (dora and capacity are
-// native and observed separately above). Bounded label cardinality, same
-// discipline as doraRefusalReasons/capacityRefusalReasons.
+// native and observed separately above; membership_backfill joins them below,
+// CHAOS-4282). Bounded label cardinality, same discipline as
+// doraRefusalReasons/capacityRefusalReasons.
 var compatibilityBridgeFamilies = []string{
 	"complexity", "release_impact", "recommendations",
-	"membership_backfill",
 }
 
 // ObserveCompatibilityPartition implements remaining.CompatibilityObserver.
@@ -3362,6 +3466,30 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	for _, reason := range capacityRefusalReasons {
 		writeUintSample(output, "worker_capacity_native_refused_total",
 			[]metricLabel{{"reason", reason}}, collector.capacityRefusals[reason])
+	}
+
+	writeMetadata(output, "worker_membership_backfill_native_runs_total", "Membership-backfill runs completed by the native Go executor.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_runs_total", nil, collector.membershipRuns)
+	writeMetadata(output, "worker_membership_backfill_native_components_total", "Work-graph components the native membership-backfill executor considered.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_components_total", nil, collector.membershipComponents)
+	writeMetadata(output, "worker_membership_backfill_native_matched_total", "Components with a persisted investment row the native membership-backfill executor projected.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_matched_total", nil, collector.membershipMatched)
+	writeMetadata(output, "worker_membership_backfill_native_skipped_total", "Components with no persisted investment row, skipped by the native membership-backfill executor.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_skipped_total", nil, collector.membershipSkipped)
+	writeMetadata(output, "worker_membership_backfill_native_rows_written_total", "work_unit_membership rows written by the native Go executor.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_rows_written_total", nil, collector.membershipRowsWritten)
+	writeMetadata(output, "worker_membership_backfill_native_oversized_components_total", "Oversized work-graph components split by the native membership-backfill executor (CHAOS-2775).", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_oversized_components_total", nil, collector.membershipOversizedComponents)
+	writeMetadata(output, "worker_membership_backfill_native_dropped_edges_total", "Edges dropped by the native membership-backfill executor's oversized-component split.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_dropped_edges_total", nil, collector.membershipDroppedEdges)
+	writeMetadata(output, "worker_membership_backfill_native_dropped_nodes_total", "Nodes dropped by the native membership-backfill executor's oversized-component split.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_dropped_nodes_total", nil, collector.membershipDroppedNodes)
+	writeMetadata(output, "worker_membership_backfill_native_prune_failures_total", "Failed retention prunes (keep-latest-2) the native membership-backfill executor tolerated -- the partition still succeeds, but old generations accumulate until a later prune succeeds.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_prune_failures_total", nil, collector.membershipPruneFailures)
+	writeMetadata(output, "worker_membership_backfill_native_refused_total", "Native membership-backfill executor construction refusals, by reason.", "counter")
+	for _, reason := range membershipRefusalReasons {
+		writeUintSample(output, "worker_membership_backfill_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.membershipRefusals[reason])
 	}
 
 	writeMetadata(output, "worker_dispatch_budget_estimate_failures_total", "dispatch_sync_run BudgetGuard estimate-bridge fetches that fell open, by reason.", "counter")

@@ -45,7 +45,10 @@ func TestOneOrgSurvivesDiscoveryComputeAndWrite(t *testing.T) {
 	conn := openLoaderClickHouse(t, ctx, dsn)
 	defer seedLoaderFixture(t, ctx, conn)()
 
-	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	// No pool: these two tests drive ComputeOrg directly and never reach the
+	// readiness gate. ComputePartition refuses a nil pool, so an executor built
+	// this way cannot reach the compute path through the handler seam.
+	executor, err := newClickHouseOnlyExecutor(ctx, conn, loaderOrgID)
 	if err != nil {
 		t.Fatalf("construct executor: %v", err)
 	}
@@ -264,7 +267,10 @@ func TestASecondRunSupersedesTheFirstOnUnchangedData(t *testing.T) {
 	conn := openLoaderClickHouse(t, ctx, dsn)
 	defer seedLoaderFixture(t, ctx, conn)()
 
-	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	// No pool: these two tests drive ComputeOrg directly and never reach the
+	// readiness gate. ComputePartition refuses a nil pool, so an executor built
+	// this way cannot reach the compute path through the handler seam.
+	executor, err := newClickHouseOnlyExecutor(ctx, conn, loaderOrgID)
 	if err != nil {
 		t.Fatalf("construct executor: %v", err)
 	}
@@ -399,7 +405,7 @@ func TestCancellationMidRunStillPersistsTheTeamsThatFinished(t *testing.T) {
 	conn := openLoaderClickHouse(t, ctx, dsn)
 	defer seedLoaderFixture(t, ctx, conn)()
 
-	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	executor, err := newClickHouseOnlyExecutor(ctx, conn, loaderOrgID)
 	if err != nil {
 		t.Fatalf("construct executor: %v", err)
 	}
@@ -516,7 +522,7 @@ func TestCancellationAfterTheLastTeamStillPersistsOnAContainer(t *testing.T) {
 	conn := openLoaderClickHouse(t, ctx, dsn)
 	defer seedLoaderFixture(t, ctx, conn)()
 
-	executor, err := NewRecommendationsExecutor(ctx, conn, loaderOrgID)
+	executor, err := newClickHouseOnlyExecutor(ctx, conn, loaderOrgID)
 	if err != nil {
 		t.Fatalf("construct executor: %v", err)
 	}

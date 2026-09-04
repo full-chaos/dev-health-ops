@@ -2,23 +2,41 @@ package remaining
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// recommendationsRuleVersion mirrors the reference's default
+// (recommendations/engine.py:156, loader.py:422). It is a CONSTANT rather than
+// scope-supplied because the scope has no field for it: a version arriving from
+// a payload would let two partitions of one run write different rule_versions
+// for the same window.
+const recommendationsRuleVersion = "1.0.0"
 
 // ErrRecommendationsSchemaIncompatible refuses a database this executor cannot
 // compute against.
 var ErrRecommendationsSchemaIncompatible = errors.New(
 	"recommendations: clickhouse schema incompatible")
 
-// errRecommendationsUnavailable is the nil-connection refusal.
-var errRecommendationsUnavailable = errors.New(
+// ErrRecommendationsUnavailable is the nil-connection refusal.
+var ErrRecommendationsUnavailable = errors.New(
 	"recommendations: clickhouse connection unavailable")
+
+// ErrRecommendationsPostgresUnavailable is the nil-pool refusal. Distinct from
+// the ClickHouse one because the remedies differ and the refusal counter is
+// labelled by reason: one is a metrics-store outage, the other means the worker
+// was wired without the store the readiness gate reads.
+var ErrRecommendationsPostgresUnavailable = errors.New(
+	"recommendations: postgres pool unavailable for the readiness gate")
 
 // recommendationsTableRequirements lists what each table must provide.
 //
@@ -64,8 +82,15 @@ var recommendationsTableRequirements = map[string][]string{
 }
 
 // RecommendationsExecutor computes recommendations natively.
+//
+// It holds BOTH stores. ClickHouse carries the metrics it reads and the rows it
+// writes; PostgreSQL carries the daily-metrics run state the readiness gate
+// consults. The gate is not optional and not the caller's to remember, so its
+// dependency is a constructor parameter rather than something discovered at
+// call time -- see NewRecommendationsExecutor.
 type RecommendationsExecutor struct {
 	conn   driver.Conn
+	pool   *pgxpool.Pool
 	loader *RecommendationsLoader
 	nowUTC func() time.Time
 
@@ -114,14 +139,32 @@ type RecommendationsExecutor struct {
 	// documented on afterTeamHook above, for the same reason: how long the
 	// loop takes to finish is not something a test should have to race.
 	beforeWriteHook func()
+
+	// observer and logger are optional; the gate tolerates nil for both.
+	observer ReadinessObserver
+	logger   ReadinessLogger
 }
 
 // NewRecommendationsExecutor refuses at construction rather than per partition.
+//
+// # WHY A NIL POOL IS A REFUSAL AND NOT A SKIPPED GATE
+//
+// The readiness gate exists to stop recommendations evaluating against partial
+// daily metrics (CHAOS-2373). An executor built without Postgres could still
+// compute and write -- it would simply never check -- and the result would be
+// well-formed rows that are quietly wrong, which is the exact failure the gate
+// was added to prevent. Treating the missing pool as "gate unavailable, proceed"
+// would therefore reproduce the incident while looking like graceful
+// degradation, so it is a construction refusal: the kind goes unserved, loudly
+// and countably, and its siblings stay registered.
 func NewRecommendationsExecutor(
-	ctx context.Context, conn driver.Conn, orgID string,
+	ctx context.Context, conn driver.Conn, pool *pgxpool.Pool, orgID string,
 ) (*RecommendationsExecutor, error) {
 	if conn == nil {
-		return nil, errRecommendationsUnavailable
+		return nil, ErrRecommendationsUnavailable
+	}
+	if pool == nil {
+		return nil, ErrRecommendationsPostgresUnavailable
 	}
 	if err := verifyRecommendationsSchema(ctx, conn); err != nil {
 		return nil, err
@@ -132,9 +175,24 @@ func NewRecommendationsExecutor(
 	}
 	return &RecommendationsExecutor{
 		conn:   conn,
+		pool:   pool,
 		loader: loader,
 		nowUTC: func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+// SetReadinessObserver wires the gate's telemetry. Optional, like the gate
+// itself tolerates (DailyMetricsReady accepts a nil observer) -- a caller that
+// never sets one still computes correctly, it just cannot see a fail-open or a
+// skip happen.
+func (executor *RecommendationsExecutor) SetReadinessObserver(observer ReadinessObserver) {
+	executor.observer = observer
+}
+
+// SetReadinessLogger wires the gate's logging. Optional for the same reason as
+// SetReadinessObserver.
+func (executor *RecommendationsExecutor) SetReadinessLogger(logger ReadinessLogger) {
+	executor.logger = logger
 }
 
 // verifyRecommendationsSchema checks every table the executor reads or writes.
@@ -240,7 +298,7 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	ctx context.Context, teamID, orgID string, now time.Time, windowDays int, ruleVersion string,
 ) ([]RecommendationRecord, error) {
 	if executor == nil || executor.conn == nil {
-		return nil, errRecommendationsUnavailable
+		return nil, ErrRecommendationsUnavailable
 	}
 	// `== ""`, NOT TrimSpace -- the same correction as ComputeOrg's branch, and
 	// round 2's fix missed this second site. Python treats a whitespace team id
@@ -262,3 +320,147 @@ func (executor *RecommendationsExecutor) ComputeTeam(
 	}
 	return EvaluateState(snapshot, now, ruleVersion)
 }
+
+// newClickHouseOnlyExecutor builds an executor with NO Postgres pool, for tests
+// that exercise the ClickHouse compute/write path and never reach the readiness
+// gate.
+//
+// It is safe ONLY because ComputePartition refuses a nil pool outright: an
+// executor built this way cannot reach ComputeOrg through the handler seam, so
+// it cannot silently skip the gate. It bypasses NewRecommendationsExecutor's
+// validation deliberately and is unexported for that reason -- the constructor
+// is what production uses, and it refuses.
+func newClickHouseOnlyExecutor(
+	ctx context.Context, conn driver.Conn, orgID string,
+) (*RecommendationsExecutor, error) {
+	if conn == nil {
+		return nil, ErrRecommendationsUnavailable
+	}
+	if err := verifyRecommendationsSchema(ctx, conn); err != nil {
+		return nil, err
+	}
+	loader, err := NewRecommendationsLoader(conn, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return &RecommendationsExecutor{
+		conn:   conn,
+		loader: loader,
+		nowUTC: func() time.Time { return time.Now().UTC() },
+	}, nil
+}
+
+// ComputePartition satisfies CompatibilityExecutor: the seam the partition
+// handler drives, and the ONLY place the readiness gate is consulted.
+//
+// # THE GATE LIVES HERE, NOT IN THE CALLER
+//
+// Putting it in the caller would make it something a future kind could forget,
+// and forgetting it is silent: recommendations evaluate against partial daily
+// metrics and persist well-formed rows that are simply wrong (CHAOS-2373).
+// Inside ComputePartition it is unskippable by construction -- there is no route
+// from the handler to ComputeOrg that does not pass through it.
+//
+// # A WITHHELD DAY IS A SUCCESS, NOT A FAILURE
+//
+// Returning an error would make the handler fail the partition and retry it,
+// and the retry would read the same unfinished run and fail again -- a loop that
+// looks like flapping while the correct behaviour is simply to wait for the
+// fan-out to finalize. So the partition completes with zero rows, and the
+// SKIPPED COUNTER is what makes that visible: without it a withheld org is
+// indistinguishable from a healthy quiet one.
+func (executor *RecommendationsExecutor) ComputePartition(
+	ctx context.Context, run Run, partition Partition,
+) (CompatibilityOutcome, error) {
+	if executor == nil || executor.conn == nil {
+		return CompatibilityOutcome{}, ErrRecommendationsUnavailable
+	}
+	if strings.TrimSpace(run.OrganizationID) == "" {
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s has no organization", ErrInvalidState, partition.ID))
+	}
+
+	var scope recommendationsScope
+	if err := json.Unmarshal(partition.Scope, &scope); err != nil {
+		// Static format, partition ID plus the decoder's own message; carries no
+		// upstream content, so it is safe to surface at WARN.
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s scope: %v", ErrInvalidState, partition.ID, err))
+	}
+	if scope.Window < 1 {
+		return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
+			"%w: partition %s window %d", ErrInvalidState, partition.ID, scope.Window))
+	}
+
+	var asOf *time.Time
+	if scope.AsOf != nil {
+		parsed, err := time.Parse("2006-01-02", *scope.AsOf)
+		if err != nil {
+			return CompatibilityOutcome{}, jobruntime.WithSafeCause(fmt.Errorf(
+				"%w: partition %s as_of %q", ErrInvalidState, partition.ID, *scope.AsOf))
+		}
+		asOf = &parsed
+	}
+	// The pool is checked HERE, adjacent to its only use, and AFTER the payload
+	// has been validated. Checking it at the top made a malformed scope report
+	// as "postgres unavailable" -- sending an operator to the database for a
+	// fault that is in the partition's own payload and will never fix itself.
+	// An error should name the thing that is actually wrong. Checked BEFORE
+	// the clock resolution below too: a nil pool is a reachable production
+	// wiring bug, while an unset clock is reachable only through a bare
+	// zero-valued struct literal in a test -- NewRecommendationsExecutor sets
+	// nowUTC unconditionally on its only non-nil-returning path, same as
+	// DORA/Capacity (executor_clock.go) -- so the pool refusal is the one
+	// that must fire first when both are unset, naming the fault that can
+	// actually happen in production (TestAZeroValuedExecutorRefusesRatherThanPanicking).
+	//
+	// Unreachable through the constructor, which refuses a nil pool. Kept
+	// because a zero-valued struct is constructible in-package, and the
+	// alternative failure is a nil dereference inside the gate.
+	if executor.pool == nil {
+		return CompatibilityOutcome{}, ErrRecommendationsPostgresUnavailable
+	}
+
+	// as_of_day is what the gate keys on -- the day whose daily_metrics_runs row
+	// must be finalized -- while `now` is as_of_day + 1 so the window actually
+	// READS that day. They are deliberately different values; see
+	// EvaluationInstant. wallClockNow is resolved via nowOrRefuse
+	// (executor_clock.go) rather than a nil-safe wallClock() accessor --
+	// CHAOS-4954/CHAOS-4935 merge conflict with #2188, same refuse-loud shape
+	// as DORA/Capacity and this executor's own write path (ComputeOrg's
+	// writeInstant).
+	wallClockNow, err := executor.nowOrRefuse()
+	if err != nil {
+		return CompatibilityOutcome{}, err
+	}
+	now, asOfDay := EvaluationInstant(asOf, func() time.Time { return wallClockNow })
+
+	if !DailyMetricsReady(
+		ctx, executor.pool, run.OrganizationID, asOfDay,
+		executor.observer, executor.logger,
+	) {
+		// Withheld, not failed. Zero rows, reported as a successful partition.
+		zero := 0
+		return CompatibilityOutcome{RowsWritten: &zero}, nil
+	}
+
+	teamID := ""
+	if scope.TeamID != nil {
+		teamID = *scope.TeamID
+	}
+	outcome, err := executor.ComputeOrg(
+		ctx, run.OrganizationID, now, scope.Window, recommendationsRuleVersion, teamID)
+	// The outcome is read even on error: ComputeOrg persists what it computed
+	// BEFORE surfacing a per-team failure, so rows written on a failing run are
+	// real and must be reported rather than discarded with the error.
+	written := outcome.RowsWritten
+	if err != nil {
+		return CompatibilityOutcome{RowsWritten: &written}, err
+	}
+	return CompatibilityOutcome{RowsWritten: &written}, nil
+}
+
+// A compile-time pin that this executor IS the seam the handler drives. Without
+// it, a signature drift would surface only where daily.go registers the kind --
+// far from the code that changed.
+var _ CompatibilityExecutor = (*RecommendationsExecutor)(nil)

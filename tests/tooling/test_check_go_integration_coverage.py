@@ -102,9 +102,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # provenance-collision acceptance test, the package's first -tags
     # integration file). Neither branch was wrong; the merged total was 39.
     # CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
+    # CHAOS-4902 then added internal/testsupport/chschema (the RMT sweep's
+    # own authoritative-count integration test): 40 -> 41.
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
-    assert "40 package(s) discovered, 0 denylisted, 40 will run" in result.stdout
+    assert "41 package(s) discovered, 0 denylisted, 41 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

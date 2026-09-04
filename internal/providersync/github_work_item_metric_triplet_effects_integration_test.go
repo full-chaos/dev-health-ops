@@ -62,6 +62,48 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 	foreignClaim := claim
 	foreignClaim.OrgID = "org-other"
 
+	// Freeze background merges on the three contested tables BEFORE anything is
+	// written, and restart them after.
+	//
+	// Every subtest below replays a write to put TWO physical rows on one dedup
+	// key, and both the contested-pair precondition and the replay assertion
+	// depend on those rows still being two when they read. A merge collapses
+	// them, and a read that has lost its FINAL then still returns the version
+	// winner -- the assertion would pass on the ENGINE's dedup rather than the
+	// QUERY's. Before this the fixture depended on winning that race silently.
+	//
+	// PER-TABLE, not the bare server-wide form: a scoped stop cannot leak to
+	// other tests even on a shared instance (CHAOS-4953).
+	//
+	// t.Cleanup, NOT defer, because THIS file tears down with t.Cleanup --
+	// `t.Cleanup(func() { _ = conn.Close() })`. Cleanups run LIFO and after all
+	// defers, so a Cleanup registered here runs BEFORE the connection closes.
+	// A `defer` restart would also run before conn.Close, but matching the
+	// file's own teardown is what keeps the ordering obvious to the next reader.
+	// The form is not portable: in a file that tears down with defers, a
+	// t.Cleanup restart fires against an ALREADY-CLOSED connection.
+	//
+	// Its own bounded context, because `defer cancel()` above runs BEFORE any
+	// t.Cleanup -- so ctx is already cancelled by the time the restart runs, and
+	// an Exec on it would be a silent no-op. The error is checked per table, or
+	// a failed restart looks exactly like a successful one.
+	for _, table := range []string{
+		githubWorkItemMetricsDailyDestination,
+		githubWorkItemUserMetricsDailyDestination,
+		githubWorkItemCycleTimesDestination,
+	} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges %s: %v", table, err)
+		}
+		t.Cleanup(func() {
+			resumeCtx, cancelResume := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelResume()
+			if err := conn.Exec(resumeCtx, "SYSTEM START MERGES "+table); err != nil {
+				t.Errorf("resume merges %s: %v", table, err)
+			}
+		})
+	}
+
 	t.Run(githubWorkItemMetricsDailyDestination, func(t *testing.T) {
 		sink := GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}
 		row := githubWorkItemMetricTestGroupRow()
@@ -91,6 +133,14 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
 			t.Fatal(err)
 		}
+		// PRECONDITION: the replay must have produced a SECOND physical row on this
+		// key. Asserted, not inferred from "two writes happened" (CHAOS-4950).
+		//
+		// Without it this subtest can degenerate into its neighbour and still pass,
+		// for the neighbour's reasons: if the replay write ever no-ops, no key ever
+		// carries two rows, the assertion below is satisfied identically with and
+		// without dedup, and nothing in the output says which case ran.
+		assertGitHubWorkItemContestedPair(t, ctx, conn, githubWorkItemMetricsDailyDestination, row.OrgID)
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a replayed write stopped being recognized")
 
@@ -131,6 +181,28 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		}
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a freshly written row was not recognized")
+		// Idempotent re-write: a recovering worker replays the same effect.
+		//
+		// THIS STEP IS THE DEDUP DETECTOR (CHAOS-4950). Without it the sequence
+		// Absent -> Exact -> Conflict passes identically whether or not the read
+		// deduplicates, because no key ever carries two rows. The replay puts a
+		// second row on the same key, so a read that lost its FINAL returns two
+		// and inspect reports conflict where this asserts exact. Measured: the
+		// sibling subtest that has this line kills the FINAL-removal mutation;
+		// the two that lacked it both survived it.
+		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatal(err)
+		}
+		// PRECONDITION: the replay must have produced a SECOND physical row on this
+		// key. Asserted, not inferred from "two writes happened" (CHAOS-4950).
+		//
+		// Without it this subtest can degenerate into its neighbour and still pass,
+		// for the neighbour's reasons: if the replay write ever no-ops, no key ever
+		// carries two rows, the assertion below is satisfied identically with and
+		// without dedup, and nothing in the output says which case ran.
+		assertGitHubWorkItemContestedPair(t, ctx, conn, githubWorkItemUserMetricsDailyDestination, row.OrgID)
+		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
+			"a replayed write stopped being recognized")
 
 		newer := row
 		newer.ComputedAt = row.ComputedAt.Add(time.Hour)
@@ -170,6 +242,28 @@ func TestGitHubWorkItemMetricTripletReadbacksAgainstRealClickHouse(t *testing.T)
 		}
 		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
 			"a freshly written row was not recognized")
+		// Idempotent re-write: a recovering worker replays the same effect.
+		//
+		// THIS STEP IS THE DEDUP DETECTOR (CHAOS-4950). Without it the sequence
+		// Absent -> Exact -> Conflict passes identically whether or not the read
+		// deduplicates, because no key ever carries two rows. The replay puts a
+		// second row on the same key, so a read that lost its FINAL returns two
+		// and inspect reports conflict where this asserts exact. Measured: the
+		// sibling subtest that has this line kills the FINAL-removal mutation;
+		// the two that lacked it both survived it.
+		if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatal(err)
+		}
+		// PRECONDITION: the replay must have produced a SECOND physical row on this
+		// key. Asserted, not inferred from "two writes happened" (CHAOS-4950).
+		//
+		// Without it this subtest can degenerate into its neighbour and still pass,
+		// for the neighbour's reasons: if the replay write ever no-ops, no key ever
+		// carries two rows, the assertion below is satisfied identically with and
+		// without dedup, and nothing in the output says which case ran.
+		assertGitHubWorkItemContestedPair(t, ctx, conn, githubWorkItemCycleTimesDestination, row.OrgID)
+		assertGitHubWorkItemMetricInspection(t, ctx, sink, identity, effect, EffectExact,
+			"a replayed write stopped being recognized")
 
 		// The three flow columns exist on the table and are NOT part of the
 		// persisted projection. Python leaves them at DEFAULT 0; so must Go, or
@@ -330,5 +424,29 @@ func assertGitHubWorkItemMetricInspection(
 	}
 	if got != want {
 		t.Fatalf("%s: inspection = %s, want %s", message, got, want)
+	}
+}
+
+// assertGitHubWorkItemContestedPair proves a replay actually produced a second
+// PHYSICAL row on the same dedup key, which is what makes a deduplicating read
+// distinguishable from a non-deduplicating one.
+//
+// Counts WITHOUT FINAL deliberately: physical rows are the thing in question,
+// and a count with FINAL would collapse them and always read 1. The foreign
+// tenant's row carries a different org_id and is excluded.
+func assertGitHubWorkItemContestedPair(
+	t *testing.T, ctx context.Context, conn driver.Conn, table, orgID string,
+) {
+	t.Helper()
+	var contested uint64
+	if err := conn.QueryRow(ctx,
+		"SELECT count() FROM "+table+" WHERE org_id = ?", orgID,
+	).Scan(&contested); err != nil {
+		t.Fatalf("count contested rows in %s: %v", table, err)
+	}
+	if contested != 2 {
+		t.Fatalf("%s contested row count = %d, want 2: the replay did not produce a second "+
+			"row on this key, so this subtest cannot tell a deduplicating read from a "+
+			"non-deduplicating one", table, contested)
 	}
 }

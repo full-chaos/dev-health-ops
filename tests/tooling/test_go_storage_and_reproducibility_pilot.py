@@ -168,10 +168,12 @@ def test_reproducibility_self_hosted_depends_on_dind_smoke_test() -> None:
 def test_reproducibility_self_hosted_real_work_has_a_shorter_inner_timeout() -> None:
     job = _job(_REPRO_SELF_HOSTED)
     job_timeout = job.get("timeout-minutes")
-    assert job_timeout == 25, (
+    assert job_timeout == 36, (
         f"{WORKFLOW_PATH.name}: {_REPRO_SELF_HOSTED!r}'s timeout-minutes "
-        f"({job_timeout!r}) does not match the contract's sizing (25m, "
-        "from measured pool wall time)"
+        f"({job_timeout!r}) does not match the contract's sizing (36m --  "
+        "measured 18m03s isolated wall x2, run 33822145677, per the "
+        "contract's own 'timeout-minutes = measured wall under load x2' "
+        "clause)"
     )
     step = _step_by_name(job, _REPRO_RUN_STEP)
     run_text = step.get("run")
@@ -185,6 +187,43 @@ def test_reproducibility_self_hosted_real_work_has_a_shorter_inner_timeout() -> 
         f"({inner}m) is not strictly shorter than its own timeout-minutes "
         f"({job_timeout}m)"
     )
+
+
+def test_pool_jobs_serialize_via_job_level_concurrency() -> None:
+    # CHAOS-4906 (09-04): a run isolated on the pool (33822145677, 18m03s,
+    # SUCCESS) and the same commit's twin overlapping a sibling pool run
+    # (33822592791/33815131351-era failures, both timing out at the then
+    # 20m inner cap) prove two concurrent reproducibility runs contend
+    # badly enough to fail outright. Job-level concurrency SERIALIZES the
+    # pool's use of each of these jobs across every PR/push, rather than
+    # letting GitHub schedule them to overlap freely; `cancel-in-progress`
+    # stays false so a queued-behind run waits its turn and still
+    # completes, instead of being cancelled by the one ahead of it (main
+    # pushes are never cancelled either way -- CHAOS-3948/CHAOS-4921/
+    # CHAOS-4946).
+    cases = [
+        (_REPRO_SELF_HOSTED, "pool-go-container-reproducibility"),
+        (_DIND_JOB, "pool-dind-smoke-test"),
+    ]
+    for job_name, expected_group in cases:
+        job = _job(job_name)
+        concurrency = job.get("concurrency")
+        assert isinstance(concurrency, dict), (
+            f"{WORKFLOW_PATH.name}: {job_name!r} has no job-level "
+            "`concurrency:` block -- pool runs of this job can overlap "
+            "and contend"
+        )
+        assert concurrency.get("group") == expected_group, (
+            f"{WORKFLOW_PATH.name}: {job_name!r}'s concurrency group "
+            f"({concurrency.get('group')!r}) does not match the expected "
+            f"{expected_group!r}"
+        )
+        assert concurrency.get("cancel-in-progress") is False, (
+            f"{WORKFLOW_PATH.name}: {job_name!r}'s cancel-in-progress "
+            f"({concurrency.get('cancel-in-progress')!r}) must be `false` "
+            "-- a queued-behind pool run waits and still completes, it is "
+            "never cancelled by the one ahead of it"
+        )
 
 
 def test_reproducibility_self_hosted_has_no_poll_step() -> None:

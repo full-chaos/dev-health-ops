@@ -182,6 +182,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    # CHAOS-5025: normal duration is ~6 min; one run hung with no output for
+    # ~6h until GitHub's default job timeout finally cancelled it. Bound the
+    # job explicitly so a recurrence fails fast instead of burning the full
+    # 360-minute default.
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read

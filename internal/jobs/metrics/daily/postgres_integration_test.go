@@ -1069,8 +1069,10 @@ CREATE TABLE daily_metrics_runs (
  status varchar(16) NOT NULL, finalization_status varchar(16) NOT NULL, finalization_claim_token uuid NULL,
  finalization_lease_expires_at timestamptz NULL, finalized_at timestamptz NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ blocked_at timestamptz NULL, blocked_reason varchar(64) NULL,
  CONSTRAINT ck_daily_metrics_run_status CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')),
- CONSTRAINT ck_daily_metrics_finalize_status CHECK (finalization_status IN ('pending', 'running', 'succeeded', 'failed'))
+ CONSTRAINT ck_daily_metrics_finalize_status CHECK (finalization_status IN ('pending', 'running', 'succeeded', 'failed')),
+ CONSTRAINT ck_daily_metrics_run_blocked_marker_paired CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL))
 );
 CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,

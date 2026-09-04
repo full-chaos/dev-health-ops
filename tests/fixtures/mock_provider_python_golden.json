@@ -1,0 +1,124 @@
+{
+  "cases": [
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "Production incident caused an outage overnight",
+          "source": "issue"
+        }
+      ],
+      "label": "incident_keyword",
+      "source_block": "[issue] E1\nProduction incident caused an outage overnight\n",
+      "subcategory_count": 15,
+      "top_category": "operational.incident_response",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "Refactor the legacy auth module, cleanup dead code",
+          "source": "pr"
+        }
+      ],
+      "label": "refactor_keyword",
+      "source_block": "[pr] E1\nRefactor the legacy auth module, cleanup dead code\n",
+      "subcategory_count": 15,
+      "top_category": "maintenance.refactor",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "Fix the flaky test and improve reliability",
+          "source": "commit"
+        }
+      ],
+      "label": "bugfix_keyword",
+      "source_block": "[commit] E1\nFix the flaky test and improve reliability\n",
+      "subcategory_count": 15,
+      "top_category": "quality.bugfix",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "Address a security vulnerability in the login flow",
+          "source": "issue"
+        }
+      ],
+      "label": "security_keyword",
+      "source_block": "[issue] E1\nAddress a security vulnerability in the login flow\n",
+      "subcategory_count": 15,
+      "top_category": "risk.security",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "Add a new export button to the dashboard",
+          "source": "issue"
+        }
+      ],
+      "label": "no_keyword_match_defaults_feature_delivery",
+      "source_block": "[issue] E1\nAdd a new export button to the dashboard\n",
+      "subcategory_count": 15,
+      "top_category": "feature_delivery.customer",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "First block, mentions a security vulnerability",
+          "source": "issue"
+        }
+      ],
+      "label": "multiple_source_blocks_uses_first_only",
+      "source_block": "[issue] E1\nFirst block, mentions a security vulnerability\n\n[pr] E2\nSecond block, mentions a refactor\n",
+      "subcategory_count": 15,
+      "top_category": "risk.security",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "unknown",
+          "quote": "incremental improvement",
+          "source": "issue"
+        }
+      ],
+      "label": "no_source_block_at_all",
+      "source_block": "(EMPTY)",
+      "subcategory_count": 15,
+      "top_category": "feature_delivery.customer",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    },
+    {
+      "evidence_quotes": [
+        {
+          "id": "E1",
+          "quote": "word word word word word word word word word word word word word word word word",
+          "source": "issue"
+        }
+      ],
+      "label": "quote_truncated_to_80_chars",
+      "source_block": "[issue] E1\nword word word word word word word word word word word word word word word word word word word word word word word word word word word word word word \n",
+      "subcategory_count": 15,
+      "top_category": "feature_delivery.customer",
+      "top_weight": 0.5,
+      "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation."
+    }
+  ]
+}

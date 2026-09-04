@@ -105,35 +105,70 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 		whereSQL = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	havingSQL := ""
+	outerFilterSQL := ""
 	if !opts.IncludeHeuristic {
-		// HAVING must reference the SELECT ALIAS, not repeat
-		// argMax(provenance, ...): the alias shadows the raw column and
-		// re-aggregating it raises ILLEGAL_AGGREGATION (184). Same ClickHouse
-		// trap documented on LATEST_WORK_UNIT_INVESTMENTS_CTE.
-		havingSQL = "HAVING provenance != {heuristic_provenance:String}"
+		// References the OUTER SELECT's `provenance` alias (extracted from
+		// the tupled winner below), not a raw column or another aggregate --
+		// the outer query no longer aggregates at all (the tupled argMax
+		// moved the GROUP BY into the subquery, mirroring
+		// cmd/query-api/internal/workgraph/edges.go's own CHAOS-4985 fix),
+		// so this is a plain WHERE, not HAVING. Re-aggregating the raw
+		// column here would still raise ILLEGAL_AGGREGATION (184) for the
+		// same reason the old HAVING-on-alias form avoided it -- same
+		// ClickHouse trap documented on LATEST_WORK_UNIT_INVESTMENTS_CTE,
+		// just enforced one query level further out now.
+		outerFilterSQL = "WHERE provenance != {heuristic_provenance:String}"
 		arguments = append(arguments, clickhouse.Named("heuristic_provenance", heuristicProvenance))
 	}
 
+	// One tupled argMax(tuple(repo_id, provider, provenance, confidence,
+	// evidence), last_synced), computed ONCE in a subquery, parts extracted
+	// in the outer SELECT (CHAOS-4985 follow-up, codex round 2 on #2186, P3
+	// -- the same hybrid-row-on-a-last_synced-tie defect the sibling
+	// cmd/query-api/internal/workgraph/edges.go reader already had, and was
+	// already fixed for: two unmerged rows sharing the same last_synced can
+	// tie under argMax, which ClickHouse documents as implementation-defined
+	// for the tie-break; five INDEPENDENT argMax calls could each break that
+	// tie differently and assemble a row that never existed in any single
+	// physical insert. Latent here (FetchWorkGraphEdges has no non-test call
+	// site at this tip), hence P3 not P2 -- fixed anyway, matching the
+	// established remediation rather than leaving a known-defective query on
+	// the books. `org_id` is carried through as a passthrough column purely
+	// for the ORDER BY (this function deliberately has no org filter by
+	// default, see the doc comment above -- a multi-tenant read needs org_id
+	// in the sort key), scanned and discarded below since EdgeRow never
+	// carried it.
 	query := fmt.Sprintf(`
         SELECT
-            any(edge_id) AS edge_id,
+            org_id,
+            edge_id,
             source_type,
             source_id,
             target_type,
             target_id,
             edge_type,
-            toString(argMax(repo_id, last_synced)) AS repo_id,
-            argMax(provider, last_synced) AS provider,
-            argMax(provenance, last_synced) AS provenance,
-            argMax(confidence, last_synced) AS confidence,
-            argMax(evidence, last_synced) AS evidence
-        FROM work_graph_edges
-        %s
-        GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+            toString(winner.1) AS repo_id,
+            winner.2 AS provider,
+            winner.3 AS provenance,
+            winner.4 AS confidence,
+            winner.5 AS evidence
+        FROM (
+            SELECT
+                org_id,
+                source_type,
+                source_id,
+                target_type,
+                target_id,
+                edge_type,
+                any(edge_id) AS edge_id,
+                argMax(tuple(repo_id, provider, provenance, confidence, evidence), last_synced) AS winner
+            FROM work_graph_edges
+            %s
+            GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+        )
         %s
         ORDER BY org_id, source_type, source_id, edge_type, target_type, target_id
-    `, whereSQL, havingSQL)
+    `, whereSQL, outerFilterSQL)
 
 	rows, err := reader.conn.Query(ctx, query, arguments...)
 	if err != nil {
@@ -144,6 +179,10 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 	edges := make([]EdgeRow, 0)
 	for rows.Next() {
 		var (
+			// orgID is scanned and discarded -- carried through purely for
+			// the query's ORDER BY (see the query comment above); EdgeRow
+			// never held it before this change either.
+			orgID      string
 			edgeID     string
 			sourceType string
 			sourceID   string
@@ -163,7 +202,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 			evidence   string
 		)
 		if err := rows.Scan(
-			&edgeID, &sourceType, &sourceID, &targetType, &targetID, &edgeType,
+			&orgID, &edgeID, &sourceType, &sourceID, &targetType, &targetID, &edgeType,
 			&repoID, &provider, &provenance, &confidence, &evidence,
 		); err != nil {
 			return nil, fmt.Errorf("scan work_graph_edges row: %w", err)

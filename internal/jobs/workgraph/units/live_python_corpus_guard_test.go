@@ -183,6 +183,14 @@ var excludedGenerators = map[string]struct {
 		missingModule: "httpx2",
 		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
 	},
+	"generate_categorization_prompts_python_golden.py": {
+		reason: "imports categorization_prompts.py, which imports " +
+			"llm.providers.openai, which imports _http.py's httpx2 client " +
+			"helpers directly -- same missing httpx2 transitive as the " +
+			"materialize.py-importing generators above, different import path",
+		missingModule: "httpx2",
+		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
+	},
 	// generate_scope_grammar_corpus.py's exclusion (limits missing from the
 	// closure) was removed here CHAOS-4945, once `limits` (and its own
 	// transitives, deprecated and wrapt) were added to

@@ -1,0 +1,1171 @@
+{
+  "parse_cases": [
+    {
+      "errors": [],
+      "label": "valid_json_object",
+      "payload_is_object": true,
+      "raw_text": "{\"a\": 1}"
+    },
+    {
+      "errors": [
+        "invalid_json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+      ],
+      "label": "invalid_json_syntax",
+      "payload_is_object": false,
+      "raw_text": "{not valid json"
+    },
+    {
+      "errors": [
+        "payload_not_object"
+      ],
+      "label": "valid_json_but_not_object",
+      "payload_is_object": false,
+      "raw_text": "[1, 2, 3]"
+    }
+  ],
+  "validate_cases": [
+    {
+      "errors": [],
+      "evidence_quotes": [
+        {
+          "quote": "Fix the login bug",
+          "source_id": "i1",
+          "source_type": "issue"
+        }
+      ],
+      "label": "fully_valid_payload",
+      "ok": true,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 1.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quotes_count_out_of_range",
+        "evidence_quotes_not_list",
+        "missing_top_level_keys:['evidence_quotes']"
+      ],
+      "evidence_quotes": [],
+      "label": "missing_top_level_key",
+      "ok": false,
+      "payload": {
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "x"
+      },
+      "subcategories": {},
+      "uncertainty": "x",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "unexpected_top_level_keys:['extra_field']"
+      ],
+      "evidence_quotes": [],
+      "label": "extra_top_level_key",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "extra_field": true,
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "all_weights_zero",
+        "subcategories_not_object"
+      ],
+      "evidence_quotes": [],
+      "label": "subcategories_not_object",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": "not an object",
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "unknown_subcategory:made.up"
+      ],
+      "evidence_quotes": [],
+      "label": "unknown_subcategory_key",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "made.up": 1.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "invalid_weight:quality.testing"
+      ],
+      "evidence_quotes": [],
+      "label": "bool_weight_rejected_not_treated_as_zero_or_one",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": true,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "invalid_weight:quality.testing"
+      ],
+      "evidence_quotes": [],
+      "label": "string_weight_invalid",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": "high",
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "negative_weight:quality.testing"
+      ],
+      "evidence_quotes": [],
+      "label": "negative_weight",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": -1.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "weight_sum_not_finite"
+      ],
+      "evidence_quotes": [],
+      "label": "weight_sum_overflows_to_non_finite",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1e+308,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 1e+308,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "all_weights_zero"
+      ],
+      "evidence_quotes": [],
+      "label": "all_weights_zero",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 0.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "evidence_quotes": [
+        {
+          "quote": "Fix the login bug",
+          "source_id": "i1",
+          "source_type": "issue"
+        }
+      ],
+      "label": "weights_normalized_warning_not_error",
+      "ok": true,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 1.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 0.5,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.5,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "uncertainty": "moderate confidence",
+      "warnings": [
+        "weights_normalized:2.0000"
+      ]
+    },
+    {
+      "errors": [
+        "evidence_quotes_count_out_of_range",
+        "evidence_quotes_not_list"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quotes_not_list",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": "not a list",
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quotes_count_out_of_range"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quotes_empty",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quotes_count_out_of_range"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quotes_too_many",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          },
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_not_object:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_not_object",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          "not an object"
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_missing_keys:0:['id']"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_missing_key",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "quote": "x",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_extra_keys:0:['extra']"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_extra_key",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "extra": 1,
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_invalid_type:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_non_string_field",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": 123,
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_empty:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_empty_after_strip",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "   ",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_too_long:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_too_long",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_invalid_source:0:wiki"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_invalid_source",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "wiki"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_missing_id:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_missing_id",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "  ",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_unknown_source:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_unknown_handle",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E99",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "evidence_quote_not_substring:0"
+      ],
+      "evidence_quotes": [],
+      "label": "evidence_quote_not_a_substring",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "totally unrelated text",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {},
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "evidence_quotes": [
+        {
+          "quote": "Fix the login bug",
+          "source_id": "i1",
+          "source_type": "issue"
+        }
+      ],
+      "label": "evidence_quote_whitespace_normalized_recovery",
+      "ok": true,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the   login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "moderate confidence"
+      },
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 1.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "uncertainty": "moderate confidence",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "uncertainty_invalid_type"
+      ],
+      "evidence_quotes": [],
+      "label": "uncertainty_wrong_type",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": 42
+      },
+      "subcategories": {},
+      "uncertainty": "",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "uncertainty_missing"
+      ],
+      "evidence_quotes": [],
+      "label": "uncertainty_missing_after_strip",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "   "
+      },
+      "subcategories": {},
+      "uncertainty": "",
+      "warnings": []
+    },
+    {
+      "errors": [
+        "uncertainty_too_long"
+      ],
+      "evidence_quotes": [],
+      "label": "uncertainty_too_long",
+      "ok": false,
+      "payload": {
+        "evidence_quotes": [
+          {
+            "id": "E1",
+            "quote": "Fix the login bug",
+            "source": "issue"
+          }
+        ],
+        "subcategories": {
+          "feature_delivery.customer": 0.0,
+          "feature_delivery.enablement": 0.0,
+          "feature_delivery.roadmap": 0.0,
+          "maintenance.debt": 1.0,
+          "maintenance.refactor": 0.0,
+          "maintenance.upgrade": 0.0,
+          "operational.incident_response": 0.0,
+          "operational.on_call": 0.0,
+          "operational.support": 0.0,
+          "quality.bugfix": 0.0,
+          "quality.reliability": 0.0,
+          "quality.testing": 0.0,
+          "risk.compliance": 0.0,
+          "risk.security": 0.0,
+          "risk.vulnerability": 0.0
+        },
+        "uncertainty": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "subcategories": {},
+      "uncertainty": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "warnings": []
+    }
+  ]
+}

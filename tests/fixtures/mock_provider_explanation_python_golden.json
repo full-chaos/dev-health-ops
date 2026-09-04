@@ -1,0 +1,106 @@
+{
+  "cases": [
+    {
+      "confidence_note": "This analysis reflects high evidence quality. The categorization leans toward risk.security but may not fully capture the nuanced nature of the work.",
+      "dominant_themes": [
+        "risk"
+      ],
+      "key_drivers": [
+        "Structural evidence appears to contribute most significantly to the categorization.",
+        "Textual phrases appear to align with the investment interpretation."
+      ],
+      "label": "high_band_single_category",
+      "operational_signals": [
+        "Evidence quality bands indicate high uncertainty.",
+        "Lower-weight categories may still represent meaningful aspects of the work."
+      ],
+      "prompt": "Evidence Quality: strong (high)\n  - risk.security: 62.00%\n",
+      "summary": "Based on the precomputed investment view, this work unit appears to lean toward risk.security work."
+    },
+    {
+      "confidence_note": "This analysis reflects low evidence quality. The categorization leans toward quality.bugfix but may not fully capture the nuanced nature of the work.",
+      "dominant_themes": [
+        "quality"
+      ],
+      "key_drivers": [
+        "Structural evidence appears to contribute most significantly to the categorization.",
+        "Textual phrases appear to align with the investment interpretation."
+      ],
+      "label": "low_band_multiple_categories_highest_wins",
+      "operational_signals": [
+        "Evidence quality bands indicate low uncertainty.",
+        "Lower-weight categories may still represent meaningful aspects of the work."
+      ],
+      "prompt": "Evidence Quality: weak (low)\n  - maintenance.refactor: 30.00%\n  - quality.bugfix: 55.00%\n  - risk.security: 15.00%\n",
+      "summary": "Based on the precomputed investment view, this work unit appears to lean toward quality.bugfix work."
+    },
+    {
+      "confidence_note": "This analysis reflects very_low evidence quality. The categorization leans toward feature_delivery.customer but may not fully capture the nuanced nature of the work.",
+      "dominant_themes": [
+        "feature_delivery"
+      ],
+      "key_drivers": [
+        "Structural evidence appears to contribute most significantly to the categorization.",
+        "Textual phrases appear to align with the investment interpretation."
+      ],
+      "label": "very_low_band_below_default_threshold_ignored",
+      "operational_signals": [
+        "Evidence quality bands indicate very_low uncertainty.",
+        "Lower-weight categories may still represent meaningful aspects of the work."
+      ],
+      "prompt": "Evidence Quality: minimal (very_low)\n  - feature_delivery.roadmap: 10.00%\n",
+      "summary": "Based on the precomputed investment view, this work unit appears to lean toward feature_delivery.customer work."
+    },
+    {
+      "confidence_note": "This analysis reflects moderate evidence quality. The categorization leans toward feature_delivery.customer but may not fully capture the nuanced nature of the work.",
+      "dominant_themes": [
+        "feature_delivery"
+      ],
+      "key_drivers": [
+        "Structural evidence appears to contribute most significantly to the categorization.",
+        "Textual phrases appear to align with the investment interpretation."
+      ],
+      "label": "no_band_no_percentage_lines_defaults",
+      "operational_signals": [
+        "Evidence quality bands indicate moderate uncertainty.",
+        "Lower-weight categories may still represent meaningful aspects of the work."
+      ],
+      "prompt": "No structured evidence markers in this prompt at all.\n",
+      "summary": "Based on the precomputed investment view, this work unit appears to lean toward feature_delivery.customer work."
+    },
+    {
+      "confidence_note": "This analysis reflects moderate evidence quality. The categorization leans toward operational.incident_response but may not fully capture the nuanced nature of the work.",
+      "dominant_themes": [
+        "operational"
+      ],
+      "key_drivers": [
+        "Structural evidence appears to contribute most significantly to the categorization.",
+        "Textual phrases appear to align with the investment interpretation."
+      ],
+      "label": "moderate_band_explicit",
+      "operational_signals": [
+        "Evidence quality bands indicate moderate uncertainty.",
+        "Lower-weight categories may still represent meaningful aspects of the work."
+      ],
+      "prompt": "Evidence Quality: fair (moderate)\n  - operational.incident_response: 40.00%\n",
+      "summary": "Based on the precomputed investment view, this work unit appears to lean toward operational.incident_response work."
+    },
+    {
+      "confidence_note": "This analysis reflects moderate evidence quality. The categorization leans toward feature_delivery.customer but may not fully capture the nuanced nature of the work.",
+      "dominant_themes": [
+        "feature_delivery"
+      ],
+      "key_drivers": [
+        "Structural evidence appears to contribute most significantly to the categorization.",
+        "Textual phrases appear to align with the investment interpretation."
+      ],
+      "label": "malformed_percentage_line_skipped",
+      "operational_signals": [
+        "Evidence quality bands indicate moderate uncertainty.",
+        "Lower-weight categories may still represent meaningful aspects of the work."
+      ],
+      "prompt": "Evidence Quality: fair (moderate)\n  - risk.compliance: not-a-number%\n",
+      "summary": "Based on the precomputed investment view, this work unit appears to lean toward feature_delivery.customer work."
+    }
+  ]
+}

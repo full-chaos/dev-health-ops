@@ -21,7 +21,7 @@
     {"name":"ai_governance","python":"build_governance_rows_for_day","writes":["ai_policy_events","ai_governance_coverage_daily"],"port":"go","golden":"required"},
     {"name":"ai_impact","python":"compute_ai_impact_metrics_daily","writes":["ai_impact_metrics_daily"],"port":"go","golden":"required"},
     {"name":"ai_workflow","python":"_extract_ai_workflow_for_day","writes":["ai_workflow_runs","ai_workflow_artifact_edges","ai_workflow_issue_edges"],"port":"pending","golden":"required"},
-    {"name":"work_graph_edges","python":"extract_review_deployment_incident_edges","writes":["work_graph_pr_review_outcome_edges","work_graph_pr_deployment_edges","work_graph_deployment_incident_edges"],"port":"pending","golden":"required"},
+    {"name":"work_graph_edges","python":"extract_review_deployment_incident_edges","writes":["work_graph_pr_review_outcome_edges","work_graph_pr_deployment_edges","work_graph_deployment_incident_edges"],"port":"go","golden":"required"},
     {"name":"compounding_risk","python":"_write_compounding_risk_for_day","writes":["compounding_risk_daily"],"port":"pending","golden":"required"},
     {"name":"team_cognitive_load","python":"_write_team_cognitive_load_for_day","writes":["team_cognitive_load_daily"],"port":"pending","golden":"required"},
     {"name":"testops_risk","python":"compute_release_confidence,compute_quality_drag,compute_pipeline_stability","writes":["testops_release_confidence","testops_quality_drag","testops_pipeline_stability"],"port":"go","golden":"required"},

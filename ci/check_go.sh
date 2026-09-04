@@ -478,6 +478,34 @@ check_live_python_oracles() {
     fi
   done
 
+  printf 'go test -count=1: internal/jobs/metrics/workgraphedges (work_graph_edges port vs live Python, CHAOS-4286)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestWorkGraphEdgesMatchLivePythonProduction$' \
+        ./internal/jobs/metrics/workgraphedges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Own marker, checked separately, for the same reason as the siblings above:
+  # a shared marker would be satisfied by whichever oracle happened to run.
+  # This one compares edge_id too -- unlike ai_governance's, whose Python side
+  # randomises the id -- so it is the only guard that can catch a change to the
+  # _hash join or its part order.
+  proof_file="${proof_dir}/work-graph-edges-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: work_graph_edges live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294)\n'
   if ! (
     cd "${ROOT}"

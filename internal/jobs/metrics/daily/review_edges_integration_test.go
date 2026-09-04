@@ -15,6 +15,21 @@ import (
 // touches: the two raw sync sources from 000_raw_tables.sql (both
 // ReplacingMergeTree(last_synced), with org_id added by migration 024) and the
 // plain-MergeTree output from 004_quality_delivery_metrics.sql.
+// Sorting keys are migration 027's, org_id FIRST on all three
+// (027_add_org_id_to_sorting_keys.py:63,64,46) -- NOT the pre-027 keys from
+// 000_raw_tables.sql / 004_quality_delivery_metrics.sql.
+//
+// This is load-bearing, not cosmetic. The first version of this fixture used
+// the pre-027 keys, and under ReplacingMergeTree(last_synced) with
+// ORDER BY (repo_id, number) two orgs sharing a repo_id are the SAME ROW: org
+// B's later last_synced silently replaced org A's PR before any query ran, so
+// TestReviewEdgesDedupIsTenantScopedWhenTwoOrgsShareARepoID computed 0 edges.
+//
+// The failure was a coin flip away from being invisible. Had org B's
+// last_synced been the EARLIER one, org A's row would have survived, the test
+// would have passed, and it would have proven nothing about the loader's
+// org_id filter -- which is the thing it exists to pin. A fixture whose
+// sorting key does not match production does not test production.
 var reviewEdgesSchema = []string{
 	`CREATE TABLE git_pull_requests (
     repo_id UUID, number UInt32, title Nullable(String), body Nullable(String),
@@ -22,18 +37,16 @@ var reviewEdgesSchema = []string{
     created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
     closed_at Nullable(DateTime64(3, 'UTC')),
     last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number)`,
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
 	`CREATE TABLE git_pull_request_reviews (
     repo_id UUID, number UInt32, review_id String, reviewer String, state String,
     submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, number, review_id)`,
-	// org_id is NOT in this table's sort key -- migration 024 added the column
-	// to a table migration 004 had already created without one.
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
 	`CREATE TABLE review_edges_daily (
     repo_id UUID, day Date, reviewer String, author String,
     reviews_count UInt32, computed_at DateTime('UTC'), org_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
-  ORDER BY (repo_id, reviewer, author, day)`,
+  ORDER BY (org_id, repo_id, reviewer, author, day)`,
 }
 
 // TestReviewEdgesComputeFamilyDeduplicatesResyncedRows is the loader-level

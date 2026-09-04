@@ -3,6 +3,7 @@ package categorize
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 )
@@ -153,6 +154,14 @@ func ResolveProviderKindForOrg(
 			return "", err
 		}
 		if orgProvider != "" {
+			// codex round 1 (#2223), P3: this branch is the whole point of
+			// CHAOS-5006 -- an org's own BYO provider overriding the
+			// platform's LLM_PROVIDER for "auto" -- and had no telemetry at
+			// all, making it operationally indistinguishable from every
+			// other resolution path. Org id only, never the resolved
+			// provider's credentials (this function only ever receives a
+			// provider NAME string here, never a secret).
+			log.Printf("categorize: org %q BYO provider %q selected over platform default for auto resolution", orgID, orgProvider)
 			return normalizeProviderKind(orgProvider), nil
 		}
 	}

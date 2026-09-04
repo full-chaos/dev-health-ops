@@ -1,8 +1,11 @@
 package categorize
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 )
 
@@ -143,5 +146,84 @@ func TestResolveProviderKindForOrg_OrgProviderIsNormalized(t *testing.T) {
 	}
 	if kind != ProviderKindOllama {
 		t.Fatalf("kind = %q, want ollama (an org-resolved provider name must be normalized same as any other)", kind)
+	}
+}
+
+// TestResolveProviderKindForOrg_LogsOnOrgBYOWin is the codex round 1
+// (#2223), P3 regression: the org-BYO-wins branch -- the whole point of
+// CHAOS-5006 -- previously had no telemetry at all, making it operationally
+// indistinguishable from every other resolution path. Asserts the log line
+// fires with the org id and resolved provider, and NOT on any other
+// resolution path (kill-switch, platform env, auto-detect).
+func TestResolveProviderKindForOrg_LogsOnOrgBYOWin(t *testing.T) {
+	clearProviderEnv(t)
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(orig) })
+
+	kind, err := ResolveProviderKindForOrg(
+		context.Background(), "auto", "org-42", staticOrgResolver("ollama", nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if kind != ProviderKindOllama {
+		t.Fatalf("kind = %q, want ollama", kind)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "org-42") || !strings.Contains(got, "ollama") {
+		t.Fatalf("log output = %q, want it to mention the org id and resolved provider", got)
+	}
+}
+
+// TestResolveProviderKindForOrg_NoLogOnNonOrgPaths proves the new log line
+// is scoped to the org-BYO-wins branch only -- it must not fire on the
+// kill-switch, no-org-provider-available, or auto-detect paths.
+func TestResolveProviderKindForOrg_NoLogOnNonOrgPaths(t *testing.T) {
+	cases := []struct {
+		name     string
+		setup    func(t *testing.T)
+		resolver OrgProviderResolver
+	}{
+		{
+			name: "kill switch beats org BYO",
+			setup: func(t *testing.T) {
+				clearProviderEnv(t)
+				t.Setenv("LLM_PROVIDER", "none")
+			},
+			resolver: staticOrgResolver("ollama", nil),
+		},
+		{
+			name: "no org provider available, falls to platform env",
+			setup: func(t *testing.T) {
+				clearProviderEnv(t)
+				t.Setenv("LLM_PROVIDER", "openai")
+			},
+			resolver: staticOrgResolver("", nil),
+		},
+		{
+			name: "nil resolver, auto-detect",
+			setup: func(t *testing.T) {
+				clearProviderEnv(t)
+				t.Setenv("OPENAI_API_KEY", "sk-test")
+			},
+			resolver: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup(t)
+			var buf bytes.Buffer
+			orig := log.Writer()
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(orig) })
+
+			if _, err := ResolveProviderKindForOrg(context.Background(), "auto", "org-1", tc.resolver); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := buf.String(); got != "" {
+				t.Fatalf("log output = %q, want empty -- the org-BYO log line must not fire on this path", got)
+			}
+		})
 	}
 }

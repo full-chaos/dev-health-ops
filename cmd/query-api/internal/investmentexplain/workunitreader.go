@@ -8,6 +8,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/chpairliteral"
 )
 
 // lookupChunkSize ports work_unit_investments.py's _LOOKUP_CHUNK_SIZE.
@@ -376,6 +377,20 @@ type WorkUnitInvestmentQuoteRow struct {
 
 // FetchWorkUnitInvestmentQuotes ports fetch_work_unit_investment_quotes
 // (work_unit_investments.py:217-244).
+//
+// CHAOS-4977 step 7's live-ClickHouse differential found the original
+// `{pairs:Array(Tuple(String, String))}` binding of a `[][2]string` fails
+// against the real driver outright ("binding value: clickhouse runtime:
+// invalid binding") -- dev-health-go@v0.6.2's clickhouse.Binding wire
+// format has no tuple-array encoding at all (confirmed directly against
+// the pinned module's clickHouseParameter: it handles only
+// string/[]string/time.Time/ints, and falls through to ErrInvalidBinding
+// for anything else). This is the exact gap
+// workgraph.batchResolveMembership already hit and fixed (CHAOS-4745): no
+// fixture-based test exercises the real driver's binding-encoding path,
+// only a live differential run does. Ported that fix's shape here via the
+// shared chpairliteral.Encode helper rather than a second hand copy of the
+// hex+concat encoder -- see chpairliteral's package doc for the mechanism.
 func (reader *Reader) FetchWorkUnitInvestmentQuotes(ctx context.Context, orgID string, unitRuns []WorkUnitRunPair) ([]WorkUnitInvestmentQuoteRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
@@ -405,8 +420,11 @@ SELECT
     source_id,
     categorization_run_id
 FROM work_unit_investment_quotes
-WHERE (work_unit_id, categorization_run_id) IN {pairs:Array(Tuple(String, String))}
-  AND org_id = {org_id:String}
+WHERE org_id = {org_id:String}
+  AND (work_unit_id, categorization_run_id) IN (
+      SELECT unhex(splitByChar(':', p)[1]), unhex(splitByChar(':', p)[2])
+      FROM (SELECT arrayJoin({pairs:Array(String)}) AS p)
+  )
 %s
 `, settingsMaxExecutionTime())
 
@@ -417,7 +435,7 @@ WHERE (work_unit_id, categorization_run_id) IN {pairs:Array(Tuple(String, String
 			tuples[i] = [2]string{pair.WorkUnitID, pair.RunID}
 		}
 		bindings := []dhclickhouse.Binding{
-			{Name: "pairs", Value: tuples},
+			{Name: "pairs", Value: chpairliteral.Encode(tuples)},
 			{Name: "org_id", Value: orgID},
 		}
 		rows, err := reader.client.Query(ctx, query, bindings)

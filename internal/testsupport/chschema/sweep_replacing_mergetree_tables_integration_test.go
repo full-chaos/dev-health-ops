@@ -150,8 +150,14 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // the recurrence guard correctly catching a real, legitimate schema change,
 // not a bug in the guard -- the fix is updating the count to match reality,
 // same as every prior number in this constant's own history.
+// 86 -> 88, CHAOS-3092 PR-B: 086_work_item_attribution_backstop_runs.sql adds
+// TWO ReplacingMergeTree tables, both keyed on completed_at --
+// `work_item_attribution_backstop_runs` and
+// `work_item_attribution_backstop_scoped_runs` -- the CHAOS-2433
+// write-then-marker run-marker pair, same shape as #2177's
+// work_unit_membership_runs/_scoped_runs.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 86
+	const wantCount = 88
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

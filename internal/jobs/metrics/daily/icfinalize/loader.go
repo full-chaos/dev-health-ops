@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 // RollingStat is one row of the 30-day rolling window, one per identity.
@@ -76,8 +75,8 @@ GROUP BY identity_id`
 // params and the precedent this package already sets: repouser/clickhouse.go
 // passes dateTimeArgument(t), a formatted string, for its own {start:DateTime}
 // binds rather than a time.Time.
-// It takes the package's narrow Conn rather than driver.Conn: the full
-// driver.Conn carries AsyncInsert and much else this never calls, and
+// It takes the package's narrow Conn rather than the clickhouse-go driver's
+// full connection interface, which carries AsyncInsert and much else this never calls, and
 // depending on it would force every caller -- including the executor, which
 // holds the narrow one -- to supply capabilities it does not use.
 func LoadRollingStats(

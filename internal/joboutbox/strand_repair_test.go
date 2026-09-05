@@ -722,3 +722,54 @@ func TestRelayStepPreservesRecoveryResultOnClaimDueExceptError(t *testing.T) {
 		)
 	}
 }
+
+// TestStrandRepairStepPreservesShapeResultOnObserveRetiredKindsError closes a
+// coverage gap found while building confirmation pass 2's context (team-lead
+// ruling, CHAOS-4438: every error branch of a touched function must be
+// exercised, or fixed, before the next round launches). r2's F2 fix at
+// strand_repair.go's trailing observeRetiredKinds error return was pinned
+// ONLY via a fake at Relay.stepRecovery (TestRelayStepRecoveryPreservesStrand
+// ResultOnObservationError) -- the REAL StrandRepair.Step never had a direct
+// test driving this exact path. Same fix shape as this file's other Step
+// tests: one shape produces a real, non-zero result; the trailing
+// observeRetiredKinds call then errors; the shape's result must survive.
+func TestStrandRepairStepPreservesShapeResultOnObserveRetiredKindsError(t *testing.T) {
+	call := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		call++
+		switch call {
+		case 1:
+			return &fakeStrandSurveyRows{rows: [][]any{
+				{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+			}}, nil
+		case 2:
+			return nil, errors.New("observe retired kinds query failed")
+		default:
+			t.Fatalf("unexpected queryQueue call #%d", call)
+			return nil, nil
+		}
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
+		shapes: []strandShape{
+			{name: "a", survey: "SELECT 1", lock: "SELECT 1"},
+		},
+	}
+
+	result, err := repair.Step(context.Background(), time.Now(), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), "observe retired kinds") {
+		t.Fatalf("Step() error = %v, want it to name the observe-retired-kinds stage", err)
+	}
+	if result.SkippedJobLive != 1 {
+		t.Fatalf(
+			"Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite observeRetiredKinds' error",
+			result,
+		)
+	}
+}

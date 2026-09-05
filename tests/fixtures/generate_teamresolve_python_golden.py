@@ -21,18 +21,32 @@ Usage: generate_teamresolve_python_golden.py [--stdout]
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import logging
 import sys
 import uuid
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from dev_health_ops.metrics.job_daily import (  # noqa: E402
-    _repo_to_team_map_for_compounding_risk,
-)
+# dev_health_ops.tracing configures a JSON handler on the ROOT logger that
+# writes to stdout (module-import side effect, triggered transitively by
+# importing job_daily). _repo_to_team_map_for_compounding_risk's own
+# `logger.info(...)` call (the via_ownership/via_pattern/unresolved line)
+# would otherwise interleave JSON log records with this script's own JSON
+# payload on the same stream, corrupting it for any reader expecting one
+# JSON document. Both the import (which configures the handler) and every
+# case run (which logs through it) happen inside the same stdout-redirect
+# below; only the final render() writes to the real stdout.
+with redirect_stdout(io.StringIO()):
+    logging.disable(logging.CRITICAL)
+    from dev_health_ops.metrics.job_daily import (
+        _repo_to_team_map_for_compounding_risk,
+    )
 
 
 class _FakeRow:

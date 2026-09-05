@@ -40,7 +40,7 @@ across the three targets, and that is what decides the routing:
 | Host Testcontainers (this repo) | **26.6.1.1193** | 18-alpine | The image is digest-pinned with no version in the source; resolved from the registry config blob label `com.clickhouse.build.version` (built 2026-06-26). Independently corroborated in-repo: `internal/providersync/linear_stale_project_ownership_cleanup.go:75-82` records the same resolution, reached by running against the digest directly. |
 | GitHub Actions CI services | **26.7** | 18-alpine | `.github/workflows/test.yml:171,353`; `.github/workflows/live-e2e.yml:88,200`. Moved 25.1 -> 26.7 by CHAOS-4851 when the service images were mirrored to ghcr; kept a tag, not a digest, so minor upgrades apply. |
 | kiac in-cluster (`acr-local`) | **26.7.3.19** | **18.6** | Live readback, `SELECT version()` / `SHOW server_version`, 2026-08-31. |
-| acr's own Testcontainers | 26.7.5.10 | 18-alpine | Pinned deliberately by CHAOS-4549; floor `26.7` in `acr/internal/chfixture`. |
+| acr's own Testcontainers | 26.7 | 18-alpine | Pinned deliberately by CHAOS-4549; floor `26.7` in `acr/internal/chfixture`. Relaxed from the exact patch `26.7.5.10` to the bare minor by CHAOS-5180 (patch drift allowed). |
 | Production | 26.7.x (floating) | — | CHAOS-4519: prod's exact patch drifts, so the floor is `major.minor`. |
 
 Three consequences follow, and they are the whole decision procedure:

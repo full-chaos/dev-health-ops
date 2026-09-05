@@ -1136,8 +1136,8 @@ async def run_daily_metrics_job(
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
-    ``compounding_risk`` CHAOS-4287, and ``review_edges`` CHAOS-4279); naming
-    any other family here has no effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -1909,6 +1909,20 @@ async def run_daily_metrics_job(
         #     compute COULD be skipped, but is left unconditional to match the
         #     established file_hotspots precedent and keep the diff minimal.
         #
+        # CHAOS-4286: work_graph_edges has a native Go executor
+        # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
+        # the compute that produces these three lists is the SAME
+        # _extract_ai_workflow_for_day call that produces ai_workflow_runs /
+        # _artifact_edges / _issue_edges, and THOSE are still Python-owned
+        # (ai_workflow is CHAOS-4286's other half, not yet ported). So the
+        # extraction must stay unconditional; only the three edge writes below
+        # are gated.
+        #
+        # Safe because each of ai_review_outcome_edges, ai_pr_deployment_edges
+        # and ai_deployment_incident_edges is assigned once (:1696-1698) and
+        # read ONLY by its own write below -- verified by grep, not assumed.
+        skip_work_graph_edges_write = "work_graph_edges" in skip_families
+        #
         # Without these two gates the native executors and the unconditional
         # writes below would BOTH fire for every partition, doubling every row
         # in work_item_metrics_daily and work_item_user_metrics_daily (plain
@@ -1973,16 +1987,22 @@ async def run_daily_metrics_job(
                 s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
             if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
                 s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
-            if ai_review_outcome_edges and hasattr(
-                s, "write_work_graph_pr_review_outcome_edges"
+            if (
+                ai_review_outcome_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_pr_review_outcome_edges")
             ):
                 s.write_work_graph_pr_review_outcome_edges(ai_review_outcome_edges)
-            if ai_pr_deployment_edges and hasattr(
-                s, "write_work_graph_pr_deployment_edges"
+            if (
+                ai_pr_deployment_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_pr_deployment_edges")
             ):
                 s.write_work_graph_pr_deployment_edges(ai_pr_deployment_edges)
-            if ai_deployment_incident_edges and hasattr(
-                s, "write_work_graph_deployment_incident_edges"
+            if (
+                ai_deployment_incident_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_deployment_incident_edges")
             ):
                 s.write_work_graph_deployment_incident_edges(
                     ai_deployment_incident_edges
@@ -2111,16 +2131,30 @@ async def run_daily_metrics_job(
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights). Reads from ClickHouse via the sink.
-        for s in sinks:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=d,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        #
+        # CHAOS-4288: benchmarking has a native Go executor
+        # (BenchmarkingExecutor). When the Go dispatcher names it in
+        # skip_families it has already computed and written this org/day, so
+        # skip the whole call -- nothing else in this function consumes its
+        # output, which makes this the cicd/team_wellbeing shape.
+        #
+        # NOTE the native side computes ONCE PER ORG/DAY, on the partition
+        # holding the org's lexicographically-first repo, whereas this call
+        # runs on EVERY partition: run_benchmarking_for_day takes no repo_id,
+        # so an org with N repos appends N identical row sets to six
+        # append-only tables here. That divergence is deliberate and ruled --
+        # see BenchmarkingExecutor's doc comment.
+        if "benchmarking" not in skip_families:
+            for s in sinks:
+                try:
+                    run_benchmarking_for_day(
+                        s,
+                        as_of_day=d,
+                        computed_at=computed_at,
+                        org_id=org_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(

@@ -151,17 +151,26 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
+	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
+	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
+	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
+	// are inside it, and Python writes those rows (job_daily.py:1919) before
+	// calling the family (:2091). It also sorts FIRST of all native families,
+	// so pre_bridge ran it ahead of every Go writer too.
+	if got := byPhase["benchmarking"]; got != "post_bridge" {
+		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	}
 	for name, phase := range byPhase {
-		if name == "compounding_risk" {
+		if name == "compounding_risk" || name == "benchmarking" {
 			continue
 		}
 		if phase != "" {
 			t.Fatalf(
 				"family %q declares phase=%q, but no OTHER family is expected to be "+
-					"non-default after CHAOS-5078 (compounding_risk/CHAOS-4287 is the "+
-					"one deliberate exception, asserted separately above). post_bridge "+
-					"remains a working mechanism -- if you are using it deliberately, "+
-					"update this assertion in the same commit.",
+					"non-default after CHAOS-5078 (compounding_risk/CHAOS-4287 and "+
+					"benchmarking/CHAOS-4288 are the two deliberate exceptions, asserted "+
+					"separately above). post_bridge remains a working mechanism -- if you "+
+					"are using it deliberately, update this assertion in the same commit.",
 				name, phase)
 		}
 	}

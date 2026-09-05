@@ -172,6 +172,24 @@ type Run struct {
 	// generation while it has no durable partitions. A metrics-queue worker owns the
 	// ClickHouse read and resolves this state before it can publish a partition.
 	RepositoryDiscoveryRequired bool
+	// DiscoveredRepoIDs is the UNION of this run's partition scopes -- the
+	// set the partitions were actually cut from, read back from
+	// daily_metrics_partitions rather than re-derived from a live source.
+	//
+	// CHAOS-4288, codex r1 on #2235. benchmarking computes ONCE per org/day and
+	// picks an anchor partition to do it in. That anchor used to come from a
+	// live `min(id)` read of the `repos` table, which is a DIFFERENT set from
+	// the one partitions were cut from: a run over a subset of the org's repos,
+	// or a repo inserted between discovery and execution, could name an anchor
+	// that no partition contains. Every partition then answered "not mine",
+	// returned zero rows and SUCCESS, and the org silently got no benchmarking
+	// output at all.
+	//
+	// Choosing the anchor from this field makes anchor-and-partition agreement
+	// true BY CONSTRUCTION rather than by two reads happening to agree, which
+	// is the invariant that was missing. An empty union means the caller built
+	// a Run without partitions and is a bug, not a quiet no-op.
+	DiscoveredRepoIDs []RepositoryID
 	// TargetDay is the UTC calendar day this run computes metrics for
 	// (`daily_metrics_runs.target_day`). CHAOS-4276: a native family
 	// executor needs this to scope its own ClickHouse reads/writes -- the
@@ -892,6 +910,33 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 		duration := handler.nativeFamiliesNow().Sub(started)
 		if err != nil {
 			blocked[name] = struct{}{}
+			// PARTIAL WRITE IS NOT FAIL-OPEN. An executor that already wrote
+			// rows before failing wraps ErrPartialWrite; fail-open there would
+			// let the bridge write the same family again, and the output tables
+			// are append-only MergeTrees with no version column, so the earlier
+			// batches are not replaced -- they DUPLICATE. The family joins the
+			// skip list instead and the partition is re-driven.
+			//
+			// The rows count reported is the executor's TRUE count, not zero:
+			// zero would understate what landed, which is exactly the number an
+			// operator needs to judge duplication. See CHAOS-4288 / codex r1 on
+			// #2235.
+			//
+			// Still added to `blocked` above (CHAOS-5078 codex r2 F3): a
+			// partial write is an INCOMPLETE result for this partition, not a
+			// trustworthy one. A family declaring `after` on it must not run
+			// natively either, even though the partially-written family itself
+			// is excluded from fail-open -- the partition redrive fixes both
+			// together on the next attempt.
+			if errors.Is(err, ErrPartialWrite) {
+				skipFamilies = append(skipFamilies, name)
+				if handler.nativeObserver != nil {
+					_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+						name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rows, duration,
+					)
+				}
+				continue
+			}
 			if handler.nativeFamilyLogger != nil {
 				handler.nativeFamilyLogger.Error(
 					"native metrics.daily family refused for this partition; "+
@@ -1017,20 +1062,31 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 		duration := handler.nativeFamiliesNow().Sub(started)
 		outcome := jobruntime.DailyMetricsNativeFamilyOutcomeComputed
 		if err != nil {
-			rows = 0
-			outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
-			if handler.nativeFamilyLogger != nil {
-				handler.nativeFamilyLogger.Error(
-					"native metrics.daily post_bridge family refused for "+
-						"this partition; no writer produces this family's "+
-						"rows for this partition (CHAOS-5139)",
-					"family", name,
-					"organization_id", run.OrganizationID,
-					"target_day", run.TargetDay,
-					"partition_id", partition.ID,
-					"run_id", run.ID,
-					"error", err,
-				)
+			// A post_bridge partial write cannot cause BRIDGE duplication --
+			// Python was already told to skip this family unconditionally. But
+			// the outcome and the row count must still be truthful: reporting
+			// "refused, 0 rows" for a family that wrote several thousand before
+			// failing tells an operator the opposite of what happened, and the
+			// re-drive decision depends on knowing rows landed. So the outcome
+			// is distinguished here even though the skip decision is not.
+			if errors.Is(err, ErrPartialWrite) {
+				outcome = jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite
+			} else {
+				rows = 0
+				outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
+				if handler.nativeFamilyLogger != nil {
+					handler.nativeFamilyLogger.Error(
+						"native metrics.daily post_bridge family refused for "+
+							"this partition; no writer produces this family's "+
+							"rows for this partition (CHAOS-5139)",
+						"family", name,
+						"organization_id", run.OrganizationID,
+						"target_day", run.TargetDay,
+						"partition_id", partition.ID,
+						"run_id", run.ID,
+						"error", err,
+					)
+				}
 			}
 		}
 		if handler.nativeObserver != nil {

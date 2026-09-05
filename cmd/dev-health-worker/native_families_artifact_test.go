@@ -421,6 +421,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// inputs are RAW SYNC tables, not another daily family's output, so
 		// nothing in this partition has to run before it.
 		"review_edges",
+		// CHAOS-4286: work_graph_edges is pre_bridge for the same reason --
+		// every input is a raw sync table plus the shared incident
+		// projection, so nothing else in the partition has to precede it.
+		"work_graph_edges",
 	}
 	// CHAOS-5078 retired the CHAOS-4283 three (work_item_state, work_item,
 	// work_item_estimate) from post_bridge -- they moved to native/pre_bridge
@@ -433,7 +437,16 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// repo_metrics_daily is written by repo_user_commit in the SAME
 	// partition, and computeNativeFamilies walks families in SORTED order,
 	// where "compounding_risk" precedes "repo_user_commit" (CHAOS-4287).
-	wantDailyPostBridge := []string{"compounding_risk"}
+	//
+	// CHAOS-4288: benchmarking is post_bridge for a THIRD distinct reason. Not a
+	// stale attribution snapshot (the CHAOS-4283 three, retired above) and not
+	// sorted-order execution (compounding_risk): its metric window ENDS ON THE
+	// TARGET DAY -- asOfDay = run.TargetDay and every fetch is
+	// Fetch(startDay, asOfDay) -- so day D's own rows are INSIDE the window,
+	// and Python writes them (job_daily.py:1919) before calling the family
+	// (:2091). A pre_bridge registration benchmarks day D against a window
+	// missing day D.
+	wantDailyPostBridge := []string{"compounding_risk", "benchmarking"}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half

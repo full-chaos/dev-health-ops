@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -76,10 +76,7 @@ from dev_health_ops.metrics.quality import (
     compute_single_owner_file_ratio,
 )
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
-from dev_health_ops.metrics.schemas import (
-    FileComplexitySnapshot,
-    TeamMetricsDailyRecord,
-)
+from dev_health_ops.metrics.schemas import TeamMetricsDailyRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.team_cognitive_load import (
     build_team_cognitive_load_rows_for_day,
@@ -918,184 +915,6 @@ def _secondary_uri_from_env() -> str:
     return uri
 
 
-def _hotspot_repo_ids(
-    active_repos: set[uuid.UUID],
-    discovered_repo_ids: Iterable[uuid.UUID],
-) -> set[uuid.UUID]:
-    """Repos eligible for the live ``file_hotspot_daily`` risk pass.
-
-    The risk-hotspot computation must NOT be gated on same-day activity: the
-    risk-hotspot compute unions complexity-only files with churned files, so
-    a discovered repo whose risk comes from static complexity (no
-    commits/pipelines/deployments that day) must still produce rows. Returning
-    ``active_repos`` UNION every discovered repo ensures idle complexity-only
-    repos are covered; the compute returns no rows for repos with neither churn
-    nor complexity, so empty repos are never fabricated (CHAOS-2376 round-4).
-    """
-    return set(active_repos) | set(discovered_repo_ids)
-
-
-def _load_complexity_map_for_repo(
-    *,
-    primary_sink: Any,
-    org_id: str,
-    repo_id: uuid.UUID,
-    day: date,
-) -> dict[str, FileComplexitySnapshot]:
-    """Load the latest complexity snapshot per file for ``repo_id`` on or before
-    ``day`` from ``file_complexity_snapshots``.
-
-    ``file_complexity_snapshots`` is written by the separate complexity job
-    (``metrics complexity``); this read joins that compute into the daily
-    hotspot/risk computation (CHAOS-2376). Selects, per file, the snapshot with
-    the latest ``as_of_day`` on or before ``day`` (breaking ties by
-    ``computed_at``) via ``argMax(*, (as_of_day, computed_at))``. The temporal
-    key MUST lead with ``as_of_day`` -- keying on ``computed_at`` alone would
-    let an older ``as_of_day`` that was *backfilled/recomputed later* clobber a
-    newer snapshot and persist stale risk_score/cyclomatic into
-    ``file_hotspot_daily`` (CHAOS-2376 round-2). This mirrors the
-    ``max(as_of_day)``-first invariant in ``get_file_complexity_snapshots``.
-    Returns an empty map (callers treat complexity as 0) on any query failure so
-    a missing or unmigrated table never aborts the daily job.
-    """
-    query = """
-        SELECT
-            file_path,
-            argMax(language,                       (as_of_day, computed_at)) AS language,
-            argMax(loc,                            (as_of_day, computed_at)) AS loc,
-            argMax(functions_count,                (as_of_day, computed_at)) AS functions_count,
-            argMax(cyclomatic_total,               (as_of_day, computed_at)) AS cyclomatic_total,
-            argMax(cyclomatic_avg,                 (as_of_day, computed_at)) AS cyclomatic_avg,
-            argMax(high_complexity_functions,      (as_of_day, computed_at)) AS high_complexity_functions,
-            argMax(very_high_complexity_functions, (as_of_day, computed_at)) AS very_high_complexity_functions
-        FROM file_complexity_snapshots
-        WHERE repo_id = {repo_id:UUID}
-          AND as_of_day <= {day:Date}
-    """
-    params: dict[str, Any] = {"repo_id": str(repo_id), "day": day}
-    if org_id:
-        query += "\n          AND org_id = {org_id:String}"
-        params["org_id"] = org_id
-    query += "\n        GROUP BY file_path"
-
-    try:
-        rows = primary_sink.query_dicts(query, params)
-    except Exception as exc:
-        logger.warning(
-            "Complexity snapshot load failed for repo_id=%s day=%s: %s",
-            repo_id,
-            day,
-            exc,
-        )
-        return {}
-
-    complexity_map: dict[str, FileComplexitySnapshot] = {}
-    for row in rows:
-        path = row.get("file_path")
-        if not path:
-            continue
-        complexity_map[path] = FileComplexitySnapshot(
-            repo_id=repo_id,
-            as_of_day=day,
-            ref="",
-            file_path=path,
-            language=row.get("language") or "",
-            loc=int(row.get("loc") or 0),
-            functions_count=int(row.get("functions_count") or 0),
-            cyclomatic_total=int(row.get("cyclomatic_total") or 0),
-            cyclomatic_avg=float(row.get("cyclomatic_avg") or 0.0),
-            high_complexity_functions=int(row.get("high_complexity_functions") or 0),
-            very_high_complexity_functions=int(
-                row.get("very_high_complexity_functions") or 0
-            ),
-            computed_at=datetime.now(timezone.utc),
-            org_id=org_id,
-        )
-    return complexity_map
-
-
-def _load_blame_map_for_repo(
-    *,
-    primary_sink: Any,
-    org_id: str,
-    repo_id: uuid.UUID,
-) -> dict[str, float]:
-    """Load per-file ownership concentration for ``repo_id`` from ``git_blame``.
-
-    Concentration is the share of currently-blamed lines attributed to the
-    single largest contributor for each file (a max-share / dominant-owner
-    metric in ``[0, 1]``). This surfaces the Ownership/blame dimension of the
-    risk hotspot (CHAOS-2376): a value near ``1.0`` means one author owns
-    almost all lines (bus-factor risk), near ``0`` means broad ownership.
-
-    The aggregation is pushed server-side. ``git_blame`` is
-    ``ReplacingMergeTree(last_synced)`` keyed by ``(org_id, repo_id, path,
-    line_no)`` (migration 027 prepends ``org_id`` to the sorting key and adds
-    the ``org_id`` column), so a per-line ``argMax(author, last_synced)``
-    collapses re-synced lines to their latest author before the per-file share
-    is computed. The read is scoped by BOTH ``org_id`` and ``repo_id``: blame
-    rows are tenant-partitioned, and a stale/default-org row for a reused
-    ``repo_id`` must not contaminate another tenant's ownership data
-    (CHAOS-2376 round-2: cross-org leak). Returns an empty map (callers treat
-    concentration as ``NULL``) on any query failure so a missing/unmigrated
-    table never aborts the daily job.
-    """
-    query = """
-        SELECT
-            path,
-            max(author_lines) / sum(author_lines) AS concentration
-        FROM
-        (
-            SELECT
-                path,
-                author,
-                count() AS author_lines
-            FROM
-            (
-                SELECT
-                    path,
-                    line_no,
-                    argMax(
-                        coalesce(author_email, author_name, ''),
-                        last_synced
-                    ) AS author
-                FROM git_blame
-                WHERE repo_id = {repo_id:UUID}
-    """
-    params: dict[str, Any] = {"repo_id": str(repo_id)}
-    if org_id:
-        query += "                  AND org_id = {org_id:String}\n"
-        params["org_id"] = org_id
-    query += """                GROUP BY path, line_no
-            )
-            WHERE author != ''
-            GROUP BY path, author
-        )
-        GROUP BY path
-    """
-
-    try:
-        rows = primary_sink.query_dicts(query, params)
-    except Exception as exc:
-        logger.warning(
-            "Blame map load failed for repo_id=%s: %s",
-            repo_id,
-            exc,
-        )
-        return {}
-
-    blame_map: dict[str, float] = {}
-    for row in rows:
-        path = row.get("path")
-        if not path:
-            continue
-        concentration = row.get("concentration")
-        if concentration is None:
-            continue
-        blame_map[path] = float(concentration)
-    return blame_map
-
-
 async def run_daily_metrics_job(
     *,
     db_url: str | None = None,
@@ -1463,10 +1282,12 @@ async def run_daily_metrics_job(
         # writer of file_metrics_daily now; neither all_file_metrics nor
         # file_hotspots fed anything else downstream in this function (see
         # the deleted gate comment's own admission), so there is no shared
-        # input to preserve. `compute_file_hotspots` itself is NOT deleted --
-        # it has real, unrelated callers (golden-fixture generators, the
-        # live-Python oracle comparator, and its own dedicated unit tests);
-        # only this call site is gone.
+        # input to preserve. `compute_file_hotspots` itself IS ALSO deleted
+        # (src/dev_health_ops/metrics/hotspots.py, removed whole-file) --
+        # its only other callers were golden-fixture generators and unit
+        # tests, never a real production caller (correction from an earlier
+        # PR pass on this same family, which left the function in place on
+        # that flawed premise; see this PR's own body for the writeup).
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
                 repo_id=str(r_id), window_stats=h_commit_rows
@@ -1490,16 +1311,17 @@ async def run_daily_metrics_job(
         # file_hotspot_daily now; all_file_hotspots fed nothing else
         # downstream in this function (see the deleted gate comment's own
         # admission), so there is no shared input to preserve.
-        # `compute_file_risk_hotspots` itself is NOT deleted -- it has real,
-        # unrelated callers (golden-fixture generators, the live-Python
-        # oracle comparator, and its own dedicated unit tests); only this
-        # call site is gone. `_hotspot_repo_ids`/`_load_complexity_map_for_
-        # repo`/`_load_blame_map_for_repo` are ALSO left in place: they are
-        # extensively unit-tested as standalone helpers
-        # (tests/metrics/test_job_daily_hotspots.py) and
-        # `_load_complexity_map_for_repo` is referenced by name in
-        # `post_sync_dispatch.py`'s own worker-chaining comment -- retiring
-        # them is a separate, larger cleanup outside this ticket's scope.
+        # `compute_file_risk_hotspots` itself IS ALSO deleted
+        # (src/dev_health_ops/metrics/hotspots.py, removed whole-file),
+        # along with the private helpers it used
+        # (`_hotspot_repo_ids`/`_load_complexity_map_for_repo`/
+        # `_load_blame_map_for_repo`, all formerly defined just above
+        # `run_daily_metrics_job` in this file) -- none of the four had a
+        # real production caller once this call site is gone, only golden-
+        # fixture generators and their own unit tests (which are deleted in
+        # the same PR). `post_sync_dispatch.py`'s worker-chaining comment
+        # naming `_load_complexity_map_for_repo` is updated in the same PR
+        # to no longer describe a live dependency.
 
         result = compute_daily_metrics(
             day=d,

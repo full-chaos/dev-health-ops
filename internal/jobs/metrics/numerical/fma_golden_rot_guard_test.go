@@ -1,10 +1,11 @@
 package numerical
 
 import (
-	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -14,17 +15,28 @@ const (
 	fmaGoldenProofFile          = "fma-golden"
 )
 
+// fmaLiveComparedKeys are the fma_golden.json top-level keys this rot guard
+// can still regenerate from live Python. "hotspot_score" is deliberately
+// EXCLUDED: CHAOS-5234/CHAOS-3092 deleted compute_file_hotspots (file_hotspots
+// is fully native now, no straddle), so generate_fma_golden.py no longer
+// produces that key at all. The frozen "hotspot_score" section in
+// fma_golden.json stays as-is (untouched by this change) -- it is still the
+// contract for filehotspots/fma_golden_test.go's pure Go-vs-frozen-bits test,
+// which never touches Python. This rot guard now only re-verifies the THREE
+// keys that still have a live Python source.
+var fmaLiveComparedKeys = []string{"schema_version", "release_confidence", "percentile_float", "percentile_int"}
+
 // TestFMAGoldenMatchesLivePython is the CHAOS-4818 rot guard, in the shape
 // established by TestRemainingMetricsGoldenMatchesLivePython
 // (golden_rot_guard_test.go): tests/fixtures/fma_golden.json was generated
 // from REAL production Python (release_impact._compute_confidence,
-// compute._percentile, compute_capacity._percentile, hotspots.compute_file_hotspots)
-// and then frozen. The bit-exact tests in fma_golden_test.go (and its
-// per-package copies) only prove Go matches the FILE -- nothing proves
-// Python still matches the file, so the moment any of those four functions'
-// numerics change, the frozen `expected_bits` values silently encode the OLD
-// Python behaviour and every bit-exact test stays green while the two
-// implementations have actually diverged.
+// compute._percentile, compute_capacity._percentile) and then frozen. The
+// bit-exact tests in fma_golden_test.go (and its per-package copies) only
+// prove Go matches the FILE -- nothing proves Python still matches the file,
+// so the moment any of those functions' numerics change, the frozen
+// `expected_bits` values silently encode the OLD Python behaviour and every
+// bit-exact test stays green while the two implementations have actually
+// diverged.
 func TestFMAGoldenMatchesLivePython(t *testing.T) {
 	if os.Getenv(fmaLivePythonOraclesEnv) != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -56,7 +68,16 @@ func TestFMAGoldenMatchesLivePython(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if bytes.Equal(bytes.TrimSpace(frozen), bytes.TrimSpace(rendered)) {
+	frozenSubset, err := fmaSubsetForLiveKeys(frozen)
+	if err != nil {
+		t.Fatalf("parse frozen fma_golden.json: %v", err)
+	}
+	renderedSubset, err := fmaSubsetForLiveKeys(rendered)
+	if err != nil {
+		t.Fatalf("parse live-rendered fma_golden.json: %v", err)
+	}
+
+	if reflect.DeepEqual(frozenSubset, renderedSubset) {
 		if err := os.WriteFile(
 			filepath.Join(proofDirectory, fmaGoldenProofFile), []byte("executed\n"), 0o600,
 		); err != nil {
@@ -66,14 +87,41 @@ func TestFMAGoldenMatchesLivePython(t *testing.T) {
 	}
 
 	t.Errorf(
-		"live Python no longer reproduces the frozen FMA golden.\n" +
+		"live Python no longer reproduces the frozen FMA golden (release_confidence/" +
+			"percentile_float/percentile_int keys only -- hotspot_score is excluded, see " +
+			"fmaLiveComparedKeys).\n" +
 			"This is Python drift, not a Go bug: tests/fixtures/fma_golden.json was " +
 			"generated from production Python and frozen (release_impact._compute_confidence, " +
-			"compute._percentile, compute_capacity._percentile, hotspots.compute_file_hotspots). " +
-			"Regenerate with\n" +
+			"compute._percentile, compute_capacity._percentile). Regenerate with\n" +
 			"    python tests/fixtures/generate_fma_golden.py\n" +
 			"and review the diff as a real behaviour change -- if Go should follow, change Go " +
 			"too and re-verify every fma_golden_test.go bit-exact test; if it should not, the " +
 			"Python change is the bug.",
 	)
+}
+
+// fmaSubsetForLiveKeys parses raw fma_golden.json bytes and returns only the
+// keys this rot guard can still regenerate from live Python (see
+// fmaLiveComparedKeys) -- comparing the full document would spuriously fail
+// on "hotspot_score", which the generator deliberately no longer produces.
+func fmaSubsetForLiveKeys(raw []byte) (map[string]any, error) {
+	var full map[string]any
+	if err := json.Unmarshal(raw, &full); err != nil {
+		return nil, err
+	}
+	subset := make(map[string]any, len(fmaLiveComparedKeys))
+	for _, key := range fmaLiveComparedKeys {
+		value, ok := full[key]
+		if !ok {
+			return nil, errMissingFMAKey(key)
+		}
+		subset[key] = value
+	}
+	return subset, nil
+}
+
+type errMissingFMAKey string
+
+func (e errMissingFMAKey) Error() string {
+	return "missing expected key " + string(e)
 }

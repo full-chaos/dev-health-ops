@@ -671,10 +671,14 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
     RUNTIME counterpart to the structural guard in
     tests/metrics/test_job_daily_skip_families_structural_guard.py.
 
-    compute_file_hotspots itself is NOT deleted from the codebase -- golden-
-    fixture generators and the live-Python oracle comparator still call it
-    directly, as do its own dedicated unit tests. Only run_daily_metrics_job's
-    own call is gone.
+    compute_file_hotspots itself IS ALSO deleted from the codebase now
+    (src/dev_health_ops/metrics/hotspots.py, removed whole-file) -- a
+    correction to an earlier pass on this same family, which left the
+    module in place on the (wrong) premise that its fixture-generator/test
+    callers counted as a real production caller. See
+    test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily
+    below for the module-existence assertion (checked once there rather
+    than duplicated here) and this PR's own body for the writeup.
     """
     assert not hasattr(job_daily, "compute_file_hotspots"), (
         "compute_file_hotspots must not be imported into job_daily.py's "
@@ -727,17 +731,29 @@ async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(
     the RUNTIME counterpart to the structural guard in
     tests/metrics/test_job_daily_skip_families_structural_guard.py.
 
-    compute_file_risk_hotspots itself is NOT deleted from the codebase --
-    golden-fixture generators and the live-Python oracle comparator still
-    call it directly, as do its own dedicated unit tests. Only
-    run_daily_metrics_job's own call is gone. The private helpers it used to
-    call (_hotspot_repo_ids/_load_complexity_map_for_repo/
-    _load_blame_map_for_repo) are also left in place -- see job_daily.py's
-    own comment at the deleted call site for why.
+    compute_file_risk_hotspots itself IS ALSO deleted from the codebase now
+    (src/dev_health_ops/metrics/hotspots.py, removed whole-file, alongside
+    compute_file_hotspots and the private job_daily.py helpers
+    _hotspot_repo_ids/_load_complexity_map_for_repo/_load_blame_map_for_repo)
+    -- a correction to an earlier pass on this same family, which left the
+    module in place on the (wrong) premise that its fixture-generator/test
+    callers counted as a real production caller the way
+    compute_work_item_team_attributions' actual sync-job caller does. See
+    this PR's own body for the writeup.
     """
     assert not hasattr(job_daily, "compute_file_risk_hotspots"), (
         "compute_file_risk_hotspots must not be imported into job_daily.py's "
         "module namespace at all"
+    )
+    import importlib.util
+
+    assert importlib.util.find_spec("dev_health_ops.metrics.hotspots") is None, (
+        "dev_health_ops.metrics.hotspots must not exist at all -- "
+        "compute_file_hotspots/compute_file_risk_hotspots and their shared "
+        "dataclasses have no caller left anywhere once this family's "
+        "job_daily.py call site (and its sibling file_hotspots) are both "
+        "deleted; if a new, deliberate caller has reappeared, this assertion "
+        "should be removed and explained, not silently loosened"
     )
 
     for skip_families in (None, {"file_risk_hotspots"}):

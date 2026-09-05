@@ -386,3 +386,34 @@ func TestAIGovernancePartialWriteGuardPinsBothDirections(t *testing.T) {
 		}
 	})
 }
+
+// TestAIGovernanceComputeFamilyReportsPartialWriteAtTheCallSite is the codex
+// confirmation-pass F2 fix: TestAIGovernancePartialWriteGuardPinsBothDirections
+// above only exercises wrapAIGovernancePartialWrite directly -- reverting
+// ComputeFamily's own call site back to `return 0, err` would NOT be caught
+// by that test. This test drives the REAL ComputeFamily (not the helper) with
+// a conn that lets ai_governance_coverage_daily succeed (landing 1 row, per
+// oneGovernanceArtifactRows) and fails ai_policy_events immediately after --
+// mirroring TestGovernanceWritesTheMergeableTableFirst's own
+// orderRecordingConn{failFrom: 2} fixture -- and asserts ComputeFamily itself
+// reports ErrPartialWrite with the true count, not Refused/0.
+func TestAIGovernanceComputeFamilyReportsPartialWriteAtTheCallSite(t *testing.T) {
+	conn := &orderRecordingConn{failFrom: 2}
+	executor := &AIGovernanceExecutor{conn: conn, nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
+	run := Run{OrganizationID: "org-42", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+
+	written, err := executor.ComputeFamily(context.Background(), run, Partition{ID: "p1"})
+	if !errors.Is(err, ErrPartialWrite) {
+		t.Fatalf("ComputeFamily error = %v, want it to wrap ErrPartialWrite -- "+
+			"a call-site revert to `return 0, err` would not be caught by this test failing", err)
+	}
+	if written != 1 {
+		t.Fatalf("ComputeFamily written = %d, want 1 (the coverage row that landed before "+
+			"the policy-events write failed) -- reporting 0 here is exactly the bug this "+
+			"confirmation pass exists to catch", written)
+	}
+	if len(conn.targets) != 2 || conn.targets[0] != "ai_governance_coverage_daily" {
+		t.Fatalf("write order/targets = %v, want [ai_governance_coverage_daily, ai_policy_events] "+
+			"(coverage must land before the policy-events failure)", conn.targets)
+	}
+}

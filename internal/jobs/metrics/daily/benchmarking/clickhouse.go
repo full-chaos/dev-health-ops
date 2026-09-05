@@ -348,8 +348,16 @@ func (writer *Writer) writeBaselines(ctx context.Context, rows []BenchmarkBaseli
 			return 0, fmt.Errorf("append testops_metric_baselines row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_metric_baselines batch: %w", err)
+		return len(rows), fmt.Errorf("send testops_metric_baselines batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -373,8 +381,16 @@ func (writer *Writer) writeMaturityBands(ctx context.Context, rows []MaturityBan
 			return 0, fmt.Errorf("append testops_maturity_bands row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_maturity_bands batch: %w", err)
+		return len(rows), fmt.Errorf("send testops_maturity_bands batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -399,8 +415,16 @@ func (writer *Writer) writeAnomalies(ctx context.Context, rows []BenchmarkAnomal
 			return 0, fmt.Errorf("append testops_metric_anomalies row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_metric_anomalies batch: %w", err)
+		return len(rows), fmt.Errorf("send testops_metric_anomalies batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -431,8 +455,16 @@ func (writer *Writer) writePeriodComparisons(ctx context.Context, rows []PeriodC
 			return 0, fmt.Errorf("append testops_period_comparisons row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_period_comparisons batch: %w", err)
+		return len(rows), fmt.Errorf("send testops_period_comparisons batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -461,8 +493,16 @@ func (writer *Writer) writeCorrelations(ctx context.Context, rows []MetricCorrel
 			return 0, fmt.Errorf("append testops_metric_correlations row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_metric_correlations batch: %w", err)
+		return len(rows), fmt.Errorf("send testops_metric_correlations batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -487,8 +527,16 @@ func (writer *Writer) writeInsights(ctx context.Context, rows []BenchmarkInsight
 			return 0, fmt.Errorf("append testops_benchmark_insights row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_benchmark_insights batch: %w", err)
+		return len(rows), fmt.Errorf("send testops_benchmark_insights batch: %w", err)
 	}
 	return len(rows), nil
 }

@@ -57,7 +57,7 @@ type StepResult struct {
 	Delivered                        int
 	Retried                          int
 	Dead                             int
-	LeaseLost               int
+	LeaseLost                        int
 }
 
 // Relay is a single bounded reconciliation step. Process lifecycle and polling

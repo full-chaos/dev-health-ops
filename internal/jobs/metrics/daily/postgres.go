@@ -1446,6 +1446,43 @@ func (store *PostgresStore) ReleaseFinalize(ctx context.Context, claim FinalizeC
 	return err
 }
 
+// FailFinalizePermanently writes the TERMINAL finalize state (CHAOS-4290).
+//
+// It cannot go through transitionFinalize: that helper rewrites `status` only
+// when the transition is 'succeeded', which is exactly why no finalize failure
+// has ever produced a terminal run. This writes BOTH columns.
+//
+// The same claim guards apply as every other finalize transition -- the claim
+// token must match, finalization_status must still be 'running', and the lease
+// must not have expired -- so a worker that lost its lease cannot terminalize a
+// run another worker now owns.
+//
+// RowsAffected is CHECKED rather than assumed. Those guards mean this statement
+// can legitimately match zero rows, and a terminal write that silently did not
+// happen would leave precisely the stranded run it exists to record -- a fix
+// that reports success while doing nothing.
+func (store *PostgresStore) FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error {
+	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed',
+    finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
+    finalized_at = $1, updated_at = $1
+WHERE id = $2::uuid AND finalization_status = 'running'
+  AND finalization_claim_token = $3::uuid AND status = 'running'
+  AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
 func (store *PostgresStore) transitionFinalize(ctx context.Context, claim FinalizeClaim, status string) error {
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable

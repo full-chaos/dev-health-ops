@@ -13,6 +13,7 @@ happens instead of the page quietly going stale.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+CLI_PY = ROOT / "src" / "dev_health_ops" / "cli.py"
 DRIFT_SCRIPT = ROOT / "scripts" / "check_go_migration_matrix_docs_drift.py"
 GEN_SCRIPT = ROOT / "scripts" / "gen_go_migration_matrix_docs.py"
 CANONICAL_DOC = ROOT / "docs" / "go-migration-matrix.md"
@@ -910,3 +912,54 @@ def test_workgraph_ledger_rejects_a_row_whose_kind_left_the_artifact() -> None:
         )
     finally:
         setattr(gen, "load_native_families_artifact", original)
+
+
+def test_stale_direct_job_modules_are_not_wired_into_cli() -> None:
+    """Cheap regression guard for CHAOS-5153's CLI-verb citation fix
+    (team-lead, 2026-09-05): none of the five `job_*.py` modules the
+    matrix's OLD (now-corrected) prose cited as the writer for
+    `daily`/`rebuild`/`complexity`/`dora`/`capacity`/`release-impact`
+    are actually imported by `cli.py` -- CHAOS-5055 moved all six verbs
+    to dispatch through `workerctl_dispatch.py` instead (the same
+    coordinator the automatic post-sync/fixed-schedule pipeline uses).
+    Each of these five modules still DEFINES its own `register_commands`
+    function (dead code today, not this ticket's concern to remove), so
+    "the function exists" cannot be trusted as "it's wired in" -- only
+    checking `cli.py`'s own import list proves reachability, which is
+    exactly what let the stale "bypasses" prose survive undetected for
+    as long as it did.
+
+    This does not mechanize the whole CLI-verb section (flagged as a
+    real, non-cheap follow-up in the same commit) -- it only prevents
+    the SPECIFIC regression this fix corrects from silently recurring:
+    if one of these five modules is ever wired back into `cli.py`'s
+    dispatch tree, this guard fails loudly, rather than the doc quietly
+    going stale a second time with nobody noticing until the next
+    manual audit.
+    """
+    assert CLI_PY.is_file(), f"missing cli.py: {CLI_PY}"
+    tree = ast.parse(CLI_PY.read_text(encoding="utf-8"))
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module.rsplit(".", 1)[-1])
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_modules.add(alias.name.rsplit(".", 1)[-1])
+
+    stale_writer_modules = {
+        "job_daily",
+        "job_complexity_db",
+        "job_dora",
+        "job_capacity",
+        "job_release_impact",
+    }
+    collision = stale_writer_modules & imported_modules
+    assert not collision, (
+        f"cli.py now imports {sorted(collision)} -- CHAOS-5153 assumed these "
+        "modules are NOT reachable from cli.py's dispatch tree (CHAOS-5055 moved "
+        "daily/rebuild/complexity/dora/capacity/release-impact to "
+        "workerctl_dispatch.py). If one of these is wired back in, "
+        "docs/go-migration-matrix.md's CLI-verb rows need re-checking, not just "
+        "this guard silenced."
+    )

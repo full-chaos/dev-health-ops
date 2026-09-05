@@ -1,0 +1,49 @@
+{
+  "records": [
+    {
+      "author": "ann@example.com",
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-00000000000a",
+      "reviewer": "Bob",
+      "reviews_count": 3
+    },
+    {
+      "author": "ann@example.com",
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-00000000000a",
+      "reviewer": "Cal",
+      "reviews_count": 2
+    },
+    {
+      "author": "unknown",
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-00000000000a",
+      "reviewer": "Cal",
+      "reviews_count": 1
+    },
+    {
+      "author": "Bob",
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-00000000000a",
+      "reviewer": "unknown",
+      "reviews_count": 2
+    },
+    {
+      "author": "dee@example.com",
+      "computed_at": "2026-08-24T12:00:00+00:00",
+      "day": "2026-08-24",
+      "org_id": "",
+      "repo_id": "00000000-0000-4000-8000-00000000000b",
+      "reviewer": "Eve",
+      "reviews_count": 1
+    }
+  ]
+}

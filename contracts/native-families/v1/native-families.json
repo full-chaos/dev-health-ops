@@ -3,11 +3,13 @@
   "generated_from": "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
   "daily": {
     "cicd": "native",
+    "compounding_risk": "post_bridge",
     "deploy": "native",
     "file_hotspots": "native",
     "file_risk_hotspots": "native",
     "incident": "native",
     "repo_user_commit": "native",
+    "review_edges": "native",
     "team_wellbeing": "native",
     "testops_risk": "native",
     "work_item": "post_bridge",

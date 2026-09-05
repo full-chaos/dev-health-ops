@@ -265,3 +265,51 @@ func TestDailyMetricsNativeFamilyZeroSeriesExistBeforeAnyObservation(t *testing.
 		}
 	}
 }
+
+// CHAOS-4290, #2241 r2 Finding 4.
+//
+// The partial_write outcome's own doc promises it "carries the TRUE
+// rows-written count, not zero ... precisely the number an operator needs to
+// reason about duplication". The collector recorded rows and duration only for
+// Computed, so the event was counted and the count was thrown away -- the
+// contract and the code said opposite things, and the code won silently.
+//
+// The rows a partial write landed are the only number that says how much
+// duplication a redrive could cause, which is exactly the decision this series
+// exists to support now that any native finalize failure redrives.
+func TestPartialWriteRecordsItsRowsAndDuration(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	if err := collector.ObserveDailyMetricsNativeFamily(
+		"team_wellbeing", DailyMetricsNativeFamilyOutcomePartialWrite, 7, 30*time.Millisecond,
+	); err != nil {
+		t.Fatalf("observe partial_write: %v", err)
+	}
+	// A REFUSED observation carrying a NONZERO row count that must be ignored.
+	//
+	// The obvious version passes 0 here, and it proves nothing: the assertion
+	// below would pass whether refused is filtered or not, so it could not tell
+	// "records rows for partial_write" from "records rows for everything". 99 is
+	// a number that WILL show up in the total if the asymmetry breaks. (Caught
+	// by lane-port-review-bench on the #2235 side of the same fix.)
+	if err := collector.ObserveDailyMetricsNativeFamily(
+		"team_wellbeing", DailyMetricsNativeFamilyOutcomeRefused, 99, 5*time.Millisecond,
+	); err != nil {
+		t.Fatalf("observe refused: %v", err)
+	}
+
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		`worker_daily_metrics_native_family_outcome_total{family="team_wellbeing",outcome="partial_write"} 1`,
+		`worker_daily_metrics_native_family_outcome_total{family="team_wellbeing",outcome="refused"} 1`,
+		`worker_daily_metrics_native_family_rows_written_total{family="team_wellbeing"} 7`,
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q -- a partial_write whose row count is "+
+				"dropped tells an operator an event happened but not how much data it "+
+				"may duplicate\nfull exposition:\n%s", want, exposition)
+		}
+	}
+}

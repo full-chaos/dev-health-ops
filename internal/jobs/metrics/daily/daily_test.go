@@ -170,7 +170,7 @@ func (compatibility *bridgeWritingCompatibility) ComputePartition(_ context.Cont
 	compatibility.state.mu.Unlock()
 	return nil
 }
-func (*bridgeWritingCompatibility) Finalize(context.Context, Run) error { return nil }
+func (*bridgeWritingCompatibility) Finalize(context.Context, Run, []string) error { return nil }
 
 // stateReadingExecutor is a NativeFamilyExecutor stub that records whatever
 // sharedOrderingState held AT THE MOMENT ComputeFamily ran, so a test can
@@ -1281,6 +1281,8 @@ func finalizeExecution() *jobruntime.Execution[jobruntime.DailyMetricsFinalizeAr
 func pointer(value string) *string { return &value }
 
 type fakeStore struct {
+	failedFinalizePermanently     int
+	failFinalizePermanentlyErr    error
 	run                           Run
 	loadErr                       error
 	partitionClaim                *PartitionClaim
@@ -1380,6 +1382,15 @@ func (store *fakeStore) CompleteFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeCompletions++
 	return store.completionErr
 }
+
+// FailFinalizePermanently records that the TERMINAL transition was invoked, so
+// a test can assert the handler chose it over a release on the final attempt --
+// the two are indistinguishable from the return value alone.
+func (store *fakeStore) FailFinalizePermanently(context.Context, FinalizeClaim) error {
+	store.failedFinalizePermanently++
+	return store.failFinalizePermanentlyErr
+}
+
 func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeReleases++
 	return nil
@@ -1395,7 +1406,7 @@ type fakeCompatibility struct{}
 func (fakeCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
 	return nil
 }
-func (fakeCompatibility) Finalize(context.Context, Run) error { return nil }
+func (fakeCompatibility) Finalize(context.Context, Run, []string) error { return nil }
 
 // failingCompatibility always fails with a fixed, caller-chosen error --
 // used to prove the classified compatibility bridge sentinels (CHAOS-4264)
@@ -1406,7 +1417,7 @@ func (compatibility failingCompatibility) ComputePartition(context.Context, Run,
 	return compatibility.err
 }
 
-func (compatibility failingCompatibility) Finalize(context.Context, Run) error {
+func (compatibility failingCompatibility) Finalize(context.Context, Run, []string) error {
 	return compatibility.err
 }
 
@@ -1424,7 +1435,7 @@ func (compatibility *recordingCompatibility) ComputePartition(_ context.Context,
 	compatibility.skipFamilies = append(compatibility.skipFamilies, skipFamilies)
 	return nil
 }
-func (*recordingCompatibility) Finalize(context.Context, Run) error { return nil }
+func (*recordingCompatibility) Finalize(context.Context, Run, []string) error { return nil }
 
 func (compatibility *recordingCompatibility) lastSkipFamilies() []string {
 	compatibility.mu.Lock()
@@ -1559,7 +1570,7 @@ func (compatibility *blockingCompatibility) ComputePartition(ctx context.Context
 	}
 }
 
-func (compatibility *blockingCompatibility) Finalize(ctx context.Context, _ Run) error {
+func (compatibility *blockingCompatibility) Finalize(ctx context.Context, _ Run, _ []string) error {
 	if compatibility.waitForCancellation {
 		<-ctx.Done()
 		compatibility.mu.Lock()

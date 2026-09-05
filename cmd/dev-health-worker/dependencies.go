@@ -14,7 +14,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -599,6 +601,26 @@ func configureWorkerDependenciesWithSources(
 	// every WriteResult call regardless of which worker group runs the
 	// metricsQueue.
 	if err := registry.RegisterMetrics("cicd_writer", cicd.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4287: same process-wide-singleton-needs-registration shape as
+	// cicd_writer above. Found by codex r1 on #2230: the metric source existed
+	// and the writer incremented it, but nothing registered it -- so
+	// dev_health_compounding_risk_rows_written_total was never exposed by the
+	// health registry and the counter incremented into nothing. A writer metric
+	// that is defined, incremented, and unregistered is indistinguishable at the
+	// scrape from a writer that never ran.
+	if err := registry.RegisterMetrics("compounding_risk_writer", compoundingrisk.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4279: same shape again. NOT found by a codex round -- found by
+	// TestEveryWriterMetricsSourceIsRegistered, the class guard added for
+	// compounding_risk, the first time it ran on a branch containing this
+	// family. That is the argument for writing the guard class-wide rather
+	// than asserting the one writer a reviewer happened to name.
+	if err := registry.RegisterMetrics("review_edges_writer", reviewedges.RowsWrittenMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

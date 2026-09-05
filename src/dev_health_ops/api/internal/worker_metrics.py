@@ -656,8 +656,22 @@ class DailyMetricsExecutionRequest(_StrictRequest):
     def validate_operation_identity(self) -> DailyMetricsExecutionRequest:
         if (self.operation == "partition") != (self.partition_id is not None):
             raise ValueError("partition_id must be supplied only for partition")
-        if self.operation != "partition" and self.skip_families:
-            raise ValueError("skip_families must be supplied only for partition")
+        # CHAOS-4290: finalize accepts skip_families too, for the same reason
+        # partition does -- a NativeFinalizeFamilyExecutor that already wrote a
+        # finalize-scope family must stop this bridge recomputing it.
+        #
+        # This branch is UNREACHABLE TODAY and is labelled so deliberately
+        # rather than left looking like live protection: `operation` is
+        # Literal["partition", "finalize"], so both members now accept the
+        # field and no third value can reach here. It is kept as the guard a
+        # THIRD operation would need -- adding one to the Literal without
+        # deciding its skip_families policy would otherwise let it inherit
+        # acceptance silently. A reader should not mistake it for a check that
+        # currently rejects anything.
+        if self.operation not in ("partition", "finalize") and self.skip_families:
+            raise ValueError(  # pragma: no cover - see comment above
+                "skip_families must be supplied only for partition or finalize"
+            )
         return self
 
 
@@ -1713,6 +1727,7 @@ async def _run_daily_direct(
             day=target_day,
             org_id=execution.organization_id,
             sink="clickhouse",
+            skip_families=set(execution.skip_families),
         )
         return {"operation": "finalize", "target_day": target_day.isoformat()}
 

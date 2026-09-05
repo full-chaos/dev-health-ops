@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"sort"
 	"time"
 
@@ -254,6 +256,20 @@ type Store interface {
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
+	// FailFinalizePermanently writes the TERMINAL finalize state --
+	// status='failed' AND finalization_status='failed' -- on the final River
+	// attempt (CHAOS-4290, #2241 confirmation pass).
+	//
+	// Nothing produced that state for a finalize before this. ReleaseFinalize
+	// sets finalization_status='failed' and leaves status='running', which
+	// ClaimFinalize treats as CLAIMABLE, so attempt 1 and an exhausted run were
+	// indistinguishable forever. The blocked marker keyed on the only state
+	// that existed and therefore fired on healthy retryable runs while never
+	// seeing a stranded one.
+	//
+	// Named after FailPartitionPermanently, which is the same shape one layer
+	// down: the point at which retrying stops and an operator has to look.
+	FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error
 }
 
 // RepositoryDiscoverer reads the authoritative repository IDs for one
@@ -285,7 +301,14 @@ type RunPublisher interface {
 // exactly as before this field existed.
 type CompatibilityExecutor interface {
 	ComputePartition(ctx context.Context, run Run, partition Partition, skipFamilies []string) error
-	Finalize(context.Context, Run) error
+	// Finalize takes skipFamilies for the same reason ComputePartition does
+	// (CHAOS-4290): a NativeFinalizeFamilyExecutor that already computed and
+	// wrote a finalize-scope family must stop the Python bridge recomputing
+	// it. Without this the two writers race on an append-only table deduped
+	// `ORDER BY computed_at DESC LIMIT 1 BY ...`, where the LATER writer wins
+	// silently -- so a correct native family would be invisibly superseded
+	// and the port would change nothing in production.
+	Finalize(ctx context.Context, run Run, skipFamilies []string) error
 }
 
 // NativeFamilyExecutor computes and writes ONE families.json family's rows
@@ -305,6 +328,42 @@ type CompatibilityExecutor interface {
 // service fleet-wide.
 type NativeFamilyExecutor interface {
 	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
+}
+
+// CONTRACT: THE CONTEXT IS BINDING (CHAOS-4290, #2241 r1 Finding 3).
+//
+// The ctx handed to ComputeFinalizeFamily is the LEASE context. It is
+// cancelled the moment lease renewal fails, which means another worker may
+// legitimately reclaim this run and start computing the same families. An
+// executor MUST pass this ctx to every ClickHouse and Postgres call it makes
+// and MUST return promptly once it is cancelled.
+//
+// An executor that blocks past cancellation is a CONTRACT VIOLATION, not a
+// slow executor. runWithLeaseRenewal waits for the work function to return
+// before it reports the renewal failure, so a non-cooperative executor keeps
+// FinalizeHandler.Work blocked while the lease it lost is held by someone
+// else -- the two-writer hazard again, arriving through liveness rather than
+// through the skip list.
+//
+// This cannot be enforced from the caller: Go has no way to interrupt a
+// goroutine that will not look at its context. It is enforced by review, by
+// the ctx-bound I/O rule above, and by the between-family cancellation check
+// in computeNativeFinalizeFamilies, which at least stops the REMAINING
+// families from running after the lease is gone.
+//
+// NativeFinalizeFamilyExecutor computes and writes ONE families.json family
+// whose scope is the RUN, not a partition -- the finalize-scope families that
+// run once after every partition has landed (CHAOS-4290, ic_finalize being
+// the first).
+//
+// It is a SEPARATE interface from NativeFamilyExecutor rather than the same
+// one with a nil Partition. The scopes are genuinely different: a finalize
+// family reads back what the partitions wrote, so handing it a partition
+// would be meaningless. Keeping them distinct makes registering a
+// finalize-scope family on the partition path (or vice versa) a COMPILE
+// error instead of a convention nobody enforces.
+type NativeFinalizeFamilyExecutor interface {
+	ComputeFinalizeFamily(ctx context.Context, run Run) (rowsWritten int, err error)
 }
 
 type Dispatcher struct {
@@ -1066,6 +1125,19 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 type FinalizeHandler struct {
 	store         Store
 	compatibility CompatibilityExecutor
+	// nativeFinalizeFamilies mirrors PartitionHandler.nativeFamilies: a
+	// nil/empty map is a no-op, so every family stays on the compatibility
+	// path exactly as before this capability existed.
+	nativeFinalizeFamilies    map[string]NativeFinalizeFamilyExecutor
+	nativeFinalizeFamilyNames []string
+	// nativeFinalizeObserver reports each family's outcome. Reuses the
+	// PartitionHandler observer rather than declaring a parallel interface:
+	// the shape is identical and a second interface would mean two dashboards
+	// answering one question.
+	nativeFinalizeObserver jobruntime.DailyMetricsNativeFamilyObserver
+	// nativeFinalizeNow is injected so the duration a test observes is the one
+	// the test controls; nil means time.Now.
+	nativeFinalizeNow func() time.Time
 }
 
 func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*FinalizeHandler, error) {
@@ -1073,6 +1145,192 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 		return nil, ErrUnavailable
 	}
 	return &FinalizeHandler{store: store, compatibility: compatibility}, nil
+}
+
+// pythonRecognisedFinalizeFamilies is the set of finalize-family names the
+// Python compatibility bridge actually gates on, in
+// src/dev_health_ops/metrics/job_daily.py's run_daily_metrics_finalize:
+//
+//	if "ic_finalize" not in skip_families:
+//
+// It is duplicated here because the Go and Python processes cannot share a
+// value, and duplicated deliberately rather than inferred: the alternative is
+// trusting that whatever string a caller registers happens to be one Python
+// understands. finalizeFamilyGateAgreementTest pins this slice against the
+// Python source, with a negative control, so the copy cannot drift silently.
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
+// ErrUnknownFinalizeFamily is returned when a registered finalize family is
+// not one the Python bridge gates on.
+var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not recognised by the compatibility bridge")
+
+// ErrNativeFinalizeFamilyFailed wraps any native finalize-family failure.
+// retryCompatibilityError's default arm makes it Retryable, which is the whole
+// policy: the run is redriven rather than completed.
+var ErrNativeFinalizeFamilyFailed = errors.New("daily: native finalize family failed")
+
+// SetNativeFinalizeFamilies registers the finalize-scope families computed
+// natively in Go instead of by the Python compatibility bridge. Mirrors
+// PartitionHandler.SetNativeFamilies exactly -- REPLACES the map on every
+// call and sorts the names, so iteration is deterministic and one family's
+// failure never makes another's inclusion depend on Go map order.
+//
+// IT VALIDATES THE NAMES (CHAOS-4290, #2241 r1 Finding 2). The names travel to
+// Python as SkipFamilies and are compared there by string equality, so a name
+// Python does not recognise means the native family runs AND the bridge runs:
+// two writers on an append-only table, both succeeding, the later one winning
+// silently. A typo -- "ic_finalise" -- is enough, and nothing downstream can
+// detect it, because from Python's side an unrecognised skip entry is
+// indistinguishable from one meant for a family it does not own.
+//
+// Registration is the last place the two vocabularies can be compared while a
+// human is still watching, so it fails LOUDLY here rather than degrading. It is
+// also all-or-nothing: a partial registration would leave the caller believing
+// a family is native when it is not.
+func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]NativeFinalizeFamilyExecutor) error {
+	if handler == nil {
+		return nil
+	}
+	names := make([]string, 0, len(families))
+	for name := range families {
+		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
+			return fmt.Errorf("%w: %q (bridge gates on %v)",
+				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	handler.nativeFinalizeFamilies = families
+	handler.nativeFinalizeFamilyNames = names
+	return nil
+}
+
+// SetNativeFinalizeFamilyObserver attaches the per-family outcome counters.
+// Nil is a silent no-op, matching every other observer in this package: a
+// handler with no observer still behaves identically.
+func (handler *FinalizeHandler) SetNativeFinalizeFamilyObserver(
+	observer jobruntime.DailyMetricsNativeFamilyObserver,
+) {
+	if handler == nil {
+		return
+	}
+	handler.nativeFinalizeObserver = observer
+}
+
+func (handler *FinalizeHandler) finalizeNow() time.Time {
+	if handler.nativeFinalizeNow != nil {
+		return handler.nativeFinalizeNow()
+	}
+	return time.Now()
+}
+
+// observeFinalizeFamily reports one attempt. The observer's own error is
+// swallowed deliberately: telemetry that can fail a job is worse than no
+// telemetry, and this is the rule every observer in this package follows.
+func (handler *FinalizeHandler) observeFinalizeFamily(
+	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
+	rowsWritten int, started time.Time,
+) {
+	if handler.nativeFinalizeObserver == nil {
+		return
+	}
+	_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+		family, outcome, rowsWritten, handler.finalizeNow().Sub(started),
+	)
+}
+
+// computeNativeFinalizeFamilies runs every registered finalize-scope executor
+// and returns the names that SUCCEEDED, in sorted order.
+//
+// computeNativeFinalizeFamilies runs every registered finalize-scope executor
+// and returns the names to skip plus the first failure.
+//
+// NO FAIL-OPEN, AT ALL (CHAOS-4290, #2241 r2 Findings 1 and 2; team-lead's
+// ruling). CHAOS-4276's fail-open is correct for partition scope and wrong
+// here, and the r1 attempt to make it conditional on rowsWritten was wrong too
+// -- for two reasons that only showed up under retry:
+//
+//  1. rowsWritten answers a per-ATTEMPT question. After a native write and a
+//     bridge failure the whole finalize retries; if the next native attempt
+//     fails before writing it reports (0, err), and a fail-open predicate reads
+//     that as "nothing was written" -- when the PREVIOUS attempt already wrote.
+//     Python then overwrites the native generation and the retry succeeds, so
+//     nothing surfaces the duplicate writer.
+//  2. Keeping a partially-written family skipped but letting the run COMPLETE
+//     records success over incomplete output, with nothing to repair it.
+//
+// So any native error -- before, during or after a write -- fails the attempt.
+// The family stays in the skip list, the bridge is not called, the run does not
+// complete, and River's existing attempt machinery redrives it; after max
+// attempts the CHAOS-5040 blocked-run marker records it under
+// BlockedReasonFinalizeFailed. Python therefore never writes a family
+// registered as native, which is what makes per-run durable state unnecessary.
+//
+// That last sentence about the marker was FALSE when first written (#2241 r3
+// Finding 2): reconcileBlockedRunsSQL fired only on a failed_permanent
+// PARTITION, and a stranded finalize has none, so blocked_at stayed NULL and
+// the run was invisible to the sweep built to surface wedged runs. The
+// predicate now covers it. Recording the correction rather than quietly editing
+// the claim, because the failure was writing a mechanism from a ruling's
+// wording instead of verifying the mechanism existed.
+//
+// THIS REQUIRES THE NATIVE WRITER TO BE IDEMPOTENT: a redrive must land on the
+// same keys with a later computed_at so the dedup read supersedes rather than
+// accumulates. That is a contract on the executor, pinned by test, not an
+// assumption.
+//
+// The outcome vocabulary still distinguishes the two failure shapes, because
+// they mean different things to an operator even though both now redrive:
+// partial_write (rows already landed, a redrive may duplicate if the writer is
+// not idempotent) versus refused (nothing landed).
+func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) ([]string, error) {
+	if handler == nil || len(handler.nativeFinalizeFamilyNames) == 0 {
+		return nil, nil
+	}
+	skipFamilies := make([]string, 0, len(handler.nativeFinalizeFamilyNames))
+	for index, name := range handler.nativeFinalizeFamilyNames {
+		executor := handler.nativeFinalizeFamilies[name]
+		if executor == nil {
+			continue
+		}
+		// Between-family cancellation check. Once the lease is lost another
+		// worker may already own this run, so continuing to write is the
+		// two-writer hazard with extra steps.
+		if err := ctx.Err(); err != nil {
+			// Sliced from the LOOP INDEX, not from len(skipFamilies): the two
+			// diverge as soon as a family is skipped for a nil executor.
+			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
+				handler.observeFinalizeFamily(
+					remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
+				)
+			}
+			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
+		}
+		started := handler.finalizeNow()
+		rowsWritten, err := executor.ComputeFinalizeFamily(ctx, run)
+		// The family is added to the skip list BEFORE the error is examined:
+		// on the failing attempt the bridge must not compute it either, and on
+		// a future change that lets the bridge run anyway this is what keeps
+		// Python out.
+		skipFamilies = append(skipFamilies, name)
+		switch {
+		case err == nil:
+			handler.observeFinalizeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
+			)
+		case rowsWritten > 0:
+			handler.observeFinalizeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
+			)
+			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
+		default:
+			handler.observeFinalizeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
+			)
+			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
+		}
+	}
+	return skipFamilies, nil
 }
 
 func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) error {
@@ -1101,9 +1359,67 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.store.RenewFinalize(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			return handler.compatibility.Finalize(workCtx, claim.Run)
+			// Native families run FIRST and their names become the bridge's
+			// skip list, so the bridge never recomputes what Go just wrote.
+			// Inside the lease-renewal callback deliberately: a native
+			// family's compute is real work and must hold the lease the same
+			// way the bridge call does.
+			skipFamilies, err := handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
+			if err != nil {
+				// The bridge is NOT called. Calling it after a native failure
+				// is the fail-open this ruling removed, and completing the run
+				// afterwards is what recorded success over partial output.
+				return err
+			}
+			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
+		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's
+		// metrics-executed-proof failure).
+		//
+		// The retryable error the caller returns is wrapped by the adapter into
+		// the fixed string "dev-health job failed [retryable]", and the cause is
+		// serialised NOWHERE. On #2243's E2E every finalize job on every run
+		// exhausted its four attempts -- 96 starts, 96 discards -- and the only
+		// evidence of WHY was 96 identical wrapper strings. A family that fails
+		// every attempt on every run must not be that quiet.
+		//
+		// Logged here rather than left to the adapter because this is the only
+		// frame that still has the family scope: which run, which org, which
+		// attempt of how many.
+		// slog.Default() rather than skipping on a nil logger, following
+		// providerunit.go's pattern. `if logger != nil { log }` would make a nil
+		// logger produce SILENCE -- reintroducing, in a different place, exactly
+		// the defect this block exists to remove.
+		finalizeLogger := execution.Logger
+		if finalizeLogger == nil {
+			finalizeLogger = slog.Default()
+		}
+		{
+			finalizeLogger.Error("daily finalize failed",
+				"error", err,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				"attempt", execution.Attempt,
+				"max_attempts", execution.Definition.MaxAttempts,
+				"native_families", handler.nativeFinalizeFamilyNames,
+				"terminal", execution.Attempt >= execution.Definition.MaxAttempts,
+			)
+		}
+		// FINAL ATTEMPT: write the terminal state rather than releasing for a
+		// retry that will never come. River discards after this, and without a
+		// terminal write the run sits at status='running',
+		// finalization_status='failed' -- byte-identical to attempt 1 -- so
+		// nothing downstream can tell a stranded run from a retrying one.
+		//
+		// Attempt and MaxAttempts come from the adapter's own pair, the same
+		// values River acts on, so "final" here means what River means by it
+		// rather than a parallel notion maintained beside it.
+		if execution.Attempt >= execution.Definition.MaxAttempts {
+			failFinalizePermanently(handler.store, ctx, *claim)
+			return retryCompatibilityError(err)
+		}
 		releaseFinalize(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
 	}
@@ -1115,6 +1431,16 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+// failFinalizePermanently writes the terminal state on a context detached from
+// the failing one, exactly as releaseFinalize does: the work context may already
+// be cancelled, and a terminal write that silently did not happen is the whole
+// defect this fixes.
+func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) {
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.FailFinalizePermanently(terminalCtx, claim)
 }
 
 func runWithLeaseRenewal(
@@ -1143,7 +1469,33 @@ func runWithLeaseRenewal(
 				renewalResult <- ctx.Err()
 				return
 			case <-ticker.C:
-				if err := renew(ctx); err != nil {
+				// BOUNDED (CHAOS-4290, #2241 r3 Finding 1). renew(ctx) used the
+				// caller's context, which has no deadline of its own, so a
+				// renewal stuck in a network black hole never returned and the
+				// work context was never cancelled -- because cancellation
+				// happens only on the RESULT of this call.
+				//
+				// The production lease is 10 minutes and the adapter timeout is
+				// 15, so a stalled renewal left the native executor running for
+				// up to five minutes past a reclaimable lease. Another worker
+				// claims the run, computes the same family, appends another
+				// generation, and the dedup read silently takes the later one:
+				// the two-writer hazard reached through TIMING rather than
+				// through the skip list.
+				//
+				// The deadline is DERIVED from the lease, never a fresh
+				// constant, so the two cannot drift apart. It matches the tick
+				// interval: a renewal that cannot finish within one tick has
+				// already missed its slot, and waiting longer only shortens the
+				// margin before expiry.
+				renewCtx, cancelRenew := context.WithTimeout(ctx, leaseDuration/3)
+				err := renew(renewCtx)
+				cancelRenew()
+				if err != nil {
+					// A renewal TIMEOUT is a lease loss, not a transient to
+					// retry: we no longer know we hold the lease, and continuing
+					// to write while another worker may own the run is the exact
+					// failure this bound exists to prevent.
 					cancelWork()
 					renewalResult <- err
 					return

@@ -89,7 +89,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, repoID, scope.start, scope.end,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
 		if len(items) == 0 {
 			// Python guards the whole work-item block with `if work_items:`
@@ -101,13 +101,13 @@ func (executor *WorkItemExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, repoID, scope.end,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
 		attributions, err := LoadWorkItemPrimaryTeamAttributions(
 			ctx, executor.conn, run.OrganizationID, repoID,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
 
 		// One honest, real-wall-clock timestamp per repo group -- the same
@@ -128,21 +128,21 @@ func (executor *WorkItemExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, scope.day, triplet.MetricsDaily, computedAt,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
 		total += written
 		written, err = WriteWorkItemUserMetricsDaily(
 			ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
 		total += written
 		written, err = WriteWorkItemCycleTimes(
 			ctx, executor.conn, run.OrganizationID, triplet.CycleTimes, computedAt,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
 		total += written
 	}
@@ -154,6 +154,27 @@ func (executor *WorkItemExecutor) ComputeFamily(
 type workItemPartitionScope struct {
 	day, start, end time.Time
 	repoIDs         []uuid.UUID
+}
+
+// wrapWorkItemPartialWrite is the codex round 3 fix (astra scale review,
+// the FOURTH instance of the class r2's F3 already found in
+// work_item_state_native_executor.go -- both WorkItemExecutor's `work_item`
+// and WorkItemEstimateExecutor's `work_item_estimate` share this exact
+// per-repo loop shape and had the identical unwrapped-return-total-err bug).
+// Shared here rather than duplicated per file since both executors use the
+// same workItemPartitionScope and the same repoID type. Mirrors
+// wrapWorkGraphEdgesPartialWrite's/wrapWorkItemStatePartialWrite's exact
+// shape: total == 0 returns the error unwrapped (a genuine refusal, nothing
+// to distinguish); total > 0 wraps ErrPartialWrite naming the repo and the
+// true row count, so daily.go's dispatcher (which only distinguishes
+// ErrPartialWrite from every other error) reports PartialWrite/N-rows
+// instead of Refused/0-rows when real rows already landed.
+func wrapWorkItemPartialWrite(family string, total int, repoID uuid.UUID, err error) (int, error) {
+	if total == 0 {
+		return 0, err
+	}
+	return total, fmt.Errorf("%w: %s failed on repo %s after %d row(s) already landed: %w",
+		ErrPartialWrite, family, repoID, total, err)
 }
 
 func newWorkItemPartitionScope(run Run, partition Partition, family string) (workItemPartitionScope, error) {

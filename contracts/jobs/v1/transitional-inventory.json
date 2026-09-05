@@ -344,7 +344,7 @@
         "type": "explicit_removal",
         "value": "Go registry kind `investment.chunk` deleted outright under CHAOS-4438 (dead handler, zero producer anywhere) -- no replacement, no bridge route left to feed"
       },
-      "target_kind_id": "task:run_investment_materialize_chunk",
+      "target_kind_id": null,
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
@@ -368,7 +368,7 @@
         "type": "explicit_removal",
         "value": "Go registry kind `investment.finalize` deleted outright under CHAOS-4438 (dead handler, zero producer anywhere) -- no replacement, no bridge route left to feed"
       },
-      "target_kind_id": "task:finalize_investment_materialize_partitioned",
+      "target_kind_id": null,
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
@@ -392,7 +392,7 @@
         "type": "explicit_removal",
         "value": "Go registry kind `investment.dispatch` deleted outright under CHAOS-4438 (dead handler, zero producer anywhere) -- no replacement, no bridge route left to feed"
       },
-      "target_kind_id": "task:dispatch_investment_materialize_partitioned",
+      "target_kind_id": null,
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",

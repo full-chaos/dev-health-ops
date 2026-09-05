@@ -388,6 +388,12 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-4284: the three TestOps families this PR ports. They were added
+		// to the artifact but NOT to this list, which was a one-way SUBSET check
+		// with no cardinality assertion on this branch -- so it certified a split
+		// it had never seen, exactly the defect CHAOS-4283's r1 P3 added the
+		// cardinality check below to stop. That check caught this on the merge.
+		"testops_pipeline", "testops_test", "testops_coverage",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

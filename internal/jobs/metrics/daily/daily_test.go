@@ -376,6 +376,70 @@ func TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete(t *testing.T) {
 	}
 }
 
+// TestPostBridgeNilExecutorDoesNotComplete proves the CHAOS-5190 codex round
+// 1 P1 fix: skipFamiliesForBridge tells Python to skip every REGISTERED
+// post_bridge NAME unconditionally, independent of whether an executor was
+// actually wired for it -- so a nil executor (e.g. a registry lookup that
+// found the name but not a live implementation) used to fall through this
+// loop's old bare `continue` silently, exactly like a genuine failure would
+// have before this whole fix, just with no error, no log, and no
+// observation at all. computeNativeFamilies' own pre_bridge sibling does
+// NOT have this exposure: a nil executor's name there is simply never
+// added to the bridge's skip list, so Python computes it as a safe
+// fallback -- the asymmetry is why this needs its own test, not a shared
+// one with the pre_bridge case.
+func TestPostBridgeNilExecutorDoesNotComplete(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingNativeFamilyObserver{}
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": nil})
+	handler.SetNativeFamilyObserver(observer)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPostBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPostBridgeFamilyIncomplete", workErr)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0 -- a nil post_bridge executor must hold the partition incomplete, exactly like a real refusal", store.partitionCompletions)
+	}
+	if len(observer.calls) != 1 || observer.calls[0].family != "work_item_state" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+		t.Fatalf("observations=%#v, want one Refused observation for the nil executor", observer.calls)
+	}
+}
+
+// TestPostBridgeReasonIsAcceptedByPostgresStore proves the CHAOS-5190 codex
+// round 1 P2 fix: ReleasePartitionWithReason's closed vocabulary
+// (dailyMetricsPartitionFailureReasons) accepts
+// jobruntime.ReasonPostBridgeFamilyIncomplete's string value. Before this
+// fix, the reason was never added to that map, so the REAL PostgresStore
+// (unlike the fakeStore every other test in this file uses, which accepts
+// any string) would reject every real call with ErrInvalidState -- Work's
+// caller discards that return value (`_ = releasePartitionWithReason(...)`),
+// so the partition would silently stay 'running' under its old lease
+// instead of transitioning to the intended 'failed' (re-dispatchable)
+// state. This is the one test in the file that talks to the real
+// PostgresStore's validation logic directly (no live database needed: the
+// reason check runs before any query), specifically to catch a class of
+// gap the fakeStore-based tests above cannot see by construction.
+func TestPostBridgeReasonIsAcceptedByPostgresStore(t *testing.T) {
+	store := &PostgresStore{}
+	err := store.ReleasePartitionWithReason(
+		context.Background(),
+		PartitionClaim{},
+		jobruntime.ReasonPostBridgeFamilyIncomplete.String(),
+	)
+	if errors.Is(err, ErrInvalidState) {
+		t.Fatalf("ReleasePartitionWithReason rejected %q as an unrecognized reason: %v -- add it to dailyMetricsPartitionFailureReasons", jobruntime.ReasonPostBridgeFamilyIncomplete.String(), err)
+	}
+}
+
 // TestNativeFamilyRefusalIsLogged proves a native family's runtime refusal
 // -- pre_bridge (computeNativeFamilies) and post_bridge
 // (computePostBridgeNativeFamilies) -- is logged with the family name and

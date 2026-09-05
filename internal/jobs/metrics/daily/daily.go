@@ -954,6 +954,37 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 	for _, name := range handler.postBridgeFamilyNames {
 		executor := handler.postBridgeFamilies[name]
 		if executor == nil {
+			// CHAOS-5190 (codex round 1, P1): skipFamiliesForBridge already
+			// told Python to skip every registered post_bridge NAME
+			// unconditionally, independent of whether an executor was
+			// actually wired for it -- unlike computeNativeFamilies' own
+			// pre_bridge sibling, where a nil executor's name is simply
+			// never appended to the bridge's own skip list, so Python
+			// computing it instead is a safe fallback there. There is no
+			// such fallback here: a nil post_bridge executor means NO
+			// writer produces this family's rows for this partition,
+			// exactly the class this fix exists to close -- it must count
+			// as incomplete too, not a silent no-op that used to fall
+			// straight through to CompletePartition.
+			incomplete = append(incomplete, name)
+			if handler.nativeFamilyLogger != nil {
+				handler.nativeFamilyLogger.Error(
+					"native metrics.daily post_bridge family is registered "+
+						"with a nil executor; no writer produces this "+
+						"family's rows for this partition (CHAOS-5190)",
+					"family", name,
+					"organization_id", run.OrganizationID,
+					"target_day", run.TargetDay,
+					"partition_id", partition.ID,
+					"repo_ids", partition.RepoIDs,
+					"run_id", run.ID,
+				)
+			}
+			if handler.nativeObserver != nil {
+				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+				)
+			}
 			continue
 		}
 		started := handler.nativeFamiliesNow()

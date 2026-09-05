@@ -1220,6 +1220,18 @@ var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	// dropping the reason on the generic releasePartition path.
 	"resource_exhausted": {},
 	"process_signaled":   {},
+	// CHAOS-5190 (astra scale review F1, codex round 1 P2): a post_bridge
+	// native family failure releases the partition with this reason
+	// (jobruntime.ReasonPostBridgeFamilyIncomplete.String()) -- omitting it
+	// here meant ReleasePartitionWithReason rejected every real call with
+	// ErrInvalidState (this map is a closed vocabulary, an unrecognized
+	// reason is refused, not persisted), which Work's caller silently
+	// discards (`_ = releasePartitionWithReason(...)`) -- so the partition
+	// would never actually transition to 'failed' against real Postgres,
+	// staying stuck 'running' under its old lease instead of becoming
+	// safely re-dispatchable. The fake store used by this package's own
+	// tests accepts any string, which is why this gap was invisible there.
+	"post_bridge_family_incomplete": {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose

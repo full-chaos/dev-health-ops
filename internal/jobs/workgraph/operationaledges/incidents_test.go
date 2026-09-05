@@ -1,7 +1,10 @@
 package operationaledges
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,5 +231,37 @@ func TestAppendUserFallbackEvidenceUsesSourceFieldName(t *testing.T) {
 	}
 	if b.edges[1].Evidence != "user_id" {
 		t.Errorf("responder-row fallback evidence = %q, want \"user_id\"", b.edges[1].Evidence)
+	}
+}
+
+// TestReadIncidentsLogsConfigurationErrorWithOrgID pins codex round
+// chaos-4924-pr-a-r3 finding 1: every read function returned a wrapped error
+// on a query/scan/iteration/configuration failure but never logged it -- only
+// the two ordering-contract InfoContext lines existed in the whole package.
+// An invalid OPERATIONAL_ORDERING_CONTRACT value fails before any ClickHouse
+// call, so this is hermetic (conn is never touched, nil is safe).
+func TestReadIncidentsLogsConfigurationErrorWithOrgID(t *testing.T) {
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "not-a-valid-contract")
+
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(previous)
+
+	const orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
+	_, err := ReadIncidents(context.Background(), nil, orgID, nil, nil)
+	if err == nil {
+		t.Fatal("expected an error for an invalid ordering contract, got nil")
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "level=ERROR") {
+		t.Fatalf("expected an ERROR-level log record, got: %s", logged)
+	}
+	if !strings.Contains(logged, orgID) {
+		t.Fatalf("expected the log record to carry org_id=%s, got: %s", orgID, logged)
+	}
+	if !strings.Contains(logged, "incident ordering contract") {
+		t.Fatalf("expected the log record to name the failing operation, got: %s", logged)
 	}
 }

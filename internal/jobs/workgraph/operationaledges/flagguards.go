@@ -9,7 +9,6 @@ package operationaledges
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -43,7 +42,7 @@ func ReadFeatureFlagRegistry(
 		`SELECT flag_key, provider, project_key FROM feature_flag FINAL WHERE org_id = {org_id:String}`,
 		clickhouse.Named("org_id", organizationID))
 	if err != nil {
-		return nil, fmt.Errorf("read feature_flag: %w", err)
+		return nil, logReadErr(ctx, "read feature_flag", organizationID, err)
 	}
 	defer rows.Close()
 
@@ -51,12 +50,12 @@ func ReadFeatureFlagRegistry(
 	for rows.Next() {
 		var r FlagRegistryRow
 		if err := rows.Scan(&r.FlagKey, &r.Provider, &r.ProjectKey); err != nil {
-			return nil, fmt.Errorf("scan feature_flag row: %w", err)
+			return nil, logReadErr(ctx, "scan feature_flag row", organizationID, err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate feature_flag: %w", err)
+		return nil, logReadErr(ctx, "iterate feature_flag", organizationID, err)
 	}
 	return out, nil
 }
@@ -81,7 +80,7 @@ func ReadWorkItemText(
 		`SELECT work_item_id, title, description FROM work_items FINAL WHERE org_id = {org_id:String}`,
 		clickhouse.Named("org_id", organizationID))
 	if err != nil {
-		return nil, fmt.Errorf("read work_items: %w", err)
+		return nil, logReadErr(ctx, "read work_items", organizationID, err)
 	}
 	defer rows.Close()
 
@@ -89,12 +88,12 @@ func ReadWorkItemText(
 	for rows.Next() {
 		var r WorkItemText
 		if err := rows.Scan(&r.WorkItemID, &r.Title, &r.Description); err != nil {
-			return nil, fmt.Errorf("scan work_items row: %w", err)
+			return nil, logReadErr(ctx, "scan work_items row", organizationID, err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate work_items: %w", err)
+		return nil, logReadErr(ctx, "iterate work_items", organizationID, err)
 	}
 	return out, nil
 }
@@ -135,7 +134,7 @@ func WriteFeatureFlagLinks(
 			"link_source, link_type, evidence_type, confidence, "+
 			"valid_from, valid_to, last_synced)")
 	if err != nil {
-		return 0, fmt.Errorf("prepare feature_flag_link batch: %w", err)
+		return 0, logReadErr(ctx, "prepare feature_flag_link batch", rows[0].OrgID, err, "row_count", len(rows))
 	}
 	for _, row := range rows {
 		if err := batch.Append(
@@ -143,12 +142,12 @@ func WriteFeatureFlagLinks(
 			row.LinkSource, row.LinkType, row.EvidenceType, row.Confidence,
 			row.ValidFrom, row.ValidTo, row.LastSynced,
 		); err != nil {
-			return 0, fmt.Errorf("append feature_flag_link row (flag=%s target=%s): %w",
-				row.FlagKey, row.TargetID, err)
+			return 0, logReadErr(ctx, "append feature_flag_link row", row.OrgID, err,
+				"flag_key", row.FlagKey, "target_id", row.TargetID)
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send feature_flag_link batch: %w", err)
+		return 0, logReadErr(ctx, "send feature_flag_link batch", rows[0].OrgID, err, "row_count", len(rows))
 	}
 	return len(rows), nil
 }

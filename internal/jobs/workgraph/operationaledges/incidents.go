@@ -31,6 +31,19 @@ import (
 // which precision the formatted string carries.
 const dateTimeSecondPrecision = "2006-01-02 15:04:05"
 
+// logReadErr logs a query/scan/iteration/configuration failure with its
+// identifying scope BEFORE wrapping it, so a failure is diagnosable from
+// logs alone without depending on a caller printing the returned error --
+// chris's standing telemetry rule. Before this, the only slog calls in this
+// package were the two ordering-contract InfoContext lines; every failure
+// path returned a wrapped error and logged nothing (codex round
+// chaos-4924-pr-a, r3 finding 1).
+func logReadErr(ctx context.Context, op, orgID string, err error, attrs ...any) error {
+	slog.Default().ErrorContext(ctx, "workgraph operationaledges: "+op+" failed",
+		append([]any{"org_id", orgID, "error", err}, attrs...)...)
+	return fmt.Errorf("%s: %w", op, err)
+}
+
 // mappingConfidence and mappingProvenance mirror operational_edges.py's
 // _mapping_confidence/_mapping_provenance helpers.
 // mappingConfidence returns full float64 precision, matching Python's own
@@ -127,7 +140,7 @@ func ReadServiceRepositoryMappings(
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("mapping ordering contract: %w", err)
+		return nil, logReadErr(ctx, "mapping ordering contract", organizationID, err)
 	}
 	slog.Default().InfoContext(ctx, "workgraph operationaledges: resolved ordering contract",
 		"org_id", organizationID, "table", "operational_service_repository_mappings", "contract", contract)
@@ -154,7 +167,7 @@ func ReadServiceRepositoryMappings(
 
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read operational_service_repository_mappings: %w", err)
+		return nil, logReadErr(ctx, "read operational_service_repository_mappings", organizationID, err)
 	}
 	defer rows.Close()
 
@@ -169,20 +182,21 @@ func ReadServiceRepositoryMappings(
 			&r.ServiceID, &repoIDStr, &r.Provider, &r.RelationshipProvenance,
 			&confidence, &r.MappingKind, &r.RuleID, &r.SourceURL,
 		); err != nil {
-			return nil, fmt.Errorf("scan operational_service_repository_mappings row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_service_repository_mappings row", organizationID, err)
 		}
 		r.RelationshipConfidence = confidence
 		if repoIDStr != nil && *repoIDStr != "" {
 			parsed, err := uuid.Parse(*repoIDStr)
 			if err != nil {
-				return nil, fmt.Errorf("mapping row %s: parse repo_id %q: %w", r.ServiceID, *repoIDStr, err)
+				return nil, logReadErr(ctx, "parse operational_service_repository_mappings repo_id", organizationID, err,
+					"service_id", r.ServiceID, "repo_id", *repoIDStr)
 			}
 			r.RepoID = &parsed
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_service_repository_mappings: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_service_repository_mappings", organizationID, err)
 	}
 	return out, nil
 }
@@ -233,7 +247,7 @@ func ReadIncidents(
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("incident ordering contract: %w", err)
+		return nil, logReadErr(ctx, "incident ordering contract", organizationID, err)
 	}
 	slog.Default().InfoContext(ctx, "workgraph operationaledges: resolved ordering contract",
 		"org_id", organizationID, "table", "operational_incidents", "contract", contract)
@@ -253,7 +267,7 @@ func ReadIncidents(
 
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read operational_incidents: %w", err)
+		return nil, logReadErr(ctx, "read operational_incidents", organizationID, err)
 	}
 	defer rows.Close()
 
@@ -264,13 +278,13 @@ func ReadIncidents(
 			startedAt *time.Time
 		)
 		if err := rows.Scan(&r.ID, &r.ServiceID, &r.EscalationPolicyID, &startedAt, &r.SourceURL); err != nil {
-			return nil, fmt.Errorf("scan operational_incidents row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_incidents row", organizationID, err)
 		}
 		r.StartedAt = startedAt
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_incidents: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_incidents", organizationID, err)
 	}
 	return out, nil
 }
@@ -289,13 +303,13 @@ func ReadServices(ctx context.Context, conn driver.Conn, organizationID string) 
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("service ordering contract: %w", err)
+		return nil, logReadErr(ctx, "service ordering contract", organizationID, err)
 	}
 	query := "SELECT id, owning_team_id, escalation_policy_id FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_services", []string{"is_deleted = 0"}, contract)
 	rows, err := conn.Query(ctx, query, clickhouse.Named("org_id", organizationID))
 	if err != nil {
-		return nil, fmt.Errorf("read operational_services: %w", err)
+		return nil, logReadErr(ctx, "read operational_services", organizationID, err)
 	}
 	defer rows.Close()
 
@@ -303,12 +317,12 @@ func ReadServices(ctx context.Context, conn driver.Conn, organizationID string) 
 	for rows.Next() {
 		var r ServiceRow
 		if err := rows.Scan(&r.ID, &r.OwningTeamID, &r.EscalationPolicyID); err != nil {
-			return nil, fmt.Errorf("scan operational_services row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_services row", organizationID, err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_services: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_services", organizationID, err)
 	}
 	return out, nil
 }
@@ -355,14 +369,14 @@ func ReadAlerts(ctx context.Context, conn driver.Conn, organizationID string, in
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("alert ordering contract: %w", err)
+		return nil, logReadErr(ctx, "alert ordering contract", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	query := "SELECT id, incident_id, source_url, triggered_at FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_alerts", []string{"is_deleted = 0", filter}, contract)
 	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read operational_alerts: %w", err)
+		return nil, logReadErr(ctx, "read operational_alerts", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	defer rows.Close()
 
@@ -373,13 +387,13 @@ func ReadAlerts(ctx context.Context, conn driver.Conn, organizationID string, in
 			triggeredAt *time.Time
 		)
 		if err := rows.Scan(&r.ID, &r.IncidentID, &r.SourceURL, &triggeredAt); err != nil {
-			return nil, fmt.Errorf("scan operational_alerts row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_alerts row", organizationID, err)
 		}
 		r.EventAt = triggeredAt
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_alerts: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_alerts", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	return out, nil
 }
@@ -398,14 +412,14 @@ func ReadTimelineEvents(ctx context.Context, conn driver.Conn, organizationID st
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("timeline ordering contract: %w", err)
+		return nil, logReadErr(ctx, "timeline ordering contract", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	query := "SELECT id, incident_id, actor_id, body, source_url, occurred_at FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_incident_timeline_events", []string{filter}, contract)
 	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read operational_incident_timeline_events: %w", err)
+		return nil, logReadErr(ctx, "read operational_incident_timeline_events", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	defer rows.Close()
 
@@ -416,13 +430,13 @@ func ReadTimelineEvents(ctx context.Context, conn driver.Conn, organizationID st
 			occurredAt *time.Time
 		)
 		if err := rows.Scan(&r.ID, &r.IncidentID, &r.PersonID, &r.Body, &r.SourceURL, &occurredAt); err != nil {
-			return nil, fmt.Errorf("scan operational_incident_timeline_events row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_incident_timeline_events row", organizationID, err)
 		}
 		r.EventAt = occurredAt
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_incident_timeline_events: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_incident_timeline_events", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	return out, nil
 }
@@ -439,14 +453,14 @@ func ReadNotes(ctx context.Context, conn driver.Conn, organizationID string, inc
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("note ordering contract: %w", err)
+		return nil, logReadErr(ctx, "note ordering contract", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	query := "SELECT id, incident_id, body, author_user_id, source_url, created_at FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_incident_notes", []string{filter}, contract)
 	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read operational_incident_notes: %w", err)
+		return nil, logReadErr(ctx, "read operational_incident_notes", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	defer rows.Close()
 
@@ -462,13 +476,13 @@ func ReadNotes(ctx context.Context, conn driver.Conn, organizationID string, inc
 		// used (notes never feed _append_user, only timeline does).
 		var authorUserID string
 		if err := rows.Scan(&r.ID, &r.IncidentID, &r.Body, &authorUserID, &r.SourceURL, &createdAt); err != nil {
-			return nil, fmt.Errorf("scan operational_incident_notes row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_incident_notes row", organizationID, err)
 		}
 		r.EventAt = createdAt
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_incident_notes: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_incident_notes", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	return out, nil
 }
@@ -485,14 +499,14 @@ func ReadResponders(ctx context.Context, conn driver.Conn, organizationID string
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, fmt.Errorf("responder ordering contract: %w", err)
+		return nil, logReadErr(ctx, "responder ordering contract", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	query := "SELECT id, incident_id, user_id, source_url, assigned_at FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_incident_responders", []string{filter}, contract)
 	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read operational_incident_responders: %w", err)
+		return nil, logReadErr(ctx, "read operational_incident_responders", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	defer rows.Close()
 
@@ -503,13 +517,13 @@ func ReadResponders(ctx context.Context, conn driver.Conn, organizationID string
 			assignedAt *time.Time
 		)
 		if err := rows.Scan(&r.ID, &r.IncidentID, &r.PersonID, &r.SourceURL, &assignedAt); err != nil {
-			return nil, fmt.Errorf("scan operational_incident_responders row: %w", err)
+			return nil, logReadErr(ctx, "scan operational_incident_responders row", organizationID, err)
 		}
 		r.EventAt = assignedAt
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate operational_incident_responders: %w", err)
+		return nil, logReadErr(ctx, "iterate operational_incident_responders", organizationID, err, "incident_count", len(incidentIDs))
 	}
 	return out, nil
 }
@@ -540,7 +554,7 @@ func ReadRepos(ctx context.Context, conn driver.Conn, organizationID string, can
 		clickhouse.Named("org_id", organizationID),
 		clickhouse.Named("repos", candidateFullNames))
 	if err != nil {
-		return nil, fmt.Errorf("read repos: %w", err)
+		return nil, logReadErr(ctx, "read repos", organizationID, err, "candidate_count", len(candidateFullNames))
 	}
 	defer rows.Close()
 
@@ -551,12 +565,12 @@ func ReadRepos(ctx context.Context, conn driver.Conn, organizationID string, can
 			repo string
 		)
 		if err := rows.Scan(&id, &repo); err != nil {
-			return nil, fmt.Errorf("scan repos row: %w", err)
+			return nil, logReadErr(ctx, "scan repos row", organizationID, err)
 		}
 		out = append(out, RepoRow{ID: id, Repo: repo})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate repos: %w", err)
+		return nil, logReadErr(ctx, "iterate repos", organizationID, err, "candidate_count", len(candidateFullNames))
 	}
 	return out, nil
 }
@@ -615,7 +629,7 @@ func ReadDeployments(
 	}
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read deployments: %w", err)
+		return nil, logReadErr(ctx, "read deployments", organizationID, err, "mapped_repo_count", len(mappedRepoIDs))
 	}
 	defer rows.Close()
 
@@ -623,12 +637,12 @@ func ReadDeployments(
 	for rows.Next() {
 		var r DeploymentRow
 		if err := rows.Scan(&r.RepoID, &r.DeploymentID, &r.Environment, &r.DeployedAt); err != nil {
-			return nil, fmt.Errorf("scan deployments row: %w", err)
+			return nil, logReadErr(ctx, "scan deployments row", organizationID, err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate deployments: %w", err)
+		return nil, logReadErr(ctx, "iterate deployments", organizationID, err, "mapped_repo_count", len(mappedRepoIDs))
 	}
 	return out, nil
 }
@@ -654,7 +668,7 @@ func ReadWorkItemIDs(ctx context.Context, conn driver.Conn, organizationID strin
 		clickhouse.Named("org_id", organizationID),
 		clickhouse.Named("work_item_ids", candidateWorkItemIDs))
 	if err != nil {
-		return nil, fmt.Errorf("read work_items: %w", err)
+		return nil, logReadErr(ctx, "read work_items", organizationID, err, "candidate_count", len(candidateWorkItemIDs))
 	}
 	defer rows.Close()
 
@@ -662,12 +676,12 @@ func ReadWorkItemIDs(ctx context.Context, conn driver.Conn, organizationID strin
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan work_items row: %w", err)
+			return nil, logReadErr(ctx, "scan work_items row", organizationID, err)
 		}
 		out[id] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate work_items: %w", err)
+		return nil, logReadErr(ctx, "iterate work_items", organizationID, err, "candidate_count", len(candidateWorkItemIDs))
 	}
 	return out, nil
 }
@@ -768,7 +782,7 @@ func BuildOperationalIncidentEdges(
 	// re-validating the same value once per deployment-window match.
 	heuristicConfidenceQuantized, err := edges.Quantize(heuristicConfidence)
 	if err != nil {
-		return nil, fmt.Errorf("heuristic confidence: %w", err)
+		return nil, logReadErr(ctx, "heuristic confidence", organizationID, err, "heuristic_confidence", heuristicConfidence)
 	}
 
 	// Reads below are ordered so every equality join against an org-scoped
@@ -817,7 +831,8 @@ func BuildOperationalIncidentEdges(
 		// malformed row rather than silently narrow it into range.
 		confidence, err := edges.Quantize(mappingConfidence(m.RelationshipConfidence))
 		if err != nil {
-			return nil, fmt.Errorf("mapping %s confidence: %w", key.serviceID, err)
+			return nil, logReadErr(ctx, "mapping confidence", organizationID, err,
+				"service_id", key.serviceID, "repo_id", key.repoID)
 		}
 		evidence := strings.Join([]string{m.RelationshipProvenance, m.MappingKind, m.RuleID, m.SourceURL}, ":")
 		provider := m.Provider

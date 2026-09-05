@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"time"
@@ -1317,6 +1318,39 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
+		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's
+		// metrics-executed-proof failure).
+		//
+		// The retryable error the caller returns is wrapped by the adapter into
+		// the fixed string "dev-health job failed [retryable]", and the cause is
+		// serialised NOWHERE. On #2243's E2E every finalize job on every run
+		// exhausted its four attempts -- 96 starts, 96 discards -- and the only
+		// evidence of WHY was 96 identical wrapper strings. A family that fails
+		// every attempt on every run must not be that quiet.
+		//
+		// Logged here rather than left to the adapter because this is the only
+		// frame that still has the family scope: which run, which org, which
+		// attempt of how many.
+		// slog.Default() rather than skipping on a nil logger, following
+		// providerunit.go's pattern. `if logger != nil { log }` would make a nil
+		// logger produce SILENCE -- reintroducing, in a different place, exactly
+		// the defect this block exists to remove.
+		finalizeLogger := execution.Logger
+		if finalizeLogger == nil {
+			finalizeLogger = slog.Default()
+		}
+		{
+			finalizeLogger.Error("daily finalize failed",
+				"error", err,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				"attempt", execution.Attempt,
+				"max_attempts", execution.Definition.MaxAttempts,
+				"native_families", handler.nativeFinalizeFamilyNames,
+				"terminal", execution.Attempt >= execution.Definition.MaxAttempts,
+			)
+		}
 		// FINAL ATTEMPT: write the terminal state rather than releasing for a
 		// retry that will never come. River discards after this, and without a
 		// terminal write the run sits at status='running',

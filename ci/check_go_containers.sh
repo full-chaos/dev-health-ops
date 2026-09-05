@@ -36,6 +36,33 @@ die() {
   exit 2
 }
 
+# CODEX ROUND 2 (P1, accepted-and-documented, team-lead ruling): `RUN
+# --mount=type=cache` mounts (/go/pkg/mod, /root/.cache/go-build) survive
+# --no-cache by BuildKit design -- that's the entire point of a cache mount,
+# and there is no per-invocation-unique cache id here (that would defeat
+# this file's whole reason to exist: it would force a fresh `go mod
+# download` every pass, reintroducing close to the O(14)-compile cost this
+# fix removes). If a FUTURE instruction ever copies cache-mount-derived
+# content into a real image path (a COPY, `cp`, or `mv` referencing either
+# path OUTSIDE the `--mount=type=cache` declaration line itself), a
+# non-deterministic value could ride the persistent cache mount straight
+# past a --no-cache rebuild undetected -- exactly the class of bug already
+# fixed twice above, one mechanism further down. No such instruction exists
+# today (only compiled binaries under /out, which live outside both cache
+# mounts, are ever copied into /runtime). This guard is what turns "no such
+# instruction exists today" into an enforced, checked fact rather than an
+# assumption that quietly stops being true.
+assert_cache_mounts_not_copied_out() {
+  local path leaked
+  for path in /go/pkg/mod /root/.cache/go-build; do
+    leaked="$(grep -n -F -- "${path}" "${DOCKERFILE}" \
+      | grep -v -- '--mount=type=cache' \
+      | grep -E 'COPY|cp |mv ')" || true
+    [ -z "${leaked}" ] \
+      || die "cache-mount path ${path} is referenced by a COPY/cp/mv outside its --mount=type=cache declaration -- cache mounts survive --no-cache by design, so this could leak stale content past the reproducibility check undetected: ${leaked}"
+  done
+}
+
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 [ -f "${DOCKERFILE}" ] || die "missing ${DOCKERFILE}"
@@ -248,6 +275,8 @@ reproducible() {
   local target
   local first_id
   local second_id
+
+  assert_cache_mounts_not_copied_out
 
   # CHAOS-5067 (option 5): the shared `build` stage compiles all 7 binaries
   # in one RUN layer; `docker build --no-cache --target <target>` invalidates

@@ -396,11 +396,17 @@ func (repair *StrandRepair) stepShape(
 	// Phase 3 -- lock, re-prove, and rearm on the queue pool. Same
 	// reasoning: `result` already carries phases 1-2's real counts.
 	rearmed, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
+	// confirmation pass 3 finding (P3, codex, CHAOS-4438): rearm can now
+	// return a non-zero `lost` alongside its own write-loop error (an
+	// observation of another transaction's already-committed race, preserved
+	// for the same reason as every other seam here) -- accumulate BEFORE
+	// checking err, not after, or this call site silently re-introduces the
+	// exact discard the callee was just fixed to avoid, one layer up.
+	result.Rearmed += rearmed
+	result.SkippedRaceLost += lost
 	if err != nil {
 		return result, fmt.Errorf("shape %q: rearm: %w", shape.name, err)
 	}
-	result.Rearmed += rearmed
-	result.SkippedRaceLost += lost
 	return result, nil
 }
 
@@ -542,18 +548,32 @@ func (repair *StrandRepair) rearm(
 	}
 	// Anything approved that did not come back rearmable lost a race: another
 	// replica took the row, or the delivery stopped being terminal.
+	//
+	// confirmation pass 3 finding (P3, codex, CHAOS-4438): `lost` is an
+	// observation of OTHER, INDEPENDENT transactions' already-committed state
+	// (another replica rearmed the row, or the row is currently held by a
+	// concurrent transaction) -- it is established by the phase-3 lock query
+	// above, before this transaction's own writes even begin, and is true
+	// regardless of whether THIS transaction's writes below succeed or roll
+	// back. `rearmed` is different: it counts writes made under `tx`, so a
+	// later failure that rolls back `tx` correctly zeroes it -- nothing it
+	// counted was ever persisted. Zeroing `lost` alongside `rearmed` on a
+	// write-loop error was the bug: a real race loss, once observed here,
+	// would never be re-observed on retry (the losing candidate is no longer
+	// a candidate at all next time), so discarding it here means it is
+	// permanently undercounted, not just delayed.
 	lost := len(approved) - len(locked)
 	rearmed := 0
 	for _, found := range locked {
 		deleted, err := repair.client.JobDeleteTx(ctx, tx, found.riverJobID)
 		if err != nil || deleted == nil || deleted.ID != found.riverJobID {
-			return 0, 0, classifyStrandError(err)
+			return 0, lost, classifyStrandError(err)
 		}
 		// The delete must have removed a terminal row. Re-checking the returned
 		// state closes the window between the predicate and the delete: a job
 		// that became runnable in between must not be removed.
 		if !terminalRiverState(deleted.State) {
-			return 0, 0, ErrUnavailable
+			return 0, lost, ErrUnavailable
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE public.worker_job_outbox
@@ -564,12 +584,16 @@ func (repair *StrandRepair) rearm(
 			WHERE id = $1 AND status = 'delivered'`,
 			found.outboxID, now.UTC(), strandRecoveryCode, strandRecoveryDetail)
 		if err != nil || command.RowsAffected() != 1 {
-			return 0, 0, classifyStrandError(err)
+			return 0, lost, classifyStrandError(err)
 		}
 		rearmed++
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, classifyStrandError(err)
+		// Same reasoning: the commit failing rolls back every rearm this
+		// transaction attempted (rearmed correctly stays 0), but has no
+		// bearing on the OTHER transactions' already-committed changes that
+		// `lost` observed.
+		return 0, lost, classifyStrandError(err)
 	}
 	return rearmed, lost, nil
 }

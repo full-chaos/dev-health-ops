@@ -621,6 +621,74 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		}
 	})
 
+	// Confirmation pass 3 finding (P3, codex, CHAOS-4438): rearm's `lost`
+	// count is an observation of another, INDEPENDENT transaction's
+	// already-committed race (a different replica rearmed the row first) --
+	// unlike `rearmed`, which counts writes made under THIS transaction and
+	// correctly zeroes when it rolls back, `lost` is true regardless of
+	// whether this transaction's own writes succeed. Two candidates are
+	// approved: A hits the write-loop error (resurrectingDelete, same as the
+	// subtest above); B has ALREADY been rearmed by a simulated concurrent
+	// replica (its outbox row flipped back to 'pending' with river_job_id
+	// cleared) by the time rearm's own lock query runs, so it never appears
+	// in `locked` at all. If `lost` were discarded on A's error (the bug this
+	// pass found), this test observes 0 instead of 1.
+	t.Run("a genuinely lost race survives a later write-loop error", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+
+		partitionA := integrationUUID(46)
+		runA := integrationUUID(47)
+		seedDailyRun(t, ctx, admin, fixture.orgID, runA, "running", "pending", nil)
+		seedDailyPartition(t, ctx, admin, partitionA, runA, "running", ptr(now.Add(-time.Hour)))
+		outboxA := deliverDailyPartition(t, ctx, fixture, partitionA, now)
+		jobA := riverJobFor(t, ctx, admin, outboxA)
+		makeJobTerminal(t, ctx, admin, jobA, "completed", now.Add(-2*time.Hour))
+
+		partitionB := integrationUUID(48)
+		runB := integrationUUID(49)
+		seedDailyRun(t, ctx, admin, fixture.orgID, runB, "running", "pending", nil)
+		seedDailyPartition(t, ctx, admin, partitionB, runB, "running", ptr(now.Add(-time.Hour)))
+		outboxB := deliverDailyPartition(t, ctx, fixture, partitionB, now)
+		jobB := riverJobFor(t, ctx, admin, outboxB)
+		makeJobTerminal(t, ctx, admin, jobB, "completed", now.Add(-2*time.Hour))
+		// Simulate another replica's ALREADY-COMMITTED rearm of B, happening
+		// after phase 1 would have surveyed it but before this test's own
+		// rearm() call locks it -- exactly the window `lost` exists to name.
+		if _, err := admin.Exec(ctx,
+			`UPDATE public.worker_job_outbox
+			 SET status = 'pending', river_job_id = NULL, delivered_at = NULL
+			 WHERE id = $1`, outboxB); err != nil {
+			t.Fatal(err)
+		}
+
+		racing, err := NewStrandRepair(queue, domain, "river")
+		if err != nil {
+			t.Fatal(err)
+		}
+		racing.client = resurrectingDelete{id: jobA}
+
+		approved := []strandCandidate{
+			{outboxID: outboxA, riverJobID: jobA},
+			{outboxID: outboxB, riverJobID: jobB},
+		}
+		rearmed, lost, err := racing.rearm(ctx, racing.shapes[0].lock, now, 10, approved)
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("rearm() error = %v, want ErrUnavailable when the deleted job was not terminal", err)
+		}
+		if rearmed != 0 {
+			t.Fatalf("rearm() rearmed = %d, want 0 -- the write transaction rolled back", rearmed)
+		}
+		if lost != 1 {
+			t.Fatalf(
+				"rearm() lost = %d, want 1 -- candidate b's already-committed race loss must survive "+
+					"candidate a's later write-loop error",
+				lost,
+			)
+		}
+		assertOutboxStillDelivered(t, ctx, admin, outboxA, jobA)
+	})
+
 	// The blocker, made executable. Without the CHAOS-3997 grants the repair
 	// cannot read the domain row, and the operator must be able to tell that
 	// from a database outage.

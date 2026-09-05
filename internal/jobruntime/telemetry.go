@@ -1911,7 +1911,19 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}]++
-	if outcome == DailyMetricsNativeFamilyOutcomeComputed {
+	// Rows and duration are recorded for PartialWrite as well as Computed
+	// (CHAOS-4290, #2241 r2 Finding 4). Counting the partial_write event while
+	// dropping its row count contradicted this type's own doc, which promises
+	// the outcome "carries the TRUE rows-written count, not zero ... precisely
+	// the number an operator needs to reason about duplication" -- and the rows
+	// a partial write landed are the only number that says how much duplication
+	// a redrive could cause.
+	//
+	// Refused stays excluded: it wrote nothing by definition, and folding a
+	// guaranteed zero into the total would dilute the rate without adding
+	// information.
+	if outcome == DailyMetricsNativeFamilyOutcomeComputed ||
+		outcome == DailyMetricsNativeFamilyOutcomePartialWrite {
 		collector.dailyMetricsNativeFamilyRowsWritten[family] += uint64(rowsWritten)
 		collector.dailyMetricsNativeFamilyDuration[family].observe(duration.Seconds())
 	}

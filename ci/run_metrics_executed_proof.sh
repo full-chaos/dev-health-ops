@@ -721,14 +721,61 @@ for family in ${NATIVE_TELEMETRY_FAMILIES}; do
   # outcome="computed" specifically: a "refused" or "partial_write" counter for
   # the same family proves the executor RAN and did not produce the rows, which
   # is the opposite of what this gate is asserting.
-  if printf '%s\n' "${METRICS_SNAPSHOT}" \
-    | grep -qE "^worker_daily_metrics_native_family_outcome_total\{[^}]*family=\"${family}\"[^}]*outcome=\"computed\"[^}]*\} [1-9]"; then
+  #
+  # `grep -c` rather than `grep -q`: -q exits on the FIRST match and closes the
+  # pipe under printf, which emitted "printf: write error: Broken pipe" into the
+  # log on every SUCCESSFUL family. An error string printed on the success path
+  # is worse than noise -- it sat directly above the FAIL lines and reads as
+  # their cause, which is exactly how it was nearly misdiagnosed.
+  family_matches="$(
+    printf '%s\n' "${METRICS_SNAPSHOT}" \
+      | grep -cE "^worker_daily_metrics_native_family_outcome_total\{[^}]*family=\"${family}\"[^}]*outcome=\"computed\"[^}]*\} [1-9]" || true
+  )"
+  if [ "${family_matches}" -gt 0 ]; then
     echo "  ok   ${family}: native executor reported outcome=computed"
   else
     echo "  FAIL ${family}: no outcome=computed sample"
     NATIVE_TELEMETRY_MISSING="${NATIVE_TELEMETRY_MISSING} ${family}"
   fi
 done
+
+# DIAGNOSTIC DUMP, printed whenever anything failed. Without it this step says
+# only "no outcome=computed sample" and the worker is torn down by the cleanup
+# trap moments later, taking the evidence with it -- so the same rerun costs the
+# same time and yields the same nothing.
+#
+# WHAT THE DUMP DISTINGUISHES, and why each case needs a different fix:
+#
+#   computed=0, refused=0, series PRESENT
+#       the executor was never INVOKED for this family. Registration or
+#       dispatch, not fail-open. The series exist at zero from process start
+#       by design, so their presence at zero is meaningful, not absence.
+#   computed=0, refused>=1
+#       the executor RAN and declined. Fail-open to Python did happen, and the
+#       refusal reason is the thing to chase.
+#   computed=0, partial_write>=1
+#       rows landed AND it failed; a re-drive would duplicate.
+#   no series at all for the family
+#       the family is not in dailyMetricsNativeFamilies, so every observation
+#       was silently refused by the collector -- a wiring bug that makes a
+#       total write outage look like silence.
+if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
+  echo "--- native-family telemetry dump (every outcome series for the failing families)"
+  for family in ${NATIVE_TELEMETRY_MISSING}; do
+    family_series="$(
+      printf '%s\n' "${METRICS_SNAPSHOT}" \
+        | grep -E "^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{[^}]*family=\"${family}\"" || true
+    )"
+    if [ -z "${family_series}" ]; then
+      echo "    ${family}: NO SERIES AT ALL -- family is not registered in"
+      echo "               dailyMetricsNativeFamilies, so every observation for it was"
+      echo "               refused by the collector and its absence is invisible."
+    else
+      printf '%s\n' "${family_series}" | sed 's/^/    /'
+    fi
+  done
+  echo "--- end dump"
+fi
 if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
   echo "FAIL: native-family telemetry missing for:${NATIVE_TELEMETRY_MISSING}"
   echo "      The readback proves rows LANDED; this proves the Go executor is what"

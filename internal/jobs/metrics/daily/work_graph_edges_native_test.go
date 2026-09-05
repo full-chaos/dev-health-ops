@@ -1,6 +1,7 @@
 package daily
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -154,4 +155,55 @@ func TestIncidentAdapterLeavesDeploymentIDEmpty(t *testing.T) {
 	if adapted[0].LastSynced != nil {
 		t.Error("last_synced is unreachable in the _dt chain here and must stay nil")
 	}
+}
+
+// TestWorkGraphEdgesPartialWriteGuardPinsBothDirections pins the partial-write
+// decision in BOTH directions, which is the only shape that actually defends
+// it.
+//
+// A test asserting only the ErrPartialWrite path would still pass if ordinary
+// failures had quietly stopped failing open — and that regression is invisible
+// in production, because the family simply disappears from the partition
+// instead of erroring. The two mistakes are symmetric:
+//
+//   - wrap when nothing was written -> suppresses the compatibility bridge's
+//     LEGITIMATE fallback, losing the family for that partition;
+//   - do not wrap when something was -> the bridge adds a SECOND copy of rows
+//     that already landed.
+//
+// Shape borrowed from #2235's TestPartialWriteIsSkippedNotFailedOpen, on
+// lane-port-review-bench's advice.
+func TestWorkGraphEdgesPartialWriteGuardPinsBothDirections(t *testing.T) {
+	cause := errors.New("simulated ClickHouse send failure")
+
+	t.Run("failure AFTER a write is a partial write", func(t *testing.T) {
+		rows, err := wrapWorkGraphEdgesPartialWrite(7, cause)
+		if !errors.Is(err, ErrPartialWrite) {
+			t.Errorf("a failure after 7 rows landed must wrap ErrPartialWrite so the bridge is "+
+				"skipped; got %v", err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must survive wrapping; got %v", err)
+		}
+		if rows != 7 {
+			t.Errorf("the TRUE rows-written count must be reported, got %d, want 7 — "+
+				"reporting 0 here tells an operator the opposite of what happened and "+
+				"misinforms the re-drive decision", rows)
+		}
+	})
+
+	t.Run("failure BEFORE any write is an ordinary failure", func(t *testing.T) {
+		rows, err := wrapWorkGraphEdgesPartialWrite(0, cause)
+		if errors.Is(err, ErrPartialWrite) {
+			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: doing so " +
+				"suppresses the bridge's legitimate fallback and loses the family for this " +
+				"partition (partialwrite.go:29)")
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must be returned unchanged; got %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("nothing was written, so the count must be 0, got %d", rows)
+		}
+	})
 }

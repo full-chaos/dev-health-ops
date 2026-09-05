@@ -1,0 +1,5 @@
+int before() { return 0; }
+// #lizard forgive
+int skipped() { if (x) return 1; return 0; }
+/* GENERATED CODE */
+int after() { if (x) return 1; return 0; }

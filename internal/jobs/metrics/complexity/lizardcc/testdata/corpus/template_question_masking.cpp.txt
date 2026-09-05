@@ -1,0 +1,4 @@
+template<int> struct Type {};
+constexpr int T = 1, A = 2, B = 3;
+#define U A : B
+int f() { Type<T ? U> x; return 0; }

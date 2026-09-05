@@ -111,36 +111,14 @@ def load_source_discovery_providers() -> set[str]:
 # ---------------------------------------------------------------------------
 KIND_LEDGER: dict[str, dict[str, str]] = {
     # --- investment family ---------------------------------------------
-    "investment.chunk": {
-        "producer": "Go handler wired, never invoked -- `internal/jobs/workgraph/handler.go:158-163`",
-        "trigger": "none — no producer ever creates a `work_graph_execution_requests` row with this kind",
-        "gate": "n/a",
-        "writer": "Python `work_graph_tasks.run_investment_materialize_chunk.run` (bridge target, unreachable) — `src/dev_health_ops/api/internal/worker_workgraph.py:186`",
-        "tables": "none written (never invoked)",
-        "evidence": "argued — rg found zero `WriteTx`/enqueue callers for this kind repo-wide (2026-08-28)",
-        "state": "dead-code",
-        "ticket": "CHAOS-4438 (dead investment.* kinds)",
-    },
-    "investment.dispatch": {
-        "producer": "Go handler wired, never invoked -- `internal/jobs/workgraph/handler.go:152-157`",
-        "trigger": "none — only reachable via the legacy Celery-chord function, not scheduled and Celery is retired prod-wide",
-        "gate": "n/a",
-        "writer": "Python `work_graph_tasks.py:508 dispatch_investment_materialize_partitioned` (Celery-only, unreachable)",
-        "tables": "none written (never invoked)",
-        "evidence": "argued — rg found zero `WriteTx`/enqueue callers for this kind repo-wide (2026-08-28)",
-        "state": "dead-code",
-        "ticket": "CHAOS-4438 (dead investment.* kinds)",
-    },
-    "investment.finalize": {
-        "producer": "Go handler wired, never invoked -- `internal/jobs/workgraph/handler.go:164-169`",
-        "trigger": "none — no producer ever creates a `work_graph_execution_requests` row with this kind",
-        "gate": "n/a",
-        "writer": "Python `work_graph_tasks.finalize_investment_materialize_partitioned.run` (bridge target, unreachable) — `worker_workgraph.py:187`",
-        "tables": "none written (never invoked)",
-        "evidence": "argued — rg found zero `WriteTx`/enqueue callers for this kind repo-wide (2026-08-28)",
-        "state": "dead-code",
-        "ticket": "CHAOS-4438 (dead investment.* kinds)",
-    },
+    # investment.chunk/dispatch/finalize rows REMOVED under CHAOS-4438: these
+    # were dead Go shells (wired, never invoked, zero producers) documented
+    # here as such -- the kinds are now deleted outright from registry.json,
+    # jobcontract, and workgraph, not merely dead. A ledger row for a kind
+    # gen_python_go_ledger_docs's own consistency guard cannot see in the live
+    # producer would itself become the stale-citation defect class this file
+    # exists to prevent (see CHAOS-5153, the sibling matrix generator's
+    # analogous reverse guard).
     "investment.materialize": {
         "producer": "`internal/syncdispatchruntime/native_post_sync.go:230-232` (`workGraph.StartRequestTx`)",
         "trigger": "post-sync",
@@ -246,12 +224,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.release_impact": {
         "producer": "`internal/scheduler/fixed/inventory.go:75` (release_impact_daily_fanout)",
         "trigger": "schedule (DailyAt 01:30 UTC)",
-        "gate": "none",
-        "writer": "Python `run_release_impact_job` `src/dev_health_ops/metrics/job_release_impact.py:29`",
+        "gate": "ClickHouse schema check in `NewReleaseImpactExecutor` (`internal/jobs/metrics/remaining/release_impact_native_executor.go:69`) -- verifies release_impact_daily's engine, version column, and sorting key (`verifyReleaseImpactSchema`, `release_impact_native_clickhouse.go`)",
+        "writer": "Go `internal/jobs/metrics/remaining/release_impact_native_clickhouse.go` (`writeReleaseImpactRows`)",
         "tables": "`release_impact_daily`",
-        "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-3092 (metrics families)",
+        "evidence": "argued — wired `daily.go:590-621`",
+        "state": "native",
+        "ticket": "n/a — Python `run_release_impact_job` (`job_release_impact.py:29`) is retired from this path; CHAOS-4296 is Done",
     },
     # --- operational / system / report / sync family ---------------------------------------------
     "operational.billing_notification": {

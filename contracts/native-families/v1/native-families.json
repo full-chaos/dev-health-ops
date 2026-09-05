@@ -4,7 +4,7 @@
   "daily": {
     "ai_governance": "native",
     "ai_impact": "native",
-    "benchmarking": "post_bridge",
+    "ai_workflow": "native",
     "cicd": "native",
     "compounding_risk": "post_bridge",
     "deploy": "native",
@@ -24,19 +24,20 @@
     "work_item_estimate": "native",
     "work_item_state": "native"
   },
+  "finalize": {
+    "benchmarking": "finalize",
+    "ic_finalize": "finalize"
+  },
   "remaining": {
     "capacity": "native",
     "complexity": "compat",
     "dora": "native",
     "membership_backfill": "native",
     "recommendations": "native",
-    "release_impact": "compat",
+    "release_impact": "native",
     "work_item_attribution": "native"
   },
   "workgraph": {
-    "investment.chunk": "compat",
-    "investment.dispatch": "compat",
-    "investment.finalize": "compat",
     "investment.materialize": "native",
     "workgraph.build": "compat"
   }

@@ -1,0 +1,26 @@
+package main
+
+// CHAOS-5156: lizard's condition_counter is purely token-based, not
+// syntax-aware -- a bare "?" token counts as a condition even though Go
+// has no ternary operator and "?" is not valid Go syntax anywhere
+// outside a string/comment. This fixture exists so goConditions["?"]
+// has a GENUINE (non-string, non-comment) token exercising it -- codex
+// round r3 on #2266 found that basic.go.txt's own backtick-string
+// negative-test fixture (containing "if"/"&&"/"||"/"?" specifically so
+// a real miscount would be caught) was ITSELF the only thing satisfying
+// "?" coverage, via the coverage scan's own tokenizer not knowing Go's
+// backtick-string syntax -- fixed in clike_parity_test.go
+// (filteredCorpusTokenPattern); this fixture closes the resulting real
+// gap the fix exposed. Since neither lizard nor this port parses real Go
+// grammar (both are regex-tokenizer + state-machine only), a
+// deliberately non-compiling expression containing a bare "?" is the
+// only way to produce a genuine "?" token in valid... well, in
+// TOKENIZABLE Go source. Measured directly against real lizard 1.23.0:
+// complexity 3 (base 1 + if + ?-as-token).
+func questionToken() int {
+	if true {
+		return 1
+	}
+	x := 0 ? 1
+	return x
+}

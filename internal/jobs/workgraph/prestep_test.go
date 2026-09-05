@@ -55,6 +55,7 @@ func TestBuildRunsPreStepsBeforeTheBridge(t *testing.T) {
 			&recordingPreStep{name: "second", sequence: &sequence},
 		},
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -78,34 +79,13 @@ func TestBuildRunsPreStepsBeforeTheBridge(t *testing.T) {
 }
 
 // TestInvestmentKindsCarryNoPreSteps pins that the seam is build-only. The
-// investment handlers take the same `newHandler`, so a shared default would
-// silently run the mapping producer four extra times per fanout.
+// investment handler takes the same `newHandler`, so a shared default would
+// silently run the mapping producer on investment.materialize too.
 func TestInvestmentKindsCarryNoPreSteps(t *testing.T) {
 	store := &fakeStore{claim: testClaim(time.Minute)}
 	for _, build := range []func() (*handler, error){
 		func() (*handler, error) {
-			h, err := NewMaterializeHandler(store, blockingExecutor{})
-			if h == nil {
-				return nil, err
-			}
-			return h.handler, err
-		},
-		func() (*handler, error) {
-			h, err := NewDispatchHandler(store, blockingExecutor{})
-			if h == nil {
-				return nil, err
-			}
-			return h.handler, err
-		},
-		func() (*handler, error) {
-			h, err := NewChunkHandler(store, blockingExecutor{})
-			if h == nil {
-				return nil, err
-			}
-			return h.handler, err
-		},
-		func() (*handler, error) {
-			h, err := NewFinalizeHandler(store, blockingExecutor{})
+			h, err := NewMaterializeHandler(store, blockingExecutor{}, nil)
 			if h == nil {
 				return nil, err
 			}
@@ -137,6 +117,7 @@ func TestPreStepFailureFailsTheBuildAmbiguously(t *testing.T) {
 			&recordingPreStep{name: "mapping", sequence: &sequence, err: errors.New("clickhouse refused the batch")},
 		},
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +143,7 @@ func TestPreStepFailureFailsTheBuildAmbiguously(t *testing.T) {
 func TestNewBuildHandlerRejectsANilPreStep(t *testing.T) {
 	// A nil step is a wiring bug that would silently skip ported compute —
 	// exactly the failure this seam exists to prevent.
-	if _, err := NewBuildHandler(&fakeStore{}, blockingExecutor{}, []NativePreStep{nil}, nil); !errors.Is(err, ErrUnavailable) {
+	if _, err := NewBuildHandler(&fakeStore{}, blockingExecutor{}, []NativePreStep{nil}, nil, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("NewBuildHandler with a nil pre-step = %v, want ErrUnavailable", err)
 	}
 }

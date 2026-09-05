@@ -1,0 +1,44 @@
+#include <stdio.h>
+
+struct Point {
+    int x;
+    int y;
+};
+
+static int clamp(int v, int lo, int hi) {
+    if (v < lo) {
+        return lo;
+    } else if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+int dispatch(int op, int a, int b) {
+    switch (op) {
+        case 0:
+            return a + b;
+        case 1:
+            return a - b;
+        case 2:
+            return a * b;
+        default:
+            return 0;
+    }
+}
+
+int accumulate(const int* values, int count) {
+    int total = 0;
+    int i = 0;
+    while (i < count && values != 0) {
+        total += values[i];
+        i++;
+    }
+    return total;
+}
+
+typedef int (*BinaryOp)(int, int);
+
+int apply(BinaryOp op, int a, int b) {
+    return op(a, b);
+}

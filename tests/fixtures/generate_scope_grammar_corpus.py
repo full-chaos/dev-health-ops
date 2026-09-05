@@ -75,7 +75,7 @@ sys.path.insert(0, "/app/src")
 
 FROZEN_NOW = datetime(2026, 9, 1, 12, 30, 45, 500000, tzinfo=timezone.utc)
 
-# Fields the bridge admits for this kind (worker_workgraph.py:74-80). An
+# Fields the bridge admits for this kind (worker_workgraph.py:76-80). An
 # unsupported field is generated too, because the bridge rejects the whole
 # request for one and a port that ignores unknown keys diverges silently.
 ADMITTED_FIELDS = [

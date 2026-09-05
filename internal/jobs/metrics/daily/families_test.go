@@ -48,17 +48,26 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// "post_bridge" family MUST carry a phase_note explaining the
 	// cross-family dependency (this field earns its cost by being read
 	// during triage, so an empty one defeats the point).
-	validPhases := map[string]bool{"": true, "pre_bridge": true, "post_bridge": true}
+	// "finalize" (CHAOS-4290) is the third bucket: a RUN-scoped family,
+	// registered through FinalizeHandler.SetNativeFinalizeFamilies rather than
+	// either partition map. It is NOT a variant of pre_bridge -- a finalize
+	// family in a partition map runs once per PARTITION instead of once per
+	// run, rewriting the same rows for every partition of the day.
+	validPhases := map[string]bool{"": true, "pre_bridge": true, "post_bridge": true, "finalize": true}
 	seen := map[string]bool{}
 	for _, family := range registry.Families {
 		if family.Name == "" || family.Python == "" || len(family.Writes) == 0 || family.Golden != "required" || seen[family.Name] || !validPorts[family.Port] || !validPhases[family.Phase] {
 			t.Fatalf("invalid family entry: %#v", family)
 		}
-		if family.Phase == "post_bridge" && family.PhaseNote == "" {
-			t.Fatalf("family %q declares phase=post_bridge with no phase_note explaining why", family.Name)
+		// Both non-default phases must justify themselves. The note earns its
+		// cost by being read during triage, so an empty one defeats the point
+		// -- and a note attached to a DEFAULT-phase family is either stale or
+		// paired with a phase somebody forgot to set.
+		if (family.Phase == "post_bridge" || family.Phase == "finalize") && family.PhaseNote == "" {
+			t.Fatalf("family %q declares phase=%s with no phase_note explaining why", family.Name, family.Phase)
 		}
-		if family.Phase != "post_bridge" && family.PhaseNote != "" {
-			t.Fatalf("family %q has a phase_note but is not phase=post_bridge -- stale note or missing phase?", family.Name)
+		if family.Phase != "post_bridge" && family.Phase != "finalize" && family.PhaseNote != "" {
+			t.Fatalf("family %q has a phase_note but is not phase=post_bridge or finalize -- stale note or missing phase?", family.Name)
 		}
 		seen[family.Name] = true
 	}
@@ -116,6 +125,14 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// the same partition call; that family is native now, and families.json's
 	// `after` edges sequence it ahead of its three readers WITHIN pre_bridge.
 	//
+	// ic_finalize is phase=finalize (CHAOS-4290), the first RUN-scoped family:
+	// compute_ic_landscape_rolling reads back user_metrics_daily rows that
+	// compute_ic_metrics_daily wrote for the SAME run, so it must run once
+	// after every partition has landed rather than once per partition.
+	if got := byPhase["ic_finalize"]; got != "finalize" {
+		t.Fatalf("ic_finalize must be phase=finalize (CHAOS-4290), got %q", got)
+	}
+	//
 	// The assertion is inverted rather than deleted. "No family declares a
 	// phase" is a real, checkable property, and it is the one that catches a
 	// family silently re-acquiring post_bridge -- deleting the block would
@@ -151,27 +168,45 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
-	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
-	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
-	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
-	// are inside it, and Python writes those rows (job_daily.py:1919) before
-	// calling the family (:2091). It also sorts FIRST of all native families,
-	// so pre_bridge ran it ahead of every Go writer too.
-	if got := byPhase["benchmarking"]; got != "post_bridge" {
-		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	// benchmarking (CHAOS-4288, then CHAOS-5194) used to be a THIRD post_bridge
+	// family in this class -- its metric window ends on the TARGET DAY, so a
+	// pre_bridge registration would benchmark day D against a window missing
+	// day D. CHAOS-5194 (astra F3) relocated it to finalize scope entirely: the
+	// post_bridge anchor-partition mechanism fixed cross-partition duplication
+	// but not the race between the anchor partition finishing and every OTHER
+	// partition for the same org/day having written its own inputs. Finalize
+	// scope's ClaimFinalize barrier (every partition succeeded) closes that
+	// race by construction.
+	if got := byPhase["benchmarking"]; got != "finalize" {
+		t.Fatalf("benchmarking must be phase=finalize (CHAOS-5194), got %q", got)
+	}
+	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
+	// a new non-default phase should force whoever adds it to come here and say
+	// which family it belongs to and why. Widening it to accept anything in
+	// validPhases would turn a deliberate acknowledgement into a silent pass.
+	//
+	// A name->PHASE map, not a set (CHAOS-4290): it must express that
+	// ic_finalize is "finalize", not just another post_bridge family, and
+	// would otherwise silently accept ic_finalize declaring post_bridge.
+	// CHAOS-5078 retired work_item_state/work_item/work_item_estimate from
+	// this map -- they are pre_bridge now (asserted in their own loop above),
+	// leaving compounding_risk/benchmarking/ic_finalize as the only three
+	// families with a deliberate non-default phase.
+	nonDefaultPhase := map[string]string{
+		"compounding_risk": "post_bridge",
+		"benchmarking":     "finalize",
+		"ic_finalize":      "finalize",
 	}
 	for name, phase := range byPhase {
-		if name == "compounding_risk" || name == "benchmarking" {
+		if phase == "" {
 			continue
 		}
-		if phase != "" {
-			t.Fatalf(
-				"family %q declares phase=%q, but no OTHER family is expected to be "+
-					"non-default after CHAOS-5078 (compounding_risk/CHAOS-4287 and "+
-					"benchmarking/CHAOS-4288 are the two deliberate exceptions, asserted "+
-					"separately above). post_bridge remains a working mechanism -- if you "+
-					"are using it deliberately, update this assertion in the same commit.",
-				name, phase)
+		want, expected := nonDefaultPhase[name]
+		if !expected {
+			t.Fatalf("family %q declares phase=%q -- only %v are expected to be non-default today; update this test if that changes deliberately", name, phase, nonDefaultPhase)
+		}
+		if phase != want {
+			t.Fatalf("family %q declares phase=%q, expected %q", name, phase, want)
 		}
 	}
 	// cicd is Wave 1B's first cutover (CHAOS-4292), following repo_user_commit/

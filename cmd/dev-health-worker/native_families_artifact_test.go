@@ -30,6 +30,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -37,20 +38,43 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 )
 
 type nativeFamiliesArtifact struct {
 	SchemaVersion int               `json:"schema_version"`
 	GeneratedFrom string            `json:"generated_from"`
 	Daily         map[string]string `json:"daily"`
-	Remaining     map[string]string `json:"remaining"`
-	// Workgraph covers the five workgraph/investment River kinds. Added by
-	// CHAOS-4441's cutover: before it, every one of those kinds took the same
-	// HTTP bridge executor, so there was nothing to record and the artifact had
-	// no key for them at all -- which is exactly why the artifact could not
-	// have detected that the cutover had never happened. It can now.
+	// Finalize is RUN-scoped, kept separate from Daily rather than folded in
+	// (CHAOS-4290). Daily's families run per PARTITION; a finalize family runs
+	// once per run after every partition has landed. One map would make the
+	// artifact -- a contract other tooling reads -- state that they are the
+	// same kind of thing, and would also silently change Daily's cardinality.
+	Finalize  map[string]string `json:"finalize"`
+	Remaining map[string]string `json:"remaining"`
+	// Workgraph covers the two live workgraph/investment River kinds
+	// (workgraph.build, investment.materialize) -- investment.dispatch/
+	// chunk/finalize were deleted under CHAOS-4438 (dead Go shells, zero
+	// producers). Added by CHAOS-4441's cutover: before it, every one of
+	// these kinds took the same HTTP bridge executor, so there was nothing
+	// to record and the artifact had no key for them at all -- which is
+	// exactly why the artifact could not have detected that the cutover had
+	// never happened. It can now.
 	Workgraph map[string]string `json:"workgraph"`
+}
+
+// knownFamilyNameConstants resolves a registration indexed by a CONSTANT rather
+// than a string literal, e.g. `finalize[daily.ICFinalizeFamilyName] = ...`.
+//
+// The value is taken from the real package, not restated, so this cannot drift
+// from the constant it names. A selector the extractor does not know is an
+// ERROR, never a skip -- see extractDailyFamilies.
+var knownFamilyNameConstants = map[string]string{
+	"ICFinalizeFamilyName":   daily.ICFinalizeFamilyName,
+	"BenchmarkingFamilyName": daily.BenchmarkingFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
@@ -75,12 +99,26 @@ func parseDailyGoFile(t *testing.T) (*token.FileSet, *ast.File) {
 	return fset, file
 }
 
-// extractDailyNativeFamilies walks dailyNativeFamilyRegistrations' body for
-// `native["name"] = ...` / `postBridge["name"] = ...` assignments and returns
-// family name -> "native" | "post_bridge".
-func extractDailyNativeFamilies(t *testing.T, file *ast.File) map[string]string {
-	t.Helper()
-	result := map[string]string{}
+// extractDailyFamilies walks dailyNativeFamilyRegistrations' body for
+// `native["x"] = ...`, `postBridge["x"] = ...` and `finalize[Const] = ...`
+// assignments, returning the partition-scoped families and the run-scoped ones
+// separately.
+//
+// IT FAILS ON ANYTHING IT DOES NOT UNDERSTAND, which is the whole point
+// (CHAOS-4290). The previous version switched on the map identifier with two
+// cases and no default, and resolved only string-literal indices. #2243's
+// registration is `finalize[daily.ICFinalizeFamilyName]` -- a THIRD map, indexed
+// by a CONSTANT -- so it missed on both counts and was silently dropped. The
+// exact-cardinality assertion downstream then passed while certifying a split it
+// could not see, which is the same defect codex r1 caught here pointing the
+// other way.
+//
+// A guard blind to a scope passes BY CONSTRUCTION. So an unknown map identifier
+// and an unresolvable index are both errors now, and a fourth scope cannot be
+// added silently.
+func extractDailyFamilies(file *ast.File) (partition, finalize map[string]string, err error) {
+	partition = map[string]string{}
+	finalize = map[string]string{}
 	var target *ast.FuncDecl
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -90,9 +128,14 @@ func extractDailyNativeFamilies(t *testing.T, file *ast.File) map[string]string 
 		}
 	}
 	if target == nil {
-		t.Fatal("dailyNativeFamilyRegistrations function not found in daily.go -- wiring was renamed or removed; update this test")
+		return nil, nil, fmt.Errorf("dailyNativeFamilyRegistrations not found -- wiring was renamed or removed")
 	}
+
+	var walkErr error
 	ast.Inspect(target.Body, func(n ast.Node) bool {
+		if walkErr != nil {
+			return false
+		}
 		assign, ok := n.(*ast.AssignStmt)
 		if !ok || len(assign.Lhs) != 1 {
 			return true
@@ -105,26 +148,65 @@ func extractDailyNativeFamilies(t *testing.T, file *ast.File) map[string]string 
 		if !ok {
 			return true
 		}
-		lit, ok := index.Index.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
+		// Only assignments into one of the registration maps are ours; an index
+		// into any other local map is legitimately none of this test's business.
+		scope, isScope := map[string]string{
+			"native": "native", "postBridge": "post_bridge", "finalize": "finalize",
+		}[mapIdent.Name]
+		if !isScope {
 			return true
 		}
-		name, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			t.Fatalf("unquoting family name literal %q: %v", lit.Value, err)
+		name, resolveErr := resolveFamilyNameIndex(index.Index)
+		if resolveErr != nil {
+			walkErr = fmt.Errorf("registration into %q: %w", mapIdent.Name, resolveErr)
+			return false
 		}
-		switch mapIdent.Name {
-		case "native":
-			result[name] = "native"
-		case "postBridge":
-			result[name] = "post_bridge"
+		if scope == "finalize" {
+			finalize[name] = scope
+		} else {
+			partition[name] = scope
 		}
 		return true
 	})
-	if len(result) == 0 {
-		t.Fatal("found zero native/postBridge family assignments in dailyNativeFamilyRegistrations -- parsing broke, or the wiring shape changed; update this test")
+	if walkErr != nil {
+		return nil, nil, walkErr
 	}
-	return result
+	if len(partition) == 0 {
+		return nil, nil, fmt.Errorf("found zero native/postBridge assignments -- parsing broke or the wiring shape changed")
+	}
+	return partition, finalize, nil
+}
+
+// resolveFamilyNameIndex turns a map index into a family name. A string literal
+// is used directly; a selector is resolved through knownFamilyNameConstants,
+// whose values come from the real package. Anything else is an error rather
+// than a skip -- a dropped registration is invisible, and invisible is exactly
+// how the finalize scope went unnoticed.
+func resolveFamilyNameIndex(expr ast.Expr) (string, error) {
+	switch index := expr.(type) {
+	case *ast.BasicLit:
+		if index.Kind != token.STRING {
+			return "", fmt.Errorf("index is a non-string literal %s", index.Value)
+		}
+		name, err := strconv.Unquote(index.Value)
+		if err != nil {
+			return "", fmt.Errorf("unquoting %q: %w", index.Value, err)
+		}
+		return name, nil
+	case *ast.SelectorExpr:
+		name, known := knownFamilyNameConstants[index.Sel.Name]
+		if !known {
+			return "", fmt.Errorf(
+				"index is the constant %s, which this test cannot resolve -- add it to "+
+					"knownFamilyNameConstants (taking the value from the package, not restating it)",
+				index.Sel.Name)
+		}
+		return name, nil
+	case *ast.Ident:
+		return "", fmt.Errorf("index is the identifier %s, which this test cannot resolve", index.Name)
+	default:
+		return "", fmt.Errorf("index is a %T, which this test cannot resolve", expr)
+	}
 }
 
 // remainingKindConstantRe matches one `KindRemainingXxx = "metrics.remaining.xxx"`
@@ -322,10 +404,15 @@ func buildNativeFamiliesArtifact(t *testing.T) nativeFamiliesArtifact {
 	t.Helper()
 	repoRoot := repoRootFromCmdDailyWorker(t)
 	_, file := parseDailyGoFile(t)
+	partition, finalize, err := extractDailyFamilies(file)
+	if err != nil {
+		t.Fatalf("extracting daily family registrations: %v", err)
+	}
 	return nativeFamiliesArtifact{
 		SchemaVersion: 1,
 		GeneratedFrom: nativeFamiliesGeneratedFrom,
-		Daily:         extractDailyNativeFamilies(t, file),
+		Daily:         partition,
+		Finalize:      finalize,
 		Remaining:     buildRemainingArtifact(t, repoRoot, file),
 		Workgraph:     extractWorkgraphExecutors(t, repoRoot),
 	}
@@ -391,8 +478,11 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
-	wantRemainingNative := []string{"capacity", "dora", "membership_backfill", "recommendations", "work_item_attribution"}
-	wantRemainingCompat := []string{"complexity", "release_impact"}
+	wantRemainingNative := []string{
+		"capacity", "dora", "membership_backfill", "recommendations",
+		"release_impact", "work_item_attribution",
+	}
+	wantRemainingCompat := []string{"complexity"}
 	assertExecutorSet(t, artifact.Remaining, wantRemainingNative, "native")
 	assertExecutorSet(t, artifact.Remaining, wantRemainingCompat, "compat")
 	if len(artifact.Remaining) != len(wantRemainingNative)+len(wantRemainingCompat) {
@@ -433,6 +523,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// every input is a raw sync table plus the shared incident
 		// projection, so nothing else in the partition has to precede it.
 		"work_graph_edges",
+		// CHAOS-4286 part B: ai_workflow is pre_bridge for the same reason --
+		// its inputs (git_pull_requests, work_graph_issue_pr) are raw sync
+		// tables, not another daily family's own output.
+		"ai_workflow",
 	}
 	// CHAOS-5078 retired the CHAOS-4283 three (work_item_state, work_item,
 	// work_item_estimate) from post_bridge -- they moved to native/pre_bridge
@@ -444,17 +538,15 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// not a stale attribution snapshot, but execution order -- its input
 	// repo_metrics_daily is written by repo_user_commit in the SAME
 	// partition, and computeNativeFamilies walks families in SORTED order,
-	// where "compounding_risk" precedes "repo_user_commit" (CHAOS-4287).
-	//
-	// CHAOS-4288: benchmarking is post_bridge for a THIRD distinct reason. Not a
-	// stale attribution snapshot (the CHAOS-4283 three, retired above) and not
-	// sorted-order execution (compounding_risk): its metric window ENDS ON THE
-	// TARGET DAY -- asOfDay = run.TargetDay and every fetch is
-	// Fetch(startDay, asOfDay) -- so day D's own rows are INSIDE the window,
-	// and Python writes them (job_daily.py:1919) before calling the family
-	// (:2091). A pre_bridge registration benchmarks day D against a window
-	// missing day D.
-	wantDailyPostBridge := []string{"compounding_risk", "benchmarking"}
+	// where "compounding_risk" precedes "repo_user_commit". CHAOS-5078
+	// already retired work_item_state/work_item/work_item_estimate from this
+	// list (moved to native/pre_bridge, per the comment above -- landed on
+	// the base branch between this PR's fork point and its squash-merge, so
+	// they never appear here at all in this PR's own diff).
+	// benchmarking (CHAOS-4288) is NO LONGER in this list either -- CHAOS-5194
+	// relocated it to finalize scope (see wantDailyFinalize below and
+	// BenchmarkingFinalizeExecutor's own doc comment).
+	wantDailyPostBridge := []string{"compounding_risk"}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half
@@ -467,6 +559,84 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	if len(artifact.Daily) != len(wantDailyNative)+len(wantDailyPostBridge) {
 		t.Fatalf("expected exactly %d daily families, got %d: %v",
 			len(wantDailyNative)+len(wantDailyPostBridge), len(artifact.Daily), artifact.Daily)
+	}
+
+	// CHAOS-4290: ic_finalize is the first RUN-scoped native family. It gets its
+	// OWN exact-cardinality check rather than joining the count above, because
+	// the two scopes answer different questions and folding them would let a
+	// finalize family appear while a partition family silently disappeared.
+	wantDailyFinalize := []string{"ic_finalize", "benchmarking"}
+	assertExecutorSet(t, artifact.Finalize, wantDailyFinalize, "finalize")
+	if len(artifact.Finalize) != len(wantDailyFinalize) {
+		t.Fatalf("expected exactly %d finalize families, got %d: %v",
+			len(wantDailyFinalize), len(artifact.Finalize), artifact.Finalize)
+	}
+}
+
+// The NEGATIVE control for the extractor, and the reason the whole scope went
+// unnoticed: a guard blind to a scope passes by construction, so the guard must
+// be shown to FAIL on a scope it does not know.
+//
+// Both arms matter. An unknown MAP identifier is a fourth registration scope
+// added without telling this test. An unresolvable INDEX is the shape #2243
+// actually used -- `finalize[daily.ICFinalizeFamilyName]` -- which the previous
+// literal-only extractor dropped silently even for a map it did recognise.
+func TestExtractorRefusesRegistrationsItCannotClassify(t *testing.T) {
+	for _, testCase := range []struct{ name, body, wantSubstring string }{
+		{
+			name:          "unknown scope map",
+			body:          `preBridgeLate["some_family"] = x`,
+			wantSubstring: "",
+		},
+		{
+			name:          "unresolvable constant index",
+			body:          `finalize[daily.NotAKnownConstant] = x`,
+			wantSubstring: "NotAKnownConstant",
+		},
+		{
+			name:          "unresolvable identifier index",
+			body:          `finalize[someLocalName] = x`,
+			wantSubstring: "someLocalName",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			source := "package main\nfunc dailyNativeFamilyRegistrations() {\n" +
+				"\tnative := map[string]any{}\n\tfinalize := map[string]any{}\n" +
+				"\tpreBridgeLate := map[string]any{}\n\tvar x, someLocalName any\n" +
+				"\tnative[\"team_wellbeing\"] = x\n\t_ = someLocalName\n\t_ = preBridgeLate\n\t" +
+				testCase.body + "\n}\n"
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "synthetic.go", source, 0)
+			if err != nil {
+				t.Fatalf("parsing the synthetic source: %v", err)
+			}
+			_, _, extractErr := extractDailyFamilies(file)
+			if testCase.wantSubstring == "" {
+				// An unknown map is NOT an error -- it is legitimately not one of
+				// the registration maps. What must hold is that it is not silently
+				// classified INTO one of them.
+				partition, finalize, err := extractDailyFamilies(file)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if _, leaked := partition["some_family"]; leaked {
+					t.Fatal("a registration into an unknown map was classified as a partition family")
+				}
+				if _, leaked := finalize["some_family"]; leaked {
+					t.Fatal("a registration into an unknown map was classified as a finalize family")
+				}
+				return
+			}
+			if extractErr == nil {
+				t.Fatalf("extractor accepted %q -- an index it cannot resolve is a "+
+					"SILENTLY DROPPED registration, which is exactly how the finalize "+
+					"scope went unnoticed", testCase.body)
+			}
+			if !strings.Contains(extractErr.Error(), testCase.wantSubstring) {
+				t.Fatalf("error %q does not name %q, so it cannot tell a maintainer what to fix",
+					extractErr, testCase.wantSubstring)
+			}
+		})
 	}
 }
 
@@ -625,19 +795,16 @@ func parseJobContractKindValues(t *testing.T, repoRoot string) map[string]string
 // revert of the cutover fails HERE with a readable message even if someone
 // regenerated the artifact to match the reverted wiring.
 //
-// investment.dispatch/chunk/finalize stay compat deliberately -- they are dead
-// shells (CHAOS-4438) with no Python target either, so porting them would be
-// work with no runtime effect. workgraph.build stays compat until CHAOS-4924's
-// six remaining sub-builders land.
+// investment.dispatch/chunk/finalize were deleted entirely under CHAOS-4438
+// (dead Go shells, zero producers ever created a request row for them) --
+// they no longer appear in the artifact at all. workgraph.build stays compat
+// until CHAOS-4924's six remaining sub-builders land.
 func TestWorkgraphArtifactRecordsTheInvestmentCutover(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
 	want := map[string]string{
 		"workgraph.build":        "compat",
 		"investment.materialize": "native",
-		"investment.dispatch":    "compat",
-		"investment.chunk":       "compat",
-		"investment.finalize":    "compat",
 	}
 	if len(artifact.Workgraph) != len(want) {
 		t.Fatalf("expected %d workgraph kinds, got %d: %v", len(want), len(artifact.Workgraph), artifact.Workgraph)

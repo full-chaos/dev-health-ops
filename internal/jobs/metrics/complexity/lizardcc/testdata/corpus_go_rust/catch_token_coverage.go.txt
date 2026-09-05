@@ -1,0 +1,13 @@
+package main
+
+// CHAOS-5156: lizard's condition_counter is purely token-based, not
+// construct-aware -- a bare "catch" token counts as a condition even used
+// as an ordinary identifier (Go has no try/catch at all). This fixture
+// exists so goConditions["catch"] has SOMETHING exercising it; see the
+// fixture-coverage manifest test (assertEveryConditionExercisedByCorpus).
+func catch() int {
+	if true {
+		return 1
+	}
+	return 0
+}

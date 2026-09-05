@@ -179,6 +179,23 @@ type Outputs struct {
 	PeriodComparisons []PeriodComparisonRecord
 	Correlations      []MetricCorrelationRecord
 	Insights          []BenchmarkInsightRecord
+	// FetchFailures counts every SeriesFetcher.FetchMetricSeriesByScope call
+	// ComputeBenchmarkingForDay swallowed (forwarded finding, #2276 r2 F2,
+	// P1, verified by lane-ci-required-to-arc): Python's own per-metric
+	// try/except semantics are preserved -- a fetch failure logs a warning
+	// and contributes zero rows for that slice, the run continues -- but
+	// until this field existed nothing counted HOW MANY slices were
+	// affected, so a run silently degrading to fewer and fewer rows over
+	// time (an intermittent ClickHouse issue, a metric whose source table
+	// stopped being populated) was indistinguishable from "nothing to
+	// report" at the result level. Incremented once per SWALLOWED slice
+	// (baselines, anomalies, one period-comparison pair, one correlation
+	// pair) -- a period-comparison or correlation pair's SECOND fetch is
+	// never attempted once its FIRST has already failed (each is an early
+	// `return` inside its own closure), so a pair contributes at most 1 to
+	// this count, not 2, matching the single warn() line each failure path
+	// actually logs.
+	FetchFailures int
 }
 
 // Total is the row count across every collection -- what the executor reports

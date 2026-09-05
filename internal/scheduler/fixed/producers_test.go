@@ -812,6 +812,7 @@ func TestRetiredKindsAreFullyRemoved(t *testing.T) {
 	}
 
 	const remainingMetricsPrefix = "metrics.remaining."
+	const investmentPrefix = "investment."
 	for _, retired := range registry.RetiredKinds {
 		// Registry and deployment-manifest checks are namespace-agnostic and
 		// apply to every retired kind.
@@ -820,6 +821,19 @@ func TestRetiredKindsAreFullyRemoved(t *testing.T) {
 		}
 		if _, exists := deployedKinds[retired.Kind]; exists {
 			t.Errorf("retired kind %q still appears in deploy/go-workers/deployment.json's job_kinds", retired.Kind)
+		}
+
+		// CHAOS-4438 retired investment.dispatch/chunk/finalize: dead Go
+		// shells wired in internal/jobs/workgraph's addWorkgraphWorker
+		// switch, zero producers anywhere. workgraph.Kind.Valid() is the
+		// exhaustive membership check over that switch's case labels (see
+		// internal/jobs/workgraph/workgraph.go) -- a retired investment kind
+		// staying Valid() would mean its case clause is still there.
+		if strings.HasPrefix(retired.Kind, investmentPrefix) {
+			if workgraph.Kind(retired.Kind).Valid() {
+				t.Errorf("retired kind %q is still workgraph.Kind.Valid() -- its addWorkgraphWorker case was not removed", retired.Kind)
+			}
+			continue
 		}
 
 		// The remaining-metrics family inventory and the fixed schedule are
@@ -832,7 +846,7 @@ func TestRetiredKindsAreFullyRemoved(t *testing.T) {
 		// complete just because a kind is listed in retired_kinds.
 		if !strings.HasPrefix(retired.Kind, remainingMetricsPrefix) {
 			t.Errorf(
-				"retired kind %q is outside the metrics.remaining.* namespace this guard covers; "+
+				"retired kind %q is outside the metrics.remaining.*/investment.* namespaces this guard covers; "+
 					"add a namespace-specific absence check for it in TestRetiredKindsAreFullyRemoved "+
 					"before relying on this test to prove its removal",
 				retired.Kind,

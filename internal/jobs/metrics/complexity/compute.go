@@ -10,8 +10,11 @@
 //
 // SCOPE, PR1 (CHAOS-4971a): only `.py` is computed natively, through the pycc
 // subpackage's port of radon. The other 20 languages Python routes to lizard
-// are PR2 (CHAOS-4971b). This package FAILS CLOSED on them rather than
-// skipping them -- see AnalyzeFile.
+// are PR2 (CHAOS-4971b / CHAOS-5156), landing in three stacked PRs: 2a (this
+// one) adds C and C++ through the lizardcc subpackage's port of lizard's
+// CLikeReader; 2b and 2c add the rest. This package FAILS CLOSED on every
+// language not yet registered in DefaultAnalyzers rather than skipping it --
+// see AnalyzeFile.
 package complexity
 
 import (
@@ -21,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/complexity/lizardcc"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/complexity/pycc"
 )
 
@@ -128,14 +132,38 @@ func PythonAnalyzer(path, source string) ([]int, bool, error) {
 	return complexities, false, nil
 }
 
+// CFamilyAnalyzer is the lizard-equivalent analyzer for C and C++
+// (CHAOS-5156 PR2a). Python's LANGUAGE_BY_EXTENSION maps both `.c`/`.h` and
+// `.cpp`/`.cc`/`.hpp` to lizard's single CLikeReader (clike.py:24-28), so
+// both languages share this one Go analyzer too -- there is no separate
+// "C-only" or "C++-only" behaviour to diverge on.
+func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
+	return lizardcc.Analyze(path, source)
+}
+
 // DefaultAnalyzers returns the analyzers available natively, keyed by the
 // language name LanguageFor reports.
 //
-// PR1 (CHAOS-4971a) registers `python` only. PR2 (CHAOS-5156) adds the 20
-// lizard languages by returning a map with more entries -- it does not need to
-// modify this function, the dispatch, the result type, or the extension map.
+// PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) added `c`
+// and `cpp`. PR2253/go-rust added `go` and `rust` (the GoLikeStates clone-
+// based infra). This PR adds `csharp`, `kotlin`, `scala` and `swift`
+// (sharing that same GoLikeStates infra, except csharp which reuses PR2a's
+// CLikeReader-family architecture via hooks). Java and the remaining
+// lizard languages land in later stacked PRs by adding more entries here
+// -- no other function, the dispatch, the result type, or the extension
+// map needs to change for any of them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
-	return map[string]AnalyzerFunc{"python": PythonAnalyzer}
+	return map[string]AnalyzerFunc{
+		"python": PythonAnalyzer,
+		"c":      CFamilyAnalyzer,
+		"cpp":    CFamilyAnalyzer,
+		"go":     lizardcc.AnalyzeGo,
+		"rust":   lizardcc.AnalyzeRust,
+		"csharp": lizardcc.AnalyzeCSharp,
+		"kotlin": lizardcc.AnalyzeKotlin,
+		"scala":  lizardcc.AnalyzeScala,
+		"swift":  lizardcc.AnalyzeSwift,
+	}
 }
 
 // BuildFileResult ports _build_result (analytics/complexity.py:240-259).
@@ -280,24 +308,56 @@ func BuildSnapshots(
 	files []FileComplexity,
 	computedAt time.Time,
 	orgID string,
-) Result {
+) (Result, error) {
 	snapshots := make([]FileSnapshot, 0, len(files))
 
 	var totalLOC, totalCC, totalHigh, totalVeryHigh int
 
 	for _, f := range files {
+		// FAIL CLOSED on the uint32 conversion. Every one of these fields is
+		// a count derived from LineCount/len()/a strict-`>` threshold tally
+		// in AnalyzeFile/BuildFileResult, so it can legitimately be 0 (an
+		// empty file, a file with no functions) but can NEVER be negative.
+		// A negative value here means a bug upstream produced impossible
+		// data -- and `uint32(negative)` in Go does not error, it silently
+		// WRAPS to a value near 4 billion. Writing that wrapped number to
+		// file_complexity_snapshots would be a wildly wrong row that reads
+		// as a real (if bizarre) measurement, not a visible failure -- the
+		// same silent-corruption shape this family's other fail-closed
+		// checks exist to prevent (see ErrLanguageNotPorted above).
+		loc, err := nonNegativeUint32(f.LOC, "LOC", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		functionsCount, err := nonNegativeUint32(f.FunctionsCount, "FunctionsCount", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		cyclomaticTotal, err := nonNegativeUint32(f.CyclomaticTotal, "CyclomaticTotal", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		high, err := nonNegativeUint32(f.HighComplexityFunctions, "HighComplexityFunctions", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		veryHigh, err := nonNegativeUint32(f.VeryHighComplexityFunctions, "VeryHighComplexityFunctions", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+
 		snapshots = append(snapshots, FileSnapshot{
 			RepoID:                      repoID,
 			AsOfDay:                     day,
 			Ref:                         ref,
 			FilePath:                    f.FilePath,
 			Language:                    f.Language,
-			LOC:                         uint32(f.LOC),
-			FunctionsCount:              uint32(f.FunctionsCount),
-			CyclomaticTotal:             uint32(f.CyclomaticTotal),
+			LOC:                         loc,
+			FunctionsCount:              functionsCount,
+			CyclomaticTotal:             cyclomaticTotal,
 			CyclomaticAvg:               f.CyclomaticAvg,
-			HighComplexityFunctions:     uint32(f.HighComplexityFunctions),
-			VeryHighComplexityFunctions: uint32(f.VeryHighComplexityFunctions),
+			HighComplexityFunctions:     high,
+			VeryHighComplexityFunctions: veryHigh,
 			ComputedAt:                  computedAt,
 			OrgID:                       orgID,
 		})
@@ -317,18 +377,66 @@ func BuildSnapshots(
 		perKLOC = float64(totalCC) / (float64(totalLOC) / 1000.0)
 	}
 
+	// The repo-level totals go through the same fail-closed conversion,
+	// widened to uint64 (a summed field can exceed uint32's range even
+	// though no single file's count can).
+	locTotal, err := nonNegativeUint64(totalLOC, "LOCTotal", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+	cyclomaticTotalAll, err := nonNegativeUint64(totalCC, "CyclomaticTotal", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+	highAll, err := nonNegativeUint64(totalHigh, "HighComplexityFunctions", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+	veryHighAll, err := nonNegativeUint64(totalVeryHigh, "VeryHighComplexityFunctions", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+
 	return Result{
 		Snapshots: snapshots,
 		Repo: RepoDaily{
 			RepoID:                      repoID,
 			Day:                         day,
-			LOCTotal:                    uint64(totalLOC),
-			CyclomaticTotal:             uint64(totalCC),
+			LOCTotal:                    locTotal,
+			CyclomaticTotal:             cyclomaticTotalAll,
 			CyclomaticPerKLOC:           perKLOC,
-			HighComplexityFunctions:     uint64(totalHigh),
-			VeryHighComplexityFunctions: uint64(totalVeryHigh),
+			HighComplexityFunctions:     highAll,
+			VeryHighComplexityFunctions: veryHighAll,
 			ComputedAt:                  computedAt,
 			OrgID:                       orgID,
 		},
+	}, nil
+}
+
+// nonNegativeUint32 converts a count to uint32, failing closed on a
+// negative input rather than letting Go's implicit conversion wrap it into
+// a large positive value near the top of uint32's range.
+func nonNegativeUint32(v int, field, filePath string) (uint32, error) {
+	if v < 0 {
+		return 0, fmt.Errorf(
+			"complexity: %s=%d is negative for %q; refusing to convert to "+
+				"uint32 (would silently wrap to a huge value instead of erroring)",
+			field, v, filePath,
+		)
 	}
+	return uint32(v), nil
+}
+
+// nonNegativeUint64 is nonNegativeUint32's counterpart for the repo-level
+// summed totals, which are widened to uint64 because a sum across many
+// files can exceed uint32's range even though no single file's count can.
+func nonNegativeUint64(v int, field, repoID string) (uint64, error) {
+	if v < 0 {
+		return 0, fmt.Errorf(
+			"complexity: %s=%d is negative for repo %q; refusing to convert "+
+				"to uint64 (would silently wrap to a huge value instead of erroring)",
+			field, v, repoID,
+		)
+	}
+	return uint64(v), nil
 }

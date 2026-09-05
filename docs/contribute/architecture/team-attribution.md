@@ -1363,7 +1363,7 @@ flowchart TD
 
     subgraph PathB["Path B — investment work-unit evidence (this section)"]
         direction TB
-        Derive["_derive_issue_pr_links_from_dependencies<br/>Python · work_graph/builder.py"]
+        Derive["issue-PR link derivation<br/>Go · internal/jobs/workgraph/issueprlinks<br/>(CHAOS-5249: was Python's _derive_issue_pr_links_from_dependencies,<br/>deleted -- issueprlinks is the sole producer, wired as a pre-step)"]
         WGIP[("work_graph_issue_pr<br/>(internal staging table)")]
         FastPath["_build_issue_pr_edges_from_fast_path<br/>Python · work_graph/builder.py"]
         WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
@@ -1378,8 +1378,10 @@ flowchart TD
     WID --> Derive
 ```
 
-**Ownership:** the graph-construction and materializer nodes (`_derive_issue_pr_links_from_dependencies`
-through `structural_evidence_json`) are Python-only — no Go port exists for them. `build_unit_team_subquery`,
+**Ownership:** the issue-PR link derivation node (`Derive` above, `work_graph_issue_pr`) is Go-native
+(`internal/jobs/workgraph/issueprlinks`, CHAOS-5249) — Python's own producer was deleted, not merely
+superseded. Every node from `_build_issue_pr_edges_from_fast_path` through `structural_evidence_json`
+remains Python-only — no Go port exists for them. `build_unit_team_subquery`,
 the READ side that turns that evidence into a team vote, IS ported to Go
 (`cmd/query-api/internal/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
 WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no

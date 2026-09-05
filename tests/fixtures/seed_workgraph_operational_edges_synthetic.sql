@@ -5,13 +5,15 @@
 -- maps_to_repository/repo_id-non-null, has_alert, has_responder,
 -- linked_incident, or any flag_guards_edges/feature_flag_link row.
 --
--- SCRATCH database chaos_4924_synthetic (not org 70d529e0, not `default`,
--- not any shared org). Apply schema first with `sink.ensure_schema(force=True)`
--- against a DSN pointed at this database (ensure_schema is a no-op unless
--- forced or AUTO_RUN_MIGRATIONS=true -- see core.py:560), then run this file,
--- then tests/fixtures/generate_workgraph_operational_edges_python_golden.py
--- with ORG_ID overridden to 'c4924000-0000-0000-0000-000000000001' and
--- CLICKHOUSE_URI's database segment pointed at chaos_4924_synthetic.
+-- Table names below are UNQUALIFIED -- run this against a connection whose
+-- default database is a SCRATCH one (not org 70d529e0, not `default`, not
+-- any shared org; e.g. `chaos_4924_synthetic` on the local stack, or a fresh
+-- Testcontainers database in a Go integration test). Apply schema first
+-- (`sink.ensure_schema(force=True)` from Python, or the equivalent CREATE
+-- TABLE statements from Go -- ensure_schema is a no-op unless forced or
+-- AUTO_RUN_MIGRATIONS=true, see core.py:560), then run this file, then
+-- tests/fixtures/generate_workgraph_operational_edges_python_golden.py with
+-- ORG_ID overridden to 'c4924000-0000-0000-0000-000000000001'.
 --
 -- org_id = 'c4924000-0000-0000-0000-000000000001' (fixed, distinguishable in review).
 --
@@ -30,12 +32,12 @@
 --     NULL-OK-guarded one accept identically, proving the port only
 --     diverges on the NULL case, not everywhere.
 
-INSERT INTO chaos_4924_synthetic.repos
+INSERT INTO repos
   (org_id, id, repo)
 VALUES
   ('c4924000-0000-0000-0000-000000000001', 'c4924000-0000-0000-0000-0000000000aa', 'synthorg/webapp');
 
-INSERT INTO chaos_4924_synthetic.operational_services
+INSERT INTO operational_services
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, observed_at, last_synced,
    name, owning_team_id, escalation_policy_id, is_deleted)
@@ -46,7 +48,7 @@ VALUES
 
 -- CHAOS-4269 case: valid_from is NULL, the exact shape map_issue_incidents
 -- writes and Python's own unguarded predicate silently drops.
-INSERT INTO chaos_4924_synthetic.operational_service_repository_mappings
+INSERT INTO operational_service_repository_mappings
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, observed_at, last_synced,
    relationship_provenance, relationship_confidence,
@@ -57,7 +59,7 @@ VALUES
    'repository_derived', 0.8,
    'svc-1', 'c4924000-0000-0000-0000-0000000000aa', 'repository_derived', 'rule-1', 1, NULL, NULL);
 
-INSERT INTO chaos_4924_synthetic.operational_incidents
+INSERT INTO operational_incidents
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, source_url, observed_at, last_synced,
    service_id, title, started_at, is_deleted)
@@ -67,13 +69,13 @@ VALUES
    '2026-09-01 00:00:00', '2026-09-01 00:00:00',
    'svc-1', 'Synthetic incident', '2026-08-31 00:00:00', 0);
 
-INSERT INTO chaos_4924_synthetic.deployments
+INSERT INTO deployments
   (org_id, repo_id, deployment_id, environment, deployed_at)
 VALUES
   ('c4924000-0000-0000-0000-000000000001', 'c4924000-0000-0000-0000-0000000000aa',
    'deploy-1', 'production', '2026-08-30 22:00:00');
 
-INSERT INTO chaos_4924_synthetic.operational_alerts
+INSERT INTO operational_alerts
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, source_url, observed_at, last_synced,
    incident_id, title, triggered_at, is_deleted)
@@ -83,7 +85,7 @@ VALUES
    '2026-09-01 00:00:00', '2026-09-01 00:00:00',
    'inc-1', 'Synthetic alert', '2026-08-31 00:05:00', 0);
 
-INSERT INTO chaos_4924_synthetic.operational_incident_responders
+INSERT INTO operational_incident_responders
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, source_url, observed_at, last_synced,
    incident_id, user_id, assigned_at)
@@ -95,7 +97,7 @@ VALUES
 
 -- body contains a jira key ("remediat" present -> REMEDIATED_BY) AND a
 -- github PR URL -> REFERENCES(pr).
-INSERT INTO chaos_4924_synthetic.operational_incident_timeline_events
+INSERT INTO operational_incident_timeline_events
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, source_url, observed_at, last_synced,
    incident_id, event_type, body, actor_id, occurred_at)
@@ -107,7 +109,7 @@ VALUES
    'user-2', '2026-08-31 00:15:00');
 
 -- body contains a DIFFERENT jira key with no "remediat" -> plain REFERENCES.
-INSERT INTO chaos_4924_synthetic.operational_incident_notes
+INSERT INTO operational_incident_notes
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, source_url, observed_at, last_synced,
    incident_id, body, author_user_id, created_at)
@@ -117,14 +119,14 @@ VALUES
    '2026-09-01 00:00:00', '2026-09-01 00:00:00',
    'inc-1', 'Related to SYNTH-2, tracked separately.', 'user-3', '2026-08-31 00:20:00');
 
-INSERT INTO chaos_4924_synthetic.work_items
+INSERT INTO work_items
   (org_id, work_item_id, title, description)
 VALUES
   ('c4924000-0000-0000-0000-000000000001', 'jira:SYNTH-1', 'Synthetic work item 1', ''),
   ('c4924000-0000-0000-0000-000000000001', 'jira:SYNTH-2', 'Synthetic work item 2', ''),
   ('c4924000-0000-0000-0000-000000000001', 'jira:SYNTH-3', 'Remove synth-flag-kill-switch before launch', 'cleanup task');
 
-INSERT INTO chaos_4924_synthetic.feature_flag
+INSERT INTO feature_flag
   (org_id, provider, flag_key, project_key, repo_id, environment, flag_type, created_at, last_synced)
 VALUES
   ('c4924000-0000-0000-0000-000000000001', 'synthetic', 'synth-flag-kill-switch', 'proj1',
@@ -134,12 +136,12 @@ VALUES
 -- that BOTH Python's unguarded predicate and Go's NULL-OK-guarded one accept
 -- identically, proving the port doesn't diverge everywhere, only on the
 -- NULL case CHAOS-4269 documents.
-INSERT INTO chaos_4924_synthetic.repos
+INSERT INTO repos
   (org_id, id, repo)
 VALUES
   ('c4924000-0000-0000-0000-000000000001', 'c4924000-0000-0000-0000-0000000000bb', 'synthorg/api');
 
-INSERT INTO chaos_4924_synthetic.operational_services
+INSERT INTO operational_services
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, observed_at, last_synced,
    name, owning_team_id, escalation_policy_id, is_deleted)
@@ -148,7 +150,7 @@ VALUES
    '2026-09-01 00:00:00', 'svc-2', '2026-09-01 00:00:00', '2026-09-01 00:00:00',
    'Synthetic API Service', 'team-2', NULL, 0);
 
-INSERT INTO chaos_4924_synthetic.operational_service_repository_mappings
+INSERT INTO operational_service_repository_mappings
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, observed_at, last_synced,
    relationship_provenance, relationship_confidence,
@@ -160,7 +162,7 @@ VALUES
    'svc-2', 'c4924000-0000-0000-0000-0000000000bb', 'bounded_service_repository_heuristic', 'rule-2',
    1, '2026-01-01 00:00:00', NULL);
 
-INSERT INTO chaos_4924_synthetic.operational_incidents
+INSERT INTO operational_incidents
   (org_id, provider, provider_instance_id, source_entity_type, external_id,
    source_version_at, id, source_url, observed_at, last_synced,
    service_id, escalation_policy_id, title, started_at, is_deleted)
@@ -170,7 +172,7 @@ VALUES
    '2026-09-01 00:00:00', '2026-09-01 00:00:00',
    'svc-2', 'policy-2', 'Synthetic API incident', '2026-08-31 00:00:00', 0);
 
-INSERT INTO chaos_4924_synthetic.deployments
+INSERT INTO deployments
   (org_id, repo_id, deployment_id, environment, deployed_at)
 VALUES
   ('c4924000-0000-0000-0000-000000000001', 'c4924000-0000-0000-0000-0000000000bb',

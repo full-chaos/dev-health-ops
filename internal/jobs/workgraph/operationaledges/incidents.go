@@ -86,7 +86,7 @@ func ReadServiceRepositoryMappings(
 
 	args := []any{
 		clickhouse.Named("org_id", organizationID),
-		clickhouse.Named("now", now.UTC()),
+		clickhouse.Named("now", remaining.DateTime64Argument(now, remaining.DateTime64MicrosecondPrecision)),
 	}
 	if repoID != nil {
 		args = append(args, clickhouse.Named("repo_id", repoID.String()))
@@ -156,11 +156,11 @@ func ReadIncidents(
 	args := []any{clickhouse.Named("org_id", organizationID)}
 	if fromDate != nil {
 		filters = append(filters, "started_at >= {from_date:DateTime64(3, 'UTC')}")
-		args = append(args, clickhouse.Named("from_date", fromDate.UTC()))
+		args = append(args, clickhouse.Named("from_date", remaining.DateTime64Argument(*fromDate, remaining.DateTime64MillisecondPrecision)))
 	}
 	if toDate != nil {
 		filters = append(filters, "started_at <= {to_date:DateTime64(3, 'UTC')}")
-		args = append(args, clickhouse.Named("to_date", toDate.UTC()))
+		args = append(args, clickhouse.Named("to_date", remaining.DateTime64Argument(*toDate, remaining.DateTime64MillisecondPrecision)))
 	}
 	query := "SELECT id, service_id, escalation_policy_id, started_at, source_url FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_incidents", filters, contract)
@@ -241,18 +241,40 @@ type directRow struct {
 	Body string
 }
 
-// ReadAlerts ports operational_edges.py's `alerts` read.
-func ReadAlerts(ctx context.Context, conn driver.Conn, organizationID string) ([]directRow, error) {
+// incidentIDFilter returns a post-selection filter restricting a table to a
+// known set of incident_id values, pushing the equality join against
+// operational_incidents into ClickHouse instead of loading every row for the
+// org and filtering in Go memory (chris's standing rule: a plain-equality
+// join on org-scoped tables belongs in the database, not Go). Returns ("",
+// false) when incidentIDs is empty -- the caller skips the query entirely in
+// that case, since no row could possibly match.
+func incidentIDFilter(incidentIDs []string) (filter string, args []any, ok bool) {
+	if len(incidentIDs) == 0 {
+		return "", nil, false
+	}
+	return "incident_id IN {incident_ids:Array(String)}", []any{clickhouse.Named("incident_ids", incidentIDs)}, true
+}
+
+// ReadAlerts ports operational_edges.py's `alerts` read, restricted to
+// incidentIDs (see incidentIDFilter) -- Python loads every alert for the org
+// and filters to known incidents in memory; this pushes that filter into the
+// query instead.
+func ReadAlerts(ctx context.Context, conn driver.Conn, organizationID string, incidentIDs []string) ([]directRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
+	}
+	filter, filterArgs, ok := incidentIDFilter(incidentIDs)
+	if !ok {
+		return nil, nil
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
 		return nil, fmt.Errorf("alert ordering contract: %w", err)
 	}
 	query := "SELECT id, incident_id, source_url, triggered_at FROM " +
-		remaining.CurrentOperationalRowsSQL("operational_alerts", []string{"is_deleted = 0"}, contract)
-	rows, err := conn.Query(ctx, query, clickhouse.Named("org_id", organizationID))
+		remaining.CurrentOperationalRowsSQL("operational_alerts", []string{"is_deleted = 0", filter}, contract)
+	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read operational_alerts: %w", err)
 	}
@@ -278,18 +300,24 @@ func ReadAlerts(ctx context.Context, conn driver.Conn, organizationID string) ([
 
 // ReadTimelineEvents ports operational_edges.py's `timeline` read -- NO
 // is_deleted filter, matching Python exactly (current_operational_rows_sql
-// called with no post_selection_filters for this table).
-func ReadTimelineEvents(ctx context.Context, conn driver.Conn, organizationID string) ([]directRow, error) {
+// called with no post_selection_filters for this table), restricted to
+// incidentIDs (see incidentIDFilter / ReadAlerts' doc comment).
+func ReadTimelineEvents(ctx context.Context, conn driver.Conn, organizationID string, incidentIDs []string) ([]directRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
+	}
+	filter, filterArgs, ok := incidentIDFilter(incidentIDs)
+	if !ok {
+		return nil, nil
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
 		return nil, fmt.Errorf("timeline ordering contract: %w", err)
 	}
 	query := "SELECT id, incident_id, actor_id, body, source_url, occurred_at FROM " +
-		remaining.CurrentOperationalRowsSQL("operational_incident_timeline_events", nil, contract)
-	rows, err := conn.Query(ctx, query, clickhouse.Named("org_id", organizationID))
+		remaining.CurrentOperationalRowsSQL("operational_incident_timeline_events", []string{filter}, contract)
+	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read operational_incident_timeline_events: %w", err)
 	}
@@ -314,18 +342,23 @@ func ReadTimelineEvents(ctx context.Context, conn driver.Conn, organizationID st
 }
 
 // ReadNotes ports operational_edges.py's `notes` read -- NO is_deleted
-// filter, same as timeline.
-func ReadNotes(ctx context.Context, conn driver.Conn, organizationID string) ([]directRow, error) {
+// filter, same as timeline -- restricted to incidentIDs.
+func ReadNotes(ctx context.Context, conn driver.Conn, organizationID string, incidentIDs []string) ([]directRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
+	}
+	filter, filterArgs, ok := incidentIDFilter(incidentIDs)
+	if !ok {
+		return nil, nil
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
 		return nil, fmt.Errorf("note ordering contract: %w", err)
 	}
 	query := "SELECT id, incident_id, body, author_user_id, source_url, created_at FROM " +
-		remaining.CurrentOperationalRowsSQL("operational_incident_notes", nil, contract)
-	rows, err := conn.Query(ctx, query, clickhouse.Named("org_id", organizationID))
+		remaining.CurrentOperationalRowsSQL("operational_incident_notes", []string{filter}, contract)
+	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read operational_incident_notes: %w", err)
 	}
@@ -355,18 +388,23 @@ func ReadNotes(ctx context.Context, conn driver.Conn, organizationID string) ([]
 }
 
 // ReadResponders ports operational_edges.py's `responders` read -- NO
-// is_deleted filter, same as timeline/notes.
-func ReadResponders(ctx context.Context, conn driver.Conn, organizationID string) ([]directRow, error) {
+// is_deleted filter, same as timeline/notes -- restricted to incidentIDs.
+func ReadResponders(ctx context.Context, conn driver.Conn, organizationID string, incidentIDs []string) ([]directRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
+	}
+	filter, filterArgs, ok := incidentIDFilter(incidentIDs)
+	if !ok {
+		return nil, nil
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
 		return nil, fmt.Errorf("responder ordering contract: %w", err)
 	}
 	query := "SELECT id, incident_id, user_id, source_url, assigned_at FROM " +
-		remaining.CurrentOperationalRowsSQL("operational_incident_responders", nil, contract)
-	rows, err := conn.Query(ctx, query, clickhouse.Named("org_id", organizationID))
+		remaining.CurrentOperationalRowsSQL("operational_incident_responders", []string{filter}, contract)
+	args := append([]any{clickhouse.Named("org_id", organizationID)}, filterArgs...)
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read operational_incident_responders: %w", err)
 	}
@@ -399,13 +437,22 @@ type RepoRow struct {
 
 // ReadRepos ports operational_edges.py's `repos` read: plain FINAL, not part
 // of the operational_current family (repos is not an operational_* table).
-func ReadRepos(ctx context.Context, conn driver.Conn, organizationID string) ([]RepoRow, error) {
+// Python loads every repo for the org; this restricts to candidateFullNames
+// (the owner/repo strings actually found in incident evidence text) instead
+// of materializing the whole org's repo list for a lookup that only ever
+// resolves a handful of names -- same equality-join-to-SQL rule as the
+// incident-scoped reads above. Returns (nil, nil) for an empty candidate set.
+func ReadRepos(ctx context.Context, conn driver.Conn, organizationID string, candidateFullNames []string) ([]RepoRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
 	}
+	if len(candidateFullNames) == 0 {
+		return nil, nil
+	}
 	rows, err := conn.Query(ctx,
-		"SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String}",
-		clickhouse.Named("org_id", organizationID))
+		"SELECT id, repo FROM repos FINAL WHERE org_id = {org_id:String} AND repo IN {repos:Array(String)}",
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("repos", candidateFullNames))
 	if err != nil {
 		return nil, fmt.Errorf("read repos: %w", err)
 	}
@@ -437,28 +484,48 @@ type DeploymentRow struct {
 }
 
 // ReadDeployments ports operational_edges.py's `deployments` read: plain
-// FINAL, org-scoped, optionally repo- and window-scoped.
+// FINAL, org-scoped, optionally repo- and window-scoped, ADDITIONALLY
+// restricted to mappedRepoIDs (the repos actually reachable through a
+// service-repository mapping). Python loads every deployment matching the
+// org/repoID/window scope and then only ever looks one up per mapped repo
+// (`for mapped_repo_id in service_repos... for deployment in deployments`) --
+// a deployment for a repo with no mapping can never be joined to anything,
+// so restricting to mappedRepoIDs removes only rows that would be discarded
+// in Go memory anyway (same equality-join-to-SQL rule as the incident-scoped
+// reads above). Returns (nil, nil) when mappedRepoIDs is empty -- no mapping
+// means no possible linked_incident edge, so the query is skipped entirely.
 func ReadDeployments(
 	ctx context.Context, conn driver.Conn, organizationID string,
-	repoID *uuid.UUID, fromDate, toDate *time.Time,
+	repoID *uuid.UUID, mappedRepoIDs []uuid.UUID, fromDate, toDate *time.Time,
 ) ([]DeploymentRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
 	}
+	if len(mappedRepoIDs) == 0 {
+		return nil, nil
+	}
 	query := "SELECT repo_id, deployment_id, environment, deployed_at FROM deployments FINAL " +
 		"WHERE org_id = {org_id:String}"
-	args := []any{clickhouse.Named("org_id", organizationID)}
+	mappedRepoIDStrings := make([]string, len(mappedRepoIDs))
+	for i, id := range mappedRepoIDs {
+		mappedRepoIDStrings[i] = id.String()
+	}
+	args := []any{
+		clickhouse.Named("org_id", organizationID),
+	}
+	query += " AND repo_id IN {mapped_repo_ids:Array(UUID)}"
+	args = append(args, clickhouse.Named("mapped_repo_ids", mappedRepoIDStrings))
 	if repoID != nil {
 		query += " AND repo_id = {repo_id:UUID}"
 		args = append(args, clickhouse.Named("repo_id", repoID.String()))
 	}
 	if fromDate != nil {
 		query += " AND deployed_at >= {from_date:DateTime64(3, 'UTC')}"
-		args = append(args, clickhouse.Named("from_date", fromDate.UTC()))
+		args = append(args, clickhouse.Named("from_date", remaining.DateTime64Argument(*fromDate, remaining.DateTime64MillisecondPrecision)))
 	}
 	if toDate != nil {
 		query += " AND deployed_at <= {to_date:DateTime64(3, 'UTC')}"
-		args = append(args, clickhouse.Named("to_date", toDate.UTC()))
+		args = append(args, clickhouse.Named("to_date", remaining.DateTime64Argument(*toDate, remaining.DateTime64MillisecondPrecision)))
 	}
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
@@ -480,15 +547,26 @@ func ReadDeployments(
 	return out, nil
 }
 
-// WorkItemIDRow is a bare work_item_id, as read for the known-work-items set
-// operational_edges.py checks jira-key matches against.
-func ReadWorkItemIDs(ctx context.Context, conn driver.Conn, organizationID string) (map[string]bool, error) {
+// ReadWorkItemIDs checks which of candidateWorkItemIDs (the "jira:<key>"
+// strings derived from jira-key matches in incident evidence text) actually
+// exist, as the known-work-items set operational_edges.py checks jira-key
+// matches against. Python loads EVERY work_item_id for the org (thousands of
+// rows on a live org) just to build a membership set for a handful of
+// extracted keys; this restricts the read to those candidates instead --
+// same equality-join-to-SQL rule as the incident-scoped reads above. Returns
+// (nil, nil) for an empty candidate set.
+func ReadWorkItemIDs(ctx context.Context, conn driver.Conn, organizationID string, candidateWorkItemIDs []string) (map[string]bool, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
 	}
+	if len(candidateWorkItemIDs) == 0 {
+		return nil, nil
+	}
 	rows, err := conn.Query(ctx,
-		"SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String}",
-		clickhouse.Named("org_id", organizationID))
+		"SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String} "+
+			"AND work_item_id IN {work_item_ids:Array(String)}",
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("work_item_ids", candidateWorkItemIDs))
 	if err != nil {
 		return nil, fmt.Errorf("read work_items: %w", err)
 	}
@@ -527,11 +605,23 @@ type incidentEdgeBuilder struct {
 	edges               []edges.Row
 }
 
+// defaultOperationalProvider mirrors operational_edges.py's `_edge()`
+// helper, whose `provider: str = "pagerduty"` parameter default applies to
+// EVERY call site in that file except the one for maps_to_repository (which
+// passes the mapping row's own provider, itself "pagerduty" unless a future
+// non-PagerDuty operational source is onboarded). A nil provider argument
+// to this method means "use Python's default", not "no provider" -- this
+// producer's edges are never provider-less.
+var defaultOperationalProvider = "pagerduty"
+
 func (b *incidentEdgeBuilder) edge(
 	sourceType, sourceID, edgeType, targetType, targetID string,
 	provenance string, confidence float32, evidence string,
 	repoID *uuid.UUID, eventTs time.Time, provider *string,
 ) {
+	if provider == nil {
+		provider = &defaultOperationalProvider
+	}
 	id := edges.EdgeID(sourceType, sourceID, edgeType, targetType, targetID)
 	b.edges = append(b.edges, edges.Row{
 		EdgeID:       id,
@@ -573,6 +663,16 @@ func BuildOperationalIncidentEdges(
 		return nil, err
 	}
 
+	// Reads below are ordered so every equality join against an org-scoped
+	// table is pushed into ClickHouse via a candidate-set WHERE/IN, rather
+	// than loading a whole table and joining in Go memory (chris's standing
+	// rule). That means the candidate set has to exist BEFORE the dependent
+	// read: mappings/incidents/services first (nothing depends on them),
+	// then incident-scoped tables filtered by the resulting incident id set,
+	// then work_items/repos filtered by the jira-key/PR-URL candidates found
+	// in THOSE tables' text. Measured row bounds on org 70d529e0 (2026-09-05,
+	// disclosed in the PR body): mappings 0, incidents 1, services 1, work_items
+	// 4944 (why the candidate-filtered read matters), deployments 699, repos 11.
 	mappings, err := ReadServiceRepositoryMappings(ctx, conn, organizationID, now, repoID)
 	if err != nil {
 		return nil, err
@@ -582,34 +682,6 @@ func BuildOperationalIncidentEdges(
 		return nil, err
 	}
 	services, err := ReadServices(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	alerts, err := ReadAlerts(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	timeline, err := ReadTimelineEvents(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	notes, err := ReadNotes(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	responders, err := ReadResponders(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	knownWorkItems, err := ReadWorkItemIDs(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	repos, err := ReadRepos(ctx, conn, organizationID)
-	if err != nil {
-		return nil, err
-	}
-	deployments, err := ReadDeployments(ctx, conn, organizationID, repoID, fromDate, toDate)
 	if err != nil {
 		return nil, err
 	}
@@ -674,6 +746,43 @@ func BuildOperationalIncidentEdges(
 			}
 		}
 		b.incidentByID[inc.ID] = inc
+	}
+
+	incidentIDs := make([]string, 0, len(b.incidentByID))
+	for id := range b.incidentByID {
+		incidentIDs = append(incidentIDs, id)
+	}
+
+	alerts, err := ReadAlerts(ctx, conn, organizationID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	timeline, err := ReadTimelineEvents(ctx, conn, organizationID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	notes, err := ReadNotes(ctx, conn, organizationID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+	responders, err := ReadResponders(ctx, conn, organizationID, incidentIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	mappedRepoIDSeen := make(map[uuid.UUID]bool)
+	var mappedRepoIDs []uuid.UUID
+	for _, repos := range b.serviceRepos {
+		for _, id := range repos {
+			if !mappedRepoIDSeen[id] {
+				mappedRepoIDSeen[id] = true
+				mappedRepoIDs = append(mappedRepoIDs, id)
+			}
+		}
+	}
+	deployments, err := ReadDeployments(ctx, conn, organizationID, repoID, mappedRepoIDs, fromDate, toDate)
+	if err != nil {
+		return nil, err
 	}
 
 	b.deploymentsByRepo = make(map[uuid.UUID][]DeploymentRow, len(deployments))
@@ -744,25 +853,53 @@ func BuildOperationalIncidentEdges(
 		}
 	}
 
+	// alerts/timeline/notes/responders are already restricted to incidentIDs
+	// at the SQL level (ReadAlerts et al.), so every row here is guaranteed
+	// known -- no Go-side membership check needed or performed.
 	for _, a := range alerts {
-		if !a.hasKnownIncident(b.incidentByID) {
-			continue
-		}
 		b.appendDirect(a, edges.NodeTypeOperationalAlert, edges.EdgeTypeHasAlert)
 	}
 	for _, t := range timeline {
-		if !t.hasKnownIncident(b.incidentByID) {
-			continue
-		}
 		b.appendDirect(t, edges.NodeTypeIncidentTimelineEvent, edges.EdgeTypeHasTimelineEvent)
 		b.appendUser(t)
 	}
 	for _, r := range responders {
-		if !r.hasKnownIncident(b.incidentByID) {
-			continue
-		}
 		b.appendDirect(r, edges.NodeTypeIncidentResponder, edges.EdgeTypeHasResponder)
 		b.appendUser(r)
+	}
+
+	// Candidate sets for the work_items/repos reads: derived from the text
+	// this build already loaded (timeline + notes bodies), not from a
+	// separate unbounded scan -- see ReadWorkItemIDs/ReadRepos' doc comments.
+	textRows := concatRows(timeline, notes)
+	candidateWorkItemIDs := make([]string, 0)
+	seenWorkItemCandidate := make(map[string]bool)
+	candidateFullNames := make([]string, 0)
+	seenFullNameCandidate := make(map[string]bool)
+	for _, row := range textRows {
+		for _, key := range jiraKeyMatches(row.Body) {
+			workItemID := "jira:" + key
+			if !seenWorkItemCandidate[workItemID] {
+				seenWorkItemCandidate[workItemID] = true
+				candidateWorkItemIDs = append(candidateWorkItemIDs, workItemID)
+			}
+		}
+		for _, ref := range githubPRURLMatches(row.Body) {
+			fullName := ref.Owner + "/" + ref.Repo
+			if !seenFullNameCandidate[fullName] {
+				seenFullNameCandidate[fullName] = true
+				candidateFullNames = append(candidateFullNames, fullName)
+			}
+		}
+	}
+
+	knownWorkItems, err := ReadWorkItemIDs(ctx, conn, organizationID, candidateWorkItemIDs)
+	if err != nil {
+		return nil, err
+	}
+	repos, err := ReadRepos(ctx, conn, organizationID, candidateFullNames)
+	if err != nil {
+		return nil, err
 	}
 
 	b.knownWorkItems = knownWorkItems
@@ -771,10 +908,7 @@ func BuildOperationalIncidentEdges(
 		b.repoIDsByFullName[r.Repo] = r.ID
 	}
 
-	for _, row := range concatRows(timeline, notes) {
-		if !row.hasKnownIncident(b.incidentByID) {
-			continue
-		}
+	for _, row := range textRows {
 		eventAt := b.now
 		if row.EventAt != nil {
 			eventAt = *row.EventAt
@@ -826,11 +960,6 @@ func sourceURLOr(sourceURL, fallback string) string {
 		return sourceURL
 	}
 	return fallback
-}
-
-func (r directRow) hasKnownIncident(known map[string]IncidentRow) bool {
-	_, ok := known[r.IncidentID]
-	return ok
 }
 
 func (b *incidentEdgeBuilder) appendDirect(row directRow, targetType, edgeType string) {

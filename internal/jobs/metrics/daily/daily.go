@@ -472,6 +472,7 @@ type PartitionHandler struct {
 	nativeFamilies      map[string]NativeFamilyExecutor
 	nativeFamilyNames   []string
 	nativeObserver      jobruntime.DailyMetricsNativeFamilyObserver
+	nativeFamilyLogger  NativeFamilyRefusalLogger
 	nativeFamiliesNow   func() time.Time
 	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
 
@@ -650,6 +651,33 @@ func (handler *PartitionHandler) SetNativeFamilyObserver(observer jobruntime.Dai
 	handler.nativeObserver = observer
 }
 
+// NativeFamilyRefusalLogger is the narrow logging capability
+// computeNativeFamilies/computePostBridgeNativeFamilies need to report a
+// per-partition native family error (CHAOS-5139). Before this, a runtime
+// refusal was recorded ONLY as an anonymous DailyMetricsNativeFamilyOutcomeRefused
+// counter increment -- the wrapped error itself was discarded at the call
+// site, so an operator (or an E2E gate reading /metrics) could see a family
+// was refused but never learn why, and no CI artifact could ever answer that
+// question without a code change (CHAOS-5138's own root cause). *slog.Logger
+// satisfies this directly, matching remaining/membership_native.go's
+// MembershipLogger shape.
+type NativeFamilyRefusalLogger interface {
+	Error(msg string, args ...any)
+}
+
+// SetNativeFamilyLogger wires optional logging for a native family's
+// per-partition refusal. Nil is tolerated everywhere it is read (same
+// discipline as SetNativeFamilyObserver) and never gates behavior on its
+// own -- fail-open stays fail-open, this only makes the reason visible.
+// Shared by both pre_bridge (computeNativeFamilies) and post_bridge
+// (computePostBridgeNativeFamilies) families, same as the observer above.
+func (handler *PartitionHandler) SetNativeFamilyLogger(logger NativeFamilyRefusalLogger) {
+	if handler == nil {
+		return
+	}
+	handler.nativeFamilyLogger = logger
+}
+
 // SetCompatRetryObserver wires the optional telemetry observer for a
 // partition durably persisted as failed_permanent after an unresolvable
 // ambiguous_refused response (CHAOS-4319). Never gates behavior on its own:
@@ -701,6 +729,19 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 		rows, err := executor.ComputeFamily(ctx, run, partition)
 		duration := handler.nativeFamiliesNow().Sub(started)
 		if err != nil {
+			if handler.nativeFamilyLogger != nil {
+				handler.nativeFamilyLogger.Error(
+					"native metrics.daily family refused for this partition; "+
+						"falling back to the Python compatibility bridge "+
+						"(CHAOS-5139)",
+					"family", name,
+					"organization_id", run.OrganizationID,
+					"target_day", run.TargetDay,
+					"partition_id", partition.ID,
+					"run_id", run.ID,
+					"error", err,
+				)
+			}
 			if handler.nativeObserver != nil {
 				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
 					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, duration,
@@ -778,10 +819,12 @@ func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run 
 // compute this family, so a post_bridge failure here means NO writer
 // produces this family's rows for this partition, unlike a pre_bridge
 // failure (which still has the bridge as a fallback). This method therefore
-// never returns an error to Work; a failure is logged via the SAME
-// DailyMetricsNativeFamilyOutcomeRefused telemetry pre_bridge failures use,
-// which is the operator-visible signal for "this partition produced zero
-// rows for this family, check why."
+// never returns an error to Work; a failure increments the SAME
+// DailyMetricsNativeFamilyOutcomeRefused telemetry pre_bridge failures use
+// (the operator-visible signal for "this partition produced zero rows for
+// this family, check why") and, since CHAOS-5139, is also logged via
+// nativeFamilyLogger with the wrapped error -- the counter alone could never
+// say WHY a family was refused (CHAOS-5138's own root cause).
 func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Context, run Run, partition Partition) {
 	if handler == nil || len(handler.postBridgeFamilyNames) == 0 {
 		return
@@ -798,6 +841,19 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 		if err != nil {
 			rows = 0
 			outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
+			if handler.nativeFamilyLogger != nil {
+				handler.nativeFamilyLogger.Error(
+					"native metrics.daily post_bridge family refused for "+
+						"this partition; no writer produces this family's "+
+						"rows for this partition (CHAOS-5139)",
+					"family", name,
+					"organization_id", run.OrganizationID,
+					"target_day", run.TargetDay,
+					"partition_id", partition.ID,
+					"run_id", run.ID,
+					"error", err,
+				)
+			}
 		}
 		if handler.nativeObserver != nil {
 			_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(name, outcome, rows, duration)

@@ -54,6 +54,45 @@ func mappingProvenance(source string) string {
 	return edges.ProvenanceNative
 }
 
+// mappingKey identifies one (service_id, repo_id) pair -- the granularity
+// preferred-mapping selection dedups at.
+type mappingKey struct {
+	serviceID string
+	repoID    uuid.UUID
+}
+
+// selectPreferredMappings ports preferred_mappings (operational_edges.py):
+// the highest-confidence mapping per (service_id, repo_id), scanning
+// `mappings` once. Extracted to a standalone, DB-free function (was inline
+// in BuildOperationalIncidentEdges) so both properties codex round
+// chaos-4924-pr-a found in this one block are independently unit-testable:
+//
+//   - finding 1: the comparison is `>` over full float64 precision
+//     (mappingConfidence), matching Python's own float comparison -- NOT
+//     quantized to float32 first, which could flip a close-but-distinct
+//     pair to a tie.
+//   - finding 7: preferredOrder returned alongside the map is FIRST-SEEN
+//     order over `mappings`, matching Python's dict-insertion-order
+//     preservation -- the caller must iterate preferredOrder, never
+//     `range` the map, or edge order randomizes on every run.
+func selectPreferredMappings(mappings []MappingRow) (byKey map[mappingKey]MappingRow, order []mappingKey) {
+	byKey = make(map[mappingKey]MappingRow)
+	for _, m := range mappings {
+		if m.RepoID == nil || m.ServiceID == "" {
+			continue
+		}
+		key := mappingKey{serviceID: m.ServiceID, repoID: *m.RepoID}
+		current, exists := byKey[key]
+		if !exists {
+			order = append(order, key)
+		}
+		if !exists || mappingConfidence(m.RelationshipConfidence) > mappingConfidence(current.RelationshipConfidence) {
+			byKey[key] = m
+		}
+	}
+	return byKey, order
+}
+
 // MappingRow is one operational_service_repository_mappings row.
 type MappingRow struct {
 	ServiceID              string
@@ -156,6 +195,32 @@ type IncidentRow struct {
 	EscalationPolicyID string
 	StartedAt          *time.Time
 	SourceURL          string
+}
+
+// selectScopedIncidents ports the `incident_by_id` dict comprehension
+// (operational_edges.py): every incident, optionally restricted to those
+// whose service maps to the build's repo scope. Extracted to a standalone,
+// DB-free function (was inline in BuildOperationalIncidentEdges) so its
+// ordering guarantee is independently unit-testable: order is FIRST-SEEN
+// over `incidents`, matching Python's dict-insertion-order preservation --
+// the caller must iterate order, never `range` the returned map, or edge
+// order randomizes on every run (codex round chaos-4924-pr-a, finding 7).
+func selectScopedIncidents(
+	incidents []IncidentRow, repoID *uuid.UUID, serviceRepos map[string][]uuid.UUID,
+) (byID map[string]IncidentRow, order []string) {
+	byID = make(map[string]IncidentRow, len(incidents))
+	order = make([]string, 0, len(incidents))
+	for _, inc := range incidents {
+		if repoID != nil {
+			// Python: `if repo_id is None or str(row.get("service_id") or "") in service_repos`
+			if _, ok := serviceRepos[inc.ServiceID]; !ok {
+				continue
+			}
+		}
+		byID[inc.ID] = inc
+		order = append(order, inc.ID)
+	}
+	return byID, order
 }
 
 // ReadIncidents ports operational_edges.py's `incidents` read.
@@ -614,7 +679,11 @@ type incidentEdgeBuilder struct {
 	orgID               string
 	now                 time.Time
 	heuristicDaysWindow int
-	heuristicConfidence float32
+	// heuristicConfidence stays float64 end-to-end (the config value as
+	// Python has it) until the single, final narrowing at edge-construction
+	// time (edges.Row.Confidence is float32) -- narrowing any earlier, even
+	// just to validate, is exactly finding 2's bug (chaos-4924-pr-a r1).
+	heuristicConfidence float64
 	repoScope           *uuid.UUID
 	serviceRepos        map[string][]uuid.UUID
 	serviceTeams        map[string]string
@@ -677,7 +746,7 @@ func (b *incidentEdgeBuilder) edge(
 // rather than reproducing non-determinism nothing depends on.
 func BuildOperationalIncidentEdges(
 	ctx context.Context, conn driver.Conn, organizationID string, now time.Time,
-	heuristicDaysWindow int, heuristicConfidence float32,
+	heuristicDaysWindow int, heuristicConfidence float64,
 	fromDate, toDate *time.Time, repoID *uuid.UUID,
 ) ([]edges.Row, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
@@ -685,15 +754,14 @@ func BuildOperationalIncidentEdges(
 	}
 	// Python's WorkGraphEdge.__post_init__ validates every edge's confidence
 	// (0.0-1.0) at CONSTRUCTION time, so a bad heuristicConfidence fails on
-	// the FIRST edge, before any ClickHouse write. This float32 parameter has
-	// already lost precision by the time it reaches this function (codex
-	// round chaos-4924-pr-a, finding 2: Go's type system cannot distinguish
-	// 1.00000001 from 1.0 the way Python's float64 comparison can), so this
-	// cannot reproduce Python's exact precision-sensitive rejection -- but it
-	// still catches a genuinely out-of-range value (NaN/Inf/outside [0,1])
-	// up front rather than deferring to WriteEdges, several edges deep into
-	// a batch, the way this function did before.
-	if err := edges.ValidateConfidence(heuristicConfidence); err != nil {
+	// the FIRST edge, before any ClickHouse write. Validated here at full
+	// float64 precision (fixed per team-lead's r1 follow-up: an EARLIER
+	// version of this fix took heuristicConfidence as float32, which had
+	// already lost precision by the time it reached this function --
+	// validating a narrowed value is not validating the real one). The
+	// float32 narrowing edges.Row.Confidence requires happens only where the
+	// heuristic edge is actually constructed, below.
+	if err := edges.ValidateConfidenceFloat64(heuristicConfidence); err != nil {
 		return nil, fmt.Errorf("heuristic confidence: %w", err)
 	}
 
@@ -726,30 +794,7 @@ func BuildOperationalIncidentEdges(
 		repoScope: repoID,
 	}
 
-	// preferred_mappings: highest-confidence mapping per (service_id, repo_id).
-	// Iterated below in FIRST-SEEN order (preferredOrder), not map-range
-	// order: Python's dict preserves the order mappings was scanned in, but
-	// a bare `for range preferred` randomizes it on every run -- codex round
-	// chaos-4924-pr-a, finding 7.
-	type mappingKey struct {
-		serviceID string
-		repoID    uuid.UUID
-	}
-	preferred := make(map[mappingKey]MappingRow)
-	var preferredOrder []mappingKey
-	for _, m := range mappings {
-		if m.RepoID == nil || m.ServiceID == "" {
-			continue
-		}
-		key := mappingKey{serviceID: m.ServiceID, repoID: *m.RepoID}
-		current, exists := preferred[key]
-		if !exists {
-			preferredOrder = append(preferredOrder, key)
-		}
-		if !exists || mappingConfidence(m.RelationshipConfidence) > mappingConfidence(current.RelationshipConfidence) {
-			preferred[key] = m
-		}
-	}
+	preferred, preferredOrder := selectPreferredMappings(mappings)
 
 	b.serviceRepos = make(map[string][]uuid.UUID)
 	for _, key := range preferredOrder {
@@ -781,22 +826,8 @@ func BuildOperationalIncidentEdges(
 		}
 	}
 
-	// incidentOrder preserves the `incidents` query's own row-scan order --
-	// Python's dict comprehension does the same implicitly (dict insertion
-	// order); a bare `for range b.incidentByID` below would randomize it on
-	// every run instead (codex round chaos-4924-pr-a, finding 7).
-	b.incidentByID = make(map[string]IncidentRow, len(incidents))
-	incidentOrder := make([]string, 0, len(incidents))
-	for _, inc := range incidents {
-		if repoID != nil {
-			// Python: `if repo_id is None or str(row.get("service_id") or "") in service_repos`
-			if _, ok := b.serviceRepos[inc.ServiceID]; !ok {
-				continue
-			}
-		}
-		b.incidentByID[inc.ID] = inc
-		incidentOrder = append(incidentOrder, inc.ID)
-	}
+	incidentByID, incidentOrder := selectScopedIncidents(incidents, repoID, b.serviceRepos)
+	b.incidentByID = incidentByID
 	incidentIDs := incidentOrder
 
 	alerts, err := ReadAlerts(ctx, conn, organizationID, incidentIDs)
@@ -892,7 +923,7 @@ func BuildOperationalIncidentEdges(
 						edges.NodeTypeDeployment, d.DeploymentID,
 						edges.EdgeTypeLinkedIncident,
 						edges.NodeTypeIncident, incidentID,
-						edges.ProvenanceHeuristic, heuristicConfidence, evidence,
+						edges.ProvenanceHeuristic, float32(heuristicConfidence), evidence,
 						&mappedRepoID, d.DeployedAt, nil,
 					)
 				}

@@ -379,3 +379,53 @@ func TestBuildOperationalEdgesMatchSyntheticGolden(t *testing.T) {
 		t.Errorf("expected 1 feature_flag_link row, got %d", len(flagLinks))
 	}
 }
+
+// TestReadServiceRepositoryMappingsTruncatesNowToWholeSeconds pins codex
+// round chaos-4924-pr-a finding 3, against a REAL ClickHouse (this is a SQL
+// type-coercion behavior no pure Go unit test can exercise).
+//
+// operational_edges.py binds `now` to a `{now:DateTime}` placeholder --
+// plain DateTime, whole-second precision, never DateTime64 -- so ClickHouse
+// truncates the PARAMETER (not the valid_to COLUMN, which stays
+// DateTime64(6)) to whole seconds before comparing. With
+// now=2026-09-01T00:00:00.900500Z and valid_to=2026-09-01T00:00:00.500000Z:
+// at full microsecond precision valid_to (.5) > now (.9005) is FALSE (the
+// mapping would be excluded); after now truncates to :00.000000, valid_to
+// (.5) > now (.0) is TRUE, so Python's deployed producer INCLUDES this
+// mapping. An earlier version of this port bound now as DateTime64(6),
+// preserving the full .9005 and excluding it -- the wrong, untruncated
+// answer.
+func TestReadServiceRepositoryMappingsTruncatesNowToWholeSeconds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	conn := newSchemaConn(t, ctx)
+
+	const orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
+	repoID := "00000000-0000-0000-0000-0000000000aa"
+	if err := conn.Exec(ctx,
+		`INSERT INTO operational_service_repository_mappings
+		   (org_id, provider, provider_instance_id, source_entity_type, external_id,
+		    source_version_at, id, observed_at, last_synced,
+		    relationship_confidence, service_id, repo_id, is_active, valid_from, valid_to)
+		 VALUES
+		   ('`+orgID+`', 'pagerduty', 'test', 'mapping', 'map-precision',
+		    '2026-09-01 00:00:00', 'map-precision', '2026-09-01 00:00:00', '2026-09-01 00:00:00',
+		    0.8, 'svc-precision', '`+repoID+`', 1, NULL, '2026-09-01 00:00:00.500000')`,
+	); err != nil {
+		t.Fatalf("seed mapping: %v", err)
+	}
+
+	now := time.Date(2026, 9, 1, 0, 0, 0, 900500000, time.UTC) // .9005 seconds
+	rows, err := ReadServiceRepositoryMappings(ctx, conn, orgID, now, nil)
+	if err != nil {
+		t.Fatalf("ReadServiceRepositoryMappings: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected the mapping to be INCLUDED (Python truncates now to :00.000000, so "+
+			"valid_to :00.500000 > now :00.000000 is true) -- got %d rows, want 1. An untruncated "+
+			"DateTime64 bind would exclude it (valid_to :00.5 > now :00.9005 is false).", len(rows))
+	}
+	if rows[0].ServiceID != "svc-precision" {
+		t.Fatalf("expected svc-precision, got %q", rows[0].ServiceID)
+	}
+}

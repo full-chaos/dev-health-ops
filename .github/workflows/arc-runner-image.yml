@@ -60,12 +60,25 @@ permissions:
 jobs:
   build:
     name: Build and publish
-    runs-on: ubuntu-26.04-arm
+    # ubuntu-26.04-arm is not a real enterprise hosted label (chris
+    # 2026-09-04 16:59) -- routed to the ARC pool instead. Fork PRs and the
+    # disabled state fall back to ubuntu-latest (x64): the Build step below
+    # asks buildx for `platforms: linux/arm64` explicitly, which needs QEMU
+    # registered to cross-build on an x64 host -- added below, since this
+    # job previously only ever ran natively on (would-be) arm64 hardware and
+    # never needed it.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     outputs:
       sha: ${{ github.sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        # Required for the x64 (fork-PR / disabled-variable) leg to
+        # cross-build `platforms: linux/arm64` below; harmless extra setup
+        # on the native-arm64 self-hosted leg.
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -162,6 +175,18 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # CHAOS-5157: this step's ONLY use of Go is `go env GOROOT` (to
+          # find a path to bind-mount below) -- it never builds or tests
+          # anything on the runner itself, so a saved module/build cache
+          # buys nothing here. Measured live (gate-rounds, via /proc):
+          # setup-go's default cache-save tar was a 38+ minute D-state
+          # (uninterruptible disk I/O) process on bigboy's sda, holding
+          # load1 above the codex-round gate threshold for the WHOLE
+          # fleet, not just this job -- an image-build job repeatedly
+          # writing a multi-hundred-MB cache archive nobody reads back
+          # (the built image's own CGO/gcc toolchain never depends on this
+          # runner's Go module cache) is pure cost.
+          cache: false
 
       - name: Check CGO toolchain inside the built image
         # Two separate `docker run` invocations, not one `sh -c 'a; b'`:
@@ -172,41 +197,67 @@ jobs:
         # shell" (fail-closed by that scanner's own design -- an image it
         # can't determine is never assumed safe). Keeping each docker run a
         # complete, self-contained statement avoids tripping it, rather than
-        # working around a scanner that is behaving as intended. The probe
-        # source is written to a plain file BEFORE either docker run (a
-        # heredoc on the host side, not inside a container invocation), so
-        # there's no `docker run`-internal sequencing operator to trip on
-        # either.
+        # working around a scanner that is behaving as intended.
+        #
+        # CHAOS-5128 (2026-09-05, PR #2245's own first ARC run): the probe
+        # source used to be written to a plain file on the RUNNER's
+        # filesystem (a host-side heredoc), then bind-mounted into the
+        # second `docker run` with `-v /tmp/cgo_probe.go:/tmp/cgo_probe.go:ro`.
+        # That worked on every prior venue but failed here with
+        # "/tmp/cgo_probe.go is a directory, should be a Go file": under the
+        # ARC pod's DinD topology, the Docker DAEMON resolving that
+        # bind-mount's SOURCE path does not share the same view of `/tmp`
+        # that the runner process wrote to, so the mount source doesn't
+        # exist from the daemon's side and Docker silently creates an empty
+        # directory there instead of erroring. The GOROOT mount below is
+        # NOT affected -- that's a real, persistent directory setup-go
+        # installed to a shared tool-cache path, not an ephemeral `/tmp`
+        # file -- which is why only the probe file broke.
+        #
+        # Fixed by never bind-mounting a runner-written file at all: the
+        # probe source is piped over stdin (`docker run -i`, no `-v` for
+        # it) to a bare `sh` invocation (no `-c` argument, so there is no
+        # quoted argument for the scanner above to split on), which writes
+        # it to a path INSIDE the container's own filesystem before
+        # compiling it. The outer heredoc (`<<'RUNSH'`, quoted so nothing
+        # expands host-side) is captured verbatim and piped to that `sh`;
+        # the nested heredoc (`<<'PROBE'`) is then `sh`'s own, read from
+        # the same piped stream once `sh` reaches that line -- ordinary,
+        # well-supported nested-heredoc-over-a-pipe shell behavior.
         #
         # Codex round 3 (b854c646, P3): the previous version only PRINTED
         # `command -v gcc` wrapped in `echo` (which exits 0 even when gcc is
         # missing -- `$(...)` substitution's exit code is discarded once
         # it's inside the echo string) and PRINTED `go env CGO_ENABLED CC`
         # (config, not an actual compile). A broken or absent compiler could
-        # pass this check silently. Both docker runs below now ASSERT
+        # pass this check silently. Both docker runs below still ASSERT
         # instead of report: `command -v gcc` with no echo wrapper fails the
         # step outright if gcc is missing, and the second run performs a
         # REAL cgo compile (not a config dump) with CGO_ENABLED forced on,
-        # using the actual go binary this job's own setup-go step installed.
+        # `set -e` inside the piped script so a failed write or compile
+        # fails the step, using the actual go binary this job's own
+        # setup-go step installed.
         run: |
           set -euo pipefail
-          cat > /tmp/cgo_probe.go <<'EOF'
-          package main
-          // #include <stdlib.h>
-          import "C"
-          func main() { C.malloc(1) }
-          EOF
           docker run --rm --platform linux/arm64 \
             ghcr.io/full-chaos/arc-runner:check \
             sh -c 'command -v gcc'
-          docker run --rm --platform linux/arm64 \
+          docker run --rm -i --platform linux/arm64 \
             -v "$(go env GOROOT)":/usr/local/go:ro \
-            -v /tmp/cgo_probe.go:/tmp/cgo_probe.go:ro \
             -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             -e CGO_ENABLED=1 \
             -e HOME=/tmp \
             ghcr.io/full-chaos/arc-runner:check \
-            go run /tmp/cgo_probe.go
+            sh <<'RUNSH'
+          set -e
+          cat > /tmp/cgo_probe.go <<'PROBE'
+          package main
+          // #include <stdlib.h>
+          import "C"
+          func main() { C.malloc(1) }
+          PROBE
+          go run /tmp/cgo_probe.go
+          RUNSH
 
       - name: Determine whether this build is main's current head
         if: steps.publish.outputs.should_publish == 'true'

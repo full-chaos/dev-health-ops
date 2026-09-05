@@ -1,0 +1,9 @@
+class Reader {
+    int readSafely(String path) {
+        try {
+            return path.length();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+}

@@ -26,7 +26,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	kinds := []string{jobcontract.KindWorkGraphBuild, jobcontract.KindInvestmentMaterialize, jobcontract.KindInvestmentDispatch, jobcontract.KindInvestmentChunk, jobcontract.KindInvestmentFinalize}
+	kinds := []string{jobcontract.KindWorkGraphBuild, jobcontract.KindInvestmentMaterialize}
 	specs := make([]jobruntime.HandlerSpec, 0, len(kinds))
 	for _, kind := range kinds {
 		descriptor, ok := registry.Descriptor(kind)
@@ -241,12 +241,16 @@ func buildPreStepOrder() []string {
 }
 
 // addWorkgraphWorker routes each kind to its executor. `executor` is the
-// Python bridge and still serves workgraph.build and the three dead investment
-// kinds; `nativeInvestment` serves investment.materialize only.
+// Python bridge and still serves workgraph.build; `nativeInvestment` serves
+// investment.materialize only. investment.dispatch/chunk/finalize (the
+// pre-cutover partitioned pipeline) were deleted under CHAOS-4438: zero
+// producers ever created a request row for them (RequestWriter.WriteTx's
+// sole call site only ever writes workgraph.build), confirmed exhaustively
+// after #2227 landed investment.materialize's native cutover.
 func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, nativeInvestment workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
-		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps)
+		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps, dependencies.Logger)
 		if err != nil {
 			return err
 		}
@@ -260,41 +264,11 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 		if nativeInvestment == nil {
 			return errWorkerDependencyUnavailable
 		}
-		h, err := workgraph.NewMaterializeHandler(store, nativeInvestment)
+		h, err := workgraph.NewMaterializeHandler(store, nativeInvestment, dependencies.Logger)
 		if err != nil {
 			return err
 		}
 		a, err := jobruntime.NewAdapter[jobruntime.InvestmentMaterializeArgs](registry, spec, h, dependencies)
-		if err != nil {
-			return err
-		}
-		return river.AddWorkerSafely(workers, a)
-	case jobcontract.KindInvestmentDispatch:
-		h, err := workgraph.NewDispatchHandler(store, executor)
-		if err != nil {
-			return err
-		}
-		a, err := jobruntime.NewAdapter[jobruntime.InvestmentDispatchArgs](registry, spec, h, dependencies)
-		if err != nil {
-			return err
-		}
-		return river.AddWorkerSafely(workers, a)
-	case jobcontract.KindInvestmentChunk:
-		h, err := workgraph.NewChunkHandler(store, executor)
-		if err != nil {
-			return err
-		}
-		a, err := jobruntime.NewAdapter[jobruntime.InvestmentChunkArgs](registry, spec, h, dependencies)
-		if err != nil {
-			return err
-		}
-		return river.AddWorkerSafely(workers, a)
-	case jobcontract.KindInvestmentFinalize:
-		h, err := workgraph.NewFinalizeHandler(store, executor)
-		if err != nil {
-			return err
-		}
-		a, err := jobruntime.NewAdapter[jobruntime.InvestmentFinalizeArgs](registry, spec, h, dependencies)
 		if err != nil {
 			return err
 		}

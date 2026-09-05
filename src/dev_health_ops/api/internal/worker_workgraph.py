@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
 import os
 import signal
@@ -30,6 +29,7 @@ from dev_health_ops.api.internal.worker_auth import (
 )
 
 router = APIRouter(prefix="/internal/worker/workgraph/v1", include_in_schema=False)
+
 _MAX_EVIDENCE_BYTES = 4096
 _MAX_COMPATIBILITY_PROCESS_BYTES = 1024 * 1024
 _PROCESS_TERMINATION_TIMEOUT_SECONDS = 1.0
@@ -93,51 +93,17 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
             "llm_batch_poll_interval_seconds",
             "llm_batch_timeout_seconds",
         },
-        "investment.dispatch": {
-            "build_from_date",
-            "build_to_date",
-            "from_date",
-            "to_date",
-            "window_days",
-            "repo_ids",
-            "team_ids",
-            "force",
-            "allow_unscoped",
-            "llm_batch_mode",
-            "llm_batch_min_items",
-            "llm_batch_poll_interval_seconds",
-            "llm_batch_timeout_seconds",
-            "run_membership_backfill_after",
-        },
-        "investment.chunk": {
-            "from_date",
-            "to_date",
-            "window_days",
-            "repo_ids",
-            "team_ids",
-            "force",
-            "allow_unscoped",
-            "run_id",
-            "computed_at",
-            "component_indexes",
-            "chunk_index",
-            "llm_batch_mode",
-            "llm_batch_min_items",
-            "llm_batch_poll_interval_seconds",
-            "llm_batch_timeout_seconds",
-            "max_component_nodes",
-        },
-        "investment.finalize": {
-            "chunk_results",
-            "run_id",
-            "run_membership_backfill_after",
-        },
+        # investment.dispatch/chunk/finalize retired outright under
+        # CHAOS-4438 -- removed from this table, so a request naming one of
+        # them fails closed here with "unsupported fields" (the existing
+        # unknown-kind rejection path) rather than being scoped and
+        # dispatched.
     }
     if kind not in allowed or set(scope) - allowed[kind]:
         raise ValueError("request scope contains unsupported fields")
     arguments = dict(scope)
     arguments["org_id"] = str(row["org_id"])
-    if kind in {"investment.materialize", "investment.dispatch", "investment.chunk"}:
+    if kind == "investment.materialize":
         arguments["llm_model"] = row["model_ref"] or None
         arguments["llm_concurrency"] = int(row["llm_concurrency"])
     return arguments
@@ -146,45 +112,12 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
 def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from dev_health_ops.workers import work_graph_tasks
 
-    if kind == "investment.dispatch":
-        run_membership = bool(arguments.pop("run_membership_backfill_after", False))
-        build_from_date = arguments.pop("build_from_date", None)
-        build_to_date = arguments.pop("build_to_date", None)
-        build_arguments = {"org_id": arguments["org_id"]}
-        if build_from_date is not None:
-            build_arguments["from_date"] = build_from_date
-        if build_to_date is not None:
-            build_arguments["to_date"] = build_to_date
-        build = _operation_evidence(
-            "workgraph.build",
-            work_graph_tasks.run_work_graph_build.run(**build_arguments),
-        )
-        materialize = _operation_evidence(
-            "investment.materialize",
-            work_graph_tasks.run_investment_materialize.run(**arguments),
-        )
-        membership = (
-            _operation_evidence(
-                "investment.membership",
-                work_graph_tasks.run_membership_backfill.run(
-                    org_id=str(arguments.get("org_id") or "")
-                ),
-            )
-            if run_membership
-            else None
-        )
-        return {
-            "status": "success",
-            "build": build,
-            "materialize": materialize,
-            "membership": membership,
-        }
-
     operations = {
         "workgraph.build": work_graph_tasks.run_work_graph_build.run,
         "investment.materialize": work_graph_tasks.run_investment_materialize.run,
-        "investment.chunk": work_graph_tasks.run_investment_materialize_chunk.run,
-        "investment.finalize": work_graph_tasks.finalize_investment_materialize_partitioned.run,
+        # investment.dispatch/chunk/finalize retired outright under
+        # CHAOS-4438 (r2 finding F1) -- removed from this table, same
+        # reasoning as _scope_arguments' allowed table above.
     }
     try:
         operation = operations[kind]
@@ -194,20 +127,6 @@ def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise ValueError("compatibility operation returned an invalid result")
     return result
-
-
-def _operation_evidence(kind: str, result: object) -> dict[str, Any]:
-    if not isinstance(result, dict):
-        raise ValueError(f"{kind} compatibility operation returned an invalid result")
-    status = result.get("status")
-    if not isinstance(status, str) or not status or len(status) > 64:
-        raise ValueError(f"{kind} compatibility operation returned an invalid status")
-    encoded = _canonical(result).encode()
-    return {
-        "status": status,
-        "sha256": hashlib.sha256(encoded).hexdigest(),
-        "encoded_bytes": len(encoded),
-    }
 
 
 async def _read_bounded_stream(
@@ -332,7 +251,7 @@ async def _run_until_client_disconnect(
 async def _mark_ambiguous(
     session: AsyncSession, request: ExecuteRequest, detail: str
 ) -> None:
-    await session.execute(
+    request_result = await session.execute(
         text(
             """
             UPDATE work_graph_execution_requests
@@ -345,6 +264,29 @@ async def _mark_ambiguous(
         ),
         {"id": str(request.request_id), "token": str(request.claim_token)},
     )
+    # r3 finding F1 (P2, codex, CHAOS-4438): the request update above is
+    # guarded by lease validity; the ledger update below was NOT -- if the
+    # lease expired between execute() reading the row and this function
+    # running (a caller can take arbitrarily long, e.g. a retired-kind
+    # rejection racing a concurrent lease expiry, or a long-running
+    # compatibility process finishing just as its lease lapses), the
+    # request update above would affect zero rows while the ledger still
+    # flipped to 'ambiguous' unconditionally -- leaving the request stuck
+    # 'running' with an expired claim while the repair endpoint (which
+    # requires BOTH records ambiguous) refuses to repair it. Skipping the
+    # ledger update whenever the request update did not actually apply
+    # keeps the two mutations atomic in effect: either both flip to
+    # ambiguous, or neither does.
+    if int(getattr(request_result, "rowcount", 0) or 0) == 0:
+        # Nothing to commit -- the UPDATE above matched no row (the lease
+        # already expired between the caller's read and this call) -- but
+        # still close the transaction cleanly rather than leaving it open
+        # for whatever the caller does next with this session. No new
+        # Python log line here (chris's standing rule: Python telemetry
+        # additions are disallowed) -- the Go-side telemetry this PR adds
+        # covers the equivalent discard-on-error class.
+        await session.commit()
+        return
     await session.execute(
         text(
             """
@@ -394,6 +336,14 @@ async def execute(
     # turns a healthy materialization into an expired execution.
     execution_row = dict(row)
     await session.rollback()
+    # CHAOS-4438: a retired kind (investment.dispatch/chunk/finalize) has no
+    # entry in _scope_arguments' `allowed` table or _run_sync's `operations`
+    # table below -- it falls into the existing unknown-kind rejection path
+    # (the broad `except Exception` a few lines down, which _scope_arguments'
+    # ValueError reaches) exactly like any other unsupported kind. No
+    # dedicated retired-kind check here (chris's standing rule: Python
+    # rejection code for a retired kind is disallowed -- deletion of the
+    # kind's handler entries is the fix, not a new guard).
     try:
         arguments = _scope_arguments(
             str(execution_row["kind"]), execution_row["scope"], execution_row

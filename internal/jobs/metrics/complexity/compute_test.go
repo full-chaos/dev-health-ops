@@ -115,6 +115,309 @@ func TestAnalyzeFileMatchesRadonAggregates(t *testing.T) {
 	}
 }
 
+// lizardGoldenFile is lizardcc's own golden shape (clike_parity_test.go),
+// reused here the same way loadCorpusGolden reuses pycc's -- this proves the
+// FILE-LEVEL aggregates (compute.go's BuildFileResult) for the C-family
+// analyzer, where lizardcc's own parity test proves only the raw per-function
+// numbers.
+type lizardGoldenFile struct {
+	FunctionsCount             int     `json:"functions_count"`
+	CyclomaticTotal            int     `json:"cyclomatic_total"`
+	CyclomaticAvg              float64 `json:"cyclomatic_avg"`
+	HighComplexityFunctions    int     `json:"high_complexity_functions"`
+	VeryHighComplexityFunction int     `json:"very_high_complexity_functions"`
+}
+
+type lizardGoldenDoc struct {
+	LizardVersion string                      `json:"lizard_version"`
+	Files         map[string]lizardGoldenFile `json:"files"`
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForCFamily is CHAOS-5156 PR2a's
+// contract test against PR1's seam: it proves the C/C++ analyzer this PR
+// registers (CFamilyAnalyzer) reaches AnalyzeFile -> AnalyzeFileWith ->
+// BuildFileResult exactly like the python analyzer does in
+// TestAnalyzeFileMatchesRadonAggregates above, deriving LOC/count/total/
+// average/threshold fields the SAME way regardless of which analyzer ran.
+func TestAnalyzeFileMatchesLizardAggregatesForCFamily(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		// The corpus is <name>.<real-ext>.txt; strip .txt so LanguageFor
+		// sees the extension the fixture is testing, exactly like
+		// lizardcc's own oracle and parity test do.
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesEveryCFamilyExtensionToCFamilyAnalyzer proves every
+// extension CLikeReader owns in Python (clike.py:27) reaches the SAME Go
+// analyzer, keyed by the SAME two language strings compute.go's extension
+// map already declared before this PR existed.
+func TestLanguageForRoutesEveryCFamilyExtensionToCFamilyAnalyzer(t *testing.T) {
+	cases := []struct {
+		path string
+		lang string
+	}{
+		{"a.c", "c"}, {"a.h", "c"},
+		{"a.cpp", "cpp"}, {"a.cc", "cpp"}, {"a.hpp", "cpp"},
+	}
+	analyzers := DefaultAnalyzers()
+	for _, c := range cases {
+		lang, known := LanguageFor(c.path)
+		if !known || lang != c.lang {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (%q, true)", c.path, lang, known, c.lang)
+		}
+		analyze, ok := analyzers[lang]
+		if !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", c.path, lang)
+		}
+		complexities, skipped, err := analyze(c.path, "int f() { if (1) { return 1; } return 0; }")
+		if err != nil || skipped {
+			t.Fatalf("%s: analyze returned err=%v skipped=%v", c.path, err, skipped)
+		}
+		if len(complexities) != 1 || complexities[0] != 2 {
+			t.Fatalf("%s: got %v, want a single function with complexity 2", c.path, complexities)
+		}
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForGoRust is this PR's contract
+// test against PR1's seam for the two analyzers it registers
+// (go/rust), mirroring TestAnalyzeFileMatchesLizardAggregatesForCFamily.
+func TestAnalyzeFileMatchesLizardAggregatesForGoRust(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_go_rust")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_go_rust.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesEveryGoRustExtensionToItsAnalyzer proves .go and
+// .rs both reach a registered analyzer under the right language string.
+func TestLanguageForRoutesEveryGoRustExtensionToItsAnalyzer(t *testing.T) {
+	cases := []struct {
+		path string
+		lang string
+	}{
+		{"a.go", "go"}, {"a.rs", "rust"},
+	}
+	analyzers := DefaultAnalyzers()
+	for _, c := range cases {
+		lang, known := LanguageFor(c.path)
+		if !known || lang != c.lang {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (%q, true)", c.path, lang, known, c.lang)
+		}
+		if _, ok := analyzers[lang]; !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", c.path, lang)
+		}
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForJVMSwiftFamily is CHAOS-5156
+// PR2b's contract test against PR1's seam, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForCFamily for the four analyzers
+// this PR registers (csharp/kotlin/scala/swift). Only the FILE-LEVEL
+// aggregates are asserted here (LOC/count/total/average/threshold), all
+// order-independent -- lizardcc's own jvmswift_parity_test.go is what
+// proves the raw per-function numbers, including why order itself is
+// NOT asserted there for this family.
+func TestAnalyzeFileMatchesLizardAggregatesForJVMSwiftFamily(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_jvm_swift")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_jvm_swift.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer proves every
+// extension PR2b registers reaches the right analyzer under the right
+// language string.
+func TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer(t *testing.T) {
+	cases := []struct {
+		path string
+		lang string
+	}{
+		{"a.cs", "csharp"}, {"a.kt", "kotlin"}, {"a.kts", "kotlin"},
+		{"a.scala", "scala"}, {"a.swift", "swift"},
+	}
+	analyzers := DefaultAnalyzers()
+	for _, c := range cases {
+		lang, known := LanguageFor(c.path)
+		if !known || lang != c.lang {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (%q, true)", c.path, lang, known, c.lang)
+		}
+		if _, ok := analyzers[lang]; !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", c.path, lang)
+		}
+	}
+}
+
 func TestAnalyzeFileSkipsUnanalysedExtensions(t *testing.T) {
 	// Python's _analyze_content returns None for an extension absent from
 	// LANGUAGE_BY_EXTENSION. That is a skip, not an error, and not a zero row.
@@ -130,10 +433,13 @@ func TestAnalyzeFileSkipsUnanalysedExtensions(t *testing.T) {
 }
 
 func TestAnalyzeFileFailsClosedOnLizardLanguages(t *testing.T) {
-	// PR1 ports .py only. Every other analysed extension must ERROR rather
-	// than skip: a skip would emit a plausible, badly-undercounted row for a
-	// TypeScript repo, and would let this executor be routed before PR2.
-	for _, path := range []string{"a.ts", "b.go", "c.java", "d.rb", "e.vue"} {
+	// Every extension NOT yet registered in DefaultAnalyzers must ERROR
+	// rather than skip: a skip would emit a plausible, badly-undercounted
+	// row for a repo in that language, and would let this executor be
+	// routed before the port lands. "b.go" moved out of this list when
+	// this PR registered `go` -- see TestLanguageForRoutesEveryGoRust
+	// ExtensionToItsAnalyzer below for its own now-ported assertion.
+	for _, path := range []string{"a.ts", "c.java", "d.rb", "e.vue"} {
 		got, err := AnalyzeFile(path, "function f() { if (a && b) return 1; }", DefaultThresholds())
 		if !errors.Is(err, ErrLanguageNotPorted) {
 			t.Errorf("%s: expected ErrLanguageNotPorted, got err=%v", path, err)
@@ -263,7 +569,10 @@ func TestBuildSnapshotsAggregatesLikePython(t *testing.T) {
 		{FilePath: "b.py", Language: "python", LOC: 500, CyclomaticTotal: 10,
 			FunctionsCount: 5, HighComplexityFunctions: 1, VeryHighComplexityFunctions: 0},
 	}
-	result := BuildSnapshots("repo-1", day, "refs/heads/main", files, computedAt, "org-1")
+	result, err := BuildSnapshots("repo-1", day, "refs/heads/main", files, computedAt, "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if len(result.Snapshots) != 2 {
 		t.Fatalf("snapshots: got %d, want 2", len(result.Snapshots))
@@ -295,9 +604,12 @@ func TestBuildSnapshotsZeroLOCDoesNotDivideByZero(t *testing.T) {
 	// is 0/0 -> NaN in Go, which ClickHouse stores as a Float64 NaN and every
 	// downstream average then poisons -- a silent, spreading corruption rather
 	// than a visible failure.
-	result := BuildSnapshots("repo-1", time.Now().UTC(), "ref",
+	result, err := BuildSnapshots("repo-1", time.Now().UTC(), "ref",
 		[]FileComplexity{{FilePath: "empty.py", Language: "python"}},
 		time.Now().UTC(), "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if result.Repo.CyclomaticPerKLOC != 0.0 {
 		t.Fatalf("cyclomatic_per_kloc: got %v, want 0.0", result.Repo.CyclomaticPerKLOC)
@@ -308,12 +620,44 @@ func TestBuildSnapshotsZeroLOCDoesNotDivideByZero(t *testing.T) {
 }
 
 func TestBuildSnapshotsEmptyFileListProducesNoSnapshots(t *testing.T) {
-	result := BuildSnapshots("repo-1", time.Now().UTC(), "ref", nil,
+	result, err := BuildSnapshots("repo-1", time.Now().UTC(), "ref", nil,
 		time.Now().UTC(), "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(result.Snapshots) != 0 {
 		t.Fatalf("snapshots: got %d, want 0", len(result.Snapshots))
 	}
 	if result.Repo.LOCTotal != 0 || result.Repo.CyclomaticTotal != 0 {
 		t.Fatalf("totals should be zero, got %+v", result.Repo)
+	}
+}
+
+// TestBuildSnapshotsFailsClosedOnANegativeCount proves the uint32/uint64
+// fail-closed guards actually fire (a guard that can never fire is no
+// assertion -- CORE rule from this lane's own migration-087 finding above).
+// Every FileComplexity field is meant to be a non-negative count; a
+// negative value can only come from an upstream bug, and silently
+// converting it with `uint32(negative)` would wrap to a value near 4
+// billion instead of surfacing the bug.
+func TestBuildSnapshotsFailsClosedOnANegativeCount(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []FileComplexity
+	}{
+		{"negative LOC", []FileComplexity{{FilePath: "a.py", LOC: -1}}},
+		{"negative FunctionsCount", []FileComplexity{{FilePath: "a.py", FunctionsCount: -1}}},
+		{"negative CyclomaticTotal", []FileComplexity{{FilePath: "a.py", CyclomaticTotal: -1}}},
+		{"negative HighComplexityFunctions", []FileComplexity{{FilePath: "a.py", HighComplexityFunctions: -1}}},
+		{"negative VeryHighComplexityFunctions", []FileComplexity{{FilePath: "a.py", VeryHighComplexityFunctions: -1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildSnapshots("repo-1", time.Now().UTC(), "ref", tc.files,
+				time.Now().UTC(), "org-1")
+			if err == nil {
+				t.Fatalf("expected an error for %s, got none", tc.name)
+			}
+		})
 	}
 }

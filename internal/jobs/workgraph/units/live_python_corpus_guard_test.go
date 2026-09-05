@@ -141,7 +141,14 @@ func corpusPathFor(name string, source []byte) (string, bool) {
 // So the count may only go DOWN. Lower this when a generator is brought into the
 // convention; if it rises, someone has added an undiscoverable corpus and this
 // test says so. Tracked as CHAOS-4849.
-const maxUnguardableGenerators = 9
+//
+// CHAOS-4924 lowered this from 9 to 8: its own generator and CHAOS-4766's
+// sibling both moved OUT of this ratchet's count and into liveDataGenerators
+// above -- a live-network dependency, not an unaddressed convention gap, so
+// counting them here would have meant raising the ratchet to excuse a
+// generator this guard was never going to be able to run, exactly the thing
+// this comment forbids.
+const maxUnguardableGenerators = 8
 
 // excludedGenerators names generators that are discoverable but CANNOT run in
 // CI, with the reason and the condition that would remove the exclusion.
@@ -181,6 +188,78 @@ var excludedGenerators = map[string]struct {
 	//
 	// generate_scope_grammar_corpus.py's exclusion (limits missing from the
 	// closure) was removed earlier under CHAOS-4945 by the same mechanism.
+}
+
+// liveDataGenerators names generators that are discoverable and CAN run, but
+// need a LIVE ClickHouse connection (CLICKHOUSE_URI) to real org-shaped data
+// rather than exercising pure interpreter behaviour -- a different axis of
+// "cannot run here" from both other maps. excludedGenerators is for a missing
+// Python package (self-checked against ci/requirements-live-python-oracles.txt);
+// explicitCorpusPaths is for an inferable-but-unnamed output path with a
+// frozen corpus this guard CAN diff against. Neither fits: naming one of
+// these in explicitCorpusPaths would make the live-python-oracles CI job
+// actually try to run it, and that job has no network path to a ClickHouse
+// replica, so it would fail differently rather than being guarded; and their
+// gap is not a missing import, so excludedGenerators' missingModule
+// self-check cannot verify them either.
+//
+// This is deliberately NOT counted against maxUnguardableGenerators, same as
+// excludedGenerators -- the ratchet measures conventions a generator failed
+// to follow, not a live-network dependency it was never going to satisfy in
+// this job. TestLiveDataGeneratorsGenuinelyNeedClickHouse below verifies each
+// entry actually reads CLICKHOUSE_URI, so the classification cannot rot into
+// an excuse for a generator that stops needing one.
+//
+// The real fix -- a --replay mode that feeds frozen ClickHouse rows through
+// the real producer offline, the way generate_workgraph_issue_edges_python_
+// golden.py's own docstring already describes -- is tracked as a follow-up
+// ticket (CHAOS-4924's parent, linked to CHAOS-4766) covering both entries
+// below, not attempted here.
+var liveDataGenerators = map[string]struct {
+	reason string
+}{
+	// CHAOS-4766: queries operational_incidents/issues/... over a live org via
+	// CLICKHOUSE_URI (see its own --replay flag, which replays a FROZEN
+	// golden's own recorded reads instead -- that mode is what a future
+	// wiring of this guard would use, not the live-query default path).
+	"generate_workgraph_issue_edges_python_golden.py": {
+		reason: "queries live ClickHouse via CLICKHOUSE_URI; no --replay wiring into this guard yet",
+	},
+	// CHAOS-4924: same shape as its sibling above -- queries
+	// operational_incidents/operational_service_repository_mappings/... over
+	// a live org via CLICKHOUSE_URI. ORG_ID is a hardcoded module constant
+	// (not env-overridable), so even a live connection would only ever
+	// reproduce the org-70d529e0 golden, never the synthetic one.
+	"generate_workgraph_operational_edges_python_golden.py": {
+		reason: "queries live ClickHouse via CLICKHOUSE_URI; no --replay wiring into this guard yet",
+	},
+}
+
+// TestLiveDataGeneratorsGenuinelyNeedClickHouse deletes the excuse the moment
+// it stops being one -- same shape as TestExcludedGeneratorsAreStillUnrunnable
+// and TestExplicitCorpusPathsAreStillNeeded, applied to this map's own axis.
+func TestLiveDataGeneratorsGenuinelyNeedClickHouse(t *testing.T) {
+	if len(liveDataGenerators) == 0 {
+		t.Skip("no live-data generators to verify")
+	}
+	fixturesDir := filepath.Join(repositoryRootPath(t), "tests", "fixtures")
+	for name := range liveDataGenerators {
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(fixturesDir, name))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			if !strings.Contains(string(source), "CLICKHOUSE_URI") {
+				t.Errorf(
+					"%s is classified in liveDataGenerators as needing a live "+
+						"ClickHouse connection, but no longer reads CLICKHOUSE_URI -- "+
+						"the classification is stale and must be removed, letting "+
+						"discovery (or explicitCorpusPaths) guard it properly",
+					name,
+				)
+			}
+		})
+	}
 }
 
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
@@ -233,6 +312,11 @@ func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {
 
 	for _, generator := range generators {
 		name := filepath.Base(generator)
+
+		if live, skip := liveDataGenerators[name]; skip {
+			t.Logf("live-data generator %s: %s", name, live.reason)
+			continue
+		}
 
 		if excluded, skip := excludedGenerators[name]; skip {
 			t.Logf("excluded %s: %s (remove when: %s)", name, excluded.reason, excluded.removeWhen)

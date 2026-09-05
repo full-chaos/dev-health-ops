@@ -115,12 +115,6 @@ func coordinatorKinds() []string {
 
 func registerKind(workers *river.Workers, kind string, descriptor jobruntime.Descriptor) error {
 	switch kind {
-	case jobcontract.KindInvestmentChunk:
-		return add[jobruntime.InvestmentChunkArgs](workers, descriptor)
-	case jobcontract.KindInvestmentDispatch:
-		return add[jobruntime.InvestmentDispatchArgs](workers, descriptor)
-	case jobcontract.KindInvestmentFinalize:
-		return add[jobruntime.InvestmentFinalizeArgs](workers, descriptor)
 	case jobcontract.KindInvestmentMaterialize:
 		return add[jobruntime.InvestmentMaterializeArgs](workers, descriptor)
 	case jobcontract.KindDailyMetricsDispatch:

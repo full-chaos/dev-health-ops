@@ -18,9 +18,6 @@ from .models import (
     KIND_DAILY_METRICS_FINALIZE,
     KIND_DAILY_METRICS_PARTITION,
     KIND_HEARTBEAT,
-    KIND_INVESTMENT_CHUNK,
-    KIND_INVESTMENT_DISPATCH,
-    KIND_INVESTMENT_FINALIZE,
     KIND_INVESTMENT_MATERIALIZE,
     KIND_REMAINING_CAPACITY,
     KIND_REMAINING_COMPLEXITY,
@@ -260,9 +257,13 @@ def load_registry(root: Path | None = None) -> Registry:
         KIND_DAILY_METRICS_DISPATCH: (CONTRACT_VERSION_V1,),
         KIND_DAILY_METRICS_PARTITION: (CONTRACT_VERSION_V1,),
         KIND_DAILY_METRICS_FINALIZE: (CONTRACT_VERSION_V1,),
-        KIND_INVESTMENT_CHUNK: (CONTRACT_VERSION_V1,),
-        KIND_INVESTMENT_DISPATCH: (CONTRACT_VERSION_V1,),
-        KIND_INVESTMENT_FINALIZE: (CONTRACT_VERSION_V1,),
+        # KIND_INVESTMENT_{CHUNK,DISPATCH,FINALIZE} deliberately absent: retired
+        # under CHAOS-4438 (dead Go shells, zero producers) -- registry.json
+        # moved them to retired_kinds, so they no longer appear in `jobs` and
+        # must not appear here either. The Python KIND_INVESTMENT_* constants
+        # and payload classes still exist (see models.py) for callers that
+        # decode a HISTORICAL envelope of these kinds; only the live-registry
+        # expectation changes.
         KIND_INVESTMENT_MATERIALIZE: (CONTRACT_VERSION_V1,),
         KIND_WORK_GRAPH_BUILD: (CONTRACT_VERSION_V1,),
         KIND_REMAINING_CAPACITY: (CONTRACT_VERSION_V1,),

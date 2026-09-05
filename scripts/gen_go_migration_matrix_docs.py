@@ -68,7 +68,11 @@ records must have a ledger row with an agreeing executor, AND every
 workgraph/investment ledger row (a kind containing ``.``) must still be in the
 artifact -- a row surviving after its addWorkgraphWorker case is deleted is a
 stale row describing dead code by omission (the CHAOS-4438 shape) and fails
-generation until removed.
+generation until removed. The ledger itself covers 2 kinds today
+(``workgraph.build``, ``investment.materialize``) -- CHAOS-4438 removed
+investment.dispatch/chunk/finalize's rows outright once their Go handlers
+were deleted (not merely retargeted), the same class this guard now also
+catches mechanically for a future removal of this kind.
 """
 
 from __future__ import annotations
@@ -242,14 +246,11 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4280",
     },
     "ai_workflow": {
-        # CHAOS-5153: was `work_graph/extractors/ai_workflow.py:212
-        # _extract_ai_workflow_for_day` -- wrong three ways at once.
-        # _extract_ai_workflow_for_day is actually defined in
-        # metrics/job_daily.py, not ai_workflow.py at all; ai_workflow.py:212
-        # is extract_review_deployment_incident_edges, a DIFFERENT family's
-        # (work_graph_edges, next row below) function -- the same function
-        # was named for two different families, once correctly, once not.
-        "citation": "Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day`",
+        # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212
+        # -- the module AND the line were both wrong before) is now moot:
+        # CHAOS-4286 ported this family to native Go, same shape as the
+        # testops_* rows above.
+        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`)",
         "ticket": "CHAOS-4286",
     },
     "work_graph_edges": {
@@ -330,15 +331,33 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4291",
     },
     "release_impact": {
-        "citation": "Python: `job_release_impact.py` -> `release_impact.py`",
-        "route": "river, bridge (`daily.go:621-624`, uses `compatibility` directly)",
-        "ticket": "CHAOS-4296",
+        "citation": (
+            "Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, "
+            "`release_impact_native_clickhouse.go`"
+        ),
+        "route": "river, native (`daily.go:590-621`)",
+        "ticket": "CHAOS-4296 (Done)",
     },
 }
 
 # ---------------------------------------------------------------------------
 # CURATED: §4, no families.json equivalent exists. Entirely hand-maintained;
 # see docs/go-migration-matrix.md's "Known gaps" section.
+#
+# r1 finding F2 (P3, codex, CHAOS-4438): investment.dispatch/chunk/finalize
+# used to have rows here documenting them as "PYTHON-ONLY (dead Go shell) --
+# Go: wired, never invoked". CHAOS-4438 didn't just leave them dead, it
+# DELETED them outright (the Go handler wiring these rows cited no longer
+# exists at all) -- keeping the rows made the generated doc describe three
+# kinds as a live Backlog cleanup item when the cleanup had already
+# happened. CHAOS-5153's reverse guard (_assert_ledger_matches_artifact)
+# does not catch this specific case: these 3 kinds were NEVER in
+# native-families.json's workgraph section (they were dead code, not
+# something that went native and then got removed), so there was nothing
+# for that guard to notice missing. Removed outright rather than
+# re-labeled "removed" -- unlike a registry_kind row in
+# transitional-inventory.json, there is no separate historical ledger this
+# page maintains for retired workgraph/investment kinds.
 # ---------------------------------------------------------------------------
 WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
     "workgraph.build": {
@@ -364,24 +383,6 @@ WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
         ),
         "route": "river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment`",
         "ticket": "CHAOS-4441 (cutover landed)",
-    },
-    "investment.dispatch": {
-        "executor": "PYTHON-ONLY (dead Go shell)",
-        "citation": "Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable",
-        "route": "bridge (dead in both directions)",
-        "ticket": "CHAOS-4438 (dead-code removal, Backlog)",
-    },
-    "investment.chunk": {
-        "executor": "PYTHON-ONLY (dead Go shell)",
-        "citation": "Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable",
-        "route": "bridge (dead in both directions)",
-        "ticket": "CHAOS-4438 (dead-code removal, Backlog)",
-    },
-    "investment.finalize": {
-        "executor": "PYTHON-ONLY (dead Go shell)",
-        "citation": "Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable",
-        "route": "bridge (dead in both directions)",
-        "ticket": "CHAOS-4438 (dead-code removal, Backlog)",
     },
     "recommendations": {
         "executor": "NATIVE",
@@ -478,9 +479,28 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # COMPAT-Python correctly today; the fix is that the finalize-scope
 # Python remainder is now provably covered by the completeness check
 # itself, not merely asserted in prose someone has to trust.
+#
+# compute_ic_metrics_daily/compute_ic_landscape_rolling are DELIBERATELY
+# ABSENT here (CHAOS-4290, removed once ic_finalize went native). They used
+# to map to ("daily", "ic_finalize") back when ic_finalize was port=pending,
+# which is a DIFFERENT shape from complexity/compounding_risk's entries
+# above: those two are a family whose PRIMARY registration is partition/repo-
+# scoped (SetNativeFamilies) with a genuinely separate, unconditionally-
+# executing TEAM-scope Python remainder -- no skip_families gate exists for
+# that remainder at all (see compounding_risk's phase_note). ic_finalize has
+# no such split: its ENTIRE scope is finalize (registered only via
+# SetNativeFinalizeFamilies, never SetNativeFamilies), and both Python calls
+# are gated behind the identical `if "ic_finalize" not in skip_families`
+# check every other wholly-native family's dormant bridge fallback uses.
+# Keeping the ledger entries after the native cutover made
+# daily_family_executor render the misleading split label "NATIVE (repo) /
+# COMPAT-Python (finalize)" -- implying a repo-scope component that does not
+# exist -- for a family that is simply, fully NATIVE now. Removing them
+# makes _finalize_call_family return None for both calls (correctly: an
+# AST-present but skip_families-gated dormant call is exactly the
+# "infrastructure, not a live per-family write" case this function's own
+# docstring describes for every other native family).
 FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
-    "compute_ic_metrics_daily": ("daily", "ic_finalize"),
-    "compute_ic_landscape_rolling": ("daily", "ic_finalize"),
     "_write_team_complexity_for_day": ("remaining", "complexity"),
 }
 
@@ -797,16 +817,18 @@ def _irregular_mapping_plausible(call_name: str, family: str) -> bool:
     rejected; with family="complexity", both check (there is only one
     token) and the mapping passes.
 
-    A call OUTSIDE the `_write_..._for_day` shape entirely (e.g.
-    `compute_ic_metrics_daily` -> `ic_finalize`) cannot be measured against
+    A call OUTSIDE the `_write_..._for_day` shape entirely (a past example,
+    while it was still ledgered: `compute_ic_metrics_daily` -> `ic_finalize`,
+    CHAOS-4290, removed once ic_finalize went fully native -- see
+    FINALIZE_CALL_IRREGULAR_FAMILY's comment) cannot be measured against
     that convention at all -- there is no "middle" to tokenize, and by
     construction such a call's name was never going to resemble the
-    family's own name (a human named `ic_finalize` as a conceptual grouping
-    label, not a description of `compute_ic_metrics_daily`'s own name).
-    These fall back to the original weak any-token check, which is honest
-    about being unable to do more for a shape this far from the
-    convention -- the exact check above only strengthens the case the
-    naming convention actually claims to cover.
+    family's own name (a human named the family as a conceptual grouping
+    label, not a description of the call's own name). These fall back to
+    the original weak any-token check, which is honest about being unable
+    to do more for a shape this far from the convention -- the exact check
+    above only strengthens the case the naming convention actually claims
+    to cover.
     """
     if call_name.startswith("_write_") and call_name.endswith("_for_day"):
         middle = call_name[len("_write_") : -len("_for_day")]
@@ -1015,7 +1037,15 @@ def count_compat_daily_families() -> int:
     families = load_daily_families()
     live_names = {f["name"] for f in families}
     remaining_names = {f["name"] for f in load_remaining_families()}
-    artifact_daily = load_native_families_artifact()["daily"]
+    # See render_daily_metrics_block's identical merge below: a finalize-scope
+    # native family (ic_finalize, team_cognitive_load) is absent from the
+    # artifact's "daily" section by construction (it lives in "finalize"
+    # instead), so daily_family_executor's `.get(name, "compat")` default
+    # silently counted every one of them as COMPAT here too -- the same
+    # staleness CHAOS-5141 found in the RENDERED table, just in the COUNT this
+    # table's own "zero COMPAT rows" close condition reads.
+    artifact = load_native_families_artifact()
+    artifact_daily = {**artifact["daily"], **artifact.get("finalize", {})}
     finalize_compat_families = load_daily_finalize_compat_families(
         live_names, remaining_names
     )
@@ -1057,14 +1087,24 @@ def render_daily_metrics_block() -> str:
         set(DAILY_CITATION_LEDGER),
         "Add a DAILY_CITATION_LEDGER row for it.",
     )
-    artifact_daily = load_native_families_artifact()["daily"]
+    # §2 covers every daily-metrics family, partition- AND finalize-scope
+    # alike -- a finalize family (ic_finalize, team_cognitive_load) is just
+    # as native as a partition one for THIS table's purposes, it only runs
+    # once per RUN instead of once per partition. Merging "finalize" in here
+    # fixes a real staleness: before this merge, EVERY finalize-scope native
+    # family showed COMPAT-Python in this table regardless of its actual
+    # port, because the artifact's "finalize" section was never consulted at
+    # all (CHAOS-5141 found this for team_cognitive_load; ic_finalize had the
+    # identical wrong row and predates it).
+    artifact = load_native_families_artifact()
+    artifact_daily = {**artifact["daily"], **artifact.get("finalize", {})}
     unknown_artifact_names = set(artifact_daily) - live_names
     if unknown_artifact_names:
         raise SystemExit(
             f"gen_go_migration_matrix_docs: contracts/native-families/v1/native-families.json's "
-            f'"daily" section names family(ies) {sorted(unknown_artifact_names)} that no longer '
-            "exist in internal/jobs/metrics/daily/families.json -- regenerate the artifact "
-            "(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
+            f'"daily"/"finalize" sections name family(ies) {sorted(unknown_artifact_names)} that '
+            "no longer exist in internal/jobs/metrics/daily/families.json -- regenerate the "
+            "artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
             "TestNativeFamiliesArtifactUpToDate)."
         )
     remaining_names = {f["name"] for f in load_remaining_families()}

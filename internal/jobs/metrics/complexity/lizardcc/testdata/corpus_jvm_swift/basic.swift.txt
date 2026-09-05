@@ -1,0 +1,56 @@
+protocol Shape {
+    func area() -> Int
+}
+
+class Rectangle: Shape {
+    let width: Int
+    let height: Int
+
+    init(width: Int, height: Int) {
+        if width > 0 && height > 0 {
+            self.width = width
+            self.height = height
+        } else {
+            self.width = 0
+            self.height = 0
+        }
+    }
+
+    func area() -> Int {
+        return width * height
+    }
+
+    func classify(score: Int) -> Int {
+        guard score > 0 else { return 0 }
+        if score > 90 {
+            return 3
+        } else if score > 50 {
+            return 2
+        }
+        return 1
+    }
+
+    func pick(a: Int, b: Int, c: Int) -> Int {
+        switch a {
+        case 1:
+            return b
+        case 2:
+            return c
+        default:
+            return a
+        }
+    }
+
+    func loop(n: Int) -> Int {
+        var total = 0
+        for i in 0..<n {
+            if i % 2 == 0 || i % 3 == 0 {
+                total += i
+            }
+        }
+        while total > 100 && n > 0 {
+            total -= n
+        }
+        return total
+    }
+}

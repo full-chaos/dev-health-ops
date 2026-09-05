@@ -8,7 +8,17 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 )
+
+// fakeDailyStoreForRegistrationTest is the daily.Store analog of
+// githubWorkItemsBuildExecutorConn below: a non-nil value that satisfies the
+// interface for construction-time nil checks (CHAOS-5194:
+// NewBenchmarkingFinalizeExecutor requires store != nil) without ever having
+// a method called -- ClickHouse/Postgres I/O happens later, when the handler
+// executes a run, never at construction.
+type fakeDailyStoreForRegistrationTest struct{ daily.Store }
 
 // CHAOS-4292 rebase-gate finding (codex, 2026-09-01, two rounds): the
 // pre-existing drift checks this metrics.daily cutover wave relied on --
@@ -54,7 +64,9 @@ import (
 // maps' mere key-set union could never see.
 func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	native, postBridge := dailyNativeFamilyRegistrations(githubWorkItemsBuildExecutorConn{}, nil, logger)
+	native, postBridge, finalize := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, nil, logger,
+	)
 
 	registeredPhase := make(map[string]string, len(native)+len(postBridge))
 	for family := range native {
@@ -67,6 +79,14 @@ func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 				"map wholesale, so a family present in both is dispatched twice, not once", family)
 		}
 		registeredPhase[family] = "post_bridge"
+	}
+	for family := range finalize {
+		if _, alreadyRegistered := registeredPhase[family]; alreadyRegistered {
+			t.Fatalf("family %q is registered as a finalize family AND in a partition "+
+				"map -- it would run once per partition AND once per run, writing the "+
+				"same rows repeatedly", family)
+		}
+		registeredPhase[family] = "finalize"
 	}
 
 	goFamilyPhase := readFamiliesJSONPortGoPhases(t)
@@ -152,9 +172,18 @@ func readFamiliesJSONPortGoPhases(t *testing.T) map[string]string {
 		if family.Port != "go" {
 			continue
 		}
-		if family.Phase == "post_bridge" {
+		switch family.Phase {
+		case "post_bridge":
 			goFamilyPhase[family.Name] = "post_bridge"
-		} else {
+		case "finalize":
+			// CHAOS-4290: a RUN-scoped family, registered through
+			// FinalizeHandler.SetNativeFinalizeFamilies rather than either
+			// partition map. A third bucket, not a variant of pre_bridge --
+			// a finalize family in a partition map would run once per
+			// PARTITION instead of once per run, writing the same rows
+			// repeatedly.
+			goFamilyPhase[family.Name] = "finalize"
+		default:
 			goFamilyPhase[family.Name] = "pre_bridge"
 		}
 	}

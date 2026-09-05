@@ -1,0 +1,15 @@
+// CHAOS-5156: closes a coverage gap codex round r2 on #2266 surfaced --
+// the mixed corpus_go_rust directory previously let a Go-only fixture
+// silently satisfy Rust's "catch"/"?" coverage too (both were only ever
+// exercised by Go source). Rust has no catch keyword (a bare identifier,
+// same as Go's own catch_token_coverage.go.txt), and "?" here is Rust's
+// REAL error-propagation operator, not a hand-added token.
+fn parse(s: &str) -> Result<i32, String> {
+    let catch = 0;
+    let n = s.parse::<i32>().map_err(|_| "bad")?;
+    if n > catch {
+        Ok(n)
+    } else {
+        Err(String::from("too small"))
+    }
+}

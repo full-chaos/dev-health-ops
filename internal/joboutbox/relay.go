@@ -44,12 +44,20 @@ type StepResult struct {
 	StrandClaimsLive                      int
 	StrandClaimsSettled                   int
 	StrandRaceLost                        int
-	Claimed                               int
-	Deferred                              int
-	Delivered                             int
-	Retried                               int
-	Dead                                  int
-	LeaseLost                             int
+	// RetiredKindObservations (r1 finding F1, codex, CHAOS-4438): see
+	// StrandRepairResult.RetiredKindObservations. Relayed here unmodified so
+	// ReconcilerLoop, the only layer in this chain holding a logger, can log
+	// one line per observation.
+	RetiredKindObservations []RetiredKindObservation
+	// RetiredKindObservationsTruncated: see
+	// StrandRepairResult.RetiredKindObservationsTruncated (r2 finding F3).
+	RetiredKindObservationsTruncated bool
+	Claimed                          int
+	Deferred                         int
+	Delivered                        int
+	Retried                          int
+	Dead                             int
+	LeaseLost                        int
 }
 
 // Relay is a single bounded reconciliation step. Process lifecycle and polling
@@ -205,21 +213,39 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 	if relay.repair != nil {
 		recovered, err := relay.repair.Step(ctx, now, limit)
 		if err != nil {
-			return result, err
+			// team-lead ruling (CHAOS-4438, discard-on-error sweep): name
+			// the seam so a caller's log line (recordStepFailure) shows
+			// which of the two recovery stages failed, not just "step
+			// failed." Wraps, never replaces, so errors.Is on the original
+			// sentinel still holds.
+			return result, fmt.Errorf("terminal delivery repair: %w", err)
 		}
 		result.Recovered = recovered.Recovered
 		result.PostRepairContractRejectionsRecovered = recovered.PostRepairContractRejectionsRecovered
 	}
 	if relay.strandRepair != nil {
 		rearmed, err := relay.strandRepair.Step(ctx, now, limit)
-		if err != nil {
-			return result, err
-		}
+		// r2 finding F2 (P2, codex, CHAOS-4438): copy rearmed's fields into
+		// result BEFORE checking err, not after -- StrandRepair.Step can
+		// return a non-zero result alongside a non-nil error (its own
+		// shapes already committed rearms; only the trailing read-only
+		// retired-kind observation query failed). Checking err first and
+		// returning early, as this used to, would silently re-introduce
+		// the exact "discard already-committed work" bug the callee was
+		// just fixed to avoid, one layer up.
 		result.StrandsRearmed = rearmed.Rearmed
 		result.StrandJobsSkippedLive = rearmed.SkippedJobLive
 		result.StrandClaimsLive = rearmed.SkippedClaimLive
 		result.StrandClaimsSettled = rearmed.SkippedClaimSettled
 		result.StrandRaceLost = rearmed.SkippedRaceLost
+		result.RetiredKindObservations = rearmed.RetiredKindObservations
+		result.RetiredKindObservationsTruncated = rearmed.RetiredKindObservationsTruncated
+		if err != nil {
+			// Same naming as the terminal-delivery seam above; strandRepair's
+			// own error already names its shape (see stepShape), this adds
+			// which SEAM of stepRecovery that shape error came from.
+			return result, fmt.Errorf("strand repair: %w", err)
+		}
 	}
 	return result, nil
 }
@@ -250,7 +276,16 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 	}
 	claims, err := relay.repository.claimDueExcept(ctx, now, limit, relay.config.LeaseDuration, deferred)
 	if err != nil {
-		return StepResult{}, err
+		// r3 finding F3 (P2, codex, CHAOS-4438): `result` already carries
+		// whatever stepRecovery committed above (both recovery seams'
+		// counts survive their own errors, per F2's fix) -- a THIRD discard
+		// layer here, on a claimDueExcept failure that has nothing to do
+		// with what recovery already did, would erase that evidence a third
+		// time. Same fix shape as stepRecovery's two seams. Named with the
+		// bounded claim request's own identifiers (limit, lease duration --
+		// there is no per-job identifier yet, nothing has been claimed) per
+		// team-lead's discard-on-error sweep.
+		return result, fmt.Errorf("claim due jobs (limit=%d, lease=%s): %w", limit, relay.config.LeaseDuration, err)
 	}
 	result.Claimed = len(claims)
 	for _, claim := range claims {

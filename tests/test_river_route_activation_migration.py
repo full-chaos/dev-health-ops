@@ -198,9 +198,18 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
     # revision did -- but they no longer exist in migration-state.json, so
     # they cannot be checked against it like every other still-live pinned
     # kind below.
+    #
+    # CHAOS-4438: investment.dispatch/chunk/finalize are the same class --
+    # registered Go handlers with zero producer anywhere, now retired
+    # (removed from the registry and migration-state entirely). 0066 still
+    # pins them historically, correctly; they cannot be checked against the
+    # current migration-state.json either.
     retired_since_0066 = {
         "metrics.remaining.extra_metrics",
         "metrics.remaining.team_metrics",
+        "investment.dispatch",
+        "investment.chunk",
+        "investment.finalize",
     }
     assert retired_since_0066 <= pinned
     assert retired_since_0066.isdisjoint(by_kind)

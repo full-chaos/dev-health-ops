@@ -63,6 +63,7 @@ EXPECTED_PACKAGES = {
     # real engine, so a fake connection cannot prove them.
     "internal/jobs/investment/chwrite",
     "internal/jobs/metrics/daily",
+    "internal/jobs/metrics/daily/icfinalize",
     "internal/jobs/metrics/remaining",
     "internal/jobs/pagerduty",
     "internal/jobs/report",
@@ -70,6 +71,12 @@ EXPECTED_PACKAGES = {
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
     "internal/jobs/workgraph/issueprlinks",
+    # CHAOS-4924: the native operational-incident/flag-guards edge producer.
+    # Its correctness claims (the CHAOS-4269 NULL-valid_from guard, the
+    # DateTime-vs-DateTime64 placeholder precision, the batch-clock stamp)
+    # are properties of the real migration chain and a real ClickHouse
+    # engine, so a fake connection cannot prove them.
+    "internal/jobs/workgraph/operationaledges",
     # CHAOS-4989: the org-scoped BYO LLM settings read path's own
     # feature_flags/org_feature_overrides/org_licenses/organizations/
     # settings precedence matrix runs against a real Postgres container.
@@ -375,10 +382,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 42 -> 43 on its own branch: CHAOS-4989's internal/llmorgsettings and
     # CHAOS-4897's internal/teamownership. Merged total: 44.
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
-    # CURRENT TOTAL: 45 -- the one number to bump when a new
+    # CHAOS-4290 and CHAOS-4924 landed independently, each written as 45 -> 46
+    # on its own branch: internal/jobs/metrics/daily/icfinalize and
+    # internal/jobs/workgraph/operationaledges. CHAOS-4279 (review_edges)
+    # added no NEW package -- its one -tags=integration file,
+    # review_edges_integration_test.go, lives in the already-discovered
+    # internal/jobs/metrics/daily package. Merged total: 47.
+    # CURRENT TOTAL: 47 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "45 package(s) discovered, 0 denylisted, 45 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 45 package(s)" in result.stdout
+    assert "47 package(s) discovered, 0 denylisted, 47 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 47 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -421,8 +434,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 42 -> 43 on its own branch: internal/llmorgsettings and
     # internal/teamownership. Merged total: 44.
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
-    # CURRENT TOTAL: 45 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 45
+    # CHAOS-4290 and CHAOS-4924 landed independently, each written as 45 -> 46
+    # on its own branch: internal/jobs/metrics/daily/icfinalize and
+    # internal/jobs/workgraph/operationaledges. Merged total: 47.
+    # CURRENT TOTAL: 47 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 47
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1767,9 +1783,13 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # shard-1 package = 43).
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 43 -> 44
     # (45 discovered - 1 for the providersync shard-1 package).
-    # CURRENT TOTAL: 44 (== discovered-total-minus-one -- keep this in
+    # CHAOS-4290 and CHAOS-4924 landed independently, each written as 44 -> 45
+    # on its own branch: internal/jobs/metrics/daily/icfinalize and
+    # internal/jobs/workgraph/operationaledges (47 discovered - 1 for the
+    # providersync shard-1 package = 46). Merged total: 46.
+    # CURRENT TOTAL: 46 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 44
+    assert len(selected_packages) == len(set(selected_packages)) == 46
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -2508,12 +2528,18 @@ _IMAGE_PULLING_ACTION_DEBT = {
     # CHAOS-4906 (runner contract v1.6): the re-added (worker, linux/arm64)
     # self-hosted-pool pilot (ported from closed #2180 into v1.6 shape) --
     # same tradeoff as go-build/go-merge above, not a new one.
+    #
+    # CHAOS-5197: this job used to be TWO separate jobs -- an always-hosted
+    # `go-build-worker-arm64` and an always-self-hosted
+    # `go-build-worker-arm64-self-hosted` sibling, deny-list era. The
+    # allow-list conversion consolidated them into ONE job (id kept as
+    # `go-build-worker-arm64`, see docker-images.yml's own comment there)
+    # whose `runs-on:` now routes via the allow-list ternary instead of two
+    # separate job definitions -- so the `-self-hosted` entry this list used
+    # to carry no longer names a real job and was deleted here, per this
+    # test's own stale-entry error message ("delete them so the list cannot
+    # rot into a silent allowlist").
     ("docker-images.yml", "go-build-worker-arm64", "docker/setup-buildx-action"),
-    (
-        "docker-images.yml",
-        "go-build-worker-arm64-self-hosted",
-        "docker/setup-buildx-action",
-    ),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

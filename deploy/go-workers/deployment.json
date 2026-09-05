@@ -92,9 +92,6 @@
         }
       ],
       "job_kinds": [
-        "investment.chunk",
-        "investment.dispatch",
-        "investment.finalize",
         "investment.materialize",
         "metrics.daily_dispatch",
         "metrics.daily_finalize",

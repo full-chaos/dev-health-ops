@@ -154,7 +154,16 @@ func Quantize(confidence float64) (float32, error) {
 // than dropping them silently — a rejected edge is a real edge that will not be
 // grouped, and that must be visible.
 func ValidateConfidence(confidence float32) error {
-	value := float64(confidence)
+	return ValidateConfidenceFloat64(float64(confidence))
+}
+
+// ValidateConfidenceFloat64 is ValidateConfidence for a confidence a caller
+// is still carrying at float64 precision (e.g. a config value ranked or
+// compared before its one, final float32 narrowing at edge-construction
+// time -- narrowing to float32 BEFORE validating would let a value like
+// 1.00000001 quietly round to the valid 1.0 and skip the check it should
+// have failed, codex round chaos-4924-pr-a finding 2).
+func ValidateConfidenceFloat64(value float64) error {
 	if math.IsNaN(value) {
 		return fmt.Errorf("confidence is NaN: %w", ErrUngroupableConfidence)
 	}

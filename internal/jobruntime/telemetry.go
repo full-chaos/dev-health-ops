@@ -654,12 +654,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // carries the same consequence: unregistered means every observation for it is
 // refused, and the family's absence becomes invisible rather than counted.
 // "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), "benchmarking"
-// (CHAOS-4288), "ai_impact" (CHAOS-4280), and "work_graph_edges" (CHAOS-4286)
-// all added themselves the same way as the families listed above.
+// (CHAOS-4288), "ai_impact" (CHAOS-4280), "work_graph_edges" (CHAOS-4286 part
+// A), and "ai_workflow" (CHAOS-4286 part B) all added themselves the same
+// way as the families listed above.
 //
 // "work_item_attribution" (CHAOS-5078) moved to pre_bridge and added itself
 // the same way, included here from merging main forward.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

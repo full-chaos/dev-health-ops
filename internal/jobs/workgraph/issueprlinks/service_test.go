@@ -366,30 +366,35 @@ func TestWindowBoundsAreTruncatedToWholeSeconds(t *testing.T) {
 		t.Fatalf("issued %d queries, want 4", len(conn.queryArgs))
 	}
 
-	bound := func(name string) time.Time {
+	// A DateTime64(3)-typed placeholder needs a RENDERED STRING literal, not a
+	// bound time.Time: clickhouse-go renders a bound time.Time as a
+	// toDateTime(...) expression, which ClickHouse refuses to parse against a
+	// DateTime64(3) placeholder (code 457) -- see DateTime64Argument's doc
+	// comment. This is exactly the live-stack outage this test now guards.
+	bound := func(name string) string {
 		t.Helper()
 		for _, arg := range conn.queryArgs[2] {
 			named, ok := arg.(driver.NamedValue)
 			if !ok || named.Name != name {
 				continue
 			}
-			moment, ok := named.Value.(time.Time)
+			rendered, ok := named.Value.(string)
 			if !ok {
-				t.Fatalf("bound %q is %T, want time.Time", name, named.Value)
+				t.Fatalf("bound %q is %T, want string (a rendered DateTime64 literal)", name, named.Value)
 			}
-			return moment
+			return rendered
 		}
 		t.Fatalf("bound %q not found in %+v", name, conn.queryArgs[2])
-		return time.Time{}
+		return ""
 	}
 
-	wantFrom := time.Date(2026, 8, 1, 10, 30, 15, 0, time.UTC)
-	wantTo := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	if got := bound("from_ts"); !got.Equal(wantFrom) {
-		t.Errorf("from_ts = %s, want %s (Python truncates to whole seconds)", got.Format(time.RFC3339Nano), wantFrom.Format(time.RFC3339Nano))
+	wantFrom := "2026-08-01 10:30:15.000"
+	wantTo := "2026-09-01 00:00:00.000"
+	if got := bound("from_ts"); got != wantFrom {
+		t.Errorf("from_ts = %q, want %q (Python truncates to whole seconds)", got, wantFrom)
 	}
-	if got := bound("to_ts"); !got.Equal(wantTo) {
-		t.Errorf("to_ts = %s, want %s (Python truncates to whole seconds)", got.Format(time.RFC3339Nano), wantTo.Format(time.RFC3339Nano))
+	if got := bound("to_ts"); got != wantTo {
+		t.Errorf("to_ts = %q, want %q (Python truncates to whole seconds)", got, wantTo)
 	}
 }
 
@@ -447,9 +452,15 @@ func TestZeroOffsetWindowBoundIsAccepted(t *testing.T) {
 		if !ok || named.Name != "to_ts" {
 			continue
 		}
-		want := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-		if got := named.Value.(time.Time); !got.Equal(want) {
-			t.Fatalf("to_ts = %s, want %s", got.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+		// Rendered STRING literal, not a bound time.Time -- see
+		// TestWindowBoundsAreTruncatedToWholeSeconds's comment.
+		want := "2026-09-01 00:00:00.000"
+		got, ok := named.Value.(string)
+		if !ok {
+			t.Fatalf("to_ts is %T, want string (a rendered DateTime64 literal)", named.Value)
+		}
+		if got != want {
+			t.Fatalf("to_ts = %q, want %q", got, want)
 		}
 		return
 	}

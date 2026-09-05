@@ -149,6 +149,7 @@ func WriteEdges(ctx context.Context, conn driver.Conn, organizationID string, ro
 	batch, err := conn.PrepareBatch(ctx,
 		"INSERT INTO work_graph_edges ("+
 			"edge_id, source_type, source_id, target_type, target_id, edge_type, "+
+			"repo_id, provider, "+
 			"provenance, confidence, evidence, discovered_at, last_synced, event_ts, day, org_id)")
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_graph_edges batch: %w", err)
@@ -162,7 +163,8 @@ func WriteEdges(ctx context.Context, conn driver.Conn, organizationID string, ro
 		}
 		if err := batch.Append(
 			row.EdgeID, row.SourceType, row.SourceID, row.TargetType, row.TargetID,
-			row.EdgeType, row.Provenance, row.Confidence, row.Evidence,
+			row.EdgeType, row.RepoID, row.Provider,
+			row.Provenance, row.Confidence, row.Evidence,
 			row.DiscoveredAt, row.LastSynced, row.EventTs, row.Day, organizationID,
 		); err != nil {
 			return 0, fmt.Errorf("append edge %s: %w", row.EdgeID, err)

@@ -20,24 +20,33 @@
 #     an apt dependency, so it needs no image change) -- installed here too
 #     so a future job that genuinely needs `tar -xJf`/`xz` directly is not
 #     surprised a second time.
-#   - docker-compose-plugin (CHAOS-5134): `ci/check_river_compat_static.sh` runs `docker
-#     compose` (v2 CLI plugin syntax) directly against the River
-#     compatibility harness's compose file -- a real dependency, not a
-#     format choice like shellcheck's tarball, so there is no script-level
-#     workaround. This base image already carries `docker-ce-cli` (proven:
-#     `docker build`/`docker run`/`docker buildx imagetools` all already
-#     work in jobs routed here, including this very Dockerfile's own build
-#     job), which Ubuntu's own archives do not distribute -- only Docker's
-#     official apt repo (download.docker.com) does, so that repo should
-#     already be registered in this base layer. Installing just the plugin
-#     package (not `docker-ce`/`containerd.io`) is deliberate: this runner
-#     talks to a Docker daemon over a DinD SIDECAR, not a locally-managed
-#     engine, so only the CLI-side plugin is needed. UNVERIFIED ahead of
-#     this PR's own build (which is the actual test): if `apt-get install
-#     docker-compose-plugin` fails with "unable to locate package", the
-#     repo is NOT already present and needs adding per Docker's own install
-#     docs (docs.docker.com/engine/install/ubuntu/, "Set up Docker's apt
-#     repository") before this package name resolves.
+#   - docker-compose-plugin (CHAOS-5134): `ci/check_river_compat_static.sh`
+#     runs `docker compose` (v2 CLI plugin syntax) directly against the
+#     River compatibility harness's compose file -- a real dependency, not
+#     a format choice like shellcheck's tarball, so there is no
+#     script-level workaround. Installing just the plugin package, not
+#     `docker-ce`/`containerd.io`, is deliberate: this runner talks to a
+#     Docker daemon over a DinD SIDECAR, not a locally-managed engine, so
+#     only the CLI-side plugin is needed.
+#
+#     MEASURED, not assumed (2026-09-05, PR #2245's own first build):
+#     `docker-ce-cli` already works in every job routed to this pool
+#     (`docker build`/`docker run`/`docker buildx imagetools`, including
+#     this Dockerfile's own build job) -- the ORIGINAL hypothesis here was
+#     that this meant Docker's official apt repo was already registered in
+#     this base layer, so `apt-get install docker-compose-plugin` would
+#     just resolve. WRONG: that first attempt failed `E: Unable to locate
+#     package docker-compose-plugin` -- this base image's apt sources are
+#     stock Ubuntu noble only (ports.ubuntu.com + a git-core PPA, no
+#     download.docker.com entry), so `docker-ce-cli`'s presence must come
+#     from somewhere else in the upstream actions-runner image (baked in
+#     directly, or reachable only via the DinD sidecar's own binary) --
+#     its presence proves nothing about apt sources. Docker's official apt
+#     repository is added explicitly below, per their own install docs
+#     (docs.docker.com/engine/install/ubuntu/, "Install using the apt
+#     repository") -- `arch=$(dpkg --print-architecture)` so this resolves
+#     correctly on both the native-arm64 self-hosted leg and the x64+QEMU
+#     fallback leg.
 #
 # gcc + libc6-dev, not build-essential: measured directly against this exact
 # base image (2026-09-03, `apt-get install -y <set>` on a fresh container
@@ -59,6 +68,27 @@ FROM ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4
 
 USER root
 
+# Docker's official apt repository -- NOT already present in this base
+# image (see the header comment's docker-compose-plugin entry for the
+# measured proof). Exact recipe from docs.docker.com/engine/install/ubuntu/
+# ("Install using the apt repository"), the only change being
+# `--no-install-recommends` to match this file's existing convention.
+# ca-certificates/curl/gnupg are the repo-setup tool dependencies (fetching
+# and verifying the GPG key over https); harmless if the base image already
+# has any of them.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update
+
 # make: needed by any job that shells out to the repo's own Makefile targets.
 # postgresql-client: provides both psql and pg_isready, needed by any job
 # that waits on or inspects a Postgres instance directly rather than only
@@ -71,9 +101,9 @@ USER root
 # docker-compose-plugin: `docker compose` (v2 CLI syntax) -- see the header
 # comment. Deliberately NOT `docker-ce`/`docker-ce-cli`/`containerd.io`:
 # this base image already carries those (it talks to a DinD sidecar), so
-# installing them again would be redundant at best.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# installing them again would be redundant at best -- the repo above is
+# added ONLY to make the plugin package resolve.
+RUN apt-get install -y --no-install-recommends \
         make \
         postgresql-client \
         gcc \

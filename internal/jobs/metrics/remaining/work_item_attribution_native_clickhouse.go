@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -204,6 +205,28 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
 	linkedIssue, _, _ := derived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
 	derived.LinkedIssue = linkedIssue
+
+	// CHAOS-5078 codex r1 F2 fix: exclude any item the native daily
+	// `work_item_attribution` family has ALREADY written TODAY. Without
+	// this, an ownership change detected the same day daily already ran
+	// would make this backstop write a SECOND, newer row for the same
+	// (org, repo, work_item) -- work_item_team_attributions'
+	// ReplacingMergeTree(computed_at) does not collapse the two (source/
+	// team_id differ, so the ORDER BY key differs), so both stay resident
+	// and LoadWorkItemPrimaryTeamAttributions' (work_item_id,
+	// max(computed_at)) fence picks whichever wrote LAST -- not necessarily
+	// the row correct for the day being read. Deferring is safe: the
+	// ownership change is picked up on THIS backstop's next run (the
+	// watermark this run advances still reflects that the change was
+	// observed, just not written today), or overwritten by tomorrow's daily
+	// run regardless.
+	coveredToday, err := executor.alreadyCoveredToday(ctx, orgID, now, affectedIDs)
+	if err != nil {
+		return outcome, err
+	}
+	for id := range coveredToday {
+		delete(affectedIDs, id)
+	}
 
 	rows := BuildWorkItemAttributionRows(orgID, now, affectedIDs, subjects, derived)
 
@@ -639,8 +662,7 @@ func (executor *WorkItemAttributionExecutor) maxEffectiveChangedAt(
 func (executor *WorkItemAttributionExecutor) loadAffectedSubjects(
 	ctx context.Context, orgID string, scope workItemAttributionScopeDecision,
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
-	query := `SELECT work_item_id, provider, type, toString(repo_id), native_team_key,
-       project_key, project_id, project_name, assignees, reporter, org_id
+	query := `SELECT ` + WorkItemDerivationSubjectColumns + `
 FROM work_items FINAL
 WHERE org_id = ?`
 	args := []any{orgID}
@@ -670,23 +692,67 @@ WHERE org_id = ?`
 func (executor *WorkItemAttributionExecutor) loadDonorSubjects(
 	ctx context.Context, orgID string, donorIDs, donorKeys []string,
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	return LoadWorkItemDonorSubjects(ctx, executor.conn, orgID, donorIDs, donorKeys)
+}
+
+// LoadWorkItemDonorSubjects is the free-function (conn-parameterised) form of
+// loadDonorSubjects, exported for the daily `work_item_attribution` family
+// (CHAOS-5078 codex r1 F1): that family needs the SAME linked-issue-donor
+// loading this backstop does, without constructing a full backstop
+// WorkItemAttributionExecutor (which would also pull in watermarks/
+// detectScope/closure-promotion machinery the daily family has no use for --
+// see internal/jobs/metrics/daily/work_item_attribution_native_executor.go's
+// own doc comment on why it borrows only the loaders, not the backstop
+// itself).
+func LoadWorkItemDonorSubjects(
+	ctx context.Context, conn driver.Conn, orgID string, donorIDs, donorKeys []string,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
 	if len(donorIDs) == 0 && len(donorKeys) == 0 {
 		return map[string]teamattribution.GithubWorkItemDerivationSubject{}, nil
 	}
-	query := `SELECT work_item_id, provider, type, toString(repo_id), native_team_key,
-       project_key, project_id, project_name, assignees, reporter, org_id
+	query := `SELECT ` + WorkItemDerivationSubjectColumns + `
 FROM work_items FINAL
 WHERE org_id = ? AND (
   has(?, work_item_id)
   OR (provider IN ('linear', 'jira') AND has(?, upper(splitByChar(':', work_item_id)[-1])))
 )`
-	return executor.querySubjects(ctx, query, orgID, donorIDs, donorKeys)
+	return querySubjectsInto(ctx, conn, query, orgID, donorIDs, donorKeys)
+}
+
+// WorkItemDerivationSubjectColumns is the SELECT list every subject query must
+// use. It is a constant, not repeated per query, because it is paired
+// positionally with the Scan in QueryWorkItemDerivationSubjects -- a column
+// added to one spelling of the list and not the others would mis-bind silently
+// (repo_id into native_team_key, say), which no type error would catch since
+// most of these are strings.
+const WorkItemDerivationSubjectColumns = `work_item_id, provider, type, toString(repo_id), native_team_key,
+       project_key, project_id, project_name, assignees, reporter, org_id`
+
+// QueryWorkItemDerivationSubjects runs a subject query and scans it into the
+// cascade's subject map.
+//
+// Exported (CHAOS-4283 PR2) so the metrics.daily `work_item_attribution` family
+// can supply its OWN predicate -- scoped to one partition's (org, repo, day
+// window) rather than this backstop's org-wide/changed-scope shape -- without
+// re-writing the column list and its positional Scan. The predicate is the part
+// that legitimately differs between the two callers; the column-to-field
+// binding is the part that must not.
+func QueryWorkItemDerivationSubjects(
+	ctx context.Context, conn driver.Conn, query string, args ...any,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	return querySubjectsInto(ctx, conn, query, args...)
 }
 
 func (executor *WorkItemAttributionExecutor) querySubjects(
 	ctx context.Context, query string, args ...any,
 ) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
-	rows, err := executor.conn.Query(ctx, query, args...)
+	return querySubjectsInto(ctx, executor.conn, query, args...)
+}
+
+func querySubjectsInto(
+	ctx context.Context, conn driver.Conn, query string, args ...any,
+) (map[string]teamattribution.GithubWorkItemDerivationSubject, error) {
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query work_items: %w", err)
 	}
@@ -716,6 +782,16 @@ func (executor *WorkItemAttributionExecutor) querySubjects(
 func (executor *WorkItemAttributionExecutor) loadDependencyEdges(
 	ctx context.Context, orgID string, subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
 ) ([]teamattribution.GithubWorkItemDerivationDependencyEdge, error) {
+	return LoadWorkItemDependencyEdges(ctx, executor.conn, orgID, subjects)
+}
+
+// LoadWorkItemDependencyEdges is the free-function (conn-parameterised) form
+// of loadDependencyEdges, exported for the daily family's reuse -- see
+// LoadWorkItemDonorSubjects' doc comment for why this is a conn-parameterised
+// export rather than a full backstop executor.
+func LoadWorkItemDependencyEdges(
+	ctx context.Context, conn driver.Conn, orgID string, subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) ([]teamattribution.GithubWorkItemDerivationDependencyEdge, error) {
 	if len(subjects) == 0 {
 		return nil, nil
 	}
@@ -723,7 +799,7 @@ func (executor *WorkItemAttributionExecutor) loadDependencyEdges(
 	for id := range subjects {
 		ids = append(ids, id)
 	}
-	rows, err := executor.conn.Query(ctx, `
+	rows, err := conn.Query(ctx, `
 SELECT source_work_item_id, target_work_item_id, relationship_type, last_synced
 FROM work_item_dependencies FINAL
 WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, ids)
@@ -741,6 +817,15 @@ WHERE org_id = ? AND has(?, source_work_item_id)`, orgID, ids)
 		result = append(result, edge)
 	}
 	return result, rows.Err()
+}
+
+// WorkItemAttributionDonorTargets is workItemAttributionDonorTargets, exported
+// for the daily family's reuse (same CHAOS-5078 F1 fix).
+func WorkItemAttributionDonorTargets(
+	dependencies []teamattribution.GithubWorkItemDerivationDependencyEdge,
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+) ([]string, []string) {
+	return workItemAttributionDonorTargets(dependencies, subjects)
 }
 
 // workItemAttributionDonorTargets mirrors githubWorkItemDerivationDonorTargets
@@ -962,7 +1047,27 @@ func (executor *WorkItemAttributionExecutor) orgItemCount(ctx context.Context, o
 func (executor *WorkItemAttributionExecutor) loadFacts(
 	ctx context.Context, orgID string, asOf time.Time,
 ) (teamattribution.GithubWorkItemDerivationFacts, error) {
-	loader := teamattribution.ClickHouseFactSource{Conn: executor.conn}
+	return LoadWorkItemDerivationFacts(ctx, executor.conn, orgID, asOf)
+}
+
+// LoadWorkItemDerivationFacts composes the six ClickHouseFactSource loaders
+// into the fact set the attribution cascade needs, for one org as of one
+// instant.
+//
+// Exported (CHAOS-4283 PR2) because the metrics.daily `work_item_attribution`
+// family needs the IDENTICAL fact set, and this composition is not the trivial
+// sequence it looks like: LoadMembers returns FOUR slices, and its fourth --
+// provider-tagged roster members -- must be appended to ProviderMembers rather
+// than assigned anywhere, because `teams.members` mixes admin-curated entries
+// with unreviewed provider auto-import writes and therefore belongs in the
+// FALLBACK layer, not the admin one (chris, 2026-08-26, after a codex HIGH
+// finding). A second hand-written copy of that would be free to drop the
+// append and silently promote provider rosters to authoritative overrides --
+// exactly the defect that review caught. One implementation, two callers.
+func LoadWorkItemDerivationFacts(
+	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
+) (teamattribution.GithubWorkItemDerivationFacts, error) {
+	loader := teamattribution.ClickHouseFactSource{Conn: conn}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	var err error
 	if facts.Teams, err = loader.LoadTeams(ctx, orgID); err != nil {
@@ -986,6 +1091,41 @@ func (executor *WorkItemAttributionExecutor) loadFacts(
 		return facts, err
 	}
 	return facts, nil
+}
+
+// alreadyCoveredToday returns the subset of ids that already have a
+// work_item_team_attributions row computed on the SAME calendar day as now
+// (UTC) -- items the native daily `work_item_attribution` family has already
+// written for today. See the CHAOS-5078 codex r1 F2 fix comment at this
+// function's call site in ComputeOrg for why this exclusion exists.
+func (executor *WorkItemAttributionExecutor) alreadyCoveredToday(
+	ctx context.Context, orgID string, now time.Time, ids map[string]struct{},
+) (map[string]struct{}, error) {
+	covered := map[string]struct{}{}
+	if len(ids) == 0 {
+		return covered, nil
+	}
+	idList := make([]string, 0, len(ids))
+	for id := range ids {
+		idList = append(idList, id)
+	}
+	rows, err := executor.conn.Query(ctx, `
+SELECT DISTINCT work_item_id
+FROM work_item_team_attributions
+WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
+		orgID, idList, now)
+	if err != nil {
+		return nil, fmt.Errorf("query already-covered-today attributions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan already-covered-today row: %w", err)
+		}
+		covered[id] = struct{}{}
+	}
+	return covered, rows.Err()
 }
 
 // publishRunMarkers writes the completion marker(s) for a completed run:

@@ -177,19 +177,19 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4277 (Done)",
     },
     "work_item": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- post_bridge, reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily`",
         "ticket": "CHAOS-4283",
     },
     "work_item_estimate": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- post_bridge, same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily`",
         "ticket": "CHAOS-4283",
     },
     "work_item_attribution": {
-        "citation": "Python: `compute_work_items.py:1189 compute_work_item_team_attributions` (full daily compute -- distinct from §3's native staleness-only backstop of the same table)",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ports `compute_work_items.py:1189 compute_work_item_team_attributions`, the FULL daily compute (distinct from §3's native staleness-only backstop of the same table). Runs before its three readers via families.json's `after` edges",
         "ticket": "CHAOS-4283",
     },
     "work_item_state": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- post_bridge, runs AFTER the Python bridge (reads `work_item_team_attributions`, itself still Python-written)",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads",
         "ticket": "CHAOS-4278 (Done)",
     },
     "review_edges": {
@@ -305,7 +305,7 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4282 (Done)",
     },
     "work_item_attribution": {
-        "citation": "Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, still COMPAT-Python)",
+        "citation": "Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078)",
         "route": "river, native (`daily.go:625-634`)",
         "ticket": "CHAOS-3092 PR-B (Done)",
     },

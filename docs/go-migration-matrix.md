@@ -214,10 +214,10 @@ function directly, even for families whose worker kind is now native:
 | testops_risk | NATIVE | Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4294 (Done) |
 | testops_test | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent | CHAOS-4284 |
 | work_graph_edges | NATIVE | Python: `ai_workflow.py extract_review_deployment_incident_edges` | CHAOS-4286 |
-| work_item | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- post_bridge, reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily` | CHAOS-4283 |
-| work_item_attribution | COMPAT-Python | Python: `compute_work_items.py:1189 compute_work_item_team_attributions` (full daily compute -- distinct from §3's native staleness-only backstop of the same table) | CHAOS-4283 |
-| work_item_estimate | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- post_bridge, same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |
-| work_item_state | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- post_bridge, runs AFTER the Python bridge (reads `work_item_team_attributions`, itself still Python-written) | CHAOS-4278 (Done) |
+| work_item | NATIVE | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily` | CHAOS-4283 |
+| work_item_attribution | NATIVE | Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ports `compute_work_items.py:1189 compute_work_item_team_attributions`, the FULL daily compute (distinct from §3's native staleness-only backstop of the same table). Runs before its three readers via families.json's `after` edges | CHAOS-4283 |
+| work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |
+| work_item_state | NATIVE | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
 
 **`team_complexity`** (writes `team_complexity_daily`, `job_daily.py:853-915 _write_team_complexity_for_day`)
@@ -248,7 +248,7 @@ Go owns the writes. Deleting the Python path is a deliberate follow-up, not part
 | membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`daily.go:599-609`) | CHAOS-4282 (Done) |
 | recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`daily.go:610-620`) | CHAOS-4281/CHAOS-3092 (Done) |
 | release_impact | COMPAT-Python | Python: `job_release_impact.py` -> `release_impact.py` | river, bridge (`daily.go:621-624`, uses `compatibility` directly) | CHAOS-4296 |
-| work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, still COMPAT-Python) | river, native (`daily.go:625-634`) | CHAOS-3092 PR-B (Done) |
+| work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`daily.go:625-634`) | CHAOS-3092 PR-B (Done) |
 <!-- END GENERATED REMAINING METRICS MATRIX -->
 
 ## RECOMMENDATIONS

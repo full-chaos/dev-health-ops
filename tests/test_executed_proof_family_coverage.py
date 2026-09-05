@@ -56,6 +56,14 @@ KNOWN_UNCOVERED = {
     # evidence for, and would block this PR on their backlog.
     "work_item",
     "work_item_estimate",
+    # work_item_attribution is the fourth CHAOS-4283/#2246 family and belongs
+    # in this same pin for the identical reason -- this PR is what makes it
+    # native+golden-required for the first time (CHAOS-5078), and criterion 2
+    # (wiring it into the executed-proof gates) was explicitly deferred in
+    # #2246's own RISK-NOTES to a follow-up PR, pending evidence the
+    # executed-proof E2E seed's anchor partition actually produces
+    # work_item_team_attributions rows.
+    "work_item_attribution",
     # MINE (CHAOS-4285, #2229), pinned with evidence, not by default. The
     # executed-proof E2E seed loop above (ci/run_metrics_executed_proof.sh)
     # only drives four sync targets -- cicd, deployments, incidents, tests --

@@ -1,0 +1,2 @@
+def unclosed_bracket():
+    x = (1, 2

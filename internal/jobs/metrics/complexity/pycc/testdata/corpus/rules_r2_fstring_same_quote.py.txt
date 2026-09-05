@@ -1,0 +1,2 @@
+def f(x, cond):
+    return f"{x["key"] if cond else 0}"

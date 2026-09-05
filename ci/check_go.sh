@@ -7,7 +7,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.0"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
-DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}"
+# CHAOS-5224: precedence is an explicit DEV_HEALTH_GO_CACHE first, then an
+# already-inherited GOCACHE, and only then the tmp fallback. The old code
+# skipped straight to the tmp fallback regardless of what the caller already
+# exported, silently overwriting an inherited GOCACHE and growing a THIRD Go
+# build cache on bigboy's root disk (7.5G observed) alongside the two
+# legitimate bind-mounted caches.
+DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}}"
 mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""

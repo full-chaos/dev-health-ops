@@ -52,7 +52,6 @@ from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
-    compute_work_item_team_attributions,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
@@ -1599,7 +1598,6 @@ async def run_daily_metrics_job(
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
         estimate_coverage_metrics: list[Any] = []
-        wi_team_attributions: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
@@ -1614,14 +1612,20 @@ async def run_daily_metrics_job(
                     attribution_context=team_attribution_context,
                 )
             )
-            wi_team_attributions = compute_work_item_team_attributions(
-                work_items=work_items,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=project_key_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
-            )
+            # CHAOS-5233/CHAOS-3092: work_item_attribution's daily compute is
+            # DELETED here, not skip-gated -- chris's ruling: "once go is in
+            # main that does the same thing, skip flags are pointless." The
+            # native Go executor (WorkItemAttributionExecutor, #2246) is the
+            # ONLY writer of work_item_team_attributions for this (org, day,
+            # repo) partition scope now; there is no Python fallback to keep
+            # alive here. `compute_work_item_team_attributions` itself is NOT
+            # deleted -- it has a real, unrelated caller
+            # (job_work_items.py's run_work_items_sync_job, a full-backfill
+            # sync job outside this function's scope) plus dedicated unit
+            # tests and the live-Python oracle comparator
+            # (internal/providersync/testdata/oracle_pairs/
+            # _github_work_item_derived_helpers.py) that exercise the
+            # function directly; only THIS call site is gone.
             estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
                 day=d,
                 work_items=work_items,
@@ -2039,8 +2043,9 @@ async def run_daily_metrics_job(
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times and not skip_work_item_write:
                 s.write_work_item_cycle_times(wi_cycle_times)
-            if wi_team_attributions and hasattr(s, "write_work_item_team_attributions"):
-                s.write_work_item_team_attributions(wi_team_attributions)
+            # CHAOS-5233/CHAOS-3092: no write_work_item_team_attributions
+            # call here -- deleted alongside the compute call above; the
+            # native Go executor is the only writer now.
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
             if not skip_review_edges:

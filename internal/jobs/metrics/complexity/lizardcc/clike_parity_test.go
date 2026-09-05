@@ -518,6 +518,18 @@ func filteredCorpusTokenPattern(t *testing.T, suffix string) *regexp.Regexp {
 		return goTokenPattern
 	case ".rs.txt":
 		return rustTokenPattern
+	case ".cs.txt":
+		return csharpTokenPattern
+	case ".kt.txt":
+		return kotlinTokenPattern
+	case ".swift.txt":
+		return swiftTokenPattern
+	case ".scala.txt":
+		// Scala has no per-language token addition at all (plain
+		// CodeReader tokenizer, confirmed from Python source) -- stated
+		// explicitly here per this function's own doc, not a silent
+		// fall-through.
+		return cLikeTokenPattern
 	default:
 		t.Fatalf("filteredCorpusTokenPattern: no token pattern registered for suffix %q -- "+
 			"add a case pointing at that language's own *TokenPattern var (see this "+

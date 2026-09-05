@@ -192,11 +192,21 @@ func TestLizardGoldenIsNotStaleJVMSwift(t *testing.T) {
 // narrower half) -- the generic check that would catch a condition
 // keyword accidentally left unexercised by any fixture, the same class as
 // #2266's missing Rust `where` and go-rust's missing `catch` coverage.
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r3 on #2268): this used the
+// UNFILTERED assertEveryConditionExercisedByCorpus for all four maps
+// against the SAME mixed corpus_jvm_swift directory -- the exact class
+// #2266 r2 found for go-rust (Rust's "catch" satisfied by a Go-only
+// fixture). Verified directly: deleting `"?": true` from swiftConditions
+// left every existing guard passing (no Swift fixture has a genuine `?`
+// at all; only C#'s basic.cs.txt:19 does) while the ACTUAL Swift
+// behavior would silently regress. Fixed: each language's own
+// suffix-filtered invocation, matching go-rust's own fix.
 func TestEveryConditionIsExercisedByTheJVMSwiftCorpus(t *testing.T) {
-	assertEveryConditionExercisedByCorpus(t, csharpConditions, jvmSwiftCorpusDir(t))
-	assertEveryConditionExercisedByCorpus(t, kotlinConditions, jvmSwiftCorpusDir(t))
-	assertEveryConditionExercisedByCorpus(t, scalaConditions, jvmSwiftCorpusDir(t))
-	assertEveryConditionExercisedByCorpus(t, swiftConditions, jvmSwiftCorpusDir(t))
+	assertEveryConditionExercisedByFilteredCorpus(t, csharpConditions, jvmSwiftCorpusDir(t), ".cs.txt")
+	assertEveryConditionExercisedByFilteredCorpus(t, kotlinConditions, jvmSwiftCorpusDir(t), ".kt.txt")
+	assertEveryConditionExercisedByFilteredCorpus(t, scalaConditions, jvmSwiftCorpusDir(t), ".scala.txt")
+	assertEveryConditionExercisedByFilteredCorpus(t, swiftConditions, jvmSwiftCorpusDir(t), ".swift.txt")
 }
 
 // TestNoUnexpectedDisabledJVMSwiftConditions is this PR's own invocation
@@ -209,4 +219,47 @@ func TestNoUnexpectedDisabledJVMSwiftConditions(t *testing.T) {
 	assertNoUnexpectedDisabledConditions(t, kotlinConditions, map[string]bool{})
 	assertNoUnexpectedDisabledConditions(t, scalaConditions, map[string]bool{})
 	assertNoUnexpectedDisabledConditions(t, swiftConditions, map[string]bool{})
+}
+
+// pinnedCSharpConditionKeys/pinnedKotlinConditionKeys/
+// pinnedScalaConditionKeys/pinnedSwiftConditionKeys and
+// TestJVMSwiftConditionKeySetIsPinned are this PR's own invocation of the
+// shared key-set-pinning mechanism cfamily's clike_parity_test.go defines
+// (see TestConditionKeySetIsPinned's doc there for the deletion attack it
+// closes) -- fixed alongside the filtered-coverage fix above (codex round
+// r3 on #2268), since the two guards work as defense-in-depth (a deleted
+// key makes the filtered-coverage check pass vacuously, but the pinned
+// key-set check still catches it).
+var pinnedCSharpConditionKeys = map[string]bool{
+	"if": true, "for": true, "while": true, "catch": true,
+	"&&": true, "||": true,
+	"case": true,
+	"?":    true, "??": true,
+}
+
+var pinnedKotlinConditionKeys = map[string]bool{
+	"if": true, "for": true, "while": true, "catch": true,
+	"&&": true, "||": true,
+	"?:": true,
+}
+
+var pinnedScalaConditionKeys = map[string]bool{
+	"if": true, "for": true, "while": true, "catch": true, "do": true,
+	"&&": true, "||": true,
+	"case": true,
+	"?":    true,
+}
+
+var pinnedSwiftConditionKeys = map[string]bool{
+	"if": true, "for": true, "while": true, "catch": true, "guard": true,
+	"&&": true, "||": true,
+	"case": true,
+	"?":    true,
+}
+
+func TestJVMSwiftConditionKeySetIsPinned(t *testing.T) {
+	assertConditionKeySetIsPinned(t, csharpConditions, pinnedCSharpConditionKeys)
+	assertConditionKeySetIsPinned(t, kotlinConditions, pinnedKotlinConditionKeys)
+	assertConditionKeySetIsPinned(t, scalaConditions, pinnedScalaConditionKeys)
+	assertConditionKeySetIsPinned(t, swiftConditions, pinnedSwiftConditionKeys)
 }

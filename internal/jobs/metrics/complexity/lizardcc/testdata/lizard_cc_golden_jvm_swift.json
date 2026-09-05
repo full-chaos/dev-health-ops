@@ -160,6 +160,22 @@
       "loc": 50,
       "very_high_complexity_functions": 0
     },
+    "catch_and_question_coverage.scala.txt": {
+      "cyclomatic_avg": 4.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 4,
+          "lineno": 12,
+          "long_name": "f",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 10,
+      "very_high_complexity_functions": 0
+    },
     "do_while_coverage.scala.txt": {
       "cyclomatic_avg": 3.0,
       "cyclomatic_total": 3,
@@ -222,6 +238,38 @@
       "functions_count": 1,
       "high_complexity_functions": 0,
       "loc": 15,
+      "very_high_complexity_functions": 0
+    },
+    "try_catch_coverage.kt.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 8,
+          "long_name": "f",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
+      "very_high_complexity_functions": 0
+    },
+    "try_catch_coverage.swift.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 9,
+          "long_name": "f x : Int",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
       "very_high_complexity_functions": 0
     },
     "very_high.cs.txt": {

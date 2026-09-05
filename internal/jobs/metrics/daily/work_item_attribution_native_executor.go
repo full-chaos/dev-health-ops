@@ -157,11 +157,19 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 		if len(rows) == 0 {
 			continue
 		}
+		// #2276 confirmation-pass sweep (found independently, same class
+		// this pass's other 6 fixes close): WriteAttributions' own
+		// batch.Send() branch already reports its TRUE row count on an
+		// ambiguous network error -- `total` must be updated with that
+		// count BEFORE the error check, not only after a confirmed
+		// success, or the failing write's own truthful count is discarded
+		// a second time. Mirrors work_graph_edges_native_executor.go's
+		// established idiom.
 		written, err := executor.writer.WriteAttributions(ctx, rows)
+		total += written
 		if err != nil {
 			return total, err
 		}
-		total += written
 	}
 	return total, nil
 }

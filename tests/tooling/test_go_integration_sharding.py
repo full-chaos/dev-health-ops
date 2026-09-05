@@ -377,8 +377,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
     # CURRENT TOTAL: 45 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "45 package(s) discovered, 0 denylisted, 45 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 45 package(s)" in result.stdout
+    assert "46 package(s) discovered, 0 denylisted, 46 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 46 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -422,7 +422,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # internal/teamownership. Merged total: 44.
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
     # CURRENT TOTAL: 45 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 45
+    assert len(flattened) == len(set(flattened)) == 46
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 

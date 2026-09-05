@@ -261,9 +261,21 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4287",
     },
     "team_cognitive_load": {
-        "citation": "Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope)",
-        # CHAOS-5153: the "NONE found" citation was stale -- CHAOS-5141 was
-        # filed 2026-09-05 to track exactly this finalize-side gap.
+        # CHAOS-5153's citation-drift fix (on main, merged forward here)
+        # updated this entry's ticket from a stale "NONE found" to
+        # CHAOS-5141 -- but that fix predates CHAOS-5141's own native port
+        # landing on THIS branch, so its citation text still described the
+        # pre-port, wholly-Python state. Keeping this branch's own
+        # (already-correct, already-CHAOS-5141-ticketed) citation: the
+        # native executor + ClickHouse loader, with the Python function
+        # retained only as the skip_families-gated compat fallback.
+        "citation": (
+            "Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` "
+            "(finalize scope, co-registered with ic_finalize) + "
+            "`team_cognitive_load_clickhouse.go`. Python "
+            "`team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained "
+            "as the compatibility-bridge fallback, gated behind `skip_families`"
+        ),
         "ticket": "CHAOS-5141",
     },
     "testops_risk": {
@@ -326,7 +338,11 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
     "release_impact": {
         "citation": (
             "Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, "
-            "`release_impact_native_clickhouse.go`"
+            "`release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute "
+            "orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) "
+            "deleted -- job compute deleted; `release_impact.py`'s `_compute_day` "
+            "survives only as `fixtures/runner.py`'s local/CI fixture-generation "
+            "dependency, fixture-generation path pending CHAOS-5250"
         ),
         "route": "river, native (`daily.go:590-621`)",
         "ticket": "CHAOS-4296 (Done)",
@@ -390,10 +406,10 @@ WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-3092 R1 (Done)",
     },
     "cognitive load (team_cognitive_load)": {
-        "executor": "COMPAT-Python",
+        "executor": "NATIVE",
         "citation": "see §2",
-        "route": "bridge",
-        "ticket": "NONE found",
+        "route": "river, native -- finalize scope, co-registered with ic_finalize",
+        "ticket": "CHAOS-5141",
     },
 }
 
@@ -495,6 +511,41 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # docstring describes for every other native family).
 FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
     "_write_team_complexity_for_day": ("remaining", "complexity"),
+}
+
+# CHAOS-5141: `_write_team_cognitive_load_for_day` is the FIRST call this
+# generator has seen that is the INVERSE of ic_finalize's shape above --
+# where ic_finalize's calls were irregular-NAMED but genuinely dormant
+# (removable from the ledger, falling through to None), this call fits the
+# `_write_<family>_..._for_day` naming convention EXACTLY (it naturally
+# resolves to ("daily", "team_cognitive_load") via that convention, with no
+# ledger entry needed or possible to remove) -- but it is JUST AS DORMANT:
+# the entire call is gated behind `if "team_cognitive_load" not in
+# skip_families:` in job_daily.py (CHAOS-5141's own routing-only change,
+# team_cognitive_load_native_executor.go's co-registration ruling), the
+# identical dormant-bridge-fallback shape every other wholly-native family
+# uses. Left unhandled, the naming-convention match alone would render the
+# same misleading "NATIVE (repo) / COMPAT-Python (finalize)" split label
+# ic_finalize used to get -- implying a repo-scope component that does not
+# exist for a family whose ENTIRE scope is finalize. This dict names calls
+# that WOULD resolve via the naming convention but must be forced dormant
+# instead; checked in `_finalize_call_family` before the naming-convention
+# branch runs.
+#
+# #2255 confirmation-pass finding (P2, CHAOS-5141): the first version of
+# this was a bare `set[str]` -- forcing a call dormant with NO check that
+# its (namespace, family) is still a LIVE family name, unlike
+# FINALIZE_CALL_IRREGULAR_FAMILY's dict shape, which validates exactly that
+# in both _finalize_call_family and _assert_no_stale_finalize_ledger_entries.
+# A rename/removal of team_cognitive_load from families.json while
+# job_daily.py's call kept its old name would have silently kept returning
+# None here -- correct-looking output for the wrong reason, no signal that
+# the mapping had gone stale. Now a dict, mapping call name to the exact
+# (namespace, family) it forces dormant, validated the same way the
+# irregular ledger is (see both call sites below): renaming/removing the
+# family raises SystemExit instead of staying silently dormant.
+FINALIZE_CALL_DORMANT_SKIP_GATED: dict[str, tuple[str, str]] = {
+    "_write_team_cognitive_load_for_day": ("daily", "team_cognitive_load"),
 }
 
 
@@ -860,6 +911,22 @@ def _finalize_call_family(
     an explicit FINALIZE_CALL_IRREGULAR_FAMILY entry stating which one);
     or is an irregular-ledger mapping that fails the plausibility check.
     """
+    if call_name in FINALIZE_CALL_DORMANT_SKIP_GATED:
+        namespace, family = FINALIZE_CALL_DORMANT_SKIP_GATED[call_name]
+        live = daily_names if namespace == "daily" else remaining_names
+        if namespace not in ("daily", "remaining") or family not in live:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED maps "
+                f"{call_name!r} to ({namespace!r}, {family!r}), which is not a live "
+                f"{namespace} family name -- family renamed/removed, or namespace typo? "
+                "Update or drop the entry."
+            )
+        # Forced dormant BEFORE the naming-convention branch below ever runs
+        # -- this call WOULD otherwise resolve via that convention (see
+        # FINALIZE_CALL_DORMANT_SKIP_GATED's own comment), but is proven
+        # skip_families-gated for its entire scope, same as every other
+        # wholly-native family's dormant bridge fallback.
+        return None
     if call_name in FINALIZE_CALL_IRREGULAR_FAMILY:
         namespace, family = FINALIZE_CALL_IRREGULAR_FAMILY[call_name]
         live = daily_names if namespace == "daily" else remaining_names
@@ -969,8 +1036,32 @@ def _assert_no_stale_finalize_ledger_entries(
     there. load_daily_finalize_compat_families only iterates calls that ARE
     present, so a renamed/removed irregular call would otherwise just
     silently stop contributing its family to the compat set -- the doc
-    would go quiet instead of failing loudly."""
+    would go quiet instead of failing loudly. Same completeness direction
+    applied to FINALIZE_CALL_DORMANT_SKIP_GATED: a renamed/removed dormant
+    call would silently stop being forced dormant, and -- since it still
+    matches the naming convention under its OLD name only -- a rename would
+    just as silently make it fall through to the None branch anyway (the
+    call is simply gone from the AST), so this guard's real job is catching
+    the call being RENAMED to something the set no longer names while a
+    call of the OLD name lingers nowhere -- i.e. proving the set names
+    exactly the calls actually present, not a stale leftover."""
     present_calls = load_finalize_write_calls()
+    stale_dormant = set(FINALIZE_CALL_DORMANT_SKIP_GATED) - present_calls
+    if stale_dormant:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED names "
+            f"call(s) {sorted(stale_dormant)} that no longer appear in "
+            f"{DAILY_FINALIZE_FN}'s body -- renamed or removed? Update or drop the entry."
+        )
+    for call_name, (namespace, family) in FINALIZE_CALL_DORMANT_SKIP_GATED.items():
+        live = daily_names if namespace == "daily" else remaining_names
+        if namespace not in ("daily", "remaining") or family not in live:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED maps "
+                f"{call_name!r} to ({namespace!r}, {family!r}), which is not a live "
+                f"{namespace} family name -- family renamed/removed, or namespace typo? "
+                "Update or drop the entry."
+            )
     stale = set(FINALIZE_CALL_IRREGULAR_FAMILY) - present_calls
     if stale:
         raise SystemExit(

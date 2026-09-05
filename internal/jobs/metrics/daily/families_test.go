@@ -130,9 +130,32 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["work_item_state"]; got != "post_bridge" {
 		t.Fatalf("work_item_state must be phase=post_bridge (CHAOS-4278, pending CHAOS-4283), got %q", got)
 	}
+	// ic_finalize is phase=finalize (CHAOS-4290), the first RUN-scoped family:
+	// compute_ic_landscape_rolling reads back user_metrics_daily rows that
+	// compute_ic_metrics_daily wrote for the SAME run, so it must run once
+	// after every partition has landed rather than once per partition.
+	if got := byPhase["ic_finalize"]; got != "finalize" {
+		t.Fatalf("ic_finalize must be phase=finalize (CHAOS-4290), got %q", got)
+	}
+	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
+	// a new non-default phase should force whoever adds it to come here and say
+	// which family it belongs to and why, exactly as this assertion forced that
+	// for ic_finalize. Widening it to accept anything in validPhases would turn
+	// a deliberate acknowledgement into a silent pass.
+	nonDefaultPhase := map[string]string{
+		"work_item_state": "post_bridge",
+		"ic_finalize":     "finalize",
+	}
 	for name, phase := range byPhase {
-		if phase != "" && name != "work_item_state" {
-			t.Fatalf("family %q declares phase=%q -- only work_item_state is expected to be non-default today; update this test if that changes deliberately", name, phase)
+		if phase == "" {
+			continue
+		}
+		want, expected := nonDefaultPhase[name]
+		if !expected {
+			t.Fatalf("family %q declares phase=%q -- only %v are expected to be non-default today; update this test if that changes deliberately", name, phase, nonDefaultPhase)
+		}
+		if phase != want {
+			t.Fatalf("family %q declares phase=%q, expected %q", name, phase, want)
 		}
 	}
 	// cicd is Wave 1B's first cutover (CHAOS-4292), following repo_user_commit/

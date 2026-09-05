@@ -98,16 +98,24 @@ class TestopsRowCapExceeded(MemoryError):
     concurrently extending the same shared classification -- reusing the
     resource-exhaustion bucket (this genuinely IS a resource bound, just
     enforced before the OS/rlimit would have) avoids that collision. The
-    table/org_id/row counts are still visible via this exception's message,
-    the log line, and the ``DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL``
-    counter below -- not silently folded into a generic MemoryError.
+    table/org_id/row counts are still visible via this exception's message
+    -- not silently folded into a generic MemoryError.
+
+    CHAOS-5245: the loader methods that used to raise this (and the
+    devhealth_testops_loader_row_cap_exceeded_total counter, the error log
+    line, and _enforce_row_cap that emitted them) are deleted along with
+    compute_testops.py -- nothing raises this anymore in practice. Kept
+    only because worker_metrics_runner.py:227-229 still imports it into a
+    tuple of exception types main() classifies.
     """
 
     # CHAOS-4350 (team-lead ruling, 2026-08-26): a fixed token, present
-    # verbatim in both this message and the _enforce_row_cap error log line
-    # below, so a SigNoz log search can distinguish a deliberately-tripped
-    # guard from a real, unbounded OOM even though both surface as the same
-    # MemoryError/resource_exhausted classification upstream.
+    # verbatim in this message (was ALSO in the now-deleted _enforce_row_cap
+    # error log line, so a SigNoz log search could distinguish a
+    # deliberately-tripped guard from a real, unbounded OOM even though both
+    # surface as the same MemoryError/resource_exhausted classification
+    # upstream). Kept for message-format stability even though nothing
+    # raises this anymore.
     TOKEN = "testops_row_cap_exceeded"
 
     def __init__(self, *, table: str, org_id: str, max_rows: int, fetched: int) -> None:

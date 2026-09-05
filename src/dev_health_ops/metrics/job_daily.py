@@ -1993,13 +1993,17 @@ async def run_daily_metrics_job(
         # had one, and adding it under a skip would be a false zero-rows signal
         # exactly as it would have been for cicd.
         #
-        # TEAM-scope rows are NOT covered by this gate. They are written once
+        # TEAM-scope rows are NOT covered by this gate -- they are written once
         # per org/day from run_daily_metrics_finalize
-        # (_write_compounding_risk_team_rows_for_day), which the Go side still
-        # reaches through the opaque compatibility.Finalize bridge call -- there
-        # is no per-family registration or skip-list at finalize to carve them
-        # out with. They stay Python until that hook exists; CHAOS-4287 stays
-        # open until then.
+        # (_write_compounding_risk_team_rows_for_day), a SEPARATE call site
+        # with its OWN skip_families gate ("compounding_risk_team", CHAOS-5084,
+        # see run_daily_metrics_finalize below) now that the Go side has a
+        # per-family finalize registration to carve it out with
+        # (CompoundingRiskTeamExecutor). This partition-scope gate and that
+        # finalize-scope gate are independent and use different names on
+        # purpose: a partition can skip repo-scope rows without skipping team
+        # rows, or vice versa, depending on which native executors this
+        # particular run has healthy.
         if "compounding_risk" not in skip_families:
             _write_compounding_risk_for_day(
                 sinks=sinks,
@@ -2305,30 +2309,40 @@ async def run_daily_metrics_finalize(
     )
     repo_names_by_id = {r.repo_id: r.full_name for r in discovered_repos}
 
-    compounding_risk_team_count = _write_compounding_risk_team_rows_for_day(
-        sinks=sinks_list,
-        primary_sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        repo_names_by_id=repo_names_by_id,
-        repo_team_resolver=repo_team_resolver,
-        computed_at=computed_at,
-    )
-    if not compounding_risk_team_count:
-        # CHAOS-4365 codex R1: a resolver failure (or an org with no
-        # ownership-resolvable repos) degrades to zero rows here, never
-        # raises (same CHAOS-4246 contract run_daily_metrics_job's own
-        # families follow) -- log it so a transient CH/resolver failure
-        # doesn't look identical to "no repos to attribute" in the logs.
-        logger.warning(
-            "metrics.daily.finalize family produced zero rows",
-            extra={
-                "family": "compounding_risk_team",
-                "day": day.isoformat(),
-                "org_id": org_id,
-                "cause": "no_rows_computed",
-            },
+    # CHAOS-5084: same skip_families gate shape as ic_finalize (:2273) and
+    # team_cognitive_load (:2421) above. When a native Go executor
+    # (CompoundingRiskTeamExecutor) already computed and wrote team-scope
+    # compounding_risk_daily rows for this run, recomputing here would append
+    # a SECOND generation of the same rows -- compounding_risk_daily is
+    # append-only with NO version column (types.go's own doc comment), so the
+    # later writer wins only by reader convention (argMax(*, computed_at)),
+    # never by the engine itself, and the native rows would simply sit there
+    # as a duplicate physical generation nothing failing would surface.
+    if "compounding_risk_team" not in skip_families:
+        compounding_risk_team_count = _write_compounding_risk_team_rows_for_day(
+            sinks=sinks_list,
+            primary_sink=primary_sink,
+            day=day,
+            org_id=org_id,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
+            computed_at=computed_at,
         )
+        if not compounding_risk_team_count:
+            # CHAOS-4365 codex R1: a resolver failure (or an org with no
+            # ownership-resolvable repos) degrades to zero rows here, never
+            # raises (same CHAOS-4246 contract run_daily_metrics_job's own
+            # families follow) -- log it so a transient CH/resolver failure
+            # doesn't look identical to "no repos to attribute" in the logs.
+            logger.warning(
+                "metrics.daily.finalize family produced zero rows",
+                extra={
+                    "family": "compounding_risk_team",
+                    "day": day.isoformat(),
+                    "org_id": org_id,
+                    "cause": "no_rows_computed",
+                },
+            )
 
     team_metrics_field_names = {f.name for f in _dc.fields(TeamMetricsDailyRecord)}
     # CHAOS-4365 codex R2 (P1): dedup_from('team_metrics_daily') keys on

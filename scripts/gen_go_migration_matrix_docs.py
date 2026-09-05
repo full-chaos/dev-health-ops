@@ -212,12 +212,19 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
     "compounding_risk": {
         # CHAOS-4287: the ticket and this citation both said :502, which is
         # inside _repo_to_team_map_for_compounding_risk, not the writer. The
-        # writer is :568. The TEAM-scope half lives at :613
-        # (_write_compounding_risk_team_rows_for_day, called from
-        # run_daily_metrics_finalize) and is still Python -- see the family's
-        # phase_note in internal/jobs/metrics/daily/families.json.
-        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python)",
+        # writer is :568 (REPO scope, post_bridge). TEAM scope is now its own
+        # entry below, "compounding_risk_team" (CHAOS-5084) -- see that row
+        # and internal/jobs/metrics/daily/families.json's phase_notes for both.
+        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native)",
         "ticket": "CHAOS-4287",
+    },
+    "compounding_risk_team": {
+        # CHAOS-5084: the TEAM-scope half of compounding_risk, split into its
+        # own family entry because it is a SEPARATE finalize-scope writer to
+        # the SAME table (compounding_risk_daily) -- see the "compounding_risk"
+        # row above and families.json's phase_notes for both.
+        "citation": "Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope)",
+        "ticket": "CHAOS-5084",
     },
     "team_cognitive_load": {
         "citation": "Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope)",
@@ -384,14 +391,25 @@ def render_daily_metrics_block() -> str:
         set(DAILY_CITATION_LEDGER),
         "Add a DAILY_CITATION_LEDGER row for it.",
     )
-    artifact_daily = load_native_families_artifact()["daily"]
-    unknown_artifact_names = set(artifact_daily) - live_names
+    artifact = load_native_families_artifact()
+    artifact_daily = artifact["daily"]
+    # CHAOS-5084 codex r2 (P2, confirmed): a family whose native executor
+    # runs at FINALIZE scope (ic_finalize, benchmarking as of CHAOS-5194, and
+    # compounding_risk_team here) still has a families.json entry in the
+    # DAILY family list -- families.json's list is "every metrics.daily
+    # family", independent of which seam its executor is registered under --
+    # but its artifact entry lives in the artifact's "finalize" section, not
+    # "daily". Reading ONLY artifact["daily"] silently defaulted every such
+    # family to "compat" (COMPAT-Python), understating three families that
+    # are actually native, not just this PR's compounding_risk_team.
+    artifact_finalize = artifact.get("finalize", {})
+    unknown_artifact_names = (set(artifact_daily) | set(artifact_finalize)) - live_names
     if unknown_artifact_names:
         raise SystemExit(
             f"gen_go_migration_matrix_docs: contracts/native-families/v1/native-families.json's "
-            f'"daily" section names family(ies) {sorted(unknown_artifact_names)} that no longer '
-            "exist in internal/jobs/metrics/daily/families.json -- regenerate the artifact "
-            "(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
+            f'"daily"/"finalize" sections name family(ies) {sorted(unknown_artifact_names)} that '
+            "no longer exist in internal/jobs/metrics/daily/families.json -- regenerate the "
+            "artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
             "TestNativeFamiliesArtifactUpToDate)."
         )
     lines = [
@@ -401,10 +419,17 @@ def render_daily_metrics_block() -> str:
     ]
     for family in sorted(families, key=lambda f: f["name"]):
         name = family["name"]
-        artifact_value = artifact_daily.get(name, "compat")
+        # "daily" takes precedence when (hypothetically) a name appeared in
+        # both -- the two sections are otherwise disjoint in practice, one
+        # native seam per family.
+        artifact_value = artifact_daily.get(name) or artifact_finalize.get(
+            name, "compat"
+        )
         executor = "COMPAT-Python" if artifact_value == "compat" else "NATIVE"
         if artifact_value == "post_bridge":
             executor += ", post_bridge"
+        elif artifact_value == "finalize":
+            executor += ", finalize"
         row = DAILY_CITATION_LEDGER[name]
         lines.append(f"| {name} | {executor} | {row['citation']} | {row['ticket']} |")
     lines.append(DAILY_END)

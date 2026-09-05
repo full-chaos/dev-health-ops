@@ -16,6 +16,7 @@
     "work_item_state": "post_bridge"
   },
   "finalize": {
+    "compounding_risk_team": "finalize",
     "ic_finalize": "finalize",
     "team_cognitive_load": "finalize"
   },

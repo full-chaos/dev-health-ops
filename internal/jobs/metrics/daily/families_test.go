@@ -27,7 +27,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if err := json.Unmarshal(data, &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || len(registry.Families) != 24 {
+	if registry.SchemaVersion != 1 || len(registry.Families) != 25 {
 		t.Fatalf("invalid family registry: %#v", registry)
 	}
 	// The port enum is closed: "pending" (still Python-only), "next_core"
@@ -176,6 +176,12 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
+	// compounding_risk_team (CHAOS-5084) is the finalize-side family
+	// families.json's compounding_risk phase_note now points to instead of
+	// promising "someday": same table, different scope, different gate.
+	if got := byPhase["compounding_risk_team"]; got != "finalize" {
+		t.Fatalf("compounding_risk_team must be phase=finalize (CHAOS-5084), got %q", got)
+	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
 	// which family it belongs to and why. Widening it to accept anything in
@@ -186,12 +192,13 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// non-default phase; it cannot express that ic_finalize is "finalize" and
 	// would have silently accepted ic_finalize declaring post_bridge.
 	nonDefaultPhase := map[string]string{
-		"work_item_state":     "post_bridge",
-		"work_item":           "post_bridge",
-		"work_item_estimate":  "post_bridge",
-		"compounding_risk":    "post_bridge",
-		"ic_finalize":         "finalize",
-		"team_cognitive_load": "finalize",
+		"work_item_state":       "post_bridge",
+		"work_item":             "post_bridge",
+		"work_item_estimate":    "post_bridge",
+		"compounding_risk":      "post_bridge",
+		"ic_finalize":           "finalize",
+		"team_cognitive_load":   "finalize",
+		"compounding_risk_team": "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

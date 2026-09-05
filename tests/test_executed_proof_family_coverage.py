@@ -69,6 +69,25 @@ KNOWN_UNCOVERED = {
     # create, which turns a green gate red for a reason unrelated to the port.
     "review_edges",
     "benchmarking",
+    # --- added 2026-09-05 (CHAOS-5084 codex r2, #2275): merging the
+    # port-ic-finalize-native-v2 / team-cognitive-load-native stack forward
+    # made ic_finalize and team_cognitive_load natively golden-required too --
+    # neither is this lane's family, and this lane has no evidence either
+    # way about the executed-proof E2E seed's coverage of them. Same
+    # standing as work_item/work_item_estimate above: naming another lane's
+    # family from here would assert rows this lane cannot verify and would
+    # block this PR on their decision, not this one's.
+    "ic_finalize",
+    "team_cognitive_load",
+    # MINE (CHAOS-5084): compounding_risk_team is this PR's own family. Same
+    # reasoning as review_edges/benchmarking above -- the real-ClickHouse
+    # integration test in this PR proves the family computes correctly
+    # against a controlled fixture, but that is not evidence the
+    # executed-proof E2E seed's org/day has the multi-team, multi-repo shape
+    # this family needs to produce a row (at least two teams, each owning a
+    # repo, per team_repo_ownership). Pinning here rather than asserting a
+    # row the seed may never produce.
+    "compounding_risk_team",
 }
 
 

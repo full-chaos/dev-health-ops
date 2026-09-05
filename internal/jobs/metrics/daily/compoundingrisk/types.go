@@ -1,28 +1,40 @@
 // Package compoundingrisk is the native Go port of the Python
-// `compounding_risk` daily metrics family (CHAOS-4287), whose producer lives
-// inline in the daily-job monolith rather than in its own module:
+// `compounding_risk` daily metrics family (CHAOS-4287 repo scope,
+// CHAOS-5084 team scope), whose producer lives inline in the daily-job
+// monolith rather than in its own module:
 // `_write_compounding_risk_for_day` (src/dev_health_ops/metrics/job_daily.py:568)
 // over the pure kernel in src/dev_health_ops/metrics/compounding_risk.py.
 //
-// # Scope: REPO rows only
+// # Scope: REPO and TEAM rows
 //
-// Python emits compounding-risk rows at TWO call sites and this package ports
-// only the first:
+// Python emits compounding-risk rows at TWO call sites and this package now
+// ports both:
 //
-//   - REPO scope, once per partition, job_daily.py:1955. Ported here.
+//   - REPO scope, once per partition, job_daily.py:1955 -- Compute /
+//     ComputeForRepos, dispatched by CompoundingRiskExecutor
+//     (compounding_risk_native_executor.go), registered POST_BRIDGE.
 //   - TEAM scope, once per org/day, from run_daily_metrics_finalize
-//     (job_daily.py:2235 -> _write_compounding_risk_team_rows_for_day:613).
-//     NOT ported: FinalizeHandler.Work hands the whole finalize step to the
-//     Python bridge as one opaque compatibility.Finalize call, with no
-//     per-family registration and no skip-list, so no family can be carved out
-//     of finalize the way skipFamiliesForBridge carves families out of the
-//     partition bridge. Team rows stay Python until that hook exists;
-//     CHAOS-4287 stays open until then.
+//     (job_daily.py:2235 -> _write_compounding_risk_team_rows_for_day:613) --
+//     ComputeTeam / BuildTeamRows, dispatched by CompoundingRiskTeamExecutor
+//     (compounding_risk_team_native_executor.go), registered as a
+//     NativeFinalizeFamilyExecutor (CHAOS-4290, #2241's per-family finalize
+//     hook -- the hook CHAOS-4287's docstring said team rows were waiting on;
+//     that hook now exists, so CHAOS-5084 uses it and CHAOS-4287 closes).
+//     Team resolution goes through internal/teamresolve
+//     (ResolveOwnershipThenPatterns), the SAME shared entry point
+//     team_cognitive_load and team_complexity use for the identical Python
+//     function (_repo_to_team_map_for_compounding_risk /
+//     job_daily.py:497) -- this package never calls teamownership.OwnedRepoIDs
+//     directly, so a later ranking fix inside teamresolve (CHAOS-5141-class)
+//     reaches this family automatically.
 //
-// The team split itself is deliberate (CHAOS-4264): this family runs once per
-// REPO, so a team row written per partition sees only that one repo's inputs,
-// and argMax(computed_at) dedup then keeps whichever repo's partition happened
-// to run last -- silently dropping every other contributing repo.
+// The repo/team split itself is deliberate (CHAOS-4264): this family runs
+// once per REPO, so a team row written per partition sees only that one
+// repo's inputs, and argMax(computed_at) dedup then keeps whichever repo's
+// partition happened to run last -- silently dropping every other
+// contributing repo. That is why team rows are computed ONCE per org/day at
+// finalize time, after every repo's own partition has landed, rather than
+// per-partition.
 //
 // # Write mode
 //
@@ -79,9 +91,12 @@ const (
 	SeverityHigh     = "high"
 )
 
-// ScopeRepo is the only scope this package emits. See the package doc comment
-// for why "team" is absent.
-const ScopeRepo = "repo"
+// ScopeRepo and ScopeTeam are the two scopes this package emits, matching
+// compounding_risk_daily's `scope` Enum8 exactly.
+const (
+	ScopeRepo = "repo"
+	ScopeTeam = "team"
+)
 
 // Inputs are the raw signals consumed by the composite
 // (compounding_risk.py:99-128). A nil pointer is Python's None: data

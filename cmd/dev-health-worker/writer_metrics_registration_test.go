@@ -23,6 +23,20 @@ import (
 // EVERY package under internal/jobs/metrics/daily that exports
 // RowsWrittenMetricsSource and requires a registration for each. The next writer
 // to forget it fails here instead of shipping a dead counter.
+//
+// WHAT A GREEN HERE DOES NOT MEAN (raised by lane-port-investment, measured
+// before recording): this proves NO MIS-REGISTRATION, not observability. The
+// enumeration is driven by packages that EXPORT RowsWrittenMetricsSource, so a
+// writer that exports NO metrics source at all is invisible to it and passes
+// silently -- the guard cannot see what was never declared.
+//
+// Deliberately NOT widened to "every writer package must export a metrics
+// source". Measured on this branch: all five writer packages (benchmarking,
+// cicd, compoundingrisk, repouser, reviewedges) already export one, so the
+// stronger rule would catch nothing here while asserting a fleet-wide policy
+// this lane has no standing to set -- and it would fail other lanes' families
+// that legitimately have no writer metric yet. Recorded as a known limit so a
+// green is not read as more than it is.
 func TestEveryWriterMetricsSourceIsRegistered(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dailyDir := filepath.Join(root, "internal", "jobs", "metrics", "daily")

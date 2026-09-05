@@ -1109,3 +1109,62 @@ async def test_review_edges_skip_does_not_perturb_other_families(
     assert "repo_metrics" in sink.write_calls
     assert "team_metrics" in sink.write_calls
     assert "write_cicd_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_benchmarking_not_skipped_runs(monkeypatch: Any) -> None:
+    """Baseline for the skip test below: WITHOUT benchmarking in skip_families
+    run_benchmarking_for_day is called, so the "never called" assertion below
+    is because of the gate rather than the fixture."""
+    calls: list[Any] = []
+
+    def _spy(*args: Any, **kwargs: Any) -> None:
+        calls.append((args, kwargs))
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", _spy)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_benchmarking_in_skip_families_runs_nothing(monkeypatch: Any) -> None:
+    """CHAOS-4288: when the Go dispatcher reports benchmarking already computed
+    and wrote this org/day, this job must not call run_benchmarking_for_day.
+
+    Worth stating why the gate matters more here than for most families: this
+    call takes no repo_id, so it recomputes the WHOLE ORG on every partition
+    and appends a full row set to six append-only tables each time. Without the
+    gate, a native run and the Python run would both fire and the duplication
+    would be worse, not merely redundant."""
+    calls: list[Any] = []
+
+    def _spy(*args: Any, **kwargs: Any) -> None:
+        calls.append((args, kwargs))
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", _spy)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"benchmarking"},
+    )
+
+    assert calls == []

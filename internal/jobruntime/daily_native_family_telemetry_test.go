@@ -266,7 +266,7 @@ func TestPartialWriteRecordsItsRowsAndDuration(t *testing.T) {
 		t.Fatalf("new collector: %v", err)
 	}
 	if err := collector.ObserveDailyMetricsNativeFamily(
-		"ic_finalize", DailyMetricsNativeFamilyOutcomePartialWrite, 7, 30*time.Millisecond,
+		"team_wellbeing", DailyMetricsNativeFamilyOutcomePartialWrite, 7, 30*time.Millisecond,
 	); err != nil {
 		t.Fatalf("observe partial_write: %v", err)
 	}
@@ -275,16 +275,16 @@ func TestPartialWriteRecordsItsRowsAndDuration(t *testing.T) {
 	// partial_write" from "records rows for everything", and the second would
 	// inflate the total with rows that were never written.
 	if err := collector.ObserveDailyMetricsNativeFamily(
-		"ic_finalize", DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+		"team_wellbeing", DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
 	); err != nil {
 		t.Fatalf("observe refused: %v", err)
 	}
 
 	exposition := collector.PrometheusText()
 	for _, want := range []string{
-		`worker_daily_metrics_native_family_outcome_total{family="ic_finalize",outcome="partial_write"} 1`,
-		`worker_daily_metrics_native_family_outcome_total{family="ic_finalize",outcome="refused"} 1`,
-		`worker_daily_metrics_native_family_rows_written_total{family="ic_finalize"} 7`,
+		`worker_daily_metrics_native_family_outcome_total{family="team_wellbeing",outcome="partial_write"} 1`,
+		`worker_daily_metrics_native_family_outcome_total{family="team_wellbeing",outcome="refused"} 1`,
+		`worker_daily_metrics_native_family_rows_written_total{family="team_wellbeing"} 7`,
 	} {
 		if !strings.Contains(exposition, want) {
 			t.Errorf("exposition is missing %q -- a partial_write whose row count is "+

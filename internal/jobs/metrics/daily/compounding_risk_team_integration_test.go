@@ -31,13 +31,23 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
     org_id String DEFAULT 'default',
     updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now()
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (id)`,
-	// 000_raw_tables.sql plus 024_add_org_id.sql's org_id ALTER, matching
-	// LoadRepoNames' production query (id, argMax(repo, last_synced) FROM
-	// repos WHERE org_id = ? AND id IN ? GROUP BY id).
+	// 000_raw_tables.sql plus 024_add_org_id.sql's org_id ALTER and
+	// 028_repos_provider.sql's provider ALTER -- the latter is NOT optional
+	// here: teamownership.OwnedRepoIDs' production query LEFT JOINs a
+	// subquery selecting `repos.provider` (matching team_repo_ownership rows
+	// whose own repo_id is unset, resolved instead by provider+name), so
+	// omitting the column makes that query fail at parse time, not merely
+	// return fewer rows -- caught by this test initially producing 0 rows
+	// everywhere, the OwnedRepoIDs error swallowed by
+	// ResolveOwnershipThenPatterns' per-team fail-open `continue` (matching
+	// Python's own defensive `except Exception`), leaving repoToTeam empty
+	// with no visible error. Matches LoadRepoNames' production query too
+	// (id, argMax(repo, last_synced) FROM repos WHERE org_id = ? AND id IN ?
+	// GROUP BY id).
 	`CREATE TABLE repos (
     id UUID, repo String, ref Nullable(String), created_at DateTime64(3, 'UTC'),
     settings Nullable(String), tags Nullable(String),
-    org_id String DEFAULT 'default',
+    org_id String DEFAULT 'default', provider String DEFAULT 'unknown',
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (id)`,
 	// 051_team_attribution_dimensions.sql verbatim, matching
@@ -116,10 +126,10 @@ func TestCompoundingRiskTeamComputeFinalizeFamilyAgainstRealClickHouse(t *testin
 	churnA, churnB, churnShared := 0.10, 0.50, 0.30
 
 	if err := conn.Exec(ctx, `
-INSERT INTO repos (id, repo, created_at, org_id, last_synced) VALUES
-(toUUID('`+repoExclusiveA+`'), 'acme/exclusive-a', now(), '`+org+`', now()),
-(toUUID('`+repoExclusiveB+`'), 'acme/exclusive-b', now(), '`+org+`', now()),
-(toUUID('`+repoShared+`'),     'acme/shared',       now(), '`+org+`', now())
+INSERT INTO repos (id, repo, created_at, org_id, provider, last_synced) VALUES
+(toUUID('`+repoExclusiveA+`'), 'acme/exclusive-a', now(), '`+org+`', 'native', now()),
+(toUUID('`+repoExclusiveB+`'), 'acme/exclusive-b', now(), '`+org+`', 'native', now()),
+(toUUID('`+repoShared+`'),     'acme/shared',       now(), '`+org+`', 'native', now())
 `); err != nil {
 		t.Fatal(err)
 	}

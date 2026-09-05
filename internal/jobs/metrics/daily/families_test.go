@@ -129,15 +129,39 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 			t.Fatalf("%s must be pre_bridge, i.e. NO phase declared (CHAOS-5078 moved it back), got %q", family, got)
 		}
 	}
-	// Every family, not just the work-item ones: post_bridge is currently
-	// unused, and a new declaration should have to be deliberate.
+	// compounding_risk must stay phase=post_bridge until a finalize-side
+	// native-family hook exists (CHAOS-4287, see families.json's phase_note).
+	// Its input, repo_metrics_daily, is written by repo_user_commit in the SAME
+	// partition, and computeNativeFamilies walks nativeFamilyNames in SORTED
+	// order -- "compounding_risk" sorts BEFORE "repo_user_commit", so a
+	// pre_bridge registration reads the table before this partition's rows
+	// land. Same assertion-pair discipline as work_item_state above: this is
+	// the families.json half, cmd/dev-health-worker/daily.go's registration is
+	// the other.
+	//
+	// A DIFFERENT reason from the CHAOS-4283/CHAOS-5078 four above, and
+	// deliberately kept as its own block rather than folded into their loop:
+	// theirs was about a stale attribution snapshot written by the bridge
+	// (now retired by CHAOS-5078's native writer), this one is about
+	// sorted-order execution inside computeNativeFamilies. Merging them would
+	// suggest one fix retires both, and CHAOS-5078 does not touch this one.
+	// It is also the ONE exception to the "every OTHER family has no phase"
+	// loop below, not the whole set post_bridge was scoped to before
+	// CHAOS-5078.
+	if got := byPhase["compounding_risk"]; got != "post_bridge" {
+		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
+	}
 	for name, phase := range byPhase {
+		if name == "compounding_risk" {
+			continue
+		}
 		if phase != "" {
 			t.Fatalf(
-				"family %q declares phase=%q, but NO family is expected to be "+
-					"non-default after CHAOS-5078. post_bridge remains a working "+
-					"mechanism -- if you are using it deliberately, update this "+
-					"assertion in the same commit.",
+				"family %q declares phase=%q, but no OTHER family is expected to be "+
+					"non-default after CHAOS-5078 (compounding_risk/CHAOS-4287 is the "+
+					"one deliberate exception, asserted separately above). post_bridge "+
+					"remains a working mechanism -- if you are using it deliberately, "+
+					"update this assertion in the same commit.",
 				name, phase)
 		}
 	}

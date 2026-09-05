@@ -672,6 +672,54 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/daily/compoundingrisk (frozen compounding_risk golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestCompoundingRiskGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/daily/compoundingrisk
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason as cicd-golden above (CHAOS-4287).
+  proof_file="${proof_dir}/compounding-risk-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: compounding_risk golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/daily/reviewedges (frozen review_edges golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestReviewEdgesGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/daily/reviewedges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason as cicd-golden above (CHAOS-4279).
+  proof_file="${proof_dir}/review-edges-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: review_edges golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/remaining (DORA incident projection vs the live Python builder)\n'
   if ! (
     cd "${ROOT}"
@@ -798,6 +846,37 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/time-bounds-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: time-bounds golden did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/investment (materialize orchestration golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestFrozenPythonGoldenStillMatchesLivePython$' \
+        ./internal/jobs/investment
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker (CHAOS-4441). This golden's producers are the ORCHESTRATION
+  # decisions -- rollup_subcategories_to_themes' two-different-summations shape,
+  # the invalid_llm_output evidence-quality clamp and its band recomputation,
+  # the LLM-vs-fallback gate order, and json.dumps' ", " separators plus
+  # ensure_ascii on the audit array. None of those is covered by the units
+  # goldens above: those prove the PIECES, this proves the wiring between them,
+  # which is the half that had no oracle while investment.materialize's native
+  # path went unwired.
+  proof_file="${proof_dir}/investment-materialize-orchestration"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: investment materialize orchestration golden did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

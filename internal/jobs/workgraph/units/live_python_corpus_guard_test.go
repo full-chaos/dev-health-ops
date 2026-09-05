@@ -162,45 +162,25 @@ var excludedGenerators = map[string]struct {
 	missingModule string
 	removeWhen    string
 }{
-	"generate_effort_golden.py": {
-		reason: "imports work_graph.investment.materialize, which transitively " +
-			"imports httpx2; the CI oracle closure is installed --no-deps and " +
-			"pins httpx==0.28.1 but not httpx2, so this raises ModuleNotFoundError",
-		missingModule: "httpx2",
-		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
-	},
-	"generate_repo_effort_allocation_golden.py": {
-		reason: "same import as generate_effort_golden.py above -- both drive " +
-			"functions from work_graph.investment.materialize, so both hit the " +
-			"same missing httpx2 transitive",
-		missingModule: "httpx2",
-		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
-	},
-	"generate_work_unit_label_golden.py": {
-		reason: "same import as generate_effort_golden.py above -- drives " +
-			"_resolve_work_unit_label from work_graph.investment.materialize, " +
-			"same missing httpx2 transitive",
-		missingModule: "httpx2",
-		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
-	},
-	"generate_categorization_prompts_python_golden.py": {
-		reason: "imports categorization_prompts.py, which imports " +
-			"llm.providers.openai, which imports _http.py's httpx2 client " +
-			"helpers directly -- same missing httpx2 transitive as the " +
-			"materialize.py-importing generators above, different import path",
-		missingModule: "httpx2",
-		removeWhen:    "httpx2 is added to ci/requirements-live-python-oracles.txt",
-	},
+	// EMPTIED, CHAOS-4441: every entry here was excluded for the SAME recorded
+	// reason -- "httpx2 is added to ci/requirements-live-python-oracles.txt" --
+	// and this PR adds it (with its own --no-deps transitives httpcore2 and
+	// truststore). TestExcludedGeneratorsAreStillUnrunnable fired on all four
+	// the moment the pin landed, which is precisely the rot check working: the
+	// exclusions had outlived their reason within one commit of it changing.
+	//
+	// The four generators are now guarded by DISCOVERY instead, which is
+	// strictly stronger -- they are executed against live Python rather than
+	// documented as unrunnable. Removing the entries is therefore the fix; a
+	// fifth entry for this PR's own generator would have been the wrong one,
+	// since the whole point of pinning httpx2 was to keep it EXECUTING.
+	//
+	// Previously excluded, all four now discovered: generate_effort_golden.py,
+	// generate_repo_effort_allocation_golden.py, generate_work_unit_label_golden.py,
+	// generate_categorization_prompts_python_golden.py.
+	//
 	// generate_scope_grammar_corpus.py's exclusion (limits missing from the
-	// closure) was removed here CHAOS-4945, once `limits` (and its own
-	// transitives, deprecated and wrapt) were added to
-	// ci/requirements-live-python-oracles.txt. Its explicitCorpusPaths entry
-	// above already named its corpus, so it is guarded by discovery with no
-	// further change -- exactly as this comment on that entry predicted, and
-	// exactly as main's own now-superseded comment on this entry predicted
-	// too ("When limits lands this entry goes and the corpus becomes guarded
-	// with no other change") -- resolved by taking the deletion, not the
-	// comment expansion, since `limits` landing is this PR's own change.
+	// closure) was removed earlier under CHAOS-4945 by the same mechanism.
 }
 
 func TestEveryDiscoverableCorpusStillMatchesLivePython(t *testing.T) {

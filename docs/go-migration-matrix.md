@@ -196,14 +196,14 @@ function directly, even for families whose worker kind is now native:
 | ai_workflow | COMPAT-Python | Python: `work_graph/extractors/ai_workflow.py:212 _extract_ai_workflow_for_day` | CHAOS-4286 |
 | benchmarking | COMPAT-Python | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
-| compounding_risk | COMPAT-Python | Python: `job_daily.py:502 _write_compounding_risk_for_day` | CHAOS-4287 |
+| compounding_risk | NATIVE, post_bridge | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |
 | ic_finalize | COMPAT-Python | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
-| review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
+| review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
 | team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`) |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | COMPAT-Python | Python: `compute_testops.py:355 compute_coverage_metrics_daily` | CHAOS-4284 |
@@ -263,7 +263,7 @@ family that would actually consume this code as a native executor).
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | `dev-hops work-graph build` | COMPAT-Python | `work_graph/runner.py run_work_graph_build`, wired through the SAME `workgraph.build` bridge as the worker path (table below) | CHAOS-4441 |
-| `dev-hops investment materialize` | COMPAT-Python | `work_graph/runner.py run_investment_materialization`, same bridge as `investment.materialize` (table below) | CHAOS-4441 |
+| `dev-hops investment materialize` | COMPAT-Python | `work_graph/runner.py run_investment_materialization`. NOTE: the CLI verb is a SEPARATE entry point from the `investment.materialize` River kind, which is NATIVE (table below) -- the CLI still runs the Python implementation directly, and re-pointing it is CHAOS-4767's follow-up. | CHAOS-4767 |
 
 No `families.json` equivalent exists for these 5 River kinds (`internal/jobs/families.json` does not exist)
 -- the table below is entirely hand-tracked in `WORKGRAPH_INVESTMENT_LEDGER` in
@@ -278,16 +278,24 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | investment.chunk | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.dispatch | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.finalize | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
-| investment.materialize | COMPAT-Python | Python: `work_graph/investment/materialize.py:1169-1854 materialize_investments()`; Go: `internal/jobs/investment/materializecomponent.go` exists (deterministic-half port) but has zero non-test callers -- built, not wired | bridge, `workgraph.go:52-83` (same wiring as workgraph.build) | CHAOS-4441 (Backlog, shared with workgraph.build) |
+| investment.materialize | NATIVE | Go: `internal/jobs/investment/nativeexecutor.go` (implements the same `workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + `categorize` LLM plane + `chwrite` write. Python `materialize.py:1169-1854 materialize_investments()` is retained but no longer reached from the worker path (removal is CHAOS-4767) | river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment` | CHAOS-4441 (cutover landed) |
 | recommendations | NATIVE | see §3 | river, native | CHAOS-4281/CHAOS-3092 (Done) |
-| workgraph.build | COMPAT-Python (narrow native pre/post-step) | Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go's own doc comment) | bridge, `cmd/dev-health-worker/workgraph.go:52-83` -- single `compatibility` executor for every kind, no native branch | CHAOS-4441 (Backlog, unassigned) |
+| workgraph.build | COMPAT-Python (narrow native pre/post-step) | Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go's own doc comment) | bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor` | CHAOS-4924 (six remaining sub-builders + cutover) |
 <!-- END GENERATED WORKGRAPH INVESTMENT MATRIX -->
 
-**Built but unwired:** `internal/jobs/investment/materializecomponent.go` (the deterministic, non-LLM half of
-`investment.materialize`'s per-component assembly) compiles and is unit-tested, but has **zero non-test
-callers** anywhere in the tree -- its own doc comment: "does NOT fetch anything and does NOT write
-anything... the chquery fetch orchestration and chwrite dispatch are the executor-wiring PR that follows
-this one." Tracked by **CHAOS-4441** (Backlog, unassigned).
+~~**Built but unwired:** `internal/jobs/investment/materializecomponent.go` ... has **zero non-test
+callers** anywhere in the tree.~~ **RESOLVED (CHAOS-4441 cutover):** the executor wiring landed.
+`internal/jobs/investment/nativeexecutor.go` implements the same `workgraph.CompatibilityExecutor` seam
+the HTTP bridge implements, `materialize.go` orchestrates fetch -> assembly -> categorize -> write, and
+`addWorkgraphWorker` hands the `investment.materialize` case that executor instead of the bridge.
+Scheduler, reconciler, outbox and the `work_graph_execution_request:<id>` completion fence are unchanged
+by construction -- the seam is the same interface.
+
+**How to check this claim rather than trust it:** `contracts/native-families/v1/native-families.json`'s
+`workgraph` section is AST-derived from `addWorkgraphWorker`'s dispatch switch, and this document's §4
+generator refuses to render when the two disagree. That guard exists because CHAOS-4441 was marked Done
+on 2026-09-03 while every kind still dispatched to Python and no artifact in the tree could contradict
+it.
 
 ## WEBHOOKS
 
@@ -328,9 +336,12 @@ Python functions, untouched by design, no further tracing needed:
 
 ## Known gaps (not fixed in this PR)
 
-- **`internal/jobs/families.json` does not exist** -- workgraph/investment kinds have no machine-readable
-  registry the way daily/remaining metrics families do, so the INVESTMENT/WORK-GRAPH table above cannot be
-  mechanically drift-gated the way SYNC/METRICS are. Adding a `port`-style field to a workgraph/investment
+- ~~**`internal/jobs/families.json` does not exist** -- workgraph/investment kinds have no machine-readable
+  registry, so the INVESTMENT/WORK-GRAPH table cannot be mechanically drift-gated.~~ **PARTLY CLOSED
+  (CHAOS-4441):** the EXECUTOR column is now drift-gated -- `native-families.json` grew a `workgraph`
+  section AST-derived from the dispatch switch, and §4's generator fails when the curated ledger
+  disagrees with it. Still hand-maintained and ungated: the citation, route-transport and ticket columns.
+  Adding a `port`-style field to a workgraph/investment
   registry file is proposed as a follow-up ticket, not done here (a Go schema change, out of scope for a
   docs+tooling change).
 - **`gitlab` `incidents` cross-contract inconsistency** -- see the callout under SYNC above.

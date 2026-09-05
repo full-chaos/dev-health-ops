@@ -9,6 +9,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -64,6 +67,22 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// THE CUTOVER (CHAOS-4441). investment.materialize's compute is native Go
+	// from here; workgraph.build's is not yet (CHAOS-4924 carries its six
+	// remaining sub-builders), so the two kinds now take DIFFERENT executors
+	// and `compatibility` is no longer the single executor for every kind.
+	//
+	// A ClickHouse failure REFUSES the family rather than falling back to the
+	// bridge. The fallback would be the more "available" choice and the wrong
+	// one: it would silently return the family to Python compute, so the
+	// cutover would appear complete while production kept running the old
+	// plane -- exactly the state this ticket exists to end, and one nothing
+	// downstream could detect. Same reasoning as workgraphBuildPreSteps'.
+	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, logger)
+	if nativeErr != nil {
+		return workerFamily{}, nativeErr
+	}
+
 	idempotency, err := newOperationalIdempotency(postgresDatabase.pools.Domain, observer)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -77,7 +96,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
-		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, dependencies, buildPreSteps, buildPostSteps); err != nil {
+		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, nativeInvestment, dependencies, buildPreSteps, buildPostSteps); err != nil {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		registered = append(registered, spec)
@@ -221,7 +240,10 @@ func buildPreStepOrder() []string {
 	return []string{"issue_pr_links"}
 }
 
-func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
+// addWorkgraphWorker routes each kind to its executor. `executor` is the
+// Python bridge and still serves workgraph.build and the three dead investment
+// kinds; `nativeInvestment` serves investment.materialize only.
+func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, nativeInvestment workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
 		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps)
@@ -234,7 +256,11 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 		}
 		return river.AddWorkerSafely(workers, a)
 	case jobcontract.KindInvestmentMaterialize:
-		h, err := workgraph.NewMaterializeHandler(store, executor)
+		// NATIVE. Refuse rather than fall back -- see buildWorkgraphWorker.
+		if nativeInvestment == nil {
+			return errWorkerDependencyUnavailable
+		}
+		h, err := workgraph.NewMaterializeHandler(store, nativeInvestment)
 		if err != nil {
 			return err
 		}
@@ -276,4 +302,47 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 	default:
 		return errWorkerDependencyUnavailable
 	}
+}
+
+// buildNativeInvestmentExecutor constructs the native investment.materialize
+// executor, or nil when this worker process is not running that kind.
+//
+// Returning nil for an unselected kind is deliberate and mirrors
+// workgraphBuildPreSteps: a process configured for the workgraph queue alone
+// takes no ClickHouse dependency it will never use, so a ClickHouse outage does
+// not refuse a family that would not have touched it. addWorkgraphWorker turns
+// a nil into a refusal at the one place it matters -- the materialize case.
+func buildNativeInvestmentExecutor(
+	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger,
+) (workgraph.CompatibilityExecutor, error) {
+	materializeSelected := false
+	for _, spec := range specs {
+		if spec.Kind == jobcontract.KindInvestmentMaterialize {
+			materializeSelected = true
+			break
+		}
+	}
+	if !materializeSelected {
+		return nil, nil
+	}
+
+	connection, connectionErr := clickhousestore.Open(
+		context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+	)
+	if connectionErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	reader, readerErr := chquery.NewReader(connection)
+	if readerErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	writer, writerErr := chwrite.NewWriter(connection)
+	if writerErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	executor, executorErr := investment.NewNativeExecutor(reader, writer, logger)
+	if executorErr != nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	return executor, nil
 }

@@ -359,3 +359,81 @@ func TestWriteSupersessionsSubMillisecondWritesStayDistinct(t *testing.T) {
 }
 
 func strPtr(value string) *string { return &value }
+
+// TestWriteTokenUsageAgainstRealClickHouse is the real-driver proof for the
+// llm_token_usage writer CHAOS-4441's cutover added.
+//
+// A mock scanner cannot catch what this catches. The precedent is CHAOS-4977
+// step 7: work_unit_investments' distribution columns are Map(String, Float64)
+// while the Go reader scanned them as *string, and every unit test passed
+// because every unit test used a fake scanner that happily accepted the wrong
+// Go type -- the divergence appeared only against a real driver. This writer
+// sends uint64 into three columns and a time.Time into a DateTime64, so it
+// carries the same exposure.
+func TestWriteTokenUsageAgainstRealClickHouse(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+
+	written, err := writer.WriteTokenUsage(ctx, testOrgID, TokenUsageRecord{
+		RunID:        "11111111-1111-4111-8111-111111111111",
+		Provider:     "openai",
+		Model:        "gpt-5-nano",
+		Source:       TokenUsageSourceInvestmentMaterialize,
+		InputTokens:  1200,
+		OutputTokens: 340,
+		Calls:        7,
+		ComputedAt:   time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("WriteTokenUsage: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("wrote %d rows, want 1", written)
+	}
+
+	if got := scanUint64(t, ctx, conn,
+		"SELECT input_tokens FROM llm_token_usage WHERE org_id = ? AND source = ?",
+		testOrgID, TokenUsageSourceInvestmentMaterialize); got != 1200 {
+		t.Errorf("input_tokens: got %d, want 1200", got)
+	}
+	if got := scanUint64(t, ctx, conn,
+		"SELECT calls FROM llm_token_usage WHERE org_id = ? AND source = ?",
+		testOrgID, TokenUsageSourceInvestmentMaterialize); got != 7 {
+		t.Errorf("calls: got %d, want 7", got)
+	}
+	// use_case defaults to "legacy" (llm_token_usage.py:23) when the caller
+	// leaves it empty, which the materializer always does.
+	if got := scanString(t, ctx, conn,
+		"SELECT use_case FROM llm_token_usage WHERE org_id = ? AND source = ?",
+		testOrgID, TokenUsageSourceInvestmentMaterialize); got != "legacy" {
+		t.Errorf("use_case: got %q, want %q", got, "legacy")
+	}
+}
+
+// TestWriteTokenUsageSkipsAnAllZeroRow pins the early return
+// write_llm_token_usage makes (llm_token_usage.py:33-34), which a port would
+// naturally drop as a micro-optimisation.
+//
+// It is not one. Consumers SUM this table, so a zero-valued row from a run that
+// made no LLM calls -- every unit skipped as unchanged, i.e. the steady state --
+// would shift call-count averages for every reader while looking like data.
+func TestWriteTokenUsageSkipsAnAllZeroRow(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+
+	written, err := writer.WriteTokenUsage(ctx, testOrgID, TokenUsageRecord{
+		RunID:      "22222222-2222-4222-8222-222222222222",
+		Provider:   "openai",
+		Model:      "gpt-5-nano",
+		Source:     TokenUsageSourceInvestmentMaterialize,
+		ComputedAt: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("WriteTokenUsage: %v", err)
+	}
+	if written != 0 {
+		t.Fatalf("wrote %d rows, want 0 -- the all-zero skip is behaviour, not an optimisation", written)
+	}
+	if got := scanUint64(t, ctx, conn,
+		"SELECT count() FROM llm_token_usage WHERE org_id = ?", testOrgID); got != 0 {
+		t.Errorf("row count: got %d, want 0", got)
+	}
+}

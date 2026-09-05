@@ -242,10 +242,27 @@ jobs:
           docker run --rm --platform linux/arm64 \
             ghcr.io/full-chaos/arc-runner:check \
             sh -c 'command -v gcc'
+          # CHAOS-5166: on the x64+QEMU fallback leg (SELF_HOSTED_RUNNERS
+          # disabled, or a fork PR), this job's own setup-go step installs
+          # the HOST's (amd64) Go toolchain -- the mounted GOROOT above is
+          # that amd64 binary, not an arm64 one. Since the container's
+          # rootfs is arm64 but the mounted `go` binary is a native amd64
+          # ELF, the KERNEL executes it NATIVELY on the x64 host (no QEMU
+          # involved for the go binary itself -- QEMU only translates
+          # foreign-ARCH ELF binaries, and this one matches the host).
+          # cgo then defaults its target arch to the go BINARY's own
+          # native GOARCH (amd64) unless told otherwise, and asks THIS
+          # CONTAINER's gcc -- which really is arm64-native, matching the
+          # image's rootfs -- to compile with amd64 flags (`-m64`), which
+          # an arm64 gcc does not recognise. `GOARCH=arm64` makes cgo
+          # target the container's actual gcc correctly; harmless on the
+          # native-arm64 ARC leg, where the mounted go binary already is
+          # arm64 and this was already the default.
           docker run --rm -i --platform linux/arm64 \
             -v "$(go env GOROOT)":/usr/local/go:ro \
             -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             -e CGO_ENABLED=1 \
+            -e GOARCH=arm64 \
             -e HOME=/tmp \
             ghcr.io/full-chaos/arc-runner:check \
             sh <<'RUNSH'

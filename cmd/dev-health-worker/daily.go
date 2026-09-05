@@ -250,7 +250,7 @@ func buildDailyWorker(
 				// test that matters now calls dailyNativeFamilyRegistrations
 				// directly and asserts on its actual return value, not on
 				// source text.
-				nativeFamilies, postBridgeFamilies, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				nativeFamilies, postBridgeFamilies, _ := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
@@ -276,9 +276,14 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
-				// CHAOS-4290: RUN-scoped native families. Registering an empty
-				// map is a no-op, so a build with no finalize executor behaves
-				// exactly as before this capability existed.
+				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
+				// is a pure function (see the partition case's comment on why the
+				// drift test calls it directly), so calling it again here is safe
+				// and keeps each case owning the maps it actually registers --
+				// the partition arm's locals are out of scope in this one.
+				// Registering an empty map is a no-op, so a build with no finalize
+				// executor behaves exactly as before this capability existed.
+				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				handler.SetNativeFinalizeFamilies(finalizeFamilies)
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsFinalizeArgs](
 					registry, spec, handler, dailyDependencies,

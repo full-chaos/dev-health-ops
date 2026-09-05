@@ -369,7 +369,7 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
 // control: pins the exact 5-native/2-compat remaining split and the 9
-// native + 1 post_bridge daily split this page's reconciliation work found,
+// native + 4 post_bridge daily split,
 // so a future accidental wiring change is caught here even if someone forgot
 // to regenerate the artifact (that case is ALSO caught by the drift test
 // above, but this one names the expected shape explicitly for a reviewer).
@@ -388,10 +388,37 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-4279: review_edges is pre_bridge, not post_bridge -- both its
+		// inputs are RAW SYNC tables, not another daily family's output, so
+		// nothing in this partition has to run before it.
+		"review_edges",
 	}
-	wantDailyPostBridge := []string{"work_item_state"}
+	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
+	// post_bridge -- all three read work_item_team_attributions, which the
+	// still-Python work_item_attribution family writes in the same partition.
+	// CHAOS-4287: compounding_risk is post_bridge for a DIFFERENT reason from
+	// the three above -- not a stale attribution snapshot, but execution order.
+	// Its input repo_metrics_daily is written by repo_user_commit in the SAME
+	// partition, and computeNativeFamilies walks families in SORTED order,
+	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
+	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
+	// those three, does not touch this one.
+	wantDailyPostBridge := []string{
+		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
+	}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
+	// The cardinality check the Remaining half above already had, and this half
+	// did not. Without it these two assertions are one-way SUBSET checks: they
+	// prove every EXPECTED family has the expected verdict, and say nothing
+	// about families that are present and unexpected. Codex r1 (P3, EXECUTED)
+	// demonstrated the consequence -- this branch added work_item and
+	// work_item_estimate as post_bridge and the stale test still passed, so a
+	// test calling itself an "exact split" certified a split it had never seen.
+	if len(artifact.Daily) != len(wantDailyNative)+len(wantDailyPostBridge) {
+		t.Fatalf("expected exactly %d daily families, got %d: %v",
+			len(wantDailyNative)+len(wantDailyPostBridge), len(artifact.Daily), artifact.Daily)
+	}
 }
 
 func assertExecutorSet(t *testing.T, got map[string]string, names []string, want string) {

@@ -56,7 +56,7 @@ func runExplainForWiring(t *testing.T, client *capturingBreakdownClient, opts Ex
 	if opts.OrgID == "" {
 		opts.OrgID = "org-golden-4977"
 	}
-	if _, err := reader.ExplainInvestmentMix(context.Background(), nil, CompleteInvestmentMixExplanation, opts); err != nil {
+	if _, err := reader.ExplainInvestmentMix(context.Background(), nil, availabilityFromIsLLMAvailable, CompleteInvestmentMixExplanation, opts); err != nil {
 		t.Fatalf("ExplainInvestmentMix: %v", err)
 	}
 }

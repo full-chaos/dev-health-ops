@@ -246,6 +246,23 @@ type DailyMetricsFinalizeSweepObserver interface {
 	ObserveDailyMetricsFinalizeSweep(outcome string, count int) error
 }
 
+// DailyMetricsBlockedRunObserver is the narrow capability
+// PostgresStore.ReconcileBlockedRuns depends on (CHAOS-5040/CHAOS-4970): a
+// daily_metrics_run holding a 'failed_permanent' partition with nothing
+// dispatchable left can never reach CompleteFinalize, so its completion
+// fence is never written and every handoff behind it -- workgraph.build,
+// then investment.materialize -- waits forever while still reading
+// 'pending'. "marked" counts runs a reconcile pass newly flagged; "cleared"
+// counts runs whose flag it removed because the predicate stopped holding
+// (an operator redrive resetting failed_permanent partitions is what makes
+// that happen). Both are transition counts and compose correctly across
+// the per-organization passes that emit them. A nil observer makes this a
+// silent no-op, matching every other observer in this package: telemetry
+// must never gate durable state.
+type DailyMetricsBlockedRunObserver interface {
+	ObserveDailyMetricsBlockedRun(outcome string, count int) error
+}
+
 // DailyMetricsFinalizeLedgerRepairObserver is the narrow capability a
 // CHAOS-4409 finalize-ledger bulk repair depends on: only the repair itself
 // knows how many daily/finalize metric_compatibility_executions rows it

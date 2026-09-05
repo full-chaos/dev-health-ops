@@ -121,7 +121,7 @@ this:
 | Credential class | Route(s) | Exempted from the path prefix? |
 | --- | --- | --- |
 | `internal_svc_worker_token` (`svc_worker_*`) | none found (see below) | **No** — no HTTP validator exists for it anywhere, so if one were ever wired up at a non-`/api/v1/internal/acr/` path it would silently degrade to anonymous first. |
-| `worker_operational_bridge_token` (`WORKER_OPERATIONAL_BRIDGE_TOKEN`/`WORKER_METRIC_REPAIR_TOKEN`/`WORKER_WORKGRAPH_REPAIR_TOKEN`) | `/api/internal/worker-operational`, `/internal/worker`, `/internal/worker/workgraph/v1`, `/api/internal/worker-sync` | **No.** None of these paths start with `/api/v1/internal/acr/`. |
+| `worker_operational_bridge_token` (`WORKER_OPERATIONAL_BRIDGE_TOKEN`/`WORKER_METRIC_REPAIR_TOKEN`) | `/api/internal/worker-operational`, `/internal/worker`, `/internal/worker/workgraph/v1`, `/api/internal/worker-sync` | **No.** None of these paths start with `/api/v1/internal/acr/`. |
 | `external_push_ingest_token` (`fcpush_*`) | External Push data-plane endpoints | **No.** The module docstring for `external_ingest/auth.py` says as much: *"OrgIdMiddleware only understands user JWTs and takes its anonymous pass-through branch for an `fcpush_...` bearer"* — meaning the decode attempt still happens, it just fails harmlessly. |
 
 Only `internal_svc_acr_token` (`svc_acr_*`) got the fix. The fix is a path

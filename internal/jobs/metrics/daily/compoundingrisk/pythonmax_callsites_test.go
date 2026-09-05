@@ -1,9 +1,14 @@
 package compoundingrisk
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"os"
-	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -31,16 +36,22 @@ import (
 func TestEveryPythonMaxCallSiteRejectsGoMax(t *testing.T) {
 	nan := math.NaN()
 
-	// Behavioural coverage, one entry per call site in compute.go. `line` is
-	// documentation for the reader; the COUNT is what the guard below enforces.
+	// Behavioural coverage, one entry per call site. `line` is documentation
+	// for the reader; `fn` and `calls` are what the guard below enforces --
+	// they name the ENCLOSING FUNCTION and how many pythonMax calls it makes,
+	// and are compared against the set the parser finds in the real source.
 	covered := []struct {
 		name  string
 		line  string
+		fn    string
+		calls int
 		check func(t *testing.T)
 	}{
 		{
-			name: "normalizeAgainstReference",
-			line: "compute.go:48 -- pythonMax(0.0, *value)",
+			name:  "normalizeAgainstReference",
+			fn:    "compute.go:normalizeAgainstReference",
+			calls: 1,
+			line:  "compute.go:48 -- pythonMax(0.0, *value)",
 			check: func(t *testing.T) {
 				// CPython: max(0.0, nan) -> 0.0. Go max/math.Max -> NaN, which
 				// then propagates through clamp01 into the score.
@@ -59,8 +70,10 @@ func TestEveryPythonMaxCallSiteRejectsGoMax(t *testing.T) {
 			},
 		},
 		{
-			name: "ownership concentration loop",
-			line: "compute.go:70 -- pythonMax(highest, candidate)",
+			name:  "ownership concentration loop",
+			fn:    "compute.go:normalizeOwnership",
+			calls: 1,
+			line:  "compute.go:70 -- pythonMax(highest, candidate)",
 			check: func(t *testing.T) {
 				record := Compute(
 					goldenDay(), "repo", "org",
@@ -76,8 +89,10 @@ func TestEveryPythonMaxCallSiteRejectsGoMax(t *testing.T) {
 			},
 		},
 		{
-			name: "ComplexityDeltaRatio denominator floor",
-			line: "compute.go:183 -- pythonMax(firstHalf, 1.0)",
+			name:  "ComplexityDeltaRatio denominator floor",
+			fn:    "compute.go:ComplexityDeltaRatio",
+			calls: 1,
+			line:  "compute.go:183 -- pythonMax(firstHalf, 1.0)",
 			check: func(t *testing.T) {
 				// CPython: max(nan, 1.0) keeps the FIRST operand, because
 				// `1.0 > nan` is False -- so the NaN propagates and the ratio is
@@ -116,32 +131,251 @@ func TestEveryPythonMaxCallSiteRejectsGoMax(t *testing.T) {
 		})
 	}
 
-	// THE CLASS GUARD. Count the call sites in the source and require this test
-	// to cover all of them. A fourth call site added later fails here until
-	// someone decides what CPython does at it -- which is exactly the step
-	// skipped twice already.
-	source, err := os.ReadFile("compute.go")
+	// THE CLASS GUARD, over the whole PACKAGE and by call-site IDENTITY.
+	//
+	// This was a regex over compute.go comparing COUNTS, and the #2230
+	// confirmation round showed three ways past it: a call site in another file
+	// of the package was never looked at; `pythonMax /* c */ (a, b)` is legal
+	// Go the pattern cannot match, because comments are whitespace to the
+	// scanner and not to a regex; and a count comparison cannot tell a covered
+	// site swapped for a hidden one from no change at all.
+	//
+	// Parsing closes all three at once, and closes them by construction rather
+	// than by adding three more patterns: the compiler's own scanner decides
+	// what a call is, so comments, spacing and line breaks are irrelevant, and
+	// comparing SETS keyed by enclosing function -- not a total -- means a swap
+	// is a set difference, not a wash.
+	found := pythonMaxCallSites(t)
+	want := map[string]int{}
+	for _, callSite := range covered {
+		want[callSite.fn] += callSite.calls
+	}
+
+	// Positive control on the parser itself. A guard whose enumerator silently
+	// returns nothing passes vacuously, which is the failure mode that lets a
+	// broken guard look identical to a clean package.
+	if len(found) == 0 {
+		t.Fatalf("the parser found no pythonMax call sites at all -- the ENUMERATOR is broken, "+
+			"not the code; this test covers %d", len(covered))
+	}
+
+	for _, key := range sortedKeys(found, want) {
+		switch {
+		case want[key] == 0:
+			t.Errorf(
+				"%s calls pythonMax %d time(s) and this test does not cover it. A call site "+
+					"nobody decided CPython's behaviour for is how the same defect was found at "+
+					"three different sites (r1, r2, r3 on #2230). Add it to `covered`, with what "+
+					"CPython's max() does there.", key, found[key])
+		case found[key] == 0:
+			t.Errorf(
+				"this test claims to cover %d pythonMax call(s) in %s but the source has none. "+
+					"Either the call moved -- in which case its new home is UNGUARDED -- or the "+
+					"entry is stale.", want[key], key)
+		case found[key] != want[key]:
+			t.Errorf(
+				"%s makes %d pythonMax call(s), this test covers %d. A second call added to an "+
+					"already-covered function is a NEW call site with its own CPython question.",
+				key, found[key], want[key])
+		}
+	}
+}
+
+// pythonMaxCallSites parses EVERY non-test .go file in this package and returns
+// the number of direct pythonMax calls per enclosing function, keyed
+// "<file>:<function>".
+//
+// Package-wide, because scoping the guard to compute.go made "put the fourth
+// call in a new file" a silent bypass -- and adding a file to a package is an
+// ordinary thing to do, not an attack.
+//
+// The declaration `func pythonMax(...)` needs no exclusion here: it is a
+// FuncDecl and never a CallExpr, so it cannot be miscounted. The old regex
+// needed a subtraction to avoid counting it, and that subtraction was itself a
+// place to be wrong.
+func pythonMaxCallSites(t *testing.T) map[string]int {
+	t.Helper()
+
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("read compute.go: %v", err)
+		t.Fatalf("read package directory: %v", err)
 	}
-	// Calls only: the declaration is `func pythonMax(`, excluded by requiring
-	// no `func ` immediately before the name.
-	calls := regexp.MustCompile(`(?m)[^c\w]pythonMax\(`).FindAllIndex(source, -1)
-	declaration := regexp.MustCompile(`func pythonMax\(`).FindAllIndex(source, -1)
-	callCount := len(calls) - len(declaration)
-	// Positive control on the counter itself: if the regex stopped matching,
-	// zero call sites would make the comparison below pass vacuously for a
-	// test that covers three.
-	if callCount <= 0 {
-		t.Fatalf("counted %d pythonMax call sites -- the counter is broken, not the code", callCount)
+	fileSet := token.NewFileSet()
+	sites := map[string]int{}
+	parsed := 0
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		parsed++
+
+		for _, declaration := range file.Decls {
+			switch typed := declaration.(type) {
+			case *ast.FuncDecl:
+				countPythonMaxCalls(sites, name+":"+functionLabel(typed), typed)
+			case *ast.GenDecl:
+				// Package-level initialisers, keyed by the DECLARED NAME rather
+				// than one shared "<package-level>" bucket.
+				//
+				// A shared bucket would let two package-level call sites swap --
+				// one removed, a different one added, the bucket's total
+				// unchanged -- and that is precisely the "swap hiding under a
+				// total" this guard exists to close, only at package-level
+				// rather than function-level granularity. There are no such
+				// sites today, which is exactly why it was cheap to close now
+				// instead of leaving a documented hole for someone to walk into.
+				// (lane-gate-rounds peer read on #2230.)
+				attributed := 0
+				for _, spec := range typed.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for index, expression := range value.Values {
+						attributed += countPythonMaxCalls(
+							sites, name+":"+valueSpecLabel(value, index), expression)
+					}
+				}
+				// GUARD THE GUARD. If a pythonMax call ever lives somewhere in a
+				// GenDecl that the ValueSpec walk above does not reach, the two
+				// counts disagree and this says so, rather than silently
+				// dropping the call and reporting a clean package.
+				total := countPythonMaxCalls(map[string]int{}, "", typed)
+				if total != attributed {
+					t.Errorf(
+						"%s: a declaration block contains %d pythonMax call(s) but only %d could "+
+							"be attributed to a declared name. The enumerator does not reach that "+
+							"position, so it cannot be trusted to have found every call site.",
+						name, total, attributed)
+				}
+			}
+		}
+
+		// Every mention of pythonMax must be either its own declaration or the
+		// callee of a direct call. Anything else -- `f := pythonMax` and later
+		// `f(a, b)`, passing it as an argument, storing it in a struct field --
+		// makes the eventual call invisible to this enumerator. That form is
+		// REFUSED rather than missed: a guard that cannot see a construct should
+		// say so, not report a clean package.
+		//
+		// Nothing here does it today. This exists so that the day something
+		// starts to, the guard fails loudly instead of going quietly blind --
+		// which is the failure mode the regex version had at three separate
+		// call sites.
+		callee := map[*ast.Ident]bool{}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.CallExpr:
+				if identifier, ok := typed.Fun.(*ast.Ident); ok {
+					callee[identifier] = true
+				}
+			case *ast.FuncDecl:
+				callee[typed.Name] = true
+			}
+			return true
+		})
+		ast.Inspect(file, func(node ast.Node) bool {
+			identifier, ok := node.(*ast.Ident)
+			if !ok || identifier.Name != "pythonMax" || callee[identifier] {
+				return true
+			}
+			t.Errorf(
+				"%s mentions pythonMax at %s in a position that is neither its declaration nor a "+
+					"direct call. This guard enumerates direct calls; an indirect call through a "+
+					"variable or field is invisible to it, so that form is not allowed here -- "+
+					"call pythonMax directly.",
+				name, fileSet.Position(identifier.Pos()))
+			return true
+		})
 	}
-	if callCount != len(covered) {
-		t.Errorf(
-			"compute.go has %d pythonMax call site(s) but this test covers %d. "+
-				"A call site nobody decided CPython's behaviour for is how the same defect "+
-				"was found three times at three different sites (r1, r2, r3 on #2230). "+
-				"Add the new site to `covered`, with what CPython does there.",
-			callCount, len(covered),
-		)
+
+	if parsed == 0 {
+		t.Fatal("no non-test .go files found in the package directory -- the enumerator is " +
+			"looking in the wrong place, so any result it returns is meaningless")
 	}
+	return sites
+}
+
+// functionLabel names a declaration the way a reader would: "Method" for a
+// plain function, "Type.Method" for one with a receiver, so two same-named
+// methods on different types cannot collide into one key.
+func functionLabel(function *ast.FuncDecl) string {
+	if function.Recv == nil || len(function.Recv.List) == 0 {
+		return function.Name.Name
+	}
+	return receiverTypeName(function.Recv.List[0].Type) + "." + function.Name.Name
+}
+
+// countPythonMaxCalls adds every direct pythonMax call under node to sites
+// under label, and returns how many it found.
+func countPythonMaxCalls(sites map[string]int, label string, node ast.Node) int {
+	found := 0
+	ast.Inspect(node, func(inner ast.Node) bool {
+		call, ok := inner.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "pythonMax" {
+			found++
+			if label != "" {
+				sites[label]++
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// valueSpecLabel names a package-level initialiser the way its declaration
+// reads: `var x = ...` becomes "var x". Names and values line up one-to-one in
+// the ordinary case; the fallbacks cover `var a, b = f()` (fewer values than
+// names) and any shape where they do not correspond.
+func valueSpecLabel(value *ast.ValueSpec, index int) string {
+	switch {
+	case index < len(value.Names):
+		return "var " + value.Names[index].Name
+	case len(value.Names) > 0:
+		return "var " + value.Names[0].Name
+	default:
+		return "<package-level>"
+	}
+}
+
+func receiverTypeName(expression ast.Expr) string {
+	switch typed := expression.(type) {
+	case *ast.StarExpr:
+		return receiverTypeName(typed.X)
+	case *ast.Ident:
+		return typed.Name
+	case *ast.IndexExpr: // generic receiver, e.g. Type[T]
+		return receiverTypeName(typed.X)
+	case *ast.IndexListExpr:
+		return receiverTypeName(typed.X)
+	default:
+		return fmt.Sprintf("%T", expression)
+	}
+}
+
+// sortedKeys returns the union of both maps' keys in a stable order, so a
+// failure lists every discrepancy in the same sequence every run.
+func sortedKeys(found, want map[string]int) []string {
+	union := map[string]bool{}
+	for key := range found {
+		union[key] = true
+	}
+	for key := range want {
+		union[key] = true
+	}
+	keys := make([]string, 0, len(union))
+	for key := range union {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -30,6 +30,16 @@ import (
 // VALID path through the real mock provider at all, by design).
 type CompleteFunc func(ctx context.Context, requestedProvider, requestedModel, fullPrompt string) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error)
 
+// AvailabilityFunc is IsLLMAvailable's own signature, extracted as a type
+// for the same reason CompleteFunc is (CHAOS-5006 PR3): ExplainInvestmentMix
+// takes one as a parameter instead of calling the package-level
+// IsLLMAvailable directly, so a real caller with org context can pass a
+// closure over IsLLMAvailableForOrg (org BYO consulted) while every
+// existing test keeps passing IsLLMAvailable itself (org-unaware,
+// unchanged) -- zero behavior change for any caller that doesn't
+// construct a new closure.
+type AvailabilityFunc func(ctx context.Context, requestedProvider, orgID string) bool
+
 // ExplainInvestmentMixOptions bundles explain_investment_mix's parameters
 // (investment_mix_explain.py:177-187).
 //
@@ -173,7 +183,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 // explain.py:532-554), so a nil writer (or either write itself failing)
 // degrades to "did not persist" rather than failing the request, exactly
 // matching that swallow-everything contract.
-func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWriter, complete CompleteFunc, opts ExplainInvestmentMixOptions) (InvestmentMixExplanation, error) {
+func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWriter, available AvailabilityFunc, complete CompleteFunc, opts ExplainInvestmentMixOptions) (InvestmentMixExplanation, error) {
 	theme := opts.Theme
 	subcategory := opts.Subcategory
 	if theme != "" && !units.IsTheme(theme) {
@@ -186,7 +196,7 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		theme = units.ThemeOf(subcategory)
 	}
 
-	if !IsLLMAvailable(opts.LLMProvider, opts.OrgID) {
+	if !available(ctx, opts.LLMProvider, opts.OrgID) {
 		return llmUnavailableExplanation(), nil
 	}
 

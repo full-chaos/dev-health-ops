@@ -119,12 +119,18 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # discovered, 44 -> 45 will run): TestResolveProviderKindForOrg_
     # UsesRealOrgSettings proves the org-BYO precedence end-to-end against
     # llmorgsettings.Store over a real Postgres container.
+    # CHAOS-4924 added internal/jobs/workgraph/operationaledges (45 -> 46
+    # discovered, 45 -> 46 will run): the native operational-incident/
+    # flag-guards edge producer's five Testcontainers-backed tests (the
+    # org-70d529e0 and synthetic golden replays, plus three targeted
+    # regression tests) run against a real migration chain, same
+    # container-per-test shape as internal/jobs/workgraph/edges.
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
-    # CURRENT TOTAL: 45. Adding one -tags=integration package bumps every
+    # CURRENT TOTAL: 46. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "45 package(s) discovered, 0 denylisted, 45 will run" in result.stdout
+    assert "46 package(s) discovered, 0 denylisted, 46 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

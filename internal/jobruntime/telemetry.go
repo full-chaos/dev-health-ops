@@ -529,8 +529,16 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 }
 
 // DailyMetricsCompatRetryDecision is the bounded durable outcome of one
-// ambiguous metrics.daily compatibility-bridge execution (CHAOS-4319). The
-// Go side only ever observes "persisted_failed" -- the point PartitionHandler
+// ambiguous metrics.daily compatibility-bridge execution (CHAOS-4319), WIDENED
+// (CHAOS-5078 codex confirmation pass) to also cover a pre_bridge NATIVE
+// family's own durable release-with-reason decision
+// (DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete) --
+// nothing about the compatibility bridge is involved in that one trigger,
+// but "durably released with a bounded reason matching the SQL-visible
+// failure_reason column" is this type's whole shape regardless of what
+// triggered it, so a second, parallel counter would only fragment the same
+// signal an operator already knows how to read here. The Go side only ever
+// observes "persisted_failed" -- the point PartitionHandler
 // gives up retrying a ledger row stuck at "ambiguous" and durably records a
 // failed_permanent partition instead of letting River discard the job with
 // no trace. "retry_authorized" is the Python bridge's mirror label for the
@@ -574,6 +582,18 @@ const (
 	// operator changes something) is distinguishable from ordinary
 	// transient resource pressure on this same shared counter.
 	DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic DailyMetricsCompatRetryDecision = "released_resource_exhausted_deterministic"
+	// DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete
+	// (CHAOS-5078 codex confirmation pass) is NOT a compatibility-bridge-
+	// triggered release like its siblings above -- a pre_bridge native
+	// family failed AFTER already writing rows (ErrPartialWrite) this
+	// partition, and PartitionHandler.Work released it 'failed' with
+	// jobruntime.ReasonPreBridgeFamilyIncomplete. Reusing this SAME counter
+	// rather than inventing a parallel one: "durably released with a bounded
+	// reason, matching the SQL-visible failure_reason column" is exactly
+	// this decision type's whole purpose (see the type's own doc comment,
+	// widened by this entry to cover non-compat-bridge triggers too) --
+	// only the TRIGGER differs, not what an operator needs from the signal.
+	DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete DailyMetricsCompatRetryDecision = "released_pre_bridge_family_incomplete"
 )
 
 func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
@@ -584,6 +604,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 		DailyMetricsCompatRetryDecisionReleasedResourceExhausted,
 		DailyMetricsCompatRetryDecisionReleasedProcessSignaled,
 		DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic,
+		DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete,
 	}
 }
 
@@ -633,9 +654,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // carries the same consequence: unregistered means every observation for it is
 // refused, and the family's absence becomes invisible rather than counted.
 // "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), "benchmarking"
-// (CHAOS-4288), "ai_impact" (CHAOS-4280), and "work_graph_edges" (CHAOS-4286)
-// all added themselves the same way as the families listed above.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges"}
+// (CHAOS-4288), "ai_impact" (CHAOS-4280), "work_graph_edges" (CHAOS-4286 part
+// A), and "ai_workflow" (CHAOS-4286 part B) all added themselves the same
+// way as the families listed above.
+//
+// "work_item_attribution" (CHAOS-5078) moved to pre_bridge and added itself
+// the same way, included here from merging main forward.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
@@ -1109,6 +1134,24 @@ type MetricsCollector struct {
 	// cannot distinguish a refused executor from a quiet day. This is the
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
+
+	// Native release_impact compute (CHAOS-4296/CHAOS-4258). Same rationale as
+	// the DORA counters above: the HTTP compatibility bridge could only report
+	// a status code, so going native is what makes the work itself observable.
+	//
+	// releaseImpactDegradedMissingTelemetry is CHAOS-4258's whole point: before
+	// it, a day with deployments but no telemetry and a genuinely quiet day
+	// were BOTH rows_written=0, indistinguishable from the outside. It stays an
+	// aggregate total rather than per-org -- org_id is an unbounded label in
+	// this codebase's metrics (every other label here is a small closed set:
+	// family, reason, outcome, pool, provider) and would turn one counter into
+	// unbounded cardinality; per-org detail belongs to the structured log the
+	// executor also emits, not this series.
+	releaseImpactPartitions               uint64
+	releaseImpactDays                     uint64
+	releaseImpactRowsWritten              uint64
+	releaseImpactEmptyOutcomes            uint64
+	releaseImpactDegradedMissingTelemetry uint64
 
 	// workItemAttributionRefusals counts native work item attribution
 	// backstop construction refusals BY REASON, for the same reason
@@ -1956,10 +1999,15 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	return nil
 }
 
-// ObserveDailyMetricsCompatRetry records one ambiguous_refused metrics.daily
-// compatibility-bridge execution's terminal disposition (CHAOS-4319). See
-// DailyMetricsCompatRetryDecision for why Go only ever reports
-// "persisted_failed".
+// ObserveDailyMetricsCompatRetry records one durable release-with-reason
+// decision for a metrics.daily partition -- originally scoped to the
+// compatibility-bridge's ambiguous_refused terminal disposition (CHAOS-4319)
+// and its CHAOS-4543 non-terminal released_* siblings, widened (CHAOS-5078
+// codex confirmation pass) to also accept
+// DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete, whose
+// trigger is a pre_bridge NATIVE family, not the compatibility bridge. See
+// DailyMetricsCompatRetryDecision's own doc comment for the full bounded
+// vocabulary this accepts and why Go never reports "retry_authorized".
 func (collector *MetricsCollector) ObserveDailyMetricsCompatRetry(decision DailyMetricsCompatRetryDecision) error {
 	if !slices.Contains(dailyMetricsCompatRetryDecisions(), decision) {
 		return errors.New("daily metrics compat retry decision is not registered")
@@ -2421,6 +2469,44 @@ func (collector *MetricsCollector) ObserveDORAPartition(
 	if rowsWritten == 0 {
 		collector.doraEmptyOutcomes++
 	}
+	return nil
+}
+
+// ObserveReleaseImpactPartition records one completed native release_impact
+// partition (CHAOS-4296): days it covered across every trigger day, and rows
+// written. Mirrors ObserveDORAPartition's reasoning -- a rows-written counter
+// alone flattens a broken cutover and a quiet day into the same line, so the
+// empty-outcome counter below is tracked separately.
+func (collector *MetricsCollector) ObserveReleaseImpactPartition(days int, rowsWritten int) error {
+	if days < 0 || rowsWritten < 0 {
+		return errors.New("release impact partition counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.releaseImpactPartitions++
+	collector.releaseImpactDays += uint64(days)
+	collector.releaseImpactRowsWritten += uint64(rowsWritten)
+	if rowsWritten == 0 {
+		collector.releaseImpactEmptyOutcomes++
+	}
+	return nil
+}
+
+// ObserveReleaseImpactDegradedMissingTelemetry records CHAOS-4258's degraded
+// state: deployments existed for the (org, day) but telemetry produced no
+// scope, so a zero-row result is a data gap rather than a quiet day. day and
+// deployments are accepted for the structured-log call site's convenience but
+// are NOT metric labels -- see the field comment on releaseImpactDegraded
+// MissingTelemetry for why org_id/day stay out of the series.
+func (collector *MetricsCollector) ObserveReleaseImpactDegradedMissingTelemetry(
+	orgID string, day time.Time, deployments int,
+) error {
+	if deployments < 0 {
+		return errors.New("release impact degraded deployment count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.releaseImpactDegradedMissingTelemetry++
 	return nil
 }
 
@@ -3494,7 +3580,12 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 
 // writeDailyMetricsCompatRetry exposes the terminal ambiguous_refused
 // disposition counter (CHAOS-4319) plus the CHAOS-4543 non-terminal
-// released-with-reason decisions. The metric name and "decision" label are
+// released-with-reason decisions -- widened (CHAOS-5078 codex confirmation
+// pass) to also include DailyMetricsCompatRetryDecisionReleasedPreBridge
+// FamilyIncomplete, whose trigger is a pre_bridge native family, not the
+// compatibility bridge; it is emitted here (including at zero) via the
+// SAME generic loop over dailyMetricsCompatRetryDecisions() as every other
+// decision, no separate code path. The metric name and "decision" label are
 // a deliberate cross-language contract with the Python bridge's
 // dev_health_metric_compat_retry_total (worker_metrics.py) -- see
 // DailyMetricsCompatRetryDecision for the full bounded vocabulary this side
@@ -3616,6 +3707,17 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	writeMetadata(output, "worker_dora_native_empty_partitions_total", "Native DORA partitions that completed having written no rows.", "counter")
 	writeUintSample(output, "worker_dora_native_empty_partitions_total", nil, collector.doraEmptyOutcomes)
 
+	writeMetadata(output, "worker_release_impact_native_partitions_total", "Partitions computed by the native Go release_impact executor.", "counter")
+	writeUintSample(output, "worker_release_impact_native_partitions_total", nil, collector.releaseImpactPartitions)
+	writeMetadata(output, "worker_release_impact_native_days_total", "Days covered by native release_impact partitions.", "counter")
+	writeUintSample(output, "worker_release_impact_native_days_total", nil, collector.releaseImpactDays)
+	writeMetadata(output, "worker_release_impact_native_rows_written_total", "Metric rows written by the native Go release_impact executor.", "counter")
+	writeUintSample(output, "worker_release_impact_native_rows_written_total", nil, collector.releaseImpactRowsWritten)
+	writeMetadata(output, "worker_release_impact_native_empty_partitions_total", "Native release_impact partitions that completed having written no rows.", "counter")
+	writeUintSample(output, "worker_release_impact_native_empty_partitions_total", nil, collector.releaseImpactEmptyOutcomes)
+	writeMetadata(output, "dev_health_release_impact_degraded_missing_telemetry_total", "CHAOS-4258: days where deployments existed but telemetry produced no scope, so a zero-row result is a data gap rather than a quiet day. Aggregate, not per-org -- see the org/day detail in the paired structured log.", "counter")
+	writeUintSample(output, "dev_health_release_impact_degraded_missing_telemetry_total", nil, collector.releaseImpactDegradedMissingTelemetry)
+
 	// Emitted for EVERY reason, including zeros. A series that only appears
 	// once it fires cannot be alerted on with a rate() rule until after the
 	// first failure, which is the moment the alert was supposed to precede.
@@ -3624,6 +3726,34 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 		writeUintSample(output, "worker_dora_native_refused_total",
 			[]metricLabel{{"reason", reason}}, collector.doraRefusals[reason])
 	}
+
+	// Emitted for EVERY reason, including zeros -- same reasoning as the dora
+	// refusal counter above (CHAOS-5078 codex round 2 F4): the collector had
+	// carried these counters since CHAOS-3092 PR-B, but nothing ever wrote
+	// them here, so the work item attribution backstop's own refusal/run
+	// telemetry was invisible to /metrics regardless of how faithfully
+	// ObserveWorkItemAttributionRefused/Run were called.
+	writeMetadata(output, "worker_work_item_attribution_native_refused_total", "Native work item attribution backstop construction refusals, by reason.", "counter")
+	for _, reason := range workItemAttributionRefusalReasons {
+		writeUintSample(output, "worker_work_item_attribution_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.workItemAttributionRefusals[reason])
+	}
+	writeMetadata(output, "worker_work_item_attribution_native_runs_total", "Completed native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_runs_total", nil, collector.workItemAttributionRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_org_wide_runs_total", "Native work item attribution backstop runs that were org-wide (no repo/project scope).", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_org_wide_runs_total", nil, collector.workItemAttributionOrgWideRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_scoped_runs_total", "Native work item attribution backstop runs scoped to specific repos/projects.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_scoped_runs_total", nil, collector.workItemAttributionScopedRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_noop_runs_total", "Native work item attribution backstop runs that found nothing to change.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_noop_runs_total", nil, collector.workItemAttributionNoopRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_repo_scopes_total", "Repo scopes considered across native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_repo_scopes_total", nil, collector.workItemAttributionRepoScopes)
+	writeMetadata(output, "worker_work_item_attribution_native_project_scopes_total", "Project scopes considered across native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_project_scopes_total", nil, collector.workItemAttributionProjectScopes)
+	writeMetadata(output, "worker_work_item_attribution_native_items_seen_total", "Work items considered across native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_items_seen_total", nil, collector.workItemAttributionItemsSeen)
+	writeMetadata(output, "worker_work_item_attribution_native_rows_written_total", "Attribution rows written by the native work item attribution backstop.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_rows_written_total", nil, collector.workItemAttributionRowsWritten)
 
 	// Emitted for EVERY reason, including zeros -- same reasoning as the dora
 	// counter above.

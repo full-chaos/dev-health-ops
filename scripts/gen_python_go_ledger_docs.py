@@ -224,12 +224,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.release_impact": {
         "producer": "`internal/scheduler/fixed/inventory.go:75` (release_impact_daily_fanout)",
         "trigger": "schedule (DailyAt 01:30 UTC)",
-        "gate": "none",
-        "writer": "Python `run_release_impact_job` `src/dev_health_ops/metrics/job_release_impact.py:29`",
+        "gate": "ClickHouse schema check in `NewReleaseImpactExecutor` (`internal/jobs/metrics/remaining/release_impact_native_executor.go:69`) -- verifies release_impact_daily's engine, version column, and sorting key (`verifyReleaseImpactSchema`, `release_impact_native_clickhouse.go`)",
+        "writer": "Go `internal/jobs/metrics/remaining/release_impact_native_clickhouse.go` (`writeReleaseImpactRows`)",
         "tables": "`release_impact_daily`",
-        "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-3092 (metrics families)",
+        "evidence": "argued — wired `daily.go:590-621`",
+        "state": "native",
+        "ticket": "n/a — Python `run_release_impact_job` (`job_release_impact.py:29`) is retired from this path; CHAOS-4296 is Done",
     },
     # --- operational / system / report / sync family ---------------------------------------------
     "operational.billing_notification": {

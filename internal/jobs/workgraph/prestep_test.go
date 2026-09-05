@@ -55,6 +55,7 @@ func TestBuildRunsPreStepsBeforeTheBridge(t *testing.T) {
 			&recordingPreStep{name: "second", sequence: &sequence},
 		},
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +85,7 @@ func TestInvestmentKindsCarryNoPreSteps(t *testing.T) {
 	store := &fakeStore{claim: testClaim(time.Minute)}
 	for _, build := range []func() (*handler, error){
 		func() (*handler, error) {
-			h, err := NewMaterializeHandler(store, blockingExecutor{})
+			h, err := NewMaterializeHandler(store, blockingExecutor{}, nil)
 			if h == nil {
 				return nil, err
 			}
@@ -116,6 +117,7 @@ func TestPreStepFailureFailsTheBuildAmbiguously(t *testing.T) {
 			&recordingPreStep{name: "mapping", sequence: &sequence, err: errors.New("clickhouse refused the batch")},
 		},
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +143,7 @@ func TestPreStepFailureFailsTheBuildAmbiguously(t *testing.T) {
 func TestNewBuildHandlerRejectsANilPreStep(t *testing.T) {
 	// A nil step is a wiring bug that would silently skip ported compute —
 	// exactly the failure this seam exists to prevent.
-	if _, err := NewBuildHandler(&fakeStore{}, blockingExecutor{}, []NativePreStep{nil}, nil); !errors.Is(err, ErrUnavailable) {
+	if _, err := NewBuildHandler(&fakeStore{}, blockingExecutor{}, []NativePreStep{nil}, nil, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("NewBuildHandler with a nil pre-step = %v, want ErrUnavailable", err)
 	}
 }

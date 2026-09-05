@@ -1,0 +1,20 @@
+#ifndef WIDGET_H
+#define WIDGET_H
+
+struct Widget {
+    int id;
+    int flags;
+};
+
+// Headers commonly carry small inline functions alongside pure
+// declarations; only the inline definition below contributes a row.
+int widget_is_active(const struct Widget* w);
+
+static inline int widget_is_visible(const struct Widget* w) {
+    if (w == 0) {
+        return 0;
+    }
+    return (w->flags & 1) != 0 || (w->flags & 2) != 0;
+}
+
+#endif

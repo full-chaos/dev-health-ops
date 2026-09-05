@@ -56,6 +56,14 @@ KNOWN_UNCOVERED = {
     # evidence for, and would block this PR on their backlog.
     "work_item",
     "work_item_estimate",
+    # work_item_attribution is the fourth CHAOS-4283/#2246 family and belongs
+    # in this same pin for the identical reason -- this PR is what makes it
+    # native+golden-required for the first time (CHAOS-5078), and criterion 2
+    # (wiring it into the executed-proof gates) was explicitly deferred in
+    # #2246's own RISK-NOTES to a follow-up PR, pending evidence the
+    # executed-proof E2E seed's anchor partition actually produces
+    # work_item_team_attributions rows.
+    "work_item_attribution",
     # MINE (CHAOS-4285, #2229), pinned with evidence, not by default. The
     # executed-proof E2E seed loop above (ci/run_metrics_executed_proof.sh)
     # only drives four sync targets -- cicd, deployments, incidents, tests --
@@ -97,6 +105,18 @@ KNOWN_UNCOVERED = {
     # it needs a "prs" seed step added to the loop (or separate per-table
     # evidence), out of scope for a port PR.
     "work_graph_edges",
+    # MINE (CHAOS-4280 part B / CHAOS-4286 part B), pinned with evidence,
+    # same discipline as work_graph_edges above and the SAME root cause: the
+    # E2E seed loop (ci/run_metrics_executed_proof.sh) drives four sync
+    # targets -- cicd, deployments, incidents, tests -- and none of them is
+    # "prs", so git_pull_requests is never seeded. This family's PR loader
+    # (LoadAIWorkflowPullRequests) cannot produce a nonzero sample without
+    # it, regardless of the port's correctness. Closing it needs a "prs"
+    # seed step added to the loop -- team-lead's ruling: pin now (this PR),
+    # then open a separate small PR (CHAOS-5123) that adds the seed step and
+    # unpins BOTH this family and work_graph_edges at once, rather than
+    # widening scope here.
+    "ai_workflow",
     # MINE (CHAOS-4280, #2267/formerly #2236), pinned with evidence, same
     # discipline as ai_governance and work_graph_edges above -- doubly so, in
     # fact: this family hits BOTH of their gaps at once. Its attribution

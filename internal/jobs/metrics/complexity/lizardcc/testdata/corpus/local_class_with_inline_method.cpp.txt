@@ -1,0 +1,35 @@
+// Regression fixture, added alongside a PopNesting fix found while
+// building the Java port (counter.go): a function whose body defines a
+// local class with an inline method does NOT score that method
+// separately at all for plain C/C++ -- base CLikeStates' `_state_imp` is
+// fully opaque (clike.go's stateImp), so nothing inside an already-open
+// function body is ever re-dispatched through the declaration-parsing
+// chain that would confirm "method" as its own function; its conditions
+// simply fold into the ENCLOSING function, exactly like a lambda's do.
+// Measured directly to confirm this (not assumed): only ONE function
+// (outer) is reported, and its complexity includes the local class's
+// method's own "if" too. This means the PopNesting fix itself (restoring
+// ctx.current to an enclosing function still open on the nesting stack)
+// is UNREACHABLE for plain C/C++ specifically -- there is no C++ shape
+// that creates two NESTED function-tagged nesting entries in the first
+// place, since only a real (non-opaque) function body can confirm a
+// nested declaration, and C/C++'s is always opaque. Java's own port is
+// where this fixture's sibling construct (an anonymous class's inline
+// method) DOES create two nested function entries and DOES exercise the
+// restore -- see java.go's package doc and its own corpus.
+int outer(int n) {
+    class Local {
+    public:
+        int method(int x) {
+            if (x > 0) {
+                return 1;
+            }
+            return 0;
+        }
+    };
+    Local l;
+    if (n > 0 && l.method(n) > 0) {
+        return 1;
+    }
+    return 0;
+}

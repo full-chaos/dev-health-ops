@@ -7,7 +7,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.0"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
-DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}"
+# CHAOS-5224: precedence is an explicit DEV_HEALTH_GO_CACHE first, then an
+# already-inherited GOCACHE, and only then the tmp fallback. The old code
+# skipped straight to the tmp fallback regardless of what the caller already
+# exported, silently overwriting an inherited GOCACHE and growing a THIRD Go
+# build cache on bigboy's root disk (7.5G observed) alongside the two
+# legitimate bind-mounted caches.
+DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}}"
 mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""
@@ -502,6 +508,35 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/work-graph-edges-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: work_graph_edges live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/aiworkflow (ai_workflow port vs live Python, CHAOS-4280/CHAOS-4286)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestAIWorkflowMatchesLivePythonProduction$' \
+        ./internal/jobs/metrics/aiworkflow
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Own marker, checked separately, for the same reason as the siblings
+  # above: a shared marker would be satisfied by whichever oracle happened
+  # to run. This one is the ONLY guard proving Go's strongestSignal keeps
+  # the FIRST maximal element on a tie against production's real
+  # extract_ai_workflow_from_pull_requests, not a synthetic fixture in this
+  # repo's own Go test.
+  proof_file="${proof_dir}/ai-workflow-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: ai_workflow live Python oracle measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

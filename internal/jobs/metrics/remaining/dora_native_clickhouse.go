@@ -104,6 +104,17 @@ func ConfiguredOperationalOrderingContract() (OperationalOrderingContract, error
 	return configuredOperationalOrderingContract()
 }
 
+// CurrentOperationalRowsSQL exposes currentOperationalRowsSQL to other
+// operational-table readers (CHAOS-4924's workgraph operational-edges port),
+// so the FINAL-vs-revision SQL shape has exactly one Go implementation
+// instead of a second one drifting from this file's under a different name.
+// Pure passthrough -- no behaviour beyond currentOperationalRowsSQL itself.
+func CurrentOperationalRowsSQL(
+	table string, postSelectionFilters []string, contract OperationalOrderingContract,
+) string {
+	return currentOperationalRowsSQL(table, postSelectionFilters, contract)
+}
+
 // currentOperationalRowsSQL ports current_operational_rows_sql
 // (operational_current.py:25). The parenthesised sub-select is spliced into a
 // FROM clause exactly as Python splices it.

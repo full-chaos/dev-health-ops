@@ -437,11 +437,27 @@ type teamCatalogRowsLabels struct {
 // bridge skipped it; Refused means the executor failed and the compatibility
 // bridge computed it instead (the fail-open policy -- see
 // PartitionHandler.computeNativeFamilies).
+//
+// Uncertain (CHAOS-4290, #2241 r1 Finding 1) is the THIRD state, and it is the
+// one the two-label vocabulary could not say. An executor that fails AFTER
+// writing rows is neither: it did not cleanly compute, and it was not refused
+// in the sense that matters operationally, because the bridge does NOT
+// recompute it -- FinalizeHandler keeps it in the skip list precisely so a
+// partial native write is not joined by a second full bridge write.
+//
+// Labelling that "refused" would state the opposite of what happened: refused
+// promises the bridge covered the family, and here nothing did. The family's
+// output may be partial and NOTHING will repair it, which is exactly the
+// condition an operator must be able to alert on, so it gets its own label
+// rather than being folded into a neighbour that reads as benign.
 type DailyMetricsNativeFamilyOutcome string
 
 const (
 	DailyMetricsNativeFamilyOutcomeComputed DailyMetricsNativeFamilyOutcome = "computed"
 	DailyMetricsNativeFamilyOutcomeRefused  DailyMetricsNativeFamilyOutcome = "refused"
+	// Uncertain: the executor errored but reported rowsWritten > 0, so the
+	// family stays in the skip list (fail-CLOSED) and its output may be partial.
+	DailyMetricsNativeFamilyOutcomeUncertain DailyMetricsNativeFamilyOutcome = "uncertain"
 )
 
 // WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
@@ -500,7 +516,9 @@ func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
 
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
-		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
+		DailyMetricsNativeFamilyOutcomeComputed,
+		DailyMetricsNativeFamilyOutcomeRefused,
+		DailyMetricsNativeFamilyOutcomeUncertain,
 	}
 }
 

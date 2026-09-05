@@ -203,7 +203,7 @@ below) -- what changed is that the CLI no longer computes them ITSELF via a seco
 | ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | NATIVE | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
 | ai_workflow | COMPAT-Python | Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day` | CHAOS-4286 |
-| benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
+| benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |

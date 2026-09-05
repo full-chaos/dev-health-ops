@@ -49,7 +49,11 @@ def run_daily_metrics(
     Returns:
         dict with job status and summary
     """
-    from dev_health_ops.metrics.job_daily import run_daily_metrics_job
+    from dev_health_ops.metrics.job_daily import (
+        _date_range,
+        run_daily_metrics_finalize,
+        run_daily_metrics_job,
+    )
 
     db_url = db_url or _get_db_url()
     target_day = date.fromisoformat(day) if day else utc_today()
@@ -88,8 +92,46 @@ def run_daily_metrics(
                 sink=sink,
                 provider=provider,
                 org_id=org_id or "",
+                # CHAOS-5194 codex r1 (P1, #2277): this Celery task is a
+                # THIRD invocation surface for run_daily_metrics_job --
+                # neither of the two the finalize-scope migration had
+                # already accounted for (the Go-orchestrated worker path,
+                # which triggers a separate finalize job once every
+                # partition lands; and the CLI paths in job_daily.py's own
+                # _cmd_metrics_daily/_cmd_metrics_rebuild, fixed for the
+                # identical gap by CHAOS-4365 codex R2). Recompute.py
+                # dispatches THIS task for repository-scoped and fallback
+                # recomputes, and it never called the standalone
+                # run_daily_metrics_finalize -- so team-scope
+                # compounding_risk_daily/team_cognitive_load_daily (once
+                # those land) and now benchmarking (this PR) would silently
+                # never compute for a recompute-triggered run, with no task
+                # failure to signal it. skip_finalize=True here avoids
+                # running run_daily_metrics_job's OWN inline ic_metrics/
+                # landscape logic (skip_finalize=False's default path)
+                # TWICE per day against the explicit run_daily_metrics_finalize
+                # call below, matching _cmd_metrics_daily's exact fix for
+                # the same defect class.
+                skip_finalize=True,
             )
         )
+        # CHAOS-5194 codex r1 (P1, #2277): see the skip_finalize comment
+        # above -- this call is what that gate exists to route to instead.
+        # Idempotent to call even for a single-repo/repo_name-scoped
+        # recompute: finalize reads the WHOLE org's already-persisted state
+        # back from ClickHouse, so it reflects every repo's current data,
+        # not just this task's repo scope (same idempotency
+        # _cmd_metrics_daily's docstring already establishes for this
+        # exact function).
+        for finalize_day in _date_range(target_day, backfill_days):
+            run_async(
+                run_daily_metrics_finalize(
+                    db_url=db_url,
+                    day=finalize_day,
+                    org_id=org_id or "",
+                    sink=sink,
+                )
+            )
         # Invalidate GraphQL cache after successful metrics update
         _invalidate_metrics_cache(target_day.isoformat(), "")
 

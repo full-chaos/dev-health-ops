@@ -70,7 +70,8 @@ type nativeFamiliesArtifact struct {
 // from the constant it names. A selector the extractor does not know is an
 // ERROR, never a skip -- see extractDailyFamilies.
 var knownFamilyNameConstants = map[string]string{
-	"ICFinalizeFamilyName": daily.ICFinalizeFamilyName,
+	"ICFinalizeFamilyName":   daily.ICFinalizeFamilyName,
+	"BenchmarkingFamilyName": daily.BenchmarkingFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
@@ -521,16 +522,11 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
 	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
 	// those three, does not touch this one.
-	// CHAOS-4288: benchmarking is post_bridge for a THIRD distinct reason. Not a
-	// stale attribution snapshot (the CHAOS-4283 three) and not sorted-order
-	// execution (compounding_risk): its metric window ENDS ON THE TARGET DAY --
-	// asOfDay = run.TargetDay and every fetch is Fetch(startDay, asOfDay) -- so
-	// day D's own rows are INSIDE the window, and Python writes them
-	// (job_daily.py:1919) before calling the family (:2091). A pre_bridge
-	// registration benchmarks day D against a window missing day D.
+	// benchmarking (CHAOS-4288) is NO LONGER in this list -- CHAOS-5194
+	// relocated it to finalize scope (see wantDailyFinalize below and
+	// BenchmarkingFinalizeExecutor's own doc comment).
 	wantDailyPostBridge := []string{
 		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
-		"benchmarking",
 	}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
@@ -550,7 +546,7 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// OWN exact-cardinality check rather than joining the count above, because
 	// the two scopes answer different questions and folding them would let a
 	// finalize family appear while a partition family silently disappeared.
-	wantDailyFinalize := []string{"ic_finalize"}
+	wantDailyFinalize := []string{"ic_finalize", "benchmarking"}
 	assertExecutorSet(t, artifact.Finalize, wantDailyFinalize, "finalize")
 	if len(artifact.Finalize) != len(wantDailyFinalize) {
 		t.Fatalf("expected exactly %d finalize families, got %d: %v",

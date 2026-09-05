@@ -176,14 +176,17 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
-	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
-	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
-	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
-	// are inside it, and Python writes those rows (job_daily.py:1919) before
-	// calling the family (:2091). It also sorts FIRST of all native families,
-	// so pre_bridge ran it ahead of every Go writer too.
-	if got := byPhase["benchmarking"]; got != "post_bridge" {
-		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	// benchmarking (CHAOS-4288, then CHAOS-5194) used to be a THIRD post_bridge
+	// family in this class -- its metric window ends on the TARGET DAY, so a
+	// pre_bridge registration would benchmark day D against a window missing
+	// day D. CHAOS-5194 (astra F3) relocated it to finalize scope entirely: the
+	// post_bridge anchor-partition mechanism fixed cross-partition duplication
+	// but not the race between the anchor partition finishing and every OTHER
+	// partition for the same org/day having written its own inputs. Finalize
+	// scope's ClaimFinalize barrier (every partition succeeded) closes that
+	// race by construction.
+	if got := byPhase["benchmarking"]; got != "finalize" {
+		t.Fatalf("benchmarking must be phase=finalize (CHAOS-5194), got %q", got)
 	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
@@ -199,7 +202,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		"work_item":          "post_bridge",
 		"work_item_estimate": "post_bridge",
 		"compounding_risk":   "post_bridge",
-		"benchmarking":       "post_bridge",
+		"benchmarking":       "finalize",
 		"ic_finalize":        "finalize",
 	}
 	for name, phase := range byPhase {

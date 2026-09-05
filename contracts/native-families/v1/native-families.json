@@ -4,7 +4,6 @@
   "daily": {
     "ai_governance": "native",
     "ai_impact": "native",
-    "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",
     "deploy": "native",
@@ -24,6 +23,7 @@
     "work_item_state": "post_bridge"
   },
   "finalize": {
+    "benchmarking": "finalize",
     "ic_finalize": "finalize"
   },
   "remaining": {

@@ -700,6 +700,16 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
         assert "team_metrics" in sink.write_calls
         assert "repo_metrics" in sink.write_calls
 
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
+
 
 @pytest.mark.asyncio
 async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(

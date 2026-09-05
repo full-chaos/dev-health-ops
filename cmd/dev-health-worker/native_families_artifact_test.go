@@ -375,16 +375,20 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 9
-// native + 1 post_bridge daily split this page's reconciliation work found,
-// so a future accidental wiring change is caught here even if someone forgot
-// to regenerate the artifact (that case is ALSO caught by the drift test
-// above, but this one names the expected shape explicitly for a reviewer).
+// control: pins the exact 6-native/1-compat remaining split (CHAOS-4296
+// moved release_impact from compat to native) and the 9 native + 1
+// post_bridge daily split this page's reconciliation work found, so a future
+// accidental wiring change is caught here even if someone forgot to
+// regenerate the artifact (that case is ALSO caught by the drift test above,
+// but this one names the expected shape explicitly for a reviewer).
 func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
-	wantRemainingNative := []string{"capacity", "dora", "membership_backfill", "recommendations", "work_item_attribution"}
-	wantRemainingCompat := []string{"complexity", "release_impact"}
+	wantRemainingNative := []string{
+		"capacity", "dora", "membership_backfill", "recommendations",
+		"release_impact", "work_item_attribution",
+	}
+	wantRemainingCompat := []string{"complexity"}
 	assertExecutorSet(t, artifact.Remaining, wantRemainingNative, "native")
 	assertExecutorSet(t, artifact.Remaining, wantRemainingCompat, "compat")
 	if len(artifact.Remaining) != len(wantRemainingNative)+len(wantRemainingCompat) {

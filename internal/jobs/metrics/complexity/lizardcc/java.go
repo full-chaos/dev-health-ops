@@ -508,11 +508,16 @@ func (m *javaMachine) stateDecBody(tok string) {
 	}
 }
 
-// stateDecToImp ports _state_dec_to_imp for Java: only the branches Java
-// can reach survive (throws, "{"/entering-imp, "["/attribute, the
-// not-an-identifier fallback, and the old-c-params default) --
-// throw/noexcept/trailing-return specifiers and initializer lists are
-// C++-only and unreachable here.
+// stateDecToImp ports _state_dec_to_imp for Java.
+//
+// CORRECTED (CHAOS-5156, codex confirmation-pass F-3 on #2292): this
+// comment used to claim trailing-return/ref-qualifier/function-pointer
+// specifiers were "C++-only and unreachable here" alongside throw/
+// noexcept/init-lists -- stale the moment the fixes below landed. Only
+// `throw` (singular)/`noexcept`/`:` (init-list) remain genuinely
+// unported (a known, out-of-scope gap -- see this file's top-level
+// package doc for the full explanation of why the others below ARE
+// reachable).
 //
 // BUG FIXED HERE (CHAOS-5156, self-found while diagnosing #2269's r1 void
 // round -- independently confirmed against real lizard 1.23.0 before

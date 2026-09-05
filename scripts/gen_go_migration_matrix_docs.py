@@ -514,26 +514,34 @@ def load_finalize_write_calls() -> set[str]:
     target -- and an `AnnAssign` (`writer: object = real_fn`) both matched
     none of the per-shape branches above and so were never added to
     raw_next/aliases at all -- silently falling through as an ordinary,
-    presumably-irrelevant call name instead of refusing, the exact
-    silent-loss failure mode every branch above exists to avoid. Every
-    such destructuring target now REFUSES outright (named error, no
-    attempt to resolve). An `Attribute`/`Subscript` target (`obj.attr = v`,
-    `d[k] = v`) is a DIFFERENT, harmless case -- it mutates something that
-    already exists and introduces no new bare name at all, so it is
-    skipped rather than refused (real code does this routinely, e.g.
-    job_daily.py's `team_metrics_params["org_id"] = org_id`; refusing on
-    it would blanket-break unrelated code, exactly what the first
-    AnnAssign attempt did). `AnnAssign` to a plain `Name` target is
-    resolved exactly like `Assign` -- real code (job_daily.py itself) uses
-    it for ordinary literal-valued declarations (`x: Any = None`) that a
-    blanket refusal would break; only a call through an unresolvable one
-    (as in the finding's own example) still refuses. `AnnAssign`'s target
-    is never a Tuple/List (Python's grammar forbids destructuring an
-    annotated assignment), so its only other shape is Attribute/Subscript,
-    which is skipped the same harmless way. (Confirmation-pass finding F2
-    -- a comprehension target that shadows an outer alias name wrongly
-    poisons that outer alias, a fail-closed false positive on valid code,
-    not a silent miss -- is a known, ticketed risk, not fixed here.)
+    presumably-irrelevant call name instead of being tracked as
+    unresolvable, the exact silent-loss failure mode every branch above
+    exists to avoid. Every bare name a destructuring target introduces is
+    now recursively collected (`_destructured_names`) and registered as
+    unresolvable, the same `_bind(name, None)` every other
+    cannot-determine-the-value case already uses -- so a LATER bare call
+    through one of them still refuses via the existing unresolved-alias
+    check below, exactly as F1's own example requires, without refusing
+    merely because a destructuring pattern exists. An unconditional
+    refuse-on-sight was tried first and broke on real code: job_daily.py
+    destructures routinely without ever calling the destructured names
+    bare (`for k, v in ... if k in team_metrics_field_names`). An
+    `Attribute`/`Subscript` leaf (`obj.attr = v`, `d[k] = v`) is a
+    DIFFERENT, harmless case -- it mutates something that already exists
+    and introduces no new bare name at all, so it is dropped rather than
+    tracked (real code does this too, e.g. job_daily.py's
+    `team_metrics_params["org_id"] = org_id`). `AnnAssign` to a plain
+    `Name` target is resolved exactly like `Assign` -- real code
+    (job_daily.py itself) uses it for ordinary literal-valued
+    declarations (`x: Any = None`) that a blanket refusal would break;
+    only a call through an unresolvable one (as in the finding's own
+    example) still refuses. `AnnAssign`'s target is never a Tuple/List
+    (Python's grammar forbids destructuring an annotated assignment), so
+    its only other shape is Attribute/Subscript, dropped the same
+    harmless way. (Confirmation-pass finding F2 -- a comprehension target
+    that shadows an outer alias name wrongly poisons that outer alias, a
+    fail-closed false positive on valid code, not a silent miss -- is a
+    known, ticketed risk, not fixed here.)
     """
     tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
     target = next(
@@ -573,32 +581,37 @@ def load_finalize_write_calls() -> set[str]:
             return value.attr
         return None
 
-    def _refuse_unmodeled_binding(node: ast.AST, shape: str) -> None:
+    def _destructured_names(elt: ast.expr) -> list[str]:
         # Confirmation-pass finding F1 (codex, CHAOS-5118): a DESTRUCTURED
         # binding target (`for (writer,) in ...`, `a, b = ...`,
-        # `with f() as (a, b):`, `[x for (a, b) in ...]`) -- or, per F3, an
-        # `AnnAssign` to a non-Name target (`self.x: T = real_fn`) -- used
-        # to fall through EVERY branch below silently, leaving the bound
-        # name entirely absent from raw_next/aliases. A later call through
-        # that name was then treated as an ordinary direct module-level
-        # reference instead of an unresolvable local binding -- the same
-        # silent-loss shape F1 (round-3) already fixed for the
-        # loop-alias/chain case, just for a binding shape nothing here
-        # ever looked at. Refusing outright for any such shape, rather
-        # than attempting to resolve it, is the same fail-closed contract
-        # every other branch already keeps: a binding this walker cannot
-        # specifically account for must never be silently treated as
-        # though it weren't there.
-        lineno = getattr(node, "lineno", "?")
-        raise SystemExit(
-            f"gen_go_migration_matrix_docs: {DAILY_FINALIZE_FN} in {JOB_DAILY_PY} "
-            f"binds a name at line {lineno} via a shape this walker does not "
-            f"model ({shape}) -- a call reached only through that binding "
-            "could be silently missed by the completeness check. Rewrite it "
-            "as a plain, single `name = some_function` binding before the "
-            "call, or teach load_finalize_write_calls to resolve this shape "
-            "explicitly."
-        )
+        # `with f() as (a, b):`, `[x for (a, b) in ...]`) matched no branch
+        # below (only a bare `Name` target was handled), so every name it
+        # bound was silently absent from raw_next/aliases -- a later call
+        # through one of them fell through as an ordinary, presumably-
+        # irrelevant call name instead of being tracked as unresolvable.
+        # Recursively collects every bare Name a (possibly nested)
+        # Tuple/List/Starred target binds, so each one is registered as
+        # unresolvable (`_bind(name, None)`) below -- the SAME outcome a
+        # hard refuse-on-sight would give IF one of them is later called
+        # bare (the existing unresolved-alias check at the bottom of this
+        # function already refuses in that case), without refusing merely
+        # because a destructuring pattern EXISTS. Real code destructures
+        # routinely without ever calling the destructured names bare
+        # (job_daily.py: `for k, v in ... if k in team_metrics_field_names`)
+        # -- refusing unconditionally on sight would blanket-break that,
+        # the same over-eager failure mode the first AnnAssign attempt hit.
+        # An Attribute/Subscript leaf (`obj.attr`, `d[k]`) binds no new bare
+        # name at all and is dropped, matching _binds_no_name's reasoning.
+        if isinstance(elt, ast.Name):
+            return [elt.id]
+        if isinstance(elt, ast.Starred):
+            return _destructured_names(elt.value)
+        if isinstance(elt, (ast.Tuple, ast.List)):
+            names: list[str] = []
+            for sub in elt.elts:
+                names.extend(_destructured_names(sub))
+            return names
+        return []  # Attribute/Subscript/anything else: binds no bare name
 
     def _binds_no_name(elt: ast.expr) -> bool:
         # `obj.attr = v` / `d[k] = v` mutate something that already exists;
@@ -618,7 +631,8 @@ def load_finalize_write_calls() -> set[str]:
                 if isinstance(element, ast.Name):
                     _bind(element.id, _one_hop_value(node.value))
                 elif not _binds_no_name(element):
-                    _refuse_unmodeled_binding(node, "a destructured Assign target")
+                    for name in _destructured_names(element):
+                        _bind(name, None)
         elif isinstance(node, ast.AnnAssign):
             # A bare annotation with no value (`primary_sink: Any`) binds
             # nothing at all -- only `x: T = value` actually assigns, and
@@ -641,7 +655,8 @@ def load_finalize_write_calls() -> set[str]:
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)
             elif not _binds_no_name(node.target):
-                _refuse_unmodeled_binding(node, "a destructured AugAssign target")
+                for name in _destructured_names(node.target):
+                    _bind(name, None)
         elif isinstance(node, (ast.For, ast.AsyncFor)):
             if isinstance(node.target, ast.Name):
                 resolved = None
@@ -652,7 +667,8 @@ def load_finalize_write_calls() -> set[str]:
                     resolved = _one_hop_value(node.iter.elts[0])
                 _bind(node.target.id, resolved)
             elif not _binds_no_name(node.target):
-                _refuse_unmodeled_binding(node, "a destructured For/AsyncFor target")
+                for name in _destructured_names(node.target):
+                    _bind(name, None)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 if item.optional_vars is None:
@@ -662,14 +678,14 @@ def load_finalize_write_calls() -> set[str]:
                     # to x itself -- never resolvable from source alone.
                     _bind(item.optional_vars.id, None)
                 elif not _binds_no_name(item.optional_vars):
-                    _refuse_unmodeled_binding(
-                        node, "a destructured With/AsyncWith target"
-                    )
+                    for name in _destructured_names(item.optional_vars):
+                        _bind(name, None)
         elif isinstance(node, ast.comprehension):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)
             elif not _binds_no_name(node.target):
-                _refuse_unmodeled_binding(node, "a destructured comprehension target")
+                for name in _destructured_names(node.target):
+                    _bind(name, None)
 
     def _resolve_chain(name: str, seen: set[str]) -> str | None:
         if name in seen:

@@ -49,7 +49,16 @@ func AnalyzeCSharp(path, source string) ([]int, bool, error) {
 	// accumulateMacros (tokenize.go) is required here too: C# has #if/
 	// #region-style directives, and without it they leak as separate
 	// tokens exactly the way they did for C/C++ before that fix.
-	raw := accumulateMacros(csharpTokenPattern.FindAllString(source, -1))
+	//
+	// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2268): this used to
+	// skip mergeTemplateQuestionRuns entirely, the same gap found
+	// independently in go_lang.go/rust.go (#2266 r2) -- a nullable
+	// generic (`List<string?>`) never got glued into one token, so its
+	// `?` reached condition_counter as a real ternary. Confirmed against
+	// real lizard 1.23.0: `List<string?> xs = null;` measures [1]
+	// (glued); this port measured [2] before this fix. Ordered before
+	// accumulateMacros, matching clike.go's GenerateTokens.
+	raw := accumulateMacros(mergeTemplateQuestionRuns(csharpTokenPattern.FindAllString(source, -1)))
 
 	cs := newCSharpMachine(ctx)
 	ns := newNestingStates(ctx)

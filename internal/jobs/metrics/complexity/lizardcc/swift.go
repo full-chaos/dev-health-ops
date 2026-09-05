@@ -26,7 +26,16 @@ var swiftAlphaConditions = []string{"if", "for", "while", "catch", "guard", "cas
 // (`cond?a:b` would tokenize as "cond?" one token) -- a real, narrow lizard
 // quirk this package reproduces rather than "fixes"; idiomatic Swift always
 // spaces a ternary (`cond ? a : b`), where it is unaffected.
-const swiftAddition = "|`" + `\w+` + "`" + `|\w+\?` + `|\w+\!` + `|\?\?`
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2268): all three `\w+`
+// alternatives here were still RE2's ASCII-only `\w`, unlike the shared
+// identifier class (tokenize.go) fixed earlier -- a Unicode identifier
+// (`Café?`) was never glued into one token here, so its `?` reached
+// condition_counter as a real ternary. Confirmed against real lizard
+// 1.23.0: `func f() -> Café? { if true {...} }` measures [2] (glued);
+// this port measured [3] before this fix. `[\p{L}\p{N}_]+` matches this
+// package's shared identifier class.
+const swiftAddition = "|`" + `[\p{L}\p{N}_]+` + "`" + `|[\p{L}\p{N}_]+\?` + `|[\p{L}\p{N}_]+\!` + `|\?\?`
 
 var swiftTokenPattern = buildTokenPattern(swiftAddition)
 

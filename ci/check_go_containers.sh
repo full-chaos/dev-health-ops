@@ -276,6 +276,28 @@ reproducible() {
   # resolves the stage by the exact tag given, not by cache-key guessing,
   # and re-measuring with it showed the correct, differing nonces.
   #
+  # CODEX ROUND 1 (P1, confirmed sound though not reproducible on this
+  # platform): the fix above only forces the SHARED `build` stage fresh --
+  # each target's OWN stage (the `runtime` base plus that target's own
+  # instructions, e.g. a `WORKDIR`) still resolved via ORDINARY caching, so
+  # a genuinely non-deterministic TARGET-LOCAL instruction (not in the
+  # `build` stage) could still get silently cached-and-reused across passes,
+  # same failure shape as the ambient-cache bug above, one layer further
+  # down. `docker/go-worker.Dockerfile:158-169`'s own comment documents a
+  # real historical instance: a since-removed `WORKDIR /app` on the
+  # `migrate` target made it CI-non-reproducible (that comment also notes
+  # local --no-cache probes never reproduced it -- confirmed again here,
+  # `--build-context ... --no-cache` on that reintroduced line still gave
+  # two independently-built images the SAME id on bigboy/arm64 -- so this
+  # exact historical case is platform/BuildKit-version-dependent, but the
+  # STRUCTURAL gap the round raised does not depend on that case reproducing
+  # here). Fixed by adding `--no-cache` to the per-target build too:
+  # measured directly (bigboy) that this does NOT re-trigger the `build`
+  # stage's compile -- `--build-context` makes it an EXTERNAL image
+  # reference rather than a graph node, so there is nothing for --no-cache
+  # to invalidate there; only the target's OWN (cheap, non-compile) layers
+  # re-run, at the same ~2s cost as before.
+  #
   # The per-target image-ID comparison below is unchanged; timeout and
   # job routing untouched.
   for pass in first second; do
@@ -283,7 +305,7 @@ reproducible() {
     for target in "${ALL_TARGETS[@]}"; do
       build_target "${target}" "${IMAGE_PREFIX}-${target}:repro-${pass}" \
         --build-context "build=docker-image://${IMAGE_PREFIX}-build:repro-${pass}" \
-        --provenance=false
+        --no-cache --provenance=false
     done
   done
 

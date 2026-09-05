@@ -442,6 +442,20 @@ type DailyMetricsNativeFamilyOutcome string
 const (
 	DailyMetricsNativeFamilyOutcomeComputed DailyMetricsNativeFamilyOutcome = "computed"
 	DailyMetricsNativeFamilyOutcomeRefused  DailyMetricsNativeFamilyOutcome = "refused"
+	// DailyMetricsNativeFamilyOutcomePartialWrite is a family that FAILED after
+	// already writing at least one row (CHAOS-4288, codex r1 on #2235).
+	//
+	// It is a third outcome rather than a flavour of "refused" because the two
+	// demand opposite responses. "refused" means nothing was written, so the
+	// compatibility bridge can safely compute the family and fail-open is
+	// correct. A partial write means rows are ALREADY in append-only tables, so
+	// letting the bridge run would DUPLICATE them -- the family is added to the
+	// skip list instead and the partition is re-driven.
+	//
+	// It also carries the TRUE rows-written count, not zero: a partial write
+	// that reports zero understates what landed, which is precisely the number
+	// an operator needs to reason about duplication.
+	DailyMetricsNativeFamilyOutcomePartialWrite DailyMetricsNativeFamilyOutcome = "partial_write"
 )
 
 // WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
@@ -501,6 +515,7 @@ func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
 		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
+		DailyMetricsNativeFamilyOutcomePartialWrite,
 	}
 }
 

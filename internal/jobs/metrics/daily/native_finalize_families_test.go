@@ -74,7 +74,9 @@ func TestSucceedingNativeFinalizeFamilyIsSkippedByTheBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	family := &stubFinalizeFamily{rows: 7}
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family})
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatalf("Work = %v, want success", err)
@@ -100,7 +102,9 @@ func TestFailingNativeFinalizeFamilyFallsBackToTheBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	family := &stubFinalizeFamily{err: errors.New("clickhouse hiccup")}
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family})
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatalf("Work = %v, want success -- a native family failure is not a finalize failure", err)
@@ -141,9 +145,19 @@ func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+	// The registration guard only admits names the Python bridge gates on, and
+	// deterministic ordering needs more than one name to be observable at all.
+	// Widening the recognised set for the duration of this test is the honest
+	// way to get there: inventing three production family names would make the
+	// guard's own test lie about what Python understands.
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"alpha", "mid", "zeta"}
+
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"zeta": &stubFinalizeFamily{}, "alpha": &stubFinalizeFamily{}, "mid": &stubFinalizeFamily{},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatal(err)
 	}
@@ -188,9 +202,11 @@ func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
 	}
 	observer := &recordingFinalizeObserver{}
 	handler.SetNativeFinalizeFamilyObserver(observer)
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"ic_finalize": &stubFinalizeFamily{err: errors.New("clickhouse hiccup")},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatalf("Work = %v, want success -- telemetry must not gate the job", err)
@@ -215,9 +231,11 @@ func TestSucceedingNativeFinalizeFamilyIsReportedComputedWithRows(t *testing.T) 
 	}
 	observer := &recordingFinalizeObserver{}
 	handler.SetNativeFinalizeFamilyObserver(observer)
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"ic_finalize": &stubFinalizeFamily{rows: 42},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatal(err)
 	}
@@ -239,10 +257,20 @@ func TestFinalizeSucceedsWhenTheObserverFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler.SetNativeFinalizeFamilyObserver(&recordingFinalizeObserver{err: errors.New("telemetry down")})
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"ic_finalize": &stubFinalizeFamily{rows: 1},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatalf("Work = %v, want success despite the observer failure", err)
 	}
+}
+
+// restoreRecognisedFinalizeFamilies puts the production set back. Taken as an
+// argument rather than read inside, so the deferred call captures the value at
+// defer time and a test cannot accidentally restore a set another test left
+// behind.
+func restoreRecognisedFinalizeFamilies(original []string) {
+	pythonRecognisedFinalizeFamilies = original
 }

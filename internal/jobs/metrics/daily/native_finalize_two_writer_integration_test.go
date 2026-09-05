@@ -37,6 +37,22 @@ const twoWriterDDL = `CREATE TABLE user_metrics_daily (
     computed_at DateTime, org_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, author_email, day)`
 
+// twoWriterRepoID is FIXED and SHARED by both writers, and that is the whole
+// point of this test rather than an incidental detail.
+//
+// Both writers previously inserted generateUUIDv4(). repo_id is IN the dedup key
+// below, so two random ids are two DIFFERENT keys: the rows could not supersede
+// one another, and the readback was choosing between two surviving rows by
+// arbitrary ordering rather than resolving one key. The main assertion passed
+// because only one row existed, and the "control" passed by ordering luck --
+// neither was measuring supersession, which is the only thing this test claims.
+//
+// One shared id puts both writers on ONE key, so LIMIT 1 BY genuinely resolves
+// them and the later computed_at genuinely wins. Found by codex r1 on #2241
+// (Finding 4); the same uuid4-in-a-sorting-key mechanism this lane reported
+// against compute_ic.py, missed here one file away.
+const twoWriterRepoID = "3f6b1c04-9a27-4d55-8e13-71b0c2a4d9e6"
+
 // dedupRead mirrors clickhouse_dedup.dedup_from("user_metrics_daily") exactly
 // -- the natural key comes from _APPEND_ONLY_DAILY_KEYS, read from the current
 // helper rather than from a migration comment.
@@ -55,8 +71,8 @@ type chWritingFinalizeFamily struct {
 func (family *chWritingFinalizeFamily) ComputeFinalizeFamily(ctx context.Context, _ Run) (int, error) {
 	err := family.conn.Exec(ctx, `INSERT INTO user_metrics_daily
         (repo_id, day, author_email, identity_id, team_id, loc_touched, delivery_units, computed_at, org_id)
-        VALUES (generateUUIDv4(), '2026-09-04', 'ic@example.com', 'NATIVE', 't', 1, 1, ?, ?)`,
-		family.when, family.orgID)
+        VALUES (toUUID(?), '2026-09-04', 'ic@example.com', 'NATIVE', 't', 1, 1, ?, ?)`,
+		twoWriterRepoID, family.when, family.orgID)
 	if err != nil {
 		return 0, err
 	}
@@ -85,8 +101,8 @@ func (bridge *chWritingBridge) Finalize(ctx context.Context, _ Run, skipFamilies
 	bridge.wrote = true
 	return bridge.conn.Exec(ctx, `INSERT INTO user_metrics_daily
         (repo_id, day, author_email, identity_id, team_id, loc_touched, delivery_units, computed_at, org_id)
-        VALUES (generateUUIDv4(), '2026-09-04', 'ic@example.com', 'BRIDGE', 't', 9, 9, ?, ?)`,
-		bridge.when, bridge.orgID)
+        VALUES (toUUID(?), '2026-09-04', 'ic@example.com', 'BRIDGE', 't', 9, 9, ?, ?)`,
+		twoWriterRepoID, bridge.when, bridge.orgID)
 }
 
 func TestNativeFinalizeFamilySurvivesTheBridgeReadback(t *testing.T) {
@@ -119,9 +135,11 @@ func TestNativeFinalizeFamilySurvivesTheBridgeReadback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"ic_finalize": &chWritingFinalizeFamily{conn: conn, orgID: orgID, when: native},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := handler.Work(ctx, finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatalf("Work = %v, want success", err)
@@ -142,14 +160,20 @@ func TestNativeFinalizeFamilySurvivesTheBridgeReadback(t *testing.T) {
 			"this mechanism exists to prevent", winner)
 	}
 
-	// Control: prove the readback CAN return BRIDGE, so the assertion above is
-	// discriminating rather than reading a table only one writer ever touched.
-	// Without this, a test against a store where the bridge could never write
-	// would pass for the wrong reason.
+	// Control: prove the readback FLIPS. The bridge's row shares the native
+	// row's dedup key and carries a later computed_at, so LIMIT 1 BY has to
+	// resolve the two into one and return the newer -- which is precisely the
+	// supersession the main assertion claims did not happen.
+	//
+	// This is what the control has to establish, and what the previous version
+	// did not: with a random repo_id per insert the two rows sat on different
+	// keys, both survived, and the read returned one of them by arbitrary
+	// ordering. It reported "BRIDGE" and looked like a passing control while
+	// never once demonstrating that a row can supersede another.
 	if err := conn.Exec(ctx, `INSERT INTO user_metrics_daily
         (repo_id, day, author_email, identity_id, team_id, loc_touched, delivery_units, computed_at, org_id)
-        VALUES (generateUUIDv4(), '2026-09-04', 'ic@example.com', 'BRIDGE', 't', 9, 9, ?, ?)`,
-		bridgeAt, orgID); err != nil {
+        VALUES (toUUID(?), '2026-09-04', 'ic@example.com', 'BRIDGE', 't', 9, 9, ?, ?)`,
+		twoWriterRepoID, bridgeAt, orgID); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.QueryRow(ctx, dedupRead, orgID, "ic@example.com").Scan(&winner); err != nil {

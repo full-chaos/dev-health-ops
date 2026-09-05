@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -295,6 +296,27 @@ type NativeFamilyExecutor interface {
 	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
 }
 
+// CONTRACT: THE CONTEXT IS BINDING (CHAOS-4290, #2241 r1 Finding 3).
+//
+// The ctx handed to ComputeFinalizeFamily is the LEASE context. It is
+// cancelled the moment lease renewal fails, which means another worker may
+// legitimately reclaim this run and start computing the same families. An
+// executor MUST pass this ctx to every ClickHouse and Postgres call it makes
+// and MUST return promptly once it is cancelled.
+//
+// An executor that blocks past cancellation is a CONTRACT VIOLATION, not a
+// slow executor. runWithLeaseRenewal waits for the work function to return
+// before it reports the renewal failure, so a non-cooperative executor keeps
+// FinalizeHandler.Work blocked while the lease it lost is held by someone
+// else -- the two-writer hazard again, arriving through liveness rather than
+// through the skip list.
+//
+// This cannot be enforced from the caller: Go has no way to interrupt a
+// goroutine that will not look at its context. It is enforced by review, by
+// the ctx-bound I/O rule above, and by the between-family cancellation check
+// in computeNativeFinalizeFamilies, which at least stops the REMAINING
+// families from running after the lease is gone.
+//
 // NativeFinalizeFamilyExecutor computes and writes ONE families.json family
 // whose scope is the RUN, not a partition -- the finalize-scope families that
 // run once after every partition has landed (CHAOS-4290, ic_finalize being
@@ -1018,14 +1040,13 @@ type FinalizeHandler struct {
 	// path exactly as before this capability existed.
 	nativeFinalizeFamilies    map[string]NativeFinalizeFamilyExecutor
 	nativeFinalizeFamilyNames []string
-	// nativeFinalizeObserver reports each finalize family's outcome.
-	// CHAOS-4290 shipped the mechanism WITHOUT this, which meant a family
-	// that failed every run degraded to Python invisibly -- fail-open with no
-	// counter is indistinguishable from fail-open that never fires. Optional:
-	// nil is a silent no-op, matching every other observer here.
+	// nativeFinalizeObserver reports each family's outcome. Reuses the
+	// PartitionHandler observer rather than declaring a parallel interface:
+	// the shape is identical and a second interface would mean two dashboards
+	// answering one question.
 	nativeFinalizeObserver jobruntime.DailyMetricsNativeFamilyObserver
-	// nativeFinalizeNow is injected so the duration a test observes is not
-	// wall-clock. nil means time.Now.
+	// nativeFinalizeNow is injected so the duration a test observes is the one
+	// the test controls; nil means time.Now.
 	nativeFinalizeNow func() time.Time
 }
 
@@ -1036,30 +1057,65 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 	return &FinalizeHandler{store: store, compatibility: compatibility}, nil
 }
 
+// pythonRecognisedFinalizeFamilies is the set of finalize-family names the
+// Python compatibility bridge actually gates on, in
+// src/dev_health_ops/metrics/job_daily.py's run_daily_metrics_finalize:
+//
+//	if "ic_finalize" not in skip_families:
+//
+// It is duplicated here because the Go and Python processes cannot share a
+// value, and duplicated deliberately rather than inferred: the alternative is
+// trusting that whatever string a caller registers happens to be one Python
+// understands. finalizeFamilyGateAgreementTest pins this slice against the
+// Python source, with a negative control, so the copy cannot drift silently.
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
+// ErrUnknownFinalizeFamily is returned when a registered finalize family is
+// not one the Python bridge gates on.
+var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not recognised by the compatibility bridge")
+
 // SetNativeFinalizeFamilies registers the finalize-scope families computed
 // natively in Go instead of by the Python compatibility bridge. Mirrors
 // PartitionHandler.SetNativeFamilies exactly -- REPLACES the map on every
 // call and sorts the names, so iteration is deterministic and one family's
 // failure never makes another's inclusion depend on Go map order.
-func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]NativeFinalizeFamilyExecutor) {
+//
+// IT VALIDATES THE NAMES (CHAOS-4290, #2241 r1 Finding 2). The names travel to
+// Python as SkipFamilies and are compared there by string equality, so a name
+// Python does not recognise means the native family runs AND the bridge runs:
+// two writers on an append-only table, both succeeding, the later one winning
+// silently. A typo -- "ic_finalise" -- is enough, and nothing downstream can
+// detect it, because from Python's side an unrecognised skip entry is
+// indistinguishable from one meant for a family it does not own.
+//
+// Registration is the last place the two vocabularies can be compared while a
+// human is still watching, so it fails LOUDLY here rather than degrading. It is
+// also all-or-nothing: a partial registration would leave the caller believing
+// a family is native when it is not.
+func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]NativeFinalizeFamilyExecutor) error {
 	if handler == nil {
-		return
+		return nil
 	}
-	handler.nativeFinalizeFamilies = families
 	names := make([]string, 0, len(families))
 	for name := range families {
+		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
+			return fmt.Errorf("%w: %q (bridge gates on %v)",
+				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	handler.nativeFinalizeFamilies = families
 	handler.nativeFinalizeFamilyNames = names
+	return nil
 }
 
-// SetNativeFinalizeFamilyObserver wires the optional telemetry observer for
-// finalize-scope families. It REUSES DailyMetricsNativeFamilyObserver rather
-// than declaring a parallel interface: the shape is identical (family, outcome,
-// rows, duration), and a second interface would mean two dashboards for one
-// question. Never gates behaviour -- an observer error is ignored.
-func (handler *FinalizeHandler) SetNativeFinalizeFamilyObserver(observer jobruntime.DailyMetricsNativeFamilyObserver) {
+// SetNativeFinalizeFamilyObserver attaches the per-family outcome counters.
+// Nil is a silent no-op, matching every other observer in this package: a
+// handler with no observer still behaves identically.
+func (handler *FinalizeHandler) SetNativeFinalizeFamilyObserver(
+	observer jobruntime.DailyMetricsNativeFamilyObserver,
+) {
 	if handler == nil {
 		return
 	}
@@ -1067,50 +1123,107 @@ func (handler *FinalizeHandler) SetNativeFinalizeFamilyObserver(observer jobrunt
 }
 
 func (handler *FinalizeHandler) finalizeNow() time.Time {
-	if handler == nil || handler.nativeFinalizeNow == nil {
-		return time.Now()
+	if handler.nativeFinalizeNow != nil {
+		return handler.nativeFinalizeNow()
 	}
-	return handler.nativeFinalizeNow()
+	return time.Now()
+}
+
+// observeFinalizeFamily reports one attempt. The observer's own error is
+// swallowed deliberately: telemetry that can fail a job is worse than no
+// telemetry, and this is the rule every observer in this package follows.
+func (handler *FinalizeHandler) observeFinalizeFamily(
+	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
+	rowsWritten int, started time.Time,
+) {
+	if handler.nativeFinalizeObserver == nil {
+		return
+	}
+	_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+		family, outcome, rowsWritten, handler.finalizeNow().Sub(started),
+	)
 }
 
 // computeNativeFinalizeFamilies runs every registered finalize-scope executor
 // and returns the names that SUCCEEDED, in sorted order.
 //
-// FAIL-OPEN, for the same reason computeNativeFamilies is (CHAOS-4276's
-// ruling, applied unchanged here): a native family's runtime failure is not a
-// finalize failure. It is left OUT of the returned skip list, so the bridge
-// computes that family exactly as it would have before any native executor
-// existed. Degrading one family to Python must never fail the whole finalize,
-// and must never turn a transient ClickHouse hiccup into a Permanent error.
+// FAIL-OPEN ONLY FOR A FAMILY THAT PROVABLY WROTE NOTHING (CHAOS-4290, #2241
+// r1 Finding 1). CHAOS-4276's blanket fail-open is unsafe on the finalize side
+// and was the original form here.
+//
+// The hazard: rowsWritten was ignored, so ANY error dropped the family from the
+// skip list and the bridge recomputed it. But a ClickHouse insert can commit and
+// then the call can still fail -- a transport error after the server committed,
+// or a first insert committing before a second fails. The native family has
+// then written real rows, the bridge writes a full second set on top, and on an
+// append-only table read through LIMIT 1 BY the later writer simply wins. Two
+// writers, no error, mixed generations across the family's output tables.
+//
+// So the policy is decided by rowsWritten, which the interface already returns
+// and which nothing used:
+//
+//	err == nil                  -> computed, skip the bridge
+//	err != nil, rowsWritten == 0 -> refused, bridge recomputes (fail-OPEN)
+//	err != nil, rowsWritten > 0  -> uncertain, family STAYS in the skip list
+//
+// The last case is fail-CLOSED and it is deliberately the pessimistic choice:
+// one possibly-partial writer is recoverable by a re-run, whereas two writers
+// racing on an append-only table is a silent, self-concealing corruption. It is
+// reported as "partial_write", never folded into "refused", because refused
+// promises the bridge covered the family and here nothing did. That outcome is
+// shared with CHAOS-4288 (#2235), which named the identical condition on the
+// partition side -- one vocabulary, so the two dashboards agree.
+//
+// Degrading one family to Python still never fails the whole finalize, and a
+// transient ClickHouse hiccup still never becomes a Permanent error.
 func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) []string {
 	if handler == nil || len(handler.nativeFinalizeFamilyNames) == 0 {
 		return nil
 	}
 	skipFamilies := make([]string, 0, len(handler.nativeFinalizeFamilyNames))
-	for _, name := range handler.nativeFinalizeFamilyNames {
+	for index, name := range handler.nativeFinalizeFamilyNames {
 		executor := handler.nativeFinalizeFamilies[name]
 		if executor == nil {
 			continue
 		}
-		started := handler.finalizeNow()
-		rows, err := executor.ComputeFinalizeFamily(ctx, run)
-		duration := handler.finalizeNow().Sub(started)
-		if err != nil {
-			// Refused, not silent: this is the counter whose absence made a
-			// persistently failing family invisible.
-			if handler.nativeFinalizeObserver != nil {
-				_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
-					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, duration,
+		// Between-family cancellation check. Once the lease is lost another
+		// worker may already be computing these families, so continuing to
+		// write is the two-writer hazard with extra steps. A family that never
+		// started provably wrote nothing, so it is REFUSED -- fail-open -- and
+		// the bridge covers it on whichever worker owns the run next.
+		if err := ctx.Err(); err != nil {
+			// Sliced from the LOOP INDEX, not from len(skipFamilies): a refused
+			// family is never appended, so the two diverge as soon as one fails
+			// and the wrong families would be reported as unrun.
+			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
+				handler.observeFinalizeFamily(
+					remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 				)
 			}
+			return skipFamilies
+		}
+		started := handler.finalizeNow()
+		rowsWritten, err := executor.ComputeFinalizeFamily(ctx, run)
+		switch {
+		case err == nil:
+			handler.observeFinalizeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
+			)
+		case rowsWritten > 0:
+			// Partial write: rows are already in an append-only table. Keep the
+			// family skipped so the bridge cannot become a second writer over
+			// what the native executor already landed.
+			handler.observeFinalizeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
+			)
+		default:
+			// Provably wrote nothing: safe to let the bridge compute it.
+			handler.observeFinalizeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
+			)
 			continue
 		}
 		skipFamilies = append(skipFamilies, name)
-		if handler.nativeFinalizeObserver != nil {
-			_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rows, duration,
-			)
-		}
 	}
 	return skipFamilies
 }

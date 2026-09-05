@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -136,7 +137,34 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		ctx, executor.conn, run.OrganizationID, day, teamIDs, repoIDs, repoNamesByID, patternResolver,
 	)
 	// Python: `if not repo_to_team_map: return 0`.
+	//
+	// TELEMETRY (codex round chaos-5084-2275-r1, P2): ResolveOwnershipThenPatterns
+	// fails OPEN per-team (a teamownership.OwnedRepoIDs query error degrades
+	// that team's contribution to empty rather than propagating -- see its own
+	// doc comment), so an empty repoToTeam here is genuinely ambiguous: it
+	// could mean "no repo in this org resolves to any team today" (a
+	// legitimate, retry-pointless zero), or it could mean "every team's
+	// ownership query failed" (a transient ClickHouse problem CHAOS-4290's
+	// finalize-scope NO-FAIL-OPEN policy says should have propagated and
+	// retried, not silently succeeded with zero rows). Distinguishing the two
+	// would need ResolveOwnershipThenPatterns to report per-team errors, a
+	// teamresolve API change out of scope for this PR (#2270 owns that
+	// package and is under separate review). This log line is the same
+	// operator-visible-signal-only tradeoff computePostBridgeNativeFamilies'
+	// own doc comment already documents and CHAOS-5183 ticketed for the
+	// analogous post_bridge case -- not a full fix, but Python's own prior
+	// path "at least logged the resolver/zero-row condition"
+	// (job_daily.py:650, job_daily.py:2331), and this restores that
+	// visibility on the Go side.
 	if len(repoToTeam) == 0 {
+		slog.Default().Warn("compounding_risk_team finalize resolved zero repo-to-team mappings",
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", day.Format("2006-01-02"),
+			"org_repo_count", len(orgRepoMetrics), "teams_attempted", len(teamIDs),
+			"cause", "either no repo resolves to any team today, or every team's "+
+				"ownership query failed -- ResolveOwnershipThenPatterns cannot "+
+				"distinguish the two (see comment above)",
+		)
 		return 0, nil
 	}
 

@@ -333,6 +333,27 @@ type RepoInputs struct {
 // -- not sorted, because Python's own order is exactly this and a reader
 // diffing two runs' output expects the same row order Python would have
 // produced for the same input.
+//
+// CORRECTION (codex round chaos-5084-2275-r1, P2) -- SCOPE OF THE BIT-EXACT
+// CLAIM ABOVE: "bit-exactly comparable to this function's output" is proven
+// ONLY against the golden fixture's own controlled input, which the
+// generator constructs by feeding _build_team_rows a repo_id-ordered dict
+// directly (bypassing ClickHouse). It is NOT proven against PRODUCTION
+// Python's actual runtime order: _fetch_repo_metrics_for_day's real query
+// (job_daily.py:613-660, and its CLI twin) has NO ORDER BY on its
+// GROUP BY repo_id, so Python's own live row order for a 3+-repo team is
+// whatever ClickHouse's query planner returns for that specific run -- not a
+// single well-defined sequence, and therefore not something a fixed choice
+// on the Go side (or on Python's own next run) could be verified bit-exact
+// against in general. LoadRepoMetricsForOrgDay's repo_id ORDER BY is a
+// deliberate, deterministic, defensible CANONICALIZATION -- repeatable and
+// auditable, and it is what the golden fixture is itself built from -- but
+// for a team with 3+ resolved repos and order-sensitive floating inputs, a
+// live Python run could legally disagree with it at the bit level (compensated
+// summation is not order-invariant; see pythonparity.Sum's own doc comment).
+// Tracked as CHAOS-5195; not fixed here because there is no single
+// production Python order to fix this port TO until Python's own query
+// gains a matching ORDER BY.
 func BuildTeamRows(
 	day time.Time,
 	orgID string,

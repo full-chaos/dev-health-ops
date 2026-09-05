@@ -224,15 +224,32 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 // caller's primary path), there is no narrower Python path to prefer here:
 // team rows need every repo in the org to attribute correctly by team.
 //
-// Carries the SAME two documented deviations as repoMetricsQuery, for the
-// SAME reasons: an explicit ORDER BY repo_id (Python's GROUP BY has none;
-// changes row order only -- see BuildTeamRows' doc comment for why this
-// specific query's order is now load-bearing for byte-exact team means, not
-// merely cosmetic the way it is for the repo-scope query), and ONE
-// argMax(tuple(...)) rather than five independent argMax calls (Python's
-// job_compounding_risk.py:75-86 has the same tie-on-computed_at exposure
-// repoMetricsQuery's doc comment describes; this port does not inherit it
-// here either).
+// Carries the SAME "one argMax(tuple(...))" fix as repoMetricsQuery, for the
+// SAME reason (Python's job_compounding_risk.py:75-86 has the same
+// tie-on-computed_at exposure repoMetricsQuery's doc comment describes; this
+// port does not inherit it here either) -- but NOT the same claim about its
+// ORDER BY repo_id being merely cosmetic.
+//
+// CORRECTION (codex round chaos-5084-2275-r1, P2, an overclaim this comment
+// used to make): for the REPO-scope query above, an explicit ORDER BY really
+// does "change ordering only, never a value" -- each repo's Compute() result
+// depends only on that repo's own inputs, so no ORDER BY choice can affect
+// what gets written. TEAM scope is different in kind, not degree:
+// BuildTeamRows' means are Neumaier-compensated sums (pythonparity.Sum),
+// which are NOT order-invariant at the bit level. Python's own production
+// query (job_daily.py:613-660's _fetch_repo_metrics_for_day, and this
+// query's CLI twin) has NO ORDER BY on its GROUP BY repo_id -- meaning
+// Python's OWN row order for this exact quantity is whatever ClickHouse's
+// query planner happens to return, not a single well-defined sequence this
+// port could target for guaranteed bit-exact parity. This query's ORDER BY
+// repo_id is therefore a DELIBERATE, DETERMINISTIC CANONICALIZATION -- a
+// defensible choice (repeatable, auditable, matches this package's own
+// golden fixture, which is itself repo_id-ordered by construction) -- but it
+// is NOT proven bit-identical to what a specific live Python run would
+// compute for a 3+-repo team with order-sensitive floats, because Python's
+// own answer for that case is not itself deterministic. See BuildTeamRows'
+// doc comment for the same correction on the aggregation side, and
+// CHAOS-5195 for the tracking ticket.
 const repoMetricsOrgWideQuery = `
 SELECT
     repo_id,

@@ -471,21 +471,37 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 // passed the coverage check before this fix. Fixed: pick each suffix's
 // OWN token pattern (matching what that language's real analyzer uses),
 // falling back to cLikeTokenPattern only for an unrecognised suffix.
-// NOTE for downstream PRs (#2268/#2269): this switch only knows the
-// suffixes THIS PR's own corpus uses (.go.txt/.rs.txt) -- add a case
-// here for each new suffix a later PR's own corpus introduces
+// BUG FIXED HERE (CHAOS-5156, go-rust confirmation pass): this used to
+// FAIL OPEN for any suffix not in the switch (`default: return
+// cLikeTokenPattern`) -- a future PR adding a new suffix without adding
+// a case here would silently tokenize that language's fixtures with the
+// PLAIN base pattern, reopening the exact backtick/raw-string/lifetime
+// class of bug this whole mechanism exists to close, with no test
+// failure to catch the omission (the comment warned about this but
+// enforced nothing). Fixed: fail CLOSED -- an unregistered suffix is a
+// test-authoring bug, not a legitimate "use the generic pattern" signal,
+// so it fails loudly via t.Fatalf instead of silently choosing a
+// pattern that might be wrong for that language.
+//
+// NOTE for downstream PRs (#2268/#2269): add a case here for each new
+// suffix a later PR's own corpus introduces
 // (.cs.txt/.kt.txt/.scala.txt/.swift.txt/.java.txt), pointing at that
-// language's own *TokenPattern var, rather than letting it silently fall
-// back to cLikeTokenPattern (which would reopen this exact bug for that
-// language's own backtick/raw-string/lifetime syntax).
-func filteredCorpusTokenPattern(suffix string) *regexp.Regexp {
+// language's own *TokenPattern var (or cLikeTokenPattern ONLY if that
+// language genuinely has no per-language addition at all, e.g. Scala --
+// state that explicitly in the case, don't let it fall through the
+// default).
+func filteredCorpusTokenPattern(t *testing.T, suffix string) *regexp.Regexp {
+	t.Helper()
 	switch suffix {
 	case ".go.txt":
 		return goTokenPattern
 	case ".rs.txt":
 		return rustTokenPattern
 	default:
-		return cLikeTokenPattern
+		t.Fatalf("filteredCorpusTokenPattern: no token pattern registered for suffix %q -- "+
+			"add a case pointing at that language's own *TokenPattern var (see this "+
+			"function's doc); do not let an unregistered suffix fall through silently", suffix)
+		return nil
 	}
 }
 
@@ -495,7 +511,7 @@ func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[
 	if err != nil {
 		t.Fatalf("read corpus dir: %v", err)
 	}
-	pattern := filteredCorpusTokenPattern(suffix)
+	pattern := filteredCorpusTokenPattern(t, suffix)
 	seen := map[string]bool{}
 	matched := 0
 	for _, entry := range entries {

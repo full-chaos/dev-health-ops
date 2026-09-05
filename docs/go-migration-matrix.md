@@ -49,7 +49,7 @@ two family tables are generated from `families.json`'s family-name sets (coverag
 `cmd/dev-health-worker/native_families_artifact_test.go` statically parses out of `daily.go`'s own
 registration wiring, so no curated Python dict or hand-set JSON field can silently drift from what the
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
-for those 2 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
+for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
 METRICS/RECOMMENDATIONS/WEBHOOKS/STREAMS/SCHEDULER-RECONCILER-OPERATOR is hand-curated prose (read against
 both CLI trees -- Python `dev_health_ops.cli` and Go `cmd/dev-health-workerctl`/`dev-health-stream-runner` --
 at the pinned sha below), because no JSON registry maps a CLI verb to a River kind or Python entrypoint.
@@ -208,7 +208,7 @@ function directly, even for families whose worker kind is now native:
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | CHAOS-5141 |
+| team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. Python `team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained as the compatibility-bridge fallback, gated behind `skip_families` | CHAOS-5141 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse | CHAOS-4284 |
 | testops_pipeline | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4284 |
@@ -273,7 +273,7 @@ Go owns the writes. Deleting the Python path is a deliberate follow-up, not part
 | `dev-hops work-graph build` | COMPAT-Python | `work_graph/runner.py run_work_graph_build`, wired through the SAME `workgraph.build` bridge as the worker path (table below) | CHAOS-4441 |
 | `dev-hops investment materialize` | COMPAT-Python | `work_graph/runner.py run_investment_materialization`. NOTE: the CLI verb is a SEPARATE entry point from the `investment.materialize` River kind, which is NATIVE (table below) -- the CLI still runs the Python implementation directly, and re-pointing it is CHAOS-4767's follow-up. | CHAOS-4767 |
 
-No `families.json` equivalent exists for these 2 River kinds (`internal/jobs/families.json` does not exist)
+No `families.json` equivalent exists for these 5 River kinds (`internal/jobs/families.json` does not exist)
 -- the table below is entirely hand-tracked in `WORKGRAPH_INVESTMENT_LEDGER` in
 `scripts/gen_go_migration_matrix_docs.py`; there is no live producer to drift-guard against mechanically.
 Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather than re-deriving there.
@@ -282,7 +282,7 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | Kind/area | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
 | DORA | NATIVE | see §3 | river, native | CHAOS-3092 R1 (Done) |
-| cognitive load (team_cognitive_load) | COMPAT-Python | see §2 | bridge | NONE found |
+| cognitive load (team_cognitive_load) | NATIVE | see §2 | river, native -- finalize scope, co-registered with ic_finalize | CHAOS-5141 |
 | investment.materialize | NATIVE | Go: `internal/jobs/investment/nativeexecutor.go` (implements the same `workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + `categorize` LLM plane + `chwrite` write. Python `materialize.py:1169-1854 materialize_investments()` is retained but no longer reached from the worker path (removal is CHAOS-4767) | river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment` | CHAOS-4441 (cutover landed) |
 | recommendations | NATIVE | see §3 | river, native | CHAOS-4281/CHAOS-3092 (Done) |
 | workgraph.build | COMPAT-Python (narrow native pre/post-step) | Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go's own doc comment) | bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor` | CHAOS-4924 (six remaining sub-builders + cutover) |

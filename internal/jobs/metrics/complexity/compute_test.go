@@ -182,6 +182,44 @@ func TestAnalyzeFileWithAcceptsAnAdditionalLanguageAnalyzer(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFileWithEmptyResultIsAZeroRowNotASkip(t *testing.T) {
+	// An analyzer that recognises NOTHING but raises nothing must produce a
+	// real row of zeros, not a skip. The two outcomes are different rows
+	// downstream: a skip contributes nothing at all, while a zero row still
+	// counts toward the repo's loc_total.
+	//
+	// Measured by lane-port-investment on lizard 1.23.0 (CHAOS-5156): a MATLAB
+	// file named *.m goes to the Objective-C reader, which recognises no
+	// functions and raises no exception. Under Python that reaches
+	// _build_result with an empty list and writes a zero row -- only an
+	// EXCEPTION returns None. radon behaves the same way on a Python module
+	// with no functions, which the corpus pins as rules_nofunctions.py.txt.
+	analyzers := DefaultAnalyzers()
+	analyzers["objective-c"] = func(path, source string) ([]int, bool, error) {
+		return []int{}, false, nil
+	}
+
+	got, err := AnalyzeFileWith("legacy.m", "function y = f(x)\ny = x;\nend\n",
+		DefaultThresholds(), analyzers)
+	if err != nil {
+		t.Fatalf("AnalyzeFileWith: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("an empty result with skipped=false must be a ZERO ROW, not a skip")
+	}
+	if got.FunctionsCount != 0 || got.CyclomaticTotal != 0 || got.CyclomaticAvg != 0.0 {
+		t.Errorf("expected zeros, got %+v", got)
+	}
+	// LOC still counts: the file exists and its lines are real, which is what
+	// makes this different from a skip.
+	if got.LOC != 3 {
+		t.Errorf("loc: got %d, want 3 -- a zero row still contributes loc", got.LOC)
+	}
+	if got.Language != "objective-c" {
+		t.Errorf("language: got %q, want objective-c", got.Language)
+	}
+}
+
 func TestBuildFileResultIsStrictlyAboveThreshold(t *testing.T) {
 	// Python: `sum(1 for c in complexities if c > threshold)`. A block exactly
 	// AT the threshold is not counted; using >= would over-report every repo.

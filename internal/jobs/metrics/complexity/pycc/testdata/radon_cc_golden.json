@@ -218,6 +218,16 @@
       "skipped": false,
       "very_high_complexity_functions": 0
     },
+    "rules_nofunctions.py.txt": {
+      "blocks": [],
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 36,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
     "rules_softkeywords.py.txt": {
       "blocks": [
         {

@@ -633,7 +633,9 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // r2 ruling a native finalize failure redrives the run instead of degrading to
 // Python, so an unregistered family would make a redrive loop invisible rather
 // than merely a silent degradation.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ic_finalize"}
+//
+// "review_edges" added itself correctly -- included here from that merge.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "review_edges", "ic_finalize"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

@@ -303,6 +303,71 @@
 #      wrapper has gotten this far, its own round .log is guaranteed to
 #      exist no matter what happens next.
 #
+# v4.8.6 (2026-09-04, chris's ruling, RE-RULED same day at 07:37 PDT -- see
+# below): on bigboy every Go run -- gates, integration suites, launchers,
+# codex clones -- moved to the SHARED fleet caches, never per-lane/per-round
+# ones, and nothing may ever `go clean` them. This wrapper's own per-round
+# GOCACHE/GOMODCACHE/GOPATH scratch dirs (v4.8.2/v4.8.4 above) were the one
+# place in the fleet still creating fresh throwaway caches on every round --
+# on Linux ONLY, this wrapper now:
+#
+#   1. Honours the caller's GOCACHE/GOMODCACHE environment values (the plain
+#      Go env vars, not the CODEX_REVIEW_* overrides, though those still win
+#      when set -- see below), defaulting to /var/lib/oci-cache/go-build and
+#      /var/lib/oci-cache/go-mod respectively -- the exact shared, ubuntu-
+#      owned volume (ext4 on /dev/sdb) every other Go invocation on that
+#      host now targets, SHARED WITH THE ARC POOL. Precedence, highest
+#      first: CODEX_REVIEW_GOCACHE/GOMODCACHE (explicit per-call override,
+#      unchanged from v4.8.2/v4.8.4) > the caller's own GOCACHE/GOMODCACHE
+#      (new) > the shared-volume default (new).
+#      RULING HISTORY, because it moved twice in six minutes the same day
+#      and a stale copy of the first version is exactly the failure mode
+#      this note exists to prevent: the 07:31 PDT ruling named
+#      $HOME/.cache/go-build and $HOME/go/pkg/mod. The 07:37 PDT re-ruling
+#      (chris, "Yes use it") retargeted the whole fleet at
+#      /var/lib/oci-cache/{go-build,go-mod} instead and named the $HOME
+#      paths LEGACY -- "leave in place, no lane writes to them". This
+#      wrapper implements the 07:37 target. At the time this was written the
+#      two were bind-mounted to the same inodes on bigboy (verified:
+#      `stat -c '%d:%i'` on $HOME/.cache/go-build and
+#      /var/lib/oci-cache/go-build both printed 2064:10485761; $HOME/go/pkg/
+#      mod and /var/lib/oci-cache/go-mod both printed 2064:7340033) -- so
+#      the two rulings were behaviourally identical when this shipped, but
+#      the bind mount is not this wrapper's to depend on, and the LEGACY
+#      label says it may not stay.
+#   2. GOPATH defaults to $HOME/go (unchanged reasoning from v4.8.4) --
+#      neither ruling above names a GOPATH target explicitly, and $HOME/go
+#      itself (as opposed to $HOME/go/pkg/mod, which the 07:37 ruling DOES
+#      name legacy) is not called out as legacy either. Same precedence
+#      pattern: CODEX_REVIEW_GOPATH > the caller's own GOPATH > $HOME/go.
+#   3. STOPS creating a fresh, timestamped, per-round directory for all
+#      three -- `mkdir -p` only, against the resolved (shared, persistent)
+#      path, never a new $LANE_KEY-$TS-suffixed one.
+#   4. STOPS reaping/removing them in cleanup(): a shared, persistent
+#      cache is not this run's to delete just because this run resolved
+#      it. cleanup() on Linux therefore skips the RGOCACHE/RGOMODCACHE/
+#      RGOPATH removal entirely (CODEX_KEEP_CACHE is meaningless there now
+#      -- there is nothing per-round left to keep or discard). The
+#      --reap-mine/--reap-stale subcommands are UNCHANGED: their glob
+#      patterns (codex-review-*-LANE-*, codex-go-cache-*, etc.) only ever
+#      matched the old per-round /tmp names, which this wrapper no longer
+#      creates on Linux, so there is nothing new for them to reap and
+#      nothing for them to accidentally catch in the shared paths either.
+#
+# The macOS (darwin) path is COMPLETELY UNCHANGED: it keeps routing
+# GOCACHE/GOMODCACHE/GOPATH/GOTMPDIR/TMPDIR under literal /tmp, per-round,
+# reaped by cleanup() exactly as v4.8.5 did -- that is what makes Go
+# executable inside the sandbox on macOS at all (see the v4.3/v4.4 notes
+# above); a $TMPDIR-rooted or $HOME-rooted cache fails there. GOSUMDB stays
+# at its default (ON) on both hosts -- this is a cache-location change, never
+# a checksum-verification change. Everything else in this file -- the
+# 0555-safe rm_rf_writable() cleanup of review worktrees and RGOTMPDIR/
+# RTMPDIR, the LANE_KEY basename+hash keying (still used for the review
+# worktree and RGOTMPDIR/RTMPDIR names, which are not Go caches), the OUTDIR
+# mkdir, the warm step and its go.mod gate, the WARM_MODULES `|| true` count
+# pipeline, creating $L before anything else can die, and warm-step
+# SKIPPED reason=no-go.mod for a repo with none -- is unchanged.
+#
 # Usage: scripts/codex-review.sh [options]   (run from the lane worktree,
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
@@ -323,8 +388,13 @@
 #   Standalone maintenance subcommands -- see v4.8.2 note above. Exit 0 on
 #   completion (busy/skipped dirs are reported, not errors); non-zero only
 #   on a usage error (missing argument).
+#
+# codex-review.sh --version
+#   Prints "codex-review.sh vX.Y.Z" and exits 0.
 
 set -euo pipefail
+
+VERSION="4.8.6"
 
 warn() { printf 'codex-review: %s\n' "$*" >&2; }
 die()  { warn "$*"; exit 1; }
@@ -470,6 +540,10 @@ reap_stale() {
 }
 
 case "${1:-}" in
+  --version)
+    printf 'codex-review.sh v%s\n' "$VERSION"
+    exit 0
+    ;;
   --reap-mine)
     [ $# -ge 2 ] || die "usage: codex-review.sh --reap-mine LANE"
     reap_mine "$2"
@@ -498,6 +572,56 @@ done
 WT=$(cd "$WT" && pwd) || die "worktree $WT not found"
 git -C "$WT" rev-parse --git-dir >/dev/null 2>&1 || die "$WT is not a git worktree"
 NAME=${NAME:-$(basename "$WT")}
+# v4.8.6 (generalized 09-04, chris/team-lead ruling after the LANE-scratch
+# confirmation-pass finding): NAME becomes a path/filename component at
+# MULTIPLE sites below -- V/L (this round's own verdict+log filenames, a
+# few lines down), RESIDUE_DIR (preserve_residue(), later in the file), and
+# on Linux, LANE_SCRATCH_ROOT. A caller-supplied `-n` value is used
+# VERBATIM and untrusted; the DEFAULT (`basename "$WT"`) is safe on its own
+# merits (WT was just canonicalized to an absolute path above, and can
+# never literally basename to `.`/`..`), but a `-n` value never goes
+# through basename at all in the general (non-Linux-lane-scratch) path --
+# `-n '../../../../tmp/evil'` reached V/L and RESIDUE_DIR completely
+# unsanitized before this fix, letting a round's own "verdict" file land
+# anywhere the process can write, escaping OUTDIR entirely.
+#
+# Fixed with ONE mechanism, validated ONCE, here -- not a sanitize-then-
+# reject helper duplicated at every site NAME reaches (that duplication is
+# exactly how the earlier Linux-only `basename --`-then-case-check fix
+# still missed this: it protected the ONE site its own author was looking
+# at while leaving V/L/RESIDUE_DIR, which never called that helper at all,
+# wide open). A positive ALLOWLIST, not a blocklist: NAME must be
+# non-empty, start with an alnum, and contain only alnum/`.`/`_`/`-`
+# afterward -- which structurally also excludes `.`, `..`, and anything
+# containing `/` (a leading `.` already fails the first-character check),
+# so there is no separate "and also reject . and .." clause to keep in
+# sync with the regex by hand. `LC_ALL=C` pins the character-class
+# semantics so this can never accept something unexpected under a non-C
+# locale. Refuse outright on anything else -- no silent rewriting, no
+# best-effort basename-and-hope.
+NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+# v4.8.6, found by confirmation-pass round #3 on bigboy, EXECUTED, independently
+# reproduced by the lane: `printf '%s' "$NAME" | grep -Eq "$RE"` is LINE-oriented
+# -- grep -q succeeds if ANY line of its input matches, and `^`/`$` in the ERE
+# anchor to LINE boundaries, not the whole string's boundaries. A NAME
+# containing an embedded newline with a SAFE first line and a malicious
+# second line (e.g. NAME=$'lane\n../../../escaped/owned') therefore passed
+# this gate -- the first line alone satisfied the regex -- and the full
+# multi-line value then reached `mkdir -p` as one argument whose later
+# `/../` components are still real path separators to mkdir, escaping the
+# mandated root. Fixed: bash's OWN `[[ =~ ]]` matches the ENTIRE string in
+# one pass, no per-line splitting, so the same regex now actually enforces
+# what it was written to enforce. This is the one place in this script
+# where `[[` is used instead of the POSIX `[`/`case` idiom everywhere
+# else -- deliberately: `[[ =~ ]]` is bash-builtin regex matching over the
+# whole argument, and no POSIX-`[`-compatible construct offers that same
+# guarantee without re-introducing this exact line-splitting hazard via an
+# external tool. Run inside a subshell so `LC_ALL=C` (character-class
+# determinism, same reasoning as the old grep invocation) is scoped to
+# just this check, never leaking into the rest of the script's locale.
+if ! (LC_ALL=C; [[ "$NAME" =~ $NAME_ALLOWLIST_RE ]]); then
+  die "-n/round name '$NAME' is not a safe path/filename component -- must be non-empty, start with a letter or digit, and contain only letters, digits, '.', '_', '-' afterward, with NO embedded newline (this also rejects '.', '..', and anything containing '/' or a line break). Refusing to guess a substitute."
+fi
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}
 # v4.8.4: OUTDIR (and the log dir, which is the same directory -- see V/L
@@ -587,16 +711,107 @@ else
   WT_HASH=$$
 fi
 LANE_KEY="$LANE-$WT_HASH"
-RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE_KEY-$TS}"
-mkdir -p "$RGOCACHE" || die "cannot create review GOCACHE $RGOCACHE"
-# GOMODCACHE, bounded for the same reason as GOCACHE: an unset GOMODCACHE
-# defaults to $HOME/go/pkg/mod, which read-only denies exactly like the
-# denied-$TMPDIR case above, and workspace-write should not be trusted to
-# widen access to the user's real mod cache just because it happens to be
-# writable there. New in v4.8.2 -- v4.8.1 and earlier left GOMODCACHE
-# unbounded.
-RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE_KEY-$TS}"
-mkdir -p "$RGOMODCACHE" || die "cannot create review GOMODCACHE $RGOMODCACHE"
+
+# HOST_OS resolved ONCE, here, and reused below (sandbox default, GOPATH
+# default) rather than re-running `uname -s` at each site -- one source of
+# truth for which branch of the v4.8.6 Linux/macOS split a given line is on.
+#
+# `builtin command -p uname`, not a bare `uname` or a plain `command -p
+# uname`:
+#   - a bare invocation resolves `uname` through the CALLER's PATH, so a
+#     caller-controlled shim earlier on PATH could make this resolve to
+#     something other than the real system uname (found by codex round
+#     lane-wrapper-v486-20260904T082800: an exact-but-WRONG token from a
+#     PATH-shadowed uname passes the validation below just as legitimately
+#     as a real one would, and could route a genuinely-Linux host into the
+#     macOS cleanup branch the same way the malformed-uname P1 above did).
+#     `command -p` closes this: it runs `uname` against a fixed,
+#     system-defined default PATH instead of the caller's own.
+#   - but `command` ITSELF is a name a caller's environment can shadow with
+#     a shell FUNCTION (e.g. via `BASH_ENV`, which non-interactive bash
+#     sources before this script runs) -- and a plain `command -p uname -s`
+#     resolves the word `command` the normal way, so a `command() { ... }`
+#     function shadow wins over the real builtin even though `uname`
+#     itself is never touched (found by codex round
+#     lane-wrapper-v486-20260904T084834, EXECUTED: a BASH_ENV-defined
+#     `command` function made this exact line return a forged value).
+#     `builtin` is the fix for THAT: it looks its argument up as a shell
+#     BUILTIN specifically, skipping function (and alias) resolution for
+#     that name -- `builtin command -p uname -s` cannot be redirected by
+#     either a PATH shim OR a shell-function override of `command`.
+#     Measured both attacks directly: a PATH-shadowed uname and a
+#     BASH_ENV-shadowed `command` function are both defeated by this exact
+#     form; neither `command -p uname -s` alone nor `\command -p uname -s`
+#     (backslash only defeats ALIAS lookup, not a function) close the
+#     second one.
+#   - a hostile environment that goes one level further and shadows
+#     `builtin` itself (or `bash` the interpreter, or the coreutils
+#     `uname` binary on disk) is out of scope: at that point the caller
+#     already has full control over this process's entire execution
+#     environment, and no invocation form defends against that -- the
+#     threat model here is "keep an accidental or ordinary-shim PATH/env
+#     quirk from silently deleting the shared cache," not "survive an
+#     adversary who already owns the shell running this script."
+HOST_OS="$(builtin command -p uname -s)"
+# v4.8.6 P1 (found by codex round lane-wrapper-v486-20260904T080604, EXECUTED
+# and independently reproduced): every `[ "$HOST_OS" = Linux ]` check in this
+# file does an EXACT string match, and every site that checks it does so the
+# SAME way -- but "the same wrong way" is still wrong. A malformed uname
+# output (measured: a wrapped `uname` emitting a trailing `\r`, e.g. under an
+# unusual shell/CI wrapper) fails the exact-match at EVERY site consistently,
+# which sounds safe but is not: a caller that has set CODEX_REVIEW_GOCACHE/
+# CODEX_REVIEW_GOMODCACHE to literal /var/lib/oci-cache paths (a SUPPORTED,
+# documented override -- this file's own v4.8.2 comment describes pointing
+# CODEX_REVIEW_GOCACHE at "a warm, already-writable" cache) on a host that
+# genuinely IS Linux still gets misrouted into the macOS/`else` branch
+# everywhere `$HOST_OS` is checked -- INCLUDING cleanup()'s removal branch,
+# which then calls rm_rf_writable on the real shared bigboy cache. This is
+# exactly the "go clean -cache on the shared cache" incident class this file
+# already warns about elsewhere, reached through a detection bug rather than
+# a cleanup bug. Fail closed HERE, immediately, rather than letting an
+# unrecognised value silently pick a branch at every downstream site: only
+# the two host kernels this file actually branches on are accepted.
+case "$HOST_OS" in
+  Linux | Darwin) ;;
+  *) die "unrecognised or malformed 'uname -s' output '$HOST_OS' -- refusing to guess whether this host's Go caches are the fleet-shared bigboy volume (Linux) or a per-round /tmp cache (Darwin/other); an unexpected value here must never silently fall through to a cache-removal branch" ;;
+esac
+
+# v4.8.6 (chris's ruling, 2026-09-04, RE-RULED 07:37 PDT -- see the
+# top-of-file changelog's "RULING HISTORY" note for the full story and why
+# it names the fleet-shared /var/lib/oci-cache volume, not a $HOME path):
+# on bigboy (Linux) every Go run -- gates, integration suites, launchers,
+# codex clones -- uses the SHARED caches, never a per-lane/per-round one,
+# and this wrapper's own GOCACHE/GOMODCACHE are no exception any more. On
+# macOS the behaviour below this `if` is BYTE-FOR-BYTE what v4.8.2/v4.8.4
+# already did: a fresh, timestamped, per-round dir under /tmp, reaped by
+# cleanup() -- see the top-of-file changelog for why (macOS sandbox
+# writability, proven per v4.3/v4.4).
+if [ "$HOST_OS" = Linux ]; then
+  # Precedence: CODEX_REVIEW_GOCACHE/GOMODCACHE (explicit per-call override,
+  # unchanged since v4.8.2) > the caller's own GOCACHE/GOMODCACHE (new in
+  # v4.8.6 -- a login shell that already exports these) > the shared-volume
+  # default (new in v4.8.6). No $LANE_KEY/$TS suffix anywhere in this branch
+  # -- that suffix is what made the old path per-round; a shared path has
+  # none.
+  RGOCACHE="${CODEX_REVIEW_GOCACHE:-${GOCACHE:-/var/lib/oci-cache/go-build}}"
+  RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-${GOMODCACHE:-/var/lib/oci-cache/go-mod}}"
+else
+  RGOCACHE="${CODEX_REVIEW_GOCACHE:-/tmp/codex-review-gocache-$LANE_KEY-$TS}"
+  # GOMODCACHE, bounded for the same reason as GOCACHE: an unset GOMODCACHE
+  # defaults to $HOME/go/pkg/mod, which read-only denies exactly like the
+  # denied-$TMPDIR case above, and workspace-write should not be trusted to
+  # widen access to the user's real mod cache just because it happens to be
+  # writable there. New in v4.8.2 -- v4.8.1 and earlier left GOMODCACHE
+  # unbounded.
+  RGOMODCACHE="${CODEX_REVIEW_GOMODCACHE:-/tmp/codex-review-modcache-$LANE_KEY-$TS}"
+fi
+# `mkdir -p` either way: on macOS this CREATES the fresh per-round dir (as
+# before); on Linux the shared path should already exist (chris's standing
+# bigboy setup), but `-p` is a harmless no-op if it does and a one-time
+# bootstrap if it somehow does not -- it is never "creating a per-round dir",
+# because the path itself carries no per-round suffix on that branch.
+mkdir -p "$RGOCACHE" || die "cannot create/find GOCACHE $RGOCACHE"
+mkdir -p "$RGOMODCACHE" || die "cannot create/find GOMODCACHE $RGOMODCACHE"
 
 # Resolve the bounds ONCE, into variables, so the warn line below reports
 # exactly what is applied. The first version re-evaluated the defaults inside
@@ -632,7 +847,7 @@ RGOMAXPROCS="${CODEX_REVIEW_GOMAXPROCS:-4}"
 # workspace-write is therefore the Linux default; it is not a widening choice,
 # it is the only mode in which Go executes there at all. CODEX_REVIEW_SANDBOX,
 # when the caller sets it explicitly, always wins over this host default.
-case "$(uname -s)" in
+case "$HOST_OS" in
   Linux) RSANDBOX="${CODEX_REVIEW_SANDBOX:-workspace-write}" ;;
   *)     RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}" ;;
 esac
@@ -647,13 +862,55 @@ START_EPOCH=$(date +%s)   # bounds the session-transcript recovery search
 # reapable naming scheme. Keyed on LANE+TS rather than $NAME: two concurrent
 # rounds against the same lane with the same explicit -n NAME must still get
 # distinct, individually reapable dirs.
-RW=$(mktemp -d "${TMPDIR:-/tmp}/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
+#
+# v4.8.6 (chris's ruling, same day, after a bigboy boot-drive-full incident):
+# on Linux, EVERY wrapper-owned per-round scratch dir below -- the review
+# worktree, Go's own work dir, and the shell TMPDIR override -- moves under
+# /var/lib/oci-cache/lane-scratch/<lane>/ instead of /tmp. <lane> is $NAME,
+# the same value the round's own verdict/log filenames are keyed on. This is
+# a FLEET-MANDATED location, not an optional nicety: fails closed (die) if
+# that root cannot be created, rather than silently falling back to /tmp and
+# quietly violating the ruling on a host where the mount is missing or
+# unwritable. macOS is UNCHANGED -- still /tmp, for the sandbox-writability
+# reasons documented throughout this file (v4.3/v4.4).
+#
+# KNOWN RESIDUAL GAP, not fixed by this change: reap_bases() (top of file,
+# --reap-mine/--reap-stale) still scans only /tmp and $TMPDIR. On Linux, a
+# round's OWN cleanup() trap already removes RW/RGOTMPDIR/RTMPDIR
+# unconditionally regardless of where they live, so normal operation is
+# unaffected -- this only means a round that gets SIGKILLed before its trap
+# runs now leaves an orphan under lane-scratch that --reap-stale cannot see.
+# Flagged for a follow-up, not blocking this change.
+if [ "$HOST_OS" = Linux ]; then
+  # v4.8.6: this used to re-derive its own SAFE_LANE_NAME here via
+  # `basename --` plus a local `.`/`..`/`/` rejection case -- a
+  # sanitize-then-reject helper that protected ONLY this one site while
+  # V/L and RESIDUE_DIR (elsewhere in the file), which never called it,
+  # stayed wide open to the exact same `-n` value (see the "item 3" finding
+  # this generalized). Superseded: $NAME is now validated ONCE against a
+  # positive allowlist right after it's resolved (a few hundred lines up,
+  # search NAME_ALLOWLIST_RE) and this file dies before reaching here if it
+  # isn't safe -- so $NAME can be used directly as a path component below,
+  # no local re-sanitization needed, and there's only one place left that
+  # can ever get this wrong.
+  LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
+  mkdir -p "$LANE_SCRATCH_ROOT" \
+    || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"
+  RW_BASE="$LANE_SCRATCH_ROOT"
+  RGOTMPDIR_BASE="$LANE_SCRATCH_ROOT"
+  RTMPDIR_BASE="$LANE_SCRATCH_ROOT"
+else
+  RW_BASE="${TMPDIR:-/tmp}"
+  RGOTMPDIR_BASE="/tmp"
+  RTMPDIR_BASE="/tmp"
+fi
+RW=$(mktemp -d "$RW_BASE/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
-# /tmp for the same reason as RGOCACHE above.
-RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
+# /tmp (macOS) / lane-scratch (Linux) for the same reason as RGOCACHE above.
+RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -667,22 +924,37 @@ RGOTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 # sort, a python NamedTemporaryFile -- fails the same way, and the reviewer
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
-RTMPDIR=$(mktemp -d "/tmp/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
+RTMPDIR=$(mktemp -d "$RTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
 
-# v4.8.4: per-round GOPATH. On bigboy, ~/go and ~/go/pkg are root:root 755
-# (chris chowns this separately -- never this script's job), so an unset
-# GOPATH defaulting to $HOME/go makes `go mod download all` fail trying to
-# create $GOPATH/pkg/sumdb/... -- an ENOENT that reads exactly like a
-# network failure and is not one; it is a permission denial one directory
-# up. Same pattern as RGOTMPDIR/RGOCACHE above: a per-round dir under
-# /tmp, cleaned up by cleanup() below, unless the caller pins
-# CODEX_REVIEW_GOPATH (e.g. to a warm, already-writable GOPATH it manages
-# itself). GOSUMDB verification is left at its default (ON) either way --
-# this fixes a permission problem, it does not relax checksum
-# verification.
+# v4.8.4 introduced a per-round GOPATH because bigboy's ~/go and ~/go/pkg
+# used to be root:root 755, and an unset GOPATH defaulting to $HOME/go made
+# `go mod download all` fail trying to create $GOPATH/pkg/sumdb/... -- an
+# ENOENT that reads exactly like a network failure and is not one.
+#
+# v4.8.6 (chris's ruling): that per-lane workaround is retired on Linux.
+# Neither the 07:31 nor the 07:37 ruling (see the top-of-file changelog's
+# "RULING HISTORY" note) names a GOPATH target explicitly -- both are about
+# GOCACHE/GOMODCACHE, which now live on the shared /var/lib/oci-cache volume
+# (see above), not under $GOPATH at all. GOPATH itself is verified writable
+# on bigboy today (measured: $HOME/go is ubuntu:ubuntu 755, not the
+# root:root this comment used to warn about), so this wrapper keeps Go's own
+# default rather than inventing a new one: CODEX_REVIEW_GOPATH (explicit
+# override) > the caller's own GOPATH (new) > $HOME/go (Go's own default).
+# No per-round dir, no $LANE_KEY/$TS suffix. If a future warm-step failure
+# on Linux names an unwritable path under this, that is bigboy's setup to
+# fix, not a per-round workaround for this script to reintroduce.
+#
+# macOS is UNCHANGED: still a fresh per-round dir under /tmp, reaped by
+# cleanup() below, for the same sandbox-writability reason as RGOTMPDIR/
+# RGOCACHE. GOSUMDB verification is left at its default (ON) on both hosts
+# either way -- this has only ever been a permission/location fix, never a
+# checksum-verification change.
 if [ -n "${CODEX_REVIEW_GOPATH:-}" ]; then
   RGOPATH="$CODEX_REVIEW_GOPATH"
   mkdir -p "$RGOPATH" || die "cannot create GOPATH $RGOPATH"
+elif [ "$HOST_OS" = Linux ]; then
+  RGOPATH="${GOPATH:-$HOME/go}"
+  mkdir -p "$RGOPATH" || die "cannot create/find GOPATH $RGOPATH"
 else
   RGOPATH=$(mktemp -d "/tmp/codex-review-gopath-$LANE_KEY-$TS-XXXXXX") \
     || die "cannot create per-round GOPATH"
@@ -856,21 +1128,35 @@ cleanup() {
   # RTMPDIR too, or every round leaves a /tmp/codex-review-gotmp-*-shell-*
   # behind.
   rm_rf_writable "${RTMPDIR:-}"
-  # RGOPATH (v4.8.4): the per-round GOPATH scratch dir -- see where it is
-  # created, above. Same rules: this run's own dir, never $HOME/go.
-  rm_rf_writable "${RGOPATH:-}"
-  # v4.8.2: GOCACHE/GOMODCACHE, by exact variable and never a glob (see the
-  # top-of-file changelog note). Straight rm -rf, not `go clean -cache`
-  # scoped to the dir first: for a large cache `go clean -cache` walks and
-  # re-verifies every entry, which is not cheap, while rm -rf on a path this
-  # script itself created and owns exclusively is. CODEX_KEEP_CACHE=1 is the
-  # explicit opt-out for a caller that wants the old warm-across-rounds
-  # cache back (see RGOCACHE above) and will police its own cleanup.
-  if [ "${CODEX_KEEP_CACHE:-0}" != 1 ]; then
-    rm_rf_writable "${RGOCACHE:-}"
-    rm_rf_writable "${RGOMODCACHE:-}"
+  # v4.8.6: on Linux, RGOPATH/RGOCACHE/RGOMODCACHE are now the SHARED,
+  # PERSISTENT bigboy caches (see where they are resolved, above) -- not
+  # this run's own scratch dirs any more. Removing them would be exactly
+  # the "go clean -cache on the shared cache" incident class this file
+  # already warns about elsewhere (lane-4818, 09-02), just via rm -rf
+  # instead of `go clean`. cleanup() on Linux therefore does not touch any
+  # of the three, ever, regardless of CODEX_KEEP_CACHE -- there is no
+  # per-round remnant left to keep or discard. On macOS this block is
+  # UNCHANGED from v4.8.4: all three are this run's own per-round dirs
+  # under /tmp, removed here unless CODEX_KEEP_CACHE=1.
+  if [ "$HOST_OS" = Linux ]; then
+    warn "shared bigboy caches left in place (not per-round any more): GOPATH=$RGOPATH GOCACHE=$RGOCACHE GOMODCACHE=$RGOMODCACHE"
   else
-    warn "CODEX_KEEP_CACHE=1 -- keeping $RGOCACHE and $RGOMODCACHE"
+    # RGOPATH (v4.8.4): the per-round GOPATH scratch dir -- see where it is
+    # created, above. Same rules: this run's own dir, never $HOME/go.
+    rm_rf_writable "${RGOPATH:-}"
+    # v4.8.2: GOCACHE/GOMODCACHE, by exact variable and never a glob (see the
+    # top-of-file changelog note). Straight rm -rf, not `go clean -cache`
+    # scoped to the dir first: for a large cache `go clean -cache` walks and
+    # re-verifies every entry, which is not cheap, while rm -rf on a path this
+    # script itself created and owns exclusively is. CODEX_KEEP_CACHE=1 is the
+    # explicit opt-out for a caller that wants the old warm-across-rounds
+    # cache back (see RGOCACHE above) and will police its own cleanup.
+    if [ "${CODEX_KEEP_CACHE:-0}" != 1 ]; then
+      rm_rf_writable "${RGOCACHE:-}"
+      rm_rf_writable "${RGOMODCACHE:-}"
+    else
+      warn "CODEX_KEEP_CACHE=1 -- keeping $RGOCACHE and $RGOMODCACHE"
+    fi
   fi
   if [ "$KEEP" -eq 1 ]; then warn "keeping review worktree $RW (-k)"; return; fi
   git -C "$WT" worktree remove --force "$RW" 2>/dev/null \
@@ -1049,6 +1335,14 @@ download blocked, a denied cache path, anything else), say so explicitly and
 in those words -- "go test unavailable" -- and label every remaining claim
 in your verdict EXECUTED or ARGUED, so a reader can tell a run result from a
 source-trace inference at a glance.
+
+If a `go test`/`go run`/`go build` fails with `creating work dir: ... mkdir
+...: operation not permitted`, RETRY IT EXACTLY ONCE before concluding go is
+unavailable. Measured directly (two lanes, macOS read-only sandbox): the
+FIRST invocation in a round can hit this even though GOTMPDIR/GOCACHE are
+correctly pointed at a writable path, and an immediate retry with no other
+change succeeds a few seconds later. One retry only -- if it fails a second
+time, that is a real "go test unavailable", not a hiccup, and you say so.
 STANDING_RULES
 # Second heredoc, UNQUOTED delimiter on purpose: this one interpolates the
 # round's actual RGOMODCACHE/HOME paths at generation time, so the reviewer
@@ -1056,15 +1350,42 @@ STANDING_RULES
 # have to resolve itself inside the sandbox. Kept separate from the
 # single-quoted STANDING_RULES block above so that block's own `$`/backtick
 # markdown-code-span characters never need escaping.
+#
+# v4.8.6 P2 (found by codex round lane-wrapper-v486-20260904T082800, EXECUTED):
+# the retry fallback below used to unconditionally point the reviewer at
+# $HOME/go/pkg/mod -- correct pre-v4.8.6, when $RGOMODCACHE was a COLD
+# per-round cache and the host's real, long-lived default module cache was
+# the only place with useful content to fall back to. On Linux, $RGOMODCACHE
+# IS now that persistent, shared cache (or a caller-set explicit location) --
+# $HOME/go/pkg/mod is the ruling's own LEGACY path, no lane writes there any
+# more, so it is likely stale or empty and routing a reviewer's retry at it
+# is directionless guidance at best. Linux gets no fallback path suggestion
+# at all (a lookup failure against the persistent shared cache is a real gap
+# worth reporting, not a location problem to route around).
+#
+# v4.8.6 addendum (chris via team-lead, same day): $HOME/go/pkg/mod is not a
+# safe suggestion on macOS EITHER -- it names a DIFFERENT USER's cache on
+# any host other than this one, and even here it is an unrelated, unwarmed
+# location with no particular reason to have what the round needs. The
+# macOS branch now quotes the round's OWN resolved $RGOMODCACHE (the same
+# value already stated above, and the one already warmed and
+# offline-resolve-proven before the round started) instead of switching
+# location at all. This is not redundant: it ties into the
+# "creating work dir" retry-once rule immediately below in the standing
+# rules -- on macOS a `go test` module-lookup failure inside the sandbox is
+# more often a transient read-only-sandbox hiccup on the FIRST invocation
+# than a genuinely missing module (measured by two lanes), so retrying the
+# SAME cache is the correct move, not hunting for a different one.
+if [ "$HOST_OS" = Linux ]; then
+  MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, that means the persistent shared cache above is genuinely missing something -- say so explicitly (name the missing module) and fall back to a source-trace verdict. Do NOT retry against \$HOME/go/pkg/mod: that path is legacy and no lane writes to it, so it is not a meaningful fallback."
+else
+  MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, retry ONCE with GOMODCACHE=$RGOMODCACHE GOPROXY=off (read-only intent -- never write there; this is the SAME cache named above, not a different one -- a first-attempt sandbox hiccup, not a missing module, is the more likely cause here) before falling back to a source-trace verdict, and say explicitly whether the retry succeeded."
+fi
 cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
 
 This round's own module cache -- already warmed and offline-resolve-proven
 (via \`GOPROXY=off go test -count=1 -run '^\$' ./...\`) before you started --
-is at $RGOMODCACHE. If \`go test\` still fails on a module lookup once you
-are inside the sandbox, retry ONCE with GOMODCACHE=$HOME/go/pkg/mod
-GOPROXY=off (read-only intent -- never write there) before falling back to
-a source-trace verdict, and say explicitly which GOMODCACHE you ended up
-using.
+is at $RGOMODCACHE. $MODCACHE_FALLBACK_LINE
 PROMPT_MODCACHE_INFO
 for aux in .codex-review-context.md LEDGER.md; do
   [ -f "$WT/$aux" ] && cp "$WT/$aux" "$RW/$aux"
@@ -1287,7 +1608,15 @@ HEAD_AFTER=$(git -C "$WT" rev-parse HEAD)
 [ "$HEAD_BEFORE" = "$HEAD_AFTER" ] \
   || die "LANE HEAD MOVED during the round ($HEAD_BEFORE -> $HEAD_AFTER). Recover via reflog/origin before anything else."
 
-[ "$RC" -eq 0 ] || { warn "codex exited rc=$RC — read $L"; echo "VERDICT=$V"; exit "$RC"; }
+# v4.8.6 (found in the field the same day: a lane keying only on "does stdout
+# contain a VERDICT= line", not on the exit code, misread a FAILED round as
+# a real verdict). On a non-zero codex exit, $V is not trustworthy -- it may
+# not exist, or may hold a partial/stale write -- so this no longer prints
+# `VERDICT=$V` at all on that path; a caller pattern-matching stdout lines
+# must not be able to mistake this for a real verdict path. `NO VERDICT
+# (codex rc=N)` is deliberately NOT shaped like the real `VERDICT=<path>`
+# line below, so the two cannot be confused by a naive grep.
+[ "$RC" -eq 0 ] || { warn "codex exited rc=$RC — read $L"; printf 'NO VERDICT (codex rc=%s)\n' "$RC"; exit "$RC"; }
 [ -s "$V" ] || die "codex exited 0 but wrote no verdict file — treat as NO VERDICT, re-run; log: $L"
 
 # CITATION NORMALIZATION (v4.8.1, CHAOS-4757 round 2179).

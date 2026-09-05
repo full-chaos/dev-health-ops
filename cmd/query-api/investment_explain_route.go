@@ -42,11 +42,16 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 
@@ -82,19 +87,28 @@ func investmentExplainSwitchFromEnv() *routeswitch.DynamicSwitch {
 	return sw
 }
 
-// loadInvestmentExplainRouteConfig reuses loadQueryRouteConfig's env
-// vars (CLICKHOUSE_URI + the GO_API_ENVELOPE_* trio) rather than
-// inventing a second set: both routes need the same ClickHouse and
-// envelope-verification dependencies in the same deployment
-// (deploy/go-api/compose-query-api.yml declares them once for the whole
-// service). Does NOT require GO_API_REGISTRY_POSTGRES_URI -- not
-// meaningful for a REST route.
-func loadInvestmentExplainRouteConfig() (clickHouseURI, jwksPath, issuer, audience string, ok bool) {
+// loadInvestmentExplainRouteConfig reuses loadQueryRouteConfig's env vars
+// (CLICKHOUSE_URI + the GO_API_ENVELOPE_* trio + GO_API_REGISTRY_POSTGRES_URI)
+// rather than inventing a second set: both routes need the same
+// ClickHouse/envelope/registry-Postgres dependencies in the same
+// deployment (deploy/go-api/compose-query-api.yml declares them once for
+// the whole service).
+//
+// CORRECTION (CHAOS-5006 PR3): the comment this replaced claimed this
+// route "does NOT require GO_API_REGISTRY_POSTGRES_URI -- not meaningful
+// for a REST route" -- that was already STALE the moment it was written:
+// loadQueryRouteConfig's own ok gate requires ALL FIVE of its vars
+// together, registry-Postgres included, so this route was already
+// implicitly requiring it before this change, just never reading the
+// field. Now it does: registryPostgresURI backs the org-BYO settings
+// read path (internal/llmorgsettings), reusing the SAME Postgres this
+// route's config loading already, silently, required.
+func loadInvestmentExplainRouteConfig() (clickHouseURI, jwksPath, issuer, audience, registryPostgresURI string, ok bool) {
 	cfg, queryOk := loadQueryRouteConfig()
 	if !queryOk {
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
-	return cfg.ClickHouseURI, cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience, true
+	return cfg.ClickHouseURI, cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience, cfg.RegistryPostgresURI, true
 }
 
 // buildInvestmentExplainRoute constructs the handler, its own
@@ -103,7 +117,7 @@ func loadInvestmentExplainRouteConfig() (clickHouseURI, jwksPath, issuer, audien
 // fail to build/start" contract loadQueryRouteConfig's own doc comment
 // describes) -- main() only calls mux.HandleFunc when ok is true.
 func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, jwksPath, issuer, audience, cfgOK := loadInvestmentExplainRouteConfig()
+	clickHouseURI, jwksPath, issuer, audience, registryPostgresURI, cfgOK := loadInvestmentExplainRouteConfig()
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
@@ -139,8 +153,56 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 		return nil, nil, false, fmt.Errorf("investment/explain: build cache writer: %w", err)
 	}
 
+	// orgSettingsPool is its OWN pgxpool.Pool against the SAME registry
+	// Postgres /query's own newQueryHandler pool targets (same DSN,
+	// GO_API_REGISTRY_POSTGRES_URI -- CHAOS-5006 PR3 deliberately does
+	// NOT thread /query's pgPool object across these two independently
+	// built routes, to avoid a larger main.go wiring change; a future
+	// pass could share one pool object between them if that duplication
+	// matters in practice). pgxpool.New is lazy (matches query_route.go's
+	// own documented behavior) -- this does not dial Postgres at startup.
+	orgSettingsPool, err := pgxpool.New(context.Background(), registryPostgresURI)
+	if err != nil {
+		_ = readClient.Close()
+		_ = writeConn.Close()
+		return nil, nil, false, fmt.Errorf("investment/explain: build org-settings postgres pool: %w", err)
+	}
+	// A missing/misconfigured SETTINGS_ENCRYPTION_KEY does not fail route
+	// construction: it only means an ENCRYPTED org settings row can never
+	// decrypt (internal/llmorgsettings.Store.loadRawSettings treats that
+	// exactly like a corrupt row -- skipped, not fatal). A plaintext org
+	// setting row still resolves. NewFernetDecryptor's own error carries
+	// no secret material (it only reports "key not configured"), but a
+	// silently-degraded route -- every encrypted BYO org silently
+	// rerouted to platform credentials with zero operator signal -- is
+	// exactly the class of bug this ticket exists to fix (codex round 1,
+	// #2234, P1). Logged once at startup so an operator has a signal to
+	// notice, even though there is nothing this call site itself can do
+	// differently.
+	//
+	// codex round 1's P1 also names a NARROWER, still-open gap this log
+	// line does not close: a WRONG (present but incorrect) key is
+	// accepted here without error -- NewFernetDecryptor only validates
+	// that a key is configured, not that it is the RIGHT one -- and every
+	// subsequent per-row Decrypt() call then fails silently inside
+	// loadRawSettings (matches Python's own `except ValueError: continue`
+	// -- deliberate parity, see that function's doc comment), with no
+	// telemetry at any layer. Closing that fully needs per-decrypt-failure
+	// telemetry inside internal/llmorgsettings itself, a larger design
+	// change; deferred pending a team-lead ruling, same pattern as this
+	// package's own documented SSRF-fallback-audit-log gap.
+	decryptor, decryptorErr := providerfoundation.NewFernetDecryptor(
+		secrets.NewValue(os.Getenv("SETTINGS_ENCRYPTION_KEY")), os.Getenv("SETTINGS_ENCRYPTION_SALT"))
+	if decryptorErr != nil {
+		log.Printf(
+			"investment/explain: SETTINGS_ENCRYPTION_KEY is not configured (%v) -- every ENCRYPTED org BYO LLM setting will be skipped and that org's requests will silently use the platform default provider instead",
+			decryptorErr,
+		)
+	}
+	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
+
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv())
-	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter))
+	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings))
 
 	// Auth runs BEFORE Dispatch, same order /query's newQueryHandler uses
 	// (query_route.go:1180-1194: resolve operation, THEN auth, THEN
@@ -170,6 +232,7 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 	cleanupFn := func() {
 		_ = readClient.Close()
 		_ = writeConn.Close()
+		orgSettingsPool.Close()
 	}
 	return entryHandler, cleanupFn, true, nil
 }
@@ -292,6 +355,7 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 func newInvestmentExplainWorkHandler(
 	reader *investmentexplain.Reader,
 	writer *investmentexplain.CacheWriter,
+	orgSettings llmorgsettings.Resolver,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
@@ -351,15 +415,34 @@ func newInvestmentExplainWorkHandler(
 		// non-200 fallback routes the request to Python's real completion
 		// instead of a wrong Go answer. Team-lead ruling, CHAOS-4977 codex
 		// round 1's #5.
-		if _, unsupported := investmentexplain.ResolveUnsupportedProviderKind(llmProvider); unsupported {
+		if _, unsupported := investmentexplain.ResolveUnsupportedProviderKindForOrg(
+			r.Context(), llmProvider, claims.OrgID, orgSettings,
+		); unsupported {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotImplemented)
 			_, _ = w.Write([]byte(`{"error": "unsupported_provider"}`))
 			return
 		}
 
+		// available/complete are closures over claims.OrgID and
+		// orgSettings, matching investmentexplain.AvailabilityFunc/
+		// CompleteFunc's own EXISTING types exactly -- CHAOS-5006 PR3
+		// added no new parameter to ExplainInvestmentMix's complete
+		// argument's type, only to ExplainInvestmentMix's own signature
+		// (the available parameter), keeping every other caller/test
+		// untouched.
+		available := func(ctx context.Context, requestedProvider, orgID string) bool {
+			return investmentexplain.IsLLMAvailableForOrg(ctx, requestedProvider, orgID, orgSettings)
+		}
+		complete := func(ctx context.Context, requestedProvider, requestedModel, fullPrompt string) (
+			categorize.CompletionResult, string, string, error,
+		) {
+			return investmentexplain.CompleteInvestmentMixExplanationForOrg(
+				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, fullPrompt)
+		}
+
 		writeKeepAliveJSON(r.Context(), w, func(ctx context.Context) ([]byte, error) {
-			explanation, err := reader.ExplainInvestmentMix(ctx, writer, investmentexplain.CompleteInvestmentMixExplanation, opts)
+			explanation, err := reader.ExplainInvestmentMix(ctx, writer, available, complete, opts)
 			if err != nil {
 				return nil, err
 			}

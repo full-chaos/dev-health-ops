@@ -89,10 +89,11 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 | Requirement | Commands |
 |-------------|----------|
-| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics daily`, `metrics dora`, `metrics complexity`, `metrics release-impact`, `metrics validate-flags`, `metrics rebuild`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `recommendations compute`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
+| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `recommendations compute` (read-only preview, CHAOS-5055); `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
+| `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
 | ClickHouse via `--db` (`CLICKHOUSE_URI`) | `investment materialize` |
 | PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
-| Organization (`--org` / `ORG_ID`) | `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
+| Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
 
 > The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.
 
@@ -339,28 +340,25 @@ The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
 
 ### `metrics daily`
 
-Compute daily metrics. Uses `CLICKHOUSE_URI`.
+**CHAOS-5055:** this command no longer computes metrics in Python. It
+dispatches a run through `dev-health-workerctl metrics daily-start` -- the
+same `StartRunTx` coordinator transaction the post-sync and fixed-schedule
+fanout paths use -- and the worker decides the native/bridge split per
+family exactly as it does for any other trigger. Requires
+`dev-health-workerctl` on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN` set to its
+path). `--repo-name`, `--no-commits`, `--sink`, `--provider` had no Go-side
+equivalent and are no longer accepted; use `--repo-id` (resolve a repo name
+to its UUID yourself) if you need repository scoping.
 
 ```bash
-# Single day
-dev-hops metrics daily \
-  --before 2025-02-02 \
-  --backfill 1
+# Single day, every org repository
+dev-hops metrics daily --org <org-uuid> --before 2025-02-02 --backfill 1
 
-# 7-day backfill
-dev-hops metrics daily \
-  --before 2025-02-02 \
-  --backfill 7
+# 7-day range
+dev-hops metrics daily --org <org-uuid> --before 2025-02-02 --backfill 7
 
-# Filter to one repo
-dev-hops metrics daily \
-  --before 2025-02-02 \
-  --repo-id <uuid>
-
-# Specify output format
-dev-hops metrics daily \
-  --before 2025-02-02 \
-  --sink clickhouse
+# Scope to specific repositories (repeatable)
+dev-hops metrics daily --org <org-uuid> --before 2025-02-02 --repo-id <uuid>
 ```
 
 **Options:**
@@ -368,124 +366,132 @@ dev-hops metrics daily \
 |--------|-------------|
 | `--since` | Start date. Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Compute N days ending before `--before` (default: 1) |
-| `--repo-id` | Filter to specific repository |
-| `--sink` | Analytics backend (`clickhouse` only) |
+| `--backfill N` | Dispatch N days ending before `--before` (default: 1) |
+| `--repo-id` | Repository UUID to scope this run to; repeatable. Omit for every org repository (deferred discovery) |
 
 ### `metrics rebuild`
 
-Recompute daily metrics for one or more repositories (or all repos) over a date range, then run a single partitioned finalize per day. Each repo/day is recomputed with finalize skipped, then the whole day is finalized once. Use after correcting or re-syncing source data for specific repos. Uses `CLICKHOUSE_URI`.
+**CHAOS-5055:** alias for `metrics daily` -- both now build the identical
+`dev-health-workerctl metrics daily-start` request. Kept as a separate verb
+for operator muscle memory (historically: "recompute one or more repos over
+a range after correcting/re-syncing source data").
 
 ```bash
 # Rebuild all repos for the last 7 days
-dev-hops metrics rebuild --backfill 7
+dev-hops metrics rebuild --org <org-uuid> --backfill 7
 
 # Rebuild specific repos (repeatable --repo-id) over an explicit range
 dev-hops metrics rebuild \
+  --org <org-uuid> \
   --repo-id 550e8400-e29b-41d4-a716-446655440000 \
   --repo-id 550e8400-e29b-41d4-a716-446655440001 \
   --since 2025-01-01 --before 2025-02-01
 ```
 
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--repo-id` | Repo UUID to rebuild; repeatable. Omit to rebuild all repos |
-| `--since` | Start date (inclusive). Mutually exclusive with `--backfill` |
-| `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Process N days ending before `--before` (default: 1) |
-| `--sink` | Analytics backend (`clickhouse` only) |
-| `--provider` | Restrict to a single provider (default: `auto`) |
+**Options:** same as `metrics daily` above.
 
 ### `metrics dora`
 
-Compute and persist DORA metrics (deployment frequency, lead time, change failure rate, time to restore) from synced ClickHouse data. Uses `CLICKHOUSE_URI`.
+**CHAOS-5055:** no longer computes in Python. Dispatches one
+`dev-health-workerctl metrics remaining trigger-backstop --family dora`
+per day in range. The verb applies ONE uniform flag policy to every family
+it accepts (team-lead ruling), regardless of that family's own
+families.json `replay` mode: `--day` defaults to yesterday UTC, targeting
+today requires the explicit `--today` flag (added automatically here
+whenever the requested day is today), and `--review-evidence` is always
+required -- `dora` is specifically an `append_latest_generation` family (a
+second live generation for the same org+day genuinely appends a duplicate
+row, no dedup on replay, CHAOS-4242), which is exactly the kind of risk that
+policy exists for. `--repo-id`/`--repo-name`/`--metrics`/`--sink` had no
+equivalent on the dispatch path and are no longer accepted.
 
 ```bash
-dev-hops metrics dora --backfill 30
-
-# Compute a subset of metrics
-dev-hops metrics dora --backfill 30 --metrics deployment_frequency,lead_time
+dev-hops metrics dora --org <org-uuid> --backfill 30 \
+  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
-| `--repo-id` / `--repo-name` | Filter to a specific repository |
-| `--metrics` | Comma-separated metric names (default: full DORA set) |
-| `--sink` | Analytics backend (`clickhouse` only) |
+| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
 
 ### `metrics complexity`
 
-Compute file complexity and hotspot metrics from persisted `git_files`/`git_blame` data. Uses `CLICKHOUSE_URI`.
+**CHAOS-5055:** no longer computes in Python. Dispatches one
+`dev-health-workerctl metrics remaining trigger-backstop --family complexity`
+per day in range, under the SAME uniform flag policy as every other
+trigger-backstop family (see `metrics dora` above): `--day` defaults to
+yesterday UTC, `--today` is required (and added automatically here) to
+target today, `--review-evidence` is always required.
+`--repo-id`/`-s`/`--lang`/`--exclude`/`--max-files`/`--sink` had no
+equivalent on the dispatch path and are no longer accepted.
 
 > **Note (CHAOS-2850/CHAOS-2888):** `--backfill N` must not fabricate N days of historical complexity from current file contents. There is no persisted historical file-content snapshot, so the DB complexity path writes complexity only when it has a real target-day input contract; run it daily (or let Go's daily complexity fixed schedule run -- the Celery `dispatch_complexity_job` beat cadence it replaced was deleted under CHAOS-4026 on 2026-08-21) to build a genuine trend. Historical API backfills skip complexity recompute unless a future real historical source of truth is added.
 
 ```bash
-dev-hops metrics complexity --backfill 30
-
-# Scope to repos matching a glob and limit languages/files
-dev-hops metrics complexity \
-  -s "meridian/*" \
-  --lang "*.py" \
-  --exclude "*/tests/*" \
-  --max-files 500
+dev-hops metrics complexity --org <org-uuid> --backfill 30 \
+  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
-| `--repo-id` | Filter to a specific repo |
-| `-s, --search` | Repo name search pattern (glob) |
-| `--lang` | Include language globs (e.g. `*.py`) |
-| `--exclude` | Exclude language globs (e.g. `*/tests/*`) |
-| `--max-files` | Limit files scanned per repo; the resulting rows are that day's complete replacement slice, not an additive preview |
-| `--sink` | Analytics backend (`clickhouse` only) |
+| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
 
 ### `metrics capacity`
 
-Compute capacity / completion-date forecasts using Monte Carlo simulation over historical throughput. Takes its ClickHouse DSN via its own **required** `--db` flag (see the caveat under [Global Arguments](#global-arguments)).
+**CHAOS-5055:** no longer computes in Python. Dispatches one
+`dev-health-workerctl metrics remaining trigger-backstop --family capacity`
+request (one dispatch per invocation -- capacity scopes by team, not a day
+range). `--review-evidence` is required (uniform policy across every
+trigger-backstop family); `--today` is added automatically when `--day`
+resolves to today UTC (the default). `--db`/`--work-scope-id`/
+`--target-items`/`--target-date`/`--history-days`/`--simulations`/
+`--dry-run` had no equivalent on the dispatch path (the worker always uses
+the fixed-schedule fanout's own history_days=90/simulations=10000, and every
+dispatch is a real, durable, async run -- there is no synchronous preview)
+and are no longer accepted.
 
 ```bash
-# Forecast a single team
-dev-hops metrics capacity --db "$CLICKHOUSE_URI" --team-id eng-core
+# Forecast a single team, right now
+dev-hops metrics capacity --org <org-uuid> --team-id <team-uuid> \
+  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
 
-# Forecast all discovered team/scope combinations, print without persisting
-dev-hops metrics capacity --db "$CLICKHOUSE_URI" --all-teams --dry-run
+# Forecast all discovered teams for a specific past day
+dev-hops metrics capacity --org <org-uuid> --all-teams --day 2026-08-01 \
+  --review-evidence "CHAOS-1234 -- backfilling a missed weekly run"
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--db` | ClickHouse connection string (**required**) |
-| `--team-id` | Filter by team ID |
-| `--work-scope-id` | Filter by work scope ID (project/board) |
-| `--target-items` | Number of items to complete (defaults to current backlog) |
-| `--target-date` | Target deadline (YYYY-MM-DD) |
-| `--history-days` | Days of history to use (default: 90) |
-| `--simulations` | Number of Monte Carlo simulations (default: 10000) |
-| `--all-teams` | Compute forecasts for all team/scope combinations |
-| `--dry-run` | Print forecasts without persisting |
+| `--team-id` | Team UUID to scope this forecast to; exactly one of `--team-id`/`--all-teams` is required |
+| `--all-teams` | Forecast every team in the organization |
+| `--day` | Dedup day for the run this trigger becomes, NOT a compute window (YYYY-MM-DD, UTC); defaults to today UTC |
+| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
 
 ### `metrics release-impact`
 
-Compute release-impact daily metrics from telemetry signal buckets. Re-computes a trailing window on each run so late-arriving signals are captured. Uses `CLICKHOUSE_URI`.
+**CHAOS-5055:** no longer computes in Python. Dispatches one
+`dev-health-workerctl metrics remaining trigger-backstop --family
+release_impact` per day in range. `release_impact` is an
+`append_latest_generation` family (families.json) -- same duplication risk
+as `dora` -- so the verb requires `--today` (added automatically for the
+current UTC day) and `--review-evidence`. `--recomputation-window`/`--sink`
+had no equivalent on the dispatch path and are no longer accepted.
 
 ```bash
-dev-hops metrics release-impact --backfill 7
-
-# Widen the recomputation window
-dev-hops metrics release-impact --recomputation-window 14
+dev-hops metrics release-impact --org <org-uuid> --backfill 7 \
+  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
 | `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
-| `--recomputation-window N` | Days to recompute on each run (default: 7) |
-| `--sink` | Analytics backend (`clickhouse` only) |
+| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
 
 ### `metrics validate-flags`
 
@@ -1104,6 +1110,45 @@ with no hint that a different container would work.
     counterexample to this warning.
 
 ### `dev-health-workerctl metrics`
+
+#### `metrics daily-start` (CHAOS-5055)
+
+Dispatch a daily-metrics run for one (organization, day-range[, repository
+set]) through the same `StartRunTx` coordinator transaction the post-sync
+and fixed-schedule fanout paths use. This is the replacement backing
+`dev-hops metrics daily`/`rebuild` (see the CLI reference above): the worker
+decides the native/bridge split per family exactly as it does for any other
+trigger source, so there is no separate, unguarded Python write path. Not
+restricted to historical days (unlike `metrics remaining start` below) --
+`--to` may be today.
+
+**Coverage check (codex adversarial review round 2, P1):** a deferred-discovery
+request (no `--repo-id`) is refused with `already_covered` if the same
+(org, day) already has a succeeded run from a DIFFERENT trigger -- the nightly
+fixed schedule, a post-sync re-drive, or an earlier manual trigger under a
+different generation. This prevents duplicate-writing every native daily
+family (`file_hotspots` included) for a day that already computed. A retried
+CLI invocation for the identical logical request is unaffected (it reuses the
+same deterministic generation and lands on the ordinary idempotency path, not
+the coverage refusal). A `--repo-id`-scoped request skips this check --
+narrower, deliberately-scoped repository recomputes are not what this guards
+against. This does NOT protect the reverse direction (a manual trigger fired
+BEFORE that day's fixed-schedule occurrence) -- closing that would mean
+changing the nightly schedule's own behavior, deliberately out of scope here.
+
+```bash
+dev-health-workerctl metrics daily-start \
+  --org 70d529e0-3c06-4597-8480-794fd02328b6 \
+  --day 2026-09-01 \
+  --to 2026-09-04
+
+# Scope to specific repositories (repeatable --repo-id); omit for every
+# org repository (deferred discovery, resolved by the worker)
+dev-health-workerctl metrics daily-start \
+  --org 70d529e0-3c06-4597-8480-794fd02328b6 \
+  --day 2026-09-04 \
+  --repo-id 550e8400-e29b-41d4-a716-446655440000
+```
 
 Repair a daily-metrics run stranded by CHAOS-4358: every `daily_partition`
 River job for it already failed and was discarded, and nothing else ever
@@ -1900,17 +1945,15 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 
 ### `recommendations compute`
 
-> ⚠️ **Warning (CHAOS-2475):** The `recommendations compute` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
->
-> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **CHAOS-5055:** this command is now **preview-only** — it evaluates rules and prints the result, but never writes to ClickHouse. It used to persist to the same `recommendations_daily` table the Go worker's NATIVE `metrics.remaining.recommendations` kind writes, on an independent per-team/arbitrary-window schedule with no dedup between the two writers. For a persisted, generation-deduped compute, use `dev-health-workerctl metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. There is no `dev-hops` wrapper verb for this (unlike `metrics capacity`); recommendations is dispatched via the raw workerctl binary only.
 
-Evaluate rule-based recommendations for a team and persist results to ClickHouse — both fired recommendations and explicit `fired=False` tombstones, so a recovered signal is cleared rather than left lingering. Uses `CLICKHOUSE_URI`.
+Preview rule-based recommendations for a team — evaluates both fired recommendations and explicit `fired=False` tombstones, and prints them. Uses `CLICKHOUSE_URI` for input reads only.
 
 ```bash
-dev-hops recommendations compute --team eng-core --window 7d
+dev-hops recommendations compute --team <team-uuid> --window 7d
 
 # Override the window with an explicit date range and print JSON
-dev-hops recommendations compute --team eng-core \
+dev-hops recommendations compute --team <team-uuid> \
   --since 2025-01-01 --until 2025-01-31 --output-json
 ```
 
@@ -2132,8 +2175,10 @@ dev-hops sync work-items --provider jira \
   --before 2025-02-02 \
   --backfill 30
 
-# 4. Compute metrics
+# 4. Compute metrics (CHAOS-5055: dispatches to dev-health-workerctl; needs
+#    it on PATH plus a running worker/Postgres coordinator)
 dev-hops metrics daily \
+  --org "$ORG_ID" \
   --backfill 30
 ```
 
@@ -2147,11 +2192,11 @@ docker compose up -d clickhouse postgres
 dev-hops migrate postgres
 dev-hops migrate clickhouse
 
-# Generate synthetic data
-dev-hops fixtures generate --days 30
-
-# Compute metrics
-dev-hops metrics daily --backfill 30
+# Generate synthetic data and compute metrics for it in one pass (fixtures
+# generation computes metrics in-process against the sink you pass it --
+# unaffected by CHAOS-5055, which is about the standalone `metrics daily`/
+# `rebuild` verbs against already-synced real data, not fixtures)
+dev-hops fixtures generate --days 30 --with-metrics
 ```
 
 ### Batch Organization Sync

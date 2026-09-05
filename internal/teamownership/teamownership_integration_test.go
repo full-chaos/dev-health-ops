@@ -407,6 +407,7 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 
 	multiClaimed := uuid.New()
 	soleOwned := uuid.New()
+	tiedOnRankDiffersOnUpdatedAt := uuid.New()
 
 	// Inserted FIRST, lowest rank on every axis -- must NOT win.
 	insert("team-low", 0, 1, before, multiClaimed)
@@ -422,6 +423,22 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	// return "the first row it sees" globally, only per repo_id.
 	insert("team-solo", 1, 1, before, soleOwned)
 
+	// CHAOS-5141, #2255 r3 finding 1: every claim above shares the SAME
+	// updated_at (`before`), so none of them can prove updated_at DESC is
+	// actually applied -- a regression dropping it from the ORDER BY would
+	// still pass every assertion so far, since is_primary alone already
+	// settles multiClaimed and soleOwned has no competing claim at all. Two
+	// claims tied on is_primary AND specificity, differing ONLY on
+	// updated_at, close that gap: team_id ASC (the tiebreak one step past
+	// updated_at) would sort "team-alpha" before "team-zulu" alphabetically,
+	// so if updated_at DESC were removed, the OLDER "team-alpha" claim would
+	// incorrectly win on the team_id tiebreak. With updated_at DESC intact,
+	// the NEWER "team-zulu" claim must win instead.
+	older := before
+	newer := before.Add(24 * time.Hour)
+	insert("team-alpha", 1, 1, older, tiedOnRankDiffersOnUpdatedAt)
+	insert("team-zulu", 1, 1, newer, tiedOnRankDiffersOnUpdatedAt)
+
 	owners, err := AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
 	if err != nil {
 		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
@@ -433,6 +450,13 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 	}
 	if got := owners[soleOwned.String()]; got != "team-solo" {
 		t.Fatalf("sole-owned repo owner=%q, want team-solo", got)
+	}
+	if got := owners[tiedOnRankDiffersOnUpdatedAt.String()]; got != "team-zulu" {
+		t.Fatalf("repo tied on is_primary/specificity, differing only on "+
+			"updated_at: owner=%q, want team-zulu (the NEWER claim) -- "+
+			"\"team-alpha\" sorts first alphabetically and would win on the "+
+			"team_id tiebreak alone, so this failing means updated_at DESC "+
+			"is not actually being applied", got)
 	}
 }
 

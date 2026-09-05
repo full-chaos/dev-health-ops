@@ -115,6 +115,19 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byName["work_item_state"]; got != "go" {
 		t.Fatalf("work_item_state must be port=go, got %q", got)
 	}
+	// team_cognitive_load (CHAOS-5141): registers TeamCognitiveLoadExecutor,
+	// finalize-scope, co-registered with ic_finalize. CHAOS-5141, #2255 r3
+	// finding 2: the `expected` membership check above (and the exact-count
+	// guard) both pass even if this flag were flipped back to "pending" --
+	// neither asserts the PORT of a specific family, only that its NAME
+	// exists somewhere in the registry. This direct assertion, matching the
+	// pattern every other Wave-1+ cutover above already has, closes that:
+	// a families.json edit that reverts this family to Python without also
+	// removing its Go registration would silently resurrect the
+	// double-write/two-writer hazard this port exists to prevent.
+	if got := byName["team_cognitive_load"]; got != "go" {
+		t.Fatalf("team_cognitive_load must be port=go, got %q", got)
+	}
 	byPhase := make(map[string]string, len(registry.Families))
 	for _, family := range registry.Families {
 		byPhase[family.Name] = family.Phase

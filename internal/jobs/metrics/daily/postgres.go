@@ -1350,6 +1350,28 @@ RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finali
 	return &claim, nil
 }
 
+// PartitionCompletionCounts is the SAME partition-completion fact
+// ClaimFinalize's own `NOT EXISTS (... status <> 'succeeded')` subquery
+// already checks (CHAOS-5194), but returned as counts rather than collapsed
+// into a boolean -- so a finalize-scope executor can verify the barrier for
+// ITSELF and log what it actually saw (total vs succeeded), rather than
+// trusting that ClaimFinalize's gate held, silently, forever.
+func (store *PostgresStore) PartitionCompletionCounts(ctx context.Context, runID string) (int, int, error) {
+	if !store.valid() || !validUUID(runID) {
+		return 0, 0, ErrUnavailable
+	}
+	var total, succeeded int
+	err := store.pool.QueryRow(ctx, `
+SELECT count(*), count(*) FILTER (WHERE status = 'succeeded')
+FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid`, runID,
+	).Scan(&total, &succeeded)
+	if err != nil {
+		return 0, 0, ErrUnavailable
+	}
+	return total, succeeded, nil
+}
+
 func (store *PostgresStore) RenewFinalize(ctx context.Context, claim FinalizeClaim) error {
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable

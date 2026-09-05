@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -180,4 +181,38 @@ func runRepoTeamsOracle(t *testing.T, markerName string) map[string]*string {
 		t.Fatalf("write live-python-oracle proof: %v", writeErr)
 	}
 	return decoded
+}
+
+// TestNonASCIIPatternsAreComparedConsistently is codex round chaos-4280-r1's
+// finding 6, and the test this file's doc comment cited before it existed
+// (the round caught that too: "a PR body naming a test IS a claim").
+//
+// Reproduces the exact adversarial input the round measured: a capital Sigma
+// followed by 31 case-ignorable runes then a cased letter is PAST
+// x/text cases.Lower's Final_Sigma lookahead cap, so Lower alone resolves the
+// pattern and the repo name to two DIFFERENT strings ("...ς" vs "...σ") even
+// though CPython's str.lower() -- and this resolver's own Fold-based key --
+// treat them as the same team.
+func TestNonASCIIPatternsAreComparedConsistently(t *testing.T) {
+	longRun := strings.Repeat(".", 31)
+	pattern := "AΣ" + longRun + "B*" // -> prefix "aσ" + longRun + "b" once folded
+	repoName := "aσ" + longRun + "b/foo"
+
+	resolver := BuildRepoPatternResolver([]Team{
+		{ID: "team-sigma", Name: "Sigma", RepoPatterns: []string{pattern}},
+	})
+	got := resolver.Resolve(repoName)
+	if got == nil || *got != "team-sigma" {
+		t.Fatalf("Resolve(%q) with pattern %q = %v, want \"team-sigma\" -- "+
+			"x/text's bounded Final_Sigma lookahead (31 case-ignorable runes, "+
+			"pythonparity.Lower's doc comment) makes Lower alone disagree with "+
+			"CPython here; the fix is comparing via pythonparity.Fold instead",
+			repoName, pattern, got)
+	}
+
+	// Negative control: a genuinely DIFFERENT repo must still not match, so
+	// the fix cannot have degenerated into "everything matches everything."
+	if got := resolver.Resolve("totally/unrelated"); got != nil {
+		t.Fatalf("Resolve(\"totally/unrelated\") = %v, want nil", got)
+	}
 }

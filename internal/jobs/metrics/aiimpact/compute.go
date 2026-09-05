@@ -574,8 +574,16 @@ func followupCommitsByPR(
 // aggregateFacts ports _aggregate (:261).
 func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 	cycles := make([]float64, 0, len(facts))
-	var prsMerged, reviews, changesRequested, reworkPRs, followupCommits, revertPRs uint32
+	var prsMerged, reworkPRs, followupCommits, revertPRs uint32
 	var knownTestPRs, testGapPRs uint32
+	// WIDENED TO uint64 ON PURPOSE (codex round chaos-4280-r1, finding 3).
+	// Each fact.reviews/fact.changesRequested is a UInt32 wire value, so any
+	// ONE of them fits uint32 -- but Python sums arbitrary-precision integers
+	// across the whole group, and a uint32 ACCUMULATOR wraps once the group's
+	// total crosses 2**32. Measured: two PRs each with reviews_count
+	// 3_000_000_000 sum to 6_000_000_000 in Python; a uint32 accumulator wraps
+	// that to 1_705_032_704, corrupting reviews_per_pr for the whole group.
+	var reviews, changesRequested uint64
 	for _, fact := range facts {
 		if fact.cycleHours != nil {
 			cycles = append(cycles, *fact.cycleHours)
@@ -583,8 +591,8 @@ func aggregateFacts(facts []prFact, incidentsCount uint32) aggregate {
 		if fact.merged {
 			prsMerged++
 		}
-		reviews += fact.reviews
-		changesRequested += fact.changesRequested
+		reviews += uint64(fact.reviews)
+		changesRequested += uint64(fact.changesRequested)
 		if fact.changesRequested > 0 || fact.followupCommits > 0 {
 			reworkPRs++
 		}

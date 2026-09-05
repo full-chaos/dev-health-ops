@@ -476,6 +476,115 @@ func TestRevertRuleDoesNotWrapOnLargeAdditions(t *testing.T) {
 	}
 }
 
+// TestLargeDenormalizedCountersDoNotWrap is codex round chaos-4280-r1's
+// finding 3: aggregateFacts summed reviews/changesRequested across a whole
+// group in a uint32 ACCUMULATOR. Each column value fits uint32 on its own
+// (it's the wire type), but Python sums arbitrary-precision integers across
+// the group, and a uint32 accumulator wraps once the group total crosses
+// 2**32 -- reachable with as few as two denormalized rows.
+func TestLargeDenormalizedCountersDoNotWrap(t *testing.T) {
+	const big = 3_000_000_000 // fits UInt32 (max ~4.29e9) individually.
+	facts := []prFact{
+		{bucket: BucketHuman, workType: "pull_request", reviews: big, changesRequested: big},
+		{bucket: BucketHuman, workType: "pull_request", reviews: big, changesRequested: big},
+	}
+	got := aggregateFacts(facts, 0)
+	wantPerPR := float64(2*big) / 2 // Python: 6_000_000_000 / 2 PRs
+	if got.reviewsPerPR == nil || *got.reviewsPerPR != wantPerPR {
+		t.Fatalf("reviewsPerPR = %v, want %v -- a uint32 accumulator wraps "+
+			"6_000_000_000 to 1_705_032_704", got.reviewsPerPR, wantPerPR)
+	}
+	if got.changesRequestedPerPR == nil || *got.changesRequestedPerPR != wantPerPR {
+		t.Fatalf("changesRequestedPerPR = %v, want %v -- same accumulator wraps",
+			got.changesRequestedPerPR, wantPerPR)
+	}
+}
+
+// TestChangesRequestedCountColumnOverridesReviewDerivedCount is codex round
+// chaos-4280-r1's finding 7, first named mutant: the shared golden fixture
+// (fixturePullRequests/fixtureReviews, byte-identical to the Python oracle by
+// contract) never varies ChangesRequestedCount away from what its review rows
+// would derive, so BOTH oracles accept deleting the column-override entirely.
+// This is a deliberately SEPARATE, small fixture -- not touching the golden
+// one -- built specifically to disagree with what reviews alone would derive.
+func TestChangesRequestedCountColumnOverridesReviewDerivedCount(t *testing.T) {
+	repo := uuid.MustParse("00000000-0000-4000-8000-000000000101")
+	createdAt := time.Date(2026, 9, 3, 1, 0, 0, 0, time.UTC)
+	pr := PullRequestRow{
+		RepoID: repo, Number: 1, CreatedAt: createdAt,
+		ChangesRequestedCount: u32Ptr(9), // the column, authoritative when nonzero
+	}
+	// One CHANGES_REQUESTED review -> reviewsByPR derives changesRequested=1,
+	// deliberately DIFFERENT from the column's 9.
+	review := PullRequestReviewRow{
+		RepoID: repo, Number: 1, State: strPtr("CHANGES_REQUESTED"),
+		SubmittedAt: timePtr(createdAt.Add(10 * time.Minute)),
+	}
+	attribution := AttributionRow{RepoID: repo, Number: 1, Kind: strPtr("human"), WorkType: strPtr("pull_request")}
+
+	records := Compute(Params{
+		Day: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC), OrgID: fixtureOrgID,
+		PullRequests: []PullRequestRow{pr}, Reviews: []PullRequestReviewRow{review},
+		Attributions: []AttributionRow{attribution},
+	})
+
+	var human *Record
+	for index := range records {
+		if records[index].AttributionBucket == BucketHuman {
+			human = &records[index]
+		}
+	}
+	if human == nil {
+		t.Fatal("no human-bucket record; the single fixture PR must land there")
+	}
+	if human.ChangesRequestedPerPR == nil || *human.ChangesRequestedPerPR != 9 {
+		t.Fatalf("changes_requested_per_pr = %v, want 9 (the column value) -- "+
+			"deleting the pr.ChangesRequestedCount override falls back to the "+
+			"review-derived count (1), which the shared golden fixture cannot "+
+			"catch because it never varies the two independently", human.ChangesRequestedPerPR)
+	}
+}
+
+// TestFollowupCommitsUsesFirstReviewBoundaryNotCreatedAt is codex round
+// chaos-4280-r1's finding 7, second named mutant: every linked PR in the
+// shared golden fixture has no submitted review timestamp, so the
+// firstReviewAt/CreatedAt branch in followupCommitsByPR is never exercised
+// either way. This fixture gives PR 1 a REAL first-review timestamp strictly
+// AFTER creation, with one commit landing strictly BETWEEN the two boundaries
+// -- counted as a followup commit under the correct (first-review) boundary,
+// and NOT counted under the mutant (creation-time) boundary.
+func TestFollowupCommitsUsesFirstReviewBoundaryNotCreatedAt(t *testing.T) {
+	key := PRKey{RepoID: fixtureRepo, Number: 1}
+	createdAt := fixtureBase
+	firstReview := fixtureBase.Add(20 * time.Minute)
+	betweenCommit := fixtureBase.Add(10 * time.Minute) // after created_at, before first review
+
+	prIndex := map[PRKey]PullRequestRow{key: {RepoID: fixtureRepo, Number: 1, CreatedAt: createdAt}}
+	firstReviewAt := map[PRKey]time.Time{key: firstReview}
+	stats := map[PRKey][]CommitStatRow{
+		key: {{CommitHash: strPtr("f1"), CommitterWhen: timePtr(betweenCommit), Evidence: strPtr("native")}},
+	}
+
+	gotCorrect := followupCommitsByPR(stats, true, prIndex, firstReviewAt)[key]
+	if gotCorrect != 0 {
+		t.Fatalf("followup commits (first-review boundary) = %d, want 0 -- the commit "+
+			"lands BEFORE first review, so it is pre-feedback work, not a followup", gotCorrect)
+	}
+
+	// Mutant simulation: the boundary the codex finding names is unconditional
+	// created_at instead of first-review-at. With that WRONG boundary the same
+	// commit (after created_at) would count as a followup -- proving this
+	// fixture can tell the two boundaries apart, which the golden fixture
+	// cannot (it has no PR with both a review and a between-boundary commit).
+	mutantBoundaryResult := followupCommitsByPR(stats, true, prIndex, map[PRKey]time.Time{})[key]
+	if mutantBoundaryResult != 1 {
+		t.Fatalf("sanity check failed: with no first-review-at entry (falls back to "+
+			"created_at), got %d followup commits, want 1 -- this fixture's commit must "+
+			"be provably on the OTHER side of created_at than of first-review-at, or it "+
+			"cannot distinguish the two boundaries", mutantBoundaryResult)
+	}
+}
+
 // TestComputeIsOrderInvariantOverItsInput is the order-invariance proof the
 // design promised: Python's own row order follows an unordered loader, so the
 // port emits a canonical order and must not otherwise depend on input order.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -599,6 +600,14 @@ func configureWorkerDependenciesWithSources(
 	// every WriteResult call regardless of which worker group runs the
 	// metricsQueue.
 	if err := registry.RegisterMetrics("cicd_writer", cicd.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4280 (codex round chaos-4280-r1, finding 5): same process-wide-
+	// singleton-needs-registration shape as cicd_writer above -- ai_impact's
+	// native executor increments this whenever a partition's commit linkage
+	// is unavailable, regardless of which worker group runs the metricsQueue.
+	if err := registry.RegisterMetrics("ai_impact_linkage", aiimpact.LinkageMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

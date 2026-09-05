@@ -119,14 +119,34 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	// than 100%. A hard error here would instead fail the whole partition, so
 	// the failure is swallowed to unavailable exactly as Python does -- the one
 	// place in this executor where an error is not propagated.
+	//
+	// codex round chaos-4280-r1, finding 5: the swallow itself is correct
+	// parity (see above), but it used to be INDISTINGUISHABLE from a healthy
+	// day with no linkage rows -- the outer handler's outcome=computed label
+	// is the same either way, and this executor logs nothing. Python at least
+	// logs a warning here (job_daily.py's pr_commit_stats build). Rather than
+	// bolt ad-hoc logging onto a package that has none, this increments a
+	// dedicated counter (aiimpact.RecordLinkageUnavailable) so the condition
+	// is observable in the SAME place every other native-family signal lives,
+	// without changing what gets computed or written.
 	linkage, linkageErr := LoadAIImpactPRCommitLinkage(
 		ctx, executor.conn, run.OrganizationID, repoIDs, prNumbers,
 	)
 	hasLinkage := linkageErr == nil
 	if !hasLinkage {
 		linkage = nil
+		aiimpact.RecordLinkageUnavailable()
 	}
 
+	// codex round chaos-4280-r1, finding 4 (REFUTED as a port defect, team-lead
+	// ruling): this loads teams.repo_patterns only, no team_repo_ownership.
+	// The architecture doc says native ownership should count, but the actual
+	// PRODUCTION call site (job_daily.py:1809-1820) passes
+	// `team_resolver=lambda ...: repo_team_resolver.resolve(repo_name)` --
+	// patterns only, no ownership map, for ai_impact specifically. Porting
+	// ownership here would be a BEHAVIOR CHANGE relative to what Python
+	// actually runs today, not a parity fix. Tracked as a Python-side gap,
+	// CHAOS-5117; out of scope for this port.
 	teams, err := LoadAIImpactTeams(ctx, executor.conn, run.OrganizationID)
 	if err != nil {
 		return 0, err

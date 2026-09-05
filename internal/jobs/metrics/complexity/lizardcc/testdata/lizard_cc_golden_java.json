@@ -1,0 +1,167 @@
+{
+  "files": {
+    "basic.java.txt": {
+      "cyclomatic_avg": 2.6666666666666665,
+      "cyclomatic_total": 24,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 13,
+          "long_name": "Rectangle::Rectangle( int width , int height)",
+          "name": "Rectangle::Rectangle"
+        },
+        {
+          "complexity": 1,
+          "lineno": 24,
+          "long_name": "Rectangle::area()",
+          "name": "Rectangle::area"
+        },
+        {
+          "complexity": 3,
+          "lineno": 28,
+          "long_name": "Rectangle::classify( int score)",
+          "name": "Rectangle::classify"
+        },
+        {
+          "complexity": 3,
+          "lineno": 37,
+          "long_name": "Rectangle::pick( int a , int b , int c)",
+          "name": "Rectangle::pick"
+        },
+        {
+          "complexity": 6,
+          "lineno": 48,
+          "long_name": "Rectangle::loop( int n)",
+          "name": "Rectangle::loop"
+        },
+        {
+          "complexity": 2,
+          "lineno": 62,
+          "long_name": "Rectangle::identity( T x)",
+          "name": "Rectangle::identity"
+        },
+        {
+          "complexity": 2,
+          "lineno": 69,
+          "long_name": "Rectangle::risky()",
+          "name": "Rectangle::risky"
+        },
+        {
+          "complexity": 2,
+          "lineno": 75,
+          "long_name": "Rectangle::makeRunner()",
+          "name": "Rectangle::makeRunner"
+        },
+        {
+          "complexity": 2,
+          "lineno": 79,
+          "long_name": "Rectangle::Rectangle::makeRunner.run()",
+          "name": "(anonymous)::run"
+        }
+      ],
+      "functions_count": 9,
+      "high_complexity_functions": 0,
+      "loc": 77,
+      "very_high_complexity_functions": 0
+    },
+    "old_style_array_return.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 10,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 8,
+      "very_high_complexity_functions": 0
+    },
+    "records_and_local_classes.java.txt": {
+      "cyclomatic_avg": 2.3333333333333335,
+      "cyclomatic_total": 7,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 4,
+          "long_name": "sum()",
+          "name": "Point::sum"
+        },
+        {
+          "complexity": 2,
+          "lineno": 17,
+          "long_name": "Container::process( int n)",
+          "name": "Container::process"
+        },
+        {
+          "complexity": 2,
+          "lineno": 19,
+          "long_name": "Container::Container::process.Local::helper( int x)",
+          "name": "Local::helper"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 28,
+      "very_high_complexity_functions": 0
+    },
+    "try_catch_coverage.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "Reader::readSafely( String path)",
+          "name": "Reader::readSafely"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 9,
+      "very_high_complexity_functions": 0
+    },
+    "underscore_record_name.java.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 17,
+          "long_name": "if( x>0)",
+          "name": "if"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
+      "very_high_complexity_functions": 0
+    },
+    "very_high.java.txt": {
+      "cyclomatic_avg": 14.0,
+      "cyclomatic_total": 28,
+      "functions": [
+        {
+          "complexity": 27,
+          "lineno": 2,
+          "long_name": "Monster::f( int a , int b , int c , int d , int e)",
+          "name": "Monster::f"
+        },
+        {
+          "complexity": 1,
+          "lineno": 23,
+          "long_name": "Monster::quiet( int a)",
+          "name": "Monster::quiet"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 1,
+      "loc": 25,
+      "very_high_complexity_functions": 1
+    }
+  },
+  "lizard_version": "1.23.0"
+}

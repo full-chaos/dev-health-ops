@@ -308,6 +308,19 @@ def answer_catalogue_probes(client):
     genuinely does not exist. 084 then skips at its own existence check and
     never reaches DESCRIBE.
 
+    Migration 087 asks the same kind of question a different way: `SELECT
+    count() FROM system.tables WHERE ...` (its `_table_exists`), expecting an
+    int it can compare with `> 0`. Against a generic mock with a canned
+    `result_rows` tuple (e.g. a migration-version string left over from an
+    unrelated assertion), that comparison raises `TypeError: '>' not
+    supported between instances of 'str' and 'int'` -- a fail-CLOSED probe
+    surfacing a mock mismatch as a crash, not a fail-open swallow, so this
+    belongs here rather than loosening the migration back to fail-open.
+    `[(0,)]` is truthful for the same reason as 084's: these tests construct
+    a store against a client with none of migration 087's tables, so they
+    genuinely do not exist, and `upgrade()` skips each one at its own
+    existence check.
+
     Call tracking survives: this sets `side_effect` on the existing mock rather
     than replacing it, so `client.query.called` and friends still work. The
     fall-through reads `return_value` LAZILY, so a test that configures its rows
@@ -321,6 +334,8 @@ def answer_catalogue_probes(client):
             return SimpleNamespace(result_rows=[(0,)])
         if text.startswith("DESCRIBE TABLE"):
             return SimpleNamespace(result_rows=[])
+        if text.startswith("SELECT COUNT() FROM SYSTEM.TABLES"):
+            return SimpleNamespace(result_rows=[(0,)])
         return client.query.return_value
 
     client.query.side_effect = _answer

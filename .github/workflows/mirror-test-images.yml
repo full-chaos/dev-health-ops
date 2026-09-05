@@ -30,6 +30,18 @@
 # service image therefore needs a maintainer to mirror it first, which is the
 # correct outcome rather than a gap: a fork must not be able to publish into
 # this registry.
+#
+# RISK-NOTE (2026-09-04, precheck-gated `mirror` job): on `pull_request`, the
+# `mirror` job now only runs when `precheck` finds a resolved image missing
+# from the mirror entirely -- it does NOT detect a MOVED upstream tag (the
+# two non-digest-pinned images, clickhouse/clickhouse-server:26.7 and
+# valkey/valkey:8-alpine, per the job-level `concurrency` comment below).
+# `imagetools inspect --raw` only asks "does this destination tag exist",
+# never "does it still match upstream". So on a PR, a moved tag is not
+# refreshed until the next `push`-to-main run (unconditional, always
+# mirrors). This is a narrower version of the SAME acceptance already made
+# for those two images at the digest level -- see `precheck`'s own job
+# comment for the incident this responds to.
 name: Mirror test images
 
 on:
@@ -125,7 +137,151 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # CHAOS-4928 follow-up (2026-09-04 night): the `mirror-publish` lock below
+  # (job-level, shared across EVERY event on purpose, to keep registry
+  # writes serialised) held up under normal load but broke down under
+  # tonight's PR volume -- 18 runs across 11+ different lanes' PRs between
+  # 21:42Z and 01:43Z, most of them cancelled within seconds of the next
+  # one's arrival (chain and evidence: work-items, folded into this PR's
+  # body). Root cause is GitHub's platform-level "one RUNNING plus one
+  # PENDING job per concurrency group" limit: `cancel-in-progress: false`
+  # only protects the job that is already RUNNING, so when arrivals outpace
+  # completions, each new one bumps the previous PENDING one out of the
+  # group before it ever starts -- not a bug in this file, but the lock
+  # doing exactly what it was built to do, at a volume it wasn't sized for.
+  #
+  # The trigger-level `paths:` filter on `pull_request` (already present,
+  # identical to `push`'s) does not fix this: it is scoped at FILE
+  # granularity, and `ci/check_go.sh` (one of the filtered paths, since it
+  # defines the image list via `integration-images`) is a large,
+  # multi-purpose script most Go-port PRs touch for reasons that have
+  # nothing to do with the image list -- so the filter is already doing its
+  # documented job and the volume tonight was still genuine, correctly
+  # scoped, contention.
+  #
+  # This job answers the question the mirror job's `if:` actually needs on
+  # a PR: does the image set THIS PR needs already exist in the mirror?
+  # This mirror is idempotent and cumulative (CHAOS-4778's header), so a PR
+  # that changes none of the resolved images has nothing to gain from
+  # entering `mirror-publish` at all. `precheck` runs OUTSIDE that lock --
+  # a pure, unauthenticated read against ghcr.io (these packages are public,
+  # see the header comment above), safe to run concurrently with itself
+  # across every PR at once, with nothing to serialise.
+  #
+  # DIGEST-AWARE, not just presence-aware, for every resolved image that
+  # carries a digest (CHAOS-4928 codex round 1, P1): presence alone cannot
+  # tell a stale destination tag from a current one, so a PR that bumps
+  # `image@sha256:OLD` to `@sha256:NEW` while the mirror still serves OLD
+  # under that tag used to read `missing=false` -- exactly the shape the
+  # incident above never covered, because it happened to the tag existing,
+  # not being absent. ci/mirror_precheck_lib.sh (shared with the "check"
+  # step below) compares the destination's actual manifest digest against
+  # the pin for anything digest-pinned; only an UNPINNED upstream tag
+  # (clickhouse/clickhouse-server:26.7, valkey/valkey:8-alpine -- see the
+  # job-level `concurrency` comment above) stays presence-only via `--raw`,
+  # not the non-raw `imagetools inspect` form: the non-raw form truncates a
+  # manifest list to a summary -- the SAME trap this file's own "Verify
+  # every mirrored digest matches upstream" step already documents below
+  # (the MediaType/index-vs-platform-manifest confusion that misjudged
+  # valkey and postgres as amd64-only), filed 2026-09-02.
+  precheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      missing: ${{ steps.check.outputs.missing }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read the set from ci/check_go.sh rather than restating it here: one
+      # parser, so the mirror and the precheck cannot drift apart.
+      # IDENTICAL to the `mirror` job's own "Resolve every image CI pulls
+      # from Docker Hub" step below -- deliberately duplicated rather than
+      # factored into a composite action, so this stays a one-file, one-PR
+      # change during an active incident. A future edit to either step's
+      # resolution logic must update both; nothing enforces that yet.
+      - name: Resolve every image CI pulls from Docker Hub
+        id: images
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          bash ci/check_go.sh integration-images | awk -F'\t' 'NF == 2' | cut -f2 > images.raw
+          OWNER="${{ github.repository_owner }}" python3 - \
+              .github/workflows/test.yml .github/workflows/live-e2e.yml >> images.raw <<'PY'
+          import os, sys, yaml
+
+          prefix = f"ghcr.io/{os.environ['OWNER']}/"
+          bad, out = [], []
+          for path in sys.argv[1:]:
+              document = yaml.safe_load(open(path, encoding="utf-8")) or {}
+              for job_name, job in (document.get("jobs") or {}).items():
+                  if not isinstance(job, dict):
+                      continue
+                  declarations = []
+                  container = job.get("container")
+                  if container is not None:
+                      declarations.append(("container", container))
+                  for service_name, service in (job.get("services") or {}).items():
+                      declarations.append((f"services.{service_name}", service))
+                  for where, declaration in declarations:
+                      image = declaration if isinstance(declaration, str) else (
+                          declaration.get("image") if isinstance(declaration, dict) else None)
+                      if not image:
+                          bad.append(f"{path}: {job_name}.{where} has no resolvable image")
+                          continue
+                      if not str(image).casefold().startswith(prefix.casefold()):
+                          bad.append(f"{path}: {job_name}.{where} pulls {image!r}, not under {prefix}")
+                          continue
+                      out.append(str(image)[len(prefix):])
+          if bad:
+              for line in bad:
+                  print(f"::error::{line}", file=sys.stderr)
+              sys.exit(1)
+          print("\n".join(out))
+          PY
+          for compose in tests/compatibility/river/compose.compatibility.yml; do
+            test -f "${compose}" || { echo "::error::compose file missing: ${compose}"; exit 1; }
+            sed -nE 's/^[[:space:]]*image:[[:space:]]*(\$\{[^}]*\})?([^[:space:]#]+).*$/\2/p' \
+              "${compose}" >> images.raw
+          done
+          bash ci/python_base_ref.sh "${OWNER}" \
+            | awk '$1 == "upstream" { print $2 }' >> images.raw
+
+          sort -u images.raw > images.txt
+          test -s images.txt || { echo "::error::no images resolved"; exit 1; }
+          if grep -q '[$]' images.txt; then
+            echo "::error::unresolved variable in an image ref:"
+            grep '[$]' images.txt
+            exit 1
+          fi
+          echo "--- images to check ---"
+          cat images.txt
+
+      - name: Check whether the mirror already carries every resolved image
+        id: check
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # Shared with the `mirror_precheck_lib_test.sh` fixture suite --
+          # see ci/mirror_precheck_lib.sh's own header for why this exists.
+          source ci/mirror_precheck_lib.sh
+          missing=false
+          while read -r image; do
+            [ -n "${image}" ] || continue
+            if mirror_image_missing "${OWNER}" "${image}"; then
+              :
+            else
+              missing=true
+            fi
+          done < images.txt
+          echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
+
   mirror:
+    needs: precheck
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Registry writes stay serialised across EVERY event via this separate,
@@ -141,12 +297,28 @@ jobs:
     # never created a job at all (CHAOS-4928's original, silent failure
     # mode). A contended mirror job failing loud here is an acceptable,
     # narrower residual, not the bug this ticket exists to fix.
+    #
+    # `precheck` above is what actually keeps this lock uncontended on a
+    # busy night now: on `pull_request`, this job only enters the group at
+    # all when `precheck` found something genuinely missing. A PR that
+    # touches a filtered path but resolves to the SAME image set as what's
+    # already mirrored (the common case -- see this job's own trigger
+    # `paths:` discussion) never queues here, so it can never evict or be
+    # evicted by another PR's mirror. `push`/`schedule`/`workflow_dispatch`
+    # are unaffected: `github.event_name != 'pull_request'` short-circuits
+    # both this and the fork-PR clause below to `true`, so main keeps doing
+    # the full idempotent refresh regardless of `precheck`'s answer --
+    # moving-tag drift (clickhouse/valkey, not digest-pinned) still
+    # self-heals there, just not on every PR that happens to touch a
+    # filtered path.
     concurrency:
       group: mirror-publish
       cancel-in-progress: false
     # Forks get neither the Docker Hub secrets nor packages:write, so the job
     # would fail at login rather than do anything useful.
-    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+    if: >-
+      (github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request') &&
+      (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

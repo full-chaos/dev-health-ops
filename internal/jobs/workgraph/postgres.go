@@ -20,6 +20,19 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-
 
 func validUUID(value string) bool { return uuidPattern.MatchString(value) }
 
+// ValidUUID is the exported form of validRequest's own RFC-4122
+// version/variant check -- an id that satisfies google/uuid's permissive
+// uuid.Parse (which accepts any 32 hex digits in the right shape,
+// version/variant bits included or not) can still fail THIS check and
+// therefore WriteTx's own validRequest, at write time, deep inside a
+// transaction. A caller constructing a Request -- e.g.
+// cmd/dev-health-workerctl's manual trigger commands -- should reject a
+// contract-invalid id at flag-validation time, with the same "invalid_request"
+// the caller already reports for every other malformed flag, rather than
+// only discovering it via WriteTx's ErrInvalidState after a transaction is
+// already open (codex review, 2026-09-05, CHAOS-5170 r1 P2).
+func ValidUUID(value string) bool { return validUUID(value) }
+
 // PostgresStore keeps request and ledger transitions in one transaction. The
 // ledger has one row per request; an expired reclaim replaces its fencing token
 // atomically rather than leaving a stale token beside a new request owner.

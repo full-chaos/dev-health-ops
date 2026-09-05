@@ -193,6 +193,39 @@ func TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName(t *testing.T) {
 	}
 }
 
+// CHAOS-5141: the REAL production pythonRecognisedFinalizeFamilies, not a
+// synthetic fixture like the declared-order test above. team_cognitive_load
+// reads user_metrics_daily rows ic_finalize writes for the SAME run, so
+// ic_finalize must iterate first -- computeNativeFinalizeFamilies now walks
+// this list in its own declared order (TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName
+// proves the mechanism), so the ordering guarantee is only as good as this
+// list's actual element order. A future edit that appends
+// TeamCognitiveLoadFamilyName before "ic_finalize" (or reorders them) would
+// compile and pass every other test here while silently making
+// team_cognitive_load read a partial/stale user_metrics_daily on every run.
+func TestICFinalizePrecedesTeamCognitiveLoadInDeclaredOrder(t *testing.T) {
+	icIndex, teamCognitiveLoadIndex := -1, -1
+	for index, name := range pythonRecognisedFinalizeFamilies {
+		switch name {
+		case ICFinalizeFamilyName:
+			icIndex = index
+		case TeamCognitiveLoadFamilyName:
+			teamCognitiveLoadIndex = index
+		}
+	}
+	if icIndex == -1 || teamCognitiveLoadIndex == -1 {
+		t.Fatalf("pythonRecognisedFinalizeFamilies=%v missing ic_finalize or team_cognitive_load "+
+			"-- this test cannot assert an ordering between two names it cannot find",
+			pythonRecognisedFinalizeFamilies)
+	}
+	if icIndex >= teamCognitiveLoadIndex {
+		t.Fatalf("pythonRecognisedFinalizeFamilies=%v has ic_finalize at index %d and "+
+			"team_cognitive_load at index %d -- ic_finalize must iterate FIRST, since "+
+			"team_cognitive_load reads user_metrics_daily rows ic_finalize writes in the same run",
+			pythonRecognisedFinalizeFamilies, icIndex, teamCognitiveLoadIndex)
+	}
+}
+
 type recordingFinalizeObserver struct {
 	calls []string
 	rows  map[string]int

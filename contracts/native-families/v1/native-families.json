@@ -4,6 +4,7 @@
   "daily": {
     "ai_governance": "native",
     "ai_impact": "native",
+    "ai_workflow": "native",
     "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",

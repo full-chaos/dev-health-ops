@@ -263,6 +263,7 @@ def _extract_ai_workflow_for_day(
     end: datetime,
     repo_id: uuid.UUID | None,
     repo_provider_by_id: dict[str, str],
+    skip_families: frozenset[str] = frozenset(),
 ) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]]:
     """Extract AI workflow runs and Work Graph edges for one UTC day window.
 
@@ -276,6 +277,19 @@ def _extract_ai_workflow_for_day(
     links natively when the deployment row carries its PR number, and
     heuristically (confidence 0.3) to same-repo deployments within the same
     UTC day otherwise.
+
+    This wrapper function feeds TWO independently-native-portable families,
+    not one (CHAOS-4280 astra review, finding 1): ``"ai_workflow"`` in
+    ``skip_families`` skips the PR load + extract_ai_workflow_from_pull_requests
+    call (runs/artifact_edges/issue_edges); ``"work_graph_edges"`` in
+    ``skip_families`` independently skips the review/deployment/incident load
+    + extract_review_deployment_incident_edges call (the other three lists).
+    Naming BOTH skips nothing extra and naming NEITHER reproduces this
+    function's original, single-gate behavior exactly. Per chris's
+    2026-09-05 amendment to the CHAOS-3092 close condition, a skip must skip
+    the PYTHON COMPUTE, not merely the write below -- so this gates the load
+    queries and the extractor calls themselves, not only the two callers'
+    write step further down in run_daily_metrics_job.
     """
     org_uuid: uuid.UUID | None = None
     if org_id:
@@ -287,6 +301,9 @@ def _extract_ai_workflow_for_day(
         logger.debug("AI workflow extraction skipped: org_id %r is not a UUID", org_id)
         return [], [], [], [], [], []
 
+    skip_ai_workflow_compute = "ai_workflow" in skip_families
+    skip_work_graph_edges_compute = "work_graph_edges" in skip_families
+
     wf_params: dict[str, Any] = {
         "org_id": org_id,
         "start": start,
@@ -297,21 +314,6 @@ def _extract_ai_workflow_for_day(
     if repo_id is not None:
         wf_params["repo_id"] = str(repo_id)
         wf_repo_filter = " AND repo_id = {repo_id:UUID}"
-
-    wf_pr_rows = primary_sink.query_dicts(
-        "SELECT repo_id, number, title, body, head_branch,"
-        " author_name, author_email, created_at, merged_at,"
-        " closed_at, last_synced"
-        " FROM git_pull_requests"
-        " WHERE org_id = {org_id:String}"
-        "   AND ((created_at >= {start:DateTime64(3, 'UTC')}"
-        "         AND created_at < {end:DateTime64(3, 'UTC')})"
-        "    OR (merged_at IS NOT NULL"
-        "        AND merged_at >= {start:DateTime64(3, 'UTC')}"
-        "        AND merged_at < {end:DateTime64(3, 'UTC')}))"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
 
     # Row-local hygiene: drop rows whose repo_id/number cannot parse instead
     # of letting one malformed row abort the whole day (the extractor calls
@@ -335,47 +337,57 @@ def _extract_ai_workflow_for_day(
             )
         return valid
 
-    wf_pr_rows = _valid_rows(wf_pr_rows, "git_pull_requests")
-
+    # CHAOS-4280 astra review, finding 1: PR-load + linkage-load skip
+    # INDEPENDENTLY of the review/deployment/incident-load below -- this is
+    # ai_workflow's own compute, gated on ai_workflow's own skip flag, not on
+    # work_graph_edges'.
     issue_ids_by_pr: dict[str, list[str]] = {}
-    wf_pr_numbers = sorted({int(row["number"]) for row in wf_pr_rows})
-    if wf_pr_numbers:
-        link_params: dict[str, Any] = {
-            "org_id": org_id,
-            "pr_numbers": wf_pr_numbers,
-        }
-        link_repo_filter = ""
-        if repo_id is not None:
-            link_params["repo_id"] = str(repo_id)
-            link_repo_filter = " AND repo_id = {repo_id:UUID}"
-        link_rows = primary_sink.query_dicts(
-            "SELECT repo_id, pr_number, work_item_id"
-            " FROM work_graph_issue_pr"
+    if skip_ai_workflow_compute:
+        wf_pr_rows = []
+    else:
+        wf_pr_rows = primary_sink.query_dicts(
+            "SELECT repo_id, number, title, body, head_branch,"
+            " author_name, author_email, created_at, merged_at,"
+            " closed_at, last_synced"
+            " FROM git_pull_requests"
             " WHERE org_id = {org_id:String}"
-            "   AND pr_number IN {pr_numbers:Array(UInt32)}"
-            f"{link_repo_filter}",
-            link_params,
+            "   AND ((created_at >= {start:DateTime64(3, 'UTC')}"
+            "         AND created_at < {end:DateTime64(3, 'UTC')})"
+            "    OR (merged_at IS NOT NULL"
+            "        AND merged_at >= {start:DateTime64(3, 'UTC')}"
+            "        AND merged_at < {end:DateTime64(3, 'UTC')}))"
+            f"{wf_repo_filter}",
+            wf_params,
         )
-        for link in link_rows:
-            wi_id = str(link.get("work_item_id") or "")
-            link_repo = str(link.get("repo_id") or "")
-            link_number = link.get("pr_number")
-            if not wi_id or not link_repo or link_number is None:
-                continue
-            issue_ids_by_pr.setdefault(f"{link_repo}:{int(link_number)}", []).append(
-                wi_id
-            )
+        wf_pr_rows = _valid_rows(wf_pr_rows, "git_pull_requests")
 
-    wf_review_rows = primary_sink.query_dicts(
-        "SELECT repo_id, number, review_id, state, submitted_at, last_synced"
-        " FROM git_pull_request_reviews"
-        " WHERE org_id = {org_id:String}"
-        "   AND submitted_at >= {start:DateTime64(3, 'UTC')}"
-        "   AND submitted_at < {end:DateTime64(3, 'UTC')}"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
-    wf_review_rows = _valid_rows(wf_review_rows, "git_pull_request_reviews")
+        wf_pr_numbers = sorted({int(row["number"]) for row in wf_pr_rows})
+        if wf_pr_numbers:
+            link_params: dict[str, Any] = {
+                "org_id": org_id,
+                "pr_numbers": wf_pr_numbers,
+            }
+            link_repo_filter = ""
+            if repo_id is not None:
+                link_params["repo_id"] = str(repo_id)
+                link_repo_filter = " AND repo_id = {repo_id:UUID}"
+            link_rows = primary_sink.query_dicts(
+                "SELECT repo_id, pr_number, work_item_id"
+                " FROM work_graph_issue_pr"
+                " WHERE org_id = {org_id:String}"
+                "   AND pr_number IN {pr_numbers:Array(UInt32)}"
+                f"{link_repo_filter}",
+                link_params,
+            )
+            for link in link_rows:
+                wi_id = str(link.get("work_item_id") or "")
+                link_repo = str(link.get("repo_id") or "")
+                link_number = link.get("pr_number")
+                if not wi_id or not link_repo or link_number is None:
+                    continue
+                issue_ids_by_pr.setdefault(
+                    f"{link_repo}:{int(link_number)}", []
+                ).append(wi_id)
 
     # Deployments/incidents feed the PR→deployment and deployment→incident
     # Work Graph edges (CHAOS-2367). Their identity is repo_id + an opaque
@@ -404,37 +416,55 @@ def _extract_ai_workflow_for_day(
             )
         return valid
 
-    # Event time falls back to last_synced (non-nullable) so in-flight
-    # deployments with no timestamps yet still land in a day bucket instead
-    # of silently never matching any window. FINAL: deployments may hold
-    # pre-merge duplicate rows during
-    # active sync.
-    wf_deployment_rows = primary_sink.query_dicts(
-        "SELECT repo_id, deployment_id, pull_request_number,"
-        " started_at, finished_at, deployed_at, last_synced"
-        " FROM deployments FINAL"
-        " WHERE org_id = {org_id:String}"
-        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
-        "       >= {start:DateTime64(3, 'UTC')}"
-        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
-        "       < {end:DateTime64(3, 'UTC')}"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
-    wf_deployment_rows = _valid_id_rows(
-        wf_deployment_rows, "deployment_id", "deployments"
-    )
+    # CHAOS-4280 astra review, finding 1: review/deployment/incident-load
+    # skips INDEPENDENTLY of the PR-load above -- this is work_graph_edges'
+    # own compute, gated on work_graph_edges' own skip flag.
+    if skip_work_graph_edges_compute:
+        wf_review_rows = []
+        wf_deployment_rows = []
+        wf_incident_rows = []
+    else:
+        wf_review_rows = primary_sink.query_dicts(
+            "SELECT repo_id, number, review_id, state, submitted_at, last_synced"
+            " FROM git_pull_request_reviews"
+            " WHERE org_id = {org_id:String}"
+            "   AND submitted_at >= {start:DateTime64(3, 'UTC')}"
+            "   AND submitted_at < {end:DateTime64(3, 'UTC')}"
+            f"{wf_repo_filter}",
+            wf_params,
+        )
+        wf_review_rows = _valid_rows(wf_review_rows, "git_pull_request_reviews")
 
-    wf_incident_rows = primary_sink.query_dicts(
-        active_incidents_query(
-            window=IncidentWindow.STARTED,
-            org_id=org_id,
-            repo_filter=wf_repo_filter,
-        ),
-        wf_params,
-    )
-    wf_incident_rows = deduplicate_active_incidents(wf_incident_rows)
-    wf_incident_rows = _valid_id_rows(wf_incident_rows, "incident_id", "incidents")
+        # Event time falls back to last_synced (non-nullable) so in-flight
+        # deployments with no timestamps yet still land in a day bucket
+        # instead of silently never matching any window. FINAL: deployments
+        # may hold pre-merge duplicate rows during active sync.
+        wf_deployment_rows = primary_sink.query_dicts(
+            "SELECT repo_id, deployment_id, pull_request_number,"
+            " started_at, finished_at, deployed_at, last_synced"
+            " FROM deployments FINAL"
+            " WHERE org_id = {org_id:String}"
+            "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
+            "       >= {start:DateTime64(3, 'UTC')}"
+            "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
+            "       < {end:DateTime64(3, 'UTC')}"
+            f"{wf_repo_filter}",
+            wf_params,
+        )
+        wf_deployment_rows = _valid_id_rows(
+            wf_deployment_rows, "deployment_id", "deployments"
+        )
+
+        wf_incident_rows = primary_sink.query_dicts(
+            active_incidents_query(
+                window=IncidentWindow.STARTED,
+                org_id=org_id,
+                repo_filter=wf_repo_filter,
+            ),
+            wf_params,
+        )
+        wf_incident_rows = deduplicate_active_incidents(wf_incident_rows)
+        wf_incident_rows = _valid_id_rows(wf_incident_rows, "incident_id", "incidents")
 
     def _by_provider(
         rows: list[dict[str, Any]],
@@ -1138,10 +1168,13 @@ async def run_daily_metrics_job(
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
     ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
     ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
-    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
+    ``benchmarking`` CHAOS-4288, ``ai_impact`` CHAOS-4280 (codex round
     chaos-4280-r3, finding 5 -- this doc had not been updated when
-    ``ai_impact`` was wired below); naming any other family here has no
-    effect.
+    ``ai_impact`` was wired below), ``work_graph_edges`` CHAOS-4286 part A,
+    and ``ai_workflow`` CHAOS-4286 part B / CHAOS-4280 part B -- the latter
+    two ALSO gate the compute inside ``_extract_ai_workflow_for_day``
+    (astra review finding 1, 2026-09-05), not only the write, unlike every
+    other name in this list; naming any other family here has no effect.
 
     The three CHAOS-4284 names gate WRITES ONLY: their computed values still
     feed ``compute_release_confidence``/``compute_quality_drag``/
@@ -1743,6 +1776,7 @@ async def run_daily_metrics_job(
             end=end,
             repo_id=repo_id,
             repo_provider_by_id=repo_provider_by_id,
+            skip_families=frozenset(skip_families),
         )
 
         # Build pr_commit_stats: {(repo_id, pr_number) -> [{"file_path": ...}]} so that
@@ -1930,18 +1964,26 @@ async def run_daily_metrics_job(
         #     established file_hotspots precedent and keep the diff minimal.
         #
         # CHAOS-4286: work_graph_edges has a native Go executor
-        # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
-        # the compute that produces these three lists is the SAME
-        # _extract_ai_workflow_for_day call that produces ai_workflow_runs /
-        # _artifact_edges / _issue_edges, and THOSE are still Python-owned
-        # (ai_workflow is CHAOS-4286's other half, not yet ported). So the
-        # extraction must stay unconditional; only the three edge writes below
-        # are gated.
+        # (WorkGraphEdgesExecutor). CHAOS-4280 astra review, finding 1
+        # (2026-09-05): _extract_ai_workflow_for_day now gates its OWN two
+        # independent compute blocks on these same two flags (skip_families
+        # is now threaded into that call above), so as of this port BOTH
+        # ai_workflow's and work_graph_edges' Python compute are skippable,
+        # not just their writes -- this section still separately gates the
+        # WRITE for each, since a skip must ALSO suppress the bridge's own
+        # persistence of whatever the (now correctly empty) extraction
+        # produced, exactly like every other native family's write gate.
         #
         # Safe because each of ai_review_outcome_edges, ai_pr_deployment_edges
         # and ai_deployment_incident_edges is assigned once (:1696-1698) and
         # read ONLY by its own write below -- verified by grep, not assumed.
         skip_work_graph_edges_write = "work_graph_edges" in skip_families
+        # CHAOS-4280 part B: ai_workflow has a native Go executor
+        # (AIWorkflowExecutor). Same write-only-skip shape as
+        # skip_work_graph_edges_write above -- gates ai_workflow_runs /
+        # _artifact_edges / _issue_edges specifically, independent of
+        # work_graph_edges' own three tables.
+        skip_ai_workflow_write = "ai_workflow" in skip_families
         #
         # Without these two gates the native executors and the unconditional
         # writes below would BOTH fire for every partition, doubling every row
@@ -2033,13 +2075,23 @@ async def run_daily_metrics_job(
                 s.write_ai_governance_coverage_daily(ai_governance_coverage)
             if ai_impact_metrics and not skip_ai_impact_write:
                 s.write_ai_impact_metrics(ai_impact_metrics)
-            if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
+            if (
+                ai_workflow_runs
+                and not skip_ai_workflow_write
+                and hasattr(s, "write_ai_workflow_runs")
+            ):
                 s.write_ai_workflow_runs(ai_workflow_runs)
-            if ai_workflow_artifact_edges and hasattr(
-                s, "write_ai_workflow_artifact_edges"
+            if (
+                ai_workflow_artifact_edges
+                and not skip_ai_workflow_write
+                and hasattr(s, "write_ai_workflow_artifact_edges")
             ):
                 s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
-            if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
+            if (
+                ai_workflow_issue_edges
+                and not skip_ai_workflow_write
+                and hasattr(s, "write_ai_workflow_issue_edges")
+            ):
                 s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
             if (
                 ai_review_outcome_edges

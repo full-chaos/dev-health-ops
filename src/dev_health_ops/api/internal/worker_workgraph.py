@@ -30,24 +30,6 @@ from dev_health_ops.api.internal.worker_auth import (
 
 router = APIRouter(prefix="/internal/worker/workgraph/v1", include_in_schema=False)
 
-# r2 finding F1 (P2, codex, CHAOS-4438): these 3 Go kinds were deleted
-# outright -- registerKind's switch (internal/jobrescue/registry.go) and
-# addWorkgraphWorker's dispatch (cmd/dev-health-worker/workgraph.go) have no
-# case for them any more. cmd/dev-health-worker/workgraph.go's own comment
-# states "zero producers ever created a request row for them ...  confirmed
-# exhaustively" -- meaning no live path can create a work_graph_execution_
-# requests row of these kinds today. This bridge's mapping/execution code for
-# them was nonetheless still live and reachable if one somehow existed
-# (a manual DB write, a bug elsewhere, a future regression), which does not
-# fail closed -- the exact same "unreachable today, but a code path that
-# would still run it exists" gap the Go-side strand-repair fix (F1 in that
-# round) was given the same defense-in-depth treatment for. Rejected
-# explicitly and logged, rather than left to fall through as a merely
-# "unsupported kind" -- an operator seeing this specific rejection knows
-# immediately that the kind is deliberately retired, not malformed.
-_RETIRED_KINDS = frozenset(
-    {"investment.dispatch", "investment.chunk", "investment.finalize"}
-)
 _MAX_EVIDENCE_BYTES = 4096
 _MAX_COMPATIBILITY_PROCESS_BYTES = 1024 * 1024
 _PROCESS_TERMINATION_TIMEOUT_SECONDS = 1.0
@@ -112,10 +94,10 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
             "llm_batch_timeout_seconds",
         },
         # investment.dispatch/chunk/finalize retired outright under
-        # CHAOS-4438 (r2 finding F1) -- removed from this table so a call
-        # that somehow bypasses execute()'s _RETIRED_KINDS guard still
-        # fails closed here with "unsupported fields" rather than being
-        # scoped and dispatched.
+        # CHAOS-4438 -- removed from this table, so a request naming one of
+        # them fails closed here with "unsupported fields" (the existing
+        # unknown-kind rejection path) rather than being scoped and
+        # dispatched.
     }
     if kind not in allowed or set(scope) - allowed[kind]:
         raise ValueError("request scope contains unsupported fields")
@@ -354,22 +336,14 @@ async def execute(
     # turns a healthy materialization into an expired execution.
     execution_row = dict(row)
     await session.rollback()
-    kind = str(execution_row["kind"])
-    if kind in _RETIRED_KINDS:
-        # r2 finding F1 (P2, codex, CHAOS-4438): fail closed rather than
-        # execute a retired kind's Python compatibility path -- see
-        # _RETIRED_KINDS' module-level comment for why this is reachable in
-        # principle even though nothing produces such a row today. No new
-        # Python log line here (chris's standing rule: Python telemetry
-        # additions are disallowed) -- the Go-side telemetry this PR adds
-        # covers the equivalent discard-on-error class.
-        await _mark_ambiguous(
-            session, request, f"job kind {kind} was retired under CHAOS-4438"
-        )
-        raise HTTPException(
-            status_code=410,
-            detail=f"Job kind {kind} is retired and no longer executable",
-        )
+    # CHAOS-4438: a retired kind (investment.dispatch/chunk/finalize) has no
+    # entry in _scope_arguments' `allowed` table or _run_sync's `operations`
+    # table below -- it falls into the existing unknown-kind rejection path
+    # (the broad `except Exception` a few lines down, which _scope_arguments'
+    # ValueError reaches) exactly like any other unsupported kind. No
+    # dedicated retired-kind check here (chris's standing rule: Python
+    # rejection code for a retired kind is disallowed -- deletion of the
+    # kind's handler entries is the fix, not a new guard).
     try:
         arguments = _scope_arguments(
             str(execution_row["kind"]), execution_row["scope"], execution_row

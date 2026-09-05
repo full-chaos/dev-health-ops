@@ -87,10 +87,11 @@ def test_scope_arguments_reloads_only_allowlisted_workgraph_fields() -> None:
     "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
 )
 def test_scope_arguments_rejects_retired_kinds(kind: str) -> None:
-    # r2 finding F1 (P2, codex, CHAOS-4438): these 3 kinds were removed from
-    # the allowed-fields table outright, so a call that somehow bypasses
-    # execute()'s explicit _RETIRED_KINDS guard still fails closed here
-    # rather than being scoped and dispatched.
+    # CHAOS-4438: these 3 kinds were removed from the allowed-fields table
+    # outright, so a request naming one of them fails closed here with
+    # "unsupported fields" -- the mechanism the existing unknown-kind
+    # rejection path in execute() relies on -- rather than being scoped
+    # and dispatched.
     row = {
         "org_id": "00000000-0000-4000-8000-000000000009",
         "model_ref": "gpt-test",
@@ -142,12 +143,12 @@ def test_compatibility_runner_preserves_canonical_datetime_and_uuid_output() -> 
     "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
 )
 def test_run_sync_rejects_retired_kinds(kind: str) -> None:
-    # r2 finding F1 (P2, codex, CHAOS-4438): these 3 kinds were removed from
-    # the operations dispatch table outright -- the multi-step build +
-    # materialize + membership orchestration investment.dispatch used to
-    # perform (and investment.chunk/finalize's own partitioned-materialize
-    # operations) no longer exists at all. A call that somehow bypasses
-    # execute()'s explicit _RETIRED_KINDS guard still fails closed here.
+    # CHAOS-4438: these 3 kinds were removed from the operations dispatch
+    # table outright -- the multi-step build + materialize + membership
+    # orchestration investment.dispatch used to perform (and
+    # investment.chunk/finalize's own partitioned-materialize operations)
+    # no longer exists at all. A request naming one of them fails closed
+    # here, same mechanism as _scope_arguments above.
     with pytest.raises(ValueError, match="unsupported"):
         _run_sync(kind, {"org_id": "00000000-0000-4000-8000-000000000009"})
 
@@ -208,19 +209,21 @@ async def test_execute_releases_read_transaction_before_long_running_work(
 @pytest.mark.parametrize(
     "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
 )
-async def test_execute_rejects_a_retired_kind_request_row(
+async def test_execute_rejects_a_retired_kind_via_the_existing_unknown_kind_path(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
 ) -> None:
-    # r2 finding F1 (P2, codex, CHAOS-4438) red/green: a request row naming
-    # a retired kind must be REJECTED -- marked ambiguous so it does not sit
-    # claimed forever, and refused with a distinct status code -- rather
-    # than reaching _scope_arguments/_run_sync at all. No new Python log
-    # line (chris's standing rule: Python telemetry additions are
-    # disallowed). GREEN is this test; RED would be the pre-fix behavior
-    # where such a row ran the retired kind's Python operation successfully
-    # (see the now-deleted test_river_investment_dispatch_
-    # runs_sequentially_without_celery for what that used to look like).
+    # team-lead ruling (CHAOS-4438): a retired kind must not get its own
+    # Python rejection path in execute() -- that was itself disallowed new
+    # Python (chris's standing rule: Python rejection code for a retired
+    # kind is disallowed, deletion of the kind's handler entries is the
+    # fix). _scope_arguments' `allowed` table has no entry for these 3
+    # kinds (see test_scope_arguments_rejects_retired_kinds), so a request
+    # naming one of them raises the same ValueError any other unsupported
+    # kind would, caught by execute()'s existing broad `except Exception`,
+    # which marks the request ambiguous and raises a 503. This test proves
+    # that EXISTING path actually covers a retired kind end to end, not
+    # that a dedicated retired-kind check exists.
     request_id = uuid.UUID("00000000-0000-4000-8000-000000000141")
     org_id = uuid.UUID("00000000-0000-4000-8000-000000000009")
     claim_token = uuid.UUID("00000000-0000-4000-8000-000000000142")
@@ -250,14 +253,14 @@ async def test_execute_rejects_a_retired_kind_request_row(
     with pytest.raises(HTTPException) as exc_info:
         await worker_workgraph.execute(request, session, MagicMock(), "Bearer test")
 
-    assert exc_info.value.status_code == 410
-    assert kind in exc_info.value.detail
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Execution outcome is ambiguous"
     mark_ambiguous.assert_awaited_once()
     await_args = mark_ambiguous.await_args
     assert await_args is not None
     assert await_args.args[0] is session
     assert await_args.args[1] is request
-    assert kind in await_args.args[2]
+    assert "ValueError" in await_args.args[2]
     # The retired kind must never reach the actual dispatch path.
     run_until_disconnect.assert_not_awaited()
 

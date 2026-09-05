@@ -136,6 +136,18 @@ func (executor *BenchmarkingFinalizeExecutor) ComputeFinalizeFamily(
 
 	total, succeeded, err := executor.store.PartitionCompletionCounts(ctx, run.ID)
 	if err != nil {
+		// #2277 r1 F2 (P2, confirmed): a lookup failure used to return before
+		// ANY barrier log line was ever written, so an operator scanning this
+		// family's own "benchmarking finalize partition barrier" log line for
+		// a run that never computed would find nothing at all -- indistinguishable
+		// from the run never having been claimed. Log the failure itself, with
+		// the same identifiers the success-path Info line below carries, so the
+		// two paths are equally visible.
+		logger.Error("benchmarking finalize partition barrier lookup failed",
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+			"error", err,
+		)
 		return 0, fmt.Errorf("%w: %v", errBenchmarkingFinalizeUnavailable, err)
 	}
 	logger.Info("benchmarking finalize partition barrier",
@@ -183,6 +195,26 @@ func (executor *BenchmarkingFinalizeExecutor) ComputeFinalizeFamily(
 		// Only insight generation propagates; every per-metric failure was
 		// already swallowed inside, matching Python.
 		return 0, err
+	}
+
+	// Forwarded finding, #2276 r2 F2 (P1, verified by
+	// lane-ci-required-to-arc): a swallowed fetch failure inside
+	// ComputeBenchmarkingForDay logs at the per-slice level (now with
+	// org_id/day identifiers -- see Outputs.FetchFailures' own doc
+	// comment), but nothing previously surfaced the AGGREGATE at the
+	// finalize layer, so an operator watching this family's own log lines
+	// (not grepping every per-metric warning) had no visibility into a run
+	// degrading over time. Logged at Warn, not Error: Python's own
+	// semantics are preserved (fail open per-metric, never abort the run),
+	// so a nonzero count here is diagnostic, not a family failure -- the
+	// row count this function still returns is what determines
+	// success/refused/partial_write.
+	if outputs.FetchFailures > 0 {
+		logger.Warn("benchmarking finalize had swallowed fetch failures",
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+			"fetch_failures", outputs.FetchFailures,
+		)
 	}
 
 	// THE COUNT SURVIVES THE ERROR (preserved from the removed

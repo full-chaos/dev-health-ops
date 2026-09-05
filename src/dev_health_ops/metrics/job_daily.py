@@ -1933,6 +1933,22 @@ async def run_daily_metrics_job(
         # repo_user_commit's own comment above warns about.
         skip_work_item_write = "work_item" in skip_families
         skip_work_item_estimate_write = "work_item_estimate" in skip_families
+        # CHAOS-4285: ai_governance has a native Go executor
+        # (AIGovernanceExecutor). Same write-only-skip shape as
+        # repo_user_commit above -- the compute stays unconditional to keep
+        # the diff minimal and match the reviewed precedent, and neither
+        # `ai_policy_events` nor `ai_governance_coverage` feeds anything else
+        # in this function (both are assigned at :1671 and used ONLY by the
+        # two writes below; verified by grep, not assumed).
+        #
+        # This gate is NOT optional hygiene for this family. ai_policy_events
+        # is a ReplacingMergeTree whose ORDER BY key ENDS in event_id, and
+        # Python's event_id is uuid4() -- so an ungated Python write can never
+        # merge with the native executor's rows, nor with its own from a
+        # previous run. Leaving both paths writing would accumulate duplicate
+        # policy events permanently, which is the exact defect the Go port's
+        # deterministic event_id exists to fix.
+        skip_ai_governance_write = "ai_governance" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1979,8 +1995,9 @@ async def run_daily_metrics_job(
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
-            s.write_ai_policy_events(ai_policy_events)
-            s.write_ai_governance_coverage_daily(ai_governance_coverage)
+            if not skip_ai_governance_write:
+                s.write_ai_policy_events(ai_policy_events)
+                s.write_ai_governance_coverage_daily(ai_governance_coverage)
             if ai_impact_metrics:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):

@@ -298,6 +298,75 @@
       "reason": "SyntaxError",
       "skipped": true
     },
+    "rules_r2_combining_identifier.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r2_fstring_bad_expr.py.txt": {
+      "detail": "f-string: unmatched ')' (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_fstring_same_quote.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r2_fstring_unterminated.py.txt": {
+      "detail": "f-string: expecting '}' (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_invalid_suite_syntax.py.txt": {
+      "detail": "invalid syntax (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_parenthesized_capture.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
     "rules_softkeywords.py.txt": {
       "blocks": [
         {

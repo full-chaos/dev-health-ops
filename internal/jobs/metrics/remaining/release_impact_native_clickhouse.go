@@ -263,3 +263,83 @@ LIMIT 1`,
 	}
 	return repoID, nil
 }
+
+// releaseImpactRow is one release_impact_daily row, matching migration 034's
+// column list and write_release_impact_daily's serialization (ci.py:380-407)
+// exactly -- including which fields are always non-nil (confidence, coverage,
+// data_completeness, missing_required_fields_count, concurrent_deploy_count)
+// versus genuinely nullable (the delta/rate fields, time-to-first-issue, every
+// flag_* column, which PR1 does not populate).
+type releaseImpactRow struct {
+	OrgID                 string
+	Day                   time.Time
+	ReleaseRef            string
+	Environment           string
+	RepoID                string // "" when unknown, matching Python's str(repo_id) if repo_id else ""
+	FrictionDelta         *float64
+	PostFrictionRate      *float64
+	ErrorDelta            *float64
+	PostErrorRate         *float64
+	TimeToFirstIssue      *float64
+	Confidence            float64
+	CoverageRatioTop      float64 // release_impact_coverage_ratio (Python passes coverage_ratio to both columns)
+	MissingRequiredFields uint32
+	DataCompleteness      float64
+	ConcurrentDeployCount uint32
+	ComputedAt            time.Time
+}
+
+// writeReleaseImpactRows ports write_release_impact_daily's INSERT (ci.py:375-440).
+// flag_*, issue_to_release_impact_link_rate stay NULL (out of PR1 scope);
+// rollback_or_disable_after_impact_spike stays 0 -- both match ci.py's current
+// behaviour verbatim (release_impact.py:558-576), not a Go-side simplification.
+func (r *ReleaseImpactReader) writeReleaseImpactRows(
+	ctx context.Context, rows []releaseImpactRow,
+) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	batch, err := r.conn.PrepareBatch(ctx, `INSERT INTO release_impact_daily (
+org_id, day, release_ref, environment, repo_id,
+release_user_friction_delta, release_post_friction_rate,
+release_error_rate_delta, release_post_error_rate,
+time_to_first_user_issue_after_release,
+release_impact_confidence_score, release_impact_coverage_ratio,
+flag_exposure_rate, flag_activation_rate, flag_reliability_guardrail,
+flag_friction_delta, flag_rollout_half_life, flag_churn_rate,
+issue_to_release_impact_link_rate,
+rollback_or_disable_after_impact_spike, coverage_ratio,
+missing_required_fields_count, instrumentation_change_flag,
+data_completeness, concurrent_deploy_count, computed_at)`)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		// release_impact_confidence_score, release_impact_coverage_ratio,
+		// coverage_ratio and data_completeness are Float32 columns (migration
+		// 034) even though the compute side is deliberately float64 all the
+		// way through (ComputeConfidence's FMA-barrier discipline needs the
+		// full float64 path to match CPython bit-for-bit) -- the narrowing to
+		// float32 happens ONLY here, at the write boundary, matching what
+		// clickhouse_connect does implicitly for the Python writer.
+		if err := batch.Append(
+			row.OrgID, row.Day, row.ReleaseRef, row.Environment, row.RepoID,
+			row.FrictionDelta, row.PostFrictionRate,
+			row.ErrorDelta, row.PostErrorRate,
+			row.TimeToFirstIssue,
+			float32(row.Confidence), float32(row.CoverageRatioTop),
+			(*float64)(nil), (*float64)(nil), (*float64)(nil),
+			(*float64)(nil), (*float64)(nil), (*float64)(nil),
+			(*float64)(nil),
+			uint32(0), float32(row.CoverageRatioTop),
+			row.MissingRequiredFields, uint8(0),
+			float32(row.DataCompleteness), row.ConcurrentDeployCount, row.ComputedAt,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}

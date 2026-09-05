@@ -582,6 +582,44 @@ func buildDailyWorker(
 			}
 		}
 
+		// CHAOS-4296: the release_impact kind computes natively too. Same
+		// per-kind discipline as dora/capacity/recommendations above -- a
+		// refusal takes THIS KIND out of service and leaves its siblings
+		// registered, with an error log rather than a metric that merely
+		// stops moving.
+		var releaseImpactExecutor *remaining.ReleaseImpactExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingReleaseImpact
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var releaseImpactObserver remaining.ReleaseImpactObserver
+			if candidate, ok := observer.(remaining.ReleaseImpactObserver); ok {
+				releaseImpactObserver = candidate
+			}
+			executor, executorErr := remaining.NewReleaseImpactExecutor(
+				metricsClickHouse, releaseImpactObserver, logger)
+			if executorErr != nil {
+				logger.Error(
+					"release impact native executor refused; the release_impact "+
+						"kind will not be served and its partitions will "+
+						"accumulate unclaimed. Every other remaining kind is "+
+						"unaffected.",
+					"error", executorErr,
+				)
+			} else {
+				releaseImpactExecutor = executor
+			}
+		}
+
 		for _, spec := range remainingSpecs {
 			family := remainingFamilies[spec.Kind]
 			var registeredSpec jobruntime.HandlerSpec
@@ -638,8 +676,18 @@ func buildDailyWorker(
 					workers, registry, spec, store, recommendationsExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingReleaseImpact:
+				if releaseImpactExecutor == nil {
+					// The native executor refused above (or was never
+					// constructed because no release_impact spec is being
+					// served). Skip rather than register a handler around a
+					// nil executor, which would claim partitions and then
+					// fail each one -- turning a clean "not served" into a
+					// retry loop that looks like flapping.
+					continue
+				}
+				// Native, not `compatibility` -- this is the CHAOS-4296 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, releaseImpactExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingWorkItemAttribution:
 				if workItemAttributionExecutor == nil {

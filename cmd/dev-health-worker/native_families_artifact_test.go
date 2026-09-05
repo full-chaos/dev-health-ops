@@ -411,6 +411,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// checks. Main's own codex r1 (P3) added the cardinality check below,
 		// and that check is what turned this silent gap into a failure.
 		"ai_governance",
+		// CHAOS-4279: review_edges is pre_bridge, not post_bridge -- both its
+		// inputs are RAW SYNC tables, not another daily family's output, so
+		// nothing in this partition has to run before it.
+		"review_edges",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

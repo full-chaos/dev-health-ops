@@ -10,6 +10,7 @@
     "file_risk_hotspots": "native",
     "incident": "native",
     "repo_user_commit": "native",
+    "review_edges": "native",
     "team_wellbeing": "native",
     "testops_risk": "native",
     "work_item": "post_bridge",

@@ -860,6 +860,25 @@ func dailyNativeFamilyRegistrations(
 	// move back into native above once CHAOS-4283 ports
 	// work_item_attribution to Go and families.json's phase_note
 	// says work_item_state can return to pre_bridge.
+	// CHAOS-4279: review_edges reads only RAW SYNC tables
+	// (git_pull_requests, git_pull_request_reviews), written by
+	// the provider sync path rather than by any daily family, so
+	// it has no same-partition write-ordering dependency and
+	// registers PRE-bridge like cicd -- unlike compounding_risk
+	// below, whose input repo_metrics_daily is written by
+	// repo_user_commit in the same partition.
+	if reviewEdgesExecutor, reviewEdgesErr := daily.NewReviewEdgesExecutor(clickhouseConnection); reviewEdgesErr == nil {
+		native["review_edges"] = reviewEdgesExecutor
+	} else {
+		logger.Error(
+			"review_edges native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", reviewEdgesErr,
+		)
+	}
+
 	postBridge = map[string]daily.NativeFamilyExecutor{}
 	// CHAOS-4287: compounding_risk reads repo_metrics_daily, which
 	// repo_user_commit writes in the SAME partition. repo_user_commit

@@ -349,3 +349,40 @@ func TestGovernanceWritesTheMergeableTableFirst(t *testing.T) {
 			"table, never ai_policy_events", failing.targets[0])
 	}
 }
+
+// TestAIGovernancePartialWriteGuardPinsBothDirections is the codex sweep
+// red-first proof (CHAOS-5190 r3 follow-up, team-lead-requested): before
+// this fix, a WriteAIPolicyEvents failure AFTER WriteAIGovernanceCoverageDaily
+// already landed rows was reported `return 0, err` -- exactly the class
+// already fixed in work_item_state/work_item/work_item_estimate/
+// work_graph_edges. Mirrors those tests' exact shape: wrap only when
+// something already landed, never when nothing did.
+func TestAIGovernancePartialWriteGuardPinsBothDirections(t *testing.T) {
+	cause := errors.New("simulated ClickHouse send failure")
+
+	t.Run("failure AFTER coverage lands is a partial write", func(t *testing.T) {
+		rows, err := wrapAIGovernancePartialWrite(5, cause)
+		if !errors.Is(err, ErrPartialWrite) {
+			t.Errorf("a failure after 5 coverage rows landed must wrap ErrPartialWrite; got %v", err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must survive wrapping; got %v", err)
+		}
+		if rows != 5 {
+			t.Errorf("the TRUE rows-written count must be reported, got %d, want 5", rows)
+		}
+	})
+
+	t.Run("failure with nothing written is an ordinary failure", func(t *testing.T) {
+		rows, err := wrapAIGovernancePartialWrite(0, cause)
+		if errors.Is(err, ErrPartialWrite) {
+			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite")
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must be returned unchanged; got %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("rows=%d, want 0", rows)
+		}
+	})
+}

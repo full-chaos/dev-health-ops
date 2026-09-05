@@ -134,12 +134,36 @@ func (executor *AIGovernanceExecutor) ComputeFamily(
 	}
 	writtenEvents, err := WriteAIPolicyEvents(ctx, executor.conn, violations, computedAt)
 	if err != nil {
-		return 0, err
+		// codex sweep (CHAOS-5190 r3 follow-up, team-lead-requested): the
+		// coverage table above already landed writtenCoverage rows durably
+		// (it is written FIRST specifically so this branch's failure mode is
+		// safe -- see the write-order comment above). Returning `0, err`
+		// here would tell this family's dispatcher "refused, 0 rows" despite
+		// real rows already on disk -- the same class already fixed in
+		// work_item_state/work_item/work_item_estimate/work_graph_edges.
+		return wrapAIGovernancePartialWrite(writtenCoverage, err)
 	}
 	// Both tables count toward this family's rows-written telemetry, matching
 	// how Python's two unconditional writes (job_daily.py:1904-1905) both
 	// belong to ai_governance.
 	return writtenEvents + writtenCoverage, nil
+}
+
+// wrapAIGovernancePartialWrite mirrors wrapWorkGraphEdgesPartialWrite's/
+// wrapWorkItemPartialWrite's exact shape for this executor's two-table
+// sequential write (not a per-repo loop, but the same "a later step failed
+// after an earlier one already landed rows" hazard): writtenCoverage == 0
+// returns the error unwrapped (nothing landed, ordinary fail-open to the
+// Python bridge is correct); writtenCoverage > 0 wraps ErrPartialWrite
+// naming the count, so the caller reports PartialWrite/N-rows instead of
+// Refused/0-rows.
+func wrapAIGovernancePartialWrite(writtenCoverage int, err error) (int, error) {
+	if writtenCoverage == 0 {
+		return 0, err
+	}
+	return writtenCoverage, fmt.Errorf(
+		"%w: ai_governance failed writing ai_policy_events after %d ai_governance_coverage_daily row(s) already landed: %w",
+		ErrPartialWrite, writtenCoverage, err)
 }
 
 var _ NativeFamilyExecutor = (*AIGovernanceExecutor)(nil)

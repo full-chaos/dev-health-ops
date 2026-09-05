@@ -236,9 +236,16 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 	// total from the deltas would report 0 blocked on a steady state that
 	// still has wedged runs -- exactly the silent-zero the gauge exists to
 	// prevent.
+	//
+	// status IN ('running', 'failed'), not status = 'running' (r2 finding #2,
+	// CHAOS-4290): reconcileBlockedRunsSQL above writes blocked_at on a
+	// finalize_blocked row whose status is 'failed', not 'running' -- the
+	// WRITE was widened for exactly this shape, but this readback still
+	// scoped to 'running' alone would silently undercount the gauge by every
+	// terminally-failed finalize the write side had just correctly marked.
 	if err := store.pool.QueryRow(ctx, `
 SELECT count(*) FROM public.daily_metrics_runs
-WHERE org_id = $1::uuid AND status = 'running' AND blocked_at IS NOT NULL`,
+WHERE org_id = $1::uuid AND status IN ('running', 'failed') AND blocked_at IS NOT NULL`,
 		orgID).Scan(&outcome.Blocked); err != nil {
 		return BlockedReconcileOutcome{}, ErrUnavailable
 	}
@@ -288,7 +295,12 @@ SELECT run.id::text, run.target_day, run.blocked_at, run.blocked_reason,
        (SELECT count(*) FROM public.daily_metrics_partitions AS partition
         WHERE partition.run_id = run.id AND partition.status = 'succeeded')
 FROM public.daily_metrics_runs AS run
-WHERE run.org_id = $1::uuid AND run.status = 'running' AND run.blocked_at IS NOT NULL
+-- status IN ('running', 'failed'), not status = 'running' (r2 finding #2,
+-- CHAOS-4290): a finalize_blocked run's status is 'failed', matching
+-- ReconcileBlockedRuns' own gauge query above -- without this, the operator
+-- readback (workerctl's own entry point for this marker) can never show the
+-- exact run class BlockedReasonFinalizeFailed exists to surface.
+WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed') AND run.blocked_at IS NOT NULL
 ORDER BY run.target_day DESC, run.id
 LIMIT $2::int`, orgID, limit)
 	if err != nil {

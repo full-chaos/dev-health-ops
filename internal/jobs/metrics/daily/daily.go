@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -1458,9 +1457,19 @@ var ErrNativeFinalizeFamilyFailed = errors.New("daily: native finalize family fa
 
 // SetNativeFinalizeFamilies registers the finalize-scope families computed
 // natively in Go instead of by the Python compatibility bridge. Mirrors
-// PartitionHandler.SetNativeFamilies exactly -- REPLACES the map on every
-// call and sorts the names, so iteration is deterministic and one family's
-// failure never makes another's inclusion depend on Go map order.
+// PartitionHandler.SetNativeFamilies in INTENT (deterministic iteration,
+// nothing depending on Go map order) but NOT in mechanism: that one sorts by
+// name because its families are independent and order-blind. Finalize
+// families are not -- computeNativeFinalizeFamilies below walks
+// nativeFinalizeFamilyNames and, on a mid-loop cancellation, marks every name
+// from the current loop INDEX onward as refused
+// (nativeFinalizeFamilyNames[index:]), so which family comes first decides
+// which families get computed before a cancellation and which get marked
+// refused without ever running. That is part of the contract, not an
+// implementation detail a lexical sort should get to decide, so iteration
+// order here is pythonRecognisedFinalizeFamilies' own DECLARED order instead
+// -- see TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName, which pins
+// it with two families whose sorted and declared orders differ.
 //
 // IT VALIDATES THE NAMES (CHAOS-4290, #2241 r1 Finding 2). The names travel to
 // Python as SkipFamilies and are compared there by string equality, so a name
@@ -1478,15 +1487,29 @@ func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]Na
 	if handler == nil {
 		return nil
 	}
-	names := make([]string, 0, len(families))
-	for name := range families {
+	for name, executor := range families {
 		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
 			return fmt.Errorf("%w: %q (bridge gates on %v)",
 				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
 		}
-		names = append(names, name)
+		// A nil executor passed the name check above but would silently vanish
+		// in computeNativeFinalizeFamilies (`if executor == nil { continue }`,
+		// WITHOUT adding the name to skipFamilies) -- Python's bridge would then
+		// compute this family too, exactly the two-writer hazard this function's
+		// own name-validation exists to prevent, just reached through a nil
+		// value instead of an unrecognised string. Reject it here, at the same
+		// "fail loudly, all-or-nothing" boundary as the name check, rather than
+		// let it degrade silently three calls later.
+		if executor == nil {
+			return fmt.Errorf("%w: %q registered with a nil executor", ErrUnknownFinalizeFamily, name)
+		}
 	}
-	sort.Strings(names)
+	names := make([]string, 0, len(families))
+	for _, name := range pythonRecognisedFinalizeFamilies {
+		if _, registered := families[name]; registered {
+			names = append(names, name)
+		}
+	}
 	handler.nativeFinalizeFamilies = families
 	handler.nativeFinalizeFamilyNames = names
 	return nil
@@ -1514,16 +1537,37 @@ func (handler *FinalizeHandler) finalizeNow() time.Time {
 // observeFinalizeFamily reports one attempt. The observer's own error is
 // swallowed deliberately: telemetry that can fail a job is worse than no
 // telemetry, and this is the rule every observer in this package follows.
+// CHAOS-5151. The observer error used to be discarded outright (`_ =
+// ...ObserveDailyMetricsNativeFamily(...)`) -- exercised directly by
+// TestFailingNativeFinalizeFamilyIsReportedRefused's telemetry-down fixture,
+// which proved Work still succeeds when the observer errors but never checked
+// whether that failure left any trace. A family whose outcome telemetry
+// silently fails to record is invisible in exactly the same way an
+// unregistered family is (see dailyMetricsNativeFamilies' doc comment in
+// telemetry.go): the counter this call was supposed to move never moves, and
+// nothing says why. run carries the identifiers (run_id, org_id, target_day)
+// this call site has and the observer interface itself does not -- logged
+// here, not inside the observer, because only the caller knows which run and
+// family this failure belongs to.
 func (handler *FinalizeHandler) observeFinalizeFamily(
-	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
+	run Run, family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
 	rowsWritten int, started time.Time,
 ) {
 	if handler.nativeFinalizeObserver == nil {
 		return
 	}
-	_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+	if err := handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
 		family, outcome, rowsWritten, handler.finalizeNow().Sub(started),
-	)
+	); err != nil {
+		slog.Default().Error("daily finalize telemetry failed",
+			"error", err,
+			"run_id", run.ID,
+			"organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+			"family", family,
+			"outcome", outcome,
+		)
+	}
 }
 
 // computeNativeFinalizeFamilies runs every registered finalize-scope executor
@@ -1588,7 +1632,7 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 			// diverge as soon as a family is skipped for a nil executor.
 			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
 				handler.observeFinalizeFamily(
-					remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
+					run, remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 				)
 			}
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
@@ -1603,16 +1647,16 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 		switch {
 		case err == nil:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
 			)
 		case rowsWritten > 0:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
 			)
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		default:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
 			)
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
@@ -1636,7 +1680,19 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return nil
 	}
 	if execution.OrganizationID == nil || claim.Run.ID != runID || claim.Run.Status != "running" || claim.Run.OrganizationID != *execution.OrganizationID {
-		_ = handler.store.ReleaseFinalize(ctx, *claim)
+		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
+		// a release failure here leaves the claim's lease live under a run
+		// this handler has already decided never to work, which is exactly
+		// the kind of silent stranding the blocked-marker sweep exists to
+		// catch, just with nothing here to tell it something went wrong.
+		if releaseErr := handler.store.ReleaseFinalize(ctx, *claim); releaseErr != nil {
+			finalizeExecutionLogger(execution).Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	if err := runWithLeaseRenewal(
@@ -1704,30 +1760,79 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		// values River acts on, so "final" here means what River means by it
 		// rather than a parallel notion maintained beside it.
 		if execution.Attempt >= execution.Definition.MaxAttempts {
-			failFinalizePermanently(handler.store, ctx, *claim)
+			// The terminal write's OWN error is logged, not discarded (r2
+			// finding #1, CHAOS-4290): a failure here means the run is left at
+			// status='running' -- byte-identical to attempt 1, invisible to the
+			// blocked-marker sweep -- and silently swallowing it would have made
+			// this exactly the "the fix reports success while doing nothing"
+			// shape FailFinalizePermanently's own RowsAffected check exists to
+			// catch on the write side, just moved one frame up to the caller
+			// that never looked.
+			if failErr := failFinalizePermanently(handler.store, ctx, *claim); failErr != nil {
+				finalizeLogger.Error("daily finalize terminal write failed",
+					"error", failErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			}
 			return retryCompatibilityError(err)
 		}
-		releaseFinalize(handler.store, ctx, *claim)
+		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
+		// same reasoning as the terminal write above, one severity notch down
+		// (a lease this fails to release still expires and becomes
+		// reclaimable, where a failed terminal write has no other recovery
+		// path at all).
+		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+			finalizeLogger.Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return retryCompatibilityError(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
 		// Symmetric with the partition layer: this exit claimed and returned
 		// retryable without releasing, which is the most likely way the lease
 		// behind CHAOS-3991 was orphaned in the first place.
-		releaseFinalize(handler.store, ctx, *claim)
+		//
+		// err itself is logged here too (r3 finding), not only a subsequent
+		// release failure: before this, a CompleteFinalize failure whose
+		// release succeeded left NO log at all naming why completion failed --
+		// exactly the swallowed-error shape the standing telemetry rule exists
+		// to catch, just one call deeper than the release path r2/the
+		// class-sweep already covered.
+		logger := finalizeExecutionLogger(execution)
+		logger.Error("daily finalize completion failed",
+			"error", err,
+			"run_id", runID,
+			"organization_id", claim.Run.OrganizationID,
+			"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+		)
+		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+			logger.Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return jobruntime.Retryable(err)
 	}
 	return nil
 }
 
-// failFinalizePermanently writes the terminal state on a context detached from
-// the failing one, exactly as releaseFinalize does: the work context may already
-// be cancelled, and a terminal write that silently did not happen is the whole
-// defect this fixes.
-func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) {
-	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	_ = store.FailFinalizePermanently(terminalCtx, claim)
+// finalizeExecutionLogger returns execution's own logger, or slog.Default()
+// when none is set. `if logger != nil { log }` would turn a nil logger into
+// silence, exactly the defect this file's finalize-failure logging exists to
+// remove -- see finalizeLogger's identical fallback above.
+func finalizeExecutionLogger(execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) *slog.Logger {
+	if execution != nil && execution.Logger != nil {
+		return execution.Logger
+	}
+	return slog.Default()
 }
 
 func runWithLeaseRenewal(
@@ -1870,8 +1975,28 @@ func failPartitionPermanently(store Store, ctx context.Context, claim PartitionC
 	return store.FailPartitionPermanently(failCtx, claim, reason) == nil
 }
 
-func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {
+// releaseFinalize returns the store's own error (r2 finding #1's class,
+// CHAOS-4290) instead of discarding it, matching failFinalizePermanently
+// below: a caller that already decided this claim's work is over is the last
+// frame with the identifiers to explain why a release failed, if it does.
+func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ReleaseFinalize(releaseCtx, claim)
+	return store.ReleaseFinalize(releaseCtx, claim)
+}
+
+// failFinalizePermanently writes the terminal state on a context detached from
+// the failing one, exactly as releaseFinalize does: the work context may already
+// be cancelled, and a terminal write that silently did not happen is the whole
+// defect this fixes.
+//
+// Returns the store's own error (r2 finding #1, CHAOS-4290) instead of
+// discarding it: this is the LAST write in the finalize failure path -- unlike
+// releaseFinalize, whose failure a River-driven redrive or lease expiry can
+// still recover from, a terminal write that fails here has no other
+// mechanism behind it. The caller logs it with the run's own identifiers.
+func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) error {
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.FailFinalizePermanently(terminalCtx, claim)
 }

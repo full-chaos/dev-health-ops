@@ -1,0 +1,12 @@
+fn largest<T>(items: &[T]) -> &T
+where
+    T: PartialOrd,
+{
+    let mut largest = &items[0];
+    for item in items {
+        if item > largest {
+            largest = item;
+        }
+    }
+    largest
+}

@@ -609,7 +609,7 @@ func TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError(t *testing.T
 		switch call {
 		case 1:
 			return &fakeStrandSurveyRows{rows: [][]any{
-				{"11111111-1111-1111-1111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+				{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
 			}}, nil
 		case 2:
 			return nil, errors.New("shape b survey failed")

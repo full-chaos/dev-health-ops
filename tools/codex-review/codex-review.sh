@@ -68,9 +68,22 @@
 #
 # The per-lane warm GOCACHE is preserved rather than moved into the per-round
 # worktree (which would make it cold every round, the exact failure the GOCACHE
-# comment below warns about). It stays at its stable path and is granted write
-# access explicitly via `sandbox_workspace_write.writable_roots`. Verified: the
-# cache is genuinely populated through the sandbox and survives outside it.
+# comment below warns about). It stays at its stable path.
+#
+# CORRECTED, uncounted confirmation pass on codex-review-wrapper-v487 (P3,
+# source-checked): this paragraph used to claim, unconditionally, that the
+# cache "is granted write access explicitly via
+# `sandbox_workspace_write.writable_roots`" and "is genuinely populated
+# through the sandbox" -- both false as stated. The warm step that actually
+# populates this cache ALWAYS runs entirely outside codex's sandbox (the
+# wrapper's own `env`+`bash -c` subshell, before `codex exec` ever starts --
+# see the warm-step block further below); nothing about it is
+# sandbox-mediated, in any sandbox mode. The `writable_roots` grant referenced
+# here is a real mechanism, but a SEPARATE one: it exists only so the
+# REVIEWER's own exec blocks (if any) can write into this same cache path
+# during the round itself, and it is added ONLY when `RSANDBOX` is
+# `workspace-write` -- which is no longer the default (read-only is, since
+# v4.8.7). By default, no such grant is added at all.
 #
 # The sandbox mode is OPT-IN and still defaults to read-only, because widening
 # it is a policy change (the reviewer gains write access to the throwaway review

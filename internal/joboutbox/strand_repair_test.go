@@ -630,8 +630,8 @@ func TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError(t *testing.T
 	}
 
 	result, err := repair.Step(context.Background(), time.Now(), 1)
-	if err == nil || err.Error() != "shape b survey failed" {
-		t.Fatalf("Step() error = %v, want shape b's survey error", err)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v, want shape b's survey error classified as ErrUnavailable", err)
 	}
 	if result.SkippedJobLive != 1 {
 		t.Fatalf("Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite shape b's error", result)

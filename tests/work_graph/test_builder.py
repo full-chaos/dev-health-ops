@@ -371,7 +371,7 @@ class TestDependencyIssuePrLinks:
         assert "org_id = {org_id:String}" in sql
         assert params == {"org_id": "org-a"}
 
-    def test_dependency_derivation_skips_unscoped_builds(self):
+    def test_stale_pr_dependency_cleanup_skips_unscoped_builds(self):
         fake_sink = MagicMock()
         fake_sink.backend_type = "clickhouse"
         fake_sink.query_dicts = MagicMock()

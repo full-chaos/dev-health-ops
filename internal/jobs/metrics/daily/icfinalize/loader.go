@@ -98,12 +98,25 @@ func LoadRollingStats(
 	var stats []RollingStat
 	for rows.Next() {
 		var stat RollingStat
+		// sum() over the UInt32 loc_touched/delivery_units columns (005_ic_metrics.sql)
+		// promotes to UInt64 in ClickHouse regardless of either source column's or
+		// ic_landscape_rolling_30d's own declared width, and max() over the UInt32
+		// work_items_active column stays UInt32 -- none of which clickhouse-go will
+		// scan into a plain float64 destination ("converting UInt64/UInt32 to
+		// *float64 is unsupported"). Scan into the matching integer width, then
+		// convert: RollingStat itself stays float64 because everything downstream
+		// (ComputeLandscape's normalization) does float arithmetic on it.
+		var churnLOC30d, deliveryUnits30 uint64
+		var wipMax30d uint32
 		if err := rows.Scan(
-			&stat.IdentityID, &stat.TeamID, &stat.ChurnLOC30d,
-			&stat.DeliveryUnits30, &stat.CycleP5030dHrs, &stat.WIPMax30d,
+			&stat.IdentityID, &stat.TeamID, &churnLOC30d,
+			&deliveryUnits30, &stat.CycleP5030dHrs, &wipMax30d,
 		); err != nil {
 			return nil, err
 		}
+		stat.ChurnLOC30d = float64(churnLOC30d)
+		stat.DeliveryUnits30 = float64(deliveryUnits30)
+		stat.WIPMax30d = float64(wipMax30d)
 		stats = append(stats, stat)
 	}
 	return stats, rows.Err()

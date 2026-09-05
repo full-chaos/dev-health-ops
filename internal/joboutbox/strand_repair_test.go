@@ -642,3 +642,81 @@ func TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError(t *testing.T
 		t.Fatalf("Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite shape b's error", result)
 	}
 }
+
+// TestStrandRepairStepShapeDefaultDispositionPreservesEarlierCounts is the
+// reproduction + fix for the confirmation pass's F1 (P3, codex, CHAOS-4438):
+// stepShape's phase-1 classification loop increments result.SkippedJobLive
+// for an EARLIER candidate, then discarded it by returning a fresh zero
+// StrandRepairResult when a LATER candidate in the same loop hit the
+// unknown-disposition default branch. "Nothing is counted yet at phase 1" was
+// only true up to the first classified candidate, not the whole loop.
+func TestStrandRepairStepShapeDefaultDispositionPreservesEarlierCounts(t *testing.T) {
+	call := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		call++
+		if call != 1 {
+			t.Fatalf("unexpected queryQueue call #%d", call)
+		}
+		return &fakeStrandSurveyRows{rows: [][]any{
+			{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+			{"22222222-2222-2222-8222-222222222222", int64(2), "workgraph.build", "dedupe-b", "unexpected-disposition"},
+		}}, nil
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
+	}
+	shape := strandShape{name: "a", survey: "SELECT 1", lock: "SELECT 1"}
+
+	result, err := repair.stepShape(context.Background(), shape, time.Now(), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("stepShape() error = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), `shape "a"`) ||
+		!strings.Contains(err.Error(), "22222222-2222-2222-8222-222222222222") {
+		t.Fatalf("stepShape() error = %v, want it to name shape %q and the offending outbox id", err, "a")
+	}
+	if result.SkippedJobLive != 1 {
+		t.Fatalf(
+			"stepShape() result = %+v, want the earlier skip_job_live candidate's count preserved despite the later unexpected-disposition candidate",
+			result,
+		)
+	}
+}
+
+// TestRelayStepPreservesRecoveryResultOnClaimDueExceptError is the
+// reproduction + fix for the confirmation pass's F2/withdrawn-N/A finding (P2,
+// codex, CHAOS-4438): the original claim that claimDueExcept has no
+// deterministic error path reachable without new production surface was
+// wrong. Repository.claimDueExcept's OWN validation guard (repository.go,
+// first line of the function body: "repository == nil || repository.pool ==
+// nil || ...") already returns ErrInvalidConfiguration deterministically for
+// a zero-value *Repository{} -- no fault-injection hook, no DB, no new
+// production code needed. This drives Relay.Step's claimDueExcept error path
+// directly (not just stepRecovery), proving the recovery seams' counts
+// survive it.
+func TestRelayStepPreservesRecoveryResultOnClaimDueExceptError(t *testing.T) {
+	strand := &fakeStrandRepair{result: StrandRepairResult{
+		Rearmed: 4, SkippedJobLive: 2, SkippedClaimLive: 1, SkippedClaimSettled: 3, SkippedRaceLost: 2,
+	}}
+	relay := &Relay{
+		repository:   &Repository{}, // zero value: nil pool -- claimDueExcept fails closed on its own guard
+		repair:       fakeTerminalRepair{},
+		strandRepair: strand,
+		config:       DefaultRelayConfig(),
+	}
+
+	result, err := relay.Step(context.Background(), time.Now(), 1)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("Step() error = %v, want ErrInvalidConfiguration (from claimDueExcept's nil-pool guard)", err)
+	}
+	if result.StrandsRearmed != 4 || result.StrandJobsSkippedLive != 2 ||
+		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 || result.StrandRaceLost != 2 {
+		t.Fatalf(
+			"Step() result = %+v, want stepRecovery's strand-repair counts preserved despite claimDueExcept's error",
+			result,
+		)
+	}
+}

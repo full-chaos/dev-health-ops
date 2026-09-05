@@ -355,7 +355,14 @@ func (repair *StrandRepair) stepShape(
 		case dispositionRearm:
 			eligible = append(eligible, candidate)
 		default:
-			return StrandRepairResult{}, fmt.Errorf(
+			// confirmation-pass finding F1 (P3, codex, CHAOS-4438): an EARLIER
+			// candidate in this same loop can already have incremented
+			// result.SkippedJobLive before a LATER candidate hits this
+			// default branch -- "nothing is counted yet at phase 1" is only
+			// true up to the first classified candidate, not for the whole
+			// loop. Return the accumulated `result`, not a fresh zero, same
+			// fix shape as every other seam in this file.
+			return result, fmt.Errorf(
 				"shape %q: outbox %s (job_kind=%q): %w",
 				shape.name, candidate.outboxID, candidate.jobKind, ErrUnavailable,
 			)

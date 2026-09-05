@@ -58,11 +58,17 @@ finalize-scope Python call renders "NATIVE (repo) / COMPAT-Python
 COMPAT-counting logic, including this page's own ``count_compat_*``
 helpers, must test against so a split row still counts.
 
-Section 4 (workgraph/investment) has no families.json equivalent at all
+Section 4 (workgraph/investment) has no families.json equivalent
 (``internal/jobs/families.json`` does not exist) -- WORKGRAPH_INVESTMENT_LEDGER
-is the sole source, entirely hand-maintained, with no live producer to
-drift-guard against mechanically. Adding a machine-readable registry for these
-5 kinds is proposed as a follow-up ticket, not done in this change.
+is entirely hand-maintained for its prose (citation/route/ticket columns).
+The EXECUTOR column and row membership are checked against the native-families
+artifact's ``workgraph`` section, the same artifact §2/§3 use
+(``_assert_ledger_matches_artifact``, CHAOS-5153): every kind the artifact
+records must have a ledger row with an agreeing executor, AND every
+workgraph/investment ledger row (a kind containing ``.``) must still be in the
+artifact -- a row surviving after its addWorkgraphWorker case is deleted is a
+stale row describing dead code by omission (the CHAOS-4438 shape) and fails
+generation until removed.
 """
 
 from __future__ import annotations
@@ -195,14 +201,20 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4292 (Done)",
     },
     "testops_pipeline": {
+        # CHAOS-5153's line-anchor fix (105 -> 114) is now moot: CHAOS-4284/
+        # #2226 ported this family to native Go after that fix landed.
         "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
         "ticket": "CHAOS-4284",
     },
     "testops_test": {
+        # CHAOS-5153's line-anchor fix (207 -> 216) is now moot: CHAOS-4284/
+        # #2226 ported this family to native Go after that fix landed.
         "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent",
         "ticket": "CHAOS-4284",
     },
     "testops_coverage": {
+        # CHAOS-5153's line-anchor fix (355 -> 371) is now moot: CHAOS-4284/
+        # #2226 ported this family to native Go after that fix landed.
         "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse",
         "ticket": "CHAOS-4284",
     },
@@ -223,6 +235,10 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4280",
     },
     "ai_workflow": {
+        # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212
+        # -- the module AND the line were both wrong before) is now moot:
+        # CHAOS-4286 ported this family to native Go, same shape as the
+        # testops_* rows above.
         "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`)",
         "ticket": "CHAOS-4286",
     },
@@ -242,7 +258,9 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
     },
     "team_cognitive_load": {
         "citation": "Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope)",
-        "ticket": "NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`)",
+        # CHAOS-5153: the "NONE found" citation was stale -- CHAOS-5141 was
+        # filed 2026-09-05 to track exactly this finalize-side gap.
+        "ticket": "CHAOS-5141",
     },
     "testops_risk": {
         "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
@@ -292,7 +310,12 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-3092 PR-B (Done)",
     },
     "complexity": {
-        "citation": "Python: `metrics_extra.py` -> `job_complexity_db.py run_complexity_db_job`",
+        # CHAOS-5153: was `metrics_extra.py -> job_complexity_db.py
+        # run_complexity_db_job` -- metrics_extra.py does not exist anywhere
+        # in this repo. The real caller is the HTTP compatibility bridge
+        # (`worker_metrics.py:_run_complexity`, matching this row's own
+        # "river, bridge ... uses compatibility directly" route below).
+        "citation": "Python: `api/internal/worker_metrics.py _run_complexity` -> `job_complexity_db.py:238 run_complexity_db_job`",
         "route": "river, bridge (`daily.go:582-585`, uses `compatibility` directly)",
         "ticket": "CHAOS-4291",
     },
@@ -1133,6 +1156,28 @@ def _assert_ledger_matches_artifact() -> None:
                 f"gen_go_migration_matrix_docs: kind {kind!r} is wired as {label!r} in "
                 f"addWorkgraphWorker (per the native-families artifact) but the curated ledger "
                 f"says {row['executor']!r}. The WIRING is authoritative -- fix the ledger."
+            )
+
+    # The OTHER direction (CHAOS-5153): a ledger row whose kind is no longer
+    # in the artifact is a STALE row describing dead code by omission -- the
+    # exact CHAOS-4438 shape (investment.dispatch/chunk/finalize were
+    # deleted from addWorkgraphWorker's switch entirely, not just marked
+    # dead) that would otherwise keep rendering as a live table row forever,
+    # with nothing forcing its removal. Every workgraph.*/investment.* kind
+    # this ledger curates is checkable this way; the recommendations/DORA/
+    # cognitive-load rows are cross-references to §2/§3 (their own
+    # "citation": "see §2"/"see §3"), not workgraph-wiring facts the
+    # artifact could ever have an opinion on, so they are exempt.
+    artifact_kinds = set(artifact)
+    for name in sorted(WORKGRAPH_INVESTMENT_LEDGER):
+        if "." not in name:
+            continue
+        if name not in artifact_kinds:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: WORKGRAPH_INVESTMENT_LEDGER has a row for "
+                f"{name!r}, but the native-families artifact no longer records it -- its "
+                "addWorkgraphWorker case was removed. This is a STALE row (dead code by "
+                "omission, the CHAOS-4438 shape) -- delete it from WORKGRAPH_INVESTMENT_LEDGER."
             )
 
 

@@ -186,11 +186,12 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// non-default phase; it cannot express that ic_finalize is "finalize" and
 	// would have silently accepted ic_finalize declaring post_bridge.
 	nonDefaultPhase := map[string]string{
-		"work_item_state":    "post_bridge",
-		"work_item":          "post_bridge",
-		"work_item_estimate": "post_bridge",
-		"compounding_risk":   "post_bridge",
-		"ic_finalize":        "finalize",
+		"work_item_state":     "post_bridge",
+		"work_item":           "post_bridge",
+		"work_item_estimate":  "post_bridge",
+		"compounding_risk":    "post_bridge",
+		"ic_finalize":         "finalize",
+		"team_cognitive_load": "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

@@ -875,3 +875,38 @@ def test_load_finalize_write_calls_allows_a_destructured_target_never_called(
         )
     finally:
         setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_workgraph_ledger_rejects_a_row_whose_kind_left_the_artifact() -> None:
+    """Falsification control for CHAOS-5153's reverse §4 guard.
+
+    A WORKGRAPH_INVESTMENT_LEDGER row surviving after its kind's
+    addWorkgraphWorker case is deleted (the CHAOS-4438 shape: dead code
+    removed from Go, but the hand-maintained doc row never follows) must
+    fail generation, not keep rendering as a live table row forever.
+    Mutates the artifact in memory (never touches
+    contracts/native-families/v1/native-families.json on disk) to drop a
+    real workgraph kind and asserts the guard refuses.
+    """
+    gen = _load_gen_module()
+    original = getattr(gen, "load_native_families_artifact")
+
+    def artifact_missing_materialize() -> dict:
+        real = original()
+        workgraph = dict(real["workgraph"])
+        del workgraph["investment.materialize"]
+        return {**real, "workgraph": workgraph}
+
+    try:
+        setattr(gen, "load_native_families_artifact", artifact_missing_materialize)
+        try:
+            gen.render_workgraph_investment_block()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "render_workgraph_investment_block did not refuse a ledger row "
+            "whose kind is no longer in the native-families artifact"
+        )
+    finally:
+        setattr(gen, "load_native_families_artifact", original)

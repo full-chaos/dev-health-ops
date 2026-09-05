@@ -505,3 +505,49 @@ func assertJSONEqual(t *testing.T, label string, want, got any) {
 		t.Fatalf("%s mismatch:\nwant=%s\ngot= %s", label, wantJSON, gotJSON)
 	}
 }
+
+// TestDeriveEventIDMatchesItsFrozenGoldenValue pins the ACTUAL derived id for
+// one fixed artifact key, not merely that the derivation is stable and
+// key-dependent.
+//
+// Codex round 2 (P2) showed why that distinction matters. Changing
+// aiGovernanceEventNamespace to any other UUID preserves stability, key
+// dependence AND collision resistance, so TestDeriveEventIDIsStableAndKeyDependent
+// and the delimiter-injectivity test both still pass; the live-Python oracle
+// cannot help either, because it deliberately excludes event_id (Python
+// randomises it). The whole existing guard set was blind to a namespace change.
+//
+// That mutant is not cosmetic: event_id is part of ai_policy_events' ORDER BY
+// key, so a deploy under a new namespace re-derives a DIFFERENT id for every
+// key already written, and every recomputation permanently duplicates the old
+// rows instead of merging with them -- the exact failure the derived id exists
+// to prevent. The integration test cannot see it either, since it re-runs
+// within one binary and therefore one namespace.
+//
+// A frozen expected value is the only assertion that closes it. If this test
+// fails, the namespace or the key encoding changed: that is a MIGRATION
+// decision about already-persisted rows, never a number to update to make the
+// test green.
+func TestDeriveEventIDMatchesItsFrozenGoldenValue(t *testing.T) {
+	repoID := uuid.MustParse("d4f322ad-2102-1fbf-8425-7400573194f7")
+	teamID := "team-alpha"
+	artifact := Artifact{
+		OrgID:       "70d529e0-3c06-4597-8480-794fd02328b6",
+		TeamID:      &teamID,
+		RepoID:      &repoID,
+		SubjectType: "pull_request",
+		SubjectID:   "7",
+		// Deliberately sub-second: the key encoding includes the timestamp at
+		// RFC3339Nano, so a fraction-dropping change to it also reddens here.
+		ObservedAt: time.Date(2026, 9, 3, 12, 0, 0, 123000000, time.UTC),
+	}
+	const golden = "6e0ba780-1d00-546e-b6c2-0c3504c3f837"
+	if got := deriveEventID(artifact, RuleMissingHumanReview).String(); got != golden {
+		t.Fatalf("derived event_id = %s, want the frozen golden %s.\n"+
+			"Either aiGovernanceEventNamespace or the key encoding changed. Both re-key EVERY "+
+			"already-persisted policy event: because event_id is in ai_policy_events' ORDER BY "+
+			"key, old rows can no longer merge with newly derived ones and every recomputation "+
+			"duplicates them permanently. Do NOT update this constant to make the test pass -- "+
+			"decide what happens to the existing rows first.", got, golden)
+	}
+}

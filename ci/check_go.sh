@@ -503,6 +503,35 @@ check_live_python_oracles() {
     fi
   done
 
+  printf 'go test -count=1: internal/jobs/metrics/workitemmetrics (work_item + work_item_estimate goldens vs live compute_work_items.py, CHAOS-4283)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestWorkItemGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/workitemmetrics
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY, one marker per FAMILY, for the same reason the
+  # testops-risk / pipeline-stability pair above is: a single shared marker
+  # would be satisfied by whichever family's guard ran, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed.
+  for marker in work-item-golden work-item-estimate-golden; do
+    proof_file="${proof_dir}/${marker}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: work_item golden rot guard did not compare against live Python (%s)\n' "${marker}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
+
   printf 'go test -count=1: internal/jobs/metrics/numerical (frozen numerical golden vs live Python)\n'
   if ! (
     cd "${ROOT}"

@@ -50,6 +50,12 @@ EXPECTED_PACKAGES = {
     "internal/jobrescue",
     "internal/jobroute",
     "internal/jobruntime",
+    # CHAOS-5006 PR2: the end-to-end proof that
+    # ResolveProviderKindForOrg's org-BYO precedence (org BYO beats an
+    # explicit platform LLM_PROVIDER, only the none/mock kill-switch
+    # beats org BYO) holds against llmorgsettings.Store.ResolveUsableProvider
+    # over a REAL Postgres container, not a fake resolver.
+    "internal/jobs/investment/categorize",
     "internal/jobs/investment/chquery",
     # CHAOS-4441: the ClickHouse writer for investment.materialize's three
     # ReplacingMergeTree tables. Its correctness claims (dedup-before-filter,
@@ -64,6 +70,10 @@ EXPECTED_PACKAGES = {
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
     "internal/jobs/workgraph/issueprlinks",
+    # CHAOS-4989: the org-scoped BYO LLM settings read path's own
+    # feature_flags/org_feature_overrides/org_licenses/organizations/
+    # settings precedence matrix runs against a real Postgres container.
+    "internal/llmorgsettings",
     "internal/providerfoundation",
     "internal/providersync",
     "internal/scheduler/fixed",
@@ -361,9 +371,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 40 -> 41 on its own branch: CHAOS-4977's
     # cmd/query-api/internal/investmentexplain and CHAOS-4902's
     # internal/testsupport/chschema. The merged total is 42.
-    # CHAOS-4897 added internal/teamownership: 42 -> 43.
-    assert "43 package(s) discovered, 0 denylisted, 43 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 43 package(s)" in result.stdout
+    # CHAOS-4989 and CHAOS-4897 landed independently, each written as
+    # 42 -> 43 on its own branch: CHAOS-4989's internal/llmorgsettings and
+    # CHAOS-4897's internal/teamownership. Merged total: 44.
+    # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
+    # CURRENT TOTAL: 45 -- the one number to bump when a new
+    # -tags=integration package is added.
+    assert "45 package(s) discovered, 0 denylisted, 45 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 45 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -402,8 +417,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 40 -> 41 on its own branch (see the "package(s) discovered" note
     # above). FLATTENED includes the providersync shard-1 package, same
     # as every other count in this comment block. Merged total: 42.
-    # CHAOS-4897: 43, not 42 -- internal/teamownership added.
-    assert len(flattened) == len(set(flattened)) == 43
+    # CHAOS-4989 and CHAOS-4897 landed independently, each written as
+    # 42 -> 43 on its own branch: internal/llmorgsettings and
+    # internal/teamownership. Merged total: 44.
+    # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
+    # CURRENT TOTAL: 45 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 45
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1719,9 +1738,15 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # 39 -> 40 on its own branch: cmd/query-api/internal/investmentexplain
     # and internal/testsupport/chschema. Merged total: 41
     # (42 discovered - 1 for the providersync shard-1 package).
-    # CHAOS-4897: 42, not 41 -- internal/teamownership added
-    # (43 discovered - 1 for the providersync shard-1 package).
-    assert len(selected_packages) == len(set(selected_packages)) == 42
+    # CHAOS-4989 and CHAOS-4897 landed independently, each written as
+    # 41 -> 42 on its own branch: internal/llmorgsettings and
+    # internal/teamownership (44 discovered - 1 for the providersync
+    # shard-1 package = 43).
+    # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 43 -> 44
+    # (45 discovered - 1 for the providersync shard-1 package).
+    # CURRENT TOTAL: 44 (== discovered-total-minus-one -- keep this in
+    # sync with the discovered-total literal above when either changes).
+    assert len(selected_packages) == len(set(selected_packages)) == 44
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

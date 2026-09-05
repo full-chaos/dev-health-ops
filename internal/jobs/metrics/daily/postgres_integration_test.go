@@ -1069,8 +1069,10 @@ CREATE TABLE daily_metrics_runs (
  status varchar(16) NOT NULL, finalization_status varchar(16) NOT NULL, finalization_claim_token uuid NULL,
  finalization_lease_expires_at timestamptz NULL, finalized_at timestamptz NULL,
  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ blocked_at timestamptz NULL, blocked_reason varchar(64) NULL,
  CONSTRAINT ck_daily_metrics_run_status CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')),
- CONSTRAINT ck_daily_metrics_finalize_status CHECK (finalization_status IN ('pending', 'running', 'succeeded', 'failed'))
+ CONSTRAINT ck_daily_metrics_finalize_status CHECK (finalization_status IN ('pending', 'running', 'succeeded', 'failed')),
+ CONSTRAINT ck_daily_metrics_run_blocked_marker_paired CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL))
 );
 CREATE TABLE daily_metrics_partitions (
  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,
@@ -1078,7 +1080,14 @@ CREATE TABLE daily_metrics_partitions (
  attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
  failure_reason varchar(64) NULL,
  CONSTRAINT ck_daily_metrics_partition_failure_reason_scope CHECK (failure_reason IS NULL OR status IN ('failed', 'failed_permanent')),
- CONSTRAINT ck_daily_metrics_partition_failed_permanent_has_reason CHECK (status <> 'failed_permanent' OR failure_reason IS NOT NULL)
+ CONSTRAINT ck_daily_metrics_partition_failed_permanent_has_reason CHECK (status <> 'failed_permanent' OR failure_reason IS NOT NULL),
+ -- Mirrors production's ck_daily_metrics_partition_lease (0057). Added after
+ -- codex review round 2 on #2224: without it this fixture accepted a 'running'
+ -- partition carrying NO claim_token and NO lease, a row production forbids --
+ -- and a blocked-marker test case was asserting behaviour for exactly that
+ -- impossible shape. A fixture that is laxer than production lets a test pass
+ -- for a state that cannot occur.
+ CONSTRAINT ck_daily_metrics_partition_lease CHECK ((status = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR (status <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL))
 );
 CREATE TABLE worker_job_outbox (
  id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,

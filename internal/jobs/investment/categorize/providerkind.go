@@ -3,6 +3,7 @@ package categorize
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 )
@@ -90,24 +91,100 @@ func detectConfiguredProviderKind() (ProviderKind, bool) {
 	return "", false
 }
 
+// OrgProviderResolver resolves an org's usable BYO provider kind as a raw
+// provider name string, "" when the org has none usable (unconfigured,
+// incomplete, SSRF-rejected, or feature-gated off -- see
+// internal/llmorgsettings.Store.ResolveUsableProvider, the production
+// implementation). A non-nil error is the ONLY case ResolveProviderKindForOrg
+// treats as fatal: internal/llmorgsettings' own contract is that error
+// return is reserved for a byo_llm feature-flag lookup that genuinely could
+// not be answered for an org WITH BYO settings configured (fail closed,
+// never silently reroute that org's traffic to the platform default -- see
+// that package's doc comment). This package takes the resolver as a plain
+// function type, not a llmorgsettings.Store parameter, so it never depends
+// on Postgres directly -- callers pass a Store method value
+// (store.ResolveUsableProvider satisfies this type exactly).
+type OrgProviderResolver func(ctx context.Context, orgID string) (string, error)
+
 // ResolveProviderKind ports providers/__init__.py's resolve_provider_name,
-// narrowed to the platform-default path: org BYO resolution
-// (resolve_usable_org_llm_provider, backed by org settings storage) has no
-// Go port, since no Go caller threads an org_id through this package yet.
-// An explicit, non-"auto" request is honored as deliberate caller intent,
-// exactly as the Python source comments it -- never silently overridden by
-// LLM_PROVIDER or auto-detection.
+// narrowed to the platform-default path: org BYO resolution has no org_id
+// or resolver to consult. Equivalent to
+// ResolveProviderKindForOrg(context.Background(), requested, "", nil) --
+// kept as a separate, stable-signature entry point for every existing
+// caller that has no org context to offer (this package's own tests
+// included). See ResolveProviderKindForOrg for the org-aware path
+// CHAOS-5006 added.
 func ResolveProviderKind(requested string) (ProviderKind, error) {
+	return ResolveProviderKindForOrg(context.Background(), requested, "", nil)
+}
+
+// ResolveProviderKindForOrg ports providers/__init__.py's
+// resolve_provider_name IN FULL, org BYO resolution included (CHAOS-5006:
+// the "auto" branch previously always picked the platform provider,
+// silently diverging from Python whenever an org's own BYO provider
+// should have won -- a divergence #2197's unsupported-provider 501 guard
+// could not catch, because both sides name Go-supported kinds). resolveOrg
+// nil is treated exactly as "no org configured any BYO provider" (never
+// consulted) -- a caller with no org context (or no Postgres wiring yet)
+// gets IDENTICAL behavior to the pre-fix ResolveProviderKind.
+//
+// Precedence, matching Python's resolve_provider_name line for line:
+// explicit non-"auto" request > LLM_PROVIDER=none/mock operator kill-switch
+// > org BYO (checked BEFORE an explicit platform LLM_PROVIDER value, not
+// after -- a tenant's BYO configuration must not be overridden by the
+// platform default env) > explicit platform LLM_PROVIDER > env
+// auto-detection > error.
+func ResolveProviderKindForOrg(
+	ctx context.Context, requested string, orgID string, resolveOrg OrgProviderResolver,
+) (ProviderKind, error) {
 	if normalized := normalizeProviderKind(requested); normalized != providerKindAuto {
 		return normalized, nil
 	}
 
 	envKind := normalizeProviderKind(os.Getenv("LLM_PROVIDER"))
 	// Operator kill-switch / explicit disable: LLM_PROVIDER=none or mock
-	// must not be overridden by auto-detection.
+	// must not be overridden by auto-detection OR by org BYO.
 	if envKind == ProviderKindNone || envKind == ProviderKindMock {
 		return envKind, nil
 	}
+
+	if resolveOrg != nil {
+		orgProvider, err := resolveOrg(ctx, orgID)
+		if err != nil {
+			return "", err
+		}
+		// #2223 peer read (lane-gate-rounds), LOW: the presence check must
+		// run on the TRIMMED value, not the raw one -- a whitespace-only
+		// resolver output (e.g. "   ") is non-empty by `!= ""` but
+		// normalizes to "" (normalizeProviderKind's own auto-substitution
+		// only fires for a truly empty string, not a whitespace-only one),
+		// so the old check let it enter this branch and return an EMPTY,
+		// invalid ProviderKind instead of falling through to the platform
+		// env / auto-detect like any other "no org BYO provider" case.
+		// Not reachable today -- llmorgsettings.Store.ResolveUsableProvider
+		// never returns a whitespace-only value -- but the check should be
+		// consistent with what it actually gates on regardless.
+		if strings.TrimSpace(orgProvider) != "" {
+			// codex round 1 (#2223), P3: this branch is the whole point of
+			// CHAOS-5006 -- an org's own BYO provider overriding the
+			// platform's LLM_PROVIDER for "auto" -- and had no telemetry at
+			// all, making it operationally indistinguishable from every
+			// other resolution path. Org id only, never the resolved
+			// provider's credentials (this function only ever receives a
+			// provider NAME string here, never a secret).
+			//
+			// codex round 2, P3: normalize BEFORE logging, not after --
+			// the earlier version logged the raw resolver output
+			// (e.g. "  OLLAMA  ") while RETURNING its normalized form
+			// ("ollama"), so telemetry never matched the value actually
+			// selected, breaking any search/aggregation keyed on the
+			// logged provider name.
+			normalized := normalizeProviderKind(orgProvider)
+			log.Printf("categorize: org %q BYO provider %q selected over platform default for auto resolution", orgID, normalized)
+			return normalized, nil
+		}
+	}
+
 	if envKind != providerKindAuto {
 		return envKind, nil
 	}
@@ -221,6 +298,91 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 
 	// BYO LLM stubs: Python has a real client for each of these; this port
 	// does not yet.
+	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
+		return unimplementedProvider{kind: kind}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
+	}
+}
+
+// NewProviderFromCredentials is NewProviderFromEnv's org-BYO sibling
+// (CHAOS-5006 PR3): constructs a Provider for kind from EXPLICIT
+// apiKey/baseURL/model values -- an org's own decrypted settings,
+// resolved by internal/llmorgsettings -- instead of reading environment
+// variables. This is the source-bound half of CHAOS-2550's invariant
+// (resolve_llm_credentials: never mix a platform key with an org
+// base_url or vice versa): a caller passes either ALL-env
+// (NewProviderFromEnv) or ALL-org (this function) values for one
+// construction, never a blend of the two.
+//
+// No generic-LLM_*-env-overrides-any-provider layering here (unlike
+// NewProviderFromEnv's firstNonEmptyEnv calls) -- apiKey/baseURL/model
+// are already the caller's fully-resolved final values; layering a
+// platform env override underneath them would silently reintroduce the
+// exact credential mixing CHAOS-2550 forbids.
+//
+// This function never logs, wraps, or interpolates apiKey/baseURL into
+// any returned error string -- see providerkind_credentials_test.go's
+// TestNewProviderFromCredentialsNeverLeaksSecretsInErrors, which fails
+// the whole suite if that guarantee is ever broken by a future edit
+// here.
+func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string) (Provider, error) {
+	switch kind {
+	case ProviderKindMock:
+		return MockProvider{}, nil
+
+	case ProviderKindNone:
+		return NoneProvider{}, nil
+
+	case ProviderKindOpenAI:
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
+		}
+		return NewOpenAIProvider(OpenAIProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+			Model:   model,
+		}), nil
+
+	case ProviderKindLocal:
+		// Same as NewProviderFromEnv's own comment: an empty base_url is
+		// not an error for "local" -- NewLocalProvider applies Ollama's
+		// default endpoint fallback regardless of where the (empty)
+		// value came from.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	case ProviderKindOllama:
+		// codex round 3 (#2234), P1: an org's stored "ollama" base_url
+		// follows Python's own contract -- local.py's OllamaProvider is a
+		// LocalProvider subclass, OpenAI-compatible /v1/chat/completions,
+		// defaulting to "http://localhost:11434/v1" (local.py:42,:283-298)
+		// -- NOT the native /api/chat wire protocol NewOllamaProvider
+		// speaks. Routing org-BYO "ollama" through NewOllamaProvider (as
+		// this case originally did, mirroring NewProviderFromEnv below for
+		// symmetry) sends a `/v1`-shaped stored base_url to the wrong path
+		// (".../v1/api/chat", a 404) and breaks every completion.
+		// NewProviderFromEnv's own ProviderKindOllama case is NOT changed
+		// here: it predates this PR (CHAOS-4978/#2189, already shipped on
+		// main) and has the SAME mismatch for an operator-set
+		// OLLAMA_BASE_URL/LLM_BASE_URL ending in /v1 -- team-lead's ruling
+		// was to fix org-BYO's newly-reachable path now and track the
+		// platform-env path as its own follow-up (see RISK NOTES in this
+		// PR's body for the ticket), not to re-litigate #2189's shipped
+		// decision here. The asymmetry between this case and
+		// NewProviderFromEnv's is therefore deliberate and temporary, not
+		// an oversight.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
 

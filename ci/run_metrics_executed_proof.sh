@@ -817,23 +817,33 @@ done
 #                                          dailyMetricsNativeFamilies, so every
 #                                          observation was silently refused and a
 #                                          total write outage looks like silence.
-if [ -n "${NATIVE_TELEMETRY_MISSING}" ] || [ -n "${MISSING_T0}" ]; then
-  echo "--- native-family telemetry dump (all outcomes, every checked family)"
-  for family in ${NATIVE_TELEMETRY_FAMILIES}; do
-    family_series="$(
-      printf '%s\n' "${METRICS_SNAPSHOT}" \
-        | grep -E "^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{[^}]*family=\"${family}\"" || true
-    )"
-    if [ -z "${family_series}" ]; then
-      echo "    ${family}: NO SERIES AT ALL -- not registered in"
-      echo "               dailyMetricsNativeFamilies, so every observation for it was"
-      echo "               refused by the collector and its absence is invisible."
-    else
-      printf '%s\n' "${family_series}" | sed 's/^/    /'
-    fi
-  done
-  echo "--- end dump"
-fi
+# UNCONDITIONAL. Printed on every run, pass or fail (team-lead, 2026-09-05).
+#
+# The dump was failure-only, and that made the one run that could have
+# explained CHAOS-5138 the one run that did not fail: cicd reported computed=0
+# on two runs, then computed>=1 on a third, and the third -- the one with the
+# diagnostic armed -- printed nothing, because it passed. A diagnostic that
+# fires only on failure cannot characterise a condition that comes and goes.
+#
+# So every run now leaves the per-family evidence behind. The cost is log
+# volume on green runs; the benefit is that a flip between two green runs is
+# still visible after the fact, and nobody has to reproduce a failure to learn
+# what the healthy shape was.
+echo "--- native-family telemetry dump (all outcomes, every checked family)"
+for family in ${NATIVE_TELEMETRY_FAMILIES}; do
+  family_series="$(
+    printf '%s\n' "${METRICS_SNAPSHOT}" \
+      | grep -E "^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{[^}]*family=\"${family}\"" || true
+  )"
+  if [ -z "${family_series}" ]; then
+    echo "    ${family}: NO SERIES AT ALL -- not registered in"
+    echo "               dailyMetricsNativeFamilies, so every observation for it was"
+    echo "               refused by the collector and its absence is invisible."
+  else
+    printf '%s\n' "${family_series}" | sed 's/^/    /'
+  fi
+done
+echo "--- end dump"
 
 if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
   echo "FAIL: native-family telemetry missing for:${NATIVE_TELEMETRY_MISSING}"

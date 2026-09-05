@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
@@ -438,6 +439,62 @@ func TestDispatchInvestmentTriggerWhitespaceDateMatchesOmittedDate(t *testing.T)
 	whitespace := dryRunID("   ")
 	if omitted == "" || omitted != whitespace {
 		t.Fatalf("omitted --to (%q) and whitespace-only --to (%q) must produce the SAME request id", omitted, whitespace)
+	}
+}
+
+// captureDefaultSlogForUnitTest swaps slog's default logger for a
+// text-handler writing into a buffer for the duration of the test,
+// restoring the original on cleanup. A separate, non-integration-tagged
+// copy of trigger_integration_test.go's captureDefaultSlog: that file is
+// //go:build integration and unavailable to this plain unit test file.
+func captureDefaultSlogForUnitTest(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+// TestDispatchWorkgraphTriggerLogsAuthorizationDenials is r3 P2's direct
+// repro: an authorization denial occurs before request_id/generation exist,
+// so it has no idempotency key to log -- but the ACTION and ORG are known,
+// and were previously logged nowhere at all. This makes an attempted
+// manual mutation a workers:read credential was not entitled to make
+// invisible in telemetry.
+func TestDispatchWorkgraphTriggerLogsAuthorizationDenials(t *testing.T) {
+	logs := captureDefaultSlogForUnitTest(t)
+	var stdout, stderr bytes.Buffer
+	code := dispatchWorkgraph(context.Background(),
+		commandRuntime(t, commandAuthorizer{err: joboperator.ErrAuthorization}),
+		[]string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"},
+		&stdout, &stderr)
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
+		t.Fatalf("unexpected result: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{"workgraph.manual_trigger", validTriggerOrg, "worker operator authorization failed"} {
+		if !bytes.Contains([]byte(logged), []byte(want)) {
+			t.Fatalf("missing authorization-denial telemetry %q; observed logs=%q", want, logged)
+		}
+	}
+}
+
+func TestDispatchInvestmentTriggerLogsAuthorizationDenials(t *testing.T) {
+	logs := captureDefaultSlogForUnitTest(t)
+	var stdout, stderr bytes.Buffer
+	code := dispatchInvestment(context.Background(),
+		commandRuntime(t, commandAuthorizer{err: joboperator.ErrAuthorization}),
+		[]string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"},
+		&stdout, &stderr)
+	if code != 1 || stdout.Len() != 0 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
+		t.Fatalf("unexpected result: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{"investment.manual_trigger", validTriggerOrg, "worker operator authorization failed"} {
+		if !bytes.Contains([]byte(logged), []byte(want)) {
+			t.Fatalf("missing authorization-denial telemetry %q; observed logs=%q", want, logged)
+		}
 	}
 }
 

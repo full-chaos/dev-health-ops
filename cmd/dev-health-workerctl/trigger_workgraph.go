@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -144,6 +145,25 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	if err := runtime.service.AuthorizeWorkgraphTrigger(ctx, runtime.principal, canonicalOrg); err != nil {
+		// A denial is logged too -- not just a Begin/Commit/WriteTx failure
+		// (codex review, 2026-09-05, CHAOS-5170 r3 P2): the failure occurs
+		// before request_id/generation exist, so there is no idempotency
+		// key to attach yet, but the ACTION and ORG are known and are what
+		// an operator needs to correlate an attempted manual mutation a
+		// credential was not entitled to make. The caller-facing response
+		// stays the bounded "unauthorized" code (writeServiceError's own
+		// contract) unchanged. `err` here is a *joboperator.ServiceError,
+		// whose own Error() deliberately prints only the bounded code
+		// ("job operator request failed [unauthorized]") -- the real
+		// underlying cause (e.g. "worker operator authorization failed")
+		// lives behind Unwrap(), so it is logged explicitly too, not just
+		// the wrapper.
+		slog.Default().LogAttrs(ctx, slog.LevelWarn,
+			"workerctl manual workgraph trigger: authorization denied",
+			slog.String("action", string(joboperator.ActionWorkgraphTrigger)),
+			slog.String("org", canonicalOrg),
+			slog.Any("error", err),
+			slog.Any("cause", errors.Unwrap(err)))
 		return writeServiceError(stderr, err)
 	}
 

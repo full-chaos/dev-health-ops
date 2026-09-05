@@ -41,6 +41,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
 )
@@ -108,6 +109,14 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	if err := runtime.service.AuthorizeInvestmentTrigger(ctx, runtime.principal, canonicalOrg); err != nil {
+		// See trigger_workgraph.go's identical log call for the full
+		// rationale (codex review, 2026-09-05, CHAOS-5170 r3 P2).
+		slog.Default().LogAttrs(ctx, slog.LevelWarn,
+			"workerctl manual investment trigger: authorization denied",
+			slog.String("action", string(joboperator.ActionInvestmentTrigger)),
+			slog.String("org", canonicalOrg),
+			slog.Any("error", err),
+			slog.Any("cause", errors.Unwrap(err)))
 		return writeServiceError(stderr, err)
 	}
 

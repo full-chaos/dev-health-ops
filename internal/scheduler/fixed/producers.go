@@ -369,7 +369,7 @@ type remainingFamilyBinding struct {
 // widening it) so every OTHER binding's store dependency is unaffected --
 // nil-checked and skipped, not required.
 type RemainingMetricsCoverageStore interface {
-	HasSucceededPartition(ctx context.Context, tx pgx.Tx, organizationID, family, day string) (bool, error)
+	HasSucceededPartition(ctx context.Context, tx pgx.Tx, organizationID, family, day string, scope json.RawMessage) (bool, error)
 }
 
 // generationSeedNamespace derives the immutable capacity seed.
@@ -562,6 +562,17 @@ func NewRemainingMetricsFanoutProducer(
 						"recomputation_window_days": 7,
 					})
 				},
+				// CHAOS-5055 (codex adversarial review round 2, P1): release_impact
+				// gained its own manual trigger-backstop entry point in this diff
+				// (StartManualBackfillRun via the shared startManualTriggerRun),
+				// which persists through the SAME remaining_metric_runs table this
+				// schedule does -- but without SkipIfCovered, a manual trigger
+				// immediately followed by this binding's own scheduled occurrence
+				// would insert a SECOND successful run under a different
+				// generation and duplicate the compute/write. release_impact_daily
+				// is append-only with no dedup on replay, same hazard class as
+				// dora (see dora's own SkipIfCovered comment below).
+				SkipIfCovered: true,
 			},
 			"dora_daily_fanout": {
 				Family: "dora",
@@ -588,6 +599,17 @@ func NewRemainingMetricsFanoutProducer(
 				Scope: func(string) (json.RawMessage, error) {
 					return json.Marshal(map[string]any{"version": 1, "window": 14})
 				},
+				// CHAOS-5055 (codex adversarial review round 2, P1): same hazard
+				// as release_impact above -- recommendations gained its own manual
+				// trigger-backstop entry point in this diff. Without
+				// SkipIfCovered, a manual all-teams window=14 trigger immediately
+				// followed by this binding's own occurrence would duplicate the
+				// compute. HasSucceededPartition's scope-containment filter
+				// (remainingCoverageScopeFilter, shared with
+				// findManualBackfillBlocker) requires an EXACT window match, so a
+				// manual trigger with a DIFFERENT window (e.g. --window 7) never
+				// falsely covers this binding's own window=14 occurrence.
+				SkipIfCovered: true,
 			},
 			"membership_backfill_daily_fanout": {
 				Family: "membership_backfill",
@@ -631,6 +653,18 @@ func NewRemainingMetricsFanoutProducer(
 				// identity carries an immutable seed. The store requires one for
 				// this family and rejects one for every other.
 				RequiresSeed: true,
+				// CHAOS-5055 (codex adversarial review round 2, P1): same hazard
+				// as release_impact/recommendations above -- a manual all-teams
+				// capacity trigger immediately followed by this binding's own
+				// weekly occurrence would insert a SECOND run under a different
+				// generation, and each execution writes a fresh forecast_id, so
+				// even capacity_forecasts' ReplacingMergeTree(computed_at) cannot
+				// collapse the duplicate. HasSucceededPartition's exact-match
+				// scope check (remainingCoverageScopeFilter) requires the stored
+				// partition's "all_teams" value to match, so a PER-TEAM manual
+				// trigger never falsely covers this binding's own all-teams
+				// occurrence.
+				SkipIfCovered: true,
 			},
 		},
 	}, nil
@@ -761,7 +795,7 @@ func (producer *RemainingMetricsFanoutProducer) startOrganization(
 	// read per organization rather than a wasted nested transaction.
 	if binding.SkipIfCovered {
 		if coverage, ok := producer.store.(RemainingMetricsCoverageStore); ok {
-			covered, err := coverage.HasSucceededPartition(ctx, tx, organizationID, binding.Family, day)
+			covered, err := coverage.HasSucceededPartition(ctx, tx, organizationID, binding.Family, day, scope)
 			if err != nil {
 				return 0, fmt.Errorf(
 					"check existing %s coverage for organization: %w", binding.Family, err,

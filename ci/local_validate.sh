@@ -1561,7 +1561,7 @@ metrics_readback() {
     --days 7 --commits-per-day 3 --pr-count 5 \
     --seed 20260825 || return 1
 
-  printf '   computing daily/dora/complexity SYNCHRONOUSLY (dev-hops metrics ...)\n'
+  printf '   computing daily/dora/complexity SYNCHRONOUSLY (direct Python job calls)\n'
   # --sink here takes a BACKEND NAME ("clickhouse"), not a URI -- unlike
   # fixtures generate's --sink above. The connection itself comes from
   # CLICKHOUSE_URI (add_sink_arg / validate_sink in utils/cli.py); passing the
@@ -1571,12 +1571,78 @@ metrics_readback() {
   # above (day-to-day variance in the fixture generator can leave any single
   # day's bucket empty for a given family, which is not the defect this stage
   # checks for) — verified locally 2026-08-25.
+  #
+  # CHAOS-5055 (RISK-NOTES): this used to shell to `${DEVHOPS} metrics
+  # daily/dora/complexity` directly. Those verbs now dispatch to
+  # dev-health-workerctl (an async Go-worker request) instead of computing
+  # in-process -- there is no Postgres coordinator or worker in this
+  # lightweight ClickHouse-only proof for them to dispatch to (this stage
+  # deliberately does not stand up the full topology
+  # ci/run_metrics_executed_proof.sh does; that script is unaffected -- it
+  # seeds through the real sync/outbox/worker path, never through `dev-hops
+  # metrics ...`). This stage only ever needed compute correctness against
+  # the scratch DB, never CLI dispatch semantics, so it now calls the
+  # still-unchanged Python job functions directly through the SAME
+  # register_commands/_cmd_* argparse wiring the old CLI verbs used (gate
+  # tooling reaching into compute internals is allowed; product code must
+  # not). --org isn't a flag either module registers (it was always the
+  # top-level dev-hops parser's global flag) -- set on the namespace
+  # explicitly from ORG_ID, mirroring what `_resolve_org` did for a real CLI
+  # invocation. This stage exercises Python COMPAT compute only (daily/dora/
+  # complexity are all still Python-computed per docs/go-migration-matrix.md
+  # as of CHAOS-5055) and should retire once the matrix shows zero COMPAT
+  # rows for these families.
+  # Written to a temp file via the printf BUILTIN, never a heredoc: bash
+  # writes a here-document into a pipe it also holds the read end of, which
+  # hangs forever on a host with a small effective pipe buffer (CHAOS-3362/
+  # 3489/4487) -- test_no_ci_script_has_a_heredoc_over_the_measured_pipe_budget
+  # and test_here_redirections_match_the_pinned_allowlist both guard every
+  # script under ci/ against exactly this, unconditionally. A single-argument
+  # printf writes straight to the file with no pipe involved regardless of
+  # payload size.
+  local metrics_readback_py
+  metrics_readback_py="$(mktemp "${TMPDIR:-/tmp}/local-validate-metrics-readback.XXXXXX")" || {
+    printf 'metrics_readback: could not create a temp file for the compute script\n' >&2
+    return 2
+  }
+  printf '%s' 'import argparse
+import asyncio
+import os
+
+from dev_health_ops.metrics import job_complexity_db, job_daily, job_dora
+
+org_id = os.environ.get("ORG_ID") or None
+
+parser = argparse.ArgumentParser()
+sub = parser.add_subparsers(dest="cmd")
+job_daily.register_commands(sub)
+job_dora.register_commands(sub)
+job_complexity_db.register_commands(sub)
+
+ns = parser.parse_args(["daily", "--backfill", "7"])
+ns.org = org_id
+rc = asyncio.run(job_daily._cmd_metrics_daily(ns))
+if rc:
+    raise SystemExit(rc)
+
+ns = parser.parse_args(["dora", "--backfill", "7"])
+ns.org = org_id
+rc = job_dora._cmd_metrics_dora(ns)
+if rc:
+    raise SystemExit(rc)
+
+ns = parser.parse_args(["complexity"])
+ns.org = org_id
+rc = job_complexity_db._cmd_metrics_complexity(ns)
+if rc:
+    raise SystemExit(rc)
+' >"${metrics_readback_py}"
+  local metrics_readback_rc
   OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${DEVHOPS}" metrics daily --backfill 7 || return 1
-  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${DEVHOPS}" metrics dora --backfill 7 || return 1
-  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${DEVHOPS}" metrics complexity || return 1
+    "${PROXY_OFF[@]}" "${PYBIN}" "${metrics_readback_py}"
+  metrics_readback_rc=$?
+  rm -f "${metrics_readback_py}"
+  [ "${metrics_readback_rc}" -eq 0 ] || return 1
 
   printf '   asserting ClickHouse readback (rows with computed_at >= %s, repo_ids ⊆ repos.id)\n' "${run_start}"
   # "incident" is deliberately excluded — see CHAOS-4269. `fixtures generate`

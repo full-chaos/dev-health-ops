@@ -92,32 +92,71 @@ func TestManualBackfillDayScopedFamiliesExcludesWorkItemAttribution(t *testing.T
 // TestManualBackstopTriggerFamiliesStayInSyncWithTheSwitch mirrors
 // TestManualBackfillDayScopedFamiliesListStaysInSyncWithTheSwitch: every
 // family ManualBackstopTriggerFamilies advertises must actually be
-// buildable by manualBackfillDayScope, since
-// dispatchMetricsRemainingTriggerBackstop calls StartManualBackfillRun
-// (which calls manualBackfillDayScope internally) for whatever family it is
-// given.
+// dispatchable. work_item_attribution/complexity/dora/release_impact go
+// through manualBackfillDayScope (dispatchMetricsRemainingTriggerBackstop
+// calls StartManualBackfillRun for them); capacity/recommendations have
+// their own scope builders (StartManualCapacityTriggerRun/
+// StartManualRecommendationsTriggerRun) precisely because
+// manualBackfillDayScope cannot express either (see
+// TestManualBackfillDayScopeRejectsNonDayScopedFamilies) -- this test
+// checks each family via whichever path is actually its own.
 func TestManualBackstopTriggerFamiliesStayInSyncWithTheSwitch(t *testing.T) {
+	dayScopeBuildable := map[string]bool{
+		"work_item_attribution": true,
+		"complexity":            true,
+		"dora":                  true,
+		"release_impact":        true,
+	}
 	for _, family := range ManualBackstopTriggerFamilies {
-		if _, err := manualBackfillDayScope(family, "2026-08-26"); err != nil {
-			t.Fatalf("family %q is in ManualBackstopTriggerFamilies but manualBackfillDayScope rejects it: %v", family, err)
+		switch {
+		case dayScopeBuildable[family]:
+			if _, err := manualBackfillDayScope(family, "2026-08-26"); err != nil {
+				t.Fatalf("family %q is in ManualBackstopTriggerFamilies but manualBackfillDayScope rejects it: %v", family, err)
+			}
+		case family == "capacity":
+			teamID := "eng-core"
+			if _, err := manualCapacityTriggerScope(&teamID, false); err != nil {
+				t.Fatalf("family %q: manualCapacityTriggerScope rejected a well-formed request: %v", family, err)
+			}
+		case family == "recommendations":
+			if _, err := manualRecommendationsTriggerScope(nil, 14); err != nil {
+				t.Fatalf("family %q: manualRecommendationsTriggerScope rejected a well-formed request: %v", family, err)
+			}
+		default:
+			t.Fatalf("family %q is in ManualBackstopTriggerFamilies but this test has no dispatch path registered for it -- add one to dayScopeBuildable or a case below", family)
 		}
 	}
 }
 
-// TestManualBackstopTriggerFamiliesNeverIncludesADayScopedRaceFamily is the
-// executable form of ManualBackstopTriggerFamilies' own doc comment: dora,
-// complexity, and release_impact must never appear here, because this list
-// is what lets `metrics remaining trigger-backstop` target --today, and
-// dora's automatic triggers racing a same-day manual dispatch is a real,
-// previously-fixed defect (see ManualBackfillDayScopedFamilies' "start"
-// today-exclusion). A family belongs in this list only after the same
-// no-day-window/watermark-driven/re-entrant review documented there.
-func TestManualBackstopTriggerFamiliesNeverIncludesADayScopedRaceFamily(t *testing.T) {
+// TestManualBackstopTriggerFamiliesAllHaveAKnownReplayMode enforces that
+// every family trigger-backstop accepts has a families.json `replay` mode
+// this codebase has actually reviewed (team-lead ruling, CHAOS-5055): the
+// verb applies ONE uniform flag policy to every family regardless of mode
+// (--day defaults to yesterday, --today must be explicit, --review-evidence
+// is always required) rather than forking behavior per mode -- this test
+// exists so an unreviewed mode still fails loud, naming which families are
+// append/replace/marker-based for a reader, not to gate dispatch on it.
+func TestManualBackstopTriggerFamiliesAllHaveAKnownReplayMode(t *testing.T) {
+	inventory, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	replayByFamily := make(map[string]string, len(inventory.Families))
+	for _, family := range inventory.Families {
+		replayByFamily[family.Name] = family.Replay
+	}
+	knownReplayModes := map[string]bool{
+		"append_latest_generation":     true,
+		"generation_replace":           true,
+		"completion_marker_generation": true,
+	}
 	for _, family := range ManualBackstopTriggerFamilies {
-		for _, dayScoped := range []string{"dora", "complexity", "release_impact"} {
-			if family == dayScoped {
-				t.Fatalf("ManualBackstopTriggerFamilies must never include %q -- it has a proven same-day automatic-trigger race (see the today-exclusion in cmd/dev-health-workerctl's `start` verb)", dayScoped)
-			}
+		mode, ok := replayByFamily[family]
+		if !ok {
+			t.Fatalf("ManualBackstopTriggerFamilies contains %q, which has no families.json entry", family)
+		}
+		if !knownReplayModes[mode] {
+			t.Fatalf("family %q has replay mode %q, not yet reviewed for trigger-backstop's uniform policy -- see this test's doc comment", family, mode)
 		}
 	}
 }

@@ -2,6 +2,8 @@ package remaining
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,27 +77,40 @@ var ErrUnsupportedManualBackfillFamily = errors.New(
 var ManualBackfillDayScopedFamilies = []string{"complexity", "dora", "release_impact"}
 
 // ManualBackstopTriggerFamilies lists the families `metrics remaining
-// trigger-backstop` (CHAOS-5016) accepts -- deliberately its OWN, narrower
-// list, not an alias for ManualBackfillDayScopedFamilies above.
+// trigger-backstop` (CHAOS-5016, generalized under CHAOS-5055) accepts --
+// deliberately its OWN, narrower-by-design list, not an alias for
+// ManualBackfillDayScopedFamilies above.
 //
-// trigger-backstop exists specifically to allow --day=today (behind an
-// explicit --today flag), which `metrics remaining start` refuses for every
-// family in ManualBackfillDayScopedFamilies (main.go's dispatchMetricsRemaining,
-// "today itself is ALSO excluded" -- a real P1 fix for a proven dora race:
-// dora's post-sync and fixed-schedule triggers both target ONLY the current
-// UTC day, so a same-day manual run can commit and release its advisory lock
-// before an automatic trigger starts a separate generation for the identical
-// day, and both eventually execute and append duplicate rows).
-// work_item_attribution has no such race -- its Scope carries no day-window
-// at all (manualBackfillDayScope's case above), ComputeOrg is watermark-
-// driven and safely re-entrant (a second call before the first's marker
-// commits just recomputes the same still-detected scope), and its day is
-// only ever a run/partition dedup label. Extending this list to a NEW family
-// requires the same "no per-day computation window, watermark-driven,
-// re-entrant" review this comment documents for work_item_attribution --
-// never just alias it to ManualBackfillDayScopedFamilies wholesale, or
-// dora's excluded-today race reopens through this verb.
-var ManualBackstopTriggerFamilies = []string{"work_item_attribution"}
+// trigger-backstop exists to let an operator target TODAY, which `metrics
+// remaining start` refuses unconditionally for every family in
+// ManualBackfillDayScopedFamilies (main.go's dispatchMetricsRemaining,
+// "today itself is ALSO excluded"). Both verbs require --review-evidence;
+// the difference is that `start` has no override for today at all, while
+// this verb accepts one behind the explicit --today flag. Every family here
+// shares ONE uniform flag policy regardless of its families.json `replay`
+// mode
+// (team-lead ruling, CHAOS-5055 -- superseding an earlier per-mode fork this
+// comment used to describe): --day defaults to yesterday UTC, targeting
+// today requires the explicit --today flag, and --review-evidence is always
+// required. That uniform friction -- never a silently-inferred today, never
+// a canned justification string -- is the safety mechanism for the
+// append_latest_generation families (dora, release_impact, recommendations;
+// TestManualBackstopTriggerFamiliesAllHaveAKnownReplayMode enumerates every
+// family's mode so a reader sees why evidence matters, without forking
+// dispatch behavior by mode); it does not by itself change dora's own
+// advisory-lock serialization against the automatic path (still applied
+// inside startManualTriggerRun via the family=="dora" branch below).
+//
+// capacity and recommendations reach this list through
+// StartManualCapacityTriggerRun/StartManualRecommendationsTriggerRun (their
+// own entry points below, NOT manualBackfillDayScope) because their Scope
+// carries no day-window at all -- day is still the ScopeKey/dedup label for
+// them (see startManualTriggerRun's own doc comment), never a compute
+// window, exactly like work_item_attribution.
+var ManualBackstopTriggerFamilies = []string{
+	"work_item_attribution", "complexity", "dora", "release_impact",
+	"capacity", "recommendations",
+}
 
 // manualBackfillDayScope builds a day-scoped family's default partition
 // scope for a single day, byte-for-byte matching the field values
@@ -136,6 +151,95 @@ func manualBackfillDayScope(family, day string) (json.RawMessage, error) {
 	default:
 		return nil, ErrUnsupportedManualBackfillFamily
 	}
+}
+
+// manualCapacityTriggerScope builds capacity's Scope for a manual trigger,
+// matching capacityScope's own validation (scopes.go): exactly one of
+// all_teams=true (team_id/work_scope_id both absent) or all_teams=false with
+// team_id set. history_days/simulations mirror
+// RemainingMetricsFanoutProducer's own capacity_forecast_weekly_fanout
+// binding (producers.go) so a manual trigger is indistinguishable, once
+// dispatched, from one the fixed schedule would have created.
+func manualCapacityTriggerScope(teamID *string, allTeams bool) (json.RawMessage, error) {
+	if allTeams == (teamID != nil) {
+		return nil, ErrInvalidState
+	}
+	payload := map[string]any{
+		"version": 1, "all_teams": allTeams,
+		"history_days": 90, "simulations": 10000,
+	}
+	if teamID != nil {
+		payload["team_id"] = *teamID
+	}
+	return json.Marshal(payload)
+}
+
+// manualRecommendationsTriggerScope builds recommendations' Scope for a
+// manual trigger. Unlike capacity, recommendationsScope (scopes.go) has no
+// all_teams field: omitting team_id entirely IS the whole-organization case,
+// matching RemainingMetricsFanoutProducer's own recommendations_daily_fanout
+// binding ({"version":1,"window":14}, no team_id at all).
+func manualRecommendationsTriggerScope(teamID *string, window int) (json.RawMessage, error) {
+	payload := map[string]any{"version": 1, "window": window}
+	if teamID != nil {
+		payload["team_id"] = *teamID
+	}
+	return json.Marshal(payload)
+}
+
+// manualTriggerGenerationSeedNamespace derives a manual capacity trigger's
+// Monte Carlo seed. producers.go's own deterministicGenerationSeed hashes an
+// Occurrence's Key, which does not exist for a manual call -- this hashes the
+// request's own logical identity instead (family+org+day+generation), so a
+// retried CLI invocation reusing the same generation reproduces the SAME
+// seed. That determinism matters structurally, not just for tidiness:
+// postgres.go's insertRun compares an ON-CONFLICT reload's stored Seed
+// against the incoming request's GenerationSeed and treats a mismatch as
+// state corruption, not idempotency -- a wall-clock or random seed here would
+// make every retried manual capacity trigger fail that check.
+func manualTriggerGenerationSeed(family, organizationID, day, generation string) int64 {
+	digest := sha256.Sum256([]byte(family + "|" + organizationID + "|" + day + "|" + generation))
+	return int64(binary.BigEndian.Uint64(digest[:8]) & 0x7fffffffffffffff)
+}
+
+// StartManualCapacityTriggerRun starts an operator-triggered capacity
+// forecast (CHAOS-5055): capacity has no day-window (manualBackfillDayScope
+// cannot express it) and requires a GenerationSeed StartManualBackfillRun
+// never supplies, so it gets its own entry point rather than reusing that
+// one. day is still the ScopeKey/dedup label (see startManualTriggerRun's
+// doc comment) -- callers pass the same day/--today semantics as every other
+// trigger-backstop family.
+func (store *PostgresStore) StartManualCapacityTriggerRun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	teamID *string,
+	allTeams bool,
+	publisher PartitionPublisher,
+) (ManualBackfillOutcome, error) {
+	scope, err := manualCapacityTriggerScope(teamID, allTeams)
+	if err != nil {
+		return ManualBackfillOutcome{}, err
+	}
+	seed := manualTriggerGenerationSeed("capacity", organizationID, day, generation)
+	return store.startManualTriggerRun(ctx, "capacity", organizationID, day, generation, scope, &seed, publisher)
+}
+
+// StartManualRecommendationsTriggerRun starts an operator-triggered
+// recommendations compute (CHAOS-5055): recommendations scopes by
+// team/window, not a calendar day, so it gets its own entry point rather
+// than manualBackfillDayScope. day is still the ScopeKey/dedup label.
+func (store *PostgresStore) StartManualRecommendationsTriggerRun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	teamID *string,
+	window int,
+	publisher PartitionPublisher,
+) (ManualBackfillOutcome, error) {
+	scope, err := manualRecommendationsTriggerScope(teamID, window)
+	if err != nil {
+		return ManualBackfillOutcome{}, err
+	}
+	return store.startManualTriggerRun(ctx, "recommendations", organizationID, day, generation, scope, nil, publisher)
 }
 
 // ManualBackfillOutcome reports what StartManualBackfillRun did for one day.
@@ -202,12 +306,47 @@ func (store *PostgresStore) StartManualBackfillRun(
 	if err != nil {
 		return ManualBackfillOutcome{}, err
 	}
+	return store.startManualTriggerRun(ctx, family, organizationID, day, generation, scope, nil, publisher)
+}
+
+// startManualTriggerRun is the shared body every manual remaining-metrics
+// trigger funnels through (CHAOS-5055 extraction): StartManualBackfillRun
+// above builds its Scope via manualBackfillDayScope and passes
+// generationSeed=nil; StartManualCapacityTriggerRun/
+// StartManualRecommendationsTriggerRun below build their OWN Scope shape
+// (team/window, no day-window at all) and, for capacity, a non-nil seed
+// (postgres.go's StartRunTx requires exactly one XOR: GenerationSeed set iff
+// family=="capacity").
+//
+// day is ALWAYS the ScopeKey/dedup label here regardless of family --
+// RemainingMetricsFanoutProducer's own startOrganization (producers.go)
+// sets ScopeKey to the occurrence's day unconditionally for every binding,
+// including capacity/recommendations, so a manual trigger's dedup identity
+// matches the scheduled run's for the same reason: day never means "the
+// compute window" for those two, only "which run row this is."
+func (store *PostgresStore) startManualTriggerRun(
+	ctx context.Context,
+	family, organizationID, day, generation string,
+	scope json.RawMessage,
+	generationSeed *int64,
+	publisher PartitionPublisher,
+) (ManualBackfillOutcome, error) {
+	if !store.valid() {
+		return ManualBackfillOutcome{}, ErrUnavailable
+	}
+	if !validUUID(organizationID) {
+		return ManualBackfillOutcome{}, ErrInvalidState
+	}
+	if !validDate(day) {
+		return ManualBackfillOutcome{}, ErrInvalidState
+	}
 	request, err := normalizeStartRunRequest(StartRunRequest{
 		OrganizationID: organizationID,
 		Family:         family,
 		Generation:     generation,
 		ScopeKey:       day,
 		Scopes:         []json.RawMessage{scope},
+		GenerationSeed: generationSeed,
 	})
 	if err != nil {
 		return ManualBackfillOutcome{}, err
@@ -248,7 +387,7 @@ func (store *PostgresStore) StartManualBackfillRun(
 		return ManualBackfillOutcome{}, ErrUnavailable
 	}
 
-	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, request.OrganizationID, request.Family, day, generation)
+	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, request.OrganizationID, request.Family, day, generation, request.Scopes[0])
 	if err != nil {
 		return ManualBackfillOutcome{}, err
 	}
@@ -346,6 +485,56 @@ func isSameManualBackfillRequest(runGeneration, generation string) bool {
 	return runGeneration == generation || strings.HasPrefix(runGeneration, generation+":retry-")
 }
 
+// remainingCoverageScopeFilter reports whether a coverage query must
+// additionally require an EXACT partition.scope match (not merely a
+// day/family/org match) for family, and the scope to match against
+// (CHAOS-5055, codex adversarial review rounds 1 and 2). false for every
+// family except capacity/recommendations -- day/family/org already
+// identifies "this exact request" for them (their scope always embeds the
+// true day, or falls back to run.scope_key, which is unconditionally the
+// day) -- so their existing coverage semantics are byte-identical to
+// before. For capacity/recommendations, requiring an exact match against
+// the CALLER's own scope: their scope objects carry no day/backfill_days
+// window semantics to disturb (manualCapacityTriggerScope/
+// manualRecommendationsTriggerScope), so this is exact, not an
+// approximation.
+//
+// EXACT equality, not jsonb CONTAINMENT (round 2 found containment unsafe,
+// self-caught before shipping): capacity's scope always carries an explicit
+// "all_teams" boolean, so containment (partition.scope @> requiredSubset)
+// correctly rejects a per-team partition against an all-teams required
+// subset (the values differ). recommendations has NO such explicit flag --
+// omitting "team_id" entirely IS its all-teams case (recommendationsScope,
+// scopes.go) -- so containment would let a PER-TEAM succeeded partition
+// (scope = {"version":1,"window":14,"team_id":"X"}, a superset of keys)
+// falsely satisfy an all-teams required subset ({"version":1,"window":14}),
+// marking the fixed schedule's own all-teams occurrence as covered when
+// only one team was ever actually computed -- every OTHER team in the org
+// would then silently never get a scheduled recommendations run. Exact
+// equality has no such asymmetry: a per-team scope is never equal to the
+// all-teams scope regardless of which one is "required".
+//
+// Shared by TWO coverage checks (round 2, P1): findManualBackfillBlocker
+// below (a manual trigger checking whether an EARLIER run -- manual or
+// scheduled -- already covers it) and HasSucceededPartition (postgres.go;
+// the fixed-schedule producer's own preflight, checking whether an EARLIER
+// run -- manual or scheduled -- already covers ITS OWN about-to-fire
+// occurrence). Round 1 fixed only the first call site, closing the
+// manual-after-manual and manual-after-scheduled collision for distinct
+// team/window scopes; round 2 found the REVERSE gap still open --
+// capacity/recommendations/release_impact's fixed-schedule bindings had no
+// SkipIfCovered coverage check at all (unlike dora's), so a manual trigger
+// immediately followed by that day's scheduled run duplicated the compute
+// and write. Both checks now use the identical exact-match rule so "does
+// this exact scope already have a succeeded partition" means the same
+// thing regardless of which trigger is asking.
+func remainingCoverageScopeFilter(family string, scope json.RawMessage) (requireExactScope bool, filterScope json.RawMessage) {
+	if family == "capacity" || family == "recommendations" {
+		return true, scope
+	}
+	return false, json.RawMessage("{}")
+}
+
 // blockReason names why findManualBackfillBlocker refused a day.
 type blockReason int
 
@@ -410,14 +599,30 @@ const (
 // work_item_attribution caller (RemainingMetricsFanoutProducer.Produce and
 // StartManualBackfillRun both set ScopeKey: day unconditionally), so the
 // fallback is exact for it, not a guess.
+//
+// scope is the FULL canonical Scope this request would insert (the same
+// value startManualTriggerRun passes to normalizeStartRunRequest), required
+// as an EXACT partition.scope match ONLY for families whose scope carries an
+// identity axis beyond day -- currently capacity (team_id/all_teams) and
+// recommendations (team_id, window); see remainingCoverageScopeFilter's doc
+// comment for why exact match, not containment. Without it (codex
+// adversarial review round 1, P1), this query's day-range filter alone made
+// team A's succeeded capacity forecast read as "covering" team B's same-day
+// request -- and team A's still-running forecast read as
+// blockReasonInProgress for team B too -- because nothing here ever
+// inspected partition.scope's team/window content. Day-scoped families skip
+// the scope check entirely (see the call site), so their existing
+// multi-day-window coverage behavior (backfill_days > 1, described above) is
+// byte-identical to before this fix.
 func (store *PostgresStore) findManualBackfillBlocker(
-	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string,
+	ctx context.Context, tx pgx.Tx, organizationID, family, day, generation string, scope json.RawMessage,
 ) (runID string, reason blockReason, err error) {
 	requested, parseErr := time.Parse("2006-01-02", day)
 	if parseErr != nil {
 		return "", blockReasonNone, ErrInvalidState
 	}
 	upperBound := requested.AddDate(0, 0, maxDayScopedBackfillDays-1).Format("2006-01-02")
+	requireExactScope, scopeFilter := remainingCoverageScopeFilter(family, scope)
 	rows, err := tx.Query(ctx, `
 SELECT run.id::text, run.generation, run.status, partition.status,
        coalesce(partition.scope->>'day', run.scope_key),
@@ -427,8 +632,9 @@ JOIN public.remaining_metric_runs AS run ON run.id = partition.run_id
 WHERE run.org_id = $1::uuid AND run.family = $2
   AND run.status IN ('pending', 'running', 'succeeded')
   AND coalesce(partition.scope->>'day', run.scope_key) >= $3
-  AND coalesce(partition.scope->>'day', run.scope_key) <= $4`,
-		organizationID, family, day, upperBound,
+  AND coalesce(partition.scope->>'day', run.scope_key) <= $4
+  AND (NOT $5 OR partition.scope = $6::jsonb)`,
+		organizationID, family, day, upperBound, requireExactScope, scopeFilter,
 	)
 	if err != nil {
 		return "", blockReasonNone, ErrUnavailable

@@ -195,6 +195,92 @@ func TestPreBridgePartialWriteHoldsPartitionIncomplete(t *testing.T) {
 	}
 }
 
+// TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved is
+// CHAOS-5078 codex confirmation pass's RED-ON-BASELINE proof (the P2 the
+// confirmation round found): releasePartitionWithReason's durable write can
+// itself fail (a transient DB error, or the lease already expired out from
+// under this attempt) -- releaseWithReasonErr injects exactly that. Before
+// this fix, the outcome was discarded with `_ =`: no log, and (had the
+// observe call been unconditional, which it never was here) no telemetry
+// distinction either. Mirrors TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry's
+// existing shape for the compat-bridge branches, extended with the log-line
+// assertion this fix adds to the SHARED helper (so it also covers those five
+// pre-existing call sites, not just this one).
+func TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{rowsWritten: 7, err: fmt.Errorf("%w: wrote 7 rows before failing", ErrPartialWrite)}
+	familyObserver := &recordingNativeFamilyObserver{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(familyObserver)
+	logger := &recordingRefusalLogger{}
+	handler.SetNativeFamilyLogger(logger)
+	retryObserver := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(retryObserver)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to still wrap ErrPreBridgeFamilyIncomplete", workErr)
+	}
+	// jobruntime's markedError.Error() deliberately never surfaces its wrapped
+	// cause's text (see errors.go) -- only errors.Unwrap/Is/As traverse to
+	// it. The explicit note this fix adds therefore lives on the UNWRAPPED
+	// cause, not on workErr.Error() itself.
+	cause := errors.Unwrap(workErr)
+	if cause == nil || !strings.Contains(cause.Error(), "durable release-with-reason also failed to persist") {
+		t.Fatalf("unwrapped cause = %v, want it to explicitly note the durable release failure", cause)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
+	}
+	if len(retryObserver.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", retryObserver.decisions)
+	}
+	// The per-family PartialWrite telemetry from computeNativeFamilies fired
+	// earlier in the pipeline and must be unaffected by whether the LATER
+	// partition-release write succeeds or fails.
+	if len(familyObserver.calls) != 1 || familyObserver.calls[0].family != "team_wellbeing" ||
+		familyObserver.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite {
+		t.Fatalf("family observations=%#v, want the PartialWrite observation unaffected", familyObserver.calls)
+	}
+	if len(logger.calls) != 1 {
+		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	}
+	call := logger.calls[0]
+	if !strings.Contains(call.msg, "release-with-reason failed") {
+		t.Fatalf("log message %q does not describe the release-with-reason failure", call.msg)
+	}
+	if !call.hasArg("organization_id", testOrgID) {
+		t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
+	}
+	if !call.hasArg("run_id", testRunID) {
+		t.Fatalf("log call %#v does not carry run_id=%s", call, testRunID)
+	}
+	if !call.hasArg("partition_id", testPartitionID) {
+		t.Fatalf("log call %#v does not carry partition_id=%s", call, testPartitionID)
+	}
+	if !call.hasArg("reason", jobruntime.ReasonPreBridgeFamilyIncomplete.String()) {
+		t.Fatalf("log call %#v does not carry reason=%s", call, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+	}
+	if !call.hasArg("error", ErrLeaseLost) {
+		t.Fatalf("log call %#v does not carry the underlying store error %v", call, ErrLeaseLost)
+	}
+}
+
 // TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttribution
 // is CHAOS-5078 codex round 2 F3's RED-ON-BASELINE proof. work_item_attribution
 // and work_item_state are registered natively with their REAL families.json

@@ -529,8 +529,16 @@ type dailyMetricsNativeFamilyOutcomeLabels struct {
 }
 
 // DailyMetricsCompatRetryDecision is the bounded durable outcome of one
-// ambiguous metrics.daily compatibility-bridge execution (CHAOS-4319). The
-// Go side only ever observes "persisted_failed" -- the point PartitionHandler
+// ambiguous metrics.daily compatibility-bridge execution (CHAOS-4319), WIDENED
+// (CHAOS-5078 codex confirmation pass) to also cover a pre_bridge NATIVE
+// family's own durable release-with-reason decision
+// (DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete) --
+// nothing about the compatibility bridge is involved in that one trigger,
+// but "durably released with a bounded reason matching the SQL-visible
+// failure_reason column" is this type's whole shape regardless of what
+// triggered it, so a second, parallel counter would only fragment the same
+// signal an operator already knows how to read here. The Go side only ever
+// observes "persisted_failed" -- the point PartitionHandler
 // gives up retrying a ledger row stuck at "ambiguous" and durably records a
 // failed_permanent partition instead of letting River discard the job with
 // no trace. "retry_authorized" is the Python bridge's mirror label for the
@@ -574,6 +582,18 @@ const (
 	// operator changes something) is distinguishable from ordinary
 	// transient resource pressure on this same shared counter.
 	DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic DailyMetricsCompatRetryDecision = "released_resource_exhausted_deterministic"
+	// DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete
+	// (CHAOS-5078 codex confirmation pass) is NOT a compatibility-bridge-
+	// triggered release like its siblings above -- a pre_bridge native
+	// family failed AFTER already writing rows (ErrPartialWrite) this
+	// partition, and PartitionHandler.Work released it 'failed' with
+	// jobruntime.ReasonPreBridgeFamilyIncomplete. Reusing this SAME counter
+	// rather than inventing a parallel one: "durably released with a bounded
+	// reason, matching the SQL-visible failure_reason column" is exactly
+	// this decision type's whole purpose (see the type's own doc comment,
+	// widened by this entry to cover non-compat-bridge triggers too) --
+	// only the TRIGGER differs, not what an operator needs from the signal.
+	DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete DailyMetricsCompatRetryDecision = "released_pre_bridge_family_incomplete"
 )
 
 func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
@@ -584,6 +604,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 		DailyMetricsCompatRetryDecisionReleasedResourceExhausted,
 		DailyMetricsCompatRetryDecisionReleasedProcessSignaled,
 		DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic,
+		DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete,
 	}
 }
 

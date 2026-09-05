@@ -1239,15 +1239,32 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// this family's rows for this partition, so it is released
 			// 'failed' (re-dispatchable) instead of completed -- a retry can
 			// still fill the gap rather than a silently-incomplete partition
-			// reading as succeeded. Not wired through retryCompatibilityError
-			// and NOT observed via observeCompatRetry: this is not a
-			// compatibility bridge error (the bridge call already returned
-			// successfully) -- reusing either would misclassify a pre_bridge
-			// native failure as a compat-bridge one. Per-family detail
-			// (which family, how many rows) already landed via
+			// reading as succeeded. Not wired through retryCompatibilityError:
+			// this is not a compatibility bridge error (the bridge call
+			// already returned successfully) -- reusing it would misclassify
+			// a pre_bridge native failure as a compat-bridge one. Per-family
+			// detail (which family, how many rows) already landed via
 			// nativeObserver inside computeNativeFamilies.
-			_ = releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
-			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPreBridgeFamilyIncomplete)
+			//
+			// CHAOS-5078 codex confirmation pass (P2): the durable release
+			// itself can fail (a transient DB error, or the lease already
+			// expired by the time this 5s-detached call runs) -- discarding
+			// that outcome with `_ =` left no trace of whether the
+			// 'failed'/pre_bridge_family_incomplete row was ever actually
+			// persisted, same class of silent-loss gap CHAOS-4319/CHAOS-4543
+			// already closed for the compat-bridge branches below. Now gated
+			// exactly like those: observeCompatRetry fires ONLY when the
+			// write is confirmed to have landed, and a failed write wraps
+			// the returned error with an explicit note rather than looking
+			// identical to a successful release.
+			if releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPreBridgeFamilyIncomplete.String(), handler.nativeFamilyLogger, run) {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete)
+				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPreBridgeFamilyIncomplete)
+			}
+			return jobruntime.WithReason(
+				jobruntime.Retryable(fmt.Errorf("%w (durable release-with-reason also failed to persist)", err)),
+				jobruntime.ReasonPreBridgeFamilyIncomplete,
+			)
 		}
 		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
 			// CHAOS-4319: this ledger row will refuse every future attempt
@@ -1286,7 +1303,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// partition row can tell a liveness kill apart from any other
 			// 'failed' outcome without cross-referencing River's attempt
 			// log or Sentry.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProgressStalled)
 			}
 			return retryCompatibilityError(err)
@@ -1299,7 +1316,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// failure_reason attached so an operator reading the partition
 			// row can tell a pids-capacity refusal apart from any other
 			// 'failed' outcome without cross-referencing River's attempt log.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedCapacityExhausted)
 			}
 			return retryCompatibilityError(err)
@@ -1324,7 +1341,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// that recorded nothing durable at all: the exact silent-loss
 			// shape CHAOS-4319 exists to close, reintroduced for this new
 			// no-retry optimization if left unguarded.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic)
 				return retryCompatibilityError(err)
 			}
@@ -1343,7 +1360,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// eventually discards the job after its attempt budget) left an
 			// operator with a bare 'failed' row and no clue why, the exact
 			// CHAOS-4543 "raw text not captured" gap this ticket closes.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted)
 			}
 			return retryCompatibilityError(err)
@@ -1353,7 +1370,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// runner subprocess killed by an external signal (kernel OOM,
 			// SIGTERM) is the same non-terminal, retryable shape and hit the
 			// identical missing-branch gap.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled)
 			}
 			return retryCompatibilityError(err)
@@ -1802,10 +1819,39 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 // row was never transitioned at all, exactly the kind of telemetry/reality
 // mismatch this ticket's own diagnosis had to work around (failure_reason
 // silently NULL despite a classified failure).
-func releasePartitionWithReason(store Store, ctx context.Context, claim PartitionClaim, reason string) bool {
+//
+// CHAOS-5078 codex confirmation pass: logs the underlying store error
+// before returning false, covering every call site below in one place.
+// Before this, a durable release-with-reason failure was invisible at this
+// function's own boundary -- every caller only ever saw a bare bool, so
+// none of them (including the five call sites that predate this fix) could
+// distinguish "release failed, here is why" from "release failed" with no
+// further trace beyond the eventual, silent lease-reclaim path. logger is
+// optional (nil is a no-op, same discipline as nativeFamilyLogger
+// elsewhere) -- absence of a logger must never change return behavior.
+func releasePartitionWithReason(
+	store Store, ctx context.Context, claim PartitionClaim, reason string,
+	logger NativeFamilyRefusalLogger, run Run,
+) bool {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	return store.ReleasePartitionWithReason(releaseCtx, claim, reason) == nil
+	if err := store.ReleasePartitionWithReason(releaseCtx, claim, reason); err != nil {
+		if logger != nil {
+			logger.Error(
+				"daily metrics partition release-with-reason failed; the durable "+
+					"failure_reason may not have been persisted",
+				"organization_id", run.OrganizationID,
+				"target_day", run.TargetDay,
+				"partition_id", claim.Partition.ID,
+				"repo_ids", claim.Partition.RepoIDs,
+				"run_id", claim.Partition.RunID,
+				"reason", reason,
+				"error", err,
+			)
+		}
+		return false
+	}
+	return true
 }
 
 // failPartitionPermanently durably terminalizes a partition stuck ambiguous

@@ -26,8 +26,6 @@ from __future__ import annotations
 
 import importlib.util
 import re
-import subprocess
-import tempfile
 from pathlib import Path
 from types import ModuleType
 
@@ -40,64 +38,30 @@ MIGRATIONS_DIR = (
     / "migrations"
     / "clickhouse"
 )
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MIGRATION_087 = "087_complexity_tables_replacing_merge_tree.py"
 
 # codex r1's reviewed tip (chaos-4291-2250-r1-20260905T052512), frozen per the
-# push-recipe rule: this sha is NEVER amended, only built on top of. A few
-# tests below load this EXACT commit's copy of the migration (via `git show`,
-# not a checkout) to prove a fix's test would have FAILED against the
-# pre-fix code, rather than only ever having been run against the fix.
+# push-recipe rule: this sha is NEVER amended, only built on top of. Named
+# here only for the frozen fixture's own header/provenance -- nothing below
+# reads it or reaches git/network for it (team-lead, 09-05: "a test that
+# depends on git depth or network is a flake by construction"). See
+# tests/fixtures/migration_087_prefix_frozen.py for the actual pre-fix code.
 FROZEN_R1_TIP = "5f3533b8531aa37df21f18fdf9959cb089a9ceb6"
 
-
-def _git_show(ref: str, rel_path: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "show", f"{ref}:{rel_path.as_posix()}"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
-def _load_migration_at_ref(ref: str, filename: str) -> ModuleType:
-    """Load a migration file as it existed at a specific git commit.
+def _load_frozen_prefix_module() -> ModuleType:
+    """Load the static, in-repo frozen copy of migration 087's pre-fix
+    functions (tests/fixtures/migration_087_prefix_frozen.py).
 
-    Reads the blob via `git show <ref>:<path>` (no checkout, no working-tree
-    mutation) and loads it standalone under a ref-qualified module name so it
-    never collides with the current `migration` fixture's module.
-
-    CI's checkout is SHALLOW (actions/checkout defaults to fetch-depth: 1 --
-    only the tip commit, no ancestor history), so `ref` -- an ancestor a few
-    commits back -- is genuinely absent locally even though it reached
-    GitHub long ago. bigboy/Mac clones are full, so this never reproduces
-    there. Fall back to a targeted `git fetch --depth=1 origin <ref>` (fetch
-    just this one commit, not full history) and retry once before giving up.
+    No git, no network, no dependency on checkout depth: the file is
+    committed source, read like any other test fixture.
     """
-    rel_path = Path("src") / "dev_health_ops" / "migrations" / "clickhouse" / filename
-    result = _git_show(ref, rel_path)
-    if result.returncode != 0:
-        fetch = subprocess.run(
-            ["git", "fetch", "--depth=1", "origin", ref],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        result = _git_show(ref, rel_path)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"cannot read {filename}@{ref}: git show failed even after "
-                f"`git fetch --depth=1 origin {ref}` (fetch stderr: "
-                f"{fetch.stderr.strip()!r}; show stderr: {result.stderr.strip()!r})"
-            )
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", prefix=f"migration_at_{ref[:8]}_", delete=False
-    ) as f:
-        f.write(result.stdout)
-        temp_path = f.name
-    spec = importlib.util.spec_from_file_location(f"migration_at_{ref[:8]}", temp_path)
-    assert spec is not None and spec.loader is not None, f"cannot load {filename}@{ref}"
+    path = _FIXTURES_DIR / "migration_087_prefix_frozen.py"
+    spec = importlib.util.spec_from_file_location("migration_087_prefix_frozen", path)
+    assert spec is not None and spec.loader is not None, f"cannot load {path}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -635,22 +599,22 @@ def test_table_exists_fails_closed_not_open_on_a_query_exception(migration) -> N
     skipping" and issued ZERO commands, even though the table is real and a
     real error occurred. This lane's fix makes the same scenario raise.
 
-    BEFORE (FROZEN_R1_TIP): the assertion below on `old_client.commands ==
-    []` with NO exception PASSES -- reproducing the bug live, not just
-    quoting the finding.
+    BEFORE (the frozen fixture, tests/fixtures/migration_087_prefix_frozen.py):
+    the assertion below on `old_client.commands == []` with NO exception
+    PASSES -- reproducing the bug against the actual pre-fix source, not
+    just quoting the finding.
     AFTER (this fix): the equivalent call on `new_client` RAISES the
     injected error instead of swallowing it -- proven with pytest.raises.
     """
     table = "repo_complexity_daily"
 
-    old_migration = _load_migration_at_ref(FROZEN_R1_TIP, MIGRATION_087)
+    old_migration = _load_frozen_prefix_module()
     old_client = FakeClient(_catalog(table), fail_query_on="count() FROM system.tables")
     old_migration._rebuild_table(old_client, table)  # must NOT raise -- that's the bug
     assert old_client.commands == [], (
-        f"expected the r1 tip ({FROZEN_R1_TIP}) to reproduce the fail-open "
-        f"bug (silently do nothing on a query exception) -- if this now "
-        f"fails, the frozen tip reference sha may be wrong, or the bug was "
-        f"already different there than believed"
+        "expected the frozen pre-fix fixture to reproduce the fail-open bug "
+        "(silently do nothing on a query exception) -- if this now fails, "
+        "the fixture may have been edited (it must never be)"
     )
 
     new_client = FakeClient(_catalog(table), fail_query_on="count() FROM system.tables")
@@ -666,15 +630,15 @@ def test_concurrent_runner_lock_did_not_exist_before_this_fix(migration) -> None
     (the exact scenario the finding describes: the live table ends up back
     on MergeTree despite the migration being recorded as applied).
 
-    BEFORE (frozen r1 tip): `hasattr(old_migration, "_acquire_lock")` is
-    False -- there is no lock to even attempt acquiring twice.
+    BEFORE (the frozen fixture): `hasattr(old_migration, "_acquire_lock")`
+    is False -- there is no lock to even attempt acquiring twice.
     AFTER (this fix): a second concurrent `_acquire_lock` call, while the
     first is still held, is refused.
     """
-    old_migration = _load_migration_at_ref(FROZEN_R1_TIP, MIGRATION_087)
+    old_migration = _load_frozen_prefix_module()
     assert not hasattr(old_migration, "_acquire_lock"), (
-        f"expected the r1 tip ({FROZEN_R1_TIP}) to have NO lock mechanism -- "
-        f"if this now fails, the frozen tip reference sha may be wrong"
+        "expected the frozen pre-fix fixture to have NO lock mechanism -- "
+        "if this now fails, the fixture may have been edited (it must never be)"
     )
 
     table = "repo_complexity_daily"

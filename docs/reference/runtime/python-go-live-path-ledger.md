@@ -148,10 +148,10 @@ flowchart LR
   REM -->|"native, no bridge"| CAP["metrics.remaining.capacity<br/>capacity_native_clickhouse.go"]
   REM -->|"native, no bridge"| DORA["metrics.remaining.dora<br/>dora_native_clickhouse.go"]
   REM -->|"native, no bridge"| MEMB["metrics.remaining.membership_backfill<br/>membership_native_clickhouse.go (CHAOS-4282)"]
+  REM -->|"native, no bridge (CHAOS-4296)"| RI["metrics.remaining.release_impact<br/>release_impact_native_clickhouse.go"]
   REM -->|"bridge: compatibility_http.go<br/>POST /internal/worker/remaining-metrics/v1/execute"| RBR["worker_metrics.py:2670 execute_remaining_metrics"]
   RBR --> COMP["job_complexity_db.py (complexity)"]
   RBR --> REC["workers/recommendations_tasks.py (recommendations)"]
-  RBR --> RI["metrics/job_release_impact.py (release_impact)"]
   TW & RUC & DPL & INC & WIS & CICD & FH & TR & DBR & CAP & DORA & MEMB & COMP & REC & RI --> CHM[("ClickHouse: per-family metric tables")]
 ```
 

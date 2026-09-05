@@ -100,6 +100,13 @@ class FakeClient:
                 else "MergeTree"
             )
             return _FakeResult([[engine]])
+        if "engine_full FROM system.tables" in query:
+            assert parameters is not None
+            spec = self.tables.get(parameters["name"])
+            if not spec:
+                return _FakeResult([])
+            match = re.search(r"ENGINE\s*=\s*([^\s(]+(?:\([^)]*\))?)", spec["ddl"])
+            return _FakeResult([[match.group(1) if match else ""]])
         if "sorting_key FROM system.tables" in query:
             assert parameters is not None
             spec = self.tables.get(parameters["name"])
@@ -219,6 +226,38 @@ def test_already_rmt_missing_version_column_refuses_instead_of_skipping(
         }
     )
     with pytest.raises(ValueError, match="missing the required version column"):
+        migration._rebuild_table(client, TABLE, SHADOW)
+    assert client.commands == []
+
+
+def test_already_rmt_wrong_version_argument_refuses_instead_of_skipping(
+    migration,
+) -> None:
+    """Confirmation-pass finding (CHAOS-4296/#2262): the check above only
+    proves the physical column exists, not that it is the engine's actual
+    version ARGUMENT. A table built as ReplacingMergeTree(day) with an
+    unrelated computed_at column present (has_column returns true) must
+    still be refused, not treated as converged -- matching the depth of the
+    Go executor's own construction-time check
+    (releaseImpactTableEngineFull)."""
+
+    class WrongVersionArgumentClient(FakeClient):
+        def query(self, query: str, parameters: dict | None = None):
+            if "engine_full FROM system.tables" in query:
+                assert parameters is not None
+                if parameters["name"] == TABLE:
+                    return _FakeResult([["ReplacingMergeTree(day)"]])
+            return super().query(query, parameters)
+
+    client = WrongVersionArgumentClient(
+        {
+            TABLE: {
+                "ddl": OLD_DDL.replace("MergeTree()", "ReplacingMergeTree(day)"),
+                "sorting_key": OLD_KEY,
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="version argument is not"):
         migration._rebuild_table(client, TABLE, SHADOW)
     assert client.commands == []
 

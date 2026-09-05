@@ -151,6 +151,26 @@ def _engine_name(client, table: str) -> str:
     return str(rows[0][0]) if rows and rows[0] else ""
 
 
+def _engine_full(client, table: str) -> str:
+    """The FULL engine expression, e.g. "ReplacingMergeTree(computed_at)" --
+    unlike _engine_name's bare system.tables.engine (only ever the family
+    name), this reveals the version-column argument. Confirmation-pass
+    finding (CHAOS-4296/#2262): the already-RMT convergence path checked only
+    that the version column EXISTS as a physical column (_has_column below),
+    never that it is the engine's actual version ARGUMENT -- a table built as
+    ReplacingMergeTree(day) with an unrelated computed_at column present
+    would pass that check and be marked converged incorrectly. Mirrors
+    release_impact_native_clickhouse.go's releaseImpactTableEngineFull.
+    """
+    res = client.query(
+        "SELECT engine_full FROM system.tables "
+        "WHERE database = currentDatabase() AND name = {name:String}",
+        parameters={"name": table},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    return str(rows[0][0]) if rows and rows[0] else ""
+
+
 def _has_column(client, table: str, column: str) -> bool:
     res = client.query(
         "SELECT count() FROM system.columns "
@@ -227,6 +247,28 @@ def _rebuild_table(client, table: str, shadow: str) -> None:
             raise ValueError(
                 f"{table}: already ReplacingMergeTree but missing the "
                 f"required version column '{RMT_VERSION_COLUMN}' -- refusing "
+                f"to treat this as converged"
+            )
+        # Confirmation-pass finding (CHAOS-4296/#2262): the check above only
+        # proves the physical COLUMN exists -- it does not prove the engine
+        # actually uses it as the RMT version ARGUMENT. A table built as
+        # ReplacingMergeTree(day) with an unrelated computed_at column
+        # present would pass the column check above and still be marked
+        # converged, at the SAME depth the executor's own construction-time
+        # check (release_impact_native_clickhouse.go's
+        # releaseImpactTableEngineFull) refuses -- bringing the migration's
+        # check to that same depth so both agree, rather than leaving the
+        # executor as the only thing that actually catches this.
+        engine_full = _engine_full(client, table)
+        version_arg_forms = (
+            f"ReplacingMergeTree({RMT_VERSION_COLUMN})",
+            f"ReplacingMergeTree(`{RMT_VERSION_COLUMN}`)",
+        )
+        if not any(form in engine_full for form in version_arg_forms):
+            raise ValueError(
+                f"{table}: already ReplacingMergeTree with a '{RMT_VERSION_COLUMN}' "
+                f"column present, but the engine's version argument is not "
+                f"'{RMT_VERSION_COLUMN}' (engine: {engine_full!r}) -- refusing "
                 f"to treat this as converged"
             )
         # Convergence: a previous run may have crashed after EXCHANGE but

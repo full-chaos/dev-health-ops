@@ -178,9 +178,11 @@ worker's own native/bridge split decide, exactly like the post-sync/fixed-schedu
 `workerctl_dispatch.py`'s own module docstring states why: the old direct-call path never passed
 `skip_families` the way the worker's HTTP bridge does, so a day the worker had already computed could
 be silently recomputed a second time in Python underneath it (`file_hotspots`, a SUM-aggregated table
-with no dedup on replay, was the concrete risk named). `complexity`/`release-impact` still resolve to
-COMPAT-Python once the request reaches the worker (their own families haven't ported, see the tables
-below) -- what changed is that the CLI no longer computes them ITSELF via a second, unguarded path.
+with no dedup on replay, was the concrete risk named). `complexity` still resolves to
+COMPAT-Python once the request reaches the worker (that family hasn't ported yet, see #2250) --
+what changed is that the CLI no longer computes it ITSELF via a second, unguarded path.
+`release-impact` ported to native in CHAOS-4296 (#2262) -- its CLI verb now dispatches to the
+same native executor the tables below describe, not a Python compute path.
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
@@ -189,7 +191,8 @@ below) -- what changed is that the CLI no longer computes them ITSELF via a seco
 | `dev-health-workerctl metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself then follows the ordinary native/bridge split below, it is not a compute engine on its own | CHAOS-4459 |
 | `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> triggers the ordinary native/bridge split on replay | `cmd/dev-health-workerctl/main.go:785-1193` | CHAOS-4358/4389/4405 |
 | `dev-hops metrics dora` / `capacity` | NATIVE (dispatches to the worker; both families are native, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family {dora,capacity}` -> the shared remaining-family coordinator (CHAOS-5055) | -- |
-| `dev-hops metrics complexity` / `release-impact` | COMPAT-Python (both families still compute in Python once the request reaches the worker, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family {complexity,release_impact}` -> the shared remaining-family coordinator (CHAOS-5055) | -- |
+| `dev-hops metrics complexity` | COMPAT-Python (still computes in Python once the request reaches the worker, see the remaining-families table below; not yet ported, see #2250) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family complexity` -> the shared remaining-family coordinator (CHAOS-5055) | #2250 |
+| `dev-hops metrics release-impact` | NATIVE (dispatches to the worker; the family is native, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family release_impact` -> the shared remaining-family coordinator (CHAOS-5055) | CHAOS-4296 |
 | `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | COMPAT-Python (standalone CLI wrapper; duplicate coverage -- `job_daily.py`'s finalize already writes `compounding_risk_daily` nightly regardless) | `job_compounding_risk.py:318` | CHAOS-4287 |
 | `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1598-1686` -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |

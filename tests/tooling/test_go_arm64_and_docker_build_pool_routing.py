@@ -84,8 +84,10 @@ _SELF_HOSTED_CONDITION = (
     "((github.event_name == 'pull_request' && "
     "github.event.pull_request.head.repo.full_name == github.repository) || "
     "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
-    "github.event_name == 'workflow_dispatch' || "
-    "github.event_name == 'release')"
+    "(github.event_name == 'workflow_dispatch' && "
+    "(github.event.inputs.ref == '' || github.event.inputs.ref == null)) || "
+    "github.event_name == 'release' || "
+    "github.event_name == 'schedule')"
 )
 
 _ELIGIBILITY_CONDITION = (

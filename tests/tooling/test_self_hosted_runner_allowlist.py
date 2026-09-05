@@ -21,6 +21,36 @@ negation of the same expression, so "exactly one leg runs" holds by
 construction rather than by two independently-derived boolean expressions
 staying in sync by hand.
 
+codex round 2 F2 added a fifth term, `schedule`: go.yml's nightly cron
+(CHAOS-3948) always targets main's HEAD by GitHub's own semantics (a
+`schedule` trigger has no ref/actor input to spoof, unlike `workflow_dispatch`
+-- it is exactly as trustworthy as `push` to `main`, no fork-safety condition
+needed). The original 4-term list omitted it, which the OLD deny-list had
+allowed (`schedule != 'pull_request'`) -- a real coverage regression (the
+nightly ARC exercise silently stopped), not a security one, introduced by
+the deny-list-to-allow-list switch itself and caught one round later.
+
+codex round 2 F1 (P1): `workflow_dispatch` was allow-listed unconditionally,
+but docker-images.yml's `workflow_dispatch` trigger accepts an arbitrary
+`inputs.ref` (any branch/tag/SHA) that its checkout step prefers over
+`github.sha` -- a dispatch with `inputs.ref=refs/pull/<n>/merge` for a FORK
+PR would route that untrusted checkout onto the ARC pool, defeating the
+`pull_request` term's own fork guard entirely via a different event type.
+The fix narrows the `workflow_dispatch` term to only the case where
+`inputs.ref` is empty/absent -- the "build main's HEAD" case, exactly as
+trustworthy as `push` to `main` -- never an operator-supplied override.
+`integration.yml`/`go.yml`'s own `workflow_dispatch` triggers have no `ref`
+input at all, so `github.event.inputs.ref` is simply undefined there and
+this restriction is a no-op on those files; it only changes behavior on
+docker-images.yml, the one file where the gap was real. NOTE: this
+narrower term must NOT be used for an ELIGIBILITY condition (e.g.
+`needs.changes.outputs.code == 'true' || github.event_name == 'workflow_dispatch' || ...`,
+which decides whether a job runs AT ALL, not which runner it lands on) --
+conflating the two during the fix accidentally corrupted 3 such sites in
+docker-images.yml on the first pass; caught and reverted before commit
+by checking each site's surrounding context (a `runs-on: ${{ matrix.runner }}`
+or an `always() && needs....` chain, never the self-hosted ternary itself).
+
 This test is the coverage gap codex's F3 named: the PRE-EXISTING
 `test_go_arm64_and_docker_build_pool_routing.py` only asserts
 `go-arm64-numeric-parity`/`go-build-worker-arm64`, NEITHER of which is a
@@ -60,8 +90,10 @@ ALLOWLIST_CONDITION = (
     "vars.SELF_HOSTED_RUNNERS == 'enabled' && "
     "((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || "
     "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
-    "github.event_name == 'workflow_dispatch' || "
-    "github.event_name == 'release')"
+    "(github.event_name == 'workflow_dispatch' && "
+    "(github.event.inputs.ref == '' || github.event.inputs.ref == null)) || "
+    "github.event_name == 'release' || "
+    "github.event_name == 'schedule')"
 )
 
 # The old deny-list fragment this fix replaces. Its mere presence anywhere
@@ -196,3 +228,63 @@ def test_go_container_reproducibility_twin_is_a_literal_negation() -> None:
         f"(!(...)) of the self-hosted leg's condition, not an independently "
         f"derived expression -- got {hosted!r}"
     )
+
+
+# codex round 2 F3: the sites above cover only the 5 required-context files.
+# These are the remaining routing sites this PR's own diff touches --
+# dind-smoke-test's `if:` (both files), integration.yml's routed job, and
+# the two Docker build matrix `runner:` (linux/arm64) legs -- NONE of which
+# were covered by any existing test before this addition. A regression on
+# any of these (e.g. reintroducing `|| github.event_name == 'merge_group'`)
+# would have passed every other test in this file silently.
+_REMAINING_IF_SITES = {
+    ("go.yml", "dind-smoke-test"): "if",
+    ("docker-images.yml", "dind-smoke-test"): "if",
+}
+_REMAINING_RUNS_ON_SITES = {
+    ("integration.yml", "integration"): "runs-on",
+}
+# (file, job, matrix-include index for platform == linux/arm64) -> field name
+_REMAINING_MATRIX_SITES = {
+    ("docker-images.yml", "build"): "runner",
+    ("docker-images.yml", "go-build"): "runner",
+}
+
+
+def test_dind_smoke_test_and_integration_use_the_allowlist_condition() -> None:
+    for (fname, job_name), field in _REMAINING_IF_SITES.items():
+        jobs = yaml.safe_load(_read(fname))["jobs"]
+        assert job_name in jobs, f"{fname}: job {job_name!r} not found"
+        value = str(jobs[job_name].get(field, ""))
+        assert ALLOWLIST_CONDITION in value, (
+            f"{fname}:{job_name} {field} does not contain the allow-list "
+            f"condition verbatim -- got {value!r}"
+        )
+    for (fname, job_name), field in _REMAINING_RUNS_ON_SITES.items():
+        jobs = yaml.safe_load(_read(fname))["jobs"]
+        assert job_name in jobs, f"{fname}: job {job_name!r} not found"
+        value = str(jobs[job_name].get(field, ""))
+        assert ALLOWLIST_CONDITION in value, (
+            f"{fname}:{job_name} {field} does not contain the allow-list "
+            f"condition verbatim -- got {value!r}"
+        )
+
+
+def test_docker_build_matrix_arm64_legs_use_the_allowlist_condition() -> None:
+    for fname, job_name in _REMAINING_MATRIX_SITES:
+        jobs = yaml.safe_load(_read(fname))["jobs"]
+        assert job_name in jobs, f"{fname}: job {job_name!r} not found"
+        matrix = jobs[job_name]["strategy"]["matrix"]
+        include = matrix.get("include", [])
+        arm64_entries = [
+            entry for entry in include if entry.get("platform") == "linux/arm64"
+        ]
+        assert len(arm64_entries) == 1, (
+            f"{fname}:{job_name}: expected exactly one linux/arm64 matrix "
+            f"include entry, found {len(arm64_entries)}"
+        )
+        runner_value = str(arm64_entries[0].get("runner", ""))
+        assert ALLOWLIST_CONDITION in runner_value, (
+            f"{fname}:{job_name}'s linux/arm64 matrix runner does not "
+            f"contain the allow-list condition verbatim -- got {runner_value!r}"
+        )

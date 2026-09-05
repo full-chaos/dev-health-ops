@@ -53,7 +53,7 @@ jobs:
     # restores the hosted runner with no code change. Fork PRs always stay
     # hosted -- same safety condition as go.yml's dual-leg jobs (a public
     # repo must never hand a fork's untrusted PR code a self-hosted runner).
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'release')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # 20m -> 45m (chris/team-lead, first-live-run finding): this job's own
     # PR (#2242) timed out and was cancelled at the 20m cap on ARC -- load1
     # on bigboy was 160+ during that run (shared with codex rounds/
@@ -113,7 +113,7 @@ jobs:
         # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
         # filesystem), same as go.yml's self-hosted legs. Only set on the
         # self-hosted leg; the hosted leg keeps setup-go's normal cache.
-        if: steps.relevance.outputs.relevant == 'true' && vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'release')
+        if: steps.relevance.outputs.relevant == 'true' && vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')
         run: |
           echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
@@ -129,7 +129,7 @@ jobs:
           # into the pool's persistent, concurrently-shared hostPath above --
           # a corruption risk against other jobs reading/writing it at the
           # same time (same reasoning as go.yml's self-hosted legs).
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'release')) }}
+          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) }}
 
       - name: Install locked live provider oracle dependencies
         if: steps.relevance.outputs.relevant == 'true'

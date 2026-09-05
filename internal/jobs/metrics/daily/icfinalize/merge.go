@@ -1,12 +1,22 @@
 package icfinalize
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/google/uuid"
+)
 
 // GitUserMetric is the subset of UserMetricsDailyRecord compute_ic_metrics_daily
 // reads or rewrites. Fields it passes through untouched are not modelled here.
 type GitUserMetric struct {
-	AuthorEmail        string
-	TeamID             string
+	AuthorEmail string
+	TeamID      string
+	// RepoID is the real repo_id this identity's git row already carries.
+	// compute_ic.py:143 sets `base = g` for a git-backed identity, i.e. the
+	// OUTPUT row keeps the INPUT row's own repo_id verbatim -- it is never
+	// replaced with a placeholder. See ICUserMetric.SynthesizedRepoID for the
+	// other half: an identity with NO git record gets a synthesized one instead.
+	RepoID             uuid.UUID
 	LOCAdded           int64
 	LOCDeleted         int64
 	PRsAuthored        int64
@@ -40,6 +50,15 @@ type ICUserMetric struct {
 	DeliveryUnits     int64
 	CycleP50Hours     float64
 	CycleP90Hours     float64
+	// RepoID is the real repo_id for a git-backed identity (base.repo_id in
+	// compute_ic.py, carried through verbatim), meaningful only when
+	// SynthesizedRepoID is false. The caller (writeUserMetrics) must not
+	// substitute a placeholder here -- doing so was CHAOS-5151's second defect:
+	// every git-backed row landed on the all-zero landscape placeholder instead
+	// of its own repo, so it never deduped against the row that was already
+	// on disk for that (org, repo, author, day) and every finalize attempt
+	// added a NEW key rather than superseding.
+	RepoID uuid.UUID
 	// SynthesizedRepoID marks a row with no git record, where the reference
 	// invents `repo_id=uuid.uuid4()`. The caller supplies the UUID so this
 	// function stays deterministic and testable; see the doc comment.
@@ -159,6 +178,7 @@ func MergeICUserMetrics(
 			DeliveryUnits:     git.PRsMerged + completed,
 			CycleP50Hours:     git.MedianPRCycleHours,
 			CycleP90Hours:     git.PRCycleP90Hours,
+			RepoID:            git.RepoID,
 			SynthesizedRepoID: !hasGit,
 		})
 	}

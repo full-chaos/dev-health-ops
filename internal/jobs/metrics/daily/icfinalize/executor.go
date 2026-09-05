@@ -37,7 +37,7 @@ type Conn interface {
 // user_metrics_daily is append-only, so a raw read mixes superseded
 // generations.
 const gitMetricsSQL = `
-SELECT author_email, team_id, loc_added, loc_deleted, prs_authored, prs_merged,
+SELECT author_email, team_id, repo_id, loc_added, loc_deleted, prs_authored, prs_merged,
        median_pr_cycle_hours, pr_cycle_p90_hours
 FROM (
     SELECT *
@@ -133,7 +133,7 @@ func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day 
 		// every downstream sum/merge in this package (and MergeICUserMetrics'
 		// SUM aggregation) actually wants.
 		var locAdded, locDeleted, prsAuthored, prsMerged uint32
-		if err := rows.Scan(&metric.AuthorEmail, &metric.TeamID, &locAdded,
+		if err := rows.Scan(&metric.AuthorEmail, &metric.TeamID, &metric.RepoID, &locAdded,
 			&locDeleted, &prsAuthored, &prsMerged,
 			&metric.MedianPRCycleHours, &metric.PRCycleP90Hours); err != nil {
 			return nil, err
@@ -250,10 +250,18 @@ func (executor *Executor) writeUserMetrics(
 		return 0, err
 	}
 	for _, metric := range metrics {
-		// Deterministic, NOT the reference's uuid4 -- see SynthesizedRepoID for
-		// why this is the one place the port deliberately diverges.
-		repoID := landscapeRepoID
+		// A git-backed identity keeps its OWN real repo_id (compute_ic.py:143's
+		// `base = g`, carried through verbatim) -- landscapeRepoID is the
+		// ic_landscape_rolling_30d placeholder and does not belong here. Using
+		// it for every non-synthesized row was CHAOS-5151's second defect: the
+		// written row never shared a dedup key with the row already on disk for
+		// that (org, repo, author, day), so every attempt (including a redrive
+		// of the SAME attempt) added a new key instead of superseding it.
+		repoID := metric.RepoID
 		if metric.SynthesizedRepoID {
+			// Deterministic, NOT the reference's uuid4 -- see SynthesizedRepoID's
+			// doc comment for why this is the one place the port deliberately
+			// diverges.
 			repoID = SynthesizedRepoID(orgID, metric.IdentityID)
 		}
 		if err := batch.Append(

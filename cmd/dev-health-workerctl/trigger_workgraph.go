@@ -165,7 +165,7 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 	// construction (it recomputes edges from source data), so a manual
 	// trigger racing an automatic one is a cost (duplicate work), never a
 	// correctness problem.
-	generation := "manual-trigger:workgraph.build:" + canonicalOrg + ":" + *from + ":" + *to
+	generation := "manual-trigger:workgraph.build:" + canonicalOrg + ":" + dateKey(fromTime) + ":" + dateKey(toTime)
 	requestID := manualTriggerRequestID(manualWorkGraphTriggerNamespace, generation)
 
 	request := workgraph.Request{
@@ -223,6 +223,20 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 		if errors.Is(err, workgraph.ErrInvalidState) {
 			status = "invalid_state"
 		}
+		// WriteTx's own underlying database cause is already collapsed to a
+		// sentinel (ErrUnavailable/ErrInvalidState) by
+		// internal/jobs/workgraph/publisher.go before it ever reaches here --
+		// that collapse is publisher.go's own established, widely-shared
+		// behavior (post-sync/scheduled-fanout callers rely on it too) and is
+		// out of scope for this PR's two new commands to change. What IS in
+		// scope, and was missing (codex review, 2026-09-05, CHAOS-5170 r2
+		// P2): this specific failure branch never logged anything at all,
+		// unlike the Begin/Commit/Rollback branches r1 already fixed. Logging
+		// whatever error IS available, with the same identifiers, closes
+		// that gap without reaching into publisher.go.
+		slog.Default().LogAttrs(ctx, slog.LevelError,
+			"workerctl manual workgraph trigger: write failed",
+			append(logAttrs, slog.Any("error", err), slog.String("status", status))...)
 		return writeResultOrError(stdout, stderr, status, err, map[string]any{
 			"request_id": requestID,
 			"org":        canonicalOrg,
@@ -269,6 +283,25 @@ func parseOptionalUTCDateRange(from, to string) (*time.Time, *time.Time, error) 
 		toTime = &parsed
 	}
 	return fromTime, toTime, nil
+}
+
+// dateKey renders a parsed *time.Time back into its canonical "YYYY-MM-DD"
+// form for use in a generation string, or "" if t is nil. Building the
+// generation from the PARSED, NORMALIZED value (rather than the raw flag
+// text) is deliberate: strings.TrimSpace(from) != "" treats a whitespace-
+// only flag as absent for scope-building purposes (parseOptionalUTCDateRange
+// leaves fromTime/toTime nil), but the raw flag text itself is still
+// non-empty. Two requests with the SAME resulting scope -- one with --from
+// omitted, one with --from " " -- must hash to the SAME generation and
+// therefore the same request id/idempotency key; hashing the raw text
+// instead produced two different ids for what WriteTx and the outbox
+// producer treat as the identical request, allowing a duplicate durable
+// request (codex review, 2026-09-05, CHAOS-5170 r2 P2).
+func dateKey(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format("2006-01-02")
 }
 
 // parseUTCDate parses one "YYYY-MM-DD" flag and rejects year <= 0.

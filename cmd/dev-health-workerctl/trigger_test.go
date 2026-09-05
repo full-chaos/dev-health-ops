@@ -382,6 +382,65 @@ func TestDispatchInvestmentTriggerRejectsYearZeroScope(t *testing.T) {
 	}
 }
 
+// TestDispatchWorkgraphTriggerWhitespaceDateMatchesOmittedDate proves r2
+// P2's fix: a whitespace-only --from (or --to) produces the same empty
+// scope as an omitted one (parseOptionalUTCDateRange treats both as nil),
+// so both must hash to the SAME generation/request id. Before the fix,
+// the generation string was built from the RAW flag text (`*from`), so
+// "" and " " produced different generations for an identical scope --
+// allowing a duplicate durable request past WriteTx's own idempotency
+// check, which keys on the generation-derived id (codex review,
+// 2026-09-05, CHAOS-5170 r2 P2, exact repro).
+func TestDispatchWorkgraphTriggerWhitespaceDateMatchesOmittedDate(t *testing.T) {
+	dryRunID := func(from string) string {
+		var stdout, stderr bytes.Buffer
+		args := []string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"}
+		if from != "" {
+			args = append(args, "--from", from)
+		}
+		code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), args, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("from=%q: unexpected failure: %s", from, stderr.String())
+		}
+		var result map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("from=%q: parse: %v", from, err)
+		}
+		id, _ := result["request_id"].(string)
+		return id
+	}
+	omitted := dryRunID("")
+	whitespace := dryRunID(" ")
+	if omitted == "" || omitted != whitespace {
+		t.Fatalf("omitted --from (%q) and whitespace-only --from (%q) must produce the SAME request id -- both build the same empty scope", omitted, whitespace)
+	}
+}
+
+func TestDispatchInvestmentTriggerWhitespaceDateMatchesOmittedDate(t *testing.T) {
+	dryRunID := func(to string) string {
+		var stdout, stderr bytes.Buffer
+		args := []string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"}
+		if to != "" {
+			args = append(args, "--to", to)
+		}
+		code := dispatchInvestment(context.Background(), commandRuntime(t, commandAuthorizer{}), args, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("to=%q: unexpected failure: %s", to, stderr.String())
+		}
+		var result map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("to=%q: parse: %v", to, err)
+		}
+		id, _ := result["request_id"].(string)
+		return id
+	}
+	omitted := dryRunID("")
+	whitespace := dryRunID("   ")
+	if omitted == "" || omitted != whitespace {
+		t.Fatalf("omitted --to (%q) and whitespace-only --to (%q) must produce the SAME request id", omitted, whitespace)
+	}
+}
+
 // TestManualTriggerNamespacesDifferFromAutomaticProducers is the reachability
 // control the context file's own "weakest point" section asked for: proves
 // (by actual UUIDv5 computation, not just "the constants are textually

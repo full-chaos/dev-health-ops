@@ -125,7 +125,11 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	// executor's own WriteTx-level idempotency (publisher.go's ON CONFLICT
 	// + sameRequest check) still protects a REPEATED manual invocation with
 	// identical flags from creating a second request.
-	generation := "manual-trigger:investment.materialize:" + canonicalOrg + ":" + *from + ":" + *to
+	// dateKey renders the PARSED, normalized date (see trigger_workgraph.go's
+	// doc comment for the full rationale: a whitespace-only --from/--to must
+	// hash identically to an omitted one, since both produce the same scope
+	// -- codex review, 2026-09-05, CHAOS-5170 r2 P2).
+	generation := "manual-trigger:investment.materialize:" + canonicalOrg + ":" + dateKey(fromTime) + ":" + dateKey(toTime)
 	requestID := manualTriggerRequestID(manualInvestmentTriggerNamespace, generation)
 
 	request := workgraph.Request{
@@ -178,6 +182,11 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 		if errors.Is(err, workgraph.ErrInvalidState) {
 			status = "invalid_state"
 		}
+		// See trigger_workgraph.go's identical log call for the full
+		// rationale (codex review, 2026-09-05, CHAOS-5170 r2 P2).
+		slog.Default().LogAttrs(ctx, slog.LevelError,
+			"workerctl manual investment trigger: write failed",
+			append(logAttrs, slog.Any("error", err), slog.String("status", status))...)
 		return writeResultOrError(stdout, stderr, status, err, map[string]any{
 			"request_id": requestID,
 			"org":        canonicalOrg,

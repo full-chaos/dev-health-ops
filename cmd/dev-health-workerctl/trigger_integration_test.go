@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -160,6 +161,108 @@ func TestManualTriggerRequiresOperateScope(t *testing.T) {
 	}
 	if got := countRows(t, ctx, runtime.pools.Domain, "worker_job_outbox"); got != 0 {
 		t.Fatalf("outbox=%d, want 0", got)
+	}
+}
+
+// triggerExecutionRequestsTableOnly creates ONLY work_graph_execution_requests
+// -- omitting worker_job_outbox -- so a real Postgres INSERT into the
+// requests table succeeds while the outbox producer's own insert fails on a
+// genuine missing-table error. This is what forces WriteTx to fail AFTER
+// Begin already succeeded, the exact branch r2 P2's finding targets.
+func triggerExecutionRequestsTableOnly(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+CREATE TABLE work_graph_execution_requests (
+ id uuid PRIMARY KEY, org_id uuid NOT NULL, kind text NOT NULL, scope jsonb NOT NULL,
+ model_ref text NULL, prompt_ref text NULL, llm_concurrency integer NOT NULL,
+ spend_limit_microunits bigint NOT NULL, correlation_id text NOT NULL, idempotency_key text NOT NULL UNIQUE,
+ state text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
+ attempt_count integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT statement_timestamp(), updated_at timestamptz NOT NULL DEFAULT statement_timestamp()
+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// captureDefaultSlog swaps slog's default logger for a text-handler writing
+// into buf for the duration of the test, restoring the original on cleanup.
+func captureDefaultSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+// TestManualTriggerWriteTxFailureLogsUnderlyingErrorAndIdentifiers is the
+// direct repro for r2 P2: WriteTx failing AFTER Begin succeeded (a real
+// missing-table error on the outbox insert, not a fabricated one) must be
+// logged with the underlying error plus request_id/org/generation -- the
+// r1 fix covered Begin/Commit/Rollback but not this branch.
+func TestManualTriggerWriteTxFailureLogsUnderlyingErrorAndIdentifiers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("close PostgreSQL: %v", err)
+		}
+	})
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	triggerExecutionRequestsTableOnly(t, ctx, pool) // worker_job_outbox deliberately absent
+
+	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &commandBackend{queues: map[string]joboperator.QueueSummary{}}
+	service, err := joboperator.New(joboperator.Dependencies{
+		Registry: registry, Backend: backend, Authorizer: commandAuthorizer{},
+		DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
+		RouteController:    commandRouteController{},
+		JobRouteController: commandJobRouteController{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &operatorRuntime{
+		service:  service,
+		registry: registry,
+		pools:    &postgresstore.RuntimePools{Domain: pool},
+		principal: joboperator.Principal{
+			Type: "service_credential",
+			ID:   "00000000-0000-4000-8000-000000000303",
+		},
+	}
+
+	logs := captureDefaultSlog(t)
+	var stdout, stderr bytes.Buffer
+	code := dispatchWorkgraphTrigger(ctx, runtime, []string{
+		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--from", "2026-01-01", "--to", "2026-01-31",
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected the missing outbox table to fail the write: code=%d stdout=%q stderr=%q",
+			code, stdout.String(), stderr.String())
+	}
+	logged := logs.String()
+	if !bytes.Contains([]byte(logged), []byte("write failed")) {
+		t.Fatalf("expected a 'write failed' log record, got: %s", logged)
+	}
+	for _, want := range []string{"request_id=", "org=" + validTriggerOrg, "generation=", "error="} {
+		if !bytes.Contains([]byte(logged), []byte(want)) {
+			t.Fatalf("expected the write-failure log to contain %q, got: %s", want, logged)
+		}
 	}
 }
 

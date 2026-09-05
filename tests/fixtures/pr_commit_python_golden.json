@@ -1,0 +1,316 @@
+{
+  "counts": {
+    "edges_written": 7,
+    "links_written": 4
+  },
+  "edge_rows": [
+    {
+      "confidence": 0.9,
+      "day": "2026-09-01",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "9b1a24a853dd2a4cde632e6d02b43a52ccc4b58df3abe533867bf33ded77f3cf",
+      "edge_type": "contains",
+      "event_ts": "2026-09-01T08:00:00Z",
+      "evidence": "commit_message_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr42",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-explicit",
+      "target_type": "commit"
+    },
+    {
+      "confidence": 0.6,
+      "day": "2026-09-01",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "0f9f3fd3828d0ce602b1b54ade4d6ae7c0f3885d878441f6e37c18d6079d0982",
+      "edge_type": "contains",
+      "event_ts": "2026-09-01T09:30:00Z",
+      "evidence": "commit_message_squash_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "heuristic",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr7",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-squash-corroborated",
+      "target_type": "commit"
+    },
+    {
+      "confidence": 0.9,
+      "day": "2026-09-01",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "ba4722ba00db26418b14d424a95cfc3bc82573f8c56667c29202c2e7a1f03501",
+      "edge_type": "contains",
+      "event_ts": "2026-09-01T10:00:00Z",
+      "evidence": "commit_message_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr7",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-dual-shape",
+      "target_type": "commit"
+    },
+    {
+      "confidence": 0.9,
+      "day": "2026-09-01",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "62e254bf5a107e0b8a4167fabf66f81e4a738d701d3f67658ee9d5f3d53d3e8f",
+      "edge_type": "contains",
+      "event_ts": "2026-09-01T11:00:00Z",
+      "evidence": "commit_message_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr34",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-unicode",
+      "target_type": "commit"
+    },
+    {
+      "confidence": 1.0,
+      "day": "2026-09-01",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "8c90ec157085154058ec64d403d72a38fc9584605a59343f23f75a4c82011f27",
+      "edge_type": "contains",
+      "event_ts": "2026-09-01T14:00:00Z",
+      "evidence": "seeded",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr100",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-zero-confidence",
+      "target_type": "commit"
+    },
+    {
+      "confidence": 0.6,
+      "day": "2026-09-05",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "9b7fe7a9569f101ee7788ea909da5d272d3669af6876f7357a66cb8947e7ea08",
+      "edge_type": "contains",
+      "event_ts": "2026-09-05T12:00:00Z",
+      "evidence": "seeded",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "heuristic",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr101",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-falsy-author-when",
+      "target_type": "commit"
+    },
+    {
+      "confidence": 0.5,
+      "day": "2026-09-01",
+      "discovered_at": "2026-09-05T12:00:00Z",
+      "edge_id": "3e737d8c897f5315c728f2f592a8f07f1ed4ed813234906a7490b60d863d1f8d",
+      "edge_type": "contains",
+      "event_ts": "2026-09-01T15:00:00Z",
+      "evidence": "seeded",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "provenance": "native",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111#pr102",
+      "source_type": "pr",
+      "target_id": "11111111-1111-1111-1111-111111111111@c-unrecognized-provenance",
+      "target_type": "commit"
+    }
+  ],
+  "extra_fastpath_seed_rows": [
+    {
+      "author_when": "2026-09-01T14:00:00Z",
+      "commit_hash": "c-zero-confidence",
+      "confidence": 0.0,
+      "evidence": "seeded",
+      "pr_number": 100,
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "author_when": null,
+      "commit_hash": "c-falsy-author-when",
+      "confidence": 0.6,
+      "evidence": "seeded",
+      "pr_number": 101,
+      "provenance": "heuristic",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "author_when": "2026-09-01T15:00:00Z",
+      "commit_hash": "c-unrecognized-provenance",
+      "confidence": 0.5,
+      "evidence": "seeded",
+      "pr_number": 102,
+      "provenance": "some_future_kind",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    }
+  ],
+  "frozen_now": "2026-09-05T12:00:00Z",
+  "inputs": {
+    "commits": [
+      {
+        "author_when": "2026-09-01T08:00:00Z",
+        "hash": "c-explicit",
+        "message": "Merge pull request #42 from team/feature",
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "author_when": "2026-09-01T09:00:00Z",
+        "hash": "c-squash-uncorroborated",
+        "message": "Fix parser edge case (#55)",
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "author_when": "2026-09-01T09:30:00Z",
+        "hash": "c-squash-corroborated",
+        "message": "Fix parser edge case (#7)",
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "author_when": "2026-09-01T10:00:00Z",
+        "hash": "c-dual-shape",
+        "message": "Merge pull request #7 from team/x (#7)",
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "author_when": "2026-09-01T11:00:00Z",
+        "hash": "c-unicode",
+        "message": "merge pull request #\u0663\u0664 from team/y",
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "author_when": "2026-09-01T12:00:00Z",
+        "hash": "c-revert",
+        "message": "Revert \"Merge pull request #99 from team/z\"\n\nThis reverts commit abc.",
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "author_when": "2026-09-01T13:00:00Z",
+        "hash": "c-cross-tenant",
+        "message": "Merge pull request #42 from team/x",
+        "org_id": "org-b-22222222",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      }
+    ],
+    "pull_requests": [
+      {
+        "number": 42,
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "number": 7,
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "number": 34,
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      },
+      {
+        "number": 99,
+        "org_id": "org-a-11111111",
+        "repo_id": "11111111-1111-1111-1111-111111111111"
+      }
+    ]
+  },
+  "org_id": "org-a-11111111",
+  "pr_commit_rows": [
+    {
+      "commit_hash": "c-explicit",
+      "confidence": 0.9,
+      "evidence": "commit_message_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 42,
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-squash-corroborated",
+      "confidence": 0.6,
+      "evidence": "commit_message_squash_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 7,
+      "provenance": "heuristic",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-dual-shape",
+      "confidence": 0.9,
+      "evidence": "commit_message_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 7,
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-unicode",
+      "confidence": 0.9,
+      "evidence": "commit_message_pr_ref",
+      "last_synced": "2026-09-05T12:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 34,
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-zero-confidence",
+      "confidence": 0.0,
+      "evidence": "seeded",
+      "last_synced": "2026-09-02T00:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 100,
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-falsy-author-when",
+      "confidence": 0.6,
+      "evidence": "seeded",
+      "last_synced": "2026-09-02T00:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 101,
+      "provenance": "heuristic",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-unrecognized-provenance",
+      "confidence": 0.5,
+      "evidence": "seeded",
+      "last_synced": "2026-09-02T00:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 102,
+      "provenance": "some_future_kind",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "commit_hash": "c-no-matching-commit",
+      "confidence": 0.9,
+      "evidence": "seeded",
+      "last_synced": "2026-09-02T00:00:00Z",
+      "org_id": "org-a-11111111",
+      "pr_number": 103,
+      "provenance": "explicit_text",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    }
+  ],
+  "schema": "pr_commit_python_golden_v1"
+}

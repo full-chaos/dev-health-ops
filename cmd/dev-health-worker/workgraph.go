@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
@@ -169,7 +170,29 @@ func workgraphBuildPreSteps(
 	if stepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	steps := []workgraph.NativePreStep{step}
+
+	prCommitLoader, prCommitLoaderErr := prcommit.NewLoader(connection)
+	if prCommitLoaderErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitWriter, prCommitWriterErr := prcommit.NewWriter(connection)
+	if prCommitWriterErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitService, prCommitServiceErr := prcommit.NewService(prCommitLoader, prCommitWriter, connection, logger)
+	if prCommitServiceErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitLinksStep, prCommitLinksStepErr := newPRCommitLinksPreStep(prCommitService)
+	if prCommitLinksStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitEdgesStep, prCommitEdgesStepErr := newPRCommitEdgesPreStep(prCommitService)
+	if prCommitEdgesStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
+	steps := []workgraph.NativePreStep{step, prCommitLinksStep, prCommitEdgesStep}
 
 	// The constructed steps must match the DECLARED order exactly. Without
 	// this, the declaration would be a comment: a step could be added to the
@@ -233,11 +256,13 @@ func buildPostStepOrder() []string {
 // the actual dispatch" split daily_native_family_registration_test.go uses.
 //
 // Appending here is a real decision, not a formality: see the ordering
-// invariant on workgraph.NativePreStep. lane-4752-go's edge producer straddles
-// this step in Python's build() and therefore needs at least two entries, one
-// before and one after "issue_pr_links".
+// invariant on workgraph.NativePreStep. "pr_commit_edges" (CHAOS-5264) is the
+// realized case that invariant was written for: it READS work_graph_pr_commit,
+// which "pr_commit_links" WRITES, so it must register strictly after it --
+// unlike issue_pr_links' still-Python fast-path half, both halves of the
+// PR<->commit straddle are native here, registered back to back.
 func buildPreStepOrder() []string {
-	return []string{"issue_pr_links"}
+	return []string{"issue_pr_links", "pr_commit_links", "pr_commit_edges"}
 }
 
 // addWorkgraphWorker routes each kind to its executor. `executor` is the

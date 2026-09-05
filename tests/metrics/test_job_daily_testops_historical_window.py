@@ -123,7 +123,6 @@ async def test_backfill_uses_each_days_own_history_window_not_wall_clock(
         backfill_days=3,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
     )
 
     # One historical call per backfilled day (DAY-2, DAY-1, DAY), never

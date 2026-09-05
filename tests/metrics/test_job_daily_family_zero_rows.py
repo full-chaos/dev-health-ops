@@ -151,7 +151,6 @@ async def test_empty_families_are_recorded_and_do_not_raise(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
     )
 
     assert set(result[DAY]) == _ALL_ZERO_ROW_FAMILIES
@@ -189,7 +188,6 @@ async def test_cicd_not_recorded_when_pipeline_data_present(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
     )
 
     # cicd produced a row this run -- it must NOT be flagged zero, but

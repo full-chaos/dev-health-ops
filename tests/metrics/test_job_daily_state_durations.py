@@ -213,7 +213,6 @@ async def test_daily_job_invokes_state_duration_compute_and_persists(
         backfill_days=1,
         provider="auto",
         org_id="22222222-2222-2222-2222-222222222222",
-        skip_finalize=True,
     )
 
     # The compute ran for the day, fed the day's already-loaded rows.
@@ -273,7 +272,6 @@ async def test_daily_job_state_durations_attribute_unassigned_by_project_key(
         backfill_days=1,
         provider="auto",
         org_id="22222222-2222-2222-2222-222222222222",
-        skip_finalize=True,
     )
 
     # A project-key resolver was actually built and passed through.

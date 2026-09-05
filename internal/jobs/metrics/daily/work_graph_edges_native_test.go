@@ -388,3 +388,47 @@ func TestWorkGraphEdgesWriteReportsRowsOnSendAckLoss(t *testing.T) {
 			written, len(rows))
 	}
 }
+
+// TestWorkGraphEdgesDeploymentAndIncidentWritersAlsoReportRowsOnSendAckLoss is
+// codex round chaos-4286a-r3's finding 5: the test above only ever called
+// WriteWorkGraphPRReviewOutcomeEdges. WriteWorkGraphPRDeploymentEdges and
+// WriteWorkGraphDeploymentIncidentEdges have the identical "report len(rows)
+// on a Send error" fix (work_graph_edges_native_clickhouse.go), but nothing
+// exercised either of them -- a regression reverting EITHER of the other two
+// writers back to returning 0 on Send ack-loss would have passed every
+// existing test.
+func TestWorkGraphEdgesDeploymentAndIncidentWritersAlsoReportRowsOnSendAckLoss(t *testing.T) {
+	sendErr := errors.New("simulated ack loss: connection reset after write")
+
+	t.Run("deployment edges", func(t *testing.T) {
+		conn := &sendErrorBatchConn{batch: &sendErrorBatch{sendErr: sendErr}}
+		rows := []workgraphedges.PRDeploymentEdge{
+			{EdgeID: "e1", OrgID: uuid.New(), PRID: "pr-1", DeploymentID: "dep-1", Provider: "github", Source: "native"},
+			{EdgeID: "e2", OrgID: uuid.New(), PRID: "pr-2", DeploymentID: "dep-2", Provider: "github", Source: "native"},
+		}
+		written, err := WriteWorkGraphPRDeploymentEdges(context.Background(), conn, rows, time.Now())
+		if !errors.Is(err, sendErr) {
+			t.Fatalf("err = %v, want it to wrap the Send error", err)
+		}
+		if written != len(rows) {
+			t.Fatalf("written = %d, want %d (ambiguous ack-loss must report rows as landed, not 0)",
+				written, len(rows))
+		}
+	})
+
+	t.Run("deployment-incident edges", func(t *testing.T) {
+		conn := &sendErrorBatchConn{batch: &sendErrorBatch{sendErr: sendErr}}
+		rows := []workgraphedges.DeploymentIncidentEdge{
+			{EdgeID: "e1", OrgID: uuid.New(), DeploymentID: "dep-1", IncidentID: "inc-1", Provider: "github", Source: "native"},
+			{EdgeID: "e2", OrgID: uuid.New(), DeploymentID: "dep-2", IncidentID: "inc-2", Provider: "github", Source: "native"},
+		}
+		written, err := WriteWorkGraphDeploymentIncidentEdges(context.Background(), conn, rows, time.Now())
+		if !errors.Is(err, sendErr) {
+			t.Fatalf("err = %v, want it to wrap the Send error", err)
+		}
+		if written != len(rows) {
+			t.Fatalf("written = %d, want %d (ambiguous ack-loss must report rows as landed, not 0)",
+				written, len(rows))
+		}
+	})
+}

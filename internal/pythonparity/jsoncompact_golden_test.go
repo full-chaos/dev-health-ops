@@ -79,6 +79,25 @@ func TestMarshalPythonJSONCompactMatchesPythonGolden(t *testing.T) {
 			map[string]any{"items": []any{map[string]any{"b": 1, "a": 2}}},
 			`{"items":[{"a":2,"b":1}]}`,
 		},
+		{
+			// codex round chaos-4286a-r3, finding 4: the case above covers
+			// array->map, but not array->array -- a mutant using the
+			// spaced/default encoder ONLY for an array nested inside
+			// another array would still pass every case above, since none
+			// of them puts an []any directly inside another []any.
+			"array of arrays has no space after the inner comma either",
+			[]any{[]any{1, 2}},
+			`[[1,2]]`,
+		},
+		{
+			// codex round chaos-4286a-r3, finding 4, the other half:
+			// array->map->array, so the map's sort_keys recursion and the
+			// compact array formatting are both exercised on the SAME
+			// path, at a nesting depth the two cases above don't reach.
+			"array of maps containing arrays, three levels deep",
+			[]any{map[string]any{"b": []any{3, 4}, "a": 1}},
+			`[{"a":1,"b":[3,4]}]`,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			encoded, err := MarshalPythonJSONCompact(testCase.value)
@@ -164,5 +183,30 @@ func TestMarshalPythonJSONCompactDetectsMapCycle(t *testing.T) {
 	shared := map[string]any{"tag": "shared"}
 	if _, err := MarshalPythonJSONCompact(map[string]any{"a": shared, "b": shared}); err != nil {
 		t.Errorf("the same map twice as siblings is not a cycle; got %v", err)
+	}
+}
+
+// TestMarshalPythonJSONCompactDetectsNestedSliceCycle is codex round
+// chaos-4286a-r3's finding 3. The map-cycle test above proves a TOP-LEVEL
+// cyclic map is caught, but the compact encoder's own array branch tracks
+// slices too (jsoncompact.go's []any case calls enterContainer exactly like
+// the map case does) -- and nothing in this file exercised THAT path. A
+// regression that removed slice tracking from enterContainer/keyFor would
+// still pass every case above (none of them nests a cyclic slice inside an
+// otherwise-acyclic container) and would stack-overflow here instead.
+func TestMarshalPythonJSONCompactDetectsNestedSliceCycle(t *testing.T) {
+	cyclicSlice := make([]any, 1)
+	cyclicSlice[0] = cyclicSlice
+	outer := map[string]any{"child": cyclicSlice}
+
+	_, err := MarshalPythonJSONCompact(outer)
+	if err == nil {
+		t.Fatal("expected a circular-reference error for a cyclic slice nested " +
+			"inside an acyclic map; a successful encode means slice tracking " +
+			"regressed and this call only returned because it ran out of stack " +
+			"before this assertion, or because tracking silently stopped working")
+	}
+	if !strings.Contains(err.Error(), "circular reference") {
+		t.Errorf("error should name the circular reference; got %q", err)
 	}
 }

@@ -411,3 +411,196 @@ def test_split_render_fires_through_the_actual_count_helpers_and_reverses() -> N
             setattr(gen, "load_finalize_write_calls", original_calls)
     finally:
         setattr(gen, "load_native_families_artifact", original_artifact)
+
+
+# ---------------------------------------------------------------------------
+# Round-2 findings (codex, CHAOS-5118). F3: the 4 tests below are
+# falsification controls for guard branches round-1's own tests never
+# exercised (F1/F2/F4 fixes above; the two existing tests above only reach
+# the unmapped-write-call and stale-irregular-entry branches). Each proves
+# reachability explicitly: the mutation/input is the MINIMAL one that drives
+# execution into the specific branch under test, not just "reddens somewhere".
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_call_family_rejects_multiple_matches_in_one_namespace() -> None:
+    """Falsification control for the same-namespace multi-match guard
+    (`_finalize_call_family`'s `len(daily_matches) > 1` branch): a call
+    whose `_write_<...>_for_day` middle prefix-matches MORE THAN ONE daily
+    family name must refuse, not silently pick the longest.
+
+    Reachability: `work_item` and `work_item_state` both legitimately
+    prefix-match the constructed middle `work_item_state_details`
+    (`middle == family or middle.startswith(family + "_")` for each), so
+    both land in `daily_matches` and the length-2 check at the top of the
+    ambiguity block is what raises -- not any other guard in the function.
+    """
+    gen = _load_gen_module()
+    try:
+        gen._finalize_call_family(
+            "_write_work_item_state_details_for_day",
+            {"work_item", "work_item_state"},
+            set(),
+        )
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised, (
+        "_finalize_call_family did not refuse a call matching multiple "
+        "daily families via the naming convention"
+    )
+
+
+def test_finalize_call_family_rejects_an_implausible_irregular_mapping() -> None:
+    """Falsification control for the irregular-mapping plausibility guard
+    inside `_finalize_call_family` (distinct from
+    test_finalize_ledger_rejects_a_stale_irregular_entry, which tests
+    `_assert_no_stale_finalize_ledger_entries` -- a different function):
+    an irregular-ledger entry that fails `_irregular_mapping_plausible`
+    must refuse to resolve, not silently return the implausible family.
+
+    Reachability: `_write_team_complexity_for_day` is a real key already in
+    FINALIZE_CALL_IRREGULAR_FAMILY (restored in `finally`); retargeting its
+    value to `("daily", "team_wellbeing")` sends `_finalize_call_family`
+    down the irregular-entry branch (the call name is a real key), past the
+    live-family-membership check (`team_wellbeing` is live), and into the
+    plausibility check specifically -- which must reject this pairing
+    (round-2 F2's own reported false-positive case).
+    """
+    gen = _load_gen_module()
+    original = dict(gen.FINALIZE_CALL_IRREGULAR_FAMILY)
+    try:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY["_write_team_complexity_for_day"] = (
+            "daily",
+            "team_wellbeing",
+        )
+        try:
+            gen._finalize_call_family(
+                "_write_team_complexity_for_day", {"team_wellbeing"}, {"complexity"}
+            )
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "_finalize_call_family did not refuse an implausible irregular mapping"
+        )
+    finally:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.clear()
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.update(original)
+
+
+def test_finalize_call_family_rejects_a_name_valid_in_both_namespaces() -> None:
+    """Falsification control for the daily/remaining cross-namespace
+    ambiguity guard (`_finalize_call_family`'s `if daily_match and
+    remaining_match` branch) -- the exact CHAOS-5118 round-1 F4 shape
+    (`work_item_attribution` names both a full daily compute and a
+    narrower remaining staleness backstop).
+
+    Reachability: passing the SAME family name in both `daily_names` and
+    `remaining_names` makes the call's middle prefix-match exactly one
+    family in EACH namespace individually (no multi-match guard fires
+    first), so only the cross-namespace check can be what raises.
+    """
+    gen = _load_gen_module()
+    try:
+        gen._finalize_call_family(
+            "_write_work_item_attribution_for_day",
+            {"work_item_attribution"},
+            {"work_item_attribution"},
+        )
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised, (
+        "_finalize_call_family did not refuse a name valid in both the daily "
+        "and remaining namespaces"
+    )
+
+
+def test_load_finalize_write_calls_rejects_an_opaque_call_target(tmp_path) -> None:
+    """Falsification control for the opaque-call guard in
+    load_finalize_write_calls (round-1 F1) -- proves it still fires on a
+    fresh input, not just that today's real job_daily.py happens to have
+    zero opaque calls (which the real-file run alone cannot distinguish
+    from a guard that never fires at all).
+
+    Reachability: a synthetic job_daily.py, pointed to via a monkeypatched
+    `JOB_DAILY_PY`, whose `run_daily_metrics_finalize` calls through a
+    subscript (`dispatch["x"]()`) -- a shape that is neither `ast.Name` nor
+    `ast.Attribute`, landing in the `opaque` branch specifically.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n    dispatch = {}\n    dispatch['x']()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, "load_finalize_write_calls did not refuse an opaque call target"
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_resolves_a_plain_name_alias(tmp_path) -> None:
+    """Positive control for round-2 finding F1's fix: a call reached
+    through an unambiguous local alias (`writer = _write_x_for_day;
+    writer(...)`) must resolve to the ALIASED function's name, not the
+    bare alias identifier -- proving the fix actually closes the gap
+    codex demonstrated, not just that it refuses somewhere new.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    writer = _write_compounding_risk_team_rows_for_day\n"
+        "    writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls did not resolve the alias to the "
+            f"assigned function's name: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_an_unresolvable_alias(tmp_path) -> None:
+    """Negative control alongside the positive one above: an alias
+    assigned MORE THAN ONCE to different targets cannot be resolved to a
+    single function name, and must refuse rather than silently falling
+    back to treating the bare alias identifier as an ordinary (and
+    therefore presumed out-of-scope) call name.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    if True:\n"
+        "        writer = _write_compounding_risk_team_rows_for_day\n"
+        "    else:\n"
+        "        writer = _write_team_complexity_for_day\n"
+        "    writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse an alias assigned to "
+            "two different targets"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)

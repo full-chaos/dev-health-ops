@@ -435,10 +435,16 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # §2 daily family: it reads back `repo_complexity_daily` (complexity's own
 # output table) and writes a team-scope rollup, the same
 # CHAOS-4365-item-3 finalize-step shape compounding_risk's team rows follow.
-# Before this fix it had ZERO representation anywhere in this doc -- not
-# hidden behind NATIVE (complexity already renders COMPAT-Python correctly
-# today), just never mentioned on either axis. Found by this exact
-# completeness check, which is the point of building it this way.
+# Before this fix it was named only in HAND-WRITTEN PROSE below the
+# generated table (not a row in either generated table, and invisible to
+# this page's own mechanical completeness/drift gate) -- round-2 finding F4
+# (codex, CHAOS-5118) corrected an earlier version of this comment that
+# claimed "ZERO representation anywhere in this doc," which overstated the
+# gap: the prose note existed, the MECHANICAL coverage did not. This fix
+# closes the latter, not the former -- complexity already renders
+# COMPAT-Python correctly today; the fix is that the finalize-scope
+# Python remainder is now provably covered by the completeness check
+# itself, not merely asserted in prose someone has to trust.
 FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
     "compute_ic_metrics_daily": ("daily", "ic_finalize"),
     "compute_ic_landscape_rolling": ("daily", "ic_finalize"),
@@ -461,9 +467,29 @@ def load_finalize_write_calls() -> set[str]:
     meaning a finalize write hidden behind one evaded the completeness
     check entirely -- the exact "cannot hide by omission" guarantee this
     whole mechanism exists for, failing on the one call shape it couldn't
-    read. Failing closed on any such shape (there are none in the function
-    today) means a future rewrite to dynamic dispatch requires a human to
-    update this function, rather than silently losing coverage.
+    read. Failing closed on any such shape means a future rewrite to
+    dynamic dispatch requires a human to update this function, rather than
+    silently losing coverage.
+
+    Also resolves a PLAIN-NAME LOCAL ALIAS (round-2 finding F1, codex,
+    CHAOS-5118: `writer = _write_compounding_risk_team_rows_for_day;
+    writer(...)`): a bare `Name` call target that is itself the target of
+    an `Assign` somewhere in this function's body is a local variable, not
+    a direct reference to a module-level function -- calling it by its own
+    identifier (here, `"writer"`) would never match the `_write_*_for_day`
+    naming convention, so the write it makes would silently read as
+    generic out-of-scope infrastructure (indistinguishable from a
+    `logger.info(...)` call) instead of the real family write it is. If
+    the alias resolves to EXACTLY ONE assigned `Name`/`Attribute` target
+    across the whole function, that target's own name is used in its
+    place. If the alias is assigned more than once, assigned a
+    non-Name/Attribute value (a call result, a subscript, ...), or never
+    assigned at all despite being called as if it were local, this
+    function REFUSES (SystemExit) rather than silently treating the bare
+    alias identifier as an ordinary, presumably-irrelevant call name --
+    the same fail-closed shape as the opaque-call case above, for the
+    same reason: a call this walker cannot resolve must never be treated
+    as though it were already known to be out of scope.
     """
     tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
     target = next(
@@ -481,13 +507,48 @@ def load_finalize_write_calls() -> set[str]:
             f"{JOB_DAILY_PY} -- function renamed/moved? Update load_finalize_write_calls "
             "and DAILY_FINALIZE_FN."
         )
+
+    # First pass: every plain `name = <value>` assignment in the function,
+    # so a later Call(func=Name(id=name)) can be told apart from a direct
+    # reference to a module-level function of that same name. `None` marks
+    # an alias that cannot be resolved (multiple distinct assignments, or a
+    # value that is itself not a plain Name/Attribute).
+    # None marks an alias this walker cannot resolve to one function name.
+    aliases: dict[str, str | None] = {}
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Assign):
+            continue
+        for element in node.targets:
+            if not isinstance(element, ast.Name):
+                continue
+            value = node.value
+            resolved: str | None
+            if isinstance(value, ast.Name):
+                resolved = value.id
+            elif isinstance(value, ast.Attribute):
+                resolved = value.attr
+            else:
+                resolved = None
+            if element.id in aliases and aliases[element.id] != resolved:
+                aliases[element.id] = None
+            else:
+                aliases[element.id] = resolved
+
     calls: set[str] = set()
     opaque: list[str] = []
+    unresolved_aliases: list[str] = []
     for node in ast.walk(target):
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name):
-                calls.add(func.id)
+                if func.id in aliases:
+                    resolved_alias = aliases[func.id]
+                    if resolved_alias is None:
+                        unresolved_aliases.append(func.id)
+                    else:
+                        calls.add(resolved_alias)
+                else:
+                    calls.add(func.id)
             elif isinstance(func, ast.Attribute):
                 calls.add(func.attr)
             else:
@@ -501,24 +562,59 @@ def load_finalize_write_calls() -> set[str]:
             "resolve manually and either rewrite them as a plain name/attribute call "
             "or teach load_finalize_write_calls to look inside this specific shape."
         )
+    if unresolved_aliases:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: {DAILY_FINALIZE_FN} in {JOB_DAILY_PY} "
+            f"calls local variable(s) {sorted(set(unresolved_aliases))} whose assignment "
+            "this walker cannot resolve to a single function name (assigned more than "
+            "once, or assigned something other than a plain name/attribute) -- the "
+            "completeness check cannot see what such a call actually writes. Resolve "
+            "manually, simplify the assignment to one unconditional `alias = "
+            "some_function` before the call, or teach load_finalize_write_calls to "
+            "follow this specific shape."
+        )
     return calls
 
 
 def _irregular_mapping_plausible(call_name: str, family: str) -> bool:
-    """A minimal, deliberately weak SEMANTIC sanity check for an irregular-
-    ledger mapping: at least one word (underscore-split, length >= 2) of the
-    target family name must appear literally in the call name.
+    """A SEMANTIC sanity check for an irregular-ledger mapping -- cannot
+    PROVE a mapping is correct (that is exactly why an irregular name needs
+    a human to name it at all), but catches an implausible one.
 
-    This CANNOT prove a mapping is correct -- that is exactly why an
-    irregular name needs a human to name it at all, since by definition it
-    does not follow the naming convention the mechanical matcher otherwise
-    relies on. What it DOES catch: a copy/paste or rename that points a
-    real call at a family sharing no textual relationship with it whatsoever
-    (round-1 finding F3, codex, CHAOS-5118: `_write_team_complexity_for_day`
-    silently accepted a mapping to `release_impact`, a live family with zero
-    connection to the call's own name -- `complexity`, the correct target,
-    IS a substring of the call name and would have passed this check).
+    Round-2 finding F2 (codex, CHAOS-5118): the round-1 form checked
+    whether ANY single family token (length >= 2) appeared anywhere in the
+    call name, which let `_write_team_complexity_for_day` pass a mapping to
+    `team_wellbeing` -- a live family sharing only the single generic token
+    "team" with the call name, while the family's OTHER token
+    ("wellbeing") appears nowhere in it. For a call that DOES follow the
+    `_write_<...>_for_day` shape (it is irregular only because the MIDDLE
+    doesn't match this specific family's own naming convention -- that is
+    what makes it need a human-written entry at all, not that it looks
+    nothing like a writer), every token of the family must appear among the
+    call's own middle tokens -- exact, not "any one of them": with
+    family="team_wellbeing" against `_write_team_complexity_for_day`,
+    "team" is present but "wellbeing" is not, so the mapping is correctly
+    rejected; with family="complexity", both check (there is only one
+    token) and the mapping passes.
+
+    A call OUTSIDE the `_write_..._for_day` shape entirely (e.g.
+    `compute_ic_metrics_daily` -> `ic_finalize`) cannot be measured against
+    that convention at all -- there is no "middle" to tokenize, and by
+    construction such a call's name was never going to resemble the
+    family's own name (a human named `ic_finalize` as a conceptual grouping
+    label, not a description of `compute_ic_metrics_daily`'s own name).
+    These fall back to the original weak any-token check, which is honest
+    about being unable to do more for a shape this far from the
+    convention -- the exact check above only strengthens the case the
+    naming convention actually claims to cover.
     """
+    if call_name.startswith("_write_") and call_name.endswith("_for_day"):
+        middle = call_name[len("_write_") : -len("_for_day")]
+        call_tokens = middle.split("_")
+        family_tokens = [t for t in family.split("_") if t]
+        if not family_tokens:
+            return True
+        return all(token in call_tokens for token in family_tokens)
     tokens = [t for t in family.split("_") if len(t) >= 2]
     if not tokens:
         return True

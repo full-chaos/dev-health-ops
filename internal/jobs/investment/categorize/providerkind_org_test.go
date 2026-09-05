@@ -94,6 +94,29 @@ func TestResolveProviderKindForOrg_NoUsableOrgProviderFallsBackToPlatformEnv(t *
 	}
 }
 
+// TestResolveProviderKindForOrg_WhitespaceOnlyOrgProviderFallsBackToPlatformEnv
+// is the #2223 peer-read (lane-gate-rounds) LOW regression: a
+// WHITESPACE-ONLY resolver value (e.g. "   ") must be treated the same as
+// an empty one -- falling through to platform env / auto-detect -- not
+// entered as a real org-BYO selection. The old code's `orgProvider != ""`
+// presence check ran on the RAW value, so a whitespace-only string passed
+// it, then normalized (trim+lower) to "", returning an empty, invalid
+// ProviderKind instead of falling through. Not reachable via the
+// production resolver today, but the check must be consistent with what
+// it actually gates on.
+func TestResolveProviderKindForOrg_WhitespaceOnlyOrgProviderFallsBackToPlatformEnv(t *testing.T) {
+	clearProviderEnv(t)
+	t.Setenv("LLM_PROVIDER", "local")
+	kind, err := ResolveProviderKindForOrg(
+		context.Background(), "auto", "org-1", staticOrgResolver("   ", nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if kind != ProviderKindLocal {
+		t.Fatalf("kind = %q, want local (whitespace-only org resolution falls back to platform env, same as empty)", kind)
+	}
+}
+
 func TestResolveProviderKindForOrg_NoUsableOrgProviderFallsBackToAutoDetection(t *testing.T) {
 	clearProviderEnv(t)
 	t.Setenv("OPENAI_API_KEY", "sk-x")

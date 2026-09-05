@@ -153,7 +153,18 @@ func ResolveProviderKindForOrg(
 		if err != nil {
 			return "", err
 		}
-		if orgProvider != "" {
+		// #2223 peer read (lane-gate-rounds), LOW: the presence check must
+		// run on the TRIMMED value, not the raw one -- a whitespace-only
+		// resolver output (e.g. "   ") is non-empty by `!= ""` but
+		// normalizes to "" (normalizeProviderKind's own auto-substitution
+		// only fires for a truly empty string, not a whitespace-only one),
+		// so the old check let it enter this branch and return an EMPTY,
+		// invalid ProviderKind instead of falling through to the platform
+		// env / auto-detect like any other "no org BYO provider" case.
+		// Not reachable today -- llmorgsettings.Store.ResolveUsableProvider
+		// never returns a whitespace-only value -- but the check should be
+		// consistent with what it actually gates on regardless.
+		if strings.TrimSpace(orgProvider) != "" {
 			// codex round 1 (#2223), P3: this branch is the whole point of
 			// CHAOS-5006 -- an org's own BYO provider overriding the
 			// platform's LLM_PROVIDER for "auto" -- and had no telemetry at
@@ -287,6 +298,91 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 
 	// BYO LLM stubs: Python has a real client for each of these; this port
 	// does not yet.
+	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
+		return unimplementedProvider{kind: kind}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
+	}
+}
+
+// NewProviderFromCredentials is NewProviderFromEnv's org-BYO sibling
+// (CHAOS-5006 PR3): constructs a Provider for kind from EXPLICIT
+// apiKey/baseURL/model values -- an org's own decrypted settings,
+// resolved by internal/llmorgsettings -- instead of reading environment
+// variables. This is the source-bound half of CHAOS-2550's invariant
+// (resolve_llm_credentials: never mix a platform key with an org
+// base_url or vice versa): a caller passes either ALL-env
+// (NewProviderFromEnv) or ALL-org (this function) values for one
+// construction, never a blend of the two.
+//
+// No generic-LLM_*-env-overrides-any-provider layering here (unlike
+// NewProviderFromEnv's firstNonEmptyEnv calls) -- apiKey/baseURL/model
+// are already the caller's fully-resolved final values; layering a
+// platform env override underneath them would silently reintroduce the
+// exact credential mixing CHAOS-2550 forbids.
+//
+// This function never logs, wraps, or interpolates apiKey/baseURL into
+// any returned error string -- see providerkind_credentials_test.go's
+// TestNewProviderFromCredentialsNeverLeaksSecretsInErrors, which fails
+// the whole suite if that guarantee is ever broken by a future edit
+// here.
+func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string) (Provider, error) {
+	switch kind {
+	case ProviderKindMock:
+		return MockProvider{}, nil
+
+	case ProviderKindNone:
+		return NoneProvider{}, nil
+
+	case ProviderKindOpenAI:
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
+		}
+		return NewOpenAIProvider(OpenAIProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+			Model:   model,
+		}), nil
+
+	case ProviderKindLocal:
+		// Same as NewProviderFromEnv's own comment: an empty base_url is
+		// not an error for "local" -- NewLocalProvider applies Ollama's
+		// default endpoint fallback regardless of where the (empty)
+		// value came from.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	case ProviderKindOllama:
+		// codex round 3 (#2234), P1: an org's stored "ollama" base_url
+		// follows Python's own contract -- local.py's OllamaProvider is a
+		// LocalProvider subclass, OpenAI-compatible /v1/chat/completions,
+		// defaulting to "http://localhost:11434/v1" (local.py:42,:283-298)
+		// -- NOT the native /api/chat wire protocol NewOllamaProvider
+		// speaks. Routing org-BYO "ollama" through NewOllamaProvider (as
+		// this case originally did, mirroring NewProviderFromEnv below for
+		// symmetry) sends a `/v1`-shaped stored base_url to the wrong path
+		// (".../v1/api/chat", a 404) and breaks every completion.
+		// NewProviderFromEnv's own ProviderKindOllama case is NOT changed
+		// here: it predates this PR (CHAOS-4978/#2189, already shipped on
+		// main) and has the SAME mismatch for an operator-set
+		// OLLAMA_BASE_URL/LLM_BASE_URL ending in /v1 -- team-lead's ruling
+		// was to fix org-BYO's newly-reachable path now and track the
+		// platform-env path as its own follow-up (see RISK NOTES in this
+		// PR's body for the ticket), not to re-litigate #2189's shipped
+		// decision here. The asymmetry between this case and
+		// NewProviderFromEnv's is therefore deliberate and temporary, not
+		// an oversight.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
 

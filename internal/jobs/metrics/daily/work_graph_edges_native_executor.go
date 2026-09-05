@@ -151,18 +151,29 @@ func (executor *WorkGraphEdgesExecutor) ComputeFamily(
 	// the whole function; that refactor is wrong. Keep the condition explicit.
 	written := 0
 
-	partial := func(err error) (int, error) { return wrapWorkGraphEdgesPartialWrite(written, err) }
+	// `step` is POSITIONAL, not a literal at each call site. Inserting a fourth
+	// write in the middle renumbers everything after it automatically, so the
+	// message cannot drift out of step with the code. A literal index would go
+	// stale silently -- a wrong "2 of 3" still reads as a plausible error.
+	// (lane-port-review-bench raised this on the shared mechanism; their own
+	// writer derives the index from a loop, mine from this counter, and both
+	// derive the TOTAL rather than writing it down.)
+	step := 0
+	partial := func(err error) (int, error) { return wrapWorkGraphEdgesPartialWrite(written, step, err) }
 
+	step++
 	writtenReviews, err := WriteWorkGraphPRReviewOutcomeEdges(ctx, executor.conn, result.ReviewOutcomeEdges, computedAt)
 	written += writtenReviews
 	if err != nil {
 		return partial(err)
 	}
+	step++
 	writtenDeployments, err := WriteWorkGraphPRDeploymentEdges(ctx, executor.conn, result.PRDeploymentEdges, computedAt)
 	written += writtenDeployments
 	if err != nil {
 		return partial(err)
 	}
+	step++
 	writtenIncidents, err := WriteWorkGraphDeploymentIncidentEdges(ctx, executor.conn, result.DeploymentIncidentEdges, computedAt)
 	written += writtenIncidents
 	if err != nil {
@@ -273,10 +284,35 @@ func extractPerProvider(
 // TestWorkGraphEdgesPartialWriteGuardPinsBothDirections asserts each one -- a
 // test covering only the ErrPartialWrite path would still pass if ordinary
 // failures had quietly stopped failing open.
-func wrapWorkGraphEdgesPartialWrite(written int, err error) (int, error) {
-	if written > 0 {
-		return written, fmt.Errorf("%w: work_graph_edges wrote %d row(s) before failing: %w",
-			ErrPartialWrite, written, err)
+//
+// The message names the TABLE that failed and its position, because "a partial
+// write happened" is not actionable and "failed on write 2 of 3
+// (work_graph_pr_deployment_edges) after 1234 row(s) landed" is: it tells an
+// operator exactly how much duplication a fail-open re-drive would create and
+// where to look.
+func wrapWorkGraphEdgesPartialWrite(written, step int, err error) (int, error) {
+	if written == 0 {
+		return 0, err
 	}
-	return 0, err
+	// Derived from workGraphEdgesWriteOrder, never written down: len() is the
+	// total, and the name comes from the slice. The out-of-range branch is not
+	// defensive noise -- it is the one thing this design still needs a human
+	// for, namely adding the new table's NAME when a write is inserted, and it
+	// says so loudly instead of naming the wrong table or panicking in prod.
+	table := "UNREGISTERED TABLE -- workGraphEdgesWriteOrder is missing an entry"
+	if step >= 1 && step <= len(workGraphEdgesWriteOrder) {
+		table = workGraphEdgesWriteOrder[step-1]
+	}
+	return written, fmt.Errorf("%w: work_graph_edges failed on write %d of %d (%s) after %d row(s) landed: %w",
+		ErrPartialWrite, step, len(workGraphEdgesWriteOrder), table, written, err)
+}
+
+// workGraphEdgesWriteOrder is the write sequence, in order, and is the SINGLE
+// source of truth for both the table name and the total in a partial-write
+// message. Adding a write means adding its name here; nothing else needs
+// renumbering.
+var workGraphEdgesWriteOrder = [...]string{
+	"work_graph_pr_review_outcome_edges",
+	"work_graph_pr_deployment_edges",
+	"work_graph_deployment_incident_edges",
 }

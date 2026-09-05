@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -256,30 +257,44 @@ func buildDailyWorker(
 						handler.SetNativeFamilyObserver(nativeObserver)
 					}
 				}
+				// CHAOS-5078 codex r1 F3 fix: an `after` ORDERING failure
+				// (a genuine graph cycle, or a `after` name that does not
+				// exist in families.json) is a CONSTRUCTION-time contract
+				// defect, not a data condition to degrade around at
+				// runtime -- ErrFamilyOrderCycle/ErrFamilyOrderUnknown's own
+				// doc comments say exactly this ("failing loudly at startup
+				// is the only honest response"). Logging and continuing
+				// contradicted that: it left the daily worker family
+				// registered and running with EVERY native family silently
+				// diverted to the Python bridge, which is a much harder
+				// condition to notice in production than a construction
+				// failure that fails CI/deploy immediately. Mirrors the
+				// adapter/river-registration failures a few lines below,
+				// which already fail construction the same way.
 				if len(nativeFamilies) > 0 {
 					if err := handler.SetNativeFamilies(nativeFamilies); err != nil {
-						// families.json's ordering is unusable. Every family
-						// stays on the Python compatibility bridge -- the same
-						// degradation a refused executor already causes, and
-						// far safer than an order in which a reader precedes
-						// its writer.
 						logger.Error(
 							"native daily families NOT registered: families.json "+
-								"run order could not be derived. Every daily family "+
-								"stays on the Python compatibility bridge until this "+
-								"is fixed.",
+								"run order could not be derived; failing worker "+
+								"construction rather than silently degrading every "+
+								"native family to the Python compatibility bridge",
 							"error", err,
 						)
+						_ = clickhouseConnection.Close()
+						return workerFamily{}, fmt.Errorf("%w: %v", errWorkerDependencyUnavailable, err)
 					}
 				}
 				if len(postBridgeFamilies) > 0 {
 					if err := handler.SetPostBridgeNativeFamilies(postBridgeFamilies); err != nil {
 						logger.Error(
 							"post_bridge daily families NOT registered: families.json "+
-								"run order could not be derived. Those families stay on "+
-								"the Python compatibility bridge until this is fixed.",
+								"run order could not be derived; failing worker "+
+								"construction rather than silently degrading to the "+
+								"Python compatibility bridge",
 							"error", err,
 						)
+						_ = clickhouseConnection.Close()
+						return workerFamily{}, fmt.Errorf("%w: %v", errWorkerDependencyUnavailable, err)
 					}
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](

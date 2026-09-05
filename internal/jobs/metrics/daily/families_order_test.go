@@ -100,6 +100,32 @@ func TestFamilyRunOrderRefusesACycle(t *testing.T) {
 	}
 }
 
+// TestFamilyRunOrderRejectsCycleWithUnregisteredEndpoint is codex r1's F3 fix
+// (CHAOS-5078): before this fix, a cycle whose members are NOT all currently
+// registered was satisfied VACUOUSLY -- each edge touching an unregistered
+// endpoint is silently dropped before the registered-subset toposort ever
+// sees it, so `alpha after beta, beta after alpha` with only `alpha`
+// registered produced ordered=[alpha], err=nil, indistinguishable from a
+// families.json with no cycle at all. Since which families are registered
+// varies run to run (an executor construction failure removes one from the
+// registered set), a genuine JSON-authoring cycle could sit undetected until
+// the one run where every cycle member happened to construct successfully.
+// declaredGraphHasCycle now checks the FULL declared graph unconditionally,
+// so this is caught every run regardless of registration status.
+func TestFamilyRunOrderRejectsCycleWithUnregisteredEndpoint(t *testing.T) {
+	registry := Registry{Families: []Family{
+		{Name: "alpha", After: []string{"beta"}},
+		{Name: "beta", After: []string{"alpha"}},
+	}}
+	ordered, err := FamilyRunOrder(registry, []string{"alpha"})
+	if err == nil {
+		t.Fatalf("a cycle with one endpoint unregistered was linearised instead of refused: %v", ordered)
+	}
+	if !errors.Is(err, ErrFamilyOrderCycle) {
+		t.Errorf("got %v, want ErrFamilyOrderCycle", err)
+	}
+}
+
 // TestFamilyRunOrderRefusesAnUnknownDependency closes the fail-open a typo
 // would otherwise open: an `after` naming a family that does not exist imposes
 // NO constraint, so the JSON would still LOOK like a declared dependency while

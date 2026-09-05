@@ -115,12 +115,44 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 		if len(subjects) == 0 {
 			continue
 		}
+		// affected is captured BEFORE donors are merged into subjects below --
+		// a donor pulled in only to resolve a linked_issue TARGET's team is
+		// context, not a row this partition writes (mirrors the backstop's
+		// own affectedIDs/subjects split in ComputeOrg).
 		affected := make(map[string]struct{}, len(subjects))
 		for workItemID := range subjects {
 			affected[workItemID] = struct{}{}
 		}
+
+		// CHAOS-5078 codex r1 F1 fix: without this, derived.LinkedIssue stays
+		// permanently empty (NewGitHubWorkItemDerivationContext initializes it
+		// to an empty map and nothing else in this executor ever populated
+		// it) -- a work item whose ONLY attribution path is a linked donor
+		// issue resolved to unassigned. Mirrors ComputeOrg's own
+		// dependency-load -> donor-load -> BuildLinkedIssueIndex sequence,
+		// scoped to this repo's own subjects (dependency edges and donor
+		// subjects are gathered fresh per repo, same as loadPartitionSubjects
+		// itself is called fresh per repo).
+		dependencies, err := remaining.LoadWorkItemDependencyEdges(ctx, executor.conn, run.OrganizationID, subjects)
+		if err != nil {
+			return total, err
+		}
+		donorIDs, donorKeys := remaining.WorkItemAttributionDonorTargets(dependencies, subjects)
+		donors, err := remaining.LoadWorkItemDonorSubjects(ctx, executor.conn, run.OrganizationID, donorIDs, donorKeys)
+		if err != nil {
+			return total, err
+		}
+		for id, donor := range donors {
+			if _, exists := subjects[id]; !exists {
+				subjects[id] = donor
+			}
+		}
+		repoDerived := derived
+		linkedIssue, _, _ := repoDerived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
+		repoDerived.LinkedIssue = linkedIssue
+
 		rows := remaining.BuildWorkItemAttributionRows(
-			run.OrganizationID, computedAt, affected, subjects, derived,
+			run.OrganizationID, computedAt, affected, subjects, repoDerived,
 		)
 		if len(rows) == 0 {
 			continue

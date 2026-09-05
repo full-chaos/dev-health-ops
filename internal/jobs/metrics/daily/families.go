@@ -103,10 +103,78 @@ var ErrFamilyOrderUnknown = fmt.Errorf("families.json: `after` names an unknown 
 // constraint exists to sequence two families that both run, and a family that
 // is not running cannot be waited for. It is still validated against the full
 // registry, so a typo is caught even when the named family is not registered.
+//
+// CHAOS-5078 codex r1 F3 fix: a CYCLE in the DECLARED graph (families.json's
+// `after` edges among ALL families, regardless of which subset is registered
+// this run) is checked FIRST, unconditionally -- this is a JSON-authoring
+// defect and must be caught the same way every run, not only on the runs
+// where every cycle member happens to be registered. Before this fix, a
+// cycle whose members were not ALL registered was satisfied vacuously (each
+// edge touching an unregistered endpoint was silently dropped before the
+// registered-subset toposort ever saw it), so it produced NO error at all --
+// indistinguishable from a families.json with no cycle. Since which
+// families are registered can vary run to run (an executor construction
+// failure removes one from `names`), a families.json cycle could sit
+// undetected until the one run where every member happened to construct
+// successfully, at which point it would BLOCK ordering only then.
+func declaredGraphHasCycle(registry Registry) ([]string, bool) {
+	full := make(map[string][]string, len(registry.Families))
+	for _, family := range registry.Families {
+		full[family.Name] = append([]string(nil), family.After...)
+	}
+	remaining := make([]string, 0, len(registry.Families))
+	for _, family := range registry.Families {
+		remaining = append(remaining, family.Name)
+	}
+	sort.Strings(remaining)
+	done := make(map[string]struct{}, len(remaining))
+	for len(remaining) > 0 {
+		progressed := false
+		for index, name := range remaining {
+			ready := true
+			for _, dependency := range full[name] {
+				if _, satisfied := done[dependency]; !satisfied {
+					ready = false
+					break
+				}
+			}
+			if !ready {
+				continue
+			}
+			done[name] = struct{}{}
+			remaining = append(remaining[:index], remaining[index+1:]...)
+			progressed = true
+			break
+		}
+		if !progressed {
+			return remaining, true
+		}
+	}
+	return nil, false
+}
+
 func FamilyRunOrder(registry Registry, names []string) ([]string, error) {
 	known := make(map[string]struct{}, len(registry.Families))
 	for _, family := range registry.Families {
 		known[family.Name] = struct{}{}
+	}
+	// Unknown-name check runs FIRST and unconditionally, before the
+	// declared-graph cycle check below -- an `after` entry naming a family
+	// absent from the WHOLE registry would otherwise also look unresolvable
+	// to declaredGraphHasCycle's toposort (its dependency's `done` flag can
+	// never be set, since that name is not among the registry's own
+	// families either), which would misreport it as ErrFamilyOrderCycle
+	// instead of the more specific, more actionable ErrFamilyOrderUnknown.
+	for _, family := range registry.Families {
+		for _, after := range family.After {
+			if _, ok := known[after]; !ok {
+				return nil, fmt.Errorf("%w: %q lists %q", ErrFamilyOrderUnknown, family.Name, after)
+			}
+		}
+	}
+	if unresolved, cyclic := declaredGraphHasCycle(registry); cyclic {
+		return nil, fmt.Errorf("%w: unresolvable among %v (declared graph, independent of "+
+			"which families are registered this run)", ErrFamilyOrderCycle, unresolved)
 	}
 	registered := make(map[string]struct{}, len(names))
 	for _, name := range names {
@@ -116,9 +184,6 @@ func FamilyRunOrder(registry Registry, names []string) ([]string, error) {
 	dependencies := make(map[string][]string, len(names))
 	for _, family := range registry.Families {
 		for _, after := range family.After {
-			if _, ok := known[after]; !ok {
-				return nil, fmt.Errorf("%w: %q lists %q", ErrFamilyOrderUnknown, family.Name, after)
-			}
 			if _, ok := registered[family.Name]; !ok {
 				continue
 			}

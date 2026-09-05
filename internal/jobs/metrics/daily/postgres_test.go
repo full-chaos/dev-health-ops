@@ -1,6 +1,9 @@
 package daily
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestDailyRepositoryPartitionSizeEnvKeyIsTheCoordinatedCHAOS4264Contract
 // pins the exact env key and default CHAOS-4263 and CHAOS-4264 (bridge-runner
@@ -72,5 +75,71 @@ func TestPostSyncAndScheduledFanoutGenerationPrefixesAreDisjoint(t *testing.T) {
 	if !isScheduledFanoutGeneration(scheduled) || isPostSyncGeneration(scheduled) {
 		t.Fatalf("scheduled-fanout generation %q: isScheduledFanoutGeneration=%t isPostSyncGeneration=%t, want true/false",
 			scheduled, isScheduledFanoutGeneration(scheduled), isPostSyncGeneration(scheduled))
+	}
+}
+
+// TestManualDailyGenerationPrefixIsDisjointFromScheduledFanoutAndPostSync
+// pins that ManualDailyGenerationPrefix (CHAOS-5055) never overlaps the other
+// two deferred-discovery generation families. MaterializeScheduledFanout
+// accepts all three prefixes for a deferred-discovery run (codex adversarial
+// review round 1, P1: a manual `metrics daily-start` with no --repo-id used
+// to permanently fail materialization because its generation matched
+// neither of the other two) -- if ManualDailyGenerationPrefix ever collided
+// with ScheduledFanoutGenerationPrefix or postSyncGenerationPrefix, a manual
+// run could be misclassified as one of the other two triggers.
+func TestManualDailyGenerationPrefixIsDisjointFromScheduledFanoutAndPostSync(t *testing.T) {
+	manual := ManualDailyGenerationPrefix + "8f7004e018318490"
+	postSync := postSyncGenerationPrefix + "00000000-0000-4000-8000-000000000001"
+	scheduled := ScheduledFanoutGenerationPrefix + "2026-08-25T01:00:00Z"
+
+	if !isManualDailyGeneration(manual) || isScheduledFanoutGeneration(manual) || isPostSyncGeneration(manual) {
+		t.Fatalf("manual-daily generation %q: isManualDailyGeneration=%t isScheduledFanoutGeneration=%t isPostSyncGeneration=%t, want true/false/false",
+			manual, isManualDailyGeneration(manual), isScheduledFanoutGeneration(manual), isPostSyncGeneration(manual))
+	}
+	if isManualDailyGeneration(postSync) {
+		t.Fatalf("post-sync generation %q must not read as manual-daily", postSync)
+	}
+	if isManualDailyGeneration(scheduled) {
+		t.Fatalf("scheduled-fanout generation %q must not read as manual-daily", scheduled)
+	}
+}
+
+// TestManualDailyRunGenerationOutputSatisfiesIsManualDailyGeneration proves
+// the two halves of the CHAOS-5055 fix agree: ManualDailyRunGeneration (which
+// StartManualDailyRun's caller uses to build a real run's generation) must
+// always produce a value isManualDailyGeneration -- and therefore
+// MaterializeScheduledFanout -- accepts, or a real deferred-discovery manual
+// run would still permanently fail at materialization despite this file's
+// own predicate tests passing.
+func TestManualDailyRunGenerationOutputSatisfiesIsManualDailyGeneration(t *testing.T) {
+	generation := ManualDailyRunGeneration("00000000-0000-4000-8000-000000000001", "2026-08-26", nil)
+	if !isManualDailyGeneration(generation) {
+		t.Fatalf("ManualDailyRunGeneration(...) = %q, which isManualDailyGeneration rejects", generation)
+	}
+}
+
+// TestEscapeLikePrefixEscapesActualUnderscoresInTheScheduledFanoutPrefix is
+// the regression test for codex adversarial review round 3, P1:
+// HasSucceededRunForDay's coverage query restricts matches to
+// ScheduledFanoutGenerationPrefix/postSyncGenerationPrefix via LIKE, and
+// ScheduledFanoutGenerationPrefix itself contains literal underscores
+// ("fixed-schedule:daily_metrics_fanout:") -- LIKE's own wildcard for
+// "any single character" -- so an unescaped prefix would still match every
+// real fixed-schedule generation, but would ALSO silently accept an
+// impostor that substituted a different character in either underscore's
+// position. This proves the escaped form only matches the literal text.
+func TestEscapeLikePrefixEscapesActualUnderscoresInTheScheduledFanoutPrefix(t *testing.T) {
+	escaped := escapeLikePrefix(ScheduledFanoutGenerationPrefix)
+	if escaped == ScheduledFanoutGenerationPrefix {
+		t.Fatalf("escapeLikePrefix did not change a prefix containing literal underscores: %q", escaped)
+	}
+	if !strings.Contains(escaped, `\_`) {
+		t.Fatalf("escapeLikePrefix(%q) = %q, want the literal underscores escaped as \\_", ScheduledFanoutGenerationPrefix, escaped)
+	}
+	// postSyncGenerationPrefix ("post-sync:") has no wildcard characters, so
+	// escaping it is a genuine no-op -- pinning that the function does not
+	// spuriously alter a prefix that needs no escaping.
+	if got := escapeLikePrefix(postSyncGenerationPrefix); got != postSyncGenerationPrefix {
+		t.Fatalf("escapeLikePrefix(%q) = %q, want unchanged (no wildcard characters)", postSyncGenerationPrefix, got)
 	}
 }

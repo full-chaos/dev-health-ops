@@ -102,15 +102,19 @@ type dailyMetricsLeaseLabels struct {
 	Result DailyMetricsLeaseResult
 }
 
-// DailyMetricsRunTrigger identifies which of the two entry points created a
-// daily-metrics run: the nightly all-org fixed schedule, or a post-sync
-// re-drive for one completed sync (CHAOS-4263). The set is closed: those are
-// the only two callers of daily.PostgresStore's Start*RunTx methods.
+// DailyMetricsRunTrigger identifies which entry point created a
+// daily-metrics run: the nightly all-org fixed schedule, a post-sync
+// re-drive for one completed sync (CHAOS-4263), or an operator-triggered
+// `metrics daily-start` dispatch with deferred repository discovery
+// (CHAOS-5055). The set is closed to these three -- the only callers that
+// ever leave RepositoryDiscoveryRequired true for daily.PostgresStore's
+// Start*RunTx/StartManualDailyRun methods.
 type DailyMetricsRunTrigger string
 
 const (
 	DailyMetricsRunTriggerScheduledFanout DailyMetricsRunTrigger = "scheduled_fanout"
 	DailyMetricsRunTriggerPostSync        DailyMetricsRunTrigger = "post_sync"
+	DailyMetricsRunTriggerManual          DailyMetricsRunTrigger = "manual"
 )
 
 // DailyMetricsDiscoveryOutcome is the bounded result of resolving live
@@ -3908,9 +3912,9 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 // outcomes. Every series is pre-seeded so a scrape distinguishes "materialized
 // non-empty every time" from "discovery never runs for this trigger".
 func dailyMetricsDiscoverySeries() []dailyMetricsDiscoveryLabels {
-	series := make([]dailyMetricsDiscoveryLabels, 0, 6)
+	series := make([]dailyMetricsDiscoveryLabels, 0, 9)
 	for _, trigger := range []DailyMetricsRunTrigger{
-		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync,
+		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync, DailyMetricsRunTriggerManual,
 	} {
 		for _, outcome := range []DailyMetricsDiscoveryOutcome{
 			DailyMetricsDiscoveryOutcomeMaterialized, DailyMetricsDiscoveryOutcomeNoRepositories,

@@ -683,14 +683,27 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 // case a fixed-schedule catch-up is FOR), the day stays frozen at 0 anyway.
 // On a closed day, any succeeded partition -- 0 rows or not -- still counts:
 // a genuinely quiet closed day is real, terminal coverage.
+//
+// scope is the calling occurrence's OWN scope (CHAOS-5055, codex adversarial
+// review round 2, P1): capacity/recommendations have no "day" field in their
+// scope at all (COALESCE falls back to run.scope_key, which -- like every
+// other family -- is unconditionally the day), and an EXACT scope match
+// (remainingCoverageScopeFilter, shared with findManualBackfillBlocker) is
+// required so a per-team manual trigger's succeeded partition does not
+// falsely satisfy an all-teams scheduled occurrence's coverage check (or
+// vice versa) -- day alone was never enough to tell "this exact scope was
+// already computed" for these two families. Day-scoped families
+// (dora/complexity/release_impact/work_item_attribution) skip the scope
+// check entirely and keep their exact prior behavior.
 func (store *PostgresStore) HasSucceededPartition(
-	ctx context.Context, tx pgx.Tx, organizationID, family, day string,
+	ctx context.Context, tx pgx.Tx, organizationID, family, day string, scope json.RawMessage,
 ) (bool, error) {
 	if !store.valid() || tx == nil || !validUUID(organizationID) ||
 		family == "" || day == "" {
 		return false, ErrUnavailable
 	}
 	dayClosed := !dayIsOpen(day, store.now())
+	requireExactScope, scopeFilter := remainingCoverageScopeFilter(family, scope)
 	// run.status = 'succeeded', not just partition.status -- codex round 3:
 	// CompletePartition and CancelRun are separate statements, so a
 	// partition already marked succeeded whose run was (or is
@@ -704,9 +717,10 @@ SELECT EXISTS (
     WHERE run.org_id = $1::uuid AND run.family = $2
       AND run.status = 'succeeded'
       AND partition.status = 'succeeded'
-      AND partition.scope->>'day' = $3
+      AND coalesce(partition.scope->>'day', run.scope_key) = $3
+      AND (NOT $5 OR partition.scope = $6::jsonb)
       AND ($4 OR NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false))
-)`, organizationID, family, day, dayClosed).Scan(&exists)
+)`, organizationID, family, day, dayClosed, requireExactScope, scopeFilter).Scan(&exists)
 	if err != nil {
 		return false, ErrUnavailable
 	}

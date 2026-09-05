@@ -57,12 +57,24 @@ def _run_cli(*args: str, env_overrides: dict[str, str] | None = None):
 # requirement tokens expected to appear in the error message.
 _MISSING_CASES = [
     (("metrics", "compounding-risk"), ("ClickHouse", "organization")),
-    (("metrics", "daily"), ("ClickHouse",)),
-    (("metrics", "dora"), ("ClickHouse",)),
-    (("metrics", "complexity"), ("ClickHouse",)),
-    (("metrics", "release-impact"), ("ClickHouse",)),
+    # CHAOS-5055: daily/rebuild/dora/complexity/release-impact/capacity
+    # dispatch to dev-health-workerctl (worker/Postgres-scoped) instead of
+    # connecting to ClickHouse directly -- they need --org, not
+    # --analytics-db/CLICKHOUSE_URI. dora/complexity/release-impact/capacity
+    # also require --review-evidence at the argparse level now (uniform
+    # policy) -- supplied here so THIS test actually exercises the org
+    # preflight rather than tripping argparse's own required-flag error
+    # first.
+    (("metrics", "daily"), ("organization",)),
+    (("metrics", "dora", "--review-evidence", "x"), ("organization",)),
+    (("metrics", "complexity", "--review-evidence", "x"), ("organization",)),
+    (("metrics", "release-impact", "--review-evidence", "x"), ("organization",)),
+    (
+        ("metrics", "capacity", "--all-teams", "--review-evidence", "x"),
+        ("organization",),
+    ),
     (("metrics", "validate-flags"), ("ClickHouse",)),
-    (("metrics", "rebuild"), ("ClickHouse",)),
+    (("metrics", "rebuild"), ("organization",)),
     (("sync", "work-items"), ("ClickHouse",)),
     (
         ("audit", "completeness", "--db", "clickhouse://localhost"),
@@ -251,7 +263,9 @@ def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:
             "sqlite:///x.db",
         ),
         ("investment", "materialize", "--db", "sqlite:///x.db"),
-        ("metrics", "capacity", "--db", "sqlite:///x.db"),
+        # CHAOS-5055: `metrics capacity` no longer takes its own --db / reads
+        # a ClickHouse DSN directly -- it dispatches to dev-health-workerctl
+        # (org/team-scoped), so this case no longer applies here.
     ],
 )
 def test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly(

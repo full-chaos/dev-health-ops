@@ -1912,6 +1912,20 @@ async def run_daily_metrics_job(
         #     compute COULD be skipped, but is left unconditional to match the
         #     established file_hotspots precedent and keep the diff minimal.
         #
+        # CHAOS-4286: work_graph_edges has a native Go executor
+        # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
+        # the compute that produces these three lists is the SAME
+        # _extract_ai_workflow_for_day call that produces ai_workflow_runs /
+        # _artifact_edges / _issue_edges, and THOSE are still Python-owned
+        # (ai_workflow is CHAOS-4286's other half, not yet ported). So the
+        # extraction must stay unconditional; only the three edge writes below
+        # are gated.
+        #
+        # Safe because each of ai_review_outcome_edges, ai_pr_deployment_edges
+        # and ai_deployment_incident_edges is assigned once (:1696-1698) and
+        # read ONLY by its own write below -- verified by grep, not assumed.
+        skip_work_graph_edges_write = "work_graph_edges" in skip_families
+        #
         # Without these two gates the native executors and the unconditional
         # writes below would BOTH fire for every partition, doubling every row
         # in work_item_metrics_daily and work_item_user_metrics_daily (plain
@@ -1992,16 +2006,22 @@ async def run_daily_metrics_job(
                 s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
             if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
                 s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
-            if ai_review_outcome_edges and hasattr(
-                s, "write_work_graph_pr_review_outcome_edges"
+            if (
+                ai_review_outcome_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_pr_review_outcome_edges")
             ):
                 s.write_work_graph_pr_review_outcome_edges(ai_review_outcome_edges)
-            if ai_pr_deployment_edges and hasattr(
-                s, "write_work_graph_pr_deployment_edges"
+            if (
+                ai_pr_deployment_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_pr_deployment_edges")
             ):
                 s.write_work_graph_pr_deployment_edges(ai_pr_deployment_edges)
-            if ai_deployment_incident_edges and hasattr(
-                s, "write_work_graph_deployment_incident_edges"
+            if (
+                ai_deployment_incident_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_deployment_incident_edges")
             ):
                 s.write_work_graph_deployment_incident_edges(
                     ai_deployment_incident_edges

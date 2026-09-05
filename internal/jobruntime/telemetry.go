@@ -628,9 +628,9 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // carries the same consequence: unregistered means every observation for it is
 // refused, and the family's absence becomes invisible rather than counted.
 // "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), "benchmarking"
-// (CHAOS-4288), and "ai_impact" (CHAOS-4280) all added themselves the same
-// way as the families listed above.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact"}
+// (CHAOS-4288), "ai_impact" (CHAOS-4280), and "work_graph_edges" (CHAOS-4286)
+// all added themselves the same way as the families listed above.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

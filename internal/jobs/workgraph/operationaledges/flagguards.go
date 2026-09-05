@@ -175,7 +175,11 @@ type flagIdentity struct {
 // instead, via investment.RequireOrganizationScope in the two readers above,
 // the SAME deliberate divergence edges.Divergences documents for
 // _build_issue_issue_edges (CHAOS-4441 RequireOrganizationScope) -- one
-// scope guard, uniformly applied, not a second bespoke one.
+// scope guard, uniformly applied, not a second bespoke one. (codex round
+// chaos-4924-pr-a, finding 8: flagged as an unlisted divergence relative to
+// that round's prompt, which only enumerated the NULL-guard and batch-clock
+// ones -- confirmed pre-existing and already approved, not a new defect;
+// listed explicitly in the confirmation round's prompt going forward.)
 func BuildFlagGuardsEdges(
 	ctx context.Context, conn driver.Conn, organizationID string, now time.Time,
 ) ([]edges.Row, []FeatureFlagLinkRow, error) {

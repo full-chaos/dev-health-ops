@@ -17,13 +17,34 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
+// dateTimeSecondPrecision matches operational_edges.py's own placeholder
+// types EXACTLY: `{now:DateTime}`, `{from_date:DateTime}`, `{to_date:DateTime}`
+// -- plain DateTime (whole-second precision), never DateTime64. An earlier
+// version of this file bound these as DateTime64(6)/(3), preserving
+// sub-second precision Python's own query throws away at comparison time
+// (codex round chaos-4924-pr-a, finding 3: with now=...:00.9005 and
+// valid_to=...:00.5000, Python's DateTime-typed comparison truncates both
+// sides to the second and finds valid_to <= now false->true differently
+// than a DateTime64 comparison would). Comparing a DateTime64(6) column
+// against a DateTime-typed literal truncates the LITERAL to whole seconds,
+// not the column -- so the fix is the placeholder's declared TYPE, not
+// which precision the formatted string carries.
+const dateTimeSecondPrecision = "2006-01-02 15:04:05"
+
 // mappingConfidence and mappingProvenance mirror operational_edges.py's
 // _mapping_confidence/_mapping_provenance helpers.
-func mappingConfidence(raw *float64) float32 {
+// mappingConfidence returns full float64 precision, matching Python's own
+// comparison (`_mapping_confidence(row) > _mapping_confidence(current)` over
+// plain Python floats). Quantizing to float32 BEFORE this comparison (as an
+// earlier version of this function did) can flip a close-but-distinct pair
+// to a tie in Go while Python still sees a strict winner -- codex round
+// chaos-4924-pr-a, finding 1. The float32 narrowing edges.Row.Confidence
+// requires happens only at edge-construction time, in the caller.
+func mappingConfidence(raw *float64) float64 {
 	if raw == nil {
 		return 0
 	}
-	return float32(*raw)
+	return *raw
 }
 
 func mappingProvenance(source string) string {
@@ -74,8 +95,8 @@ func ReadServiceRepositoryMappings(
 
 	filters := []string{
 		"is_active = 1",
-		"(valid_from IS NULL OR valid_from <= {now:DateTime64(6, 'UTC')})",
-		"(valid_to IS NULL OR valid_to > {now:DateTime64(6, 'UTC')})",
+		"(valid_from IS NULL OR valid_from <= {now:DateTime})",
+		"(valid_to IS NULL OR valid_to > {now:DateTime})",
 	}
 	if repoID != nil {
 		filters = append(filters, "repo_id = {repo_id:UUID}")
@@ -86,7 +107,7 @@ func ReadServiceRepositoryMappings(
 
 	args := []any{
 		clickhouse.Named("org_id", organizationID),
-		clickhouse.Named("now", remaining.DateTime64Argument(now, remaining.DateTime64MicrosecondPrecision)),
+		clickhouse.Named("now", remaining.DateTime64Argument(now, dateTimeSecondPrecision)),
 	}
 	if repoID != nil {
 		args = append(args, clickhouse.Named("repo_id", repoID.String()))
@@ -155,12 +176,12 @@ func ReadIncidents(
 	filters := []string{"is_deleted = 0"}
 	args := []any{clickhouse.Named("org_id", organizationID)}
 	if fromDate != nil {
-		filters = append(filters, "started_at >= {from_date:DateTime64(3, 'UTC')}")
-		args = append(args, clickhouse.Named("from_date", remaining.DateTime64Argument(*fromDate, remaining.DateTime64MillisecondPrecision)))
+		filters = append(filters, "started_at >= {from_date:DateTime}")
+		args = append(args, clickhouse.Named("from_date", remaining.DateTime64Argument(*fromDate, dateTimeSecondPrecision)))
 	}
 	if toDate != nil {
-		filters = append(filters, "started_at <= {to_date:DateTime64(3, 'UTC')}")
-		args = append(args, clickhouse.Named("to_date", remaining.DateTime64Argument(*toDate, remaining.DateTime64MillisecondPrecision)))
+		filters = append(filters, "started_at <= {to_date:DateTime}")
+		args = append(args, clickhouse.Named("to_date", remaining.DateTime64Argument(*toDate, dateTimeSecondPrecision)))
 	}
 	query := "SELECT id, service_id, escalation_policy_id, started_at, source_url FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_incidents", filters, contract)
@@ -520,12 +541,12 @@ func ReadDeployments(
 		args = append(args, clickhouse.Named("repo_id", repoID.String()))
 	}
 	if fromDate != nil {
-		query += " AND deployed_at >= {from_date:DateTime64(3, 'UTC')}"
-		args = append(args, clickhouse.Named("from_date", remaining.DateTime64Argument(*fromDate, remaining.DateTime64MillisecondPrecision)))
+		query += " AND deployed_at >= {from_date:DateTime}"
+		args = append(args, clickhouse.Named("from_date", remaining.DateTime64Argument(*fromDate, dateTimeSecondPrecision)))
 	}
 	if toDate != nil {
-		query += " AND deployed_at <= {to_date:DateTime64(3, 'UTC')}"
-		args = append(args, clickhouse.Named("to_date", remaining.DateTime64Argument(*toDate, remaining.DateTime64MillisecondPrecision)))
+		query += " AND deployed_at <= {to_date:DateTime}"
+		args = append(args, clickhouse.Named("to_date", remaining.DateTime64Argument(*toDate, dateTimeSecondPrecision)))
 	}
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
@@ -662,6 +683,19 @@ func BuildOperationalIncidentEdges(
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
 	}
+	// Python's WorkGraphEdge.__post_init__ validates every edge's confidence
+	// (0.0-1.0) at CONSTRUCTION time, so a bad heuristicConfidence fails on
+	// the FIRST edge, before any ClickHouse write. This float32 parameter has
+	// already lost precision by the time it reaches this function (codex
+	// round chaos-4924-pr-a, finding 2: Go's type system cannot distinguish
+	// 1.00000001 from 1.0 the way Python's float64 comparison can), so this
+	// cannot reproduce Python's exact precision-sensitive rejection -- but it
+	// still catches a genuinely out-of-range value (NaN/Inf/outside [0,1])
+	// up front rather than deferring to WriteEdges, several edges deep into
+	// a batch, the way this function did before.
+	if err := edges.ValidateConfidence(heuristicConfidence); err != nil {
+		return nil, fmt.Errorf("heuristic confidence: %w", err)
+	}
 
 	// Reads below are ordered so every equality join against an org-scoped
 	// table is pushed into ClickHouse via a candidate-set WHERE/IN, rather
@@ -693,25 +727,35 @@ func BuildOperationalIncidentEdges(
 	}
 
 	// preferred_mappings: highest-confidence mapping per (service_id, repo_id).
+	// Iterated below in FIRST-SEEN order (preferredOrder), not map-range
+	// order: Python's dict preserves the order mappings was scanned in, but
+	// a bare `for range preferred` randomizes it on every run -- codex round
+	// chaos-4924-pr-a, finding 7.
 	type mappingKey struct {
 		serviceID string
 		repoID    uuid.UUID
 	}
 	preferred := make(map[mappingKey]MappingRow)
+	var preferredOrder []mappingKey
 	for _, m := range mappings {
 		if m.RepoID == nil || m.ServiceID == "" {
 			continue
 		}
 		key := mappingKey{serviceID: m.ServiceID, repoID: *m.RepoID}
-		if current, ok := preferred[key]; !ok || mappingConfidence(m.RelationshipConfidence) > mappingConfidence(current.RelationshipConfidence) {
+		current, exists := preferred[key]
+		if !exists {
+			preferredOrder = append(preferredOrder, key)
+		}
+		if !exists || mappingConfidence(m.RelationshipConfidence) > mappingConfidence(current.RelationshipConfidence) {
 			preferred[key] = m
 		}
 	}
 
 	b.serviceRepos = make(map[string][]uuid.UUID)
-	for key, m := range preferred {
+	for _, key := range preferredOrder {
+		m := preferred[key]
 		b.serviceRepos[key.serviceID] = append(b.serviceRepos[key.serviceID], key.repoID)
-		confidence := mappingConfidence(m.RelationshipConfidence)
+		confidence := float32(mappingConfidence(m.RelationshipConfidence))
 		evidence := strings.Join([]string{m.RelationshipProvenance, m.MappingKind, m.RuleID, m.SourceURL}, ":")
 		provider := m.Provider
 		if provider == "" {
@@ -737,7 +781,12 @@ func BuildOperationalIncidentEdges(
 		}
 	}
 
+	// incidentOrder preserves the `incidents` query's own row-scan order --
+	// Python's dict comprehension does the same implicitly (dict insertion
+	// order); a bare `for range b.incidentByID` below would randomize it on
+	// every run instead (codex round chaos-4924-pr-a, finding 7).
 	b.incidentByID = make(map[string]IncidentRow, len(incidents))
+	incidentOrder := make([]string, 0, len(incidents))
 	for _, inc := range incidents {
 		if repoID != nil {
 			// Python: `if repo_id is None or str(row.get("service_id") or "") in service_repos`
@@ -746,12 +795,9 @@ func BuildOperationalIncidentEdges(
 			}
 		}
 		b.incidentByID[inc.ID] = inc
+		incidentOrder = append(incidentOrder, inc.ID)
 	}
-
-	incidentIDs := make([]string, 0, len(b.incidentByID))
-	for id := range b.incidentByID {
-		incidentIDs = append(incidentIDs, id)
-	}
+	incidentIDs := incidentOrder
 
 	alerts, err := ReadAlerts(ctx, conn, organizationID, incidentIDs)
 	if err != nil {
@@ -790,7 +836,8 @@ func BuildOperationalIncidentEdges(
 		b.deploymentsByRepo[d.RepoID] = append(b.deploymentsByRepo[d.RepoID], d)
 	}
 
-	for incidentID, inc := range b.incidentByID {
+	for _, incidentID := range incidentOrder {
+		inc := b.incidentByID[incidentID]
 		eventAt := b.now
 		if inc.StartedAt != nil {
 			eventAt = *inc.StartedAt
@@ -861,11 +908,11 @@ func BuildOperationalIncidentEdges(
 	}
 	for _, t := range timeline {
 		b.appendDirect(t, edges.NodeTypeIncidentTimelineEvent, edges.EdgeTypeHasTimelineEvent)
-		b.appendUser(t)
+		b.appendUser(t, "actor_id")
 	}
 	for _, r := range responders {
 		b.appendDirect(r, edges.NodeTypeIncidentResponder, edges.EdgeTypeHasResponder)
-		b.appendUser(r)
+		b.appendUser(r, "user_id")
 	}
 
 	// Candidate sets for the work_items/repos reads: derived from the text
@@ -938,8 +985,7 @@ func BuildOperationalIncidentEdges(
 			if repoID != nil && prRepoID != *repoID {
 				continue
 			}
-			number := parsePRNumber(ref.Number)
-			prID := edges.GeneratePRID(prRepoID, number)
+			prID := edges.GeneratePRIDFromDigits(prRepoID, normalizeDigitsToASCII(ref.Number))
 			prRepoIDCopy := prRepoID
 			b.edge(
 				edges.NodeTypeIncident, row.IncidentID,
@@ -983,7 +1029,13 @@ func (b *incidentEdgeBuilder) appendDirect(row directRow, targetType, edgeType s
 	)
 }
 
-func (b *incidentEdgeBuilder) appendUser(row directRow) {
+// appendUser ports operational_edges.py's `_append_user(edges, row,
+// user_key, now)`. userKey is the SOURCE COLUMN NAME ("actor_id" for
+// timeline rows, "user_id" for responder rows) -- Python's fallback
+// evidence is `row.get("source_url") or user_key`, the field name itself,
+// not a fixed literal (codex round chaos-4924-pr-a, finding 6: this
+// previously hardcoded "assigned_at" for every caller).
+func (b *incidentEdgeBuilder) appendUser(row directRow, userKey string) {
 	if row.IncidentID == "" || row.PersonID == "" {
 		return
 	}
@@ -995,7 +1047,7 @@ func (b *incidentEdgeBuilder) appendUser(row directRow) {
 		edges.NodeTypeIncident, row.IncidentID,
 		edges.EdgeTypeAssignedTo,
 		edges.NodeTypeUser, row.PersonID,
-		edges.ProvenanceNative, 1.0, sourceURLOr(row.SourceURL, "assigned_at"),
+		edges.ProvenanceNative, 1.0, sourceURLOr(row.SourceURL, userKey),
 		nil, eventAt, nil,
 	)
 }
@@ -1005,15 +1057,4 @@ func concatRows(a, b []directRow) []directRow {
 	out = append(out, a...)
 	out = append(out, b...)
 	return out
-}
-
-func parsePRNumber(raw string) int {
-	n := 0
-	for _, r := range raw {
-		if r < '0' || r > '9' {
-			return n
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n
 }

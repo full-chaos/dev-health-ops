@@ -183,11 +183,12 @@ func workgraphBuildPreSteps(
 	if prCommitServiceErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	prCommitLinksStep, prCommitLinksStepErr := newPRCommitLinksPreStep(prCommitService)
+	prCommitSharedWindow := newSharedPRCommitWindow()
+	prCommitLinksStep, prCommitLinksStepErr := newPRCommitLinksPreStep(prCommitService, prCommitSharedWindow)
 	if prCommitLinksStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	prCommitEdgesStep, prCommitEdgesStepErr := newPRCommitEdgesPreStep(prCommitService)
+	prCommitEdgesStep, prCommitEdgesStepErr := newPRCommitEdgesPreStep(prCommitService, prCommitSharedWindow)
 	if prCommitEdgesStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}

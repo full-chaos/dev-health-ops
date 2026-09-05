@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 )
 
 // TestPRCommitStepNamesMatchDeclaredOrder pins the two ledger-evidence keys
@@ -12,16 +16,17 @@ import (
 // silently breaks the constructed-vs-declared refusal in
 // workgraphBuildPreSteps, which only compares strings.
 func TestPRCommitStepNamesMatchDeclaredOrder(t *testing.T) {
-	linksStep, err := newPRCommitLinksPreStep(nil)
+	shared := newSharedPRCommitWindow()
+	linksStep, err := newPRCommitLinksPreStep(nil, shared)
 	if err == nil {
-		t.Fatal("newPRCommitLinksPreStep(nil) should refuse a nil service")
+		t.Fatal("newPRCommitLinksPreStep(nil, ...) should refuse a nil service")
 	}
 	if linksStep != nil {
 		t.Fatal("refused construction must not return a non-nil step")
 	}
-	edgesStep, err := newPRCommitEdgesPreStep(nil)
+	edgesStep, err := newPRCommitEdgesPreStep(nil, shared)
 	if err == nil {
-		t.Fatal("newPRCommitEdgesPreStep(nil) should refuse a nil service")
+		t.Fatal("newPRCommitEdgesPreStep(nil, ...) should refuse a nil service")
 	}
 	if edgesStep != nil {
 		t.Fatal("refused construction must not return a non-nil step")
@@ -30,6 +35,67 @@ func TestPRCommitStepNamesMatchDeclaredOrder(t *testing.T) {
 	want := buildPreStepOrder()
 	if len(want) != 3 || want[1] != "pr_commit_links" || want[2] != "pr_commit_edges" {
 		t.Fatalf("buildPreStepOrder() = %v, want [issue_pr_links pr_commit_links pr_commit_edges]", want)
+	}
+}
+
+// TestSharedPRCommitWindowGivesEdgesTheExactLinksWindow is the regression test
+// for codex round chaos-5264-pr-r1's P1 (EXECUTED repro): each step calling
+// prCommitWindowFor with its OWN time.Now, independently, at whatever instant
+// its Run() happened to execute, let the default `from` bound drift between
+// the two steps by however long elapsed between them -- a commit landing in
+// that sliver got a link but never an edge, permanently, since the window
+// only narrows further on later runs. This pins that both steps now use the
+// SAME window for one claim, regardless of how much wall-clock time passes
+// between their two Run() calls.
+func TestSharedPRCommitWindowGivesEdgesTheExactLinksWindow(t *testing.T) {
+	shared := newSharedPRCommitWindow()
+	requestID := "req-1"
+
+	linksNow := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	linksWindow, err := prCommitWindowFor(nil, func() time.Time { return linksNow })
+	if err != nil {
+		t.Fatalf("prCommitWindowFor: %v", err)
+	}
+	shared.store(requestID, linksWindow)
+
+	// Simulate real time elapsing before the edges step runs -- the exact
+	// condition that produced the drift.
+	edgesWindow, ok := shared.take(requestID)
+	if !ok {
+		t.Fatal("shared.take should find the window pr_commit_links stored")
+	}
+	if edgesWindow.From == nil || !edgesWindow.From.Equal(*linksWindow.From) {
+		t.Fatalf("edges window.From = %v, want the exact links window.From %v", edgesWindow.From, linksWindow.From)
+	}
+	if edgesWindow.To == nil || !edgesWindow.To.Equal(*linksWindow.To) {
+		t.Fatalf("edges window.To = %v, want the exact links window.To %v", edgesWindow.To, linksWindow.To)
+	}
+
+	// The entry must be consumed, not merely readable twice -- see take's doc
+	// on why (unbounded map growth across the worker's lifetime otherwise).
+	if _, ok := shared.take(requestID); ok {
+		t.Fatal("shared.take should consume the entry; a second take for the same claim found one")
+	}
+}
+
+// TestPRCommitEdgesPreStepFailsLoudlyWhenNoSharedWindowExists pins the
+// fail-loud requirement (chris's 15:30 ruling, via team-lead, on the
+// chaos-5264-pr-r1 P1 fix): if pr_commit_edges somehow runs for a claim
+// pr_commit_links never processed, it must refuse with an error naming the
+// request id and org -- NOT silently recompute its own window, which would
+// reintroduce the exact drift defect this type exists to close.
+func TestPRCommitEdgesPreStepFailsLoudlyWhenNoSharedWindowExists(t *testing.T) {
+	shared := newSharedPRCommitWindow()
+	step := &prCommitEdgesPreStep{service: nil, shared: shared}
+
+	_, err := step.Run(context.Background(), workgraph.Claim{
+		Request: workgraph.Request{ID: "no-such-claim", OrganizationID: "org-a"},
+	})
+	if err == nil {
+		t.Fatal("Run must refuse when no shared window was stored for this claim")
+	}
+	if !strings.Contains(err.Error(), "no-such-claim") || !strings.Contains(err.Error(), "org-a") {
+		t.Fatalf("error should name the request id and org for diagnosis, got: %v", err)
 	}
 }
 

@@ -167,4 +167,3 @@ func Derive(inputs Inputs) Result {
 	}
 	return result
 }
-

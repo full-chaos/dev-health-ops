@@ -270,46 +270,6 @@
       "pr_number": 34,
       "provenance": "explicit_text",
       "repo_id": "11111111-1111-1111-1111-111111111111"
-    },
-    {
-      "commit_hash": "c-zero-confidence",
-      "confidence": 0.0,
-      "evidence": "seeded",
-      "last_synced": "2026-09-02T00:00:00Z",
-      "org_id": "org-a-11111111",
-      "pr_number": 100,
-      "provenance": "explicit_text",
-      "repo_id": "11111111-1111-1111-1111-111111111111"
-    },
-    {
-      "commit_hash": "c-falsy-author-when",
-      "confidence": 0.6,
-      "evidence": "seeded",
-      "last_synced": "2026-09-02T00:00:00Z",
-      "org_id": "org-a-11111111",
-      "pr_number": 101,
-      "provenance": "heuristic",
-      "repo_id": "11111111-1111-1111-1111-111111111111"
-    },
-    {
-      "commit_hash": "c-unrecognized-provenance",
-      "confidence": 0.5,
-      "evidence": "seeded",
-      "last_synced": "2026-09-02T00:00:00Z",
-      "org_id": "org-a-11111111",
-      "pr_number": 102,
-      "provenance": "some_future_kind",
-      "repo_id": "11111111-1111-1111-1111-111111111111"
-    },
-    {
-      "commit_hash": "c-no-matching-commit",
-      "confidence": 0.9,
-      "evidence": "seeded",
-      "last_synced": "2026-09-02T00:00:00Z",
-      "org_id": "org-a-11111111",
-      "pr_number": 103,
-      "provenance": "explicit_text",
-      "repo_id": "11111111-1111-1111-1111-111111111111"
     }
   ],
   "schema": "pr_commit_python_golden_v1"

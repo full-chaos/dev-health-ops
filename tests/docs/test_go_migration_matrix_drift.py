@@ -860,7 +860,8 @@ def test_load_finalize_write_calls_allows_a_destructured_target_never_called(
     synthetic.write_text(
         "def run_daily_metrics_finalize():\n"
         "    pairs = {}\n"
-        "    for k, v in pairs.items():\n"
+        "    pair_source = []\n"
+        "    for k, v in pair_source:\n"
         "        pairs[k] = v\n"
         "    _write_compounding_risk_team_rows_for_day()\n"
     )

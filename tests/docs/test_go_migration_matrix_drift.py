@@ -840,3 +840,37 @@ def test_load_finalize_write_calls_allows_a_subscript_or_attribute_target(
         )
     finally:
         setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_allows_a_destructured_target_never_called(
+    tmp_path,
+) -> None:
+    """Positive control for the final F1 design: a destructured `for k, v
+    in ...:` loop target is real, common code (job_daily.py:
+    `for k, v in ... if k in team_metrics_field_names`) that never calls
+    `k` or `v` bare. Refusing the moment a destructuring pattern EXISTS,
+    regardless of whether any of its names are ever called, was tried
+    first and broke on exactly this shape -- it must instead be tracked
+    as unresolvable and only refuse if a later bare call actually reaches
+    it (see the sibling rejects_a_r3_destructured_for_alias test for that
+    case).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    pairs = {}\n"
+        "    for k, v in pairs.items():\n"
+        "        pairs[k] = v\n"
+        "    _write_compounding_risk_team_rows_for_day()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls wrongly refused a destructured "
+            f"for-loop target that is never called bare: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)

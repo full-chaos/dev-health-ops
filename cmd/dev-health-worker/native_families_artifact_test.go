@@ -375,7 +375,7 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 8
+// control: pins the exact 5-native/2-compat remaining split and the 9
 // native + 4 post_bridge daily split,
 // so a future accidental wiring change is caught here even if someone forgot
 // to regenerate the artifact (that case is ALSO caught by the drift test
@@ -395,6 +395,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-4279: review_edges is pre_bridge, not post_bridge -- both its
+		// inputs are RAW SYNC tables, not another daily family's output, so
+		// nothing in this partition has to run before it.
+		"review_edges",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

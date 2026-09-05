@@ -498,6 +498,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// inputs are RAW SYNC tables, not another daily family's output, so
 		// nothing in this partition has to run before it.
 		"review_edges",
+		// CHAOS-4286: work_graph_edges is pre_bridge for the same reason --
+		// every input is a raw sync table plus the shared incident
+		// projection, so nothing else in the partition has to precede it.
+		"work_graph_edges",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

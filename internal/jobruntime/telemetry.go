@@ -637,7 +637,10 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), and
 // "benchmarking" (CHAOS-4288) all added themselves the same way as the
 // families listed above.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ic_finalize"}
+//
+// "work_graph_edges" (CHAOS-4286) added itself the same way as the families
+// listed above.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "work_graph_edges", "ic_finalize"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

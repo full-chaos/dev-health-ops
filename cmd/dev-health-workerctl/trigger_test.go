@@ -519,9 +519,9 @@ func TestManualTriggerNamespacesDifferFromAutomaticProducers(t *testing.T) {
 
 	const generation = "shared-generation-string:" + validTriggerOrg + ":2026-01-01:2026-01-31"
 	namespaces := map[string]uuid.UUID{
-		"manualWorkGraphTrigger":  manualWorkGraphTriggerNamespace,
-		"manualInvestmentTrigger": manualInvestmentTriggerNamespace,
-		"postSyncFanout":          postSyncFanoutNamespace,
+		"manualWorkGraphTrigger":          manualWorkGraphTriggerNamespace,
+		"manualInvestmentTrigger":         manualInvestmentTriggerNamespace,
+		"postSyncFanout":                  postSyncFanoutNamespace,
 		"scheduledFanoutOccurrenceDomain": occurrenceDomainNamespace,
 	}
 	ids := make(map[string]string, len(namespaces))

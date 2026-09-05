@@ -27,26 +27,12 @@ Rebuild uses the same shadow-table pattern as migrations 027/042/055
     1. SHOW CREATE TABLE to get the live DDL.
     2. Rewrite DDL: rename to ``release_impact_daily_new``, swap the engine to
        ``ReplacingMergeTree(computed_at)``.
-    3. PROJECTION GUARD (new in 088, not present in 055): ClickHouse rejects
-       merges on a ReplacingMergeTree table that has projections unless
-       ``deduplicate_merge_projection_mode`` is set away from its default
-       ``throw`` (error code 344, `PROJECTION_NOT_SUPPORTED_WITH_REPLACING_
-       MERGE_TREE`-shaped). release_impact_daily has never had a projection
-       added in migration history (checked: only 034 touches this table, no
-       ALTER ... ADD PROJECTION anywhere), but a live cluster can drift from
-       its migration history, so this migration CHECKS system.projections at
-       run time rather than trusting that audit. If any projection exists on
-       the shadow, its mode is set to ``drop`` -- not ``rebuild`` -- because
-       nothing in the read path (checked alongside the CHAOS-4536 audit) is
-       known to depend on a projection here, so cheaply invalidating stale
-       projection data on a conflicting merge is preferable to paying to
-       re-materialize it during a migration window.
-    4. Verify via system.tables that the shadow is ReplacingMergeTree AND that
+    3. Verify via system.tables that the shadow is ReplacingMergeTree AND that
        its sorting key is byte-for-byte the original key -- abort (dropping
        the shadow) on any mismatch.
-    5. INSERT INTO release_impact_daily_new SELECT * FROM release_impact_daily
+    4. INSERT INTO release_impact_daily_new SELECT * FROM release_impact_daily
        (snapshot copy).
-    6. Verify the distinct sorting-key tuple count matches between original
+    5. Verify the distinct sorting-key tuple count matches between original
        and shadow. PLUS A CALLER-SIDE count() CROSS-CHECK (new in 088): 055's
        ``_distinct_key_count`` reads ``uniqExact(...)`` and returns 0 whenever
        the result set comes back empty, which is indistinguishable from "the
@@ -56,13 +42,22 @@ Rebuild uses the same shadow-table pattern as migrations 027/042/055
        tables and fails closed if the raw row count says data exists but the
        distinct-key read claimed zero -- so a masked read failure cannot hide
        behind an empty-looking comparison.
-    7. EXCHANGE TABLES release_impact_daily AND release_impact_daily_new
+    6. EXCHANGE TABLES release_impact_daily AND release_impact_daily_new
        (atomic swap).
-    8. CATCH-UP: INSERT INTO release_impact_daily SELECT * FROM
+    7. CATCH-UP: INSERT INTO release_impact_daily SELECT * FROM
        release_impact_daily_new -- the shadow now holds the OLD table,
-       including rows written between snapshot (5) and swap (7). Re-inserting
+       including rows written between snapshot (4) and swap (6). Re-inserting
        is idempotent under RMT.
-    9. DROP TABLE release_impact_daily_new -- only after catch-up succeeded.
+    8. DROP TABLE release_impact_daily_new -- only after catch-up succeeded.
+
+NO PROJECTION GUARD: team-lead ruled DDL-history evidence sufficient (checked
+2026-09-05 -- only migration 034 ever touches this table, no
+``ALTER ... ADD PROJECTION`` anywhere in history) and explicitly declined a
+``deduplicate_merge_projection_mode`` setting for 088. If a projection is ever
+added to this table out-of-band, the FIRST background merge after this
+migration would fail with ClickHouse error code 344 -- a loud, immediate
+failure, not silent corruption, so this is a deliberate scope cut, not an
+oversight.
 
 Crash convergence: identical to 055 -- a crash after EXCHANGE but before
 catch-up/DROP leaves the main table already ReplacingMergeTree, so a rerun
@@ -201,46 +196,6 @@ def _row_count(client, table: str) -> int:
     return int(rows[0][0]) if rows and rows[0] else 0
 
 
-def _projection_names(client, table: str) -> list[str]:
-    """List projections on ``table``, scoped to currentDatabase()."""
-    res = client.query(
-        "SELECT name FROM system.projections "
-        "WHERE database = currentDatabase() AND table = {t:String}",
-        parameters={"t": table},
-    )
-    rows = getattr(res, "result_rows", None) or []
-    return [str(r[0]) for r in rows]
-
-
-def _guard_projection_merge_mode(client, table: str) -> None:
-    """Set deduplicate_merge_projection_mode='drop' if `table` has projections.
-
-    ClickHouse refuses to merge a ReplacingMergeTree table that carries a
-    projection while this setting is still its default (`throw`, error code
-    344). release_impact_daily has no projection anywhere in migration
-    history, but this checks the LIVE catalog rather than trusting that audit
-    -- a projection added by hand or by a tool outside the migration runner
-    would otherwise turn the very first background merge after this migration
-    into a hard failure.
-
-    `drop` over `rebuild`: nothing in the read path is known to depend on a
-    projection existing on this table, so invalidating stale projection data
-    on a conflicting merge is the cheap-and-safe choice; `rebuild` would pay
-    to re-materialize a projection nothing reads.
-    """
-    projections = _projection_names(client, table)
-    if not projections:
-        return
-    log.warning(
-        f"  {table}: {len(projections)} projection(s) found ({', '.join(projections)}) "
-        f"-- setting deduplicate_merge_projection_mode='drop' so ReplacingMergeTree "
-        f"merges do not fail with code 344"
-    )
-    client.command(
-        f"ALTER TABLE `{table}` MODIFY SETTING deduplicate_merge_projection_mode = 'drop'"
-    )
-
-
 def _catch_up_and_drop(client, table: str, shadow: str) -> None:
     """Post-EXCHANGE catch-up: re-insert the old table's rows, then drop it."""
     log.info(f"  {table}: catch-up copy of post-snapshot writes from `{shadow}`")
@@ -296,10 +251,6 @@ def _rebuild_table(client, table: str, shadow: str) -> None:
                 f"{table}: shadow sorting key changed during engine swap "
                 f"(expected {old_key!r}, got {shadow_key!r}); aborting"
             )
-
-        # Projection guard runs BEFORE any data lands in the shadow, so the
-        # setting is in place before the shadow could ever be merged.
-        _guard_projection_merge_mode(client, shadow)
 
         log.info(f"  {table}: copying data")
         client.command(f"INSERT INTO `{shadow}` SELECT * FROM `{table}`")

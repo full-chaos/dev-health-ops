@@ -6,12 +6,14 @@ Against a fake client (no database needed), covering:
    post-EXCHANGE catch-up, and crash convergence from a leftover shadow;
 2. the sorting-key fail-closed check aborts (and drops the shadow) on a key
    mismatch;
-3. the PROJECTION GUARD (new in 088): a projection on the source table makes
-   the migration set deduplicate_merge_projection_mode='drop' on the shadow
-   before any data lands in it; no projection means no ALTER at all;
-4. the caller-side count() cross-check (new in 088): a distinct-key read that
+3. the caller-side count() cross-check (new in 088): a distinct-key read that
    comes back 0 while the table actually holds rows aborts the migration
    instead of trusting a misleading 0==0 comparison.
+
+No projection guard: team-lead ruled DDL-history evidence (only migration 034
+ever touches this table) sufficient and declined a
+deduplicate_merge_projection_mode setting for 088, so there is nothing to test
+here -- see the module docstring in 088 itself.
 """
 
 from __future__ import annotations
@@ -74,13 +76,11 @@ class FakeClient:
         tables: dict[str, dict[str, str]],
         *,
         created_sorting_key: str = OLD_KEY,
-        projections: dict[str, list[str]] | None = None,
         distinct_key_counts: dict[str, int] | None = None,
         row_counts: dict[str, int] | None = None,
     ) -> None:
         self.tables = {name: dict(spec) for name, spec in tables.items()}
         self.created_sorting_key = created_sorting_key
-        self.projections = projections or {}
         self.distinct_key_counts = distinct_key_counts or {}
         self.row_counts = row_counts or {}
         self.commands: list[str] = []
@@ -95,10 +95,6 @@ class FakeClient:
             return _FakeResult([[spec["sorting_key"]]] if spec else [])
         if "count() FROM system.columns" in query:
             return _FakeResult([[1]])
-        if "name FROM system.projections" in query:
-            assert parameters is not None
-            names = self.projections.get(parameters["t"], [])
-            return _FakeResult([[n] for n in names])
         if query.startswith("SHOW CREATE TABLE"):
             name = query.split("`")[1]
             return _FakeResult([[self.tables[name]["ddl"]]])
@@ -195,35 +191,6 @@ def test_sorting_key_mismatch_aborts_and_drops_shadow(migration) -> None:
         migration._rebuild_table(client, TABLE, SHADOW)
     assert f"EXCHANGE TABLES `{TABLE}` AND `{SHADOW}`" not in client.commands
     assert SHADOW not in client.tables
-
-
-# ---------------------------------------------------------------------------
-# 088-specific: projection guard
-# ---------------------------------------------------------------------------
-
-
-def test_no_projection_means_no_mode_alter(migration) -> None:
-    client = FakeClient({TABLE: {"ddl": OLD_DDL, "sorting_key": OLD_KEY}})
-    migration._rebuild_table(client, TABLE, SHADOW)
-    assert not any("deduplicate_merge_projection_mode" in c for c in client.commands)
-
-
-def test_projection_present_sets_drop_mode_before_copy(migration) -> None:
-    client = FakeClient(
-        {TABLE: {"ddl": OLD_DDL, "sorting_key": OLD_KEY}},
-        projections={SHADOW: ["release_ref_idx"]},
-    )
-    migration._rebuild_table(client, TABLE, SHADOW)
-
-    alter_cmd = f"ALTER TABLE `{SHADOW}` MODIFY SETTING deduplicate_merge_projection_mode = 'drop'"
-    assert alter_cmd in client.commands
-    alter_index = client.commands.index(alter_cmd)
-    copy_index = client.commands.index(
-        f"INSERT INTO `{SHADOW}` SELECT * FROM `{TABLE}`"
-    )
-    assert alter_index < copy_index, (
-        "the mode must be set before any data (and merge) lands in the shadow"
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -36,9 +36,25 @@ type Conn interface {
 // goes through the same dedup form as the rolling loader, for the same reason:
 // user_metrics_daily is append-only, so a raw read mixes superseded
 // generations.
+//
+// SELECTS EVERY COLUMN THIS FAMILY DOES NOT ITSELF DERIVE, not just the ones
+// its own math needs (CHAOS-5151's third scan defect). repouser's own write
+// (internal/jobs/metrics/daily/repouser/clickhouse.go) is the authority for
+// this column list -- it is the SAME table row, read back here before this
+// family re-writes it with only the IC-derived fields changed. Reading a
+// narrower set here is exactly how the previous version silently dropped
+// commits_count/files_changed/avg_commit_size_loc/etc. to zero on write: a
+// column this query does not select cannot be carried through by
+// writeUserMetrics no matter what that function does with what it has.
 const gitMetricsSQL = `
 SELECT author_email, team_id, repo_id, loc_added, loc_deleted, prs_authored, prs_merged,
-       median_pr_cycle_hours, pr_cycle_p90_hours
+       median_pr_cycle_hours, pr_cycle_p90_hours,
+       commits_count, files_changed, large_commits_count, avg_commit_size_loc,
+       avg_pr_cycle_hours, pr_cycle_p75_hours, prs_with_first_review,
+       pr_first_review_p50_hours, pr_first_review_p90_hours, pr_review_time_p50_hours,
+       pr_pickup_time_p50_hours, reviews_given, changes_requested_given,
+       reviews_received, review_reciprocity, pr_interruption_load,
+       context_spread_count, review_request_load, team_name, active_hours, weekend_days
 FROM (
     SELECT *
     FROM user_metrics_daily
@@ -133,15 +149,47 @@ func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day 
 		// every downstream sum/merge in this package (and MergeICUserMetrics'
 		// SUM aggregation) actually wants.
 		var locAdded, locDeleted, prsAuthored, prsMerged uint32
+		// Same class again for the pass-through columns: commits_count,
+		// files_changed, large_commits_count, prs_with_first_review,
+		// reviews_given, changes_requested_given, reviews_received,
+		// pr_interruption_load, context_spread_count and review_request_load
+		// are all UInt32; weekend_days is UInt8. avg_commit_size_loc,
+		// avg_pr_cycle_hours, pr_cycle_p75_hours, review_reciprocity and
+		// active_hours are plain Float64 and scan directly. The four
+		// pr_*_p50/p90_hours columns are Nullable(Float64), matching the
+		// *float64 fields declared on GitUserMetric -- same pattern
+		// repouser.UserMetric already uses for the identical columns.
+		var commitsCount, filesChanged, largeCommitsCount, prsWithFirstReview uint32
+		var reviewsGiven, changesRequestedGiven, reviewsReceived uint32
+		var prInterruptionLoad, contextSpreadCount, reviewRequestLoad uint32
+		var weekendDays uint8
 		if err := rows.Scan(&metric.AuthorEmail, &metric.TeamID, &metric.RepoID, &locAdded,
 			&locDeleted, &prsAuthored, &prsMerged,
-			&metric.MedianPRCycleHours, &metric.PRCycleP90Hours); err != nil {
+			&metric.MedianPRCycleHours, &metric.PRCycleP90Hours,
+			&commitsCount, &filesChanged, &largeCommitsCount, &metric.AvgCommitSizeLOC,
+			&metric.AvgPRCycleHours, &metric.PRCycleP75Hours, &prsWithFirstReview,
+			&metric.PRFirstReviewP50Hours, &metric.PRFirstReviewP90Hours, &metric.PRReviewTimeP50Hours,
+			&metric.PRPickupTimeP50Hours, &reviewsGiven, &changesRequestedGiven,
+			&reviewsReceived, &metric.ReviewReciprocity, &prInterruptionLoad,
+			&contextSpreadCount, &reviewRequestLoad, &metric.TeamName, &metric.ActiveHours, &weekendDays,
+		); err != nil {
 			return nil, err
 		}
 		metric.LOCAdded = int64(locAdded)
 		metric.LOCDeleted = int64(locDeleted)
 		metric.PRsAuthored = int64(prsAuthored)
 		metric.PRsMerged = int64(prsMerged)
+		metric.CommitsCount = int64(commitsCount)
+		metric.FilesChanged = int64(filesChanged)
+		metric.LargeCommitsCount = int64(largeCommitsCount)
+		metric.PRsWithFirstReview = int64(prsWithFirstReview)
+		metric.ReviewsGiven = int64(reviewsGiven)
+		metric.ChangesRequestedGiven = int64(changesRequestedGiven)
+		metric.ReviewsReceived = int64(reviewsReceived)
+		metric.PRInterruptionLoad = int64(prInterruptionLoad)
+		metric.ContextSpreadCount = int64(contextSpreadCount)
+		metric.ReviewRequestLoad = int64(reviewRequestLoad)
+		metric.WeekendDays = int64(weekendDays)
 		metrics = append(metrics, metric)
 	}
 	return metrics, rows.Err()
@@ -176,10 +224,26 @@ func (executor *Executor) loadWorkItemMetrics(ctx context.Context, orgID string,
 	return metrics, rows.Err()
 }
 
+// userMetricsInsertSQL writes every column of user_metrics_daily, not just the
+// ones this family derives (CHAOS-5151's third scan defect, see GitUserMetric's
+// doc comment). This is the SAME table row repouser already wrote once per
+// partition; the pass-through columns here must be repouser's own write list
+// (internal/jobs/metrics/daily/repouser/clickhouse.go) or a redrive silently
+// zeros commits_count/files_changed/avg_commit_size_loc/etc. to their
+// ClickHouse table default on the newly-inserted, later-computed_at row --
+// which then WINS the dedup read every downstream consumer uses.
 const userMetricsInsertSQL = `INSERT INTO user_metrics_daily (
     repo_id, day, author_email, identity_id, team_id, loc_touched,
     prs_opened, work_items_completed, work_items_active, delivery_units,
-    cycle_p50_hours, cycle_p90_hours, computed_at, org_id)`
+    cycle_p50_hours, cycle_p90_hours, computed_at, org_id,
+    commits_count, loc_added, loc_deleted, files_changed, large_commits_count,
+    avg_commit_size_loc, prs_authored, prs_merged, avg_pr_cycle_hours,
+    median_pr_cycle_hours, pr_cycle_p75_hours, pr_cycle_p90_hours,
+    prs_with_first_review, pr_first_review_p50_hours, pr_first_review_p90_hours,
+    pr_review_time_p50_hours, pr_pickup_time_p50_hours, reviews_given,
+    changes_requested_given, reviews_received, review_reciprocity,
+    pr_interruption_load, context_spread_count, review_request_load,
+    team_name, active_hours, weekend_days)`
 
 const landscapeInsertSQL = `INSERT INTO ic_landscape_rolling_30d (
     repo_id, as_of_day, identity_id, team_id, map_name,
@@ -209,7 +273,7 @@ var landscapeRepoID = uuid.UUID{}
 // landscape input is a READBACK of the user-metrics write, so the two halves
 // cannot be reordered or run independently.
 func (executor *Executor) computeForDay(
-	ctx context.Context, orgID string, day time.Time, teamMap map[string]string,
+	ctx context.Context, orgID string, day time.Time, resolveTeam TeamResolver,
 ) (int, error) {
 	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
 	if err != nil {
@@ -220,7 +284,7 @@ func (executor *Executor) computeForDay(
 		return 0, err
 	}
 
-	merged := MergeICUserMetrics(gitMetrics, workItems, teamMap)
+	merged := MergeICUserMetrics(gitMetrics, workItems, resolveTeam)
 	computedAt := executor.now()
 	written, err := executor.writeUserMetrics(ctx, orgID, day, computedAt, merged)
 	if err != nil {
@@ -231,8 +295,24 @@ func (executor *Executor) computeForDay(
 	if err != nil {
 		return written, err
 	}
+	// ComputeLandscape's own team_map is a fallback used only when a stat row's
+	// OWN team_id is empty (compute_ic.py's `if not team_id: team_id =
+	// team_map.get(identity, "unassigned")`), unlike MergeICUserMetrics'
+	// override semantics above -- but it is resolved through the same
+	// TeamResolver, built here per rolling-stat identity rather than passed a
+	// pre-built map, for the same reason MergeICUserMetrics takes the resolver
+	// directly: identity normalization stays inside the resolver's own
+	// implementation.
+	landscapeTeams := map[string]string{}
+	if resolveTeam != nil {
+		for _, stat := range stats {
+			if mapped, ok := resolveTeam(stat.IdentityID); ok && mapped != "" {
+				landscapeTeams[stat.IdentityID] = mapped
+			}
+		}
+	}
 	landscapeWritten, err := executor.writeLandscape(
-		ctx, orgID, day, computedAt, ComputeLandscape(stats, teamMap))
+		ctx, orgID, day, computedAt, ComputeLandscape(stats, landscapeTeams))
 	if err != nil {
 		return written, err
 	}
@@ -264,11 +344,24 @@ func (executor *Executor) writeUserMetrics(
 			// diverges.
 			repoID = SynthesizedRepoID(orgID, metric.IdentityID)
 		}
+		pass := metric.PassThrough
 		if err := batch.Append(
 			repoID, day, metric.IdentityID, metric.IdentityID, metric.TeamID,
 			metric.LOCTouched, metric.PRsOpened, metric.WorkItemsComplete,
 			metric.WorkItemsActive, metric.DeliveryUnits,
 			metric.CycleP50Hours, metric.CycleP90Hours, computedAt, orgID,
+			uint32(pass.CommitsCount), uint32(pass.LOCAdded), uint32(pass.LOCDeleted),
+			uint32(pass.FilesChanged), uint32(pass.LargeCommitsCount),
+			pass.AvgCommitSizeLOC, uint32(pass.PRsAuthored), uint32(pass.PRsMerged),
+			pass.AvgPRCycleHours, pass.MedianPRCycleHours, pass.PRCycleP75Hours,
+			pass.PRCycleP90Hours, uint32(pass.PRsWithFirstReview),
+			pass.PRFirstReviewP50Hours, pass.PRFirstReviewP90Hours,
+			pass.PRReviewTimeP50Hours, pass.PRPickupTimeP50Hours,
+			uint32(pass.ReviewsGiven), uint32(pass.ChangesRequestedGiven),
+			uint32(pass.ReviewsReceived), pass.ReviewReciprocity,
+			uint32(pass.PRInterruptionLoad), uint32(pass.ContextSpreadCount),
+			uint32(pass.ReviewRequestLoad), pass.TeamName, pass.ActiveHours,
+			uint8(pass.WeekendDays),
 		); err != nil {
 			return 0, err
 		}
@@ -305,13 +398,37 @@ func (executor *Executor) writeLandscape(
 	return len(records), nil
 }
 
-// TeamMapper resolves identity -> team, mirroring Python's load_team_map().
-// Injected rather than read here so the executor has one reason to fail.
-type TeamMapper func(ctx context.Context) (map[string]string, error)
+// TeamResolver resolves one identity -> team_id, mirroring
+// `team_map.get(identity)` inside compute_ic.py's per-identity loop. ok is
+// false exactly when Python's `.get()` would have returned None (no entry),
+// which MergeICUserMetrics treats identically to a false/empty mapped value:
+// the git record's own team_id survives.
+type TeamResolver func(identity string) (teamID string, ok bool)
 
-// SetTeamMapper wires the resolver. A nil mapper means an empty map, which is
-// the reference's behaviour when load_team_map() returns nothing: identities
-// fall through to "unassigned" rather than the family failing.
+// TeamMapper builds a TeamResolver scoped to one organization, mirroring
+// Python's load_team_map() -- itself backed by a per-process global resolver
+// that is effectively org-scoped by construction (a single deployment serves
+// one org's team config at a time). Returning a RESOLVER rather than a
+// pre-built map keeps identity normalization (case/whitespace) inside the
+// resolver's own implementation instead of requiring every caller to
+// replicate it correctly against a hand-built map's keys.
+//
+// CHAOS-5151's fourth defect: this used to be `func(ctx) (map[string]string,
+// error)` -- no org parameter at all -- wired via SetTeamMapper, which
+// nothing in cmd/dev-health-worker/daily.go ever called. teamMapper was
+// therefore always nil and every identity silently fell through to its
+// git-backed team_id (typically "unassigned"), regardless of real team
+// ownership. Injected as a function value (built once, at construction, from
+// a live per-call ClickHouse read) rather than a stored map, so a single
+// Executor instance shared across CONCURRENT finalize runs for different
+// organizations never mutates shared state per call -- see
+// ic_finalize_native_executor.go's wiring.
+type TeamMapper func(ctx context.Context, orgID string) (TeamResolver, error)
+
+// SetTeamMapper wires the resolver-builder. A nil mapper means an empty
+// TeamResolver, which is the reference's behaviour when load_team_map()
+// returns nothing: identities fall through to "unassigned" rather than the
+// family failing.
 func (executor *Executor) SetTeamMapper(mapper TeamMapper) { executor.teamMapper = mapper }
 
 // ComputeFinalizeFamily implements daily.NativeFinalizeFamilyExecutor.
@@ -321,15 +438,15 @@ func (executor *Executor) SetTeamMapper(mapper TeamMapper) { executor.teamMapper
 // place removes any chance of computing a day for the wrong org. computeForDay
 // keeps the explicit form for tests.
 func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScope) (int, error) {
-	teamMap := map[string]string{}
+	var resolveTeam TeamResolver
 	if executor.teamMapper != nil {
-		resolved, err := executor.teamMapper(ctx)
+		resolved, err := executor.teamMapper(ctx, run.OrganizationID)
 		if err != nil {
 			return 0, err
 		}
-		teamMap = resolved
+		resolveTeam = resolved
 	}
-	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamMap)
+	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, resolveTeam)
 }
 
 // RunScope is the subset of daily.Run this package needs. Declaring it here

@@ -46,6 +46,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // -----------------------------------------------------------------------
@@ -203,15 +205,22 @@ func median(values []float64) float64 {
 	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
+// mean ports Python's `sum(queues) / len(queues)`
+// (compute_testops.py:203's avg_queue_seconds).
+//
+// pythonparity.Sum is LOAD-BEARING, not a stylistic preference (CHAOS-4284):
+// since CPython 3.12 (gh-100425) the builtin sum() applies NEUMAIER
+// COMPENSATED summation to floats, and a `sum += value` loop is not
+// equivalent -- internal/pythonparity/sum.go measures the two disagreeing on
+// 3,202 of 20,000 random 2-8 element inputs (16%). The naive loop that used
+// to live here was a real Python-parity defect that CHAOS-4294's pipeline
+// oracle fixture was too benign to catch; testops_risk consumes the same
+// ComputePipelineMetrics and inherits the correction.
 func mean(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
-	var sum float64
-	for _, value := range values {
-		sum += value
-	}
-	return sum / float64(len(values))
+	return pythonparity.Sum(values) / float64(len(values))
 }
 
 // percentile mirrors compute.py's module-level _percentile: linear
@@ -413,50 +422,107 @@ func safeDurationSeconds(queuedAt *time.Time, startedAt time.Time, finishedAt *t
 // "" service_id, both sorting as "") keep Python's dict's own
 // insertion-order tie-break instead of an arbitrary one.
 func ComputePipelineMetrics(repoID uuid.UUID, rows []PipelineRunRow, repoName string, resolver RepoTeamResolver) []PipelineMetric {
-	type bucket struct {
-		pipelines, success, failure, cancelled, reruns int
-		durations, queues                              []float64
-		orgID                                          string
-	}
-	type key struct {
-		teamID       string // "" means unresolved (Python None) -- see doc comment: never ambiguous with a real value post-resolution.
-		serviceSet   bool
-		serviceValue string
-	}
-	byGroup := make(map[key]*bucket)
-	var order []key
+	accumulator := NewPipelineAccumulator(repoID, repoName, resolver)
 	for _, row := range rows {
-		resolvedTeam := resolveRepoTeam(row.TeamID, repoName, resolver)
-		k := key{teamID: derefStr(resolvedTeam)}
-		if row.ServiceID != nil {
-			k.serviceSet = true
-			k.serviceValue = *row.ServiceID
-		}
-		b, ok := byGroup[k]
-		if !ok {
-			b = &bucket{orgID: row.OrgID}
-			byGroup[k] = b
-			order = append(order, k)
-		}
-		b.pipelines++
-		switch normalizePipelineStatus(row.Status) {
-		case "success":
-			b.success++
-		case "failure":
-			b.failure++
-		case "cancelled":
-			b.cancelled++
-		}
-		if row.RetryCount > 0 {
-			b.reruns++
-		}
-		if d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, false); d != nil {
-			b.durations = append(b.durations, *d)
-		}
-		if q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true); q != nil {
-			b.queues = append(b.queues, *q)
-		}
+		accumulator.Add(row)
 	}
+	return accumulator.Finish()
+}
+
+// pipelineBucket/pipelineKey are PipelineAccumulator's per-group state --
+// formerly locals inside ComputePipelineMetrics, hoisted unchanged.
+type pipelineBucket struct {
+	pipelines, success, failure, cancelled, reruns int
+	durations, queues                              []float64
+	orgID                                          string
+}
+
+type pipelineKey struct {
+	teamID       string // "" means unresolved (Python None) -- see ComputePipelineMetrics's doc comment: never ambiguous with a real value post-resolution.
+	serviceSet   bool
+	serviceValue string
+}
+
+// PipelineAccumulator is ComputePipelineMetrics in streaming form
+// (CHAOS-4284): Add one row at a time, Finish once.
+//
+// # Why this exists
+//
+// The native testops_pipeline family reads ci_pipeline_runs straight off a
+// ClickHouse cursor and must NOT materialise the whole day's rows first --
+// that materialisation, plus the 200k DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS cap
+// bolted on to bound it, is the choke this ticket removes. Per row this
+// keeps only O(1) counters plus at most two float64s, so a repo with an
+// arbitrarily large CI day costs bytes, not gigabytes, and needs no cap.
+//
+// ComputePipelineMetrics above is now a thin wrapper over this type, so the
+// slice API and the streaming API are IDENTICAL BY CONSTRUCTION rather than
+// by a second implementation kept in sync by hand -- which is what lets the
+// existing live-Python oracles (compute_test.go, ci/check_go.sh's
+// live-python-oracles verb) keep covering the streaming path with no
+// weakening. Do not reimplement Add's body anywhere else.
+type PipelineAccumulator struct {
+	repoID   uuid.UUID
+	repoName string
+	resolver RepoTeamResolver
+	byGroup  map[pipelineKey]*pipelineBucket
+	order    []pipelineKey
+}
+
+// NewPipelineAccumulator takes the same repoName/resolver contract as
+// ComputePipelineMetrics: pass "", nil when there is no resolver.
+func NewPipelineAccumulator(repoID uuid.UUID, repoName string, resolver RepoTeamResolver) *PipelineAccumulator {
+	return &PipelineAccumulator{
+		repoID:   repoID,
+		repoName: repoName,
+		resolver: resolver,
+		byGroup:  make(map[pipelineKey]*pipelineBucket),
+	}
+}
+
+// Add folds one ci_pipeline_runs row into its (resolved team_id, raw
+// service_id) group. Rows are expected pre-scoped to one (org, repo, day) by
+// the caller, exactly as ComputePipelineMetrics expects them.
+func (accumulator *PipelineAccumulator) Add(row PipelineRunRow) {
+	resolvedTeam := resolveRepoTeam(row.TeamID, accumulator.repoName, accumulator.resolver)
+	k := pipelineKey{teamID: derefStr(resolvedTeam)}
+	if row.ServiceID != nil {
+		k.serviceSet = true
+		k.serviceValue = *row.ServiceID
+	}
+	b, ok := accumulator.byGroup[k]
+	if !ok {
+		b = &pipelineBucket{orgID: row.OrgID}
+		accumulator.byGroup[k] = b
+		accumulator.order = append(accumulator.order, k)
+	}
+	b.pipelines++
+	switch normalizePipelineStatus(row.Status) {
+	case "success":
+		b.success++
+	case "failure":
+		b.failure++
+	case "cancelled":
+		b.cancelled++
+	}
+	if row.RetryCount > 0 {
+		b.reruns++
+	}
+	if d := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.DurationSeconds, false); d != nil {
+		b.durations = append(b.durations, *d)
+	}
+	if q := safeDurationSeconds(row.QueuedAt, row.StartedAt, row.FinishedAt, row.QueueSeconds, true); q != nil {
+		b.queues = append(b.queues, *q)
+	}
+}
+
+// Finish emits the groups in Python's sorted (team_id, service_id) order.
+// Safe to call on an accumulator that received no rows (returns an empty,
+// non-nil slice, same as ComputePipelineMetrics on empty input).
+func (accumulator *PipelineAccumulator) Finish() []PipelineMetric {
+	repoID := accumulator.repoID
+	byGroup := accumulator.byGroup
+	order := accumulator.order
 	sort.SliceStable(order, func(i, j int) bool {
 		if order[i].teamID != order[j].teamID {
 			return order[i].teamID < order[j].teamID
@@ -519,42 +585,153 @@ func ComputeTestMetrics(
 	repoID uuid.UUID, suites []SuiteRow, cases []CaseRow, historicalFailedNames map[string]struct{},
 	repoName string, resolver RepoTeamResolver,
 ) []TestMetric {
-	if len(suites) == 0 && len(cases) == 0 {
+	accumulator := NewTestAccumulator(repoID, repoName, resolver)
+	for _, suite := range suites {
+		accumulator.AddSuite(suite)
+	}
+	for _, c := range cases {
+		accumulator.AddCaseRow(c)
+	}
+	return accumulator.Finish(historicalFailedNames)
+}
+
+// CaseGroup is one case_name's REDUCED form: the distinct RAW status strings
+// seen for it and the largest retry_attempt. It is the unit the native
+// testops_test reader gets back from ClickHouse
+// (`groupUniqArray(status)`, `max(retry_attempt)`, `GROUP BY case_name`)
+// instead of one struct per test_case_results row.
+//
+// Statuses are RAW, un-normalised, on purpose (CHAOS-4284): normalising in
+// SQL would mean reproducing Python's `str.strip().lower()` in ClickHouse,
+// and the two disagree -- str.strip() removes unicode whitespace, while
+// ClickHouse's trim and RE2's \s do not. Normalisation therefore stays in Go,
+// on these raw strings, through the same normalizeTestStatus the row-at-a-time
+// path uses, so no new parity surface is opened.
+type CaseGroup struct {
+	CaseName string
+	Statuses []string
+	MaxRetry uint32
+}
+
+// TestAccumulator is ComputeTestMetrics in streaming form (CHAOS-4284).
+//
+// # Why this exists
+//
+// test_case_results is THE allocation choke this ticket removes: the Python
+// loader (and today's Go row loader) materialise every case row for the day
+// -- ~1M rows for repo 920f9442 once CHAOS-5045's 5x re-ingestion is counted
+// -- only to reduce them to a per-case_name status set. This type accepts
+// EITHER shape and produces identical output:
+//
+//   - AddCaseRow: one raw row at a time (what ComputeTestMetrics above feeds
+//     it, and what the live-Python oracles exercise).
+//   - AddCaseGroup: one already-reduced CaseGroup, which is what the native
+//     executor feeds it after ClickHouse has done the reduction.
+//
+// Both funnel into the same caseStatuses/retry/currentFailedNames state, so
+// the pushdown path cannot drift from the oracle-proved path by construction.
+// The integration differential (testops_native_integration_test.go) proves
+// the two agree row-exactly against a real ClickHouse anyway.
+type TestAccumulator struct {
+	repoID   uuid.UUID
+	repoName string
+	resolver RepoTeamResolver
+
+	suites                                             []SuiteRow
+	totalCases, passedCount, failedCount, skippedCount int
+	quarantinedCount                                   int
+	suiteDurations                                     []float64
+	caseStatuses                                       map[string]map[string]struct{}
+	caseHasRetry                                       map[string]bool
+	currentFailedNames                                 map[string]struct{}
+	sawCaseRow                                         bool
+}
+
+// NewTestAccumulator takes the same repoName/resolver contract as
+// ComputeTestMetrics: pass "", nil when there is no resolver.
+func NewTestAccumulator(repoID uuid.UUID, repoName string, resolver RepoTeamResolver) *TestAccumulator {
+	return &TestAccumulator{
+		repoID:             repoID,
+		repoName:           repoName,
+		resolver:           resolver,
+		caseStatuses:       make(map[string]map[string]struct{}),
+		caseHasRetry:       make(map[string]bool),
+		currentFailedNames: make(map[string]struct{}),
+	}
+}
+
+// AddSuite folds one test_suite_results row in. Suites are retained (they are
+// bounded by CI runs x suites/run, not by case count) because Finish needs
+// len(suites) for total_suites and suites[0] as the representative row for
+// team_id/service_id/org_id -- exactly Python's `first_suite`.
+func (accumulator *TestAccumulator) AddSuite(row SuiteRow) {
+	accumulator.suites = append(accumulator.suites, row)
+	accumulator.totalCases += int(row.TotalCount)
+	accumulator.passedCount += int(row.PassedCount)
+	accumulator.failedCount += int(row.FailedCount) + int(row.ErrorCount)
+	accumulator.skippedCount += int(row.SkippedCount)
+	accumulator.quarantinedCount += int(row.QuarantinedCount)
+	if row.DurationSeconds != nil && *row.DurationSeconds >= 0 {
+		accumulator.suiteDurations = append(accumulator.suiteDurations, *row.DurationSeconds)
+	}
+}
+
+// AddCaseRow folds one raw test_case_results row in, reproducing Python's
+// `if not case_name: continue` skip.
+func (accumulator *TestAccumulator) AddCaseRow(row CaseRow) {
+	accumulator.sawCaseRow = true
+	accumulator.observeCase(row.CaseName, []string{derefStr(row.Status)}, row.RetryAttempt)
+}
+
+// AddCaseGroup folds one ClickHouse-reduced CaseGroup in. Equivalent to
+// calling AddCaseRow for every row that fed the group: the status SET and the
+// "any retry_attempt > 0" predicate are the only things the compute reads, and
+// a set union plus a max reproduce both exactly.
+func (accumulator *TestAccumulator) AddCaseGroup(group CaseGroup) {
+	accumulator.sawCaseRow = true
+	accumulator.observeCase(group.CaseName, group.Statuses, group.MaxRetry)
+}
+
+func (accumulator *TestAccumulator) observeCase(caseName string, rawStatuses []string, maxRetry uint32) {
+	if caseName == "" {
+		return
+	}
+	statuses := accumulator.caseStatuses[caseName]
+	if statuses == nil {
+		statuses = make(map[string]struct{})
+		accumulator.caseStatuses[caseName] = statuses
+	}
+	for index := range rawStatuses {
+		raw := rawStatuses[index]
+		normalized := normalizeTestStatus(&raw)
+		statuses[normalized] = struct{}{}
+		if normalized == "failed" {
+			accumulator.currentFailedNames[caseName] = struct{}{}
+		}
+	}
+	if maxRetry > 0 {
+		accumulator.caseHasRetry[caseName] = true
+	}
+}
+
+// Finish emits the single per-repo record, or nil when this repo had neither
+// suites nor cases (Python's `if not repo_suites and not repo_cases:
+// continue`). historicalFailedNames is the CHAOS-4350-PR2 SQL-aggregate input.
+func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]struct{}) []TestMetric {
+	if len(accumulator.suites) == 0 && !accumulator.sawCaseRow {
 		return nil
 	}
-	var totalCases, passedCount, failedCount, skippedCount, quarantinedCount int
-	var suiteDurations []float64
-	for _, s := range suites {
-		totalCases += int(s.TotalCount)
-		passedCount += int(s.PassedCount)
-		failedCount += int(s.FailedCount) + int(s.ErrorCount)
-		skippedCount += int(s.SkippedCount)
-		quarantinedCount += int(s.QuarantinedCount)
-		if s.DurationSeconds != nil && *s.DurationSeconds >= 0 {
-			suiteDurations = append(suiteDurations, *s.DurationSeconds)
-		}
-	}
+	repoID := accumulator.repoID
+	suites := accumulator.suites
+	totalCases := accumulator.totalCases
+	passedCount := accumulator.passedCount
+	failedCount := accumulator.failedCount
+	skippedCount := accumulator.skippedCount
+	quarantinedCount := accumulator.quarantinedCount
+	suiteDurations := accumulator.suiteDurations
+	caseStatuses := accumulator.caseStatuses
+	currentFailedNames := accumulator.currentFailedNames
 
-	caseStatuses := make(map[string]map[string]struct{})
-	retryAttemptsByCase := make(map[string]map[uint32]struct{})
-	currentFailedNames := make(map[string]struct{})
-	for _, c := range cases {
-		if c.CaseName == "" {
-			continue
-		}
-		normalized := normalizeTestStatus(c.Status)
-		if caseStatuses[c.CaseName] == nil {
-			caseStatuses[c.CaseName] = make(map[string]struct{})
-		}
-		caseStatuses[c.CaseName][normalized] = struct{}{}
-		if retryAttemptsByCase[c.CaseName] == nil {
-			retryAttemptsByCase[c.CaseName] = make(map[uint32]struct{})
-		}
-		retryAttemptsByCase[c.CaseName][c.RetryAttempt] = struct{}{}
-		if normalized == "failed" {
-			currentFailedNames[c.CaseName] = struct{}{}
-		}
-	}
 	distinctCases := len(caseStatuses)
 	var flakeCases, retryDependentCases int
 	for name, statuses := range caseStatuses {
@@ -563,13 +740,8 @@ func ComputeTestMetrics(
 		if hasPassed && hasFailed {
 			flakeCases++
 		}
-		if hasPassed {
-			for attempt := range retryAttemptsByCase[name] {
-				if attempt > 0 {
-					retryDependentCases++
-					break
-				}
-			}
+		if hasPassed && accumulator.caseHasRetry[name] {
+			retryDependentCases++
 		}
 	}
 	recurrentFailures := 0
@@ -606,7 +778,7 @@ func ComputeTestMetrics(
 		metric.FailureRecurrence = float64(recurrentFailures) / float64(len(currentFailedNames))
 	}
 	if first != nil {
-		metric.TeamID = resolveRepoTeam(first.TeamID, repoName, resolver)
+		metric.TeamID = resolveRepoTeam(first.TeamID, accumulator.repoName, accumulator.resolver)
 		metric.ServiceID = first.ServiceID
 		metric.OrgID = first.OrgID
 	}

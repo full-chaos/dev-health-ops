@@ -19,8 +19,36 @@ type ICFinalizeExecutor struct {
 
 // NewICFinalizeExecutor builds the adapter. conn is the ClickHouse connection
 // the family reads back from and writes through.
+//
+// Wires a real team resolver (CHAOS-5151's fourth defect: SetTeamMapper
+// previously had no caller at all, so every identity fell through to its
+// git-backed team_id, typically "unassigned", regardless of real team
+// ownership). Reuses team_wellbeing's own, already-tested
+// LoadWellbeingTeams + NewMemberResolver (wellbeing_native_clickhouse.go) --
+// the SAME production query Python's load_team_resolver_from_store is built
+// from -- rather than inventing a second identity->team path.
+//
+// The mapper is set ONCE here, at construction, not per finalize call: the
+// closure it wires takes orgID as an explicit parameter and does a fresh,
+// independent ClickHouse read on every invocation, so concurrent
+// ComputeFinalizeFamily calls for DIFFERENT organizations sharing this one
+// Executor instance never mutate shared state -- only icfinalize.Executor's
+// own `teamMapper` field is written, and that write happens exactly once,
+// before any concurrent read of it can occur.
 func NewICFinalizeExecutor(conn icfinalize.Conn) *ICFinalizeExecutor {
-	return &ICFinalizeExecutor{inner: icfinalize.NewExecutor(conn)}
+	inner := icfinalize.NewExecutor(conn)
+	inner.SetTeamMapper(func(ctx context.Context, orgID string) (icfinalize.TeamResolver, error) {
+		teams, err := LoadWellbeingTeams(ctx, conn, orgID)
+		if err != nil {
+			return nil, err
+		}
+		resolver := NewMemberResolver(teams)
+		return func(identity string) (string, bool) {
+			teamID, _ := resolver.ResolveMember(identity)
+			return teamID, teamID != ""
+		}, nil
+	})
+	return &ICFinalizeExecutor{inner: inner}
 }
 
 // ComputeFinalizeFamily implements NativeFinalizeFamilyExecutor.

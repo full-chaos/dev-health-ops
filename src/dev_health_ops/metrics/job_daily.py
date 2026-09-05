@@ -1136,8 +1136,22 @@ async def run_daily_metrics_job(
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
-    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
+    ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
+    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
+    chaos-4280-r3, finding 5 -- this doc had not been updated when
+    ``ai_impact`` was wired below); naming any other family here has no
+    effect.
+
+    The three CHAOS-4284 names gate WRITES ONLY: their computed values still
+    feed ``compute_release_confidence``/``compute_quality_drag``/
+    ``compute_pipeline_stability`` in-process further down, so the compute runs
+    regardless of this set -- same shape as ``repo_user_commit`` and
+    ``testops_risk``, not ``team_wellbeing``'s compute+write skip. The gate is
+    load-bearing rather than cosmetic: their three target tables are plain
+    ``MergeTree`` with no dedup engine, so a write that is not suppressed after
+    the Go executor already wrote the same ``(org_id, repo_id, day)`` doubles
+    every metric silently instead of erroring.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -1646,6 +1660,12 @@ async def run_daily_metrics_job(
                 day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
             )
         )
+        # CHAOS-4284: see the write block below for why these three are a
+        # WRITE-ONLY skip -- the computed values are still needed in-process by
+        # testops_risk's own three functions further down.
+        skip_testops_pipeline_write = "testops_pipeline" in skip_families
+        skip_testops_test_write = "testops_test" in skip_families
+        skip_testops_coverage_write = "testops_coverage" in skip_families
         testops_pipeline_metrics = compute_pipeline_metrics_daily(
             day=d,
             pipeline_runs=testops_pipeline_rows,
@@ -1946,6 +1966,22 @@ async def run_daily_metrics_job(
         # policy events permanently, which is the exact defect the Go port's
         # deterministic event_id exists to fix.
         skip_ai_governance_write = "ai_governance" in skip_families
+        # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
+        # Same write-only-skip shape as repo_user_commit above --
+        # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
+        # below (verified by grep, not assumed), so compute stays unconditional
+        # and only the write is gated.
+        #
+        # ai_impact_metrics_daily is a ReplacingMergeTree whose ORDER BY key
+        # (org_id, team_id, repo_id, work_type, day, attribution_bucket) fully
+        # covers the producer's grouping, so an ungated double-write would
+        # eventually collapse rather than accumulate. The gate is still
+        # required: until a merge runs, both versions are live, and readers
+        # that do not dedup would double-count -- and the two paths disagree
+        # wherever the Go port's fixes apply (the uint64 revert-rule widening,
+        # and the incident reader's CHAOS-4269 valid_from guard), so which copy
+        # wins would decide the answer.
+        skip_ai_impact_write = "ai_impact" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1968,16 +2004,34 @@ async def run_daily_metrics_job(
             if not skip_review_edges:
                 s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
-            s.write_testops_pipeline_metrics(testops_pipeline_metrics)
-            s.write_testops_test_metrics(testops_test_metrics)
-            s.write_testops_coverage_metrics(testops_coverage_metrics)
+            # CHAOS-4284: testops_pipeline/testops_test/testops_coverage have
+            # native Go executors (TestopsPipelineExecutor/TestopsTestExecutor/
+            # TestopsCoverageExecutor). WRITE-ONLY skip, exactly like
+            # repo_user_commit and testops_risk above -- NOT team_wellbeing's
+            # compute+write skip: these three values are consumed IN-PROCESS a
+            # few hundred lines below by compute_release_confidence /
+            # compute_quality_drag / compute_pipeline_stability, so the compute
+            # must keep running here regardless of which side wrote the rows.
+            #
+            # Gating the writes is what actually prevents a double write. The
+            # three target tables are plain MergeTree ORDER BY (repo_id, day)
+            # (029_testops_tables.sql), NOT ReplacingMergeTree -- nothing
+            # collapses a duplicate (repo_id, day) row, so an ungated write
+            # after Go has already written the same scope would silently
+            # double every one of these metrics.
+            if not skip_testops_pipeline_write:
+                s.write_testops_pipeline_metrics(testops_pipeline_metrics)
+            if not skip_testops_test_write:
+                s.write_testops_test_metrics(testops_test_metrics)
+            if not skip_testops_coverage_write:
+                s.write_testops_coverage_metrics(testops_coverage_metrics)
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
             if not skip_ai_governance_write:
                 s.write_ai_policy_events(ai_policy_events)
                 s.write_ai_governance_coverage_daily(ai_governance_coverage)
-            if ai_impact_metrics:
+            if ai_impact_metrics and not skip_ai_impact_write:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
                 s.write_ai_workflow_runs(ai_workflow_runs)

@@ -481,6 +481,37 @@ func TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure(t *testing.T) 
 		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
 	}
 	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "completion down")
+}
+
+// TestFinalizeLogsACompleteFinalizeFailureEvenWhenReleaseSucceeds is the r3
+// finding: CompleteFinalize's OWN error was never logged, only a SUBSEQUENT
+// release failure -- so the common case (completion fails, release
+// succeeds) left no log at all naming why completion failed. Isolated from
+// the test above, which always failed both calls and so could not tell
+// completion's own log line apart from coincidentally passing because
+// release's failure was logged instead.
+func TestFinalizeLogsACompleteFinalizeFailureEvenWhenReleaseSucceeds(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.completionErr = errors.New("completion down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded despite CompleteFinalize failing")
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "completion down")
 }
 
 // assertFinalizeReleaseFailureLogged is the three tests' shared assertion:

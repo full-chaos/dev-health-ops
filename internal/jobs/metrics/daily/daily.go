@@ -1797,8 +1797,22 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		// Symmetric with the partition layer: this exit claimed and returned
 		// retryable without releasing, which is the most likely way the lease
 		// behind CHAOS-3991 was orphaned in the first place.
+		//
+		// err itself is logged here too (r3 finding), not only a subsequent
+		// release failure: before this, a CompleteFinalize failure whose
+		// release succeeded left NO log at all naming why completion failed --
+		// exactly the swallowed-error shape the standing telemetry rule exists
+		// to catch, just one call deeper than the release path r2/the
+		// class-sweep already covered.
+		logger := finalizeExecutionLogger(execution)
+		logger.Error("daily finalize completion failed",
+			"error", err,
+			"run_id", runID,
+			"organization_id", claim.Run.OrganizationID,
+			"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+		)
 		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
-			finalizeExecutionLogger(execution).Error("daily finalize release failed",
+			logger.Error("daily finalize release failed",
 				"error", releaseErr,
 				"run_id", runID,
 				"organization_id", claim.Run.OrganizationID,

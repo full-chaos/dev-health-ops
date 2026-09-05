@@ -52,12 +52,17 @@ func TestLoaderScansAgreeWithTheRealSchemaColumnTypes(t *testing.T) {
 	repoID := uuid.MustParse("8f5c1f2e-6b4a-4a1e-9f0c-2f2a2d6d5a11")
 	day := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
 
+	// loc_touched is a SEPARATE column from loc_added/loc_deleted (005_ic_metrics.sql's
+	// ALTER, DEFAULT 0) -- the executor computes it as their sum when IT writes
+	// (merge.go's LOCTouched: git.LOCAdded+git.LOCDeleted), but a raw seed row
+	// inserted directly, as here, must set it explicitly or LoadRollingStats'
+	// sum(loc_touched) reads back 0 regardless of loc_added/loc_deleted.
 	if err := conn.Exec(ctx, `INSERT INTO user_metrics_daily
         (repo_id, day, author_email, identity_id, team_id, loc_added, loc_deleted,
-         prs_authored, prs_merged, median_pr_cycle_hours, pr_cycle_p90_hours,
+         loc_touched, prs_authored, prs_merged, median_pr_cycle_hours, pr_cycle_p90_hours,
          computed_at, org_id)
         VALUES (?, ?, 'scan-types@example.com', 'scan-types@example.com', 'team-a',
-                40, 10, 3, 2, 6.5, 12.0, ?, ?)`,
+                40, 10, 50, 3, 2, 6.5, 12.0, ?, ?)`,
 		repoID, day, day, orgID); err != nil {
 		t.Fatal(err)
 	}

@@ -231,9 +231,9 @@ func NewWriter(connection conn) (*Writer, error) {
 	return &Writer{conn: connection}, nil
 }
 
-// WriteOutputs writes every non-empty collection and returns the total rows
-// written. Column lists and their order are the sink's verbatim
-// (sinks/clickhouse/dora.py:56-198).
+// WriteOutputs writes every non-empty collection across the six benchmarking
+// output tables and returns the total rows written. Column lists and their
+// order are the sink's verbatim (sinks/clickhouse/dora.py:56-198).
 //
 // Fails closed on an empty orgID: org_id is a filter column on all six tables
 // and an unscoped row is invisible to every org-bound read.
@@ -241,7 +241,6 @@ func NewWriter(connection conn) (*Writer, error) {
 // Mirrors write_benchmarking_outputs' per-collection emptiness checks
 // (runner.py:243-256) -- an empty collection is skipped, not written as zero
 // rows.
-// WriteOutputs writes the six benchmarking output tables.
 //
 // PARTIAL WRITES ARE REPORTED, NOT SWALLOWED (CHAOS-4288, codex r1 on #2235).
 //

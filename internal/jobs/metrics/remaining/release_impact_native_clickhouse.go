@@ -17,6 +17,19 @@ import (
 // CHAOS-2397). The Python carries that reasoning in four separate docstrings;
 // it is stated once here and must survive any query edit.
 
+// dateArgument renders a Date literal the same way dateTime64Argument
+// (dora_native_clickhouse.go) renders a DateTime64 one: as a plain string,
+// never a bound time.Time. clickhouse-go renders a time.Time value bound to a
+// {name:Date} placeholder as `toDateTime('2026-08-20 00:00:00')`, which
+// ClickHouse then refuses to parse AS a Date (CANNOT_PARSE_DATE) -- measured
+// live via TestReleaseImpactParityClassBattery, the same class of defect
+// dora_native_clickhouse.go's comment documents for DateTime64. Every {*:Date}
+// and {*:DateTime64(...)} parameter in this file must go through this or
+// dateTime64Argument, never a raw time.Time.
+func dateArgument(value time.Time) string {
+	return value.UTC().Format("2006-01-02")
+}
+
 // ReleaseImpactReader owns the ClickHouse side of the family.
 type ReleaseImpactReader struct {
 	conn driver.Conn
@@ -52,7 +65,7 @@ WHERE org_id = {org_id:String}
   AND toDate(bucket_start) = {day:Date}
   AND release_ref != ''
 ORDER BY release_ref, environment`,
-		namedArguments(map[string]any{"org_id": orgID, "day": day})...)
+		namedArguments(map[string]any{"org_id": orgID, "day": dateArgument(day)})...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +94,7 @@ FROM deployments
 WHERE release_ref != ''
   AND toDate(coalesce(deployed_at, started_at)) = {day:Date}
   AND org_id = {org_id:String}`,
-		namedArguments(map[string]any{"org_id": orgID, "day": day})...).Scan(&cnt)
+		namedArguments(map[string]any{"org_id": orgID, "day": dateArgument(day)})...).Scan(&cnt)
 	if err != nil {
 		return 0, err
 	}
@@ -150,7 +163,9 @@ WHERE org_id = {org_id:String}
   AND bucket_end <= {window_end:DateTime64(3)}`,
 		namedArguments(map[string]any{
 			"org_id": orgID, "release_ref": releaseRef, "environment": environment,
-			"signal_pattern": signalPattern, "window_start": windowStart, "window_end": windowEnd,
+			"signal_pattern": signalPattern,
+			"window_start":   dateTime64Argument(windowStart, millisecondPrecision),
+			"window_end":     dateTime64Argument(windowEnd, millisecondPrecision),
 		})...).Scan(&sig, &sess)
 	if err != nil {
 		return 0, 0, false, err
@@ -186,7 +201,8 @@ WHERE org_id = {org_id:String}
   AND signal_count > 0`,
 		namedArguments(map[string]any{
 			"org_id": orgID, "release_ref": releaseRef, "environment": environment,
-			"deploy_ts": deployTS, "spike_end": spikeEnd,
+			"deploy_ts": dateTime64Argument(deployTS, millisecondPrecision),
+			"spike_end": dateTime64Argument(spikeEnd, millisecondPrecision),
 		})...).Scan(&first)
 	if err != nil {
 		return nil, nil //nolint:nilerr // absence is a value here, matching Python's None
@@ -211,7 +227,9 @@ WHERE environment = {environment:String}
   AND org_id = {org_id:String}`,
 		namedArguments(map[string]any{
 			"environment": environment, "release_ref": releaseRef,
-			"window_start": windowStart, "window_end": windowEnd, "org_id": orgID,
+			"window_start": dateTime64Argument(windowStart, millisecondPrecision),
+			"window_end":   dateTime64Argument(windowEnd, millisecondPrecision),
+			"org_id":       orgID,
 		})...).Scan(&cnt)
 	if err != nil {
 		return 0, err
@@ -234,7 +252,7 @@ WHERE org_id = {org_id:String}
   AND toDate(bucket_start) = {day:Date}`,
 		namedArguments(map[string]any{
 			"org_id": orgID, "release_ref": releaseRef,
-			"environment": environment, "day": day,
+			"environment": environment, "day": dateArgument(day),
 		})...).Scan(&hours)
 	if err != nil {
 		return 0, err

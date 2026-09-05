@@ -250,7 +250,7 @@ func buildDailyWorker(
 				// test that matters now calls dailyNativeFamilyRegistrations
 				// directly and asserts on its actual return value, not on
 				// source text.
-				nativeFamilies, postBridgeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				nativeFamilies, postBridgeFamilies, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
@@ -276,6 +276,10 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				// CHAOS-4290: RUN-scoped native families. Registering an empty
+				// map is a no-op, so a build with no finalize executor behaves
+				// exactly as before this capability existed.
+				handler.SetNativeFinalizeFamilies(finalizeFamilies)
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsFinalizeArgs](
 					registry, spec, handler, dailyDependencies,
 				)
@@ -688,8 +692,20 @@ func dailyNativeFamilyRegistrations(
 	clickhouseConnection driver.Conn,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
-) (native map[string]daily.NativeFamilyExecutor, postBridge map[string]daily.NativeFamilyExecutor) {
+) (
+	native map[string]daily.NativeFamilyExecutor,
+	postBridge map[string]daily.NativeFamilyExecutor,
+	finalize map[string]daily.NativeFinalizeFamilyExecutor,
+) {
 	native = map[string]daily.NativeFamilyExecutor{}
+	// CHAOS-4290: RUN-scoped families. Kept in their own map because
+	// FinalizeHandler registers them through SetNativeFinalizeFamilies -- a
+	// finalize family placed in either partition map would run once per
+	// PARTITION rather than once per run.
+	finalize = map[string]daily.NativeFinalizeFamilyExecutor{}
+	if clickhouseConnection != nil {
+		finalize[daily.ICFinalizeFamilyName] = daily.NewICFinalizeExecutor(clickhouseConnection)
+	}
 	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
 		native["team_wellbeing"] = teamWellbeingExecutor
 		// CHAOS-4329: per-team repo fan-out telemetry -- optional,
@@ -851,7 +867,7 @@ func dailyNativeFamilyRegistrations(
 			"error", workItemStateErr,
 		)
 	}
-	return native, postBridge
+	return native, postBridge, finalize
 }
 
 func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {

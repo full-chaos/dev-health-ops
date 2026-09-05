@@ -72,7 +72,12 @@ func compileFnMatch(pattern string) (*regexp.Regexp, error) {
 }
 
 // TranslateFnMatch ports Python's ``fnmatch.translate``: it converts a shell
-// pattern into a regular expression anchored to the whole string.
+// pattern into a regular expression matching the WHOLE string.
+//
+// CPython's translate() emits only a trailing `\Z`, because its output is
+// always used with `re.match`, which supplies start anchoring itself. Go has
+// no start-anchoring matcher, so the `\A` is added here rather than left to
+// every caller to remember.
 //
 // Exported so the parity test can compare the produced expression against
 // CPython's own, rather than only comparing match outcomes -- two different
@@ -80,7 +85,15 @@ func compileFnMatch(pattern string) (*regexp.Regexp, error) {
 // thought to try.
 func TranslateFnMatch(pattern string) string {
 	var out strings.Builder
-	out.WriteString("(?s:")
+	// `\A` is load-bearing: Python applies translate()'s output with
+	// `re.match`, which anchors at the START of the string, while Go's
+	// MatchString searches ANYWHERE. Without it, the exclude glob `tests/**`
+	// matches "contests/thing.py" -- the pattern finds "tests/thing.py" as a
+	// suffix -- and every path whose name merely CONTAINS an excluded
+	// directory name is silently dropped from the scan. Found by the
+	// should_process oracle, not by the fnmatch cases, because a suffix-only
+	// match needs a pattern anchored at neither end to expose it.
+	out.WriteString(`\A(?s:`)
 
 	runes := []rune(pattern)
 	i := 0

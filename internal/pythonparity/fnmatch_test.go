@@ -65,6 +65,19 @@ var fnMatchCases = []struct {
 	// Newline: translate uses (?s:...), so `*` and `?` cross a newline.
 	{"a*b", "a\nb"},
 	{"a?b", "a\nb"},
+
+	// START ANCHORING. These are the cases the first 28 MISSED: a pattern
+	// whose regex can match a proper SUFFIX of the name. Python applies
+	// translate() with re.match, which anchors at the start; Go's MatchString
+	// does not, so without an explicit \A these all match wrongly. Found by
+	// the should_process oracle when the exclude glob "tests/**" swallowed
+	// "contests/thing.py".
+	{"tests/**", "contests/thing.py"},
+	{"tests/*", "contests/thing"},
+	{"abc*", "xabc"},
+	{"b*", "ab"},
+	{"[a-c]at", "xbat"},
+	{"?at", "xcat"},
 }
 
 func TestFnMatchDiffersFromPathMatchWhereItMust(t *testing.T) {
@@ -84,6 +97,12 @@ func TestFnMatchDiffersFromPathMatchWhereItMust(t *testing.T) {
 	}
 	if !FnMatch("[abc", "[abc") {
 		t.Errorf("an unterminated class is a literal bracket in Python")
+	}
+	// The anchoring case, kept here as well as in the table because it is the
+	// one that shipped wrong: an exclude glob must not match a path whose name
+	// merely CONTAINS the excluded directory name.
+	if FnMatch("contests/thing.py", "tests/**") {
+		t.Errorf(`"tests/**" must not match "contests/thing.py" -- fnmatch anchors at the start`)
 	}
 }
 

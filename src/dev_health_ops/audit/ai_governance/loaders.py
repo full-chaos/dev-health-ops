@@ -11,7 +11,6 @@ from uuid import UUID
 from dev_health_ops.audit.ai_governance.models import (
     AIGovernanceArtifact,
     AIGovernanceCoverageDaily,
-    AIGovernanceViolation,
     ToolAllowlistStatus,
 )
 
@@ -110,17 +109,18 @@ class AIGovernanceLoader:
         ]
 
 
-def build_governance_rows_for_day(
-    client: Any, *, org_id: str, day: date
-) -> tuple[list[AIGovernanceViolation], list[AIGovernanceCoverageDaily]]:
-    """Load raw artifacts and compute policy events plus coverage rows."""
-    from dev_health_ops.audit.ai_governance.policy import evaluate_artifacts
-    from dev_health_ops.audit.ai_governance.rollup import rollup_coverage_daily
-
-    artifacts = AIGovernanceLoader(client).load_artifacts_for_day(
-        org_id=org_id, day=day
-    )
-    return evaluate_artifacts(artifacts), rollup_coverage_daily(artifacts, day=day)
+# CHAOS-5234/CHAOS-3092: build_governance_rows_for_day (the daily-job glue
+# function this comment replaces) is DELETED, not kept -- chris's standing
+# rule (CHAOS-5233): once a family's Go executor is on main, its Python
+# compute is deleted, never skip-gated. Verified (codegraph_explore + rg)
+# that job_daily.py's run_daily_metrics_job was its ONLY real caller; unlike
+# CHAOS-5233's work_item_attribution, nothing else called this specific
+# glue function directly. evaluate_artifacts/rollup_coverage_daily/
+# AIGovernanceLoader (what it glued together) are NOT deleted -- they have
+# real, separate callers: the Go oracle comparator
+# (internal/jobs/metrics/aigovernance/testdata/python_governance_oracle.py),
+# the GraphQL API resolver (api/graphql/resolvers/ai.py), and their own
+# dedicated tests.
 
 
 def _artifact_from_row(row: dict[str, Any]) -> AIGovernanceArtifact:
@@ -344,5 +344,4 @@ LIMIT {limit:UInt32}
 __all__: Sequence[str] = [
     "AIGovernanceLoader",
     "AIGovernanceViolationQueryRow",
-    "build_governance_rows_for_day",
 ]

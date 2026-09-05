@@ -247,7 +247,7 @@ Go owns the writes. Deleting the Python path is a deliberate follow-up, not part
 | dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`daily.go:586-598`) | CHAOS-3092 R1 (Done) |
 | membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`daily.go:599-609`) | CHAOS-4282 (Done) |
 | recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`daily.go:610-620`) | CHAOS-4281/CHAOS-3092 (Done) |
-| release_impact | COMPAT-Python | Python: `job_release_impact.py` -> `release_impact.py` | river, bridge (`daily.go:621-624`, uses `compatibility` directly) | CHAOS-4296 |
+| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go` | river, native (`daily.go:590-621`) | CHAOS-4296 (Done) |
 | work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`daily.go:625-634`) | CHAOS-3092 PR-B (Done) |
 <!-- END GENERATED REMAINING METRICS MATRIX -->
 

@@ -193,6 +193,36 @@ def test_already_rmt_with_leftover_shadow_converges(migration) -> None:
     assert SHADOW not in client.tables
 
 
+def test_already_rmt_missing_version_column_refuses_instead_of_skipping(
+    migration,
+) -> None:
+    """codex r3 finding 1 (CHAOS-4296/#2262): the already-ReplacingMergeTree
+    convergence path trusted the engine NAME alone -- a table converted by
+    hand (or a partial run) could be ReplacingMergeTree with no version
+    column at all, and this branch used to treat that as "already converged,
+    skip" without checking. It must refuse instead."""
+
+    class MissingVersionColumnClient(FakeClient):
+        def query(self, query: str, parameters: dict | None = None):
+            if "count() FROM system.columns" in query:
+                return _FakeResult([[0]])
+            return super().query(query, parameters)
+
+    client = MissingVersionColumnClient(
+        {
+            TABLE: {
+                "ddl": OLD_DDL.replace(
+                    "MergeTree()", "ReplacingMergeTree(computed_at)"
+                ),
+                "sorting_key": OLD_KEY,
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="missing the required version column"):
+        migration._rebuild_table(client, TABLE, SHADOW)
+    assert client.commands == []
+
+
 def test_table_exists_probe_failure_propagates_instead_of_reading_as_absent(
     migration,
 ) -> None:

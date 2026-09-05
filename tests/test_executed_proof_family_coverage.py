@@ -110,8 +110,20 @@ def test_native_golden_required_families_are_named_in_both_gates() -> None:
         "lists in ci/run_metrics_executed_proof.sh and ci/local_validate.sh."
     )
 
-    now_covered = KNOWN_UNCOVERED - uncovered
+    # Intersect with native_required FIRST. `uncovered` is computed only over
+    # families that are native here, so a pinned family that is NOT native on
+    # this branch is absent from it -- and a bare `KNOWN_UNCOVERED - uncovered`
+    # then reports that family as "now covered", which is false and actively
+    # misleading: it is not covered, it is not even ported yet.
+    #
+    # This bites on a STACKED branch specifically. KNOWN_UNCOVERED is shared and
+    # merges forward, but which families are `port: go` differs per branch: on
+    # the compounding_risk branch `benchmarking` is still `pending`, so pinning
+    # it there is inert, not a regression. The first version of this assertion
+    # failed exactly that way and claimed benchmarking "IS covered by both
+    # gates" on a branch whose gate lists never mention it.
+    now_covered = (KNOWN_UNCOVERED & native_required) - uncovered
     assert not now_covered, (
-        f"{sorted(now_covered)} now IS covered by both gates -- remove it from "
-        "KNOWN_UNCOVERED so the coverage cannot silently regress later."
+        f"{sorted(now_covered)} is native here AND named in both gates -- remove it "
+        "from KNOWN_UNCOVERED so the coverage cannot silently regress later."
     )

@@ -62,7 +62,7 @@ Section 4 (workgraph/investment) has no families.json equivalent at all
 (``internal/jobs/families.json`` does not exist) -- WORKGRAPH_INVESTMENT_LEDGER
 is the sole source, entirely hand-maintained, with no live producer to
 drift-guard against mechanically. Adding a machine-readable registry for these
-5 kinds is proposed as a follow-up ticket, not done in this change.
+2 kinds is proposed as a follow-up ticket, not done in this change.
 """
 
 from __future__ import annotations
@@ -306,6 +306,21 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 # CURATED: §4, no families.json equivalent exists. Entirely hand-maintained;
 # see docs/go-migration-matrix.md's "Known gaps" section.
+#
+# r1 finding F2 (P3, codex, CHAOS-4438): investment.dispatch/chunk/finalize
+# used to have rows here documenting them as "PYTHON-ONLY (dead Go shell) --
+# Go: wired, never invoked". CHAOS-4438 didn't just leave them dead, it
+# DELETED them outright (the Go handler wiring these rows cited no longer
+# exists at all) -- keeping the rows made the generated doc describe three
+# kinds as a live Backlog cleanup item when the cleanup had already
+# happened. CHAOS-5153's reverse guard (_assert_ledger_matches_artifact)
+# does not catch this specific case: these 3 kinds were NEVER in
+# native-families.json's workgraph section (they were dead code, not
+# something that went native and then got removed), so there was nothing
+# for that guard to notice missing. Removed outright rather than
+# re-labeled "removed" -- unlike a registry_kind row in
+# transitional-inventory.json, there is no separate historical ledger this
+# page maintains for retired workgraph/investment kinds.
 # ---------------------------------------------------------------------------
 WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
     "workgraph.build": {
@@ -331,24 +346,6 @@ WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
         ),
         "route": "river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment`",
         "ticket": "CHAOS-4441 (cutover landed)",
-    },
-    "investment.dispatch": {
-        "executor": "PYTHON-ONLY (dead Go shell)",
-        "citation": "Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable",
-        "route": "bridge (dead in both directions)",
-        "ticket": "CHAOS-4438 (dead-code removal, Backlog)",
-    },
-    "investment.chunk": {
-        "executor": "PYTHON-ONLY (dead Go shell)",
-        "citation": "Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable",
-        "route": "bridge (dead in both directions)",
-        "ticket": "CHAOS-4438 (dead-code removal, Backlog)",
-    },
-    "investment.finalize": {
-        "executor": "PYTHON-ONLY (dead Go shell)",
-        "citation": "Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable",
-        "route": "bridge (dead in both directions)",
-        "ticket": "CHAOS-4438 (dead-code removal, Backlog)",
     },
     "recommendations": {
         "executor": "NATIVE",

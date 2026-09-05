@@ -48,17 +48,26 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// "post_bridge" family MUST carry a phase_note explaining the
 	// cross-family dependency (this field earns its cost by being read
 	// during triage, so an empty one defeats the point).
-	validPhases := map[string]bool{"": true, "pre_bridge": true, "post_bridge": true}
+	// "finalize" (CHAOS-4290) is the third bucket: a RUN-scoped family,
+	// registered through FinalizeHandler.SetNativeFinalizeFamilies rather than
+	// either partition map. It is NOT a variant of pre_bridge -- a finalize
+	// family in a partition map runs once per PARTITION instead of once per
+	// run, rewriting the same rows for every partition of the day.
+	validPhases := map[string]bool{"": true, "pre_bridge": true, "post_bridge": true, "finalize": true}
 	seen := map[string]bool{}
 	for _, family := range registry.Families {
 		if family.Name == "" || family.Python == "" || len(family.Writes) == 0 || family.Golden != "required" || seen[family.Name] || !validPorts[family.Port] || !validPhases[family.Phase] {
 			t.Fatalf("invalid family entry: %#v", family)
 		}
-		if family.Phase == "post_bridge" && family.PhaseNote == "" {
-			t.Fatalf("family %q declares phase=post_bridge with no phase_note explaining why", family.Name)
+		// Both non-default phases must justify themselves. The note earns its
+		// cost by being read during triage, so an empty one defeats the point
+		// -- and a note attached to a DEFAULT-phase family is either stale or
+		// paired with a phase somebody forgot to set.
+		if (family.Phase == "post_bridge" || family.Phase == "finalize") && family.PhaseNote == "" {
+			t.Fatalf("family %q declares phase=%s with no phase_note explaining why", family.Name, family.Phase)
 		}
-		if family.Phase != "post_bridge" && family.PhaseNote != "" {
-			t.Fatalf("family %q has a phase_note but is not phase=post_bridge -- stale note or missing phase?", family.Name)
+		if family.Phase != "post_bridge" && family.Phase != "finalize" && family.PhaseNote != "" {
+			t.Fatalf("family %q has a phase_note but is not phase=post_bridge or finalize -- stale note or missing phase?", family.Name)
 		}
 		seen[family.Name] = true
 	}

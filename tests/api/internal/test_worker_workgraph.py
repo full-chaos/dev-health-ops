@@ -17,6 +17,7 @@ from dev_health_ops.api.internal import worker_workgraph, worker_workgraph_runne
 from dev_health_ops.api.internal.worker_workgraph import (
     ExecuteRequest,
     _evidence,
+    _mark_ambiguous,
     _run_compatibility_process,
     _run_sync,
     _run_until_client_disconnect,
@@ -264,6 +265,56 @@ async def test_execute_rejects_a_retired_kind_request_row(
         kind in record.message and str(request_id) in record.message
         for record in caplog.records
     ), f"no log line named both {kind!r} and the request id:\n{caplog.text}"
+
+
+@pytest.mark.asyncio
+async def test_mark_ambiguous_flips_both_records_when_the_request_update_applies() -> (
+    None
+):
+    # r3 finding F1 GREEN half: when the request update actually matches a
+    # row (lease still valid), the ledger update runs too and the
+    # transaction commits.
+    session = AsyncMock()
+    request_update_result = MagicMock(rowcount=1)
+    session.execute.side_effect = [request_update_result, MagicMock()]
+    request = ExecuteRequest(
+        request_id=uuid.UUID("00000000-0000-4000-8000-000000000151"),
+        claim_token=uuid.UUID("00000000-0000-4000-8000-000000000152"),
+    )
+
+    await _mark_ambiguous(session, request, "some failure detail")
+
+    assert session.execute.await_count == 2
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_expired() -> (
+    None
+):
+    # r3 finding F1 (P2, codex, CHAOS-4438) RED half: the request update is
+    # guarded by lease validity (WHERE ... lease_expires_at >
+    # statement_timestamp()); if the lease already expired, that UPDATE
+    # matches zero rows. Before the fix, the ledger update ran anyway --
+    # flipping to 'ambiguous' unconditionally -- leaving the request stuck
+    # 'running' with an expired claim while the ledger says ambiguous, a
+    # state the repair endpoint (requires BOTH ambiguous) can never
+    # resolve. The fix must skip the second update and still commit.
+    session = AsyncMock()
+    request_update_result = MagicMock(rowcount=0)
+    session.execute.side_effect = [request_update_result]
+    request = ExecuteRequest(
+        request_id=uuid.UUID("00000000-0000-4000-8000-000000000161"),
+        claim_token=uuid.UUID("00000000-0000-4000-8000-000000000162"),
+    )
+
+    await _mark_ambiguous(session, request, "some failure detail")
+
+    assert session.execute.await_count == 1, (
+        "the ledger update ran even though the request update matched zero "
+        "rows -- the two records can now disagree about ambiguous state"
+    )
+    session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

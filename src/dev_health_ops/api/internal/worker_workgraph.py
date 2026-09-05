@@ -271,7 +271,7 @@ async def _run_until_client_disconnect(
 async def _mark_ambiguous(
     session: AsyncSession, request: ExecuteRequest, detail: str
 ) -> None:
-    await session.execute(
+    request_result = await session.execute(
         text(
             """
             UPDATE work_graph_execution_requests
@@ -284,6 +284,25 @@ async def _mark_ambiguous(
         ),
         {"id": str(request.request_id), "token": str(request.claim_token)},
     )
+    # r3 finding F1 (P2, codex, CHAOS-4438): the request update above is
+    # guarded by lease validity; the ledger update below was NOT -- if the
+    # lease expired between execute() reading the row and this function
+    # running (a caller can take arbitrarily long, e.g. a retired-kind
+    # rejection racing a concurrent lease expiry, or a long-running
+    # compatibility process finishing just as its lease lapses), the
+    # request update above would affect zero rows while the ledger still
+    # flipped to 'ambiguous' unconditionally -- leaving the request stuck
+    # 'running' with an expired claim while the repair endpoint (which
+    # requires BOTH records ambiguous) refuses to repair it. Skipping the
+    # ledger update whenever the request update did not actually apply
+    # keeps the two mutations atomic in effect: either both flip to
+    # ambiguous, or neither does.
+    if int(getattr(request_result, "rowcount", 0) or 0) == 0:
+        # Nothing to commit -- the UPDATE above matched no row -- but still
+        # close the transaction cleanly rather than leaving it open for
+        # whatever the caller does next with this session.
+        await session.commit()
+        return
     await session.execute(
         text(
             """

@@ -268,7 +268,13 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 	}
 	claims, err := relay.repository.claimDueExcept(ctx, now, limit, relay.config.LeaseDuration, deferred)
 	if err != nil {
-		return StepResult{}, err
+		// r3 finding F3 (P2, codex, CHAOS-4438): `result` already carries
+		// whatever stepRecovery committed above (both recovery seams'
+		// counts survive their own errors, per F2's fix) -- a THIRD discard
+		// layer here, on a claimDueExcept failure that has nothing to do
+		// with what recovery already did, would erase that evidence a third
+		// time. Same fix shape as stepRecovery's two seams.
+		return result, err
 	}
 	result.Claimed = len(claims)
 	for _, claim := range claims {

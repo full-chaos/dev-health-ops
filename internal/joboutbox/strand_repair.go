@@ -245,14 +245,22 @@ func (repair *StrandRepair) Step(
 	result := StrandRepairResult{}
 	for _, shape := range repair.shapes {
 		shapeResult, err := repair.stepShape(ctx, shape, now, limit)
-		if err != nil {
-			return StrandRepairResult{}, err
-		}
+		// r3 finding F2 (P2, codex, CHAOS-4438): an EARLIER shape's rearm
+		// already committed in its own queue-pool transaction (phase 3 of
+		// stepShape) before a LATER shape can fail here -- shapes run in a
+		// fixed order (partition, finalize, workgraph). Accumulate this
+		// shape's counts into `result` BEFORE checking err, same fix
+		// shape as the trailing observeRetiredKinds error below, so a
+		// later shape's failure cannot erase an earlier shape's already-
+		// committed work a second time.
 		result.Rearmed += shapeResult.Rearmed
 		result.SkippedJobLive += shapeResult.SkippedJobLive
 		result.SkippedClaimLive += shapeResult.SkippedClaimLive
 		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
 		result.SkippedRaceLost += shapeResult.SkippedRaceLost
+		if err != nil {
+			return result, err
+		}
 	}
 	observed, err := repair.observeRetiredKinds(ctx)
 	if err != nil {
@@ -319,6 +327,9 @@ func (repair *StrandRepair) stepShape(
 	// Phase 1 -- survey on the queue pool, WITHOUT locking. Locking here would
 	// hold outbox rows across the domain round-trip for no benefit: nothing is
 	// mutated until phase 3 re-proves the predicate under a lock anyway.
+	// Nothing is counted yet at this phase (a survey error means zero
+	// candidates were even classified), so a plain zero-result return here
+	// is correct, not a discard -- unlike phases 2/3 below.
 	candidates, err := repair.survey(ctx, shape.survey, now, limit)
 	if err != nil {
 		return StrandRepairResult{}, err
@@ -339,10 +350,13 @@ func (repair *StrandRepair) stepShape(
 	}
 
 	// Phase 2 -- execution state, on the DOMAIN pool, before any queue
-	// transaction is open.
+	// transaction is open. r3 finding F2 (P2, codex, CHAOS-4438), applied
+	// here too: `result` already carries real SkippedJobLive counts from
+	// phase 1's classification above -- a phase 2 error must not discard
+	// those.
 	approved, live, settled, err := repair.filterByClaim(ctx, eligible, now)
 	if err != nil {
-		return StrandRepairResult{}, err
+		return result, err
 	}
 	result.SkippedClaimLive += live
 	result.SkippedClaimSettled += settled
@@ -350,10 +364,11 @@ func (repair *StrandRepair) stepShape(
 		return result, nil
 	}
 
-	// Phase 3 -- lock, re-prove, and rearm on the queue pool.
+	// Phase 3 -- lock, re-prove, and rearm on the queue pool. Same
+	// reasoning: `result` already carries phases 1-2's real counts.
 	rearmed, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
 	if err != nil {
-		return StrandRepairResult{}, err
+		return result, err
 	}
 	result.Rearmed += rearmed
 	result.SkippedRaceLost += lost

@@ -554,3 +554,86 @@ func TestReconcilerLoopLogsRetiredKindTruncation(t *testing.T) {
 		t.Fatalf("logged truncation with none reported:\n%s", cleanBuf.String())
 	}
 }
+
+// fakeStrandSurveyRows is a minimal pgx.Rows fake covering exactly the
+// methods StrandRepair.survey calls (Next/Scan/Close/Err) -- enough to
+// drive one strandCandidate row through without needing a real database.
+type fakeStrandSurveyRows struct {
+	rows [][]any
+	idx  int
+}
+
+func (f *fakeStrandSurveyRows) Close()                                       {}
+func (f *fakeStrandSurveyRows) Err() error                                   { return nil }
+func (f *fakeStrandSurveyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (f *fakeStrandSurveyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (f *fakeStrandSurveyRows) Values() ([]any, error)                       { return nil, nil }
+func (f *fakeStrandSurveyRows) RawValues() [][]byte                          { return nil }
+func (f *fakeStrandSurveyRows) Conn() *pgx.Conn                              { return nil }
+
+func (f *fakeStrandSurveyRows) Next() bool {
+	if f.idx >= len(f.rows) {
+		return false
+	}
+	f.idx++
+	return true
+}
+
+func (f *fakeStrandSurveyRows) Scan(dest ...any) error {
+	row := f.rows[f.idx-1]
+	for i, d := range dest {
+		switch v := d.(type) {
+		case *string:
+			*v, _ = row[i].(string)
+		case *int64:
+			*v, _ = row[i].(int64)
+		default:
+			return fmt.Errorf("fakeStrandSurveyRows.Scan: unsupported dest type %T", d)
+		}
+	}
+	return nil
+}
+
+// TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError is the
+// reproduction + fix for r3 finding F2 (P2, codex, CHAOS-4438): F2's
+// original fix only covered the trailing observeRetiredKinds error --
+// Step's own shape loop still discarded an EARLIER shape's real counts
+// when a LATER shape failed. Shape "a" surveys one skip_job_live
+// candidate (counted in phase 1, no phase 2/3 needed); shape "b"'s survey
+// then errors. The fix must return shape "a"'s count alongside the error,
+// not a fresh zero result.
+func TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError(t *testing.T) {
+	call := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		call++
+		switch call {
+		case 1:
+			return &fakeStrandSurveyRows{rows: [][]any{
+				{"11111111-1111-1111-1111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+			}}, nil
+		case 2:
+			return nil, errors.New("shape b survey failed")
+		default:
+			t.Fatalf("unexpected queryQueue call #%d", call)
+			return nil, nil
+		}
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
+		shapes: []strandShape{
+			{name: "a", survey: "SELECT 1", lock: "SELECT 1"},
+			{name: "b", survey: "SELECT 1", lock: "SELECT 1"},
+		},
+	}
+
+	result, err := repair.Step(context.Background(), time.Now(), 1)
+	if err == nil || err.Error() != "shape b survey failed" {
+		t.Fatalf("Step() error = %v, want shape b's survey error", err)
+	}
+	if result.SkippedJobLive != 1 {
+		t.Fatalf("Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite shape b's error", result)
+	}
+}

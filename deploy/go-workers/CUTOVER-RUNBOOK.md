@@ -128,20 +128,27 @@ env | grep DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER   # must print nothing
 `metrics.remaining.extra_metrics`/`metrics.remaining.team_metrics`, were
 registered handlers with zero producer and were removed entirely by
 CHAOS-4243 (not retargeted -- deleted from the registry, the worker, and this
-list). The verification loop below reflects the current 21-kind registry;
+list). CHAOS-4438 retired three more the same way --
+`investment.dispatch`/`investment.chunk`/`investment.finalize` (also
+registered handlers with zero producer anywhere) -- dropped from the loop
+below the same way CHAOS-4243's retirements were. The verification loop
+below reflects the current 22-kind registry (`contracts/jobs/v1/registry.json`);
 `job-routes apply` is a verifying no-op for every one of them, which makes it
 a safe read-back:
 
 ```bash
 for kind in \
-  investment.chunk investment.dispatch investment.finalize investment.materialize \
+  investment.materialize \
   metrics.daily_dispatch metrics.daily_finalize metrics.daily_partition \
   metrics.remaining.capacity metrics.remaining.complexity metrics.remaining.dora \
   metrics.remaining.membership_backfill \
   metrics.remaining.recommendations metrics.remaining.release_impact \
+  metrics.remaining.work_item_attribution \
   operational.billing_notification operational.webhook_delivery \
   report.execute_on_demand report.execute_scheduled \
-  sync.team_autoimport system.heartbeat system.retention_cleanup workgraph.build
+  sync.provider_unit sync.team_autoimport sync.team_repo_ownership_derivation \
+  system.heartbeat system.retention_cleanup system.sync_coverage_refresh \
+  workgraph.build
 do
   dev-health-workerctl job-routes status "$kind"
 done

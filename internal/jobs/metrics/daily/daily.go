@@ -1172,9 +1172,17 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 // So any native error -- before, during or after a write -- fails the attempt.
 // The family stays in the skip list, the bridge is not called, the run does not
 // complete, and River's existing attempt machinery redrives it; after max
-// attempts the CHAOS-5040 blocked-run marker records it. Python therefore never
-// writes a family registered as native, which is what makes per-run durable
-// state unnecessary.
+// attempts the CHAOS-5040 blocked-run marker records it under
+// BlockedReasonFinalizeFailed. Python therefore never writes a family
+// registered as native, which is what makes per-run durable state unnecessary.
+//
+// That last sentence about the marker was FALSE when first written (#2241 r3
+// Finding 2): reconcileBlockedRunsSQL fired only on a failed_permanent
+// PARTITION, and a stranded finalize has none, so blocked_at stayed NULL and
+// the run was invisible to the sweep built to surface wedged runs. The
+// predicate now covers it. Recording the correction rather than quietly editing
+// the claim, because the failure was writing a mechanism from a ruling's
+// wording instead of verifying the mechanism existed.
 //
 // THIS REQUIRES THE NATIVE WRITER TO BE IDEMPOTENT: a redrive must land on the
 // same keys with a later computed_at so the dedup read supersedes rather than
@@ -1315,7 +1323,33 @@ func runWithLeaseRenewal(
 				renewalResult <- ctx.Err()
 				return
 			case <-ticker.C:
-				if err := renew(ctx); err != nil {
+				// BOUNDED (CHAOS-4290, #2241 r3 Finding 1). renew(ctx) used the
+				// caller's context, which has no deadline of its own, so a
+				// renewal stuck in a network black hole never returned and the
+				// work context was never cancelled -- because cancellation
+				// happens only on the RESULT of this call.
+				//
+				// The production lease is 10 minutes and the adapter timeout is
+				// 15, so a stalled renewal left the native executor running for
+				// up to five minutes past a reclaimable lease. Another worker
+				// claims the run, computes the same family, appends another
+				// generation, and the dedup read silently takes the later one:
+				// the two-writer hazard reached through TIMING rather than
+				// through the skip list.
+				//
+				// The deadline is DERIVED from the lease, never a fresh
+				// constant, so the two cannot drift apart. It matches the tick
+				// interval: a renewal that cannot finish within one tick has
+				// already missed its slot, and waiting longer only shortens the
+				// margin before expiry.
+				renewCtx, cancelRenew := context.WithTimeout(ctx, leaseDuration/3)
+				err := renew(renewCtx)
+				cancelRenew()
+				if err != nil {
+					// A renewal TIMEOUT is a lease loss, not a transient to
+					// retry: we no longer know we hold the lease, and continuing
+					// to write while another worker may own the run is the exact
+					// failure this bound exists to prevent.
 					cancelWork()
 					renewalResult <- err
 					return

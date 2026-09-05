@@ -43,6 +43,21 @@ const (
 	// because a needless recompute inflates the families whose readers SUM raw
 	// rows instead of deduplicating by computed_at.
 	BlockedReasonPartialPartitionsPermanent = "partial_partitions_failed_permanent"
+	// BlockedReasonFinalizeFailed marks a run whose PARTITIONS all succeeded
+	// but whose finalization terminally failed (CHAOS-4290, #2241 r3 Finding 2).
+	//
+	// Before this the marker only ever fired on a failed_permanent PARTITION,
+	// so a finalize that exhausted its River attempts left the run at
+	// status='running', finalization_status='failed', every partition
+	// succeeded -- and blocked_at NULL. The run was invisible to the very sweep
+	// built to surface wedged runs, and the finalize policy's own claim that
+	// "max attempts -> the blocked marker records it" was false.
+	//
+	// It is a THIRD reason rather than reuse of either above, because the
+	// operator action differs: the partition reasons mean recompute some
+	// partitions, this one means the partitions are fine and only the
+	// cross-partition finalize needs re-running.
+	BlockedReasonFinalizeFailed = "finalize_failed"
 )
 
 // dailyMetricsRunBlockedReasons is the closed vocabulary the marker accepts,
@@ -51,6 +66,7 @@ const (
 var dailyMetricsRunBlockedReasons = map[string]struct{}{
 	BlockedReasonAllPartitionsPermanent:     {},
 	BlockedReasonPartialPartitionsPermanent: {},
+	BlockedReasonFinalizeFailed:             {},
 }
 
 // BlockedReconcileOutcome summarizes one reconciliation pass.
@@ -107,6 +123,23 @@ WITH decided AS (
                      AND partition.lease_expires_at <= $2::timestamptz
                  )
            ) AS blocked,
+           -- CHAOS-4290 #2241 r3 F2: a run whose partitions ALL succeeded but
+           -- whose finalization terminally failed is equally wedged -- nothing
+           -- automatic will re-run it -- and was invisible here because the
+           -- predicate above requires a failed_permanent PARTITION, which this
+           -- shape never has.
+           (
+               run.finalization_status = 'failed'
+               AND NOT EXISTS (
+                   SELECT 1 FROM public.daily_metrics_partitions AS partition
+                   WHERE partition.run_id = run.id
+                     AND partition.status <> 'succeeded'
+               )
+               AND EXISTS (
+                   SELECT 1 FROM public.daily_metrics_partitions AS partition
+                   WHERE partition.run_id = run.id
+               )
+           ) AS finalize_blocked,
            NOT EXISTS (
                SELECT 1 FROM public.daily_metrics_partitions AS partition
                WHERE partition.run_id = run.id
@@ -116,17 +149,22 @@ WITH decided AS (
     WHERE run.org_id = $1::uuid AND run.status = 'running'
 )
 UPDATE public.daily_metrics_runs AS run
-SET blocked_at = CASE WHEN decided.blocked THEN $2::timestamptz ELSE NULL END,
+SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::timestamptz ELSE NULL END,
     blocked_reason = CASE
         WHEN decided.blocked AND decided.none_succeeded THEN $3
         WHEN decided.blocked THEN $4
+        -- Checked AFTER the partition reasons: a run with a failed_permanent
+        -- partition AND a failed finalize is a partition problem first, and
+        -- reporting the finalize would send an operator to recompute the wrong
+        -- thing.
+        WHEN decided.finalize_blocked THEN $5
         ELSE NULL
     END,
     updated_at = $2
 FROM decided
 WHERE run.id = decided.id
-  AND decided.blocked <> (run.blocked_at IS NOT NULL)
-RETURNING decided.blocked`
+  AND (decided.blocked OR decided.finalize_blocked) <> (run.blocked_at IS NOT NULL)
+RETURNING (decided.blocked OR decided.finalize_blocked)`
 
 // ReconcileBlockedRuns marks and unmarks this organization's wedged runs from
 // live partition state. It is the ONLY writer of the marker, in either
@@ -143,7 +181,8 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 	}
 	now := store.now().UTC()
 	rows, err := store.pool.Query(ctx, reconcileBlockedRunsSQL, orgID, now,
-		BlockedReasonAllPartitionsPermanent, BlockedReasonPartialPartitionsPermanent)
+		BlockedReasonAllPartitionsPermanent, BlockedReasonPartialPartitionsPermanent,
+		BlockedReasonFinalizeFailed)
 	if err != nil {
 		return outcome, ErrUnavailable
 	}

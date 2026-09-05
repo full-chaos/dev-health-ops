@@ -175,6 +175,18 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # CHAOS-5157: this step's ONLY use of Go is `go env GOROOT` (to
+          # find a path to bind-mount below) -- it never builds or tests
+          # anything on the runner itself, so a saved module/build cache
+          # buys nothing here. Measured live (gate-rounds, via /proc):
+          # setup-go's default cache-save tar was a 38+ minute D-state
+          # (uninterruptible disk I/O) process on bigboy's sda, holding
+          # load1 above the codex-round gate threshold for the WHOLE
+          # fleet, not just this job -- an image-build job repeatedly
+          # writing a multi-hundred-MB cache archive nobody reads back
+          # (the built image's own CGO/gcc toolchain never depends on this
+          # runner's Go module cache) is pure cost.
+          cache: false
 
       - name: Check CGO toolchain inside the built image
         # Two separate `docker run` invocations, not one `sh -c 'a; b'`:

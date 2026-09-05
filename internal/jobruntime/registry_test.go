@@ -111,53 +111,6 @@ func TestRegistryValidateStartupCoversAllRuntimePolicy(t *testing.T) {
 	}
 }
 
-func TestRegistryInvestmentDispatchStartupBudgetMatchesMaterialization(t *testing.T) {
-	t.Parallel()
-	registry, err := Load("../../contracts/jobs/v1")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	promoted := riverRoutedRegistry(t)
-	handlers := promoted.Queue("investment")
-	queueSet := make(map[string]struct{})
-	for _, handler := range handlers {
-		queueSet[handler.Queue] = struct{}{}
-	}
-	queues := make([]QueueBudget, 0, len(queueSet))
-	for queue := range queueSet {
-		queues = append(queues, QueueBudget{Queue: queue, MaxWorkers: 2})
-	}
-	if err := promoted.ValidateStartup(StartupSpec{
-		SelectedQueues:        []string{"investment"},
-		Queues:                queues,
-		ConfiguredQueues:      queues,
-		Handlers:              handlers,
-		Connections:           ConnectionBudget{QueueControl: 2, Domain: 4},
-		ConfiguredConnections: ConnectionBudget{QueueControl: 2, Domain: 4},
-	}); err != nil {
-		t.Fatalf("ValidateStartup: %v", err)
-	}
-	var dispatch Descriptor
-	for _, handler := range registry.Queue("investment") {
-		if handler.Kind == jobcontract.KindInvestmentDispatch {
-			dispatch = handler
-		}
-	}
-	if dispatch.Kind == "" {
-		t.Fatal("heavy startup is missing investment.dispatch")
-	}
-	if dispatch.Timeout != 2*time.Hour {
-		t.Fatalf("investment.dispatch timeout = %s, want 2h", dispatch.Timeout)
-	}
-	if dispatch.CurrentVersion != 1 || dispatch.Route != "river" {
-		t.Fatalf(
-			"investment.dispatch rollout contract drifted: version=%d route=%q",
-			dispatch.CurrentVersion,
-			dispatch.Route,
-		)
-	}
-}
-
 func TestRegistryValidateStartupRejectsCoverageDrift(t *testing.T) {
 	t.Parallel()
 	registry := riverRoutedRegistry(t)
@@ -236,31 +189,28 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 25 || descriptors[0].Kind != jobcontract.KindInvestmentChunk ||
-		descriptors[1].Kind != jobcontract.KindInvestmentDispatch ||
-		descriptors[2].Kind != jobcontract.KindInvestmentFinalize ||
-		descriptors[3].Kind != jobcontract.KindInvestmentMaterialize ||
-		descriptors[4].Kind != jobcontract.KindDailyMetricsDispatch ||
-		descriptors[5].Kind != jobcontract.KindDailyMetricsFinalize ||
-		descriptors[6].Kind != jobcontract.KindDailyMetricsPartition ||
-		descriptors[7].Kind != jobcontract.KindRemainingCapacity ||
-		descriptors[8].Kind != jobcontract.KindRemainingComplexity ||
-		descriptors[9].Kind != jobcontract.KindRemainingDORA ||
-		descriptors[10].Kind != jobcontract.KindRemainingMembership ||
-		descriptors[11].Kind != jobcontract.KindRemainingRecommendations ||
-		descriptors[12].Kind != jobcontract.KindRemainingReleaseImpact ||
-		descriptors[13].Kind != jobcontract.KindRemainingWorkItemAttribution ||
-		descriptors[14].Kind != jobcontract.KindBillingNotification ||
-		descriptors[15].Kind != jobcontract.KindWebhookDelivery ||
-		descriptors[16].Kind != jobcontract.KindReportExecuteOnDemand ||
-		descriptors[17].Kind != jobcontract.KindReportExecuteScheduled ||
-		descriptors[18].Kind != jobcontract.KindSyncProviderUnit ||
-		descriptors[19].Kind != jobcontract.KindTeamAutoimport ||
-		descriptors[20].Kind != jobcontract.KindTeamRepoOwnershipDerivation ||
-		descriptors[21].Kind != jobcontract.KindHeartbeat ||
-		descriptors[22].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[23].Kind != jobcontract.KindSyncCoverageRefresh ||
-		descriptors[24].Kind != jobcontract.KindWorkGraphBuild {
+	if len(descriptors) != 22 || descriptors[0].Kind != jobcontract.KindInvestmentMaterialize ||
+		descriptors[1].Kind != jobcontract.KindDailyMetricsDispatch ||
+		descriptors[2].Kind != jobcontract.KindDailyMetricsFinalize ||
+		descriptors[3].Kind != jobcontract.KindDailyMetricsPartition ||
+		descriptors[4].Kind != jobcontract.KindRemainingCapacity ||
+		descriptors[5].Kind != jobcontract.KindRemainingComplexity ||
+		descriptors[6].Kind != jobcontract.KindRemainingDORA ||
+		descriptors[7].Kind != jobcontract.KindRemainingMembership ||
+		descriptors[8].Kind != jobcontract.KindRemainingRecommendations ||
+		descriptors[9].Kind != jobcontract.KindRemainingReleaseImpact ||
+		descriptors[10].Kind != jobcontract.KindRemainingWorkItemAttribution ||
+		descriptors[11].Kind != jobcontract.KindBillingNotification ||
+		descriptors[12].Kind != jobcontract.KindWebhookDelivery ||
+		descriptors[13].Kind != jobcontract.KindReportExecuteOnDemand ||
+		descriptors[14].Kind != jobcontract.KindReportExecuteScheduled ||
+		descriptors[15].Kind != jobcontract.KindSyncProviderUnit ||
+		descriptors[16].Kind != jobcontract.KindTeamAutoimport ||
+		descriptors[17].Kind != jobcontract.KindTeamRepoOwnershipDerivation ||
+		descriptors[18].Kind != jobcontract.KindHeartbeat ||
+		descriptors[19].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[20].Kind != jobcontract.KindSyncCoverageRefresh ||
+		descriptors[21].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	// Every checked-in kind is executable, and no kind is Celery-routed any

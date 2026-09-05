@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 99,
+  "row_count": 96,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -1483,78 +1483,6 @@
       "acceptance_test_id": "tests/test_sync_units.py",
       "notes": "internal/jobs/report unreachable from cmd/ (gap 2.7)",
       "route_mount_prefix": ""
-    },
-    {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:12",
-      "surface": "investment.chunk",
-      "class": "registry_kind",
-      "source": {
-        "file": "contracts/jobs/v1/registry.json",
-        "line": 12
-      },
-      "queue_or_cadence": "investment / heavy",
-      "dispatches": "run_investment_materialize_chunk",
-      "dispatch_mechanism": "job_registry_descriptor",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "investment.chunk"
-      },
-      "target_kind_id": "kind:investment.chunk",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `investment.chunk` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "handler_owner metadata drift, gap 4.7 | Orchestrator resolution: real current executor is the work-graph compatibility bridge cmd/dev-health-worker/workgraph.go (confirmed: it constructs workgraph.NewHTTPCompatibilityExecutor against /internal/worker/workgraph/v1/execute), NOT internal/jobs/investment as registry.json handler_owner metadata claims. That metadata drift is a known gap (4.7) whose fix belongs to CUT-13; this row records the real owner without editing registry.json."
-    },
-    {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:44",
-      "surface": "investment.dispatch",
-      "class": "registry_kind",
-      "source": {
-        "file": "contracts/jobs/v1/registry.json",
-        "line": 44
-      },
-      "queue_or_cadence": "investment / heavy",
-      "dispatches": "dispatch_investment_materialize_partitioned",
-      "dispatch_mechanism": "job_registry_descriptor",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "investment.dispatch"
-      },
-      "target_kind_id": "kind:investment.dispatch",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `investment.dispatch` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "handler_owner metadata drift | Orchestrator resolution: real current executor is cmd/dev-health-worker/workgraph.go (HTTP compatibility bridge), not internal/jobs/investment; registry.json handler_owner metadata is stale (gap 4.7, fix owned by CUT-13)."
-    },
-    {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:76",
-      "surface": "investment.finalize",
-      "class": "registry_kind",
-      "source": {
-        "file": "contracts/jobs/v1/registry.json",
-        "line": 76
-      },
-      "queue_or_cadence": "investment / heavy",
-      "dispatches": "finalize_investment_materialize_partitioned",
-      "dispatch_mechanism": "job_registry_descriptor",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "investment.finalize"
-      },
-      "target_kind_id": "kind:investment.finalize",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `investment.finalize` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "handler_owner metadata drift | Orchestrator resolution: real current executor is cmd/dev-health-worker/workgraph.go (HTTP compatibility bridge), not internal/jobs/investment; registry.json handler_owner metadata is stale (gap 4.7, fix owned by CUT-13)."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:108",

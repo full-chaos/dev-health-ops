@@ -199,9 +199,6 @@ func runWithLeaseRenewal(ctx context.Context, lease time.Duration, renew func(co
 
 type BuildHandler struct{ *handler }
 type MaterializeHandler struct{ *handler }
-type DispatchHandler struct{ *handler }
-type ChunkHandler struct{ *handler }
-type FinalizeHandler struct{ *handler }
 
 // NewBuildHandler builds the workgraph.build handler. preSteps are native Go
 // producers that run before the Python bridge, in the order given; see
@@ -217,18 +214,6 @@ func NewMaterializeHandler(store Store, executor CompatibilityExecutor) (*Materi
 	h, err := newHandler(store, executor, nil, nil)
 	return &MaterializeHandler{h}, err
 }
-func NewDispatchHandler(store Store, executor CompatibilityExecutor) (*DispatchHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
-	return &DispatchHandler{h}, err
-}
-func NewChunkHandler(store Store, executor CompatibilityExecutor) (*ChunkHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
-	return &ChunkHandler{h}, err
-}
-func NewFinalizeHandler(store Store, executor CompatibilityExecutor) (*FinalizeHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
-	return &FinalizeHandler{h}, err
-}
 
 func (h *BuildHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.WorkGraphBuildArgs]) error {
 	if execution == nil {
@@ -241,22 +226,4 @@ func (h *MaterializeHandler) Work(ctx context.Context, execution *jobruntime.Exe
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	return h.work(ctx, execution.Args.Payload.RequestID, KindMaterialize, execution.OrganizationID, execution.Envelope.Domain)
-}
-func (h *DispatchHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentDispatchArgs]) error {
-	if execution == nil {
-		return jobruntime.Permanent(ErrInvalidState)
-	}
-	return h.work(ctx, execution.Args.Payload.RequestID, KindDispatch, execution.OrganizationID, execution.Envelope.Domain)
-}
-func (h *ChunkHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentChunkArgs]) error {
-	if execution == nil {
-		return jobruntime.Permanent(ErrInvalidState)
-	}
-	return h.work(ctx, execution.Args.Payload.ChunkID, KindChunk, execution.OrganizationID, execution.Envelope.Domain)
-}
-func (h *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentFinalizeArgs]) error {
-	if execution == nil {
-		return jobruntime.Permanent(ErrInvalidState)
-	}
-	return h.work(ctx, execution.Args.Payload.RunID, KindFinalize, execution.OrganizationID, execution.Envelope.Domain)
 }

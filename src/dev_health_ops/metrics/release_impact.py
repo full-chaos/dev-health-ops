@@ -1,12 +1,20 @@
-"""Release impact daily metric computation.
+"""Release impact daily metric computation -- per-day helper only (CHAOS-5234).
 
-Reads from ``telemetry_signal_bucket`` and ``deployments`` tables, computes
-per-release/environment impact deltas, and writes ``ReleaseImpactDailyRecord``
-rows via the ClickHouse sink.
+CHAOS-4296 ported the daily production compute to a native Go executor
+(``internal/jobs/metrics/remaining/release_impact_native_executor.go``); the
+former top-level orchestrator in this module, ``compute_release_impact_daily``
+(the recomputation-window loop over ``_compute_day`` below, writing via
+``ClickHouseMetricsSink``), was deleted in CHAOS-5234 once nothing else called
+it -- ``run_release_impact_job``/``job_release_impact.py`` (its only caller)
+is deleted too.
 
-Recomputation contract (PRD §Late data):
-- Always recomputes the last ``recomputation_window_days`` (default 7) days.
-- Append-only: new rows with newer ``computed_at`` win via ``argMax``.
+``_compute_day`` itself is KEPT: ``src/dev_health_ops/fixtures/runner.py``
+imports it directly (as ``_compute_release_impact_day``) to synthesize
+realistic ``release_impact_daily`` rows for local/CI fixture generation, a
+live, real, non-production-job caller unrelated to the daily job this module
+used to serve. Reads from ``telemetry_signal_bucket`` and ``deployments``
+tables, computes per-release/environment impact deltas for ONE day, and
+returns ``ReleaseImpactDailyRecord`` rows for the caller to write.
 """
 
 from __future__ import annotations
@@ -17,7 +25,6 @@ from typing import Any
 from uuid import UUID
 
 from dev_health_ops.metrics.schemas import ReleaseImpactDailyRecord
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 logger = logging.getLogger(__name__)
 
@@ -42,47 +49,6 @@ def _query_dicts(
     if not col_names or not rows:
         return []
     return [dict(zip(col_names, row)) for row in rows]
-
-
-async def compute_release_impact_daily(
-    ch_client: Any,
-    sink: ClickHouseMetricsSink,
-    org_id: str,
-    day: date,
-    recomputation_window_days: int = 7,
-) -> int:
-    """Compute release impact metrics for a given day.
-
-    Recomputes the last ``recomputation_window_days`` days (append-only;
-    latest ``computed_at`` wins via ``argMax``).
-
-    Returns number of records written.
-    """
-    computed_at = datetime.now(tz=timezone.utc)
-    total_written = 0
-
-    start_day = day - timedelta(days=recomputation_window_days - 1)
-    current = start_day
-    while current <= day:
-        records = _compute_day(ch_client, org_id, current, computed_at)
-        if records:
-            sink.write_release_impact_daily(records)
-            total_written += len(records)
-            logger.info(
-                "release_impact_daily: wrote %d records for day=%s org=%s",
-                len(records),
-                current.isoformat(),
-                org_id,
-            )
-        else:
-            logger.debug(
-                "release_impact_daily: no data for day=%s org=%s",
-                current.isoformat(),
-                org_id,
-            )
-        current += timedelta(days=1)
-
-    return total_written
 
 
 def _compute_day(

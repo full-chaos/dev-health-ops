@@ -50,6 +50,9 @@ def test_retired_dispatcher_has_no_runtime_exports_or_beat_entry():
     # pure re-export shim over the now-deleted metrics_partitioned.py
     # dispatch chain), so it is no longer scanned here -- there is nothing
     # left to import.
+    # CHAOS-4439: metrics_daily.py stays (peer read caught a live producer
+    # in external_ingest/recompute.py -- see PR #2237) so it is still
+    # imported and scanned here like before.
     from dev_health_ops.workers import metrics_daily, tasks
     from dev_health_ops.workers.config import beat_schedule
 

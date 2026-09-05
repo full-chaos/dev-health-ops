@@ -137,14 +137,41 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["ic_finalize"]; got != "finalize" {
 		t.Fatalf("ic_finalize must be phase=finalize (CHAOS-4290), got %q", got)
 	}
+	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
+	// post_bridge, for the IDENTICAL reason -- all three read
+	// work_item_team_attributions, which the still-Python-bridged
+	// work_item_attribution family writes during the same partition's
+	// compatibility call. All three must be port=go AND phase=post_bridge;
+	// either half alone is a half-cutover (port=go without the phase would
+	// run them pre_bridge against a stale attribution snapshot, which is the
+	// exact P1 codex round 1 caught on CHAOS-4278).
+	//
+	// CHAOS-5078 is the follow-up that moves all three back to pre_bridge
+	// once the DAILY work_item_attribution family has its own native executor
+	// that can be sequenced ahead of them. When that lands, this block and
+	// the allowlist below move together.
+	for _, family := range []string{"work_item", "work_item_estimate"} {
+		if got := byName[family]; got != "go" {
+			t.Fatalf("%s must be port=go (CHAOS-4283), got %q", family, got)
+		}
+		if got := byPhase[family]; got != "post_bridge" {
+			t.Fatalf("%s must be phase=post_bridge (CHAOS-4283, pending CHAOS-5078), got %q", family, got)
+		}
+	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
-	// which family it belongs to and why, exactly as this assertion forced that
-	// for ic_finalize. Widening it to accept anything in validPhases would turn
-	// a deliberate acknowledgement into a silent pass.
+	// which family it belongs to and why. Widening it to accept anything in
+	// validPhases would turn a deliberate acknowledgement into a silent pass.
+	//
+	// It is a name->PHASE map, not a set. main's version was a set of
+	// post-bridge families, which was sufficient while post_bridge was the only
+	// non-default phase; it cannot express that ic_finalize is "finalize" and
+	// would have silently accepted ic_finalize declaring post_bridge.
 	nonDefaultPhase := map[string]string{
-		"work_item_state": "post_bridge",
-		"ic_finalize":     "finalize",
+		"work_item_state":    "post_bridge",
+		"work_item":          "post_bridge",
+		"work_item_estimate": "post_bridge",
+		"ic_finalize":        "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

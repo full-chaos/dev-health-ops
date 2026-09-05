@@ -878,7 +878,52 @@ func dailyNativeFamilyRegistrations(
 			"error", workItemStateErr,
 		)
 	}
+
+	// CHAOS-4283: work_item and work_item_estimate read the SAME
+	// work_item_team_attributions rows work_item_state reads, for the
+	// same reason and with the same loader -- so they carry the same
+	// "phase":"post_bridge" declaration and register here, not in the
+	// native map above. Registered as TWO independent executors, one
+	// per families.json entry, so a construction or runtime failure in
+	// one never takes the other down (the file_hotspots/
+	// file_risk_hotspots discipline, CHAOS-4277).
+	//
+	// FAIL-OPEN CAVEAT, inherent to post_bridge and worth restating: a
+	// refusal here is NOT the same as a pre_bridge refusal. Python was
+	// already told to skip these families for this partition
+	// (skipFamiliesForBridge adds every post_bridge NAME
+	// unconditionally), so a failure means NOBODY writes this family's
+	// rows for this partition -- there is no bridge fallback. The
+	// DailyMetricsNativeFamilyOutcomeRefused counter is the
+	// operator-visible signal.
+	if workItemExecutor, workItemErr := daily.NewWorkItemExecutor(clickhouseConnection); workItemErr == nil {
+		postBridge["work_item"] = workItemExecutor
+	} else {
+		logger.Error(
+			"work_item native executor refused; NO writer produces "+
+				"work_item_metrics_daily, work_item_user_metrics_daily "+
+				"or work_item_cycle_times for any partition until this "+
+				"executor can be constructed (post_bridge families have "+
+				"no compatibility-bridge fallback). Every other "+
+				"daily-metrics family is unaffected.",
+			"error", workItemErr,
+		)
+	}
+	if workItemEstimateExecutor, workItemEstimateErr := daily.NewWorkItemEstimateExecutor(clickhouseConnection); workItemEstimateErr == nil {
+		postBridge["work_item_estimate"] = workItemEstimateExecutor
+	} else {
+		logger.Error(
+			"work_item_estimate native executor refused; NO writer "+
+				"produces estimate_coverage_metrics_daily for any "+
+				"partition until this executor can be constructed "+
+				"(post_bridge families have no compatibility-bridge "+
+				"fallback). Every other daily-metrics family is "+
+				"unaffected.",
+			"error", workItemEstimateErr,
+		)
+	}
 	return native, postBridge, finalize
+
 }
 
 func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {

@@ -127,8 +127,25 @@ func TestDailyMetricsNativeFamiliesCoverEveryPortedFamily(t *testing.T) {
 	}
 
 	registered := make(map[string]bool, len(dailyMetricsNativeFamilies))
+	seen := make(map[string]int, len(dailyMetricsNativeFamilies))
 	for _, family := range dailyMetricsNativeFamilies {
 		registered[family] = true
+		seen[family]++
+	}
+	// The map conversion above is what this coverage check needs, and it is
+	// also what HIDES a duplicate: a second "work_item" entry satisfies every
+	// membership test while writeDailyMetricsNativeFamily (telemetry.go) ranges
+	// over the SLICE, emitting two Prometheus samples for one label set. Codex
+	// r2 P3, executed: "telemetry duplicate allowlist passes map coverage: true
+	// has duplicate: true". Assert on the slice, not on its map projection.
+	for family, count := range seen {
+		if count > 1 {
+			t.Errorf(
+				"dailyMetricsNativeFamilies lists %q %d times -- the collector "+
+					"ranges over this slice, so a duplicate emits duplicate "+
+					"Prometheus samples for one label set",
+				family, count)
+		}
 	}
 
 	var missing []string

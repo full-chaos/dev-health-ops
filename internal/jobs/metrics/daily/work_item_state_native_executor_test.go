@@ -196,6 +196,48 @@ func TestResolveWorkItemPrimaryTeamPassesThroughAttribution(t *testing.T) {
 	}
 }
 
+// TestResolveWorkItemPrimaryTeamStripsWhitespaceLikePython pins the half of
+// normalize_team_id/normalize_team_name (providers/teams.py:37-48) that the
+// "" check alone does not reach. Python is
+//
+//	if not team_id or not team_id.strip(): return UNASSIGNED_TEAM_ID
+//	return team_id.strip()
+//
+// so it BOTH treats a whitespace-only value as unassigned AND strips a padded
+// one. team_id is a grouping key and part of the sorting key, so an untrimmed
+// value splits a team's rows in two -- " team-a " and "team-a" aggregate
+// separately and neither total is right.
+//
+// This is asserted here rather than only through the golden because the frozen
+// corpus carries no whitespace-bearing attribution string: a test that never
+// receives a padded value cannot tell the two normalizers apart.
+func TestResolveWorkItemPrimaryTeamStripsWhitespaceLikePython(t *testing.T) {
+	for _, testCase := range []struct {
+		name             string
+		attribution      workItemPrimaryAttribution
+		wantID, wantName string
+	}{
+		{"padded", workItemPrimaryAttribution{TeamID: " team-a ", TeamName: " Core "}, "team-a", "Core"},
+		{"whitespace only", workItemPrimaryAttribution{TeamID: "   ", TeamName: "\t\n"}, unassignedTeamID, unassignedTeamName},
+		{"tab padded", workItemPrimaryAttribution{TeamID: "\tteam-b\t", TeamName: "\tPlatform\t"}, "team-b", "Platform"},
+		// U+001C-U+001F are whitespace to CPython's str.strip() but NOT to Go's
+		// unicode.IsSpace (Unicode White_Space excludes them), so
+		// strings.TrimSpace leaves them in place. Without these two cases the
+		// delegation looks Python-equivalent while a separator-only team_id
+		// stays a live grouping key instead of becoming "unassigned".
+		{"separator padded", workItemPrimaryAttribution{TeamID: "\x1cteam-c\x1f", TeamName: "\x1eData\x1d"}, "team-c", "Data"},
+		{"separator only", workItemPrimaryAttribution{TeamID: "\x1c\x1d\x1e\x1f", TeamName: "\x1c"}, unassignedTeamID, unassignedTeamName},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			teamID, teamName := resolveWorkItemPrimaryTeam(testCase.attribution)
+			if teamID != testCase.wantID || teamName != testCase.wantName {
+				t.Fatalf("resolveWorkItemPrimaryTeam(%#v) = (%q,%q), want (%q,%q) -- Python strips and treats whitespace-only as unassigned",
+					testCase.attribution, teamID, teamName, testCase.wantID, testCase.wantName)
+			}
+		})
+	}
+}
+
 // TestComputeWorkItemStateDurationsItemsTouchedDedupesRepeatVisits ports the
 // items_touched set semantics: an item revisiting the SAME status twice in
 // one day (e.g. in_progress -> blocked -> in_progress) counts once as

@@ -4,7 +4,7 @@
   "families": [
     {
       "name": "complexity",
-      "python_sources": ["src/dev_health_ops/workers/metrics_extra.py", "src/dev_health_ops/metrics/job_complexity_db.py"],
+      "python_sources": ["src/dev_health_ops/metrics/job_complexity_db.py"],
       "writes": ["file_complexity_snapshots", "repo_complexity_daily"],
       "max_concurrency": 2,
       "clickhouse_read_budget": 2,
@@ -19,7 +19,7 @@
     },
     {
       "name": "dora",
-      "python_sources": ["src/dev_health_ops/workers/metrics_extra.py", "src/dev_health_ops/metrics/job_dora.py", "src/dev_health_ops/metrics/compute_dora.py"],
+      "python_sources": ["src/dev_health_ops/metrics/job_dora.py", "src/dev_health_ops/metrics/compute_dora.py"],
       "writes": ["dora_metrics_daily"],
       "max_concurrency": 4,
       "clickhouse_read_budget": 2,
@@ -34,7 +34,7 @@
     },
     {
       "name": "release_impact",
-      "python_sources": ["src/dev_health_ops/workers/metrics_extra.py", "src/dev_health_ops/metrics/job_release_impact.py", "src/dev_health_ops/metrics/release_impact.py"],
+      "python_sources": ["src/dev_health_ops/metrics/job_release_impact.py", "src/dev_health_ops/metrics/release_impact.py"],
       "writes": ["release_impact_daily"],
       "max_concurrency": 2,
       "clickhouse_read_budget": 2,

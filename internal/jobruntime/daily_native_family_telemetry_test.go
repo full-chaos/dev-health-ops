@@ -270,12 +270,15 @@ func TestPartialWriteRecordsItsRowsAndDuration(t *testing.T) {
 	); err != nil {
 		t.Fatalf("observe partial_write: %v", err)
 	}
-	// A REFUSED observation alongside it, carrying a row count that must be
-	// ignored. Without this the test could not tell "records rows for
-	// partial_write" from "records rows for everything", and the second would
-	// inflate the total with rows that were never written.
+	// A REFUSED observation carrying a NONZERO row count that must be ignored.
+	//
+	// The obvious version passes 0 here, and it proves nothing: the assertion
+	// below would pass whether refused is filtered or not, so it could not tell
+	// "records rows for partial_write" from "records rows for everything". 99 is
+	// a number that WILL show up in the total if the asymmetry breaks. (Caught
+	// by lane-port-review-bench on the #2235 side of the same fix.)
 	if err := collector.ObserveDailyMetricsNativeFamily(
-		"team_wellbeing", DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+		"team_wellbeing", DailyMetricsNativeFamilyOutcomeRefused, 99, 5*time.Millisecond,
 	); err != nil {
 		t.Fatalf("observe refused: %v", err)
 	}

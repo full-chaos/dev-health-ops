@@ -3459,7 +3459,7 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyRowsWritten[family])
 	}
 
-	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Only Computed attempts are observed.", "histogram")
+	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Computed and partial_write attempts are observed; refused is not, because it did no work to time.", "histogram")
 	for _, family := range families {
 		writeHistogram(output, "worker_daily_metrics_native_family_duration_seconds",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyDuration[family])

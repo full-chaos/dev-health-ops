@@ -40,6 +40,29 @@ KNOWN_UNCOVERED = {
     "work_item_state",
     "incident",
     "testops_risk",
+    # --- added 2026-09-05, when merging main forward and porting two more
+    # families made four more natives golden-required. Each entry is a GAP,
+    # not an exemption; the reason says what would close it.
+    #
+    # Owned by CHAOS-4283 / #2246. The coverage decision belongs to that lane,
+    # which can see whether its own E2E run produces the rows. Naming another
+    # lane's families in this gate from here would assert rows this lane has no
+    # evidence for, and would block this PR on their backlog.
+    "work_item",
+    "work_item_estimate",
+    # MINE, and pinning them is the part of this change I like least: these are
+    # the two families this stack ports, and pinning leaves them unchecked by
+    # the very gate that exists to prove a native family ran. It is a gap, not
+    # coverage, and it is recorded as one.
+    #
+    # What would close it is evidence, not a decision: does the executed-proof
+    # E2E seed actually produce `review_edges_daily` rows, and does it carry the
+    # ~30 days of history benchmarking's window needs on the org's ANCHOR
+    # partition (it writes on exactly one partition per org/day)? Adding either
+    # without that evidence makes the gate assert rows the fixture may never
+    # create, which turns a green gate red for a reason unrelated to the port.
+    "review_edges",
+    "benchmarking",
 }
 
 

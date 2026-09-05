@@ -108,43 +108,15 @@ func TestPartitionNativeFamilySuccessSkipsCompatibility(t *testing.T) {
 	}
 }
 
-// TestPartitionNativeFamilyFailureFallsOpenToCompatibility proves a native
-// family's RUNTIME failure is fail-open (chris's ruling, relayed via
-// team-lead, CHAOS-4276): the partition still succeeds, the failed family is
-// NOT in skipFamilies (so the compatibility bridge computes it as before),
-// and the refusal is observed rather than silently swallowed.
-func TestPartitionNativeFamilyFailureFallsOpenToCompatibility(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
-		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor := &fakeNativeFamilyExecutor{err: errors.New("transient clickhouse failure")}
-	observer := &recordingNativeFamilyObserver{}
-	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor})
-	handler.SetNativeFamilyObserver(observer)
-
-	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
-		t.Fatalf("a native family failure must not fail the partition: %v", err)
-	}
-	if executor.calls != 1 {
-		t.Fatalf("native executor calls=%d, want 1", executor.calls)
-	}
-	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
-		t.Fatalf("skipFamilies=%v, want empty -- the failed family must stay on the compatibility path", got)
-	}
-	if store.partitionCompletions != 1 {
-		t.Fatalf("partition completions=%d, want 1 (fail-open must still complete the partition)", store.partitionCompletions)
-	}
-	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
-		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
-		t.Fatalf("observations=%#v", observer.calls)
-	}
-}
+// TestPartitionNativeFamilyFailureFallsOpenToCompatibility is DELETED
+// (CHAOS-5243, chris: "it should fail loudly so we find it"). It asserted
+// the OLD CHAOS-4276 contract -- a native family's runtime failure is
+// fail-open, the partition still completes 'succeeded', the failed family
+// stays on the compatibility bridge path -- which CHAOS-5243 deliberately
+// inverts: an ordinary pre_bridge refusal now holds the partition
+// incomplete, exactly like a partial write. See
+// TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly for the new
+// contract's own test, same fixture shape.
 
 // TestPreBridgePartialWriteHoldsPartitionIncomplete is CHAOS-5078 codex
 // round 3's RED-ON-BASELINE proof (astra scale review F1's pre_bridge twin,
@@ -257,12 +229,27 @@ func TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved(t 
 		familyObserver.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite {
 		t.Fatalf("family observations=%#v, want the PartialWrite observation unaffected", familyObserver.calls)
 	}
-	if len(logger.calls) != 1 {
-		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	// CHAOS-5243 sweep: computeNativeFamilies now logs EVERY incomplete
+	// family (partial write or ordinary refusal alike), not just ordinary
+	// refusals -- so this fixture's partial-write family produces TWO log
+	// calls: the earlier per-family incomplete-family log, then this
+	// test's own subject, the later release-with-reason failure. Find the
+	// release-with-reason call by content rather than assuming index
+	// 0/only-one-call, so this test's OWN assertions stay scoped to what
+	// it's actually testing.
+	if len(logger.calls) != 2 {
+		t.Fatalf("logger.calls=%d, want exactly 2 (the per-family incomplete-family log, "+
+			"then the release-with-reason failure log) -- got %#v", len(logger.calls), logger.calls)
 	}
-	call := logger.calls[0]
-	if !strings.Contains(call.msg, "release-with-reason failed") {
-		t.Fatalf("log message %q does not describe the release-with-reason failure", call.msg)
+	var call *recordingRefusalLogCall
+	for i := range logger.calls {
+		if strings.Contains(logger.calls[i].msg, "release-with-reason failed") {
+			call = &logger.calls[i]
+			break
+		}
+	}
+	if call == nil {
+		t.Fatalf("no log call describes the release-with-reason failure; got %#v", logger.calls)
 	}
 	if !call.hasArg("organization_id", testOrgID) {
 		t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
@@ -312,8 +299,22 @@ func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttributio
 	}
 	handler.SetNativeFamilyObserver(observer)
 
-	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
-		t.Fatalf("a blocked dependent must not fail the partition either: %v", err)
+	// CHAOS-5243: work_item_attribution's OWN ordinary refusal now holds the
+	// partition incomplete (it no longer matters that it's the "failed
+	// dependency" rather than a plain standalone refusal -- every pre_bridge
+	// refusal does this now). The BLOCKED READER's own handling
+	// (blockedNativeDependency, a separate code path this ticket does not
+	// touch) is UNCHANGED: work_item_state still never runs natively and
+	// still stays OFF skipFamilies (nothing was ever written for it, so the
+	// bridge remains a safe, correct fallback for THAT specific family).
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete for the failed "+
+			"work_item_attribution dependency (CHAOS-5243)", workErr)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0 -- the failed dependency must hold the "+
+			"partition incomplete", store.partitionCompletions)
 	}
 	if attribution.calls != 1 {
 		t.Fatalf("attribution executor calls=%d, want 1", attribution.calls)
@@ -322,9 +323,11 @@ func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttributio
 		t.Fatalf("work_item_state executor calls=%d, want 0 -- it must never run natively when its "+
 			"work_item_attribution dependency failed this pass", reader.calls)
 	}
-	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
-		t.Fatalf("skipFamilies=%v, want empty -- BOTH the failed dependency and its blocked reader "+
-			"must stay on the compatibility path so the bridge can compute them consistently", got)
+	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "work_item_attribution" {
+		t.Fatalf("skipFamilies=%v, want [work_item_attribution] -- the failed family itself is now "+
+			"excluded from the bridge's recompute (CHAOS-5243, matches the partial-write "+
+			"contract), but its BLOCKED reader stays off skipFamilies since nothing was ever "+
+			"written for it and the bridge is still a safe fallback there", got)
 	}
 	sort.Slice(observer.calls, func(i, j int) bool { return observer.calls[i].family < observer.calls[j].family })
 	if len(observer.calls) != 2 ||
@@ -521,67 +524,102 @@ func TestPostBridgeNativeFamilyFailureIsFailOpenWithNarrowerSafetyNet(t *testing
 // DailyMetricsNativeFamilyOutcomeRefused counter increment; CHAOS-5138 hit
 // exactly this gap live: cicd's runtime error was unrecoverable from any CI
 // artifact because nothing ever logged it.
+// TestNativeFamilyRefusalIsLogged covers the (still fail-open, unchanged by
+// CHAOS-5243) post_bridge case; the pre_bridge case is now split out to
+// TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly below, since
+// CHAOS-5243 deleted pre_bridge's fail-open path entirely -- these two
+// cases no longer share an expected Work() outcome, so they can no longer
+// share one table-driven assertion block.
 func TestNativeFamilyRefusalIsLogged(t *testing.T) {
 	refusalErr := errors.New("transient clickhouse failure: cicd-5139")
 	targetDay := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
-	cases := []struct {
-		name string
-		wire func(handler *PartitionHandler, executor *fakeNativeFamilyExecutor)
-	}{
-		{
-			name: "pre_bridge",
-			wire: func(handler *PartitionHandler, executor *fakeNativeFamilyExecutor) {
-				handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
-			},
-		},
-		{
-			name: "post_bridge",
-			wire: func(handler *PartitionHandler, executor *fakeNativeFamilyExecutor) {
-				handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
-			},
-		},
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running", TargetDay: targetDay},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store := &fakeStore{
-				partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
-				run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running", TargetDay: targetDay},
-			}
-			handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			executor := &fakeNativeFamilyExecutor{err: refusalErr}
-			logger := &recordingRefusalLogger{}
-			handler.SetNativeFamilyLogger(logger)
-			tc.wire(handler, executor)
+	handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{err: refusalErr}
+	logger := &recordingRefusalLogger{}
+	handler.SetNativeFamilyLogger(logger)
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
 
-			if err := handler.Work(context.Background(), partitionExecution()); err != nil {
-				t.Fatalf("a native family refusal must not fail the partition: %v", err)
-			}
-			if len(logger.calls) != 1 {
-				t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
-			}
-			call := logger.calls[0]
-			if !call.hasArg("family", "cicd") {
-				t.Fatalf("log call %#v does not carry family=cicd", call)
-			}
-			if !call.hasArg("organization_id", testOrgID) {
-				t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
-			}
-			if !call.hasArg("target_day", targetDay) {
-				t.Fatalf("log call %#v does not carry target_day=%v", call, targetDay)
-			}
-			if !call.hasArg("partition_id", testPartitionID) {
-				t.Fatalf("log call %#v does not carry partition_id=%s", call, testPartitionID)
-			}
-			if !call.hasArg("run_id", testRunID) {
-				t.Fatalf("log call %#v does not carry run_id=%s", call, testRunID)
-			}
-			if !call.hasArg("error", refusalErr) {
-				t.Fatalf("log call %#v does not carry the wrapped error %v -- a counter increment alone is CHAOS-5138's whole root cause", call, refusalErr)
-			}
-		})
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatalf("a post_bridge native family refusal must not fail the partition (CHAOS-5243 "+
+			"only closed pre_bridge's fail-open path, not post_bridge's -- see #2276/CHAOS-5190 "+
+			"for that): %v", err)
+	}
+	if len(logger.calls) != 1 {
+		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	}
+	call := logger.calls[0]
+	if !call.hasArg("family", "cicd") {
+		t.Fatalf("log call %#v does not carry family=cicd", call)
+	}
+	if !call.hasArg("organization_id", testOrgID) {
+		t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
+	}
+	if !call.hasArg("target_day", targetDay) {
+		t.Fatalf("log call %#v does not carry target_day=%v", call, targetDay)
+	}
+	if !call.hasArg("partition_id", testPartitionID) {
+		t.Fatalf("log call %#v does not carry partition_id=%s", call, testPartitionID)
+	}
+	if !call.hasArg("run_id", testRunID) {
+		t.Fatalf("log call %#v does not carry run_id=%s", call, testRunID)
+	}
+	if !call.hasArg("error", refusalErr) {
+		t.Fatalf("log call %#v does not carry the wrapped error %v -- a counter increment alone is CHAOS-5138's whole root cause", call, refusalErr)
+	}
+}
+
+// TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly is the CHAOS-5243
+// fix (chris, "it should fail loudly so we find it"): an ORDINARY
+// (non-partial) pre_bridge native family refusal used to log a counter
+// increment and let the partition complete 'succeeded' via the Python
+// compatibility bridge's fail-open fallback -- a native family could fail
+// silently, forever, and nobody would be paged. Mutant-proofed below by
+// reverting the fix (see its own comment).
+func TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly(t *testing.T) {
+	refusalErr := errors.New("transient clickhouse failure: cicd-5139")
+	targetDay := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running", TargetDay: targetDay},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{err: refusalErr}
+	logger := &recordingRefusalLogger{}
+	handler.SetNativeFamilyLogger(logger)
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor}); err != nil {
+		t.Fatal(err)
+	}
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete -- an ordinary "+
+			"pre_bridge refusal must now hold the partition, not fail-open to the bridge "+
+			"(CHAOS-5243)", workErr)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0 -- an ordinary refusal must hold the "+
+			"partition incomplete, exactly like a partial write does", store.partitionCompletions)
+	}
+	if len(logger.calls) != 1 {
+		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	}
+	call := logger.calls[0]
+	if !call.hasArg("family", "cicd") || !call.hasArg("organization_id", testOrgID) ||
+		!call.hasArg("target_day", targetDay) || !call.hasArg("partition_id", testPartitionID) ||
+		!call.hasArg("run_id", testRunID) || !call.hasArg("error", refusalErr) ||
+		!call.hasArg("phase", "pre_bridge") || !call.hasArg("rows", 0) {
+		t.Fatalf("log call %#v missing an expected field (family/organization_id/target_day/"+
+			"partition_id/run_id/error/phase/rows)", call)
 	}
 }
 
@@ -600,9 +638,15 @@ func TestNativeFamilyLoggerIsOptional(t *testing.T) {
 	}
 	executor := &fakeNativeFamilyExecutor{err: errors.New("transient clickhouse failure")}
 	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
-	// Deliberately no SetNativeFamilyLogger call.
-	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
-		t.Fatalf("a nil logger must not affect fail-open behavior: %v", err)
+	// Deliberately no SetNativeFamilyLogger call -- this test's whole point
+	// is that a nil logger never panics and never changes what Work()
+	// decides, whatever that decision now is (CHAOS-5243: a plain refusal
+	// now correctly fails the partition instead of falling open, but a nil
+	// logger must produce the IDENTICAL disposition a wired one would).
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete even with no "+
+			"logger wired -- a nil logger must not gate behavior (CHAOS-5243)", workErr)
 	}
 }
 

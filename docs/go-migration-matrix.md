@@ -156,8 +156,11 @@ aggregation layer built on top of these tables (see METRICS below).
 This is wrong for raw ingestion -- see the `tests` dataset rows above (`internal/providersync/github_tests_effects_clickhouse.go:152,185,218`,
 and the explicitly cross-provider `testOpsEffects`, `internal/providersync/testops_effects.go:23-28`, doc
 comment: "the single six-destination effect projection shared by GitHub and GitLab TestOps handlers"). What
-IS still 100% Python is the separate daily-metrics *aggregation* layer built on top of these tables --
-`testops_pipeline`/`testops_test`/`testops_coverage` under METRICS below. The brief conflated the two layers.
+was still 100% Python at the time of that note is the separate daily-metrics *aggregation* layer built on
+top of these tables -- `testops_pipeline`/`testops_test`/`testops_coverage` under METRICS below. The brief
+conflated the two layers. **Superseded 2026-09-04 (CHAOS-4284): all three of those families are now NATIVE
+too**, so neither layer is Python-only any more; only the (still-present, no longer authoritative)
+`compute_testops.py` compute remains, feeding `testops_risk` in-process.
 
 **Doc-drift finding (filed as a follow-up ticket, not fixed here):** `gitlab` `incidents` is present and
 `native_go`/`route_ready` in `matrix.json` (table above reflects this correctly) but has no entry in the
@@ -171,28 +174,16 @@ cross-contract inconsistency between the repo's two provider-sync contract files
 `cmd/dev-health-worker/daily.go` ~L680-820; everything else falls through to `HTTPCompatibilityExecutor` ->
 `POST /internal/worker/daily-metrics/v1/execute` -> `job_daily.py:1104 run_daily_metrics_job`) and 7
 independent `metrics.remaining.*` River kinds (`daily.go:566-646`) are the two WORKER-side families below.
-**CHAOS-5055 (landed, corrects a stale "the CLI verb layer bypasses the worker" claim this section
-used to make):** `daily`/`rebuild`/`complexity`/`dora`/`capacity`/`release-impact` no longer call a
-Python compute function in-process at all -- they shell out to `dev-health-workerctl` and let the
-worker's own native/bridge split decide, exactly like the post-sync/fixed-schedule fanout paths do.
-`workerctl_dispatch.py`'s own module docstring states why: the old direct-call path never passed
-`skip_families` the way the worker's HTTP bridge does, so a day the worker had already computed could
-be silently recomputed a second time in Python underneath it (`file_hotspots`, a SUM-aggregated table
-with no dedup on replay, was the concrete risk named). `complexity` still resolves to
-COMPAT-Python once the request reaches the worker (that family hasn't ported yet, see #2250) --
-what changed is that the CLI no longer computes it ITSELF via a second, unguarded path.
-`release-impact` ported to native in CHAOS-4296 (#2262) -- its CLI verb now dispatches to the
-same native executor the tables below describe, not a Python compute path.
+The **CLI verb layer largely bypasses both** -- several `dev-hops metrics` verbs call the Python compute
+function directly, even for families whose worker kind is now native:
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops metrics daily` | same split as `metrics.daily_partition` (dispatches to the worker) | `workerctl_dispatch.py` `_cmd_metrics_daily` -> `dev-health-workerctl metrics daily-start` -> the SAME `StartRunTx` coordinator transaction (`internal/jobs/metrics/daily/manual_run.go`) the post-sync/fixed-schedule fanout use -- the worker decides native vs. bridge per family, same as any other trigger of this kind (CHAOS-5055) | -- |
-| `dev-hops metrics rebuild` | same split as `metrics.daily_partition` (dispatches to the worker) | `workerctl_dispatch.py` `_cmd_metrics_rebuild` -> identical `dev-health-workerctl metrics daily-start` request as `daily` (CHAOS-5055) -- kept as a separate verb for operator muscle memory only, **not** `partition_recompute.go` (a different mechanism, next row) | -- |
+| `dev-hops metrics daily` | COMPAT-Python (direct call) | `job_daily.py` `_cmd_metrics_daily` -> `run_daily_metrics_job` -- **bypasses Go's native executors entirely**, unlike the worker's `metrics.daily_partition` kind (9/24 families native there, see table below) | -- |
+| `dev-hops metrics rebuild` | COMPAT-Python (direct call) | `job_daily.py` `_cmd_metrics_rebuild` -> `run_daily_metrics_job` per repo + `run_daily_metrics_finalize` -- **not** `partition_recompute.go`, that's a different mechanism (next row) | -- |
 | `dev-health-workerctl metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself then follows the ordinary native/bridge split below, it is not a compute engine on its own | CHAOS-4459 |
 | `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> triggers the ordinary native/bridge split on replay | `cmd/dev-health-workerctl/main.go:785-1193` | CHAOS-4358/4389/4405 |
-| `dev-hops metrics dora` / `capacity` | NATIVE (dispatches to the worker; both families are native, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family {dora,capacity}` -> the shared remaining-family coordinator (CHAOS-5055) | -- |
-| `dev-hops metrics complexity` | COMPAT-Python (still computes in Python once the request reaches the worker, see the remaining-families table below; not yet ported, see #2250) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family complexity` -> the shared remaining-family coordinator (CHAOS-5055) | #2250 |
-| `dev-hops metrics release-impact` | NATIVE (dispatches to the worker; the family is native, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family release_impact` -> the shared remaining-family coordinator (CHAOS-5055) | CHAOS-4296 |
+| `dev-hops metrics complexity` / `dora` / `capacity` / `release-impact` | COMPAT-Python (direct call, always -- bypasses the native worker kinds below regardless of their own split) | `job_complexity_db.py`/`job_dora.py`/`job_capacity.py`/`job_release_impact.py` | -- |
 | `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | COMPAT-Python (standalone CLI wrapper; duplicate coverage -- `job_daily.py`'s finalize already writes `compounding_risk_daily` nightly regardless) | `job_compounding_risk.py:318` | CHAOS-4287 |
 | `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1598-1686` -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
@@ -205,7 +196,7 @@ same native executor the tables below describe, not a Python compute path.
 | --- | --- | --- | --- |
 | ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | NATIVE | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
-| ai_workflow | COMPAT-Python | Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day` | CHAOS-4286 |
+| ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`) | CHAOS-4286 |
 | benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
@@ -235,12 +226,16 @@ page's own drift gate, per `.remember/remaining-python-compute-inventory-2026-09
 independently re-verified this pass; tracked as a follow-up ticket, not listed as a row here per team-lead's
 instruction not to fold doc-drift findings into the doc itself).
 
-**`internal/jobs/metrics/testops/compute.go`** exists as pure Go compute (with Python oracles for parity
-tests) but is **only** an internal dependency of `testops_risk`'s own input recompute
-(`testops_risk_native_clickhouse.go:15` imports it) -- its own package doc states it does NOT register as a
-native family and does NOT write `testops_{pipeline,test,coverage}_metrics_daily`. Built, not wired; those
-three families are COMPAT-Python above, not ported by this file's existence. Tracked by **CHAOS-4284** (the
-family that would actually consume this code as a native executor).
+**`internal/jobs/metrics/testops/compute.go`** is the pure Go compute (with live-Python oracles for parity)
+shared by `testops_risk` and the three `testops_{pipeline,test,coverage}` families. It was written by
+CHAOS-4294 as an internal dependency of `testops_risk`'s own input recompute and was, for a period,
+*built but not wired* -- no native family consumed it and nothing wrote
+`testops_{pipeline,test,coverage}_metrics_daily`. **CHAOS-4284 closed that gap**: those three families are
+NATIVE above, implemented in `internal/jobs/metrics/daily/testops_native_executor.go` on top of this same
+compute, with cap-free ClickHouse readers in `testops_native_clickhouse.go`. The Python compute in
+`compute_testops.py` is deliberately still present and still runs -- `job_daily.py` feeds its in-process
+results to `testops_risk`'s own functions -- but its three `s.write_testops_*` calls are now skip-gated, so
+Go owns the writes. Deleting the Python path is a deliberate follow-up, not part of CHAOS-4284.
 
 ### Remaining metrics families (`internal/jobs/metrics/remaining/families.json`)
 
@@ -260,14 +255,14 @@ family that would actually consume this code as a native executor).
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops recommendations compute` | N/A -- read-only preview, writes nothing (CHAOS-5055) | `cli.py` `_cmd_recommendations_compute` -> `RuleEngine` directly, evaluates and prints only; it used to persist via `sink.write_recommendations` on an independent, non-deduped schedule against the same table the native `metrics.remaining.recommendations` worker kind writes -- now the persisted path is exclusively `dev-health-workerctl metrics remaining trigger-backstop --family recommendations` | -- |
+| `dev-hops recommendations compute` | COMPAT-Python (direct call) | `cli.py:260-287 _register_recommendations_commands` -> `_cmd_recommendations_compute` -> `RuleEngine` directly -- **bypasses** the now-native `metrics.remaining.recommendations` worker kind | -- |
 | `metrics.remaining.recommendations` (worker kind) | NATIVE | see METRICS' remaining-families table above | CHAOS-4281/CHAOS-3092 (Done) |
 
 ## AI
 
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| ai_governance / ai_impact / ai_workflow | COMPAT-Python | see METRICS' daily-families table above (all `pending`) | CHAOS-4285/4280/4286 |
+| ai_governance / ai_impact / ai_workflow | NATIVE | see METRICS' daily-families table above (all three now native; this hand-authored row is not generator-checked and had drifted stale for all three, not just the family this row's own PR ported -- caught by codex round chaos-5220-r1) | CHAOS-4285/4280/4286 |
 | **ai attribution** | **PARTIAL** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`gitlab_work_item_derived.go:423`, `linear_work_items_derived.go:51,283` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `jira_work_item_derived.go:16-21` -- no AI-attribution signal exists for jira, not a gap). READ path: Python still consumes `ai_attribution` as an input to ai_governance/ai_impact compute (`job_daily.py:1677 ai_loader.load_ai_pr_attributions`) -- that consumption stays COMPAT along with those two families. | none found |
 
 ## INVESTMENT / WORK-GRAPH

@@ -127,6 +127,15 @@ func pythonIsWord(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'
 }
 
+// PythonIsWord is the exported form of pythonIsWord, for callers outside this
+// package that need Python's exact `\w` rune-membership test (codex round
+// chaos-5220 r2, P2, aiworkflow package). Kept as a thin wrapper rather than
+// exporting pythonIsWord directly, so this package's own internal call sites
+// (wordBoundaryBefore/After, flagkeys.go) are untouched.
+func PythonIsWord(r rune) bool {
+	return pythonIsWord(r)
+}
+
 // pythonIsDigit reports whether r is in Python's `re` `\d` set.
 //
 // EQUIVALENCE: every rune Python's `\d` accepts, this accepts. The converse

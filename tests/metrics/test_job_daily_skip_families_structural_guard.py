@@ -76,7 +76,12 @@ def _referenced_names(source: str, source_path: str) -> set[str]:
     string literals like `"compute_" "x"` are folded into ONE `ast.Constant`
     by the parser itself before this function ever sees them, so a
     dynamic reference split across literals is detected exactly like a
-    plain one, no manual concatenation-handling needed).
+    plain one, no manual concatenation-handling needed), and an import
+    alias's ORIGINAL name (`ast.alias.name` -- codex r2 Finding 1 on #2283:
+    `from package import compute_x as y` binds the local name `y`, which is
+    all a bare `ast.Name`/`ast.Attribute` walk would ever see; the deleted
+    function's REAL name is `ast.alias.name`, not the local alias it's bound
+    to, so it must be collected explicitly).
     """
     tree = ast.parse(source, filename=source_path)
     names: set[str] = set()
@@ -87,6 +92,8 @@ def _referenced_names(source: str, source_path: str) -> set[str]:
             names.add(node.attr)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             names.add(node.value)
+        elif isinstance(node, ast.alias):
+            names.add(node.name)
     return names
 
 
@@ -135,4 +142,19 @@ def test_guard_detects_adjacent_string_literal_split_reference() -> None:
     false negative (the literal text never contains the function name as one
     contiguous substring, so a plain `in` check missed it)."""
     source = 'getattr(job_daily, "build_" "governance_rows_for_day")()\n'
+    assert "build_governance_rows_for_day" in _referenced_names(source, "<test>")
+
+
+def test_guard_detects_aliased_import_reference() -> None:
+    """Regression for codex r2 Finding 1 on #2283 (CHAOS-5240): a deleted
+    function imported under a local alias (`from package import
+    build_governance_rows_for_day as daily_compute`) must still be detected
+    by its REAL (pre-alias) name -- a bare Name/Attribute walk only ever
+    sees the local alias (`daily_compute`), never the original name being
+    imported, so the alias binding itself (`ast.alias.name`) has to be
+    collected explicitly."""
+    source = (
+        "from package import build_governance_rows_for_day as daily_compute\n"
+        "daily_compute()\n"
+    )
     assert "build_governance_rows_for_day" in _referenced_names(source, "<test>")

@@ -1680,7 +1680,19 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return nil
 	}
 	if execution.OrganizationID == nil || claim.Run.ID != runID || claim.Run.Status != "running" || claim.Run.OrganizationID != *execution.OrganizationID {
-		_ = handler.store.ReleaseFinalize(ctx, *claim)
+		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
+		// a release failure here leaves the claim's lease live under a run
+		// this handler has already decided never to work, which is exactly
+		// the kind of silent stranding the blocked-marker sweep exists to
+		// catch, just with nothing here to tell it something went wrong.
+		if releaseErr := handler.store.ReleaseFinalize(ctx, *claim); releaseErr != nil {
+			finalizeExecutionLogger(execution).Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	if err := runWithLeaseRenewal(
@@ -1766,17 +1778,47 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			}
 			return retryCompatibilityError(err)
 		}
-		releaseFinalize(handler.store, ctx, *claim)
+		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
+		// same reasoning as the terminal write above, one severity notch down
+		// (a lease this fails to release still expires and becomes
+		// reclaimable, where a failed terminal write has no other recovery
+		// path at all).
+		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+			finalizeLogger.Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return retryCompatibilityError(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
 		// Symmetric with the partition layer: this exit claimed and returned
 		// retryable without releasing, which is the most likely way the lease
 		// behind CHAOS-3991 was orphaned in the first place.
-		releaseFinalize(handler.store, ctx, *claim)
+		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+			finalizeExecutionLogger(execution).Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+// finalizeExecutionLogger returns execution's own logger, or slog.Default()
+// when none is set. `if logger != nil { log }` would turn a nil logger into
+// silence, exactly the defect this file's finalize-failure logging exists to
+// remove -- see finalizeLogger's identical fallback above.
+func finalizeExecutionLogger(execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) *slog.Logger {
+	if execution != nil && execution.Logger != nil {
+		return execution.Logger
+	}
+	return slog.Default()
 }
 
 func runWithLeaseRenewal(
@@ -1919,10 +1961,14 @@ func failPartitionPermanently(store Store, ctx context.Context, claim PartitionC
 	return store.FailPartitionPermanently(failCtx, claim, reason) == nil
 }
 
-func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {
+// releaseFinalize returns the store's own error (r2 finding #1's class,
+// CHAOS-4290) instead of discarding it, matching failFinalizePermanently
+// below: a caller that already decided this claim's work is over is the last
+// frame with the identifiers to explain why a release failed, if it does.
+func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ReleaseFinalize(releaseCtx, claim)
+	return store.ReleaseFinalize(releaseCtx, claim)
 }
 
 // failFinalizePermanently writes the terminal state on a context detached from

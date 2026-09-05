@@ -374,3 +374,149 @@ func TestSetNativeFinalizeFamiliesRejectsNilExecutor(t *testing.T) {
 			handler.nativeFinalizeFamilyNames)
 	}
 }
+
+// The three tests below close the coverage gap the r3 class-sweep found
+// (CHAOS-4290): releaseFinalize's error was discarded at three call sites in
+// Work, all fixed to log via finalizeExecutionLogger/finalizeLogger, but none
+// of the three logging branches had ANY test forcing ReleaseFinalize itself
+// to fail -- go tool cover showed finalizeExecutionLogger at 0.0%. Each test
+// below drives Work down one of the three call sites and asserts the log
+// line, mirroring TestFinalizeSucceedsWhenTheObserverFails' capture pattern.
+
+// TestFinalizeLogsAReleaseFailureFromTheMismatchGuard hits the first call
+// site (Work's claim/run mismatch guard, before any native family runs).
+func TestFinalizeLogsAReleaseFailureFromTheMismatchGuard(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.releaseFinalizeErr = errors.New("release down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A different org than the claim's own triggers the mismatch guard
+	// (claim.Run.OrganizationID != *execution.OrganizationID) without
+	// touching any native family.
+	execution := finalizeExecutionFor(testRunID)
+	mismatchedOrg := "org-does-not-match"
+	execution.OrganizationID = &mismatchedOrg
+	execution.Envelope.OrganizationID = &mismatchedOrg
+	execution.Args.EnvelopeArgs.OrganizationID = &mismatchedOrg
+
+	workErr := handler.Work(context.Background(), execution)
+	if !errors.Is(workErr, ErrInvalidState) {
+		t.Fatalf("Work = %v, want it to wrap ErrInvalidState", workErr)
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1 -- the mismatch guard must still attempt a release", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+}
+
+// TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure hits the second
+// call site: a native family fails on an attempt that is NOT the final one,
+// so Work releases (rather than terminalizes) the claim for a future retry.
+func TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.releaseFinalizeErr = errors.New("release down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	family := &stubFinalizeFamily{err: errors.New("clickhouse hiccup")}
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family}); err != nil {
+		t.Fatal(err)
+	}
+
+	execution := finalizeExecutionFor(testRunID)
+	execution.Attempt = 0
+	execution.Definition.MaxAttempts = 3 // attempt (0) < max (3): retryable, not terminal.
+
+	workErr := handler.Work(context.Background(), execution)
+	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("Work = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
+	}
+	if store.failedFinalizePermanently != 0 {
+		t.Fatalf("failedFinalizePermanently = %d, want 0 -- attempt 0 of 3 must release, not terminalize",
+			store.failedFinalizePermanently)
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+}
+
+// TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure hits the third
+// call site: every native family and the bridge call succeed, but
+// CompleteFinalize itself fails, so Work releases the claim it can no longer
+// mark complete.
+func TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.releaseFinalizeErr = errors.New("release down")
+	store.completionErr = errors.New("completion down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded despite CompleteFinalize failing")
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+}
+
+// assertFinalizeReleaseFailureLogged is the three tests' shared assertion:
+// exactly the shape TestFinalizeSucceedsWhenTheObserverFails already
+// verifies for the telemetry-observer class of swallowed error, applied here
+// to the store-release class instead.
+func assertFinalizeReleaseFailureLogged(t *testing.T, logOutput, wantErrSubstring string) {
+	t.Helper()
+	if logOutput == "" {
+		t.Fatal("ReleaseFinalize's error was not logged -- a release failure here is " +
+			"exactly as invisible as the terminal-write failure r2 finding #1 fixed")
+	}
+	// The release-failure log line is not necessarily the FIRST line: the
+	// native-family-failure or CompleteFinalize-failure test scenarios log
+	// their OWN cause first via the existing "daily finalize failed" line,
+	// and the release-failure line follows it -- find the line naming this
+	// test's own error, rather than assume line 1.
+	var record map[string]any
+	var found bool
+	for _, line := range strings.Split(strings.TrimSpace(logOutput), "\n") {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			t.Fatalf("log line is not JSON: %v\n%s", err, line)
+		}
+		if got, _ := candidate["error"].(string); strings.Contains(got, wantErrSubstring) {
+			record = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no log line contained error %q; got:\n%s", wantErrSubstring, logOutput)
+	}
+	for _, field := range []string{"run_id", "organization_id", "target_day"} {
+		if _, present := record[field]; !present {
+			t.Errorf("log line is missing %q; got keys %v", field, keysOf(record))
+		}
+	}
+}

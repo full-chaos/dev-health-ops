@@ -571,6 +571,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchMetrics(ctx, runtime, args[1:], stdout, stderr)
 	case "workgraph":
 		return dispatchWorkgraph(ctx, runtime, args[1:], stdout, stderr)
+	case "investment":
+		return dispatchInvestment(ctx, runtime, args[1:], stdout, stderr)
 	case "queues":
 		return dispatchQueues(ctx, runtime, args[1:], stdout, stderr)
 	case "contracts":

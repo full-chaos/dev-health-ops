@@ -1867,7 +1867,25 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}]++
-	if outcome == DailyMetricsNativeFamilyOutcomeComputed {
+	// Rows and duration are recorded for the two outcomes under which the
+	// family actually DID work: a clean compute, and a compute that wrote rows
+	// before failing.
+	//
+	// partial_write is not a bookkeeping nicety here. Its entire reason to
+	// exist is that rows LANDED, and that count is the number an operator uses
+	// to size the duplication a fail-open re-drive would create. Counting the
+	// event but dropping its rows would leave
+	// worker_daily_metrics_native_family_rows_written_total understating
+	// what is on disk -- which is the same silent-undercount failure
+	// ErrPartialWrite exists to remove, reintroduced one layer further out.
+	// (CHAOS-4288; found by codex r2 on #2241.)
+	//
+	// refused still records neither, and that asymmetry is deliberate: a
+	// refused family wrote nothing by definition, so adding 0 to the counter
+	// says nothing, and its duration measures how long a failure took, which
+	// is not the quantity the compute-time histogram is asked about.
+	if outcome == DailyMetricsNativeFamilyOutcomeComputed ||
+		outcome == DailyMetricsNativeFamilyOutcomePartialWrite {
 		collector.dailyMetricsNativeFamilyRowsWritten[family] += uint64(rowsWritten)
 		collector.dailyMetricsNativeFamilyDuration[family].observe(duration.Seconds())
 	}
@@ -3391,13 +3409,13 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 		}
 	}
 
-	writeMetadata(output, "worker_daily_metrics_native_family_rows_written_total", "Rows written by native metrics.daily family executors, by family.", "counter")
+	writeMetadata(output, "worker_daily_metrics_native_family_rows_written_total", "Rows written by native metrics.daily family executors, by family. Includes rows that landed before a partial_write failure, which is exactly the count that sizes a re-drive's duplication risk.", "counter")
 	for _, family := range families {
 		writeUintSample(output, "worker_daily_metrics_native_family_rows_written_total",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyRowsWritten[family])
 	}
 
-	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Only Computed attempts are observed.", "histogram")
+	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Observed for computed and partial_write attempts -- the two under which the family did real work; refused attempts are not observed (CHAOS-4288).", "histogram")
 	for _, family := range families {
 		writeHistogram(output, "worker_daily_metrics_native_family_duration_seconds",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyDuration[family])

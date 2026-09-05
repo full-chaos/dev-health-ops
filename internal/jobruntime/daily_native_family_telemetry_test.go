@@ -248,3 +248,67 @@ func TestDailyMetricsNativeFamilyZeroSeriesExistBeforeAnyObservation(t *testing.
 		}
 	}
 }
+
+// TestDailyMetricsNativeFamilyPartialWriteCarriesItsRowCount pins the one
+// thing the partial_write outcome exists to communicate.
+//
+// A family that fails on its third output table has already committed the
+// first two. The row count is not decoration: it is the number an operator
+// uses to size the duplication a fail-open re-drive would create, and it is
+// the only number that distinguishes "wrote nothing, safe to re-drive" from
+// "wrote nine thousand rows, do NOT re-drive". Counting the EVENT while
+// dropping the COUNT -- which is what ObserveDailyMetricsNativeFamily did
+// until codex r2 on #2241 found it -- leaves rows_written_total understating
+// what is on disk. That is the same silent undercount ErrPartialWrite was
+// introduced to remove, reintroduced one layer further out, which is why it
+// survived review: the executor side was correct and only the telemetry lied.
+//
+// The refused half of this test is not filler. It pins the ASYMMETRY on
+// purpose: a later "just record for every outcome" simplification would make
+// refused contribute its rowsWritten argument too, and this test goes red.
+func TestDailyMetricsNativeFamilyPartialWriteCarriesItsRowCount(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+
+	if err := collector.ObserveDailyMetricsNativeFamily(
+		"benchmarking", DailyMetricsNativeFamilyOutcomePartialWrite, 1234, 700*time.Millisecond,
+	); err != nil {
+		t.Fatalf("observe partial_write: %v", err)
+	}
+	// A refused observation carrying a NONZERO count. Passing 0 here would make
+	// the assertion below pass whether refused is filtered or not, and would
+	// prove nothing.
+	if err := collector.ObserveDailyMetricsNativeFamily(
+		"benchmarking", DailyMetricsNativeFamilyOutcomeRefused, 99, 5*time.Second,
+	); err != nil {
+		t.Fatalf("observe refused: %v", err)
+	}
+
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		`worker_daily_metrics_native_family_outcome_total{family="benchmarking",outcome="partial_write"} 1`,
+		`worker_daily_metrics_native_family_outcome_total{family="benchmarking",outcome="refused"} 1`,
+		// 1234, not 1333: the refused observation's 99 must NOT be included.
+		`worker_daily_metrics_native_family_rows_written_total{family="benchmarking"} 1234`,
+		// The duration histogram observed the partial_write and not the
+		// refused, so its count is exactly 1.
+		`worker_daily_metrics_native_family_duration_seconds_count{family="benchmarking"} 1`,
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q\nfull exposition:\n%s", want, exposition)
+		}
+	}
+
+	// Stated as its own assertion so the failure message names the actual
+	// defect rather than a missing substring.
+	if strings.Contains(exposition,
+		`worker_daily_metrics_native_family_rows_written_total{family="benchmarking"} 0`) {
+		t.Error(
+			"partial_write recorded 1234 rows but rows_written_total reads 0 -- the outcome is " +
+				"counted while its row count is dropped, so an operator sees a partial write " +
+				"happened but cannot tell whether 0 or 9000 rows are on disk, which is the only " +
+				"input to the re-drive decision")
+	}
+}

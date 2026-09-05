@@ -38,6 +38,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
@@ -85,12 +86,29 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	// See trigger_workgraph.go's identical check for the full rationale:
+	// canonicalUUID/uuid.Parse is permissive; WriteTx's validRequest
+	// requires RFC-4122 version/variant bits (codex review, 2026-09-05,
+	// CHAOS-5170 r1 P2).
+	if !workgraph.ValidUUID(canonicalOrg) {
+		return writeError(stderr, "invalid_request")
+	}
 	if strings.TrimSpace(*reviewEvidence) == "" {
 		return writeError(stderr, "invalid_request")
 	}
 	fromTime, toTime, err := parseOptionalUTCDateRange(*from, *to)
 	if err != nil {
 		return writeError(stderr, "invalid_request")
+	}
+
+	// Authorized BEFORE anything backend-related is even attempted, dry-run
+	// included -- see trigger_workgraph.go's identical check for the full
+	// rationale (codex review, 2026-09-05, CHAOS-5170 r1 P1).
+	if runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	if err := runtime.service.AuthorizeInvestmentTrigger(ctx, runtime.principal, canonicalOrg); err != nil {
+		return writeServiceError(stderr, err)
 	}
 
 	// Date-only (YYYY-MM-DD), matching postSyncWorkGraphScope's
@@ -140,11 +158,21 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
+	logAttrs := []slog.Attr{
+		slog.String("request_id", requestID),
+		slog.String("org", canonicalOrg),
+		slog.String("generation", generation),
+	}
 	tx, err := runtime.pools.Domain.Begin(ctx)
 	if err != nil {
+		// See trigger_workgraph.go's identical log call for the full
+		// rationale (codex review, 2026-09-05, CHAOS-5170 r1 P2).
+		slog.Default().LogAttrs(ctx, slog.LevelError,
+			"workerctl manual investment trigger: begin failed",
+			append(logAttrs, slog.Any("error", err))...)
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	defer rollbackTriggerTx(ctx, tx)
+	defer rollbackTriggerTx(ctx, tx, logAttrs...)
 	if err := writer.WriteTx(ctx, tx, request); err != nil {
 		status := "error"
 		if errors.Is(err, workgraph.ErrInvalidState) {
@@ -157,8 +185,14 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 		})
 	}
 	if err := tx.Commit(ctx); err != nil {
+		slog.Default().LogAttrs(ctx, slog.LevelError,
+			"workerctl manual investment trigger: commit failed",
+			append(logAttrs, slog.Any("error", err))...)
 		return writeError(stderr, "operator_backend_unavailable")
 	}
+	slog.Default().LogAttrs(ctx, slog.LevelInfo,
+		"workerctl manual investment trigger: enqueued",
+		append(logAttrs, slog.String("review_evidence", *reviewEvidence))...)
 	return writeResult(stdout, stderr, map[string]any{
 		"request_id":      requestID,
 		"org":             canonicalOrg,

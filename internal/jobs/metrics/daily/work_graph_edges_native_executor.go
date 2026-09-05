@@ -128,19 +128,41 @@ func (executor *WorkGraphEdgesExecutor) ComputeFamily(
 		return 0, err
 	}
 
+	// THREE TABLES, NO TRANSACTION: report the TRUE rows-written count on a
+	// mid-sequence failure (#2240 round 1, P2).
+	//
+	// This used to `return 0, err` from each step, which is a lie once an
+	// earlier table has already committed: the caller records "refused, 0 rows"
+	// for a partition that really does have review edges in ClickHouse. The
+	// count below is what actually landed, whatever happens after it.
+	//
+	// PENDING DEPENDENCY, tracked in this PR's RISK-NOTES: the other half of
+	// the ruling -- wrapping this error in `ErrPartialWrite` so
+	// computeNativeFamilies adds the family to skipFamilies (suppressing the
+	// Python fallback) and emits the PartialWrite outcome -- needs the shared
+	// sentinel and observer constant that lane-port-review-bench owns as the
+	// first commit of #2235's F2 work. Both names are fixed by ruling, so this
+	// wrap is a one-line change once that lands and this PR restacks onto it.
+	// Until then a partial write still fails open to Python, exactly as before;
+	// nothing here makes that worse, and the honest count makes it visible.
+	written := 0
+
 	writtenReviews, err := WriteWorkGraphPRReviewOutcomeEdges(ctx, executor.conn, result.ReviewOutcomeEdges, computedAt)
+	written += writtenReviews
 	if err != nil {
-		return 0, err
+		return written, err
 	}
 	writtenDeployments, err := WriteWorkGraphPRDeploymentEdges(ctx, executor.conn, result.PRDeploymentEdges, computedAt)
+	written += writtenDeployments
 	if err != nil {
-		return 0, err
+		return written, err
 	}
 	writtenIncidents, err := WriteWorkGraphDeploymentIncidentEdges(ctx, executor.conn, result.DeploymentIncidentEdges, computedAt)
+	written += writtenIncidents
 	if err != nil {
-		return 0, err
+		return written, err
 	}
-	return writtenReviews + writtenDeployments + writtenIncidents, nil
+	return written, nil
 }
 
 // extractPerProvider ports job_daily.py:452-462: the extractor runs ONCE PER

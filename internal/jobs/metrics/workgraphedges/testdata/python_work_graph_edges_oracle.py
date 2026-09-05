@@ -11,12 +11,26 @@ this run's proof marker. See compute_test.go's runPythonOracle.
 
 # What is compared
 
-Everything that is persisted, including edge_id. Unlike ai_governance, this
-family's ids are NOT random on the Python side -- `_hash` is a sha256 over the
-identity tuple (ai_workflow.py:49) -- so the Go port must reproduce them
-exactly and the oracle can assert them. That makes this oracle strictly
-stronger than #2229's, which had to exclude event_id because Python randomised
-it.
+Every persisted column of all three edge lists, including edge_id.
+
+THAT CLAIM WAS FALSE WHEN FIRST WRITTEN, and the wording is kept deliberately
+so the correction is visible rather than tidied away. The comparator originally
+omitted org_id, provider and repo_id from the deployment and incident lists,
+and repo_id from the review list -- while this docstring and the PR body both
+asserted full coverage. #2240's round-1 reviewer found it and demonstrated it:
+changing the deployment edges' Provider to a literal left every asserted field
+untouched (provider is not in the hash either), so the oracle passed on rows
+carrying a wrong persisted provider.
+
+The comparator now asserts all of them, and that mutation is killed. Widening
+it surfaced no actual mismatches -- the kernel was right all along, which is
+precisely why the gap was invisible: nothing failed, so nothing drew attention.
+
+This oracle IS stronger than #2229's in one specific respect and it is worth
+stating narrowly rather than broadly: it can compare edge_id, because Python
+derives ids here (`_hash`, a sha256 over the identity tuple, ai_workflow.py:49)
+whereas #2229's Python randomises event_id and has no answer to compare. That
+is the whole of the advantage; it is not "stronger" in general.
 
 computed_at is not produced by the extractor at all (the sink stamps it), so
 there is nothing to exclude here.

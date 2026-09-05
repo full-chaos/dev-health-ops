@@ -15,7 +15,7 @@ import (
 // Run kind/status string constants, ported from
 // dev_health_ops.models.ai_workflow's StrEnums.
 const (
-	RunKindChatAssisted   = "chat_assisted"
+	RunKindChatAssisted    = "chat_assisted"
 	RunKindAgentAutonomous = "agent_autonomous"
 	RunKindUnknown         = "unknown"
 

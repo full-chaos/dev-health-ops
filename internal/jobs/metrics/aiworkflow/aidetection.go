@@ -47,10 +47,10 @@ const (
 	KindAgentCreated = "agent_created"
 	KindAIReview     = "ai_review"
 
-	SourcePRLabel      = "pr_label"
-	SourceBotAuthor     = "bot_author"
-	SourceBranchName    = "branch_name"
-	SourcePRBody        = "pr_body"
+	SourcePRLabel    = "pr_label"
+	SourceBotAuthor  = "bot_author"
+	SourceBranchName = "branch_name"
+	SourcePRBody     = "pr_body"
 )
 
 // aiLabels ports AI_LABELS: known explicit AI attribution label names.

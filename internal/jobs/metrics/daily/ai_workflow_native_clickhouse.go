@@ -71,17 +71,17 @@ ORDER BY repo_id, number`,
 	var result []aiworkflow.PullRequestRow
 	for rows.Next() {
 		var (
-			repoID       uuid.UUID
-			number       uint32
-			title        *string
-			body         *string
-			headBranch   *string
-			authorName   *string
-			authorEmail  *string
-			createdAt    time.Time
-			mergedAt     *time.Time
-			closedAt     *time.Time
-			lastSynced   time.Time
+			repoID      uuid.UUID
+			number      uint32
+			title       *string
+			body        *string
+			headBranch  *string
+			authorName  *string
+			authorEmail *string
+			createdAt   time.Time
+			mergedAt    *time.Time
+			closedAt    *time.Time
+			lastSynced  time.Time
 		)
 		if err := rows.Scan(&repoID, &number, &title, &body, &headBranch,
 			&authorName, &authorEmail, &createdAt, &mergedAt, &closedAt, &lastSynced); err != nil {

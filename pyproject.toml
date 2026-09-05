@@ -233,20 +233,6 @@ exclude = [
   # directory-exclude draft that silently dropped them from `ruff check`).
   ".planning",
   ".github/docs-legacy/**/*.md",
-  # Cyclomatic-complexity parity fixtures (CHAOS-4971a). These files are
-  # INPUT to a parser, not source to be maintained: they deliberately
-  # contain one-line suites (`if x: return 1`), backslash/bracket line
-  # continuations, and single-quoted strings, because those are exactly the
-  # lexical shapes the Go tokenizer has to get right. ruff-format rewrites
-  # all three -- it expanded the inline suites and collapsed the
-  # continuations on first commit -- which silently deletes the coverage the
-  # corpus exists to provide, while every test still passes.
-  #
-  # Scoped to the corpus directory ONLY, deliberately narrow per CHAOS-4606's
-  # round-3 lesson about a directory exclude that dropped real sources from
-  # `ruff check`. testdata/python_radon_cc_oracle.py is real source, is NOT
-  # excluded, and stays linted and formatted.
-  "internal/jobs/metrics/complexity/pycc/testdata/corpus/**/*.py",
   "build",
   "dist",
   "migrations",
@@ -256,24 +242,8 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E203", "E501"]
-# The complexity parity-fixture entry below (CHAOS-4971a) needs E731 (lambda
-# assignment) and E701 (one-line suite): those are the exact constructs the
-# files exist to feed the Go tokenizer. radon does NOT count a lambda as a
-# decision point and a one-line suite still opens a body, so "fixing" either
-# deletes the case under test.
-#
-# It is needed IN ADDITION TO the `exclude` entry above. ruff's `exclude`
-# governs file DISCOVERY, so it stops `ruff format` (which lefthook lets walk
-# the tree) but not `ruff check`, which lefthook invokes with an explicit
-# `{staged_files}` list -- explicitly named paths bypass `exclude` unless
-# `force-exclude` is set, and it is not set in this repo. Setting it globally
-# would change linting for migrations/, docs/ and .planning/ at once, which
-# does not belong in a metrics port; raised separately instead.
 per-file-ignores = { "__init__.py" = [
   "F401",
-], "internal/jobs/metrics/complexity/pycc/testdata/corpus/*.py" = [
-  "E701",
-  "E731",
 ], "src/dev_health_ops/api/main.py" = [
   "E402",
 ], "tests/test_ingest_streams.py" = [

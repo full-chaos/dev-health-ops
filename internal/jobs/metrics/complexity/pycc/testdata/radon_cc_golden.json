@@ -1,6 +1,6 @@
 {
   "files": {
-    "rules_basic.py": {
+    "rules_basic.py.txt": {
       "blocks": [
         {
           "col_offset": 0,
@@ -109,7 +109,7 @@
       "skipped": false,
       "very_high_complexity_functions": 0
     },
-    "rules_classes.py": {
+    "rules_classes.py.txt": {
       "blocks": [
         {
           "col_offset": 0,
@@ -218,7 +218,7 @@
       "skipped": false,
       "very_high_complexity_functions": 0
     },
-    "rules_softkeywords.py": {
+    "rules_softkeywords.py.txt": {
       "blocks": [
         {
           "col_offset": 0,

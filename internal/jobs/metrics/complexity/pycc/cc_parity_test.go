@@ -138,7 +138,15 @@ func TestGoMatchesRadonGolden(t *testing.T) {
 	}
 	seen := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".py") {
+		// The corpus is named *.py.txt, not *.py, so no Python tool treats it
+		// as source. ruff-format rewrote all three when they were committed as
+		// .py -- expanding one-line suites and collapsing continuations -- and
+		// every test still passed, because formatting does not change
+		// complexity. The corpus silently stopped exercising the lexical
+		// shapes it exists for. A ruff `exclude` does not prevent this:
+		// `exclude` governs discovery, and lefthook hands ruff an explicit
+		// staged-file list, which bypasses it without `force-exclude`.
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".py.txt") {
 			continue
 		}
 		name := entry.Name()

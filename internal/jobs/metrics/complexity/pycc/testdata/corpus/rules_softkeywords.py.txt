@@ -63,7 +63,7 @@ def match_only_wildcard(command):
 def keywords_in_strings(x):
     """None of these `if`/`for`/`and` occurrences are code."""
     a = "if x and y for z"
-    b = "or else while"
+    b = 'or else while'
     c = """
     if this were code it would count
     for every line and then some
@@ -86,17 +86,18 @@ def keyword_lookalike_identifiers():
 
 def inline_suite(x):
     """A one-line suite still opens a body."""
-    if x:
-        return 1
-    for i in range(3):
-        print(i)
+    if x: return 1
+    for i in range(3): print(i)
     return 0
 
 
 def continued_lines(a, b, c):
     """A logical line spanning several physical ones is still one line for
     structure, and the operators inside it still count."""
-    if a and b and c:
+    if (a and
+            b and
+            c):
         return 1
-    total = a or b
+    total = (a or
+             b)
     return total

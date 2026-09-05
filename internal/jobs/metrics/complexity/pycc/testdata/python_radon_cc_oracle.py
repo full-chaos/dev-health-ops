@@ -1,6 +1,17 @@
 """Radon oracle for the native Go cyclomatic-complexity port (CHAOS-4971a).
 
-Emits, for every ``*.py`` file in the corpus directory, exactly what
+The corpus files are named ``*.py.txt``, not ``*.py``, ON PURPOSE. They are
+parser INPUT, not source: they carry one-line suites, backslash/bracket line
+continuations and single-quoted strings because those are the lexical shapes
+the Go tokenizer must handle. ruff-format rewrote all three the first time they
+were committed as ``.py`` -- and every test still passed, because formatting
+does not change complexity, so the corpus silently stopped testing what it
+claims to test. A ruff ``exclude`` entry does NOT prevent this: ``exclude``
+governs file discovery, and lefthook passes staged files to ruff explicitly,
+which bypasses it unless ``force-exclude`` is set. Renaming is the fix that
+needs no repo-wide config change and that no future tool can undo by accident.
+
+Emits, for every ``*.py.txt`` file in the corpus directory, exactly what
 ``analytics/complexity.py::_analyze_python`` derives from radon: the block
 list (name, kind, complexity) plus the aggregates the family stores.
 
@@ -101,7 +112,7 @@ def main() -> int:
     import radon
 
     results: dict[str, object] = {}
-    for path in sorted(corpus.glob("*.py")):
+    for path in sorted(corpus.glob("*.py.txt")):
         results[path.name] = analyze(path)
 
     json.dump(

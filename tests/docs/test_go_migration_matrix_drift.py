@@ -328,3 +328,83 @@ def test_split_status_still_counts_as_compat_once_repo_scope_goes_native() -> No
     )
     assert remaining_status == "NATIVE (repo) / COMPAT-Python (finalize)"
     assert gen.is_compat_executor(remaining_status) is True
+
+
+def test_split_render_fires_through_the_actual_count_helpers_and_reverses() -> None:
+    """Required before merge (team-lead, 2026-09-05): prove the split render
+    and count_compat_daily_families FIRE TOGETHER through the real counting
+    function (not just the underlying predicate, which the previous test
+    already covers) -- AND that the effect reverses once the Python
+    remainder is genuinely gone, so this isn't a one-way ratchet that keeps
+    counting a family as compat forever just because it once had a finalize
+    call.
+
+    Two states compared against the SAME baseline count:
+    1. compounding_risk's repo scope goes native, finalize call untouched
+       (still real) -- count_compat_daily_families must NOT drop: the split
+       row still counts.
+    2. ALSO remove `_write_compounding_risk_team_rows_for_day` from the
+       AST-walked call set (simulating the Python port genuinely
+       finishing) -- NOW the family must drop out of the compat count, and
+       its rendered status must degrade to bare "NATIVE".
+    """
+    gen = _load_gen_module()
+    baseline = gen.count_compat_daily_families()
+
+    original_artifact = getattr(gen, "load_native_families_artifact")
+
+    def native_compounding_risk() -> dict:
+        real = original_artifact()
+        return {**real, "daily": {**real["daily"], "compounding_risk": "native"}}
+
+    try:
+        setattr(gen, "load_native_families_artifact", native_compounding_risk)
+
+        after_native = gen.count_compat_daily_families()
+        assert after_native == baseline, (
+            "a family whose repo scope went native but still has a real finalize "
+            "call must still count as compat (split row) -- count must not drop"
+        )
+
+        daily_names = {f["name"] for f in gen.load_daily_families()}
+        remaining_names = {f["name"] for f in gen.load_remaining_families()}
+        finalize_compat = gen.load_daily_finalize_compat_families(
+            daily_names, remaining_names
+        )
+        artifact_daily = gen.load_native_families_artifact()["daily"]
+        assert (
+            gen.daily_family_executor(
+                "compounding_risk", artifact_daily, finalize_compat
+            )
+            == "NATIVE (repo) / COMPAT-Python (finalize)"
+        )
+
+        original_calls = getattr(gen, "load_finalize_write_calls")
+        try:
+            setattr(
+                gen,
+                "load_finalize_write_calls",
+                lambda: (
+                    original_calls() - {"_write_compounding_risk_team_rows_for_day"}
+                ),
+            )
+
+            after_mutation = gen.count_compat_daily_families()
+            assert after_mutation == baseline - 1, (
+                "once the finalize call is actually gone, the family must drop "
+                "OUT of the compat count -- otherwise this is a one-way ratchet"
+            )
+
+            finalize_compat_after = gen.load_daily_finalize_compat_families(
+                daily_names, remaining_names
+            )
+            assert "compounding_risk" not in finalize_compat_after
+            status_after = gen.daily_family_executor(
+                "compounding_risk", artifact_daily, finalize_compat_after
+            )
+            assert status_after == "NATIVE"
+            assert gen.is_compat_executor(status_after) is False
+        finally:
+            setattr(gen, "load_finalize_write_calls", original_calls)
+    finally:
+        setattr(gen, "load_native_families_artifact", original_artifact)

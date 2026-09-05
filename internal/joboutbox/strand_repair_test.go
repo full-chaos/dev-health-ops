@@ -670,7 +670,9 @@ func TestStrandRepairStepShapeDefaultDispositionPreservesEarlierCounts(t *testin
 	}
 	shape := strandShape{name: "a", survey: "SELECT 1", lock: "SELECT 1"}
 
-	result, err := repair.stepShape(context.Background(), shape, time.Now(), 1)
+	// limit=2: survey() itself refuses (len(candidates) > limit) if the fake
+	// returns more rows than the caller's own bound -- 2 rows need limit>=2.
+	result, err := repair.stepShape(context.Background(), shape, time.Now(), 2)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("stepShape() error = %v, want ErrUnavailable", err)
 	}

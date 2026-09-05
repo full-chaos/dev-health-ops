@@ -80,6 +80,17 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		return nil
 	}
 	if claim.Request.OrganizationID != *organizationID || claim.Request.ID != requestID || claim.Request.Kind != kind {
+		// Loud for the same reason as the lease-renewal permanent-cancel
+		// below: this is a permanent cancel too, and without the mismatch
+		// itself logged an operator sees only "ambiguous", never which of
+		// org/id/kind actually disagreed with the claimed request.
+		handler.logger.Error("workgraph handler: permanent cancel, claimed request does not match envelope",
+			slog.String("request_id", requestID), slog.String("kind", string(kind)),
+			slog.String("organization_id", *organizationID),
+			slog.String("claimed_organization_id", claim.Request.OrganizationID),
+			slog.String("claimed_request_id", claim.Request.ID),
+			slog.String("claimed_kind", string(claim.Request.Kind)),
+		)
 		_ = releaseAmbiguous(handler.store, ctx, *claim, "claimed request no longer matches River envelope")
 		return jobruntime.Permanent(ErrInvalidState)
 	}

@@ -184,24 +184,37 @@ jobs:
           # format error" under aarch64. Both shas verified against the
           # upstream release asset bytes directly (sha256sum on a fresh
           # download of each), not copied from an unverified source.
+          #
+          # .tar.gz, not .tar.xz: PR #2242's own first live ARC run failed
+          # here with `tar (child): xz: Cannot exec: No such file or
+          # directory` -- the oci-arc-runners image (docker/arc-runner/
+          # Dockerfile) has no xz-utils, only what that Dockerfile
+          # explicitly adds (make/postgresql-client/gcc/libc6-dev) on top of
+          # the upstream actions-runner base; GitHub-hosted ubuntu-latest
+          # ships xz-utils by default, so this never surfaced there. gzip
+          # needs no such assumption -- it's a dependency of apt itself, so
+          # it is present on any Debian/Ubuntu-derived image without a
+          # Dockerfile change. shellcheck publishes a .tar.gz for every
+          # platform; both shas below verified the same way as the .tar.xz
+          # ones above (sha256sum on a fresh download of each).
           case "$(uname -m)" in
             x86_64)
               arch=x86_64
-              sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+              sha=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
               ;;
             aarch64|arm64)
               arch=aarch64
-              sha=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
+              sha=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
               ;;
             *)
               echo "unsupported architecture: $(uname -m)" >&2
               exit 1
               ;;
           esac
-          tarball="shellcheck-v${version}.linux.${arch}.tar.xz"
+          tarball="shellcheck-v${version}.linux.${arch}.tar.gz"
           curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
           echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
-          tar -xJf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
           mkdir -p "${RUNNER_TEMP}/bin"
           install -m 0755 "${RUNNER_TEMP}/shellcheck-v${version}/shellcheck" "${RUNNER_TEMP}/bin/shellcheck"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"

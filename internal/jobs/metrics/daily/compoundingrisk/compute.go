@@ -351,7 +351,7 @@ type RepoInputs struct {
 // for a team with 3+ resolved repos and order-sensitive floating inputs, a
 // live Python run could legally disagree with it at the bit level (compensated
 // summation is not order-invariant; see pythonparity.Sum's own doc comment).
-// Tracked as CHAOS-5195; not fixed here because there is no single
+// Tracked as CHAOS-5204; not fixed here because there is no single
 // production Python order to fix this port TO until Python's own query
 // gains a matching ORDER BY.
 func BuildTeamRows(

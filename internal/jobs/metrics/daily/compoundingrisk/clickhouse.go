@@ -249,7 +249,7 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 // compute for a 3+-repo team with order-sensitive floats, because Python's
 // own answer for that case is not itself deterministic. See BuildTeamRows'
 // doc comment for the same correction on the aggregation side, and
-// CHAOS-5195 for the tracking ticket.
+// CHAOS-5204 for the tracking ticket.
 const repoMetricsOrgWideQuery = `
 SELECT
     repo_id,

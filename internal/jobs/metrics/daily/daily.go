@@ -1074,6 +1074,11 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
 // not one the Python bridge gates on.
 var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not recognised by the compatibility bridge")
 
+// ErrNativeFinalizeFamilyFailed wraps any native finalize-family failure.
+// retryCompatibilityError's default arm makes it Retryable, which is the whole
+// policy: the run is redriven rather than completed.
+var ErrNativeFinalizeFamilyFailed = errors.New("daily: native finalize family failed")
+
 // SetNativeFinalizeFamilies registers the finalize-scope families computed
 // natively in Go instead of by the Python compatibility bridge. Mirrors
 // PartitionHandler.SetNativeFamilies exactly -- REPLACES the map on every
@@ -1147,38 +1152,42 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 // computeNativeFinalizeFamilies runs every registered finalize-scope executor
 // and returns the names that SUCCEEDED, in sorted order.
 //
-// FAIL-OPEN ONLY FOR A FAMILY THAT PROVABLY WROTE NOTHING (CHAOS-4290, #2241
-// r1 Finding 1). CHAOS-4276's blanket fail-open is unsafe on the finalize side
-// and was the original form here.
+// computeNativeFinalizeFamilies runs every registered finalize-scope executor
+// and returns the names to skip plus the first failure.
 //
-// The hazard: rowsWritten was ignored, so ANY error dropped the family from the
-// skip list and the bridge recomputed it. But a ClickHouse insert can commit and
-// then the call can still fail -- a transport error after the server committed,
-// or a first insert committing before a second fails. The native family has
-// then written real rows, the bridge writes a full second set on top, and on an
-// append-only table read through LIMIT 1 BY the later writer simply wins. Two
-// writers, no error, mixed generations across the family's output tables.
+// NO FAIL-OPEN, AT ALL (CHAOS-4290, #2241 r2 Findings 1 and 2; team-lead's
+// ruling). CHAOS-4276's fail-open is correct for partition scope and wrong
+// here, and the r1 attempt to make it conditional on rowsWritten was wrong too
+// -- for two reasons that only showed up under retry:
 //
-// So the policy is decided by rowsWritten, which the interface already returns
-// and which nothing used:
+//  1. rowsWritten answers a per-ATTEMPT question. After a native write and a
+//     bridge failure the whole finalize retries; if the next native attempt
+//     fails before writing it reports (0, err), and a fail-open predicate reads
+//     that as "nothing was written" -- when the PREVIOUS attempt already wrote.
+//     Python then overwrites the native generation and the retry succeeds, so
+//     nothing surfaces the duplicate writer.
+//  2. Keeping a partially-written family skipped but letting the run COMPLETE
+//     records success over incomplete output, with nothing to repair it.
 //
-//	err == nil                  -> computed, skip the bridge
-//	err != nil, rowsWritten == 0 -> refused, bridge recomputes (fail-OPEN)
-//	err != nil, rowsWritten > 0  -> uncertain, family STAYS in the skip list
+// So any native error -- before, during or after a write -- fails the attempt.
+// The family stays in the skip list, the bridge is not called, the run does not
+// complete, and River's existing attempt machinery redrives it; after max
+// attempts the CHAOS-5040 blocked-run marker records it. Python therefore never
+// writes a family registered as native, which is what makes per-run durable
+// state unnecessary.
 //
-// The last case is fail-CLOSED and it is deliberately the pessimistic choice:
-// one possibly-partial writer is recoverable by a re-run, whereas two writers
-// racing on an append-only table is a silent, self-concealing corruption. It is
-// reported as "partial_write", never folded into "refused", because refused
-// promises the bridge covered the family and here nothing did. That outcome is
-// shared with CHAOS-4288 (#2235), which named the identical condition on the
-// partition side -- one vocabulary, so the two dashboards agree.
+// THIS REQUIRES THE NATIVE WRITER TO BE IDEMPOTENT: a redrive must land on the
+// same keys with a later computed_at so the dedup read supersedes rather than
+// accumulates. That is a contract on the executor, pinned by test, not an
+// assumption.
 //
-// Degrading one family to Python still never fails the whole finalize, and a
-// transient ClickHouse hiccup still never becomes a Permanent error.
-func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) []string {
+// The outcome vocabulary still distinguishes the two failure shapes, because
+// they mean different things to an operator even though both now redrive:
+// partial_write (rows already landed, a redrive may duplicate if the writer is
+// not idempotent) versus refused (nothing landed).
+func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) ([]string, error) {
 	if handler == nil || len(handler.nativeFinalizeFamilyNames) == 0 {
-		return nil
+		return nil, nil
 	}
 	skipFamilies := make([]string, 0, len(handler.nativeFinalizeFamilyNames))
 	for index, name := range handler.nativeFinalizeFamilyNames {
@@ -1187,45 +1196,43 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 			continue
 		}
 		// Between-family cancellation check. Once the lease is lost another
-		// worker may already be computing these families, so continuing to
-		// write is the two-writer hazard with extra steps. A family that never
-		// started provably wrote nothing, so it is REFUSED -- fail-open -- and
-		// the bridge covers it on whichever worker owns the run next.
+		// worker may already own this run, so continuing to write is the
+		// two-writer hazard with extra steps.
 		if err := ctx.Err(); err != nil {
-			// Sliced from the LOOP INDEX, not from len(skipFamilies): a refused
-			// family is never appended, so the two diverge as soon as one fails
-			// and the wrong families would be reported as unrun.
+			// Sliced from the LOOP INDEX, not from len(skipFamilies): the two
+			// diverge as soon as a family is skipped for a nil executor.
 			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
 				handler.observeFinalizeFamily(
 					remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 				)
 			}
-			return skipFamilies
+			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
 		started := handler.finalizeNow()
 		rowsWritten, err := executor.ComputeFinalizeFamily(ctx, run)
+		// The family is added to the skip list BEFORE the error is examined:
+		// on the failing attempt the bridge must not compute it either, and on
+		// a future change that lets the bridge run anyway this is what keeps
+		// Python out.
+		skipFamilies = append(skipFamilies, name)
 		switch {
 		case err == nil:
 			handler.observeFinalizeFamily(
 				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
 			)
 		case rowsWritten > 0:
-			// Partial write: rows are already in an append-only table. Keep the
-			// family skipped so the bridge cannot become a second writer over
-			// what the native executor already landed.
 			handler.observeFinalizeFamily(
 				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
 			)
+			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		default:
-			// Provably wrote nothing: safe to let the bridge compute it.
 			handler.observeFinalizeFamily(
 				name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
 			)
-			continue
+			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
-		skipFamilies = append(skipFamilies, name)
 	}
-	return skipFamilies
+	return skipFamilies, nil
 }
 
 func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) error {
@@ -1259,7 +1266,13 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			// Inside the lease-renewal callback deliberately: a native
 			// family's compute is real work and must hold the lease the same
 			// way the bridge call does.
-			skipFamilies := handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
+			skipFamilies, err := handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
+			if err != nil {
+				// The bridge is NOT called. Calling it after a native failure
+				// is the fail-open this ruling removed, and completing the run
+				// afterwards is what recorded success over partial output.
+				return err
+			}
 			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {

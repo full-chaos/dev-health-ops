@@ -94,7 +94,15 @@ func TestSucceedingNativeFinalizeFamilyIsSkippedByTheBridge(t *testing.T) {
 // family that errors is LEFT OUT of the skip list, so the bridge computes it
 // exactly as before. The finalize itself must still succeed -- one family
 // degrading to Python must not fail the run.
-func TestFailingNativeFinalizeFamilyFallsBackToTheBridge(t *testing.T) {
+// REPLACES TestFailingNativeFinalizeFamilyFallsBackToTheBridge, which asserted
+// the OPPOSITE and was correct only under the fail-open policy #2241 r2
+// Findings 1 and 2 removed. Its reasoning -- "a failed family must not be
+// skipped, or its rows are written by nobody" -- is answered by the redrive:
+// the rows are written by the NEXT attempt, not by Python.
+//
+// Letting the bridge cover it was the hazard, because a family that failed on
+// this attempt may have succeeded on a previous one.
+func TestFailingNativeFinalizeFamilyFailsTheAttemptInsteadOfFallingBack(t *testing.T) {
 	store := finalizeStoreWithClaim()
 	compatibility := &recordingFinalizeCompatibility{}
 	handler, err := NewFinalizeHandler(store, compatibility)
@@ -106,15 +114,18 @@ func TestFailingNativeFinalizeFamilyFallsBackToTheBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
-		t.Fatalf("Work = %v, want success -- a native family failure is not a finalize failure", err)
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded after a native family failed -- the run completes and " +
+			"is never redriven, and the family's rows are written by nobody")
 	}
-	if compatibility.callCount != 1 {
-		t.Fatalf("bridge calls = %d, want 1", compatibility.callCount)
+	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
 	}
-	if len(compatibility.sawSkip) != 0 {
-		t.Fatalf("bridge saw skip=%v, want EMPTY -- a failed family must not be "+
-			"skipped, or its rows are written by nobody", compatibility.sawSkip)
+	if compatibility.callCount != 0 {
+		t.Fatalf("bridge calls = %d, want 0 -- Python must never compute a family "+
+			"registered as native, or a retry can reintroduce it as a second writer",
+			compatibility.callCount)
 	}
 }
 

@@ -23,10 +23,12 @@ import (
 type skipRecordingCompatibility struct {
 	fakeCompatibility
 	sawSkip []string
+	called  bool
 	wrote   bool
 }
 
 func (bridge *skipRecordingCompatibility) Finalize(_ context.Context, _ Run, skip []string) error {
+	bridge.called = true
 	bridge.sawSkip = append([]string(nil), skip...)
 	for _, name := range skip {
 		if name == "ic_finalize" {
@@ -58,39 +60,47 @@ func finalizeHandlerWithFamily(
 
 // THE FINDING ITSELF. An executor that fails after writing rows must keep the
 // bridge out, because a ClickHouse insert can commit and the call still fail.
-func TestAFailingFamilyThatWroteRowsKeepsTheBridgeOut(t *testing.T) {
+func TestAPartialNativeWriteFailsTheAttemptAndKeepsTheBridgeOut(t *testing.T) {
 	family := &stubFinalizeFamily{rows: 3, err: errors.New("failed after a durable insert")}
 	handler, bridge, observer := finalizeHandlerWithFamily(t, family)
 
-	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
-		t.Fatalf("Work = %v, want success -- one family's failure must not fail the finalize", err)
+	err := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if err == nil {
+		t.Fatal("Work succeeded after a partial native write -- the run would be " +
+			"recorded complete over incomplete output, with nothing to repair it")
 	}
-	if bridge.wrote {
-		t.Fatal("the bridge recomputed a family that may already have written rows -- " +
-			"two writers on an append-only table, the later one winning silently")
+	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", err)
 	}
-	if len(bridge.sawSkip) != 1 || bridge.sawSkip[0] != "ic_finalize" {
-		t.Fatalf("skip=%v, want [ic_finalize]", bridge.sawSkip)
+	if bridge.called {
+		t.Fatal("the bridge ran after a partial native write -- two writers on an " +
+			"append-only table, the later one winning silently")
 	}
 	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, 3)
 }
 
-// The other half of the same predicate, and the reason this is not simply
-// "never fail open": a family that provably wrote nothing is safe to hand back.
-func TestAFailingFamilyThatWroteNothingStillFailsOpen(t *testing.T) {
+// There is NO fail-open half any more (#2241 r2 Findings 1 and 2). A family
+// that wrote nothing on THIS attempt may still have written on a previous one,
+// so handing it to the bridge is unsafe regardless of the current row count.
+// The attempt fails and River redrives it.
+func TestAFailingFamilyThatWroteNothingAlsoFailsTheAttempt(t *testing.T) {
 	family := &stubFinalizeFamily{rows: 0, err: errors.New("failed before writing anything")}
 	handler, bridge, observer := finalizeHandlerWithFamily(t, family)
 
-	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
-		t.Fatalf("Work = %v, want success", err)
+	err := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if err == nil {
+		t.Fatal("Work succeeded after a native family failed -- the run would be " +
+			"recorded complete and never redriven")
 	}
-	if !bridge.wrote {
-		t.Fatal("the bridge did NOT recompute a family that wrote nothing -- the family " +
-			"would simply be missing, which fail-open exists to prevent")
+	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", err)
 	}
-	if len(bridge.sawSkip) != 0 {
-		t.Fatalf("skip=%v, want empty", bridge.sawSkip)
+	if bridge.called {
+		t.Fatal("the bridge ran after a native failure -- that is the fail-open " +
+			"this ruling removed, and it lets Python write a family registered native")
 	}
+	// Refused, not partial_write: nothing landed. The distinction still matters
+	// to an operator even though both outcomes now redrive.
 	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0)
 }
 
@@ -135,7 +145,10 @@ func TestACancelledContextStopsRemainingFamilies(t *testing.T) {
 	}
 
 	done := make(chan []string, 1)
-	go func() { done <- handler.computeNativeFinalizeFamilies(ctx, Run{}) }()
+	go func() {
+		skip, _ := handler.computeNativeFinalizeFamilies(ctx, Run{})
+		done <- skip
+	}()
 
 	select {
 	case skip := <-done:

@@ -1172,9 +1172,9 @@ UPDATE public.daily_metrics_runs AS run
 SET finalization_status = 'running', finalization_claim_token = $2,
     finalization_lease_expires_at = $3, updated_at = $1
 WHERE run.id = $4::uuid
-RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text`,
+RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text, run.target_day`,
 		now, token, now.Add(store.lease), runID,
-	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token)
+	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token, &claim.Run.TargetDay)
 	if err != nil {
 		return nil, ErrUnavailable
 	}

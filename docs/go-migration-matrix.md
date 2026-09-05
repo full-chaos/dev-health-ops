@@ -191,7 +191,7 @@ function directly, even for families whose worker kind is now native:
 <!-- BEGIN GENERATED DAILY METRICS MATRIX -->
 | Family | Executor | Citation | Ticket |
 | --- | --- | --- | --- |
-| ai_governance | COMPAT-Python | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
+| ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | COMPAT-Python | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
 | ai_workflow | COMPAT-Python | Python: `work_graph/extractors/ai_workflow.py:212 _extract_ai_workflow_for_day` | CHAOS-4286 |
 | benchmarking | COMPAT-Python | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |

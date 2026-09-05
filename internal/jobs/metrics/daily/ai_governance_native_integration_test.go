@@ -1,0 +1,672 @@
+//go:build integration
+
+package daily
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+)
+
+// TestAIGovernanceComputeFamilyAgainstRealClickHouse is the ai_governance
+// port's live-driver proof (CHAOS-4285). It runs the real production entry
+// point, AIGovernanceExecutor.ComputeFamily, against a real ClickHouse with
+// the production schema -- never a fake scanner.
+//
+// It proves four things a unit test structurally cannot:
+//
+//  1. DRIVER TYPE COMPATIBILITY. confidence is Float32 on the wire, repo_id is
+//     Nullable(UUID), team_id/tool_name are Nullable(String), org_id on
+//     ai_attribution is a UUID (not a String). A fake scanner accepts whatever
+//     Go type the reader asks for; only a real driver rejects a wrong one.
+//     This is the exact class of defect the CHAOS-4977 live-CH differential
+//     found (a Map(String,Float64) column scanned as *string, invisible to
+//     every existing unit test).
+//
+//  2. FINDING A -- the git_pull_requests fan-out does NOT happen here. The
+//     fixture seeds TWO un-merged rows for the same (repo_id, number) with
+//     different last_synced and DIFFERENT reviews_count. Python's query, which
+//     joins that table with neither FINAL nor any dedup, would emit the
+//     artifact twice and count it twice. This loader's FINAL read must emit it
+//     once, with the LATER last_synced's reviews_count winning. (It was an
+//     argMax dedup until #2229 round 3 showed argMax is nondeterministic on a
+//     tied version; see the loader's doc comment.)
+//
+//  3. Q1 -- IDEMPOTENCY. ComputeFamily is run TWICE, exactly as it is in
+//     production when an org has more than one repo partition (the family is
+//     org-scoped and ignores the partition's repo scope). With the
+//     deterministic event_id, the second run re-derives the SAME ids, so the
+//     ReplacingMergeTree collapses them and the DISTINCT event_id count stays
+//     flat. Under Python's uuid4() it would double. This is the assertion that
+//     makes the whole Q1 decision testable rather than merely argued.
+//
+//  4. The scan/finding reads agree with Python. They now use FINAL, exactly as
+//     Python does, after #2229 round 3 showed argMax is nondeterministic on a
+//     tied version -- so this is no longer "an argMax replacement that agrees
+//     with FINAL", it is the same instrument Python uses.
+func TestAIGovernanceComputeFamilyAgainstRealClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		// Production shape: migration 035 + 044's repo_id-in-ORDER-BY rebuild.
+		`CREATE TABLE ai_attribution (
+    record_id UUID, org_id UUID, provider LowCardinality(String),
+    subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
+    kind LowCardinality(String), source LowCardinality(String), confidence Float32,
+    actor Nullable(String), evidence String,
+    observed_at DateTime64(3, 'UTC'), ingested_at DateTime64(3, 'UTC'),
+    superseded_by Nullable(UUID), computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
+SETTINGS allow_nullable_key = 1`,
+		// Migration 043's live view definition, verbatim.
+		`CREATE VIEW ai_attribution_resolved AS
+SELECT record_id, org_id, provider, subject_type, subject_id, repo_id, kind,
+       source, confidence, actor, evidence, observed_at, ingested_at,
+       superseded_by, computed_at
+FROM (
+    SELECT *, multiIf(
+        source = 'manual', 1, source = 'pr_label', 2, source = 'bot_author', 3,
+        source = 'commit_trailer', 4, source = 'ci_annotation', 5,
+        source = 'branch_name', 6, source = 'pr_body', 7, 8) AS _source_priority
+    FROM ai_attribution FINAL WHERE superseded_by IS NULL
+)
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY org_id, subject_type, repo_id, subject_id
+    ORDER BY _source_priority ASC, confidence DESC) = 1`,
+		`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    started_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`,
+		`CREATE TABLE security_alerts (
+    repo_id UUID, alert_id String, source String,
+    created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, alert_id)`,
+		`CREATE TABLE ai_tool_allowlist (
+    org_id String, tool_name String, model_name Nullable(String),
+    status LowCardinality(String), reason Nullable(String),
+    updated_at DateTime64(3, 'UTC'), computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, tool_name, ifNull(model_name, ''))`,
+		// Migration 038, verbatim.
+		`CREATE TABLE ai_policy_events (
+    event_id UUID, org_id String, team_id Nullable(String), repo_id Nullable(UUID),
+    rule_id LowCardinality(String), severity LowCardinality(String),
+    subject_type LowCardinality(String), subject_id String,
+    observed_at DateTime64(3, 'UTC'), evidence String,
+    computed_at DateTime64(3, 'UTC') DEFAULT now64()
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at)
+ORDER BY (org_id, ifNull(team_id, ''), ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')), rule_id, subject_type, subject_id, observed_at, event_id)`,
+		`CREATE TABLE ai_governance_coverage_daily (
+    org_id String, team_id Nullable(String), repo_id Nullable(UUID), day Date,
+    ai_artifacts UInt64, declared_artifacts UInt64, human_reviewed_prs UInt64,
+    security_scanned_prs UInt64, in_policy_artifacts UInt64,
+    computed_at DateTime64(3, 'UTC') DEFAULT now64()
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day)
+ORDER BY (org_id, ifNull(team_id, ''), ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')), day)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v\nstatement: %s", err, statement)
+		}
+	}
+
+	const (
+		orgID  = "00000000-0000-4000-8000-0000000000a0"
+		repoID = "00000000-0000-4000-8000-0000000000a1"
+	)
+
+	// Three artifacts on the target day:
+	//   PR 1  -- declared via pr_label, reviewed, scanned, allowlisted -> clean.
+	//   PR 2  -- declared, but the repo has a dependabot finding      -> 1 violation.
+	//   PR 3  -- source pr_body (NOT a declaring source)              -> 1 violation.
+	if err := conn.Exec(ctx, `
+INSERT INTO ai_attribution (record_id, org_id, provider, subject_type, subject_id, repo_id,
+    kind, source, confidence, actor, evidence, observed_at, ingested_at, superseded_by, computed_at) VALUES
+(generateUUIDv4(), toUUID('`+orgID+`'), 'github', 'pull_request', '1', toUUID('`+repoID+`'),
+ 'ai_assisted', 'pr_label', 0.95, NULL, '{"tool_name":"copilot","model_name":"gpt-4o"}',
+ toDateTime64('2026-09-03 12:00:00', 3, 'UTC'), now64(3), NULL, now64(3)),
+(generateUUIDv4(), toUUID('`+orgID+`'), 'github', 'pull_request', '2', toUUID('`+repoID+`'),
+ 'ai_assisted', 'pr_label', 0.95, NULL, '{"tool_name":"copilot","model_name":"gpt-4o"}',
+ toDateTime64('2026-09-03 13:00:00', 3, 'UTC'), now64(3), NULL, now64(3)),
+(generateUUIDv4(), toUUID('`+orgID+`'), 'github', 'pull_request', '3', toUUID('`+repoID+`'),
+ 'ai_assisted', 'pr_body', 0.25, NULL, '{"tool_name":"copilot","model_name":"gpt-4o"}',
+ toDateTime64('2026-09-03 14:00:00', 3, 'UTC'), now64(3), NULL, now64(3))`); err != nil {
+		t.Fatal(err)
+	}
+
+	// FINDING A FIXTURE: PR 1 has TWO un-merged rows with different
+	// last_synced AND different reviews_count. Python's undeduped join would
+	// emit the artifact twice; this loader must emit it once, taking the
+	// later last_synced's reviews_count (2, so human_reviewed is true).
+	// PRs 2 and 3 each get a single row.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 1, 0, toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+orgID+`'),
+(toUUID('`+repoID+`'), 1, 2, toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+orgID+`'),
+(toUUID('`+repoID+`'), 2, 3, toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+orgID+`'),
+(toUUID('`+repoID+`'), 3, 1, toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// A successful pipeline run makes security_scanned true for the repo.
+	// Duplicated on the dedup key so the argMax replacement for Python's FINAL
+	// is exercised rather than assumed.
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 'run-1', 'pending', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgID+`'),
+(toUUID('`+repoID+`'), 'run-1', 'success', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 09:30:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO security_alerts (repo_id, alert_id, source, created_at, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 'alert-1', 'dependabot', toDateTime64('2026-09-01 00:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-01 00:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// Exact (tool+model) row beats the wildcard row -- CHAOS-2209 precedence.
+	if err := conn.Exec(ctx, `
+INSERT INTO ai_tool_allowlist (org_id, tool_name, model_name, status, reason, updated_at, computed_at) VALUES
+('`+orgID+`', 'copilot', 'gpt-4o', 'allowed', NULL, now64(3), now64(3)),
+('`+orgID+`', 'copilot', NULL, 'disallowed', NULL, now64(3), now64(3))`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewAIGovernanceExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(repoID)}}
+
+	firstWritten, err := executor.ComputeFamily(ctx, run, partition)
+	if err != nil {
+		t.Fatalf("first ComputeFamily: %v", err)
+	}
+	if firstWritten == 0 {
+		t.Fatal("first run wrote zero rows -- the family computed nothing at all")
+	}
+
+	// (2) Finding A: exactly ONE coverage row, counting THREE artifacts. A
+	// fan-out on PR 1's duplicate would make ai_artifacts 4, not 3.
+	var aiArtifacts, declared, humanReviewed, securityScanned, inPolicy uint64
+	if err := conn.QueryRow(ctx, `
+SELECT ai_artifacts, declared_artifacts, human_reviewed_prs, security_scanned_prs, in_policy_artifacts
+FROM ai_governance_coverage_daily FINAL WHERE org_id = ?`, orgID).
+		Scan(&aiArtifacts, &declared, &humanReviewed, &securityScanned, &inPolicy); err != nil {
+		t.Fatalf("read coverage: %v", err)
+	}
+	if aiArtifacts != 3 {
+		t.Fatalf("ai_artifacts = %d, want 3 -- 4 means PR 1's duplicate git_pull_requests row fanned out "+
+			"(the argMax dedup regressed to Python's undeduped join)", aiArtifacts)
+	}
+	if declared != 2 {
+		t.Fatalf("declared_artifacts = %d, want 2 (pr_label declares, pr_body does not)", declared)
+	}
+	// PR 1's LATER row has reviews_count=2, so human_reviewed is true for it;
+	// PRs 2 and 3 also have non-zero reviews. If argMax picked the EARLIER row
+	// (reviews_count=0) this would be 2, not 3.
+	if humanReviewed != 3 {
+		t.Fatalf("human_reviewed_prs = %d, want 3 -- 2 means argMax took the EARLIER last_synced row "+
+			"for PR 1 (reviews_count=0) instead of the later one", humanReviewed)
+	}
+	if securityScanned != 3 {
+		t.Fatalf("security_scanned_prs = %d, want 3 -- the argMax replacement for Python's "+
+			"`ci_pipeline_runs FINAL` must see run-1's later 'success' status", securityScanned)
+	}
+	// Every artifact carries the dependabot finding, so none is in policy.
+	if inPolicy != 0 {
+		t.Fatalf("in_policy_artifacts = %d, want 0 (the repo has a dependabot finding)", inPolicy)
+	}
+
+	var distinctEvents, totalEvents uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT uniqExact(event_id), count() FROM ai_policy_events FINAL WHERE org_id = ?`, orgID).
+		Scan(&distinctEvents, &totalEvents); err != nil {
+		t.Fatalf("read policy events: %v", err)
+	}
+	if distinctEvents == 0 {
+		t.Fatal("no policy events written")
+	}
+
+	// (3) Q1 idempotency: a SECOND ComputeFamily for the same org/day, which
+	// is what production does for every additional repo partition. The
+	// deterministic event_id must re-derive identically so the
+	// ReplacingMergeTree collapses the rewrite.
+	if _, err := executor.ComputeFamily(ctx, run, partition); err != nil {
+		t.Fatalf("second ComputeFamily: %v", err)
+	}
+	var distinctAfter, totalAfter uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT uniqExact(event_id), count() FROM ai_policy_events FINAL WHERE org_id = ?`, orgID).
+		Scan(&distinctAfter, &totalAfter); err != nil {
+		t.Fatalf("re-read policy events: %v", err)
+	}
+	if distinctAfter != distinctEvents {
+		t.Fatalf("distinct event_id went %d -> %d across two runs of the SAME org/day. "+
+			"The event_id derivation is not stable, so ai_policy_events can never dedup "+
+			"-- this is exactly the uuid4() defect the port exists to fix.",
+			distinctEvents, distinctAfter)
+	}
+	if totalAfter != totalEvents {
+		t.Fatalf("ai_policy_events row count went %d -> %d after re-running the same partition; "+
+			"FINAL should collapse the rewrite onto the identical ORDER BY key", totalEvents, totalAfter)
+	}
+
+	var coverageRows uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM ai_governance_coverage_daily FINAL WHERE org_id = ?`, orgID).
+		Scan(&coverageRows); err != nil {
+		t.Fatalf("count coverage rows: %v", err)
+	}
+	if coverageRows != 1 {
+		t.Fatalf("coverage rows = %d after two runs, want 1 -- the rewrite must collapse", coverageRows)
+	}
+}
+
+// TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie is the regression guard
+// for the independent-argMax defect this file's own first version shipped with
+// (CHAOS-2787's class).
+//
+// It seeds TWO physical git_pull_requests rows for one (repo_id, number) that
+// share an IDENTICAL last_synced but disagree on BOTH reviews_count AND
+// org_id. With one argMax per column the two aggregates resolve that tie
+// independently, and the query can emit reviews_count from one row beside
+// org_id from the other -- a row that never existed in the table. With a
+// single argMax over a tuple, both values come from whichever row wins.
+//
+// THE ASSERTION HAS TO BE ON THE PAIR. Checking reviews_count alone, or
+// org_id alone, passes under BOTH implementations, because each individual
+// value is legitimately one of the two seeded values either way. Only "these
+// two came from the SAME row" separates them -- which is why the seeded rows
+// disagree on both columns at once, and why the check below accepts exactly
+// two whole-row outcomes and nothing in between.
+//
+// The tie is ordinary, not contrived: last_synced is DateTime64(3) stamped
+// from datetime.now(), and the writer inserts a fresh row per sync rather than
+// short-circuiting, so two versions of one key in the same millisecond is
+// routine.
+func TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if err := conn.Exec(ctx, `CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		tieRepoID = "00000000-0000-4000-8000-0000000000c1"
+		tieOrgA   = "00000000-0000-4000-8000-0000000000c0"
+		tieOrgB   = "00000000-0000-4000-8000-0000000000d0"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+tieRepoID+`'), 1, 5, toDateTime64('2026-09-03 11:00:00.000', 3, 'UTC'), '`+tieOrgA+`'),
+(toUUID('`+tieRepoID+`'), 1, 9, toDateTime64('2026-09-03 11:00:00.000', 3, 'UTC'), '`+tieOrgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact dedup shape LoadGovernanceArtifacts uses, in isolation.
+	var reviewsCount uint32
+	var resolvedOrgID string
+	if err := conn.QueryRow(ctx, `
+SELECT tupleElement(latest, 1), tupleElement(latest, 2)
+FROM (
+    SELECT repo_id, number, argMax(tuple(reviews_count, org_id), last_synced) AS latest
+    FROM git_pull_requests
+    GROUP BY repo_id, number
+)`).Scan(&reviewsCount, &resolvedOrgID); err != nil {
+		t.Fatalf("read deduped row: %v", err)
+	}
+
+	consistent := (reviewsCount == 5 && resolvedOrgID == tieOrgA) ||
+		(reviewsCount == 9 && resolvedOrgID == tieOrgB)
+	if !consistent {
+		t.Fatalf("dedup emitted reviews_count=%d with org_id=%s -- that PAIR exists in no seeded row. "+
+			"Two independent argMax aggregates resolved the last_synced tie differently; the seeded "+
+			"rows were (5, %s) and (9, %s).", reviewsCount, resolvedOrgID, tieOrgA, tieOrgB)
+	}
+}
+
+// TestGovernanceDedupIsTenantScoped is the regression guard for codex round
+// 1's P1 on #2229: a dedup GROUP BY that omits org_id selects the newest row
+// ACROSS TENANTS.
+//
+// The live sorting keys all begin with org_id --
+//
+//	git_pull_requests  (org_id, repo_id, number)   027_add_org_id_to_sorting_keys.py:63
+//	ci_pipeline_runs   (org_id, repo_id, run_id)   :65
+//	security_alerts    (org_id, repo_id, alert_id) 042_rmt_org_id_dedup_keys.py:93
+//
+// -- but the CREATE statements in 000_raw_tables.sql do not, and migration 024
+// explicitly says org_id is NOT in any sorting key, which was true when written
+// and is now stale. The first version of this loader grouped without org_id on
+// the strength of that note.
+//
+// THE FIXTURE IS THE ASSERTION. Two organisations legitimately share one
+// repo_id and one PR number. Org B's row is NEWER and has reviews_count=0; org
+// A's is older with reviews_count=5. Grouping without org_id makes B's row win
+// globally, A's org filter then misses, and A's artifact reads as unreviewed --
+// so org A gets a spurious MISSING_HUMAN_REVIEW. Grouping by the real key gives
+// each tenant its own group and A keeps its own facts.
+//
+// A single-tenant fixture cannot see this at all, which is why the original
+// integration test passed while the defect was live.
+func TestGovernanceDedupIsTenantScoped(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// The CURRENT key, from the rekey migrations -- not the stale CREATE.
+	if err := conn.Exec(ctx, `CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		sharedRepo = "00000000-0000-4000-8000-0000000000e1"
+		orgA       = "00000000-0000-4000-8000-0000000000e0"
+		orgB       = "00000000-0000-4000-8000-0000000000f0"
+	)
+	// Same (repo_id, number) in two tenants. B is NEWER and unreviewed.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 7, 5, toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), 7, 0, toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The dedup shape LoadGovernanceArtifacts uses, in isolation.
+	var reviewsCount uint32
+	if err := conn.QueryRow(ctx, `
+SELECT reviews_count FROM (
+    SELECT repo_id, number, argMax(reviews_count, last_synced) AS reviews_count
+    FROM git_pull_requests
+    WHERE org_id = ?
+    GROUP BY org_id, repo_id, number
+)`, orgA).Scan(&reviewsCount); err != nil {
+		t.Fatalf("read org A's deduped row: %v", err)
+	}
+	if reviewsCount != 5 {
+		t.Fatalf("org A sees reviews_count=%d, want 5. Org B's NEWER row won a dedup group that "+
+			"omitted org_id, so org A's own reviewed PR was suppressed and would emit a spurious "+
+			"MISSING_HUMAN_REVIEW. The GROUP BY must be the CURRENT sorting key "+
+			"(org_id, repo_id, number), per 027_add_org_id_to_sorting_keys.py:63.", reviewsCount)
+	}
+
+	// Org B must still see its own row -- the fix must not simply pin org A.
+	var orgBReviews uint32
+	if err := conn.QueryRow(ctx, `
+SELECT reviews_count FROM (
+    SELECT repo_id, number, argMax(reviews_count, last_synced) AS reviews_count
+    FROM git_pull_requests
+    WHERE org_id = ?
+    GROUP BY org_id, repo_id, number
+)`, orgB).Scan(&orgBReviews); err != nil {
+		t.Fatalf("read org B's deduped row: %v", err)
+	}
+	if orgBReviews != 0 {
+		t.Fatalf("org B sees reviews_count=%d, want 0", orgBReviews)
+	}
+}
+
+// TestGovernanceDedupKeepsANewerNullStatus is the regression guard for codex
+// round 2's P1 — a NULL-skip I REINTRODUCED while fixing round 1's org_id
+// finding.
+//
+// `argMax(x, y)` skips rows where x is NULL, so an older non-NULL value
+// outlives a genuinely NULL latest one. `argMax(tuple(x), y)` does not, because
+// tuple(NULL) is itself never NULL: the row competes and tupleElement returns
+// the NULL. ci_pipeline_runs.status is Nullable(String)
+// (000_raw_tables.sql:100).
+//
+// Why it matters: Python reads `... FINAL` and then `lower(coalesce(status,”))`,
+// so a newest-NULL status does NOT count as a successful scan. A bare argMax
+// makes Go retain the older 'success' instead, marking every AI PR in that repo
+// security-scanned -- Python emits MISSING_SECURITY_SCAN and reports
+// security_scanned_prs=0, Go emits nothing and reports 1.
+//
+// The assertion compares against `SELECT ... FINAL` rather than a hardcoded
+// expectation, so it states the actual invariant -- "the dedup agrees with
+// FINAL" -- instead of a value that could drift with the fixture.
+func TestGovernanceDedupKeepsANewerNullStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if err := conn.Exec(ctx, `CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    started_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		nullRepo = "00000000-0000-4000-8000-0000000000f1"
+		nullOrg  = "00000000-0000-4000-8000-0000000000f0"
+	)
+	// Older 'success', NEWER NULL, same dedup key.
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id) VALUES
+(toUUID('`+nullRepo+`'), 'run-1', 'success', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), '`+nullOrg+`'),
+(toUUID('`+nullRepo+`'), 'run-1', NULL, toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 11:00:00', 3, 'UTC'), '`+nullOrg+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// What Python's `FINAL` path sees -- the reference answer.
+	var finalScanCount uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE org_id = ? AND lower(coalesce(status, '')) IN ('success','passed','completed')`,
+		nullOrg).Scan(&finalScanCount); err != nil {
+		t.Fatalf("read FINAL reference: %v", err)
+	}
+
+	// The PRODUCTION shape, lifted from LoadGovernanceArtifacts' scan subquery.
+	// It used to be an argMax dedup and is now FINAL (#2229 codex round 3 P1),
+	// so this string must be kept in step with the loader -- an embedded copy of
+	// SQL that production no longer runs is a test of nothing.
+	var productionScanCount uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE lower(coalesce(status, '')) IN ('success','passed','completed') AND org_id = ?`,
+		nullOrg).Scan(&productionScanCount); err != nil {
+		t.Fatalf("read production dedup: %v", err)
+	}
+
+	if productionScanCount != finalScanCount {
+		t.Fatalf("production dedup counted %d successful scans, FINAL counts %d. The newer row's "+
+			"status is genuinely NULL, and a dedup that drops it retains the older 'success' -- "+
+			"marking every AI PR in this repo security-scanned while Python emits "+
+			"MISSING_SECURITY_SCAN. A bare argMax over a Nullable column does exactly that, "+
+			"which is why this read is FINAL.",
+			productionScanCount, finalScanCount)
+	}
+	if finalScanCount != 0 {
+		t.Fatalf("fixture is not exercising the case: FINAL counts %d successful scans, want 0 "+
+			"(the newest row's status is NULL)", finalScanCount)
+	}
+}
+
+// TestGovernanceScanDedupIsDeterministicAndMatchesFINAL is the regression guard
+// for #2229 codex round 3's P1: it fails if anyone turns the `FINAL` reads in
+// LoadGovernanceArtifacts back into `argMax`.
+//
+// # WHY THE FIXTURE IS 400 KEYS AND NOT 2
+//
+// This size is not enthusiasm. The first attempt at this repro used TWO rows,
+// found FINAL and argMax agreeing and stable, and nearly concluded the finding
+// did not reproduce. That negative was worthless: argMax's tie behaviour is a
+// PARALLEL AGGREGATION property, and with one small part and one thread there
+// is nothing to race. A two-row tie fixture cannot detect the defect it would
+// be written to catch.
+//
+// At 400 tied keys across 40 unmerged parts with merges stopped, the same query
+// on the same bytes returned 60, 300, 180, 120 and 80 disagreeing keys on five
+// consecutive runs (ClickHouse 26.7.6.57). That is the scale that discriminates.
+//
+// # WHY MERGES ARE STOPPED
+//
+// The second attempt let background merges run and produced self-contradictory
+// output -- a disagreement count alongside value distributions that implied no
+// disagreement -- because the table was collapsing underneath the measurement.
+// `SYSTEM STOP MERGES` before any insert is what makes the pre-merge state
+// observable at all. Without it this test would pass for the wrong reason:
+// post-merge, argMax and FINAL agree.
+func TestGovernanceScanDedupIsDeterministicAndMatchesFINAL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	const (
+		tieRepo = "00000000-0000-4000-8000-0000000000e1"
+		tieOrg  = "00000000-0000-4000-8000-0000000000e0"
+	)
+
+	if err := conn.Exec(ctx, `CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    started_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`); err != nil {
+		t.Fatal(err)
+	}
+	// Freeze the table BEFORE inserting, so the pre-merge state is what is
+	// measured rather than whatever the merge scheduler has reached.
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES ci_pipeline_runs`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 400 keys, each with two rows at an IDENTICAL last_synced and DIFFERENT
+	// status, written as 40 separate parts so aggregation has something to race.
+	for batch := 0; batch < 20; batch++ {
+		for _, status := range []string{"success", "pending"} {
+			if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, started_at, last_synced, org_id)
+SELECT toUUID(?), concat('run-', toString(number)), ?,
+       toDateTime64('2026-09-03 09:00:00', 3, 'UTC'),
+       toDateTime64('2026-09-03 10:00:00', 3, 'UTC'), ?
+FROM numbers(?, 20)`, tieRepo, status, tieOrg, uint64(batch*20)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// POSITIVE CONTROL. Without this the test can pass by measuring a fixture
+	// that does not actually tie -- 800 undeduped rows and 400 keys is the
+	// property under test, not an incidental detail.
+	var rowCount, keyCount, distinctVersions uint64
+	if err := conn.QueryRow(ctx, `
+SELECT count(), uniqExact(run_id), uniqExact(last_synced)
+FROM ci_pipeline_runs WHERE org_id = ?`, tieOrg).Scan(&rowCount, &keyCount, &distinctVersions); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 800 || keyCount != 400 || distinctVersions != 1 {
+		t.Fatalf("fixture does not tie as intended: %d rows, %d keys, %d distinct last_synced "+
+			"(want 800/400/1). A fixture that has already merged, or whose versions differ, "+
+			"cannot exercise the tie this test exists for", rowCount, keyCount, distinctVersions)
+	}
+
+	// The reference: what Python's FINAL read sees.
+	scanCountVia := func(t *testing.T, query string) uint64 {
+		t.Helper()
+		var count uint64
+		if err := conn.QueryRow(ctx, query, tieOrg).Scan(&count); err != nil {
+			t.Fatalf("query %q: %v", query, err)
+		}
+		return count
+	}
+
+	const finalQuery = `
+SELECT count() FROM ci_pipeline_runs FINAL
+WHERE org_id = ? AND lower(coalesce(status, '')) IN ('success','passed','completed')`
+
+	// The static shape assertions live in ai_governance_sql_shape_test.go, which
+	// carries no build tag so they run without a container -- the regression they
+	// catch is a one-line edit and must not depend on Docker being present.
+	// Behavioural half: prove WHY the static assertion above matters.
+	want := scanCountVia(t, finalQuery)
+
+	// STABILITY across repeats is the half a single comparison cannot show: a
+	// bare argMax can agree with FINAL on one run and disagree on the next.
+	seen := map[uint64]int{}
+	for range 5 {
+		seen[scanCountVia(t, finalQuery)]++
+	}
+	if len(seen) != 1 {
+		t.Fatalf("the scan dedup is NOT deterministic across identical runs: saw %v. "+
+			"argMax is unspecified when the version ties and varies under parallel "+
+			"aggregation; FINAL does not. Do not replace these FINAL reads with argMax", seen)
+	}
+	for got := range seen {
+		if got != want {
+			t.Fatalf("scan dedup counted %d successful scans, FINAL counts %d on the same tied "+
+				"fixture. Python reads this table with FINAL (loaders.py:248), so a divergence "+
+				"here is a parity defect, not a preference", got, want)
+		}
+	}
+}

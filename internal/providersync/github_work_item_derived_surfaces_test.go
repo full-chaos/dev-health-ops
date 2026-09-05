@@ -512,7 +512,7 @@ func TestGitHubWorkItemDerivedBuildersAssertTenancyBeforeSkipping(t *testing.T) 
 		t.Fatalf("composite: got %v, want ErrInvalidConfiguration", err)
 	}
 	if _, err := buildGitHubEstimateCoverageMetricsDaily(
-		claim, rows, day, day.AddDate(0, 0, 1), computedAt, derived,
+		claim, rows, day, computedAt, derived,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("estimate coverage: got %v, want ErrInvalidConfiguration", err)
 	}

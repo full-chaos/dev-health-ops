@@ -3,11 +3,9 @@ package providersync
 import (
 	"encoding/json"
 	"fmt"
-	"math"
-	"sort"
-	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -154,11 +152,6 @@ type githubWorkItemMetricUserKey struct {
 	provider, scope, user, teamID string
 }
 
-var githubWorkItemMetricWaitStatuses = map[string]struct{}{
-	"backlog": {}, "todo": {}, "waiting": {}, "blocked": {},
-	"review_requested": {}, "waiting_for_review": {},
-}
-
 // buildGitHubWorkItemMetricTriplet is deliberately pure. The caller loads the
 // shared attribution context once and can reuse it for every UTC backfill day.
 // It does not register or activate the composite route.
@@ -190,209 +183,161 @@ func buildWorkItemMetricTripletForProvider(
 		!isWorkItemFamilyDataset(claim.Dataset) || day.IsZero() || computedAt.IsZero() {
 		return githubWorkItemMetricTriplet{}, ErrInvalidConfiguration
 	}
-	dayUTC := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	end := dayUTC.AddDate(0, 0, 1)
-	weekStart := end.AddDate(0, 0, -7)
 	computedAt = computedAt.UTC()
 
-	transitions := make(map[string][]githubWorkItemTransitionRow)
+	// Tenancy is asserted in ONE pass over the rows in their original order,
+	// exactly where the pre-CHAOS-4283 inline version asserted it: the check
+	// was the first statement of each loop body, before any `continue`, so
+	// every row was checked in order regardless of relevance. Hoisting it here
+	// preserves both the set of rejected inputs and WHICH row is reported
+	// first.
+	transitions := make([]workitemmetrics.Transition, 0, len(rows.StatusTransitions))
 	for _, transition := range rows.StatusTransitions {
 		if transition.OrgID != claim.OrgID {
 			return githubWorkItemMetricTriplet{}, ErrInvalidConfiguration
 		}
-		transitions[transition.WorkItemID] = append(transitions[transition.WorkItemID], transition)
+		transitions = append(transitions, workitemmetrics.Transition{
+			WorkItemID: transition.WorkItemID,
+			OccurredAt: transition.OccurredAt,
+			ToStatus:   transition.ToStatus,
+		})
 	}
-	groups := make(map[githubWorkItemMetricGroupKey]*githubWorkItemMetricGroupBucket)
-	users := make(map[githubWorkItemMetricUserKey]*githubWorkItemMetricUserBucket)
-	result := githubWorkItemMetricTriplet{}
+	items, err := workItemMetricItems(claim, rows)
+	if err != nil {
+		return githubWorkItemMetricTriplet{}, err
+	}
 
-	for _, item := range rows.WorkItems {
+	triplet := workitemmetrics.ComputeDailyTriplet(
+		day, items, transitions,
+		workitemmetrics.AssertAligned(len(rows.WorkItems), items, workItemMetricResolver(rows, derived)),
+	)
+	return githubWorkItemMetricTriplet{
+		MetricsDaily:     githubWorkItemMetricsDailyRows(triplet.MetricsDaily, computedAt, claim.OrgID),
+		UserMetricsDaily: githubWorkItemUserMetricsDailyRows(triplet.UserMetricsDaily, computedAt, claim.OrgID),
+		CycleTimes:       githubWorkItemCycleTimeRecords(triplet.CycleTimes, computedAt, claim.OrgID),
+	}, nil
+}
+
+// workItemMetricItems projects providersync's row shape onto the shared
+// compute's input, asserting tenancy in row order (see the caller's comment).
+func workItemMetricItems(claim Claim, rows githubWorkItemRows) ([]workitemmetrics.Item, error) {
+	items := make([]workitemmetrics.Item, 0, len(rows.WorkItems))
+	for index, item := range rows.WorkItems {
 		if item.OrgID != claim.OrgID || item.Provider != claim.Provider || item.CreatedAt.IsZero() {
-			return githubWorkItemMetricTriplet{}, ErrInvalidConfiguration
+			return nil, ErrInvalidConfiguration
 		}
-		createdAt := item.CreatedAt.UTC()
-		if !createdAt.Before(end) {
-			continue
-		}
-		startedAt := utcTimePointer(item.StartedAt)
-		completedAt := utcTimePointer(item.CompletedAt)
-		terminalAt := earliestTimePointer(completedAt, utcTimePointer(item.ClosedAt))
-		startedToday := inHalfOpenDay(startedAt, dayUTC, end)
-		completedToday := inHalfOpenDay(completedAt, dayUTC, end)
-		wipEndOfDay := startedAt != nil && startedAt.Before(end) &&
-			(terminalAt == nil || !terminalAt.Before(end))
-		createdToday := !createdAt.Before(dayUTC) && createdAt.Before(end)
-		if !startedToday && !completedToday && !wipEndOfDay && !createdToday {
-			continue
-		}
-
-		scope := teamattribution.WorkItemDerivationScope(githubWorkItemDerivationSubjectFromRow(item))
-		teamID, teamName, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
-		teamIDValue := normalizeGitHubWorkItemMetricTeamID(teamID)
-		teamNameValue := normalizeGitHubWorkItemMetricTeamName(teamName)
-		groupKey := githubWorkItemMetricGroupKey{item.Provider, scope, teamIDValue}
-		bucket := groups[groupKey]
-		if bucket == nil {
-			bucket = &githubWorkItemMetricGroupBucket{teamName: teamNameValue}
-			groups[groupKey] = bucket
-		}
-
-		// compute_work_items.py:872 is `user_identity = assignee or "unassigned"`,
-		// so an assignee that is present but EMPTY falls to "unassigned" — an
-		// empty string is falsy in Python. The unassigned group counters below
-		// deliberately do NOT follow: they test `assignee is None`
-		// (compute_work_items.py:906/916/1007), which an empty string passes.
-		// One assignee value, two different questions.
-		assignee := firstStringPointer(item.Assignees)
-		userIdentity := "unassigned"
-		if assignee != nil && *assignee != "" {
-			userIdentity = *assignee
-		}
-		userKey := githubWorkItemMetricUserKey{item.Provider, scope, userIdentity, teamIDValue}
-		userBucket := users[userKey]
-		if userBucket == nil {
-			userBucket = &githubWorkItemMetricUserBucket{teamName: teamNameValue}
-			users[userKey] = userBucket
-		}
-
-		if createdToday {
-			bucket.newItems++
-			if item.Type == "bug" {
-				bucket.newBugs++
-			}
-		}
-		if completedAt != nil && !completedAt.Before(weekStart) && completedAt.Before(end) {
-			bucket.weeklyThroughput++
-		}
-		if startedToday {
-			bucket.itemsStarted++
-			userBucket.itemsStarted++
-			if assignee == nil {
-				bucket.itemsStartedUnassigned++
-			}
-		}
-		if completedToday {
-			bucket.itemsCompleted++
-			userBucket.itemsCompleted++
-			if assignee == nil {
-				bucket.itemsCompletedUnassigned++
-			}
-			if item.Type == "bug" {
-				bucket.bugCompleted++
-			}
-			if item.StoryPoints != nil {
-				bucket.storyPointsCompleted += *item.StoryPoints
-			}
-			leadHours := githubWorkItemMetricHours(completedAt.Sub(createdAt))
-			bucket.leadHours = append(bucket.leadHours, leadHours)
-			var cycleHours, activeHours, waitHours, efficiency *float64
-			if startedAt != nil {
-				value := githubWorkItemMetricHours(completedAt.Sub(*startedAt))
-				cycleHours = &value
-				bucket.cycleHours = append(bucket.cycleHours, value)
-				userBucket.cycleHours = append(userBucket.cycleHours, value)
-				if value > 0 {
-					active, wait := calculateGitHubWorkItemFlowBreakdown(*startedAt, *completedAt, transitions[item.WorkItemID])
-					if active+wait == 0 {
-						active = value
-					}
-					activeHours, waitHours = floatPointer(active), floatPointer(wait)
-					ratio := 0.0
-					if active+wait > 0 {
-						ratio = active / (active + wait)
-					}
-					efficiency = &ratio
-				}
-			}
-			result.CycleTimes = append(result.CycleTimes, githubWorkItemCycleTimeRecord{
-				WorkItemID: item.WorkItemID, Provider: item.Provider,
-				Day: newGitHubWorkItemMetricDay(*completedAt), WorkScopeID: scope,
-				TeamID: teamIDValue, TeamName: teamNameValue, Assignee: assignee,
-				Type: item.Type, Status: item.Status, CreatedAt: createdAt,
-				StartedAt: startedAt, CompletedAt: completedAt, CycleTimeHours: cycleHours,
-				LeadTimeHours: floatPointer(leadHours), ActiveTimeHours: activeHours,
-				WaitTimeHours: waitHours, FlowEfficiency: efficiency,
-				ComputedAt: computedAt, OrgID: claim.OrgID,
-			})
-		}
-		if wipEndOfDay {
-			bucket.wipCount++
-			userBucket.wipCount++
-			if assignee == nil {
-				bucket.wipUnassigned++
-			}
-			bucket.wipAgeHours = append(bucket.wipAgeHours, githubWorkItemMetricHours(end.Sub(*startedAt)))
-		}
-	}
-
-	groupKeys := make([]githubWorkItemMetricGroupKey, 0, len(groups))
-	for key := range groups {
-		groupKeys = append(groupKeys, key)
-	}
-	sort.Slice(groupKeys, func(i, j int) bool {
-		left, right := groupKeys[i], groupKeys[j]
-		return left.provider < right.provider || left.provider == right.provider &&
-			(left.scope < right.scope || left.scope == right.scope && left.teamID < right.teamID)
-	})
-	for _, key := range groupKeys {
-		bucket := groups[key]
-		completed := float64(bucket.itemsCompleted)
-		bugRatio := 0.0
-		if completed > 0 {
-			bugRatio = float64(bucket.bugCompleted) / completed
-		}
-		defectRate := 0.0
-		if bucket.newItems > 0 {
-			defectRate = float64(bucket.newBugs) / float64(bucket.newItems)
-		}
-		congestion := float64(bucket.wipCount) / math.Max(1, float64(bucket.weeklyThroughput))
-		predictability := 0.0
-		if bucket.itemsCompleted+bucket.wipCount > 0 {
-			predictability = completed / float64(bucket.itemsCompleted+bucket.wipCount)
-		}
-		result.MetricsDaily = append(result.MetricsDaily, githubWorkItemMetricsDailyRow{
-			Day: newGitHubWorkItemMetricDay(dayUTC), Provider: key.provider,
-			WorkScopeID: key.scope, TeamID: key.teamID, TeamName: bucket.teamName,
-			ItemsStarted: bucket.itemsStarted, ItemsCompleted: bucket.itemsCompleted,
-			ItemsStartedUnassigned:   bucket.itemsStartedUnassigned,
-			ItemsCompletedUnassigned: bucket.itemsCompletedUnassigned,
-			WIPCountEndOfDay:         bucket.wipCount, WIPUnassignedEndOfDay: bucket.wipUnassigned,
-			CycleTimeP50Hours: percentilePointer(bucket.cycleHours, 50),
-			CycleTimeP90Hours: percentilePointer(bucket.cycleHours, 90),
-			LeadTimeP50Hours:  percentilePointer(bucket.leadHours, 50),
-			LeadTimeP90Hours:  percentilePointer(bucket.leadHours, 90),
-			WIPAgeP50Hours:    percentilePointer(bucket.wipAgeHours, 50),
-			WIPAgeP90Hours:    percentilePointer(bucket.wipAgeHours, 90),
-			BugCompletedRatio: bugRatio, StoryPointsCompleted: bucket.storyPointsCompleted,
-			NewBugsCount: bucket.newBugs, NewItemsCount: bucket.newItems,
-			DefectIntroRate: defectRate, WIPCongestionRatio: congestion,
-			PredictabilityScore: predictability, ComputedAt: computedAt, OrgID: claim.OrgID,
+		items = append(items, workitemmetrics.Item{
+			SourceIndex: index,
+			WorkItemID:  item.WorkItemID,
+			Provider:    item.Provider,
+			Type:        item.Type,
+			Status:      item.Status,
+			Assignee:    workitemmetrics.FirstAssignee(item.Assignees),
+			CreatedAt:   item.CreatedAt,
+			StartedAt:   item.StartedAt,
+			CompletedAt: item.CompletedAt,
+			ClosedAt:    item.ClosedAt,
+			StoryPoints: item.StoryPoints,
 		})
 	}
+	return items, nil
+}
 
-	userKeys := make([]githubWorkItemMetricUserKey, 0, len(users))
-	for key := range users {
-		userKeys = append(userKeys, key)
+// workItemMetricResolver runs the live teamattribution cascade LAZILY, once per
+// item the shared compute actually reaches -- the same call sites, in the same
+// order, as the pre-extraction inline version. Resolving eagerly in
+// workItemMetricItems would call Resolve for items the relevance filter
+// discards, which is a behaviour change even though Resolve is pure.
+func workItemMetricResolver(
+	rows githubWorkItemRows, derived teamattribution.GithubWorkItemDerivationContext,
+) workitemmetrics.Resolver {
+	return func(index int) workitemmetrics.Attribution {
+		subject := githubWorkItemDerivationSubjectFromRow(rows.WorkItems[index])
+		teamID, teamName, _ := derived.Resolve(subject)
+		return workitemmetrics.Attribution{
+			WorkScopeID: teamattribution.WorkItemDerivationScope(subject),
+			TeamID:      workitemmetrics.NormalizeTeamID(teamID),
+			TeamName:    workitemmetrics.NormalizeTeamName(teamName),
+		}
 	}
-	sort.Slice(userKeys, func(i, j int) bool {
-		left, right := userKeys[i], userKeys[j]
-		return left.provider < right.provider || left.provider == right.provider &&
-			(left.scope < right.scope || left.scope == right.scope &&
-				(left.user < right.user || left.user == right.user && left.teamID < right.teamID))
-	})
-	for _, key := range userKeys {
-		bucket := users[key]
-		result.UserMetricsDaily = append(result.UserMetricsDaily, githubWorkItemUserMetricsDailyRow{
-			Day: newGitHubWorkItemMetricDay(dayUTC), Provider: key.provider,
-			WorkScopeID: key.scope, UserIdentity: key.user, TeamID: key.teamID,
-			TeamName: bucket.teamName, ItemsStarted: bucket.itemsStarted,
-			ItemsCompleted: bucket.itemsCompleted, WIPCountEndOfDay: bucket.wipCount,
-			CycleTimeP50Hours: percentilePointer(bucket.cycleHours, 50),
-			CycleTimeP90Hours: percentilePointer(bucket.cycleHours, 90),
-			ComputedAt:        computedAt, OrgID: claim.OrgID,
+}
+
+func githubWorkItemMetricsDailyRows(
+	computed []workitemmetrics.MetricsDailyRow, computedAt time.Time, orgID string,
+) []githubWorkItemMetricsDailyRow {
+	if len(computed) == 0 {
+		return nil
+	}
+	result := make([]githubWorkItemMetricsDailyRow, 0, len(computed))
+	for _, row := range computed {
+		result = append(result, githubWorkItemMetricsDailyRow{
+			Day: newGitHubWorkItemMetricDay(row.Day), Provider: row.Provider,
+			WorkScopeID: row.WorkScopeID, TeamID: row.TeamID, TeamName: row.TeamName,
+			ItemsStarted: row.ItemsStarted, ItemsCompleted: row.ItemsCompleted,
+			ItemsStartedUnassigned:   row.ItemsStartedUnassigned,
+			ItemsCompletedUnassigned: row.ItemsCompletedUnassigned,
+			WIPCountEndOfDay:         row.WIPCountEndOfDay,
+			WIPUnassignedEndOfDay:    row.WIPUnassignedEndOfDay,
+			CycleTimeP50Hours:        row.CycleTimeP50Hours,
+			CycleTimeP90Hours:        row.CycleTimeP90Hours,
+			LeadTimeP50Hours:         row.LeadTimeP50Hours,
+			LeadTimeP90Hours:         row.LeadTimeP90Hours,
+			WIPAgeP50Hours:           row.WIPAgeP50Hours,
+			WIPAgeP90Hours:           row.WIPAgeP90Hours,
+			BugCompletedRatio:        row.BugCompletedRatio,
+			StoryPointsCompleted:     row.StoryPointsCompleted,
+			NewBugsCount:             row.NewBugsCount, NewItemsCount: row.NewItemsCount,
+			DefectIntroRate: row.DefectIntroRate, WIPCongestionRatio: row.WIPCongestionRatio,
+			PredictabilityScore: row.PredictabilityScore,
+			ComputedAt:          computedAt, OrgID: orgID,
 		})
 	}
-	return result, nil
+	return result
+}
+
+func githubWorkItemUserMetricsDailyRows(
+	computed []workitemmetrics.UserMetricsDailyRow, computedAt time.Time, orgID string,
+) []githubWorkItemUserMetricsDailyRow {
+	if len(computed) == 0 {
+		return nil
+	}
+	result := make([]githubWorkItemUserMetricsDailyRow, 0, len(computed))
+	for _, row := range computed {
+		result = append(result, githubWorkItemUserMetricsDailyRow{
+			Day: newGitHubWorkItemMetricDay(row.Day), Provider: row.Provider,
+			WorkScopeID: row.WorkScopeID, UserIdentity: row.UserIdentity,
+			TeamID: row.TeamID, TeamName: row.TeamName,
+			ItemsStarted: row.ItemsStarted, ItemsCompleted: row.ItemsCompleted,
+			WIPCountEndOfDay:  row.WIPCountEndOfDay,
+			CycleTimeP50Hours: row.CycleTimeP50Hours,
+			CycleTimeP90Hours: row.CycleTimeP90Hours,
+			ComputedAt:        computedAt, OrgID: orgID,
+		})
+	}
+	return result
+}
+
+func githubWorkItemCycleTimeRecords(
+	computed []workitemmetrics.CycleTimeRecord, computedAt time.Time, orgID string,
+) []githubWorkItemCycleTimeRecord {
+	if len(computed) == 0 {
+		return nil
+	}
+	result := make([]githubWorkItemCycleTimeRecord, 0, len(computed))
+	for _, row := range computed {
+		result = append(result, githubWorkItemCycleTimeRecord{
+			WorkItemID: row.WorkItemID, Provider: row.Provider,
+			Day: newGitHubWorkItemMetricDay(row.Day), WorkScopeID: row.WorkScopeID,
+			TeamID: row.TeamID, TeamName: row.TeamName, Assignee: row.Assignee,
+			Type: row.Type, Status: row.Status, CreatedAt: row.CreatedAt,
+			StartedAt: row.StartedAt, CompletedAt: row.CompletedAt,
+			CycleTimeHours: row.CycleTimeHours, LeadTimeHours: row.LeadTimeHours,
+			ActiveTimeHours: row.ActiveTimeHours, WaitTimeHours: row.WaitTimeHours,
+			FlowEfficiency: row.FlowEfficiency,
+			ComputedAt:     computedAt, OrgID: orgID,
+		})
+	}
+	return result
 }
 
 // githubWorkItemMetricTripletDestinations is exactly what this lane owns. It is
@@ -473,161 +418,4 @@ func (row githubWorkItemCycleTimeRecord) persistenceRow() githubWorkItemCycleTim
 	}
 }
 
-func normalizeGitHubWorkItemMetricTeamID(value *string) string {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		return "unassigned"
-	}
-	return strings.TrimSpace(*value)
-}
-
-func normalizeGitHubWorkItemMetricTeamName(value *string) string {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		return "Unassigned"
-	}
-	return strings.TrimSpace(*value)
-}
-
-func firstStringPointer(values []string) *string {
-	if len(values) == 0 {
-		return nil
-	}
-	value := values[0]
-	return &value
-}
-
-func utcTimePointer(value *time.Time) *time.Time {
-	if value == nil {
-		return nil
-	}
-	utc := value.UTC()
-	return &utc
-}
-
-func earliestTimePointer(values ...*time.Time) *time.Time {
-	var result *time.Time
-	for _, value := range values {
-		if value != nil && (result == nil || value.Before(*result)) {
-			copy := *value
-			result = &copy
-		}
-	}
-	return result
-}
-
-func inHalfOpenDay(value *time.Time, start, end time.Time) bool {
-	return value != nil && !value.Before(start) && value.Before(end)
-}
-
-func percentilePointer(values []float64, percentile float64) *float64 {
-	if len(values) == 0 {
-		return nil
-	}
-	sorted := append([]float64(nil), values...)
-	sort.Float64s(sorted)
-	if percentile <= 0 {
-		return floatPointer(sorted[0])
-	}
-	if percentile >= 100 {
-		return floatPointer(sorted[len(sorted)-1])
-	}
-	// Each intermediate below is bound to its own name and passed through an
-	// explicit float64 conversion, and the parenthesisation mirrors
-	// compute_work_items.py:48-52 exactly -- `(n-1) * (p/100)`, not `(n-1)*p/100`.
-	//
-	// This shape is not stylistic. Written as one expression, the Go compiler is
-	// free to contract `a*b + c*d` into fused operations that skip the
-	// intermediate rounding Python performs. Measured over 6000 percentile
-	// evaluations drawn from the real input class (hours derived from
-	// microsecond-resolution durations, n = 2..7, p = 50 and 90), the collapsed
-	// form landed one ulp away from the live `_percentile` on 319 of them -- 5.3%
-	// -- while this form matched on all 6000.
-	//
-	// One ulp matters because these columns are compared for EQUALITY on
-	// readback: a percentile disagreeing in its last bit is an effect that can
-	// never be confirmed, on every re-run, forever.
-	ratio := float64(percentile / 100)
-	rank := float64(float64(len(sorted)-1) * ratio)
-	lo := int(rank)
-	hi := lo + 1
-	if hi >= len(sorted) {
-		hi = len(sorted) - 1
-	}
-	frac := float64(rank - float64(lo))
-	low := float64(sorted[lo] * float64(1-frac))
-	high := float64(sorted[hi] * frac)
-	return floatPointer(low + high)
-}
-
-// githubWorkItemMetricSeconds and githubWorkItemMetricHours mirror how PYTHON
-// reaches these quantities, which is not how Go's own Duration methods do.
-//
-// timedelta.total_seconds() is `(whole microseconds) / 10**6` -- one division
-// of an exact integer. Duration.Seconds() instead splits into whole seconds
-// plus a nanosecond remainder and adds them, and Duration.Hours() splits into
-// whole hours plus a nanosecond remainder. Those are different roundings of the
-// same interval, and they disagree in the last bit for ordinary values: a
-// 12h31m08.107259s cycle is 12.518918683055555 hours through Python's path and
-// 12.518918683055556 through Duration.Hours(). Both numbers are "right"; only
-// one of them matches the producer, and these columns are compared for equality
-// on readback.
-//
-// Every datetime Python can hold is a whole number of microseconds, so
-// Microseconds() loses nothing here.
-func githubWorkItemMetricSeconds(value time.Duration) float64 {
-	return float64(float64(value.Microseconds()) / 1e6)
-}
-
-func githubWorkItemMetricHours(value time.Duration) float64 {
-	return float64(githubWorkItemMetricSeconds(value) / 3600)
-}
-
 func floatPointer(value float64) *float64 { return &value }
-
-func calculateGitHubWorkItemFlowBreakdown(
-	startedAt, completedAt time.Time,
-	transitions []githubWorkItemTransitionRow,
-) (float64, float64) {
-	start, end := startedAt.UTC(), completedAt.UTC()
-	if !start.Before(end) {
-		return 0, 0
-	}
-	sorted := append([]githubWorkItemTransitionRow(nil), transitions...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].OccurredAt.Before(sorted[j].OccurredAt) })
-	currentStatus := "unknown"
-	for _, transition := range sorted {
-		occurred := transition.OccurredAt.UTC()
-		if occurred.After(start) {
-			break
-		}
-		currentStatus = transition.ToStatus
-	}
-	if currentStatus == "unknown" || currentStatus == "todo" || currentStatus == "backlog" {
-		currentStatus = "in_progress"
-	}
-	last := start
-	activeSeconds, waitSeconds := 0.0, 0.0
-	for _, transition := range sorted {
-		occurred := transition.OccurredAt.UTC()
-		if !occurred.After(start) {
-			continue
-		}
-		if !occurred.Before(end) {
-			break
-		}
-		duration := githubWorkItemMetricSeconds(occurred.Sub(last))
-		if _, waiting := githubWorkItemMetricWaitStatuses[strings.ToLower(currentStatus)]; waiting {
-			waitSeconds = float64(waitSeconds + duration)
-		} else {
-			activeSeconds = float64(activeSeconds + duration)
-		}
-		currentStatus, last = transition.ToStatus, occurred
-	}
-	if duration := githubWorkItemMetricSeconds(end.Sub(last)); duration > 0 {
-		if _, waiting := githubWorkItemMetricWaitStatuses[strings.ToLower(currentStatus)]; waiting {
-			waitSeconds = float64(waitSeconds + duration)
-		} else {
-			activeSeconds = float64(activeSeconds + duration)
-		}
-	}
-	return float64(activeSeconds / 3600), float64(waitSeconds / 3600)
-}

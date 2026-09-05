@@ -159,7 +159,7 @@ jobs:
       # bytes that (when publishing) were also just pushed under the sha tag
       # in that same build, so there is no separate build to diverge from.
       - name: Set up Go (for the in-image CGO check only)
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 

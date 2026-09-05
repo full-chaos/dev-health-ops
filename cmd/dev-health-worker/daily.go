@@ -324,6 +324,12 @@ func buildDailyWorker(
 				// the partition arm's locals are out of scope in this one.
 				// Registering an empty map is a no-op, so a build with no finalize
 				// executor behaves exactly as before this capability existed.
+				// CHAOS-5141: team_cognitive_load is constructed inside
+				// dailyNativeFamilyRegistrations alongside ic_finalize (see
+				// that function) so both land in ONE finalizeFamilies map and
+				// go through ONE SetNativeFinalizeFamilies call -- the setter
+				// validates every name in the map together against
+				// pythonRecognisedFinalizeFamilies in a single pass.
 				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				handler.SetNativeFinalizeFamilies(finalizeFamilies)
 				// Same fail-open discipline as the partition path: telemetry
@@ -817,6 +823,38 @@ func dailyNativeFamilyRegistrations(
 	finalize = map[string]daily.NativeFinalizeFamilyExecutor{}
 	if clickhouseConnection != nil {
 		finalize[daily.ICFinalizeFamilyName] = daily.NewICFinalizeExecutor(clickhouseConnection)
+	}
+	// CHAOS-5141: team_cognitive_load is a finalize-scope native family that
+	// reads user_metrics_daily, itself populated earlier in the SAME run by
+	// ic_finalize -- co-registration is asserted at construction:
+	// team_cognitive_load registers natively ONLY when ic_finalize is ALSO
+	// registered natively in this finalize map, never independently. Same
+	// fail-open construction policy as every native family below -- a
+	// refusal here simply leaves team_cognitive_load on the Python
+	// compatibility bridge for every run. Registration is separate from
+	// construction: the caller's single SetNativeFinalizeFamilies call
+	// validates every name in this map against
+	// pythonRecognisedFinalizeFamilies and fails loudly (not silently) on a
+	// name Python does not gate on -- see that setter's doc comment.
+	if _, icFinalizeNative := finalize[daily.ICFinalizeFamilyName]; icFinalizeNative {
+		if teamCognitiveLoadExecutor, teamCognitiveLoadErr := daily.NewTeamCognitiveLoadExecutor(clickhouseConnection); teamCognitiveLoadErr == nil {
+			finalize[daily.TeamCognitiveLoadFamilyName] = teamCognitiveLoadExecutor
+		} else {
+			logger.Error(
+				"team_cognitive_load native finalize family refused; "+
+					"the family stays on the Python compatibility "+
+					"bridge for every run. Every other daily-metrics "+
+					"family is unaffected.",
+				"error", teamCognitiveLoadErr,
+			)
+		}
+	} else {
+		logger.Error(
+			"team_cognitive_load native finalize family refused: " +
+				"ic_finalize is not registered natively in this run " +
+				"(co-registration required); team_cognitive_load stays " +
+				"on the Python compatibility bridge.",
+		)
 	}
 	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
 		native["team_wellbeing"] = teamWellbeingExecutor

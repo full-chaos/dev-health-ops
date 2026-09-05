@@ -70,7 +70,8 @@ type nativeFamiliesArtifact struct {
 // from the constant it names. A selector the extractor does not know is an
 // ERROR, never a skip -- see extractDailyFamilies.
 var knownFamilyNameConstants = map[string]string{
-	"ICFinalizeFamilyName": daily.ICFinalizeFamilyName,
+	"ICFinalizeFamilyName":        daily.ICFinalizeFamilyName,
+	"TeamCognitiveLoadFamilyName": daily.TeamCognitiveLoadFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
@@ -563,7 +564,7 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// OWN exact-cardinality check rather than joining the count above, because
 	// the two scopes answer different questions and folding them would let a
 	// finalize family appear while a partition family silently disappeared.
-	wantDailyFinalize := []string{"ic_finalize"}
+	wantDailyFinalize := []string{"ic_finalize", "team_cognitive_load"}
 	assertExecutorSet(t, artifact.Finalize, wantDailyFinalize, "finalize")
 	if len(artifact.Finalize) != len(wantDailyFinalize) {
 		t.Fatalf("expected exactly %d finalize families, got %d: %v",

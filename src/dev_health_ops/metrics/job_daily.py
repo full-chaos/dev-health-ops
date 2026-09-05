@@ -2533,27 +2533,36 @@ async def run_daily_metrics_finalize(
         except Exception:
             logger.debug("Skipping malformed team_metrics row: %s", row)
 
-    team_cognitive_load_count = _write_team_cognitive_load_for_day(
-        sinks=sinks_list,
-        primary_sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        user_metrics_rows=git_metrics,
-        team_wellbeing_rows=org_team_metrics,
-        computed_at=computed_at,
-        repo_names_by_id=repo_names_by_id,
-        repo_team_resolver=repo_team_resolver,
-    )
-    if not team_cognitive_load_count:
-        logger.warning(
-            "metrics.daily.finalize family produced zero rows",
-            extra={
-                "family": "team_cognitive_load",
-                "day": day.isoformat(),
-                "org_id": org_id,
-                "cause": "no_rows_computed",
-            },
+    # CHAOS-5141: same skip_families gate shape as ic_finalize above (:2246).
+    # When a native Go executor already computed and wrote
+    # team_cognitive_load for this run, recomputing here would append a
+    # SECOND generation of the same rows -- team_cognitive_load_daily is
+    # append-only, deduped by every reader's own
+    # argMax(<col>, computed_at) GROUP BY (org_id, team_id, day), so the
+    # later writer wins silently and the native rows would vanish with
+    # nothing failing.
+    if "team_cognitive_load" not in skip_families:
+        team_cognitive_load_count = _write_team_cognitive_load_for_day(
+            sinks=sinks_list,
+            primary_sink=primary_sink,
+            day=day,
+            org_id=org_id,
+            user_metrics_rows=git_metrics,
+            team_wellbeing_rows=org_team_metrics,
+            computed_at=computed_at,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
         )
+        if not team_cognitive_load_count:
+            logger.warning(
+                "metrics.daily.finalize family produced zero rows",
+                extra={
+                    "family": "team_cognitive_load",
+                    "day": day.isoformat(),
+                    "org_id": org_id,
+                    "cause": "no_rows_computed",
+                },
+            )
 
     team_complexity_count = _write_team_complexity_for_day(
         sinks=sinks_list,

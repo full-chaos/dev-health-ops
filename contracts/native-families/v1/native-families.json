@@ -26,7 +26,8 @@
     "work_item_state": "native"
   },
   "finalize": {
-    "ic_finalize": "finalize"
+    "ic_finalize": "finalize",
+    "team_cognitive_load": "finalize"
   },
   "remaining": {
     "capacity": "native",

@@ -207,7 +207,7 @@ function directly, even for families whose worker kind is now native:
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | CHAOS-5141 |
+| team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. Python `team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained as the compatibility-bridge fallback, gated behind `skip_families` | CHAOS-5141 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse | CHAOS-4284 |
 | testops_pipeline | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4284 |
@@ -281,7 +281,7 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | Kind/area | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
 | DORA | NATIVE | see §3 | river, native | CHAOS-3092 R1 (Done) |
-| cognitive load (team_cognitive_load) | COMPAT-Python | see §2 | bridge | NONE found |
+| cognitive load (team_cognitive_load) | NATIVE | see §2 | river, native -- finalize scope, co-registered with ic_finalize | CHAOS-5141 |
 | investment.chunk | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.dispatch | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.finalize | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |

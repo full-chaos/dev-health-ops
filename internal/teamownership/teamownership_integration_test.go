@@ -354,3 +354,188 @@ func TestOwnedRepoIDsResolvesProviderAccessRowsByRepoName(t *testing.T) {
 		}
 	}
 }
+
+// TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt is
+// the red-first proof for CHAOS-5141, #2255 r1 finding 2: a repo claimed by
+// more than one team must resolve to the SAME authoritative owner Python's
+// load_team_repo_ownership_map picks (src/dev_health_ops/providers/teams.py:281,
+// ORDER BY is_primary DESC, specificity DESC, updated_at DESC, team_id ASC --
+// first row wins), regardless of which team's ownership row happens to sort
+// first by INSERTION order or team_id alone.
+//
+// team-low is deliberately inserted FIRST and would win under any resolver
+// that iterates ownership per-team and keeps whichever is encountered first
+// (the exact defect resolveDailyFinalizeRepoToTeam had before this fix) --
+// team-primary must win instead, because it is_primary=1.
+func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate clickhouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const orgID = "org-teamownership-precedence"
+	asOf := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	before := asOf.AddDate(0, 0, -30)
+
+	insert := func(teamID string, isPrimary uint8, specificity uint16, updatedAt time.Time, repoID uuid.UUID) {
+		if err := conn.Exec(ctx, `
+            INSERT INTO team_repo_ownership
+                (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+                 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+            VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', ?, ?, 0, ?, NULL, ?)
+        `, orgID, teamID, repoID, repoID.String(), isPrimary, specificity, before, updatedAt); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+
+	multiClaimed := uuid.New()
+	soleOwned := uuid.New()
+	tiedOnRankDiffersOnUpdatedAt := uuid.New()
+
+	// Inserted FIRST, lowest rank on every axis -- must NOT win.
+	insert("team-low", 0, 1, before, multiClaimed)
+	// Inserted SECOND, is_primary=1 -- must win regardless of insertion order
+	// or team_id (alphabetically "team-low" < "team-primary", so a
+	// team_id-only tiebreak would also pick the wrong one here).
+	insert("team-primary", 1, 1, before, multiClaimed)
+	// A third claim, is_primary=0 but higher specificity than team-low --
+	// must still lose to team-primary's is_primary=1 (is_primary outranks
+	// specificity entirely, never traded off against it).
+	insert("team-specific", 0, 5, before, multiClaimed)
+	// An unrelated, singly-owned repo -- proves the function does not just
+	// return "the first row it sees" globally, only per repo_id.
+	insert("team-solo", 1, 1, before, soleOwned)
+
+	// CHAOS-5141, #2255 r3 finding 1: every claim above shares the SAME
+	// updated_at (`before`), so none of them can prove updated_at DESC is
+	// actually applied -- a regression dropping it from the ORDER BY would
+	// still pass every assertion so far, since is_primary alone already
+	// settles multiClaimed and soleOwned has no competing claim at all. Two
+	// claims tied on is_primary AND specificity, differing ONLY on
+	// updated_at, close that gap: team_id ASC (the tiebreak one step past
+	// updated_at) would sort "team-alpha" before "team-zulu" alphabetically,
+	// so if updated_at DESC were removed, the OLDER "team-alpha" claim would
+	// incorrectly win on the team_id tiebreak. With updated_at DESC intact,
+	// the NEWER "team-zulu" claim must win instead.
+	older := before
+	newer := before.Add(24 * time.Hour)
+	insert("team-alpha", 1, 1, older, tiedOnRankDiffersOnUpdatedAt)
+	insert("team-zulu", 1, 1, newer, tiedOnRankDiffersOnUpdatedAt)
+
+	owners, err := AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	if err != nil {
+		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+	}
+
+	if got := owners[multiClaimed.String()]; got != "team-primary" {
+		t.Fatalf("multi-claimed repo owner=%q, want team-primary -- is_primary "+
+			"must outrank both insertion order and specificity", got)
+	}
+	if got := owners[soleOwned.String()]; got != "team-solo" {
+		t.Fatalf("sole-owned repo owner=%q, want team-solo", got)
+	}
+	if got := owners[tiedOnRankDiffersOnUpdatedAt.String()]; got != "team-zulu" {
+		t.Fatalf("repo tied on is_primary/specificity, differing only on "+
+			"updated_at: owner=%q, want team-zulu (the NEWER claim) -- "+
+			"\"team-alpha\" sorts first alphabetically and would win on the "+
+			"team_id tiebreak alone, so this failing means updated_at DESC "+
+			"is not actually being applied", got)
+	}
+}
+
+// TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow is the red-first proof
+// for CHAOS-5141, #2255 r2 finding 1: the schema permits an empty team_id
+// (051_team_attribution_dimensions.sql has no non-empty constraint on it),
+// and Python's load_team_repo_ownership_map skips such a row entirely
+// (`if not repo_id or not team_id: continue`, teams.py:411) rather than let
+// an empty string win a repo -- the caller then falls back to the
+// pattern-resolver for that repo. A prior revision of AuthoritativeOwnerByRepo
+// only guarded against an invalid/zero repo_id, not an empty team_id, so an
+// empty-team_id row (however it got there) silently won the repo and
+// suppressed both a real lower-ranked claim AND the pattern-resolver
+// fallback the caller applies when a repo has no entry at all.
+func TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate clickhouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const orgID = "org-teamownership-empty-team-id"
+	asOf := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	before := asOf.AddDate(0, 0, -30)
+
+	insert := func(teamID string, isPrimary uint8, specificity uint16, repoID uuid.UUID) {
+		if err := conn.Exec(ctx, `
+            INSERT INTO team_repo_ownership
+                (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+                 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+            VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', ?, ?, 0, ?, NULL, ?)
+        `, orgID, teamID, repoID, repoID.String(), isPrimary, specificity, before, before); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+
+	onlyEmptyClaim := uuid.New()
+	emptyClaimWinsRankButLowerRealClaimExists := uuid.New()
+
+	// A repo whose ONLY claim has an empty team_id -- must be ABSENT from the
+	// result entirely (so the caller's pattern-resolver fallback applies),
+	// never present with team_id="".
+	insert("", 1, 1, onlyEmptyClaim)
+
+	// A repo where the TOP-RANKED claim (is_primary=1) has an empty
+	// team_id, but a LOWER-ranked claim (is_primary=0) has a real team --
+	// the real team must win, the empty one must not suppress it.
+	insert("", 1, 1, emptyClaimWinsRankButLowerRealClaimExists)
+	insert("team-real", 0, 1, emptyClaimWinsRankButLowerRealClaimExists)
+
+	owners, err := AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	if err != nil {
+		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+	}
+
+	if teamID, present := owners[onlyEmptyClaim.String()]; present {
+		t.Fatalf("repo with only an empty-team_id claim: owner=%q present=%v, "+
+			"want ABSENT from the map so the caller's pattern-resolver fallback "+
+			"applies -- an empty team_id must never win a repo", teamID, present)
+	}
+	if got := owners[emptyClaimWinsRankButLowerRealClaimExists.String()]; got != "team-real" {
+		t.Fatalf("repo with a top-ranked empty-team_id claim and a lower-ranked "+
+			"real claim: owner=%q, want team-real -- the empty claim must not "+
+			"suppress the real one further down the ranked order", got)
+	}
+}

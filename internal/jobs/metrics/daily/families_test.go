@@ -72,7 +72,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		seen[family.Name] = true
 	}
 	expected := []string{
-		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize",
+		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize", "team_cognitive_load",
 	}
 	for _, core := range expected {
 		if !seen[core] {
@@ -114,6 +114,19 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// WorkItemStateExecutor exactly as team_wellbeing/repo_user_commit did.
 	if got := byName["work_item_state"]; got != "go" {
 		t.Fatalf("work_item_state must be port=go, got %q", got)
+	}
+	// team_cognitive_load (CHAOS-5141): registers TeamCognitiveLoadExecutor,
+	// finalize-scope, co-registered with ic_finalize. CHAOS-5141, #2255 r3
+	// finding 2: the `expected` membership check above (and the exact-count
+	// guard) both pass even if this flag were flipped back to "pending" --
+	// neither asserts the PORT of a specific family, only that its NAME
+	// exists somewhere in the registry. This direct assertion, matching the
+	// pattern every other Wave-1+ cutover above already has, closes that:
+	// a families.json edit that reverts this family to Python without also
+	// removing its Go registration would silently resurrect the
+	// double-write/two-writer hazard this port exists to prevent.
+	if got := byName["team_cognitive_load"]; got != "go" {
+		t.Fatalf("team_cognitive_load must be port=go, got %q", got)
 	}
 	byPhase := make(map[string]string, len(registry.Families))
 	for _, family := range registry.Families {
@@ -187,12 +200,13 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// would otherwise silently accept ic_finalize declaring post_bridge.
 	// CHAOS-5078 retired work_item_state/work_item/work_item_estimate from
 	// this map -- they are pre_bridge now (asserted in their own loop above),
-	// leaving compounding_risk/benchmarking/ic_finalize as the only three
-	// families with a deliberate non-default phase.
+	// leaving compounding_risk/benchmarking/ic_finalize/team_cognitive_load
+	// as the families with a deliberate non-default phase.
 	nonDefaultPhase := map[string]string{
-		"compounding_risk": "post_bridge",
-		"benchmarking":     "post_bridge",
-		"ic_finalize":      "finalize",
+		"compounding_risk":    "post_bridge",
+		"benchmarking":        "post_bridge",
+		"ic_finalize":         "finalize",
+		"team_cognitive_load": "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

@@ -59,19 +59,59 @@ SELECT user_identity, provider, work_scope_id, team_id, team_name,
 FROM work_item_user_metrics_daily FINAL
 WHERE day = {day:Date} AND org_id = {org_id:String}`
 
+// synthesizedRepoNamespace seeds the deterministic repo_id below. A fixed
+// namespace constant, never regenerated: the whole value of the id is that it
+// is reproducible, and a namespace that changed would move every synthesized
+// key at once.
+//
+// Generated once for CHAOS-4290 and pinned here.
+var synthesizedRepoNamespace = uuid.MustParse("1b4e28ba-2fa1-11d2-883f-b9a761bde3fb")
+
+// SynthesizedRepoID is the repo_id for an identity that has work-item metrics
+// but no git record.
+//
+// DELIBERATE DIVERGENCE FROM PYTHON (CHAOS-4290, ruled by team-lead).
+// compute_ic.py mints uuid.uuid4() here. repo_id is part of
+// user_metrics_daily's dedup key (org_id, repo_id, author_email, day), so a
+// random value means the same identity lands on a NEW key every run: the rows
+// never collapse, and each re-drive appends another surviving row. That is a
+// data-writing defect, and it became load-bearing once any native finalize
+// failure redrives the run -- replicating it faithfully would have converted a
+// rare silent overwrite into guaranteed accumulation.
+//
+// So the Go side is deterministic: a UUIDv5 over (org_id, identity_id). The
+// same identity in the same org always resolves to the same repo_id, a redrive
+// lands on the SAME key with a later computed_at, and the dedup read supersedes
+// instead of accumulating.
+//
+// The day is deliberately NOT part of the seed. It is already a column of the
+// dedup key, so including it would change nothing about uniqueness while
+// fragmenting one identity's synthetic repo across days -- the id is meant to
+// stand for "this identity has no repo", which is a property of the identity,
+// not of the day.
+//
+// Python keeps uuid4 (no Python fixes for metrics); the divergence is stated in
+// RISK-NOTES and the ticket is filed. PR3's parity kind observes it directly:
+// the native side replays Idempotent while Python replays changed_key_set on
+// the same corpus.
+func SynthesizedRepoID(orgID, identityID string) uuid.UUID {
+	return uuid.NewSHA1(synthesizedRepoNamespace, []byte(orgID+"\x1f"+identityID))
+}
+
 // Executor computes the ic_finalize family natively.
 type Executor struct {
 	conn       Conn
 	now        func() time.Time
-	newID      func() uuid.UUID
 	teamMapper TeamMapper
 }
 
-// NewExecutor builds the executor. now and newID are injected so the two
-// non-deterministic values the reference produces -- computed_at and the
-// synthesized repo_id -- are controllable in tests rather than ambient.
+// NewExecutor builds the executor. now is injected so computed_at -- the one
+// remaining non-deterministic value the reference produces -- is controllable
+// in tests rather than ambient. The synthesized repo_id used to be injected for
+// the same reason and no longer needs to be: it is a pure function of the org
+// and identity now.
 func NewExecutor(conn Conn) *Executor {
-	return &Executor{conn: conn, now: func() time.Time { return time.Now().UTC() }, newID: uuid.New}
+	return &Executor{conn: conn, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day time.Time) ([]GitUserMetric, error) {
@@ -190,14 +230,11 @@ func (executor *Executor) writeUserMetrics(
 		return 0, err
 	}
 	for _, metric := range metrics {
-		// The reference mints a FRESH random repo_id for an identity with no
-		// git record. That UUID is part of this table's dedup key
-		// (org_id, repo_id, author_email, day), so those rows never collapse
-		// across re-runs -- each re-drive appends another. Replicated per Q1;
-		// the suspected accumulation defect is filed, Python untouched.
+		// Deterministic, NOT the reference's uuid4 -- see SynthesizedRepoID for
+		// why this is the one place the port deliberately diverges.
 		repoID := landscapeRepoID
 		if metric.SynthesizedRepoID {
-			repoID = executor.newID()
+			repoID = SynthesizedRepoID(orgID, metric.IdentityID)
 		}
 		if err := batch.Append(
 			repoID, day, metric.IdentityID, metric.IdentityID, metric.TeamID,

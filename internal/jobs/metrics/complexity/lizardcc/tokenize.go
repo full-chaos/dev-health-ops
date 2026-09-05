@@ -350,7 +350,21 @@ func accumulateMacros(raw []string) []string {
 // Unicode-aware identifier class) fixes this the same way, greedily
 // consuming the non-ASCII suffix so the word can never falsely match a
 // shorter ASCII-only directive name.
-var macroPattern = regexp.MustCompile(`(?s)^#\s*([\p{L}\p{N}_]+)`)
+//
+// BUG FIXED HERE (CHAOS-5156, cfamily confirmation pass on #2253's r3):
+// `\s*` here is STILL RE2's ASCII-only whitespace class -- a residual of
+// the SAME class the whitespace-widening work fixed everywhere else,
+// missed because this regex lives in a separate var, not inside
+// buildTokenPattern. `#<U+0085>if` (a directive separated from `#` by
+// NEL rather than ASCII whitespace) failed to match this pattern at all
+// (falling through to a "not a directive" no-op), so the `#if` bump
+// never happened. Confirmed against real lizard 1.23.0: `int f() {\n#
+// <U+0085>if X\nreturn 0;\n}` measures [2] (the #if bump counted); this
+// port measured [1] before this fix. Built from the SAME named,
+// pinned pythonExtraWhitespaceRegexClass the tokenizer's own
+// whitespace-run alternative uses (buildTokenPattern), rather than a
+// second hand-copied class, so the two can never drift apart again.
+var macroPattern = regexp.MustCompile(`(?s)^#[\t\v\f\r ` + pythonExtraWhitespaceRegexClass + `\p{Z}]*([\p{L}\p{N}_]+)`)
 
 // preprocessor ports CLikeReader.preprocess (clike.py:46-65) as an explicit
 // one-token-at-a-time state machine rather than a batch pass.

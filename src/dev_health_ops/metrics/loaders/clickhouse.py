@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
@@ -15,7 +14,6 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
     deduplicate_active_incidents,
 )
-from dev_health_ops.metrics.compute_testops import FAILURE_STATUSES
 from dev_health_ops.metrics.compute_work_items import (
     ManualFallbackRule,
     TeamAttributionCandidate,
@@ -42,13 +40,6 @@ from dev_health_ops.metrics.sinks.clickhouse.idempotency import (
     WORK_ITEM_TRANSITIONS_DEDUPED,
     WORK_ITEMS_DEDUPED,
 )
-from dev_health_ops.metrics.testops_schemas import (
-    CoverageSnapshotRow,
-    JobRunRow,
-    PipelineRunExtendedRow,
-    TestCaseResultRow,
-    TestSuiteResultRow,
-)
 from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsAlert,
     AtlassianOpsIncident,
@@ -67,23 +58,16 @@ async def _clickhouse_query_dicts(
     return await query_dicts(client, query, params)
 
 
-# CHAOS-4350: hard row cap for the testops loader reads (test_suite_results /
-# test_case_results). `query_dicts` materializes the FULL result set with
-# `list(result.result_rows)` -- no LIMIT, no streaming -- and
-# `load_testops_test_data` was previously called once per backfilled day with
-# a rolling 30-day window, org-wide (repo_id is frequently None). An org with
-# a heavy CI suite has no natural upper bound on rows in that shape, which is
-# what produced the observed MemoryError in the compatibility-bridge runner.
-#
-# This is a GUARD, not a degrade: chris's ruling (2026-08-26) is that a LIMIT
-# which lets computation proceed on a truncated window produces WRONG testops
-# metrics silently-ish -- not allowed. `test_suite_results`/`test_case_results`
-# are ordered by (repo_id, run_id, ...), not event time, so an unordered LIMIT
-# can drop today's rows (or whole repos) while keeping stale ones -- confirmed
-# by codex review of the first (truncating) version of this fix. So exceeding
-# the cap FAILS the read instead of returning a partial result.
+# CHAOS-4350: this constant is referenced only by TestopsRowCapExceeded's own
+# message below (the override-with-this-env-var hint) -- CHAOS-5245 deleted
+# the loader methods, _enforce_row_cap, and _testops_loader_max_rows that used
+# to read it and raise that exception. TestopsRowCapExceeded ITSELF stays:
+# src/dev_health_ops/api/internal/worker_metrics_runner.py:227-229 imports it
+# into a tuple of exception types main() classifies as EXIT_RESOURCE_EXHAUSTED
+# -- a real, live, non-testops-loader caller, per the "a helper with a live
+# caller stays" rule. Nothing will ever raise it again in practice, but the
+# import site is real, not speculative.
 _TESTOPS_LOADER_MAX_ROWS_ENV = "DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS"
-_TESTOPS_LOADER_DEFAULT_MAX_ROWS = 200_000
 
 # CHAOS-4361: caps how many rows clickhouse_connect buffers into a single
 # `read_str_col` call for the `load_work_items` reads (see that method).
@@ -94,17 +78,6 @@ _TESTOPS_LOADER_DEFAULT_MAX_ROWS = 200_000
 # repo with a large open-item backlog. This is defense in depth alongside
 # excluding `description` from the SELECT below, not a substitute for it.
 _WORK_ITEMS_LOADER_MAX_BLOCK_SIZE = 8_192
-
-
-def _testops_loader_max_rows() -> int:
-    raw = os.environ.get(_TESTOPS_LOADER_MAX_ROWS_ENV, "").strip()
-    if not raw:
-        return _TESTOPS_LOADER_DEFAULT_MAX_ROWS
-    try:
-        value = int(raw)
-    except ValueError:
-        return _TESTOPS_LOADER_DEFAULT_MAX_ROWS
-    return value if value > 0 else _TESTOPS_LOADER_DEFAULT_MAX_ROWS
 
 
 class TestopsRowCapExceeded(MemoryError):
@@ -148,49 +121,6 @@ class TestopsRowCapExceeded(MemoryError):
             "testops metrics on a partial/truncated result "
             f"(override with {_TESTOPS_LOADER_MAX_ROWS_ENV})"
         )
-
-
-def _enforce_row_cap(
-    rows: list[dict[str, Any]], *, table: str, org_id: str, max_rows: int
-) -> None:
-    """Raise :class:`TestopsRowCapExceeded` if `rows` exceeds `max_rows`.
-
-    The caller already asked ClickHouse for at most `max_rows + 1` rows (via
-    a `LIMIT` bound to the same cap), so a length beyond `max_rows` here
-    means the true result set was larger than the cap -- never silently
-    truncate; the caller must not proceed to compute on it.
-    """
-    from dev_health_ops.metrics.prometheus import (
-        DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL,
-        DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED,
-    )
-
-    if len(rows) > max_rows:
-        # CHAOS-4350 (team-lead ruling): the "testops_row_cap_exceeded"
-        # token below is fixed and must match TestopsRowCapExceeded.TOKEN --
-        # it is the SigNoz-searchable marker that separates a deliberately
-        # tripped guard from a real unbounded OOM (both are, upstream, a
-        # MemoryError classified resource_exhausted).
-        logger.error(
-            "testops_row_cap_exceeded: table=%s org_id=%s max_rows=%d "
-            "fetched=%d -- refusing to compute on a partial result",
-            table,
-            org_id,
-            max_rows,
-            len(rows),
-            extra={
-                "event": "testops_row_cap_exceeded",
-                "table": table,
-                "org_id": org_id,
-                "max_rows": max_rows,
-                "fetched": len(rows),
-            },
-        )
-        DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL.labels(table=table).inc()
-        raise TestopsRowCapExceeded(
-            table=table, org_id=org_id, max_rows=max_rows, fetched=len(rows)
-        )
-    DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED.labels(table=table).observe(len(rows))
 
 
 def _decode_provider_identities_json(value: Any) -> dict[str, list[str]]:
@@ -1263,448 +1193,6 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
             for row in dicts
         ]
         return deduplicate_active_incidents(incidents)
-
-    async def load_testops_pipeline_data(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-    ) -> tuple[list[PipelineRunExtendedRow], list[JobRunRow]]:
-        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
-        repo_filter = ""
-        job_repo_filter = ""
-        if repo_id is not None:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND repo_id = {repo_id:UUID}"
-            # Alias-qualify only the column; the {repo_id:UUID} parameter name
-            # must stay dot-free (ClickHouse rejects dotted param names).
-            job_repo_filter = " AND p.repo_id = {repo_id:UUID}"
-
-        org_filter = self._org_filter()
-        params = self._inject_org_id(params)
-
-        pipeline_query = f"""
-        SELECT
-          repo_id,
-          run_id,
-          pipeline_name,
-          provider,
-          status,
-          queued_at,
-          started_at,
-          finished_at,
-          duration_seconds,
-          queue_seconds,
-          retry_count,
-          cancel_reason,
-          trigger_source,
-          commit_hash,
-          branch,
-          pr_number,
-          team_id,
-          service_id,
-          org_id
-        FROM ci_pipeline_runs FINAL
-        WHERE started_at >= {{start:DateTime}} AND started_at < {{end:DateTime}}
-        {repo_filter}
-        {org_filter}
-        """
-        job_query = f"""
-        SELECT
-          j.repo_id,
-          j.run_id,
-          j.job_id,
-          j.job_name,
-          j.stage,
-          j.status,
-          j.started_at,
-          j.finished_at,
-          j.duration_seconds,
-          j.runner_type,
-          j.retry_attempt,
-          j.org_id
-        FROM ci_job_runs AS j FINAL
-        INNER JOIN ci_pipeline_runs AS p FINAL
-          ON (p.repo_id = j.repo_id) AND (p.run_id = j.run_id)
-         AND (p.org_id = j.org_id)
-        WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
-        {job_repo_filter}
-        {self._org_filter(alias="p")}
-        """
-
-        pipeline_dicts = await _clickhouse_query_dicts(
-            self.client, pipeline_query, params
-        )
-        job_dicts = await _clickhouse_query_dicts(self.client, job_query, params)
-        return (
-            [cast(PipelineRunExtendedRow, dict(row)) for row in pipeline_dicts],
-            [cast(JobRunRow, dict(row)) for row in job_dicts],
-        )
-
-    async def load_testops_test_data(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-    ) -> tuple[list[TestSuiteResultRow], list[TestCaseResultRow]]:
-        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
-        repo_filter = ""
-        case_repo_filter = ""
-        if repo_id is not None:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND repo_id = {repo_id:UUID}"
-            # Alias-qualify only the column; the {repo_id:UUID} parameter name
-            # must stay dot-free (ClickHouse rejects dotted param names).
-            case_repo_filter = " AND c.repo_id = {repo_id:UUID}"
-
-        org_filter = self._org_filter()
-        params = self._inject_org_id(params)
-
-        # CHAOS-4350: cap both reads. `+ 1` lets us detect "the true result
-        # exceeded the cap" (len > max_rows) versus "the true result was
-        # exactly max_rows" without a separate count() round-trip.
-        max_rows = _testops_loader_max_rows()
-        params = {**params, "_row_cap": max_rows + 1}
-
-        suite_query = f"""
-        SELECT
-          repo_id,
-          run_id,
-          suite_id,
-          suite_name,
-          framework,
-          environment,
-          total_count,
-          passed_count,
-          failed_count,
-          skipped_count,
-          error_count,
-          quarantined_count,
-          retried_count,
-          duration_seconds,
-          started_at,
-          finished_at,
-          team_id,
-          service_id,
-          org_id
-        FROM test_suite_results FINAL
-        WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
-          AND coalesce(started_at, finished_at) < {{end:DateTime}}
-        {repo_filter}
-        {org_filter}
-        LIMIT {{_row_cap:UInt64}}
-        """
-        # CHAOS-4350 (codex P1): project only what compute_test_metrics_daily
-        # (and callers that inspect org_id, e.g. this method's own org-scope
-        # tests) actually read. `failure_message`/`failure_type`/`stack_trace`
-        # (up to 4KB each) and `class_name`/`is_quarantined` are unused by any
-        # production caller -- at cap-sized volumes those text columns alone
-        # can exceed the compatibility runner's memory bound even with a
-        # generous row cap, so they never leave ClickHouse for this read path.
-        #
-        # CHAOS-4350 PR2 (codex round 2 P2): cases are scoped by RUN_ID
-        # membership -- "does this case's run have ANY suite in today's
-        # window" -- via the semi-join subquery below, not by joining each
-        # case to its OWN suite's day (which is what this query did before).
-        # JUnit `<testsuite>` elements can carry a per-suite `timestamp` that
-        # `_build_rows_from_parsed` prefers over the run-level fallback, so
-        # two suites sharing one run_id CAN land on different UTC days (a CI
-        # run whose suites straddle midnight). The documented flake_rate
-        # contract is "same run window" (testops_schemas.py), not "same
-        # suite's own day" -- a run_id-scoped semi-join is what makes a
-        # before-midnight failure and an after-midnight retry of the SAME
-        # run still count as one flake, matching the pre-PR-2 Python
-        # behavior (which bucketed cases by run_id membership over a wide
-        # window, not by each case's individual suite). The subquery is
-        # scoped by (repo_id, run_id) together, not run_id alone, so a
-        # same-org different-repo run_id collision can't leak cases across
-        # repos in the org-wide (repo_id=None) case.
-        #
-        # CHAOS-4350 PR2 (codex round 3 P2): run-id membership alone is NOT
-        # enough -- it only proves the run has SOME suite in today's window,
-        # not that every one of its suites does. A second semi-join bounds
-        # each returned case's OWN suite to `< end` so a suite that hasn't
-        # happened yet as of `end` (this run continues into a LATER day)
-        # can't leak its cases backward into an earlier partition on a
-        # backfill computed after that later suite lands -- see the query
-        # below for the exact clause.
-        case_query = f"""
-        SELECT
-          c.repo_id,
-          c.run_id,
-          c.suite_id,
-          c.case_id,
-          c.case_name,
-          c.status,
-          c.duration_seconds,
-          c.retry_attempt,
-          c.org_id
-        FROM test_case_results AS c FINAL
-        WHERE (c.repo_id, c.run_id) IN (
-          SELECT repo_id, run_id FROM test_suite_results FINAL
-          WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
-            AND coalesce(started_at, finished_at) < {{end:DateTime}}
-          {repo_filter}
-          {org_filter}
-        )
-        -- codex round 3 P2: the run-membership check above only proves SOME
-        -- suite of this run falls in today's window -- without this second
-        -- semi-join, a case whose OWN suite starts on or after `end` (a
-        -- later day, not yet closed as of this partition) would leak
-        -- backward into today's read on a backfill run computed after that
-        -- later suite lands, making the backfill non-deterministic. Bound
-        -- each returned case's OWN suite to `< end` (no lower bound -- a
-        -- suite from an earlier day sharing this run_id is exactly the
-        -- day-boundary case this method exists to include).
-        AND (c.repo_id, c.run_id, c.suite_id) IN (
-          SELECT repo_id, run_id, suite_id FROM test_suite_results FINAL
-          WHERE coalesce(started_at, finished_at) < {{end:DateTime}}
-          {repo_filter}
-          {org_filter}
-        )
-        {case_repo_filter}
-        {self._org_filter(alias="c")}
-        LIMIT {{_row_cap:UInt64}}
-        """
-
-        # CHAOS-4350: a guard, not a degrade -- both tables are ordered by
-        # (repo_id, run_id, ...), not event time, so an unordered LIMIT that
-        # let computation proceed could silently drop today's rows (or whole
-        # repos) while keeping stale ones. Exceeding the cap fails this read
-        # (raises TestopsRowCapExceeded, a MemoryError) instead of returning
-        # a partial result for compute_test_metrics_daily to compute wrong
-        # numbers from. Enforce the suite cap BEFORE issuing the case query
-        # (codex round 3 P2): if suites alone already exceed the cap, there
-        # is no reason to pay for materializing up to another `max_rows + 1`
-        # case rows before raising -- with a cap sized near the runner's
-        # memory budget, that extra allocation could itself trigger an
-        # ordinary OOM before this guard's classified exception ever fires.
-        suite_dicts = await _clickhouse_query_dicts(self.client, suite_query, params)
-        _enforce_row_cap(
-            suite_dicts,
-            table="test_suite_results",
-            org_id=self.org_id,
-            max_rows=max_rows,
-        )
-        case_dicts = await _clickhouse_query_dicts(self.client, case_query, params)
-        _enforce_row_cap(
-            case_dicts, table="test_case_results", org_id=self.org_id, max_rows=max_rows
-        )
-        return (
-            [cast(TestSuiteResultRow, dict(row)) for row in suite_dicts],
-            [cast(TestCaseResultRow, dict(row)) for row in case_dicts],
-        )
-
-    async def load_testops_historical_failed_case_names(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-        *,
-        current_day_end: datetime,
-    ) -> dict[uuid.UUID, set[str]]:
-        """Distinct (repo_id, case_name) pairs that failed at least once in
-        `[start, end)`, pushed into SQL instead of materializing raw rows.
-
-        CHAOS-4350 PR 2: `compute_test_metrics_daily`'s only use of
-        historical (non-current-day) case data is
-        `historical_failed_names_by_repo` -- a SET of case names that failed
-        outside today's runs, used solely for `failure_recurrence_score`
-        (`len(current_failed_names & historical_failed_names_by_repo)`).
-        Nothing else about the historical window is ever read: not
-        `duration_seconds`, not `retry_attempt`, not even how MANY times a
-        name failed. PR 1's `load_testops_test_data` fetched every raw
-        historical case row to derive this set in Python -- for a busy repo
-        (1M+ case rows/30 days measured on the real local stack) that is the
-        exact unbounded-materialization failure mode CHAOS-4350 exists to
-        close, moved one query up. `GROUP BY case_name` here is bounded by
-        the number of DISTINCT failing test names (order of hundreds to
-        low thousands even for a huge repo), not by run count x day count.
-
-        `start`/`end` are the PARTITION DAY's own history window
-        (`[day-29, day)`), not wall-clock "now" -- callers must pass the
-        window relative to the day being computed, same as
-        `load_testops_test_data`'s window. `end` doubles as today's window's
-        lower bound; `current_day_end` (required) is today's upper bound
-        (exclusive), i.e. the same `end` passed to `load_testops_test_data`
-        for the same partition day.
-
-        CHAOS-4350 PR2 (codex round 2 P2): a run whose suites straddle
-        `end` (UTC midnight for the partition day) must not have its
-        pre-midnight suite double-counted as "historical" -- that suite's
-        run_id is `load_testops_test_data`'s "today," via the same
-        (repo_id, run_id) semi-join semantics (see that method's docstring).
-        `AND (s.repo_id, s.run_id) NOT IN (...)` excludes today's run_ids
-        from this query the same way `load_testops_test_data`'s case query
-        includes them -- both computed as a semi-join subquery against
-        `test_suite_results`, never as a Python-collected run_id list (so
-        there's no array-size ceiling to fall back from for orgs with many
-        run_ids/day).
-
-        Issues THREE queries: the `GROUP BY case_name` aggregate, a second
-        unfiltered `count()` over the same scope purely for the
-        ROWS_AGGREGATED_FROM telemetry (see prometheus.py), and the run_id
-        exclusion is itself a subquery inside each -- all O(1) in
-        Python-side memory (a handful of aggregate rows, one scalar), so
-        this doesn't reintroduce raw-row materialization.
-        """
-        params: dict[str, Any] = {
-            "start": naive_utc(start),
-            "end": naive_utc(end),
-            "current_day_end": naive_utc(current_day_end),
-        }
-        repo_filter = ""
-        if repo_id is not None:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND s.repo_id = {repo_id:UUID}"
-
-        org_filter = self._org_filter(alias="s")
-        params = self._inject_org_id(params)
-
-        max_rows = _testops_loader_max_rows()
-        params = {**params, "_row_cap": max_rows + 1}
-        # Must match _normalize_test_status()'s failure vocabulary
-        # (dev_health_ops.metrics.compute_testops) exactly, or historical
-        # rows with a canonical "error"/"timeout"/etc status silently drop
-        # out of failure_recurrence_score. lower(trim(...)) mirrors that
-        # function's `.strip().lower()` normalization.
-        params["_failure_statuses"] = sorted(FAILURE_STATUSES)
-
-        # Unaliased repo/org filters for the exclusion subquery below (it
-        # queries test_suite_results directly, no alias).
-        today_run_ids_filter = ""
-        if repo_id is not None:
-            today_run_ids_filter = " AND repo_id = {repo_id:UUID}"
-        today_run_ids_org_filter = self._org_filter()
-        exclude_today_run_ids = f"""
-          AND (s.repo_id, s.run_id) NOT IN (
-            SELECT repo_id, run_id FROM test_suite_results FINAL
-            WHERE coalesce(started_at, finished_at) >= {{end:DateTime}}
-              AND coalesce(started_at, finished_at) < {{current_day_end:DateTime}}
-            {today_run_ids_filter}
-            {today_run_ids_org_filter}
-          )
-        """
-
-        query = f"""
-        SELECT
-          s.repo_id AS repo_id,
-          c.case_name AS case_name,
-          count() AS occurrences
-        FROM test_case_results AS c FINAL
-        INNER JOIN test_suite_results AS s FINAL
-          ON (s.repo_id = c.repo_id)
-         AND (s.run_id = c.run_id)
-         AND (s.suite_id = c.suite_id)
-         AND (s.org_id = c.org_id)
-        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
-          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
-          AND lower(trim(c.status)) IN {{_failure_statuses:Array(String)}}
-        {exclude_today_run_ids}
-        {repo_filter}
-        {org_filter}
-        GROUP BY s.repo_id, c.case_name
-        LIMIT {{_row_cap:UInt64}}
-        """
-        dicts = await _clickhouse_query_dicts(self.client, query, params)
-        # Backstop cap (team-lead: keep it on both queries): the aggregate is
-        # already tiny relative to raw rows, but an org with an enormous or
-        # ever-churning distinct-name set should still fail loud rather than
-        # grow unbounded.
-        _enforce_row_cap(
-            dicts,
-            table="test_case_results:historical_names",
-            org_id=self.org_id,
-            max_rows=max_rows,
-        )
-
-        from dev_health_ops.metrics.prometheus import (
-            DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM,
-            DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED,
-        )
-
-        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED.observe(len(dicts))
-        # (codex round 2) ROWS_AGGREGATED_FROM's contract (see prometheus.py)
-        # is the raw test_case_results row volume this aggregation replaced
-        # -- i.e. the FULL joined population the pre-PR-2 code would have
-        # materialized, not just the failure-filtered rows behind the
-        # `occurrences` sum above. Count that population directly (a single
-        # scalar `count()`, never materializing rows) rather than reusing
-        # `occurrences`, which only ever reflects the failed subset and
-        # silently undercounted this metric (e.g. 29 instead of ~1.1M on the
-        # busiest measured repo). Same run_id exclusion as the aggregate
-        # above, so the telemetry's population matches what the aggregate
-        # actually scans.
-        count_query = f"""
-        SELECT count() AS total
-        FROM test_case_results AS c FINAL
-        INNER JOIN test_suite_results AS s FINAL
-          ON (s.repo_id = c.repo_id)
-         AND (s.run_id = c.run_id)
-         AND (s.suite_id = c.suite_id)
-         AND (s.org_id = c.org_id)
-        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
-          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
-        {exclude_today_run_ids}
-        {repo_filter}
-        {org_filter}
-        """
-        count_rows = await _clickhouse_query_dicts(self.client, count_query, params)
-        total_population = int(count_rows[0].get("total") or 0) if count_rows else 0
-        DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM.observe(total_population)
-
-        result: dict[uuid.UUID, set[str]] = {}
-        for row in dicts:
-            parsed = parse_uuid(row.get("repo_id"))
-            case_name = row.get("case_name")
-            if parsed is None or not case_name:
-                continue
-            result.setdefault(parsed, set()).add(str(case_name))
-        return result
-
-    async def load_testops_coverage_data(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-    ) -> list[CoverageSnapshotRow]:
-        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
-        repo_filter = ""
-        if repo_id is not None:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND p.repo_id = {repo_id:UUID}"
-
-        params = self._inject_org_id(params)
-        query = f"""
-        SELECT
-          c.repo_id,
-          c.run_id,
-          c.snapshot_id,
-          c.report_format,
-          c.lines_total,
-          c.lines_covered,
-          c.line_coverage_pct,
-          c.branches_total,
-          c.branches_covered,
-          c.branch_coverage_pct,
-          c.functions_total,
-          c.functions_covered,
-          c.commit_hash,
-          c.branch,
-          c.pr_number,
-          c.team_id,
-          c.service_id,
-          c.org_id
-        FROM coverage_snapshots AS c FINAL
-        INNER JOIN ci_pipeline_runs AS p FINAL
-          ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id)
-         AND (p.org_id = c.org_id)
-        WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
-        {repo_filter}
-        {self._org_filter(alias="p")}
-        """
-        dicts = await _clickhouse_query_dicts(self.client, query, params)
-        return [cast(CoverageSnapshotRow, dict(row)) for row in dicts]
 
     async def load_blame_concentration(
         self,

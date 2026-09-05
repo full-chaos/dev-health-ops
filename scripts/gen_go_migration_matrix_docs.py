@@ -204,6 +204,18 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "citation": "Go: `internal/jobs/metrics/daily/cicd/`",
         "ticket": "CHAOS-4292 (Done)",
     },
+    "testops_pipeline": {
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops.py`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4284 (Done)",
+    },
+    "testops_test": {
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent. CHAOS-5245 deleted the Python compute entirely -- no fallback left.",
+        "ticket": "CHAOS-4284 (Done)",
+    },
+    "testops_coverage": {
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse. CHAOS-5245 deleted the Python compute entirely -- no fallback left.",
+        "ticket": "CHAOS-4284 (Done)",
+    },
     "deploy": {
         "citation": "Go: `internal/jobs/metrics/daily/deploy_native_executor.go`",
         "ticket": "CHAOS-4293 (Done)",
@@ -247,6 +259,10 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         # CHAOS-5153: the "NONE found" citation was stale -- CHAOS-5141 was
         # filed 2026-09-05 to track exactly this finalize-side gap.
         "ticket": "CHAOS-5141",
+    },
+    "testops_risk": {
+        "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops_risk.py`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4294 (Done)",
     },
     "benchmarking": {
         "citation": "Python: `benchmarking/runner.py:259 run_benchmarking_for_day`",

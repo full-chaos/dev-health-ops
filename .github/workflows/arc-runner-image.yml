@@ -60,12 +60,25 @@ permissions:
 jobs:
   build:
     name: Build and publish
-    runs-on: ubuntu-26.04-arm
+    # ubuntu-26.04-arm is not a real enterprise hosted label (chris
+    # 2026-09-04 16:59) -- routed to the ARC pool instead. Fork PRs and the
+    # disabled state fall back to ubuntu-latest (x64): the Build step below
+    # asks buildx for `platforms: linux/arm64` explicitly, which needs QEMU
+    # registered to cross-build on an x64 host -- added below, since this
+    # job previously only ever ran natively on (would-be) arm64 hardware and
+    # never needed it.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     outputs:
       sha: ${{ github.sha }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        # Required for the x64 (fork-PR / disabled-variable) leg to
+        # cross-build `platforms: linux/arm64` below; harmless extra setup
+        # on the native-arm64 self-hosted leg.
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0

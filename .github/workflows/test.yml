@@ -165,11 +165,15 @@ jobs:
       github.event_name == 'merge_group' ||
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.code == 'true'
-    # Same ARC routing as `changes` above; falls back to this job's own
-    # ubuntu-26.04-arm (already ARM, just hosted) rather than ubuntu-latest,
-    # so disabling the variable restores the EXACT prior runner, not a
-    # different architecture.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-26.04-arm' }}
+    # Same ARC routing as `changes` above. Fallback changed from this job's
+    # former ubuntu-26.04-arm to ubuntu-latest (x64): chris 2026-09-04 16:59 --
+    # the enterprise's hosted-runner label list is exactly ubuntu-latest/
+    # ubuntu-22.04/ubuntu-24.04 (+ windows/macos); ubuntu-26.04-arm is not a
+    # real hosted label there, so it was never a valid fallback. There is no
+    # hosted ARM label to fall back to -- the disabled/fork-PR leg now runs
+    # x64 (this suite has no arm64-specific assertions, unlike
+    # go-arm64-numeric-parity in go.yml).
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # Test matrix needs package read access for dependency installs.
     permissions:
       contents: read
@@ -336,11 +340,12 @@ jobs:
     if: >-
       github.event_name != 'pull_request' &&
       (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
-    # Same ARC routing as `changes` above; falls back to this job's own
-    # ubuntu-26.04-arm (already ARM, just hosted) rather than ubuntu-latest,
-    # so disabling the variable restores the EXACT prior runner, not a
-    # different architecture.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-26.04-arm' }}
+    # Same ARC routing as `changes` above, same ubuntu-26.04-arm -> ubuntu-latest
+    # fallback fix as test-matrix (chris 2026-09-04 16:59: ubuntu-26.04-arm is
+    # not a real enterprise hosted label). This job never runs on
+    # pull_request at all (see `if:` above), so the fork-PR clause is inert
+    # here; kept for the same textual shape as every other routed job.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # CHAOS-3413: this job has hung indefinitely (1h45m-6h, then auto-cancelled
     # by the next push's `cancel-in-progress` group) instead of failing, for
     # days -- `cancelled` isn't a red check, so it merged silently as routine

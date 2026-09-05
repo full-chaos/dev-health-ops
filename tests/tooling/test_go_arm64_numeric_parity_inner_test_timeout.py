@@ -45,12 +45,13 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "go.yml"
 
-# Job IDs, not the shared `name:` -- v1.6's two legs share one `name:`
-# (go-arm64-numeric-parity) but are distinct job KEYS in the YAML, which is
-# what `_job()` below looks up.
+# CHAOS-4906+ (2026-09-04, chris): the hosted `ubuntu-26.04-arm` leg was
+# dropped -- that label was never a real GitHub-hosted runner in this
+# enterprise, and this job has no valid non-arm64 substitute (its whole
+# purpose is proving FMA bit-pattern behavior on real arm64 hardware). One
+# job id remains, self-hosted only.
 _TARGET_JOBS = [
     "go-arm64-numeric-parity",
-    "go-arm64-numeric-parity-self-hosted",
 ]
 _STEP_NAME = "Run FMA bit-pattern goldens on real arm64"
 _GO_TEST_TIMEOUT = re.compile(r"go test\b[^\n]*?-timeout[ =](\S+)")

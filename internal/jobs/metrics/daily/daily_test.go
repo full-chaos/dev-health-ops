@@ -1188,6 +1188,8 @@ func finalizeExecution() *jobruntime.Execution[jobruntime.DailyMetricsFinalizeAr
 func pointer(value string) *string { return &value }
 
 type fakeStore struct {
+	failedFinalizePermanently     int
+	failFinalizePermanentlyErr    error
 	run                           Run
 	loadErr                       error
 	partitionClaim                *PartitionClaim
@@ -1287,6 +1289,15 @@ func (store *fakeStore) CompleteFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeCompletions++
 	return store.completionErr
 }
+
+// FailFinalizePermanently records that the TERMINAL transition was invoked, so
+// a test can assert the handler chose it over a release on the final attempt --
+// the two are indistinguishable from the return value alone.
+func (store *fakeStore) FailFinalizePermanently(context.Context, FinalizeClaim) error {
+	store.failedFinalizePermanently++
+	return store.failFinalizePermanentlyErr
+}
+
 func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeReleases++
 	return nil

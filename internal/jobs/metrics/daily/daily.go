@@ -255,6 +255,20 @@ type Store interface {
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
+	// FailFinalizePermanently writes the TERMINAL finalize state --
+	// status='failed' AND finalization_status='failed' -- on the final River
+	// attempt (CHAOS-4290, #2241 confirmation pass).
+	//
+	// Nothing produced that state for a finalize before this. ReleaseFinalize
+	// sets finalization_status='failed' and leaves status='running', which
+	// ClaimFinalize treats as CLAIMABLE, so attempt 1 and an exhausted run were
+	// indistinguishable forever. The blocked marker keyed on the only state
+	// that existed and therefore fired on healthy retryable runs while never
+	// seeing a stranded one.
+	//
+	// Named after FailPartitionPermanently, which is the same shape one layer
+	// down: the point at which retrying stops and an operator has to look.
+	FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error
 }
 
 // RepositoryDiscoverer reads the authoritative repository IDs for one
@@ -1303,6 +1317,19 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
+		// FINAL ATTEMPT: write the terminal state rather than releasing for a
+		// retry that will never come. River discards after this, and without a
+		// terminal write the run sits at status='running',
+		// finalization_status='failed' -- byte-identical to attempt 1 -- so
+		// nothing downstream can tell a stranded run from a retrying one.
+		//
+		// Attempt and MaxAttempts come from the adapter's own pair, the same
+		// values River acts on, so "final" here means what River means by it
+		// rather than a parallel notion maintained beside it.
+		if execution.Attempt >= execution.Definition.MaxAttempts {
+			failFinalizePermanently(handler.store, ctx, *claim)
+			return retryCompatibilityError(err)
+		}
 		releaseFinalize(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
 	}
@@ -1314,6 +1341,16 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+// failFinalizePermanently writes the terminal state on a context detached from
+// the failing one, exactly as releaseFinalize does: the work context may already
+// be cancelled, and a terminal write that silently did not happen is the whole
+// defect this fixes.
+func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) {
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.FailFinalizePermanently(terminalCtx, claim)
 }
 
 func runWithLeaseRenewal(

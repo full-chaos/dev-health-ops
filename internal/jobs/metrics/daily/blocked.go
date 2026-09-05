@@ -123,13 +123,24 @@ WITH decided AS (
                      AND partition.lease_expires_at <= $2::timestamptz
                  )
            ) AS blocked,
-           -- CHAOS-4290 #2241 r3 F2: a run whose partitions ALL succeeded but
-           -- whose finalization terminally failed is equally wedged -- nothing
-           -- automatic will re-run it -- and was invisible here because the
-           -- predicate above requires a failed_permanent PARTITION, which this
-           -- shape never has.
+           -- CHAOS-4290 #2241 r3 F2, CORRECTED by the confirmation pass.
+           --
+           -- The first version keyed on finalization_status='failed' alone and
+           -- fired EXACTLY BACKWARDS. That state is what ReleaseFinalize writes
+           -- after ANY failed attempt, and ClaimFinalize treats it as claimable
+           -- (postgres.go), so it is the ordinary retryable state -- while a
+           -- terminally failed run also has status='failed' and was excluded by
+           -- this query's own status='running' scope. The marker therefore fired
+           -- on healthy retrying runs and never on stranded ones.
+           --
+           -- It now keys on the TERMINAL shape, which FailFinalizePermanently
+           -- writes only on the final River attempt: BOTH columns 'failed'.
+           -- Because the state exists only after retries are exhausted, a
+           -- transient failure followed by a successful retry never acquires a
+           -- marker, so CompleteFinalize needs no clearing path.
            (
-               run.finalization_status = 'failed'
+               run.status = 'failed'
+               AND run.finalization_status = 'failed'
                AND NOT EXISTS (
                    SELECT 1 FROM public.daily_metrics_partitions AS partition
                    WHERE partition.run_id = run.id
@@ -146,7 +157,12 @@ WITH decided AS (
                  AND partition.status = 'succeeded'
            ) AS none_succeeded
     FROM public.daily_metrics_runs AS run
-    WHERE run.org_id = $1::uuid AND run.status = 'running'
+    -- Widened from status='running' (CHAOS-4290 confirmation pass): a
+    -- terminally failed finalize has status='failed', so the old scope excluded
+    -- the exact rows the finalize arm needs to see. The partition arms are
+    -- unaffected -- they additionally require a failed_permanent partition,
+    -- which a terminal finalize run does not have.
+    WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
 )
 UPDATE public.daily_metrics_runs AS run
 SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::timestamptz ELSE NULL END,

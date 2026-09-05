@@ -577,3 +577,89 @@ func TestFisherPValueDiffersFromCPythonOnlyBelowThePersistedPrecision(t *testing
 func pythonparityRound(value float64, digits int) (float64, error) {
 	return pythonparity.Round(value, digits)
 }
+
+// TestPercentileMatchesCPythonIncludingSingleNaNPlacements pins Percentile at
+// the CALL SITE against CPython, and states the class it does NOT pin.
+//
+// codex r1 on #2235 (F4): the implementation used sort.Float64s, which sorts
+// NaN to the FRONT, while CPython's sorted moves it nowhere because every
+// comparison against NaN is False. They disagree on [1, NaN, 2], the simplest
+// possible case. Measured against real CPython before the fix was chosen:
+//
+//	input           CPython sorted      sort.Float64s     SliceStable(a<b)
+//	[1, NaN, 2]     [1, NaN, 2]         [NaN, 1, 2] X     [1, NaN, 2] ok
+//	[NaN, 1, 2]     [NaN, 1, 2]         [NaN, 1, 2] ok    [NaN, 1, 2] ok
+//	[2, NaN, 1]     [2, NaN, 1]         [NaN, 1, 2] X     [2, NaN, 1] ok
+//	[3, 1, NaN, 2]  [1, 2, 3, NaN]      [NaN,1,2,3] X     [1, 3, NaN, 2] X
+//
+// The last row is the RESIDUAL and it is deliberately not fixed. CPython's
+// ordering under NaN is a Timsort artefact of a non-transitive comparator --
+// sorted([2.0, nan, 1.0]) returns [2.0, nan, 1.0], which is not sorted at all
+// -- so no stable sort reproduces it in general and matching it would mean
+// reimplementing Timsort, i.e. parity with an artefact rather than with a
+// specification. Ticketed against BOTH planes; neither should be taking a
+// percentile over a NaN-bearing series.
+//
+// So this test pins exactly what is provably shared: every NaN-free input, and
+// the single-NaN placements above. It does NOT assert the four-element case,
+// and that omission is the point rather than an oversight.
+func TestPercentileMatchesCPythonIncludingSingleNaNPlacements(t *testing.T) {
+	nan := math.NaN()
+
+	// NaN-free: ordinary parity, unaffected by any of the above.
+	for _, testCase := range []struct {
+		name   string
+		values []float64
+		pct    float64
+		want   float64
+	}{
+		{"p50 odd", []float64{1, 2, 3}, 50, 2},
+		{"p50 even interpolates", []float64{1, 2, 3, 4}, 50, 2.5},
+		{"p0 is the min", []float64{5, 1, 3}, 0, 1},
+		{"p100 is the max", []float64{5, 1, 3}, 100, 5},
+		{"single element", []float64{7}, 50, 7},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := Percentile(testCase.values, testCase.pct); got != testCase.want {
+				t.Errorf("Percentile(%v, %v) = %v, want %v",
+					testCase.values, testCase.pct, got, testCase.want)
+			}
+		})
+	}
+
+	// Single-NaN placements. Expectations are CPython's ACTUAL output, captured
+	// from `sorted(...)` on the same input order -- not what a total order
+	// would give, because CPython does not produce one here.
+	for _, testCase := range []struct {
+		name    string
+		values  []float64
+		ordered []float64 // what CPython's sorted() returns
+	}{
+		{"NaN in the middle", []float64{1, nan, 2}, []float64{1, nan, 2}},
+		{"NaN first", []float64{nan, 1, 2}, []float64{nan, 1, 2}},
+		{"NaN middle, descending ends", []float64{2, nan, 1}, []float64{2, nan, 1}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			// p0 reads index 0 of the ordered slice, which is the position the
+			// sort disagreement actually moves -- so it discriminates
+			// sort.Float64s from CPython without depending on interpolation.
+			got := Percentile(testCase.values, 0)
+			want := testCase.ordered[0]
+			if math.IsNaN(want) {
+				if !math.IsNaN(got) {
+					t.Errorf("Percentile(%v, 0) = %v, want NaN (CPython's sorted leaves NaN at index 0)",
+						testCase.values, got)
+				}
+				return
+			}
+			if math.IsNaN(got) || got != want {
+				t.Errorf(
+					"Percentile(%v, 0) = %v, want %v -- CPython's sorted gives %v, so index 0 is %v; "+
+						"a NaN here means the sort moved NaN to the front, which is sort.Float64s' "+
+						"behaviour and not CPython's",
+					testCase.values, got, want, testCase.ordered, want,
+				)
+			}
+		})
+	}
+}

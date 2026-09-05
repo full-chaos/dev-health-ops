@@ -79,9 +79,36 @@ func Percentile(values []float64, pct float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
+	observeNonFinitePercentileInput(values)
 	ordered := make([]float64, len(values))
 	copy(ordered, values)
-	sort.Float64s(ordered)
+	// sort.SliceStable with a plain `a < b`, NOT sort.Float64s (CHAOS-4288,
+	// codex r1 on #2235).
+	//
+	// sort.Float64s sorts NaN to the FRONT. CPython's `sorted` moves it
+	// nowhere, because every comparison against NaN is False, so the two
+	// disagree on the simplest possible input:
+	//
+	//	[1, NaN, 2]   CPython -> [1, NaN, 2]      sort.Float64s -> [NaN, 1, 2]
+	//
+	// and the percentile then differs. SliceStable with the same comparator
+	// CPython uses agrees on every single-NaN placement measured.
+	//
+	// KNOWN RESIDUAL, stated because it is NOT fixed here: CPython's ordering
+	// under NaN is a Timsort ARTEFACT, not a specification -- its comparator is
+	// non-transitive, so `sorted([2.0, nan, 1.0])` returns [2.0, nan, 1.0],
+	// which is not sorted at all. No stable sort reproduces that in general,
+	// and the planes diverge once more than one element sits on each side:
+	//
+	//	[3, 1, NaN, 2]  CPython -> [1, 2, 3, NaN]   SliceStable -> [1, 3, NaN, 2]
+	//
+	// Matching it exactly would mean reimplementing Timsort, i.e. parity with
+	// an artefact. The real fix is upstream -- neither plane should be taking a
+	// percentile over a series containing NaN at all -- and that is ticketed
+	// against BOTH planes. countNonFinite below makes the input visible when it
+	// happens; it deliberately does NOT change the result, because a Go-only
+	// skip would be a new divergence rather than a fix.
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
 	if len(ordered) == 1 {
 		return ordered[0]
 	}

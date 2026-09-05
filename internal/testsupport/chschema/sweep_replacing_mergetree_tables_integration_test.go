@@ -156,8 +156,14 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // `work_item_attribution_backstop_scoped_runs` -- the CHAOS-2433
 // write-then-marker run-marker pair, same shape as #2177's
 // work_unit_membership_runs/_scoped_runs.
+// 88 -> 89, CHAOS-4296: 088_release_impact_daily_replacing_merge_tree.py
+// converts `release_impact_daily` from plain MergeTree to
+// ReplacingMergeTree(computed_at), the 055/027/042 shadow-table pattern --
+// see that migration's own docstring for why (append-only duplication once
+// CHAOS-4256's ingest gap is fixed and the 7-day recompute window overlaps a
+// live day).
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 88
+	const wantCount = 89
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

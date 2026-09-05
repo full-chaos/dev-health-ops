@@ -1,9 +1,12 @@
 package daily
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
 
@@ -182,8 +185,11 @@ func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T)
 	staleRepo := uuid.New() // owned, but absent from repoNamesByID
 	repoNamesByID := map[string]string{knownRepo.String(): "acme/known-repo"}
 
-	repoToTeam := map[string]string{}
-	applyOwnershipToRepoToTeam(repoToTeam, "team-platform", []uuid.UUID{knownRepo, staleRepo}, repoNamesByID)
+	owners := map[string]string{
+		knownRepo.String(): "team-platform",
+		staleRepo.String(): "team-platform",
+	}
+	repoToTeam := authoritativeOwnersKnownToRepoCatalog(owners, repoNamesByID)
 
 	if got := repoToTeam[knownRepo.String()]; got != "team-platform" {
 		t.Fatalf("known repo team=%q, want team-platform", got)
@@ -192,5 +198,46 @@ func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T)
 		t.Fatalf("stale repo (owned but absent from repo_names_by_id) resolved to %q, want "+
 			"unresolved -- an owned repo_id the current repos catalog does not carry must never "+
 			"be trusted, matching Python's guard", teamID)
+	}
+}
+
+// erroringOwnershipConn is a driver.Conn whose ONLY reachable method is
+// Query, always failing -- everything else panics if reached (mirrors
+// stubDriverConn's "unimplemented" discipline, wellbeing_native_executor_test.go).
+// resolveDailyFinalizeRepoToTeam's only conn use is the single
+// AuthoritativeOwnerByRepo call, so this is a faithful, minimal fake for
+// testing that path's error propagation.
+type erroringOwnershipConn struct{ stubDriverConn }
+
+var errOwnershipQueryFailed = errors.New("clickhouse: connection reset by peer")
+
+func (erroringOwnershipConn) Query(context.Context, string, ...any) (chdriver.Rows, error) {
+	return nil, errOwnershipQueryFailed
+}
+
+// TestResolveDailyFinalizeRepoToTeamPropagatesOwnershipQueryError is the
+// failing-first proof for CHAOS-5141, #2255 r1 finding 3: a transient
+// ClickHouse error while loading ownership must FAIL this resolution, never
+// silently degrade to an empty map. A prior revision swallowed this error
+// (`continue` inside a per-team loop), which let ComputeFinalizeFamily
+// return (0, nil) -- a SUCCESS with zero rows -- for what was actually an
+// infrastructure failure, and the finalize handler then marked
+// team_cognitive_load Computed and skipped the Python bridge for that run,
+// silently losing the family for the whole run.
+func TestResolveDailyFinalizeRepoToTeamPropagatesOwnershipQueryError(t *testing.T) {
+	repoID := uuid.New()
+	repoNamesByID := map[string]string{repoID.String(): "acme/repo"}
+	patternResolver := NewRepoPatternResolver(nil)
+
+	_, err := resolveDailyFinalizeRepoToTeam(
+		context.Background(), erroringOwnershipConn{}, "acme", cognitiveLoadTestDay,
+		[]uuid.UUID{repoID}, repoNamesByID, patternResolver,
+	)
+	if err == nil {
+		t.Fatal("err=nil, want the ownership query failure to propagate -- " +
+			"a resolution failure must never silently become an empty map")
+	}
+	if !errors.Is(err, errOwnershipQueryFailed) {
+		t.Fatalf("err=%v, want it to wrap errOwnershipQueryFailed", err)
 	}
 }

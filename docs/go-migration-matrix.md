@@ -200,11 +200,11 @@ function directly, even for families whose worker kind is now native:
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |
-| ic_finalize | COMPAT-Python | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
+| ic_finalize | NATIVE | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`) |
+| team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. Python `team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained as the compatibility-bridge fallback, gated behind `skip_families` | CHAOS-5141 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | COMPAT-Python | Python: `compute_testops.py:355 compute_coverage_metrics_daily` | CHAOS-4284 |
 | testops_pipeline | COMPAT-Python | Python: `compute_testops.py:105 compute_pipeline_metrics_daily` | CHAOS-4284 |
@@ -274,7 +274,7 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | Kind/area | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
 | DORA | NATIVE | see §3 | river, native | CHAOS-3092 R1 (Done) |
-| cognitive load (team_cognitive_load) | COMPAT-Python | see §2 | bridge | NONE found |
+| cognitive load (team_cognitive_load) | NATIVE | see §2 | river, native -- finalize scope, co-registered with ic_finalize | CHAOS-5141 |
 | investment.chunk | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.dispatch | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.finalize | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |

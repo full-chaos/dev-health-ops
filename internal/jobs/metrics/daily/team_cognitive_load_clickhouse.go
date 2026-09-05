@@ -89,8 +89,23 @@ type teamMetricsCognitiveLoadInput struct {
 }
 
 // loadTeamMetricsCognitiveLoadInputsForDay reads team_metrics_daily for
-// (org_id, day), argMax(tuple(...), computed_at)-deduped per (team_id,
-// repo_id) -- migration 080's own documented reader contract. A legacy row
+// (org_id, day), deduped per repo_id to its LATEST GENERATION ONLY -- mirrors
+// job_daily.py's team_metrics_query (:2377) exactly, NOT a per-(team_id,
+// repo_id) argMax. A prior revision of this query grouped by (team_id,
+// repo_id), which meant a repo relabeled to a new team_id kept BOTH the old
+// team's row (its own argMax group, still "latest" within that group) and
+// the new team's row -- resolveDailyFinalizeRepoToTeam then mapped both rows
+// to whichever team repo_to_team currently says the repo belongs to, and
+// buildTeamCognitiveLoadRows summed both, double-counting every relabeled
+// repo's commits (CHAOS-5141, #2255 r1 finding 1).
+//
+// The fix: find max(computed_at) per repo_id FIRST (across every team_id that
+// repo has ever been under), then sum only the row(s) sharing that exact
+// timestamp. team_metrics_daily's own team_id is still never read for
+// resolution (CHAOS-4396 -- team resolution is repo_to_team's job), so it
+// does not appear in the SELECT at all; summing (not `any()`) across ties
+// matches Python's "same-generation splits are summed together" comment for
+// the rare case of two same-timestamp writes for one repo. A legacy row
 // (repo_id = ”, pre-migration-080) is EXCLUDED here: it can never resolve to
 // a repo_id, so it can never be ownership-attributed to a team by this
 // executor -- the SAME skip build_team_cognitive_load_rows_for_day's own
@@ -100,20 +115,21 @@ func loadTeamMetricsCognitiveLoadInputsForDay(
 ) ([]teamMetricsCognitiveLoadInput, error) {
 	rows, err := conn.Query(ctx, `
 SELECT
-	repo_id,
-	tupleElement(latest, 1) AS after_hours_commits_count,
-	tupleElement(latest, 2) AS weekend_commits_count,
-	tupleElement(latest, 3) AS commits_count
-FROM (
-	SELECT
-		team_id,
-		repo_id,
-		argMax(tuple(after_hours_commits_count, weekend_commits_count, commits_count), computed_at) AS latest
+	t.repo_id AS repo_id,
+	sum(t.after_hours_commits_count) AS after_hours_commits_count,
+	sum(t.weekend_commits_count) AS weekend_commits_count,
+	sum(t.commits_count) AS commits_count
+FROM team_metrics_daily AS t
+INNER JOIN (
+	SELECT repo_id, max(computed_at) AS latest_computed_at
 	FROM team_metrics_daily
 	WHERE org_id = ? AND day = ? AND repo_id != ''
-	GROUP BY team_id, repo_id
-)`,
-		organizationID, day,
+	GROUP BY repo_id
+) AS latest_gen
+	ON t.repo_id = latest_gen.repo_id AND t.computed_at = latest_gen.latest_computed_at
+WHERE t.org_id = ? AND t.day = ? AND t.repo_id != ''
+GROUP BY t.repo_id`,
+		organizationID, day, organizationID, day,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load team_metrics_daily for cognitive load: %w", err)
@@ -124,7 +140,9 @@ FROM (
 	for rows.Next() {
 		var row teamMetricsCognitiveLoadInput
 		var repoIDText string
-		var afterHours, weekend, commits uint32
+		// sum(UInt32) promotes to UInt64 in ClickHouse -- these are no longer
+		// the raw column type the way the old per-row argMax scan was.
+		var afterHours, weekend, commits uint64
 		if err := rows.Scan(&repoIDText, &afterHours, &weekend, &commits); err != nil {
 			return nil, fmt.Errorf("scan team_metrics_daily cognitive load row: %w", err)
 		}

@@ -220,8 +220,14 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4287",
     },
     "team_cognitive_load": {
-        "citation": "Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope)",
-        "ticket": "NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`)",
+        "citation": (
+            "Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` "
+            "(finalize scope, co-registered with ic_finalize) + "
+            "`team_cognitive_load_clickhouse.go`. Python "
+            "`team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained "
+            "as the compatibility-bridge fallback, gated behind `skip_families`"
+        ),
+        "ticket": "CHAOS-5141",
     },
     "testops_risk": {
         "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
@@ -342,10 +348,10 @@ WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-3092 R1 (Done)",
     },
     "cognitive load (team_cognitive_load)": {
-        "executor": "COMPAT-Python",
+        "executor": "NATIVE",
         "citation": "see §2",
-        "route": "bridge",
-        "ticket": "NONE found",
+        "route": "river, native -- finalize scope, co-registered with ic_finalize",
+        "ticket": "CHAOS-5141",
     },
 }
 
@@ -384,14 +390,24 @@ def render_daily_metrics_block() -> str:
         set(DAILY_CITATION_LEDGER),
         "Add a DAILY_CITATION_LEDGER row for it.",
     )
-    artifact_daily = load_native_families_artifact()["daily"]
+    # §2 covers every daily-metrics family, partition- AND finalize-scope
+    # alike -- a finalize family (ic_finalize, team_cognitive_load) is just
+    # as native as a partition one for THIS table's purposes, it only runs
+    # once per RUN instead of once per partition. Merging "finalize" in here
+    # fixes a real staleness: before this merge, EVERY finalize-scope native
+    # family showed COMPAT-Python in this table regardless of its actual
+    # port, because the artifact's "finalize" section was never consulted at
+    # all (found alongside CHAOS-5141's own port flip, but the gap predates
+    # it -- ic_finalize had the identical wrong row).
+    artifact = load_native_families_artifact()
+    artifact_daily = {**artifact["daily"], **artifact.get("finalize", {})}
     unknown_artifact_names = set(artifact_daily) - live_names
     if unknown_artifact_names:
         raise SystemExit(
             f"gen_go_migration_matrix_docs: contracts/native-families/v1/native-families.json's "
-            f'"daily" section names family(ies) {sorted(unknown_artifact_names)} that no longer '
-            "exist in internal/jobs/metrics/daily/families.json -- regenerate the artifact "
-            "(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
+            f'"daily"/"finalize" sections name family(ies) {sorted(unknown_artifact_names)} that '
+            "no longer exist in internal/jobs/metrics/daily/families.json -- regenerate the "
+            "artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
             "TestNativeFamiliesArtifactUpToDate)."
         )
     lines = [

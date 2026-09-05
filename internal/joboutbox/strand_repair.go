@@ -249,7 +249,13 @@ func (repair *StrandRepair) observeRetiredKinds(
 		return nil, classifyStrandError(err)
 	}
 	defer rows.Close()
-	observations := make([]RetiredKindObservation, 0)
+	// nil, not make([]T, 0): a StepResult/StrandRepairResult with every field
+	// at its zero value (the common "nothing happened" case an integration
+	// test asserts against directly) must stay reflect.DeepEqual-comparable
+	// to a bare zero-value literal -- an allocated empty slice here would
+	// silently break that for every caller, not just the ones that inspect
+	// this specific field.
+	var observations []RetiredKindObservation
 	for rows.Next() {
 		var found RetiredKindObservation
 		if err := rows.Scan(&found.OutboxID, &found.JobKind, &found.OrganizationID); err != nil {

@@ -182,36 +182,6 @@ func (InvestmentMaterializeArgs) SupportedContractVersions() []int {
 }
 func (args InvestmentMaterializeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
 
-type InvestmentDispatchArgs struct {
-	EnvelopeArgs[jobcontract.InvestmentDispatchPayload]
-}
-
-func (InvestmentDispatchArgs) Kind() string { return jobcontract.KindInvestmentDispatch }
-func (InvestmentDispatchArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
-}
-func (args InvestmentDispatchArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
-
-type InvestmentChunkArgs struct {
-	EnvelopeArgs[jobcontract.InvestmentChunkPayload]
-}
-
-func (InvestmentChunkArgs) Kind() string { return jobcontract.KindInvestmentChunk }
-func (InvestmentChunkArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
-}
-func (args InvestmentChunkArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
-
-type InvestmentFinalizeArgs struct {
-	EnvelopeArgs[jobcontract.InvestmentFinalizePayload]
-}
-
-func (InvestmentFinalizeArgs) Kind() string { return jobcontract.KindInvestmentFinalize }
-func (InvestmentFinalizeArgs) SupportedContractVersions() []int {
-	return []int{jobcontract.ContractVersionV1}
-}
-func (args InvestmentFinalizeArgs) ContractEnvelope() jobcontract.Envelope { return args.envelope() }
-
 type RemainingCapacityArgs struct {
 	EnvelopeArgs[jobcontract.RemainingMetricsPartitionPayload]
 }

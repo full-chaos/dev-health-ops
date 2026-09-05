@@ -107,8 +107,16 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # wrongly cited. Its row is kept, unchanged in count effect (still
     # counted), with deletion_evidence_requirement corrected to name the
     # real blocker.
-    # = 99.
-    assert inventory["row_count"] == 99
+    # = 99, - 3 removed under CHAOS-4438: the registry_kind rows for
+    # investment.chunk/investment.dispatch/investment.finalize. All three
+    # were registered Go handlers with zero producer anywhere (dead
+    # wired-but-never-invoked shells, same class as CHAOS-4243's
+    # retirements above); the kinds were deleted outright from the Go
+    # registry, so their rows are removed rather than re-anchored. Every
+    # other registry_kind row was re-anchored -96 lines to match
+    # registry.json's own entries shifting up after the deletion.
+    # = 96.
+    assert inventory["row_count"] == 96
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

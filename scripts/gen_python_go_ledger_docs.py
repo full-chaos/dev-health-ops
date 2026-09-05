@@ -111,36 +111,14 @@ def load_source_discovery_providers() -> set[str]:
 # ---------------------------------------------------------------------------
 KIND_LEDGER: dict[str, dict[str, str]] = {
     # --- investment family ---------------------------------------------
-    "investment.chunk": {
-        "producer": "Go handler wired, never invoked -- `internal/jobs/workgraph/handler.go:158-163`",
-        "trigger": "none — no producer ever creates a `work_graph_execution_requests` row with this kind",
-        "gate": "n/a",
-        "writer": "Python `work_graph_tasks.run_investment_materialize_chunk.run` (bridge target, unreachable) — `src/dev_health_ops/api/internal/worker_workgraph.py:186`",
-        "tables": "none written (never invoked)",
-        "evidence": "argued — rg found zero `WriteTx`/enqueue callers for this kind repo-wide (2026-08-28)",
-        "state": "dead-code",
-        "ticket": "CHAOS-4438 (dead investment.* kinds)",
-    },
-    "investment.dispatch": {
-        "producer": "Go handler wired, never invoked -- `internal/jobs/workgraph/handler.go:152-157`",
-        "trigger": "none — only reachable via the legacy Celery-chord function, not scheduled and Celery is retired prod-wide",
-        "gate": "n/a",
-        "writer": "Python `work_graph_tasks.py:508 dispatch_investment_materialize_partitioned` (Celery-only, unreachable)",
-        "tables": "none written (never invoked)",
-        "evidence": "argued — rg found zero `WriteTx`/enqueue callers for this kind repo-wide (2026-08-28)",
-        "state": "dead-code",
-        "ticket": "CHAOS-4438 (dead investment.* kinds)",
-    },
-    "investment.finalize": {
-        "producer": "Go handler wired, never invoked -- `internal/jobs/workgraph/handler.go:164-169`",
-        "trigger": "none — no producer ever creates a `work_graph_execution_requests` row with this kind",
-        "gate": "n/a",
-        "writer": "Python `work_graph_tasks.finalize_investment_materialize_partitioned.run` (bridge target, unreachable) — `worker_workgraph.py:187`",
-        "tables": "none written (never invoked)",
-        "evidence": "argued — rg found zero `WriteTx`/enqueue callers for this kind repo-wide (2026-08-28)",
-        "state": "dead-code",
-        "ticket": "CHAOS-4438 (dead investment.* kinds)",
-    },
+    # investment.chunk/dispatch/finalize rows REMOVED under CHAOS-4438: these
+    # were dead Go shells (wired, never invoked, zero producers) documented
+    # here as such -- the kinds are now deleted outright from registry.json,
+    # jobcontract, and workgraph, not merely dead. A ledger row for a kind
+    # gen_python_go_ledger_docs's own consistency guard cannot see in the live
+    # producer would itself become the stale-citation defect class this file
+    # exists to prevent (see CHAOS-5153, the sibling matrix generator's
+    # analogous reverse guard).
     "investment.materialize": {
         "producer": "`internal/syncdispatchruntime/native_post_sync.go:230-232` (`workGraph.StartRequestTx`)",
         "trigger": "post-sync",

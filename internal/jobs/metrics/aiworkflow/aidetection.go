@@ -380,8 +380,20 @@ func isPythonWordBoundary(text string, pos int) bool {
 	return beforeIsWord != afterIsWord
 }
 
+// isPythonWordRune ports Python re's Unicode \w membership test.
+//
+// codex round chaos-5220 r1, P2: unicode.IsDigit only covers Unicode category
+// Nd (decimal digit). Python's \w is defined via str.isalnum(), which is true
+// for isalpha() OR isdecimal() OR isdigit() OR isnumeric() -- isnumeric()
+// additionally covers Nl (letter numbers, e.g. U+2160 ROMAN NUMERAL ONE) and
+// No (other numbers, e.g. superscripts, fractions). unicode.IsNumber reports
+// membership in category N as a whole (Nd+Nl+No), matching Python's broader
+// scope; IsDigit alone silently excluded Nl/No, so "Ⅰcopilot" wrongly
+// formed a word boundary before "copilot" in Go (false-positive signal) where
+// Python's \bcopilot\b correctly does not match (U+2160 is itself a Python
+// \w character, so no boundary forms there).
 func isPythonWordRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'
 }
 
 func runeBefore(text string, pos int) (rune, bool) {

@@ -262,7 +262,7 @@ Go owns the writes. Deleting the Python path is a deliberate follow-up, not part
 
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| ai_governance / ai_impact / ai_workflow | COMPAT-Python | see METRICS' daily-families table above (all `pending`) | CHAOS-4285/4280/4286 |
+| ai_governance / ai_impact / ai_workflow | NATIVE | see METRICS' daily-families table above (all three now native; this hand-authored row is not generator-checked and had drifted stale for all three, not just the family this row's own PR ported -- caught by codex round chaos-5220-r1) | CHAOS-4285/4280/4286 |
 | **ai attribution** | **PARTIAL** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`gitlab_work_item_derived.go:423`, `linear_work_items_derived.go:51,283` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `jira_work_item_derived.go:16-21` -- no AI-attribution signal exists for jira, not a gap). READ path: Python still consumes `ai_attribution` as an input to ai_governance/ai_impact compute (`job_daily.py:1677 ai_loader.load_ai_pr_attributions`) -- that consumption stays COMPAT along with those two families. | none found |
 
 ## INVESTMENT / WORK-GRAPH

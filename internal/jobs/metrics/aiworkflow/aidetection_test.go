@@ -182,6 +182,24 @@ func TestDetectFromPRBodyStillMatchesPlainCopilot(t *testing.T) {
 	}
 }
 
+// TestDetectFromPRBodyUnicodeNumericBoundary pins a THIRD measured divergence
+// (codex round chaos-5220 r1, P2): Python's \w set is str.isalnum(), which
+// covers isnumeric() as well as isdigit() -- isnumeric() additionally
+// includes Unicode category Nl (letter numbers, e.g. U+2160 ROMAN NUMERAL
+// ONE) and No (other numbers), neither of which unicode.IsDigit (Nd only)
+// recognizes. Python's `\bcopilot\b` does NOT match "Ⅰcopilot" because
+// U+2160 is itself a Python \w character, so no boundary forms between it and
+// "copilot" -- unicode.IsDigit-only would wrongly treat U+2160 as non-word,
+// form a boundary, and over-match. isPythonWordRune now uses
+// unicode.IsNumber (Nd+Nl+No), matching Python's broader scope.
+func TestDetectFromPRBodyUnicodeNumericBoundary(t *testing.T) {
+	for _, body := range []string{"Ⅰcopilot", "copilotⅠ"} {
+		if signal := DetectFromPRBody(body); signal != nil {
+			t.Errorf("body %q: 'copilot' adjacent to U+2160 (a Python \\w numeric character) must NOT match \\bcopilot\\b, got %+v", body, signal)
+		}
+	}
+}
+
 // --------------------------------------------------------------------------
 // strongestSignal / max-confidence tie-break goldens (CHAOS-4280 ai_workflow
 // design approval condition 2: equal-confidence fixtures for every ordered

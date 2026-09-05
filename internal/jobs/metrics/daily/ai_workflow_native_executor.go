@@ -98,9 +98,18 @@ func (executor *AIWorkflowExecutor) ComputeFamily(
 		// operator scanning logs for "how many PRs lost issue linkage" needs
 		// a signal that survives even when the caller only surfaces a bare
 		// error string up the stack.
+		//
+		// codex round chaos-5220 r1, P3: this is a single BULK query scoped
+		// to the whole partition (every PR number in one call), so there is
+		// no single repo/PR to name -- unlike the per-PR sample logged
+		// below. repo_ids (the partition's own repo scope, already known
+		// before this query ran) and pr_count are the most specific
+		// identifiers this failure mode actually has; naming them is still
+		// strictly more actionable than the org/day/partition tuple alone.
 		slog.Error("ai_workflow issue-pr linkage query failed",
 			"org_id", run.OrganizationID, "partition_id", partition.ID,
-			"target_day", targetDay.Format("2006-01-02"), "error", linkErr)
+			"target_day", targetDay.Format("2006-01-02"), "repo_ids", repoIDs,
+			"pr_count", len(prNumbers), "error", linkErr)
 		return 0, linkErr
 	}
 	issueIDsByPR := make(map[string][]string)
@@ -135,17 +144,27 @@ func (executor *AIWorkflowExecutor) ComputeFamily(
 		issueEdges = append(issueEdges, result.IssueEdges...)
 	}
 
-	// codex round chaos-4280 astra review, finding 6: log (not just count)
-	// an AI-positive PR whose artifact edge exists but produced no issue
-	// edge -- silent today in both Python and every existing Go family. This
-	// does not distinguish "genuinely no linked work item" from "linkage
-	// query missed it": both are legitimately silent per PR, but the
-	// AGGREGATE rate is the operator signal worth having, same reasoning as
-	// aiimpact.RecordLinkageUnavailable.
-	if aiPositiveWithoutLinkage := countAIPositiveWithoutIssueLinkage(artifactEdges, issueEdges); aiPositiveWithoutLinkage > 0 {
+	// codex round chaos-4280 astra review, finding 6 (sharpened by chaos-5220
+	// r1, P3): log a bounded SAMPLE of the actual PR identities (not just an
+	// aggregate count) for an AI-positive PR whose artifact edge exists but
+	// produced no issue edge -- silent today in both Python and every
+	// existing Go family. This does not distinguish "genuinely no linked
+	// work item" from "linkage query missed it": both are legitimately
+	// silent per PR, but naming the affected PRs (up to
+	// unlinkedLogSampleCap) is what actually lets an operator investigate or
+	// re-drive specific rows, versus a bare count that names nothing
+	// repairable.
+	if unlinked := aiPositiveWithoutIssueLinkage(artifactEdges, issueEdges); len(unlinked) > 0 {
+		sample := unlinked
+		truncated := false
+		if len(sample) > unlinkedLogSampleCap {
+			sample = sample[:unlinkedLogSampleCap]
+			truncated = true
+		}
 		slog.Debug("ai_workflow: AI-positive PR(s) with no issue linkage found",
 			"org_id", run.OrganizationID, "partition_id", partition.ID,
-			"target_day", targetDay.Format("2006-01-02"), "count", aiPositiveWithoutLinkage)
+			"target_day", targetDay.Format("2006-01-02"), "count", len(unlinked),
+			"pr_ids_sample", sample, "sample_truncated", truncated)
 	}
 
 	// THREE TABLES, NO TRANSACTION: report the TRUE rows-written count on a
@@ -177,22 +196,34 @@ func (executor *AIWorkflowExecutor) ComputeFamily(
 	return written, nil
 }
 
-// countAIPositiveWithoutIssueLinkage counts artifact edges (one per
-// AI-positive PR, keyed by run_id since each PR yields exactly one run and
-// one artifact edge) whose run_id never appears in the issue-edge slice.
-func countAIPositiveWithoutIssueLinkage(artifactEdges []aiworkflow.ArtifactEdge, issueEdges []aiworkflow.IssueEdge) int {
+// aiPositiveWithoutIssueLinkage returns the artifact_id (the PR's own
+// "repoID:number" identity string, see prIDFor) of every AI-positive PR
+// (keyed by run_id since each PR yields exactly one run and one artifact
+// edge) whose run_id never appears in the issue-edge slice.
+//
+// codex round chaos-5220 r1, P3: an aggregate COUNT alone (the original form
+// of this helper) tells an operator "N PRs lost linkage" but not WHICH ones,
+// so nothing is actually repairable from the log line. Returning the PR
+// identities lets the caller log a bounded sample an operator can act on.
+func aiPositiveWithoutIssueLinkage(artifactEdges []aiworkflow.ArtifactEdge, issueEdges []aiworkflow.IssueEdge) []string {
 	linkedRunIDs := make(map[string]struct{}, len(issueEdges))
 	for _, edge := range issueEdges {
 		linkedRunIDs[edge.RunID] = struct{}{}
 	}
-	count := 0
+	var unlinked []string
 	for _, edge := range artifactEdges {
 		if _, linked := linkedRunIDs[edge.RunID]; !linked {
-			count++
+			unlinked = append(unlinked, edge.ArtifactID)
 		}
 	}
-	return count
+	return unlinked
 }
+
+// unlinkedLogSampleCap bounds how many PR identities a single log line
+// names -- a partition with thousands of unlinked PRs must not turn one log
+// line into an unbounded write; the total count is always logged alongside
+// the (possibly truncated) sample.
+const unlinkedLogSampleCap = 10
 
 // wrapAIWorkflowPartialWrite mirrors wrapWorkGraphEdgesPartialWrite exactly
 // (same reasoning: written>0 guards against suppressing the compatibility

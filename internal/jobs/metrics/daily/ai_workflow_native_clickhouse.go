@@ -96,17 +96,28 @@ ORDER BY repo_id, number`,
 			ClosedAt:   utcOrNil(closedAt),
 			LastSynced: lastSynced.UTC(),
 		}
+		// codex round chaos-5220 r1, P2: clickhouse-go scans a String column
+		// into a Go string WITHOUT validating it, while Python's driver
+		// hex-substitutes any value that fails UTF-8 decode
+		// (pythonparity.DecodeClickHouseString's doc comment). Applying the
+		// decode here matches work_graph_edges_native_clickhouse.go's
+		// identical fix for ReviewID/DeploymentID/IncidentID -- these are the
+		// String columns whose values can reach Compute's hash inputs
+		// (Body/HeadBranch feed detector regex matching; AuthorName feeds the
+		// actor fallback and, transitively, evidence/metadata JSON) or a
+		// comparison with the Python plane, so skipping it would silently
+		// diverge from Python on any row holding invalid UTF-8.
 		if title != nil {
-			row.Title = *title
+			row.Title = pythonparity.DecodeClickHouseStringValue(*title)
 		}
 		if body != nil {
-			row.Body = *body
+			row.Body = pythonparity.DecodeClickHouseStringValue(*body)
 		}
 		if headBranch != nil {
-			row.HeadBranch = *headBranch
+			row.HeadBranch = pythonparity.DecodeClickHouseStringValue(*headBranch)
 		}
 		if authorName != nil {
-			row.AuthorName = *authorName
+			row.AuthorName = pythonparity.DecodeClickHouseStringValue(*authorName)
 		}
 		result = append(result, row)
 	}
@@ -174,6 +185,13 @@ WHERE org_id = ? AND repo_id IN ? AND pr_number IN ?`,
 		if err := rows.Scan(&repoID, &prNumber, &workItemID); err != nil {
 			return nil, fmt.Errorf("scan ai workflow issue-pr link row: %w", err)
 		}
+		// codex round chaos-5220 r1, P2: work_item_id feeds
+		// hashParts("issue_ai_run", ...) in compute.go -- an undecoded
+		// invalid-UTF-8 value here diverges from Python's hex-substituted
+		// string and therefore produces a different issue_id/edge_id for the
+		// same row. Same fix as work_graph_edges' ReviewID/DeploymentID/
+		// IncidentID.
+		workItemID = pythonparity.DecodeClickHouseStringValue(workItemID)
 		if workItemID == "" {
 			continue
 		}

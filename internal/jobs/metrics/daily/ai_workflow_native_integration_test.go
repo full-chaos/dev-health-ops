@@ -194,6 +194,108 @@ SELECT toUUID(?), toUInt32(101), 'Add caching', 'plain body, no AI mention',
 	}
 }
 
+// TestAIWorkflowDecodesInvalidUTF8LikePython proves the ClickHouse String
+// decode (codex round chaos-5220 r1, P2) against a real driver, the same
+// class of proof as work_graph_edges_native_integration_test.go's
+// TestWorkGraphEdgesDecodesInvalidUTF8LikePython.
+//
+// clickhouse-go scans a String column into a Go string WITHOUT validating
+// it, so a column holding invalid UTF-8 arrives as raw bytes. Python's
+// driver has already hex-encoded the same value by the time the extractor
+// sees it. work_item_id feeds compute.go's issue-edge hash directly; body
+// feeds DetectFromPRBody's regex matching -- both diverge from Python,
+// silently, without the decode.
+//
+// Fixture is `unhex('61ff62')` = a\xffb: real bytes, invalid UTF-8, short
+// enough that the expected value is readable in a failure message.
+func TestAIWorkflowDecodesInvalidUTF8LikePython(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	conn := awfClickHouse(ctx, t)
+
+	if err := conn.Exec(ctx, `CREATE TABLE work_graph_issue_pr (
+    repo_id UUID, work_item_id String, pr_number UInt32, confidence Float32,
+    provenance String, evidence String, last_synced DateTime64(3,'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced)
+ORDER BY (org_id, repo_id, work_item_id, pr_number)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, title Nullable(String), body Nullable(String),
+    head_branch Nullable(String), author_name Nullable(String), author_email Nullable(String),
+    created_at DateTime64(3,'UTC'), merged_at Nullable(DateTime64(3,'UTC')),
+    closed_at Nullable(DateTime64(3,'UTC')), last_synced DateTime64(3,'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := conn.Exec(ctx, `
+INSERT INTO work_graph_issue_pr
+  (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+SELECT toUUID(?), unhex('61ff62'), toUInt32(101), toFloat32(0.8), 'native', 'fixture',
+       toDateTime64('2026-09-01 00:00:00', 3, 'UTC'), ?`,
+		awfRepo, awfOrg,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests
+  (repo_id, number, title, body, head_branch, author_name, author_email, created_at, merged_at, closed_at, last_synced, org_id)
+SELECT toUUID(?), toUInt32(101), 'Add caching', unhex('61ff62'), 'feature/cache', 'dev-a',
+       'dev-a@example.com', toDateTime64('2026-09-01 09:00:00', 3, 'UTC'),
+       toDateTime64('2026-09-01 10:00:00', 3, 'UTC'), NULL,
+       toDateTime64('2026-09-01 23:00:00', 3, 'UTC'), ?`,
+		awfRepo, awfOrg,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// POSITIVE CONTROL. A fixture that turned out to be valid UTF-8 would
+	// make this test pass while exercising nothing.
+	var validWorkItemID, validBody uint8
+	if err := conn.QueryRow(ctx,
+		`SELECT isValidUTF8(work_item_id) FROM work_graph_issue_pr WHERE org_id = ?`, awfOrg,
+	).Scan(&validWorkItemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx,
+		`SELECT isValidUTF8(body) FROM git_pull_requests WHERE org_id = ?`, awfOrg,
+	).Scan(&validBody); err != nil {
+		t.Fatal(err)
+	}
+	if validWorkItemID != 0 || validBody != 0 {
+		t.Fatal("fixture work_item_id/body is VALID UTF-8, so this test cannot exercise the decode")
+	}
+
+	links, err := LoadAIWorkflowIssuePRLinks(ctx, conn, awfOrg, []uuid.UUID{uuid.MustParse(awfRepo)}, []int64{101})
+	if err != nil {
+		t.Fatalf("load links: %v", err)
+	}
+	if len(links) != 1 {
+		t.Fatalf("expected exactly 1 link, got %d", len(links))
+	}
+	if got, want := links[0].WorkItemID, "61ff62"; got != want {
+		t.Errorf("work_item_id: got %q, want %q. Python's driver yields the hex form, so without "+
+			"DecodeClickHouseStringValue the raw bytes reach compute.go's issue-edge hash and the "+
+			"issue_id/edge_id diverge from Python for this row -- silently, since both ids look "+
+			"well-formed.", got, want)
+	}
+
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	rows, err := LoadAIWorkflowPullRequests(ctx, conn, awfOrg, []uuid.UUID{uuid.MustParse(awfRepo)},
+		start, start.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("load pull requests: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 pull request row, got %d", len(rows))
+	}
+	if got, want := rows[0].Body, "61ff62"; got != want {
+		t.Errorf("body: got %q, want %q. Without DecodeClickHouseStringValue the raw bytes reach "+
+			"DetectFromPRBody's regex matching with different content than Python sees.", got, want)
+	}
+}
+
 // TestAIWorkflowPartialWriteAgainstRealClickHouse mirrors
 // TestWorkGraphEdgesPartialWriteAgainstRealClickHouse's structural-failure
 // shape for ai_workflow's own 3-table write order (runs, then artifact

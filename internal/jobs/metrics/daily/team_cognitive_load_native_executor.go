@@ -141,6 +141,33 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	return len(rows), nil
 }
 
+// applyOwnershipToRepoToTeam merges one team's owned repos into repoToTeam,
+// gated on repoNamesByID membership (CHAOS-4365 codex r2 P1 guard) -- an
+// owned repo_id that repoNamesByID does not carry (removed/renamed since
+// team_repo_ownership last ran; that table is INSERT-only, CHAOS-2610 tracks
+// writer-side valid_to retirement) is never trusted, exactly matching
+// Python's _repo_to_team_map_for_compounding_risk: "a repo is trusted from
+// EITHER source only when it also appears in repo_names_by_id" -- ownership
+// included, not just the pattern-resolver fallback below. A prior revision of
+// this function gated ONLY the pattern fallback on repoNamesByID and let
+// ownership resolve unconditionally, a real parity gap (found in #2256
+// review): a stale ownership row could attribute a repo that no longer
+// exists in the org's current inventory, something the pattern-resolver path
+// never did.
+func applyOwnershipToRepoToTeam(
+	repoToTeam map[string]string, teamID string, owned []uuid.UUID, repoNamesByID map[string]string,
+) {
+	for _, repoID := range owned {
+		key := repoID.String()
+		if _, known := repoNamesByID[key]; !known {
+			continue
+		}
+		if _, exists := repoToTeam[key]; !exists {
+			repoToTeam[key] = teamID
+		}
+	}
+}
+
 // resolveDailyFinalizeRepoToTeam builds {repo_id_str: team_id} exactly as
 // _write_team_cognitive_load_for_day does: team_repo_ownership
 // (teamownership.OwnedRepoIDs, per team) first, the repo-pattern resolver
@@ -166,12 +193,7 @@ func resolveDailyFinalizeRepoToTeam(
 			// other family's correctness.
 			continue
 		}
-		for _, repoID := range owned {
-			key := repoID.String()
-			if _, exists := repoToTeam[key]; !exists {
-				repoToTeam[key] = team.ID
-			}
-		}
+		applyOwnershipToRepoToTeam(repoToTeam, team.ID, owned, repoNamesByID)
 	}
 	for _, repoID := range repoIDs {
 		key := repoID.String()

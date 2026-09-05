@@ -167,3 +167,30 @@ func TestBuildTeamCognitiveLoadRowsEmptyInputsProduceNoRows(t *testing.T) {
 		t.Fatalf("records=%d, want 0", len(records))
 	}
 }
+
+// TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership ports the
+// CHAOS-4365 codex r2 P1 guard from Python's
+// _repo_to_team_map_for_compounding_risk: "a repo is trusted from EITHER
+// source only when it also appears in repo_names_by_id" -- ownership
+// included, not just the pattern-resolver fallback. A stale
+// team_repo_ownership row (that table is INSERT-only; a repo removed or
+// renamed after auto-import last ran still carries one) must resolve to
+// UNRESOLVED here, exactly as it does on the Python side, never attribute a
+// repo the org's current repos catalog no longer carries.
+func TestApplyOwnershipToRepoToTeamRequiresRepoNamesByIDMembership(t *testing.T) {
+	knownRepo := uuid.New()
+	staleRepo := uuid.New() // owned, but absent from repoNamesByID
+	repoNamesByID := map[string]string{knownRepo.String(): "acme/known-repo"}
+
+	repoToTeam := map[string]string{}
+	applyOwnershipToRepoToTeam(repoToTeam, "team-platform", []uuid.UUID{knownRepo, staleRepo}, repoNamesByID)
+
+	if got := repoToTeam[knownRepo.String()]; got != "team-platform" {
+		t.Fatalf("known repo team=%q, want team-platform", got)
+	}
+	if teamID, resolved := repoToTeam[staleRepo.String()]; resolved {
+		t.Fatalf("stale repo (owned but absent from repo_names_by_id) resolved to %q, want "+
+			"unresolved -- an owned repo_id the current repos catalog does not carry must never "+
+			"be trusted, matching Python's guard", teamID)
+	}
+}

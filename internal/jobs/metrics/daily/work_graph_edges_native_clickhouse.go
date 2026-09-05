@@ -272,13 +272,24 @@ func workGraphEdgeIncidents(started []IncidentRow) []workgraphedges.IncidentRow 
 // the production path repo_provider_by_id is {repo: "auto"} for every repo,
 // every run. The repos table is never consulted.
 //
-// This is NOT a cosmetic column. `provider` is the SPLIT KEY for
-// extractPerProvider: Python, seeing one provider, makes ONE pass with a
-// single deployments_by_repo index, while reading repos.provider could yield
-// {github, gitlab, ...} and split the same repos across several passes. The
-// heuristic incident fallback walks that index, so a deployment and an
-// incident Python links can land in different passes and fail to link. An
-// edge-set difference, not a presentation one.
+// `provider` is also the SPLIT KEY for extractPerProvider, so reading the
+// column changes how many passes run: Python makes ONE, while {github,
+// gitlab, ...} makes several.
+//
+// MEASURED, because the first version of this comment overstated it. I claimed
+// the split could make a deployment and an incident "fail to link". It cannot.
+// The heuristic index is keyed by REPO, and a repo has exactly one provider, so
+// an incident and its repo's deployments always land in the SAME pass either
+// way. Running the same fixture under both maps yields the same two edges with
+// the same pairing and the same edge_ids (provider is not in the hash):
+//
+//	split:   provider=github inc-a->a-dep   provider=gitlab inc-b->b-dep
+//	uniform: provider=auto   inc-a->a-dep   provider=auto   inc-b->b-dep
+//
+// So the real divergence is the persisted `provider` VALUE, plus the emitted
+// row ORDER (one pass versus several, visited in sorted provider order). The
+// value is what the live oracle compares; nothing structural sees it, since
+// `provider` is in none of the three sorting keys.
 //
 // The live oracle cannot see it either: it drives the kernel directly with a
 // providers map, so it never exercises this adapter. Found by codex r1 (P1) on

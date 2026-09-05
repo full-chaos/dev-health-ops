@@ -89,6 +89,17 @@ class FakeClient:
         if "count() FROM system.tables" in query:
             assert parameters is not None
             return _FakeResult([[1 if parameters["name"] in self.tables else 0]])
+        if "engine FROM system.tables" in query:
+            assert parameters is not None
+            spec = self.tables.get(parameters["name"])
+            if not spec:
+                return _FakeResult([])
+            engine = (
+                "ReplacingMergeTree"
+                if "ReplacingMergeTree" in spec["ddl"]
+                else "MergeTree"
+            )
+            return _FakeResult([[engine]])
         if "sorting_key FROM system.tables" in query:
             assert parameters is not None
             spec = self.tables.get(parameters["name"])

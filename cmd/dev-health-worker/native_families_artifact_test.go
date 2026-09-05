@@ -421,6 +421,8 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// inputs are RAW SYNC tables, not another daily family's output, so
 		// nothing in this partition has to run before it.
 		"review_edges",
+		// CHAOS-4280, same shape as ai_governance above.
+		"ai_impact",
 		// CHAOS-4286: work_graph_edges is pre_bridge for the same reason --
 		// every input is a raw sync table plus the shared incident
 		// projection, so nothing else in the partition has to precede it.

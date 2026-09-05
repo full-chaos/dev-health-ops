@@ -244,19 +244,32 @@ smoke() {
 }
 
 reproducible() {
+  local pass
   local target
-  local first_tag
-  local second_tag
   local first_id
   local second_id
 
+  # CHAOS-5067 (option 5): the shared `build` stage compiles all 7 binaries
+  # in one RUN layer; `docker build --no-cache --target <target>` invalidates
+  # that whole ancestor stage, so building each of the 7 target images with
+  # --no-cache separately recompiled every binary 7 times per pass -- 14 full
+  # compiles for a check that only needs 2. Fix: force exactly one fresh
+  # (--no-cache) compile of the `build` stage per pass, then build the 7
+  # target stages in that SAME pass with NORMAL caching -- identical inputs
+  # (same source, same --build-arg values) give the just-built `build`
+  # stage's layer the same cache key, so each target build hits that cache
+  # and only runs its own cheap COPY/final-stage instructions instead of
+  # recompiling. The per-target image-ID comparison below is unchanged.
+  for pass in first second; do
+    build_target build "${IMAGE_PREFIX}-build:repro-${pass}" --no-cache --provenance=false
+    for target in "${ALL_TARGETS[@]}"; do
+      build_target "${target}" "${IMAGE_PREFIX}-${target}:repro-${pass}" --provenance=false
+    done
+  done
+
   for target in "${ALL_TARGETS[@]}"; do
-    first_tag="${IMAGE_PREFIX}-${target}:repro-first"
-    second_tag="${IMAGE_PREFIX}-${target}:repro-second"
-    build_target "${target}" "${first_tag}" --no-cache --provenance=false
-    build_target "${target}" "${second_tag}" --no-cache --provenance=false
-    first_id="$(docker image inspect --format '{{.Id}}' "${first_tag}")"
-    second_id="$(docker image inspect --format '{{.Id}}' "${second_tag}")"
+    first_id="$(docker image inspect --format '{{.Id}}' "${IMAGE_PREFIX}-${target}:repro-first")"
+    second_id="$(docker image inspect --format '{{.Id}}' "${IMAGE_PREFIX}-${target}:repro-second")"
     [ "${first_id}" = "${second_id}" ] \
       || die "${target} image is not reproducible: ${first_id} != ${second_id}"
     printf 'container reproducibility: %s %s\n' "${target}" "${first_id}"

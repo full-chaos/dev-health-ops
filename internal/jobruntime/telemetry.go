@@ -613,6 +613,11 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // and fixed for their own new family (a family absent from this closed
 // list gets ZERO generic outcome/rows/duration telemetry, forever, since
 // ObserveDailyMetricsNativeFamily's error is discarded at its call site).
+// CHAOS-4284 adds testops_pipeline/testops_test/testops_coverage. That PR did
+// not have to remember to: TestDailyMetricsNativeFamiliesCoverEveryPortedFamily
+// (daily_native_family_telemetry_test.go) reddened on the families.json
+// port="go" flip alone, which is the drift guard this comment's own history
+// asked for after three separate PRs rediscovered the class by hand.
 // "deploy" (CHAOS-4293) and "work_item_state" (CHAOS-4278) added themselves
 // correctly -- included here from those merges.
 // "work_item" and "work_item_estimate" (CHAOS-4283) matter here MORE than a
@@ -633,7 +638,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 //
 // "work_graph_edges" (CHAOS-4286) added itself the same way as the families
 // listed above.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "work_graph_edges"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "work_graph_edges"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

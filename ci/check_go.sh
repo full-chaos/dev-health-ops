@@ -476,7 +476,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294)\n'
+  printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294/CHAOS-4284)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -486,13 +486,20 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestComputePipelineMetricsMatchesLivePythonProductionOnRealRow|TestComputePipelineMetricsGroupingMatchesLivePythonProduction|TestComputeTestMetricsMatchesLivePythonProductionOnRealRows|TestComputeCoverageMetricMatchesLivePythonProductionOnRealRows)$' \
+        -run '^(TestComputePipelineMetricsMatchesLivePythonProductionOnRealRow|TestComputePipelineMetricsGroupingMatchesLivePythonProduction|TestComputeTestMetricsMatchesLivePythonProductionOnRealRows|TestComputeCoverageMetricMatchesLivePythonProductionOnRealRows|TestComputePipelineMetricsAvgQueueMatchesLivePythonSum)$' \
         ./internal/jobs/metrics/testops
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for marker in testops-pipeline-golden testops-pipeline-grouping-golden testops-test-golden testops-coverage-golden; do
+  # testops-pipeline-avgqueue-golden (CHAOS-4284) is checked alongside the
+  # other four for the reason the numerical package's sibling goldens are:
+  # one shared marker would be satisfied by whichever guard happened to run,
+  # letting another be skipped, renamed, or filtered out of the -run pattern
+  # unnoticed. This one specifically pins avg_queue_seconds to CPython's
+  # Neumaier-compensated sum() -- the four older oracles all pass against a
+  # NAIVE Go accumulation, which is how that defect survived CHAOS-4294.
+  for marker in testops-pipeline-golden testops-pipeline-grouping-golden testops-test-golden testops-coverage-golden testops-pipeline-avgqueue-golden; do
     proof_file="${proof_dir}/${marker}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: internal/jobs/metrics/testops live Python oracle measurement did not occur (%s)\n' "${marker}" >&2

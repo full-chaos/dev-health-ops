@@ -403,6 +403,12 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-5078: work_item_attribution is native, and its three readers
+		// return to the pre_bridge (native) phase with it. They read
+		// work_item_team_attributions, which it WRITES; families.json's
+		// `after` edges order the writer ahead of its readers within the
+		// phase, which is what made post_bridge unnecessary.
+		"work_item_attribution", "work_item_state", "work_item", "work_item_estimate",
 		// CHAOS-4284: the three TestOps families this PR ports. They were added
 		// to the artifact but NOT to this list, which was a one-way SUBSET check
 		// with no cardinality assertion on this branch -- so it certified a split
@@ -421,32 +427,34 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// inputs are RAW SYNC tables, not another daily family's output, so
 		// nothing in this partition has to run before it.
 		"review_edges",
+		// CHAOS-4280, same shape as ai_governance above.
+		"ai_impact",
 		// CHAOS-4286: work_graph_edges is pre_bridge for the same reason --
 		// every input is a raw sync table plus the shared incident
 		// projection, so nothing else in the partition has to precede it.
 		"work_graph_edges",
 	}
-	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
-	// post_bridge -- all three read work_item_team_attributions, which the
-	// still-Python work_item_attribution family writes in the same partition.
-	// CHAOS-4287: compounding_risk is post_bridge for a DIFFERENT reason from
-	// the three above -- not a stale attribution snapshot, but execution order.
-	// Its input repo_metrics_daily is written by repo_user_commit in the SAME
+	// CHAOS-5078 retired the CHAOS-4283 three (work_item_state, work_item,
+	// work_item_estimate) from post_bridge -- they moved to native/pre_bridge
+	// above, alongside work_item_attribution which now writes
+	// work_item_team_attributions natively (families.json's `after` edges
+	// order the writer ahead of them within pre_bridge, retiring the reason
+	// post_bridge existed for them). compounding_risk is the one remaining
+	// post_bridge family, for a DIFFERENT reason CHAOS-5078 does not touch:
+	// not a stale attribution snapshot, but execution order -- its input
+	// repo_metrics_daily is written by repo_user_commit in the SAME
 	// partition, and computeNativeFamilies walks families in SORTED order,
-	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
-	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
-	// those three, does not touch this one.
+	// where "compounding_risk" precedes "repo_user_commit" (CHAOS-4287).
+	//
 	// CHAOS-4288: benchmarking is post_bridge for a THIRD distinct reason. Not a
-	// stale attribution snapshot (the CHAOS-4283 three) and not sorted-order
-	// execution (compounding_risk): its metric window ENDS ON THE TARGET DAY --
-	// asOfDay = run.TargetDay and every fetch is Fetch(startDay, asOfDay) -- so
-	// day D's own rows are INSIDE the window, and Python writes them
-	// (job_daily.py:1919) before calling the family (:2091). A pre_bridge
-	// registration benchmarks day D against a window missing day D.
-	wantDailyPostBridge := []string{
-		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
-		"benchmarking",
-	}
+	// stale attribution snapshot (the CHAOS-4283 three, retired above) and not
+	// sorted-order execution (compounding_risk): its metric window ENDS ON THE
+	// TARGET DAY -- asOfDay = run.TargetDay and every fetch is
+	// Fetch(startDay, asOfDay) -- so day D's own rows are INSIDE the window,
+	// and Python writes them (job_daily.py:1919) before calling the family
+	// (:2091). A pre_bridge registration benchmarks day D against a window
+	// missing day D.
+	wantDailyPostBridge := []string{"compounding_risk", "benchmarking"}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half

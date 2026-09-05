@@ -38,6 +38,15 @@ on:
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
       - 'src/dev_health_ops/providers/**'
+      # scanconfig_test.go's TestShouldProcessMatchesLivePython fixture
+      # list (CHAOS-4291/CHAOS-5156) names these two top-level files
+      # directly as real-repo ComplexityScanner.should_process examples,
+      # so a change to either is a genuine Go-test input even though
+      # neither lives under any of the subdirectory globs above
+      # (test_go_workflow_path_filters.py's _files_named_by_go_tests
+      # oracle: a file is a Go input because Go code NAMES it).
+      - 'src/dev_health_ops/__init__.py'
+      - 'src/dev_health_ops/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -118,6 +127,15 @@ on:
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
       - 'src/dev_health_ops/providers/**'
+      # scanconfig_test.go's TestShouldProcessMatchesLivePython fixture
+      # list (CHAOS-4291/CHAOS-5156) names these two top-level files
+      # directly as real-repo ComplexityScanner.should_process examples,
+      # so a change to either is a genuine Go-test input even though
+      # neither lives under any of the subdirectory globs above
+      # (test_go_workflow_path_filters.py's _files_named_by_go_tests
+      # oracle: a file is a Go input because Go code NAMES it).
+      - 'src/dev_health_ops/__init__.py'
+      - 'src/dev_health_ops/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'

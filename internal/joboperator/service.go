@@ -67,6 +67,22 @@ const (
 	// job/route/queue backends and so has no natural Action otherwise. Not
 	// written to worker_operator_audits for the same reason.
 	ActionSyncDispatchOutboxClose Action = "sync_dispatch_outbox.close_terminal_backlog"
+	// ActionWorkgraphTrigger and ActionInvestmentTrigger are CHAOS-5172/5173's
+	// `workerctl workgraph trigger` / `workerctl investment trigger`: an
+	// operator-invoked manual enqueue of a workgraph.build /
+	// investment.materialize request through workgraph.RequestWriter.WriteTx
+	// (cmd/dev-health-workerctl/trigger_workgraph.go,
+	// trigger_investment.go). Like ActionProvidersyncCleanup, this does not
+	// go through this service's own job/route/queue backends and has no
+	// natural Action otherwise. codex review, 2026-09-05, r1 P1: the first
+	// version of both commands authenticated the caller (a live
+	// WORKER_OPERATOR_TOKEN) but never called an Authorize method at all --
+	// authentication is not authorization, and a workers:read-only
+	// credential could reach WriteTx and physically enqueue work, the same
+	// class of defect AuthorizeProvidersyncCleanup's own doc comment
+	// describes for its own 2026-08-29 finding.
+	ActionWorkgraphTrigger  Action = "workgraph.manual_trigger"
+	ActionInvestmentTrigger Action = "investment.manual_trigger"
 )
 
 // JobSummary is intentionally incapable of carrying encoded_args, exception
@@ -502,6 +518,22 @@ func (service *Service) AuthorizeProvidersyncCleanup(ctx context.Context, princi
 // tick.
 func (service *Service) AuthorizeSyncDispatchOutboxClose(ctx context.Context, principal Principal, resourceID string) error {
 	return service.authorize(ctx, principal, ActionSyncDispatchOutboxClose, "sync_dispatch_outbox_close_terminal_backlog", resourceID)
+}
+
+// AuthorizeWorkgraphTrigger authorizes CHAOS-5172's manual `workgraph
+// trigger` enqueue. resourceID is the target organization -- a
+// workers:read-only credential must never reach WriteTx, dry-run included
+// (mirroring how AuthorizeProvidersyncCleanup gates its own dry-run
+// preview: this service's established convention is that authorization
+// covers the preview too, not only the real write).
+func (service *Service) AuthorizeWorkgraphTrigger(ctx context.Context, principal Principal, resourceID string) error {
+	return service.authorize(ctx, principal, ActionWorkgraphTrigger, "workgraph_manual_trigger", resourceID)
+}
+
+// AuthorizeInvestmentTrigger authorizes CHAOS-5173's manual `investment
+// trigger` enqueue. Same reasoning as AuthorizeWorkgraphTrigger.
+func (service *Service) AuthorizeInvestmentTrigger(ctx context.Context, principal Principal, resourceID string) error {
+	return service.authorize(ctx, principal, ActionInvestmentTrigger, "investment_manual_trigger", resourceID)
 }
 
 // Status authorizes the top-level runtime status view. Composition performs

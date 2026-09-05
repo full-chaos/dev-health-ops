@@ -7,7 +7,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.0"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
-DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}"
+# CHAOS-5224: precedence is an explicit DEV_HEALTH_GO_CACHE first, then an
+# already-inherited GOCACHE, and only then the tmp fallback. The old code
+# skipped straight to the tmp fallback regardless of what the caller already
+# exported, silently overwriting an inherited GOCACHE and growing a THIRD Go
+# build cache on bigboy's root disk (7.5G observed) alongside the two
+# legitimate bind-mounted caches.
+DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${GOCACHE:-${TMPDIR:-/tmp}/dev-health-go-build-cache}}"
 mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""
@@ -447,6 +453,36 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+
+  printf 'go test -count=1: internal/jobs/metrics/aiimpact (ai_impact port vs live Python, CHAOS-4280)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestAIImpactMatchesLivePythonProduction|TestRepoPatternResolverMatchesLivePython)$' \
+        ./internal/jobs/metrics/aiimpact
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY, per the sibling goldens' reasoning: one shared marker
+  # would be satisfied by whichever guard happened to run, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed. The
+  # resolver oracle is not optional -- it is the sole source of ai_impact's
+  # team dimension.
+  for marker in ai-impact-golden ai-impact-repo-teams-golden; do
+    proof_file="${proof_dir}/${marker}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: ai_impact live Python oracle measurement did not occur (%s)\n' "${marker}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
 
   printf 'go test -count=1: internal/jobs/metrics/workgraphedges (work_graph_edges port vs live Python, CHAOS-4286)\n'
   if ! (

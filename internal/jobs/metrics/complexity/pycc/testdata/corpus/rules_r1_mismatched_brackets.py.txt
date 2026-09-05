@@ -1,0 +1,2 @@
+def mismatched_brackets():
+    return (1]

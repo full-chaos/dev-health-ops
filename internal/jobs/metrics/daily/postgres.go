@@ -1232,6 +1232,21 @@ var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	// safely re-dispatchable. The fake store used by this package's own
 	// tests accepts any string, which is why this gap was invisible there.
 	"post_bridge_family_incomplete": {},
+	// pre_bridge_family_incomplete (CHAOS-5078 codex round 3, astra scale
+	// review F1's pre_bridge twin -- see lane-ci-required-to-arc's
+	// CHAOS-5190/#2276 for the post_bridge sibling, "post_bridge_family_
+	// incomplete"): a pre_bridge native family failed AFTER already writing
+	// rows this partition. Retryable, never terminal -- a fresh attempt can
+	// still succeed, exactly like the other reasons in this set.
+	//
+	// codex r1 on #2276 (P2, the class this entry mirrors): omitting a new
+	// reason from THIS map means every real ReleasePartitionWithReason/
+	// FailPartitionPermanently call with it is silently rejected with
+	// ErrInvalidState in production, invisible to any fakeStore-based test
+	// (fakeStore does not enforce this vocabulary at all) -- see
+	// TestPreBridgeReasonIsAcceptedByPostgresStore for the direct
+	// PostgresStore-level proof this entry is actually wired.
+	"pre_bridge_family_incomplete": {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose

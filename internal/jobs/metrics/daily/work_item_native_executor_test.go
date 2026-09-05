@@ -310,6 +310,22 @@ func whereClauseOf(t *testing.T, fileName, funcName string) string {
 		}
 		for _, arg := range call.Args {
 			folded, ok := foldStringExpr(arg)
+			// The SQL may be built into a local variable and passed by name --
+			// `query := "SELECT " + cols + " FROM ... WHERE ..."` then
+			// `Query(ctx, conn, query, ...)`. The argument is then an Ident,
+			// which folds to "" and would silently yield "no WHERE-bearing
+			// query" on a function that plainly has one.
+			//
+			// Resolving it stays bound to the argument ACTUALLY PASSED: we look
+			// up that one identifier's assignment inside this function, not any
+			// string literal that happens to appear nearby. That is what
+			// preserves r2's property -- a decoy literal elsewhere in the body
+			// still cannot satisfy the guard, because nothing passes it.
+			if ident, isIdent := arg.(*ast.Ident); isIdent {
+				if assigned, found := localStringAssignment(target, ident.Name); found {
+					folded, ok = assigned, true
+				}
+			}
 			if ok && strings.Contains(folded, "WHERE") {
 				queries = append(queries, folded)
 			}
@@ -413,4 +429,76 @@ func TestWorkItemAndWorkItemEstimatePartialWriteGuardPinsBothDirections(t *testi
 			})
 		})
 	}
+}
+
+func TestNewWorkItemAttributionExecutorRefusesANilConnection(t *testing.T) {
+	if _, err := NewWorkItemAttributionExecutor(nil); err == nil {
+		t.Fatal("NewWorkItemAttributionExecutor accepted a nil connection; every native family executor must fail closed")
+	}
+}
+
+// TestNilWorkItemAttributionExecutorRefuses covers the nil-receiver arm.
+func TestNilWorkItemAttributionExecutorRefuses(t *testing.T) {
+	var executor *WorkItemAttributionExecutor
+	if _, err := executor.ComputeFamily(context.Background(), Run{}, Partition{}); err == nil {
+		t.Error("a nil WorkItemAttributionExecutor did not refuse")
+	}
+}
+
+// TestWorkItemAttributionSubjectQuerySharesTheLoadWorkItemsPredicate asserts
+// this family selects the SAME rows as the other work-item families.
+//
+// It matters more here than anywhere else: work_item, work_item_estimate and
+// work_item_state all read the attribution rows this family writes. If this
+// family's predicate were narrower, those readers would find NO attribution for
+// items it skipped and silently fall back to unassigned/Unassigned -- a wrong
+// team on a real row, not a missing row, and invisible to every other test.
+func TestWorkItemAttributionSubjectQuerySharesTheLoadWorkItemsPredicate(t *testing.T) {
+	attribution := whereClauseOf(t, "work_item_attribution_native_executor.go", "loadPartitionSubjects")
+	metrics := whereClauseOf(t, "work_item_native_clickhouse.go", "LoadWorkItemMetricsWorkItems")
+
+	if attribution != metrics {
+		t.Errorf(
+			"the attribution family selects a different row set than the families that read it.\n"+
+				"  loadPartitionSubjects:         %s\n"+
+				"  LoadWorkItemMetricsWorkItems:  %s\n"+
+				"Items selected by one and not the other resolve to unassigned in the readers "+
+				"-- a wrong team, not a missing row.",
+			attribution, metrics,
+		)
+	}
+	for _, required := range []string{"created_at < ?", "status != 'done'", "completed_at >= ?"} {
+		if !strings.Contains(attribution, required) {
+			t.Fatalf("extracted predicate %q is missing %q -- the extractor is broken and the "+
+				"equality assertion above is vacuous", attribution, required)
+		}
+	}
+}
+
+// localStringAssignment folds the value assigned to `name` inside fn, for the
+// single-assignment case (`name := <string expr>` or `name = <string expr>`).
+// It deliberately refuses to guess when the identifier is assigned more than
+// once: two assignments mean the value at the call site depends on control
+// flow, which this guard cannot evaluate, and picking either one would be a
+// coin flip presented as a fact.
+func localStringAssignment(fn *ast.FuncDecl, name string) (string, bool) {
+	var found []string
+	ast.Inspect(fn, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		lhs, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok || lhs.Name != name {
+			return true
+		}
+		if value, folded := foldStringExpr(assign.Rhs[0]); folded {
+			found = append(found, value)
+		}
+		return true
+	})
+	if len(found) != 1 {
+		return "", false
+	}
+	return found[0], true
 }

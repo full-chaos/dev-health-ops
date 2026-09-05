@@ -132,6 +132,21 @@ var (
 	// (re-dispatchable) instead of completed, so a retry can still fill the
 	// gap rather than a silently-incomplete partition reading as succeeded.
 	ReasonPostBridgeFamilyIncomplete = reason("post_bridge_family_incomplete")
+	// ReasonPreBridgeFamilyIncomplete marks a daily-metrics partition held
+	// back from 'succeeded' because a pre_bridge native family (one that
+	// runs BEFORE the compatibility bridge for this partition) failed AFTER
+	// already writing at least one row (CHAOS-5078 codex round 3, astra
+	// scale review F1's pre_bridge twin -- see ReasonPostBridgeFamilyIncomplete
+	// for the post_bridge sibling, same shape, no code dependency between
+	// the two). An ordinary pre_bridge refusal (nothing written yet) is
+	// UNAFFECTED and stays fail-open to the compatibility bridge exactly as
+	// before -- this reason exists only for the partial-write case, where
+	// the bridge is deliberately excluded (re-running it would duplicate
+	// the rows already written to an append-only table), so nothing
+	// completes that family's rows for this partition at all. The
+	// partition is released 'failed' (re-dispatchable) instead of
+	// completed, so a retry can still fill the gap.
+	ReasonPreBridgeFamilyIncomplete = reason("pre_bridge_family_incomplete")
 )
 
 // Result is the runtime decision. A discard is represented by a normal safe

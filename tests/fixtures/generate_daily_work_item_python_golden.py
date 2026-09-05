@@ -42,11 +42,16 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.metrics.compute_work_items import (
+    build_linked_issue_team_resolver,
     compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
 )
-from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemStatusTransition,
+)
 from dev_health_ops.providers.teams import ProjectKeyTeamResolver
 
 OUTPUT = Path(__file__).with_name("daily_work_item_python_golden.json")
@@ -490,6 +495,26 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
             completed_at=_hour(22, 41, 3, 271828),
             assignees=["bob"],
         ),
+        # codex r1 F4 (CHAOS-5078): the linked_issue fallback's SOURCE item.
+        # Resolves to NO team by any other path (no native_team_key, no
+        # project_id/project_key the resolver recognizes, no assignee) --
+        # its only path to a team is via a `relates_to` edge to a donor item
+        # BUILD_LINKED_ISSUE_DONOR (defined below _corpus, NOT part of this
+        # items list -- production loads donors via a SEPARATE query
+        # (job_daily.py's `_load_donors`, distinct from the run's own
+        # `run_items`), so this fixture mirrors that split rather than
+        # folding the donor into the main corpus, which would also perturb
+        # metrics_daily/estimate_coverage for a scope unrelated to this
+        # fixture's actual point). See render()'s resolver wiring. Before
+        # this fixture existed, `linked_issue_resolver` was always None
+        # here, so the frozen golden and the live rot guard both would have
+        # accepted a Python change (or a Go port) that silently disabled the
+        # linked_issue branch entirely.
+        _item(
+            "gh:linked-only",
+            project_id=None,
+            created_at=_hour(1),
+        ),
     ]
     transitions = [
         # gh:4 walks in_progress -> blocked -> in_review -> done inside the
@@ -565,6 +590,37 @@ def _encode_item(item: WorkItem) -> dict[str, Any]:
     }
 
 
+def _linked_issue_fixture() -> tuple[WorkItem, WorkItemDependency]:
+    """The donor item + dependency edge for gh:linked-only's linked_issue
+    fallback (codex r1 F4, CHAOS-5078).
+
+    Deliberately NOT part of _corpus()'s `items` list: production loads
+    linked-issue donors via a SEPARATE query (job_daily.py's `_load_donors`),
+    disjoint from the run's own `run_items` -- folding this donor into the
+    main corpus would also perturb metrics_daily/estimate_coverage output
+    for the "PROJ" scope, noise unrelated to this fixture's actual point.
+    The donor resolves to team-jira via PROJECT_TEAM_RESOLVER's "PROJ" entry
+    (the issue_project source); gh:linked-only itself resolves to nothing
+    by any other path, so it inherits team-jira ONLY if
+    build_linked_issue_team_resolver's edge-walk actually runs.
+    """
+    donor = _item(
+        "jira:donor-1",
+        provider="jira",
+        project_id=None,
+        project_key="PROJ",
+        created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+    )
+    edge = WorkItemDependency(
+        source_work_item_id="gh:linked-only",
+        target_work_item_id="jira:donor-1",
+        relationship_type="relates_to",
+        relationship_type_raw="relates_to",
+        last_synced=COMPUTED_AT,
+    )
+    return donor, edge
+
+
 def _predicate_excluded_items() -> list[WorkItem]:
     """Rows that exist in ClickHouse but that the loader predicate must NOT return.
 
@@ -632,10 +688,23 @@ def render() -> str:
             f"corpus has duplicate work_item_id(s): {', '.join(duplicate_ids)} -- "
             "ids must be unique or attribution silently crosses items"
         )
+    # codex r1 F4 (CHAOS-5078): a REAL linked_issue_resolver, built the same
+    # way job_daily.py builds one (over the donor + dependency edge, not the
+    # main corpus) -- see _linked_issue_fixture's doc comment. Before this,
+    # linked_issue_resolver was always None, so neither this frozen golden
+    # nor the live rot guard that re-renders it could ever have caught a
+    # mutation disabling Python's linked_issue branch, or a Go port that
+    # never wires the equivalent.
+    linked_issue_donor, linked_issue_edge = _linked_issue_fixture()
+    linked_issue_resolver = build_linked_issue_team_resolver(
+        work_items=[linked_issue_donor],
+        dependencies=[linked_issue_edge],
+        project_key_resolver=PROJECT_TEAM_RESOLVER,
+    )
     resolvers: dict[str, Any] = {
         "team_resolver": None,
         "project_key_resolver": PROJECT_TEAM_RESOLVER,
-        "linked_issue_resolver": None,
+        "linked_issue_resolver": linked_issue_resolver,
         "attribution_context": None,
     }
 

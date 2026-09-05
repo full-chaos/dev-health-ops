@@ -52,7 +52,6 @@ from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
-    compute_work_item_team_attributions,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
@@ -1137,8 +1136,11 @@ async def run_daily_metrics_job(
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
     ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
-    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
+    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
+    chaos-4280-r3, finding 5 -- this doc had not been updated when
+    ``ai_impact`` was wired below); naming any other family here has no
+    effect.
 
     The three CHAOS-4284 names gate WRITES ONLY: their computed values still
     feed ``compute_release_confidence``/``compute_quality_drag``/
@@ -1563,7 +1565,6 @@ async def run_daily_metrics_job(
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
         estimate_coverage_metrics: list[Any] = []
-        wi_team_attributions: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
@@ -1578,14 +1579,20 @@ async def run_daily_metrics_job(
                     attribution_context=team_attribution_context,
                 )
             )
-            wi_team_attributions = compute_work_item_team_attributions(
-                work_items=work_items,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=project_key_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
-            )
+            # CHAOS-5233/CHAOS-3092: work_item_attribution's daily compute is
+            # DELETED here, not skip-gated -- chris's ruling: "once go is in
+            # main that does the same thing, skip flags are pointless." The
+            # native Go executor (WorkItemAttributionExecutor, #2246) is the
+            # ONLY writer of work_item_team_attributions for this (org, day,
+            # repo) partition scope now; there is no Python fallback to keep
+            # alive here. `compute_work_item_team_attributions` itself is NOT
+            # deleted -- it has a real, unrelated caller
+            # (job_work_items.py's run_work_items_sync_job, a full-backfill
+            # sync job outside this function's scope) plus dedicated unit
+            # tests and the live-Python oracle comparator
+            # (internal/providersync/testdata/oracle_pairs/
+            # _github_work_item_derived_helpers.py) that exercise the
+            # function directly; only THIS call site is gone.
             estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
                 day=d,
                 work_items=work_items,
@@ -1963,6 +1970,22 @@ async def run_daily_metrics_job(
         # policy events permanently, which is the exact defect the Go port's
         # deterministic event_id exists to fix.
         skip_ai_governance_write = "ai_governance" in skip_families
+        # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
+        # Same write-only-skip shape as repo_user_commit above --
+        # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
+        # below (verified by grep, not assumed), so compute stays unconditional
+        # and only the write is gated.
+        #
+        # ai_impact_metrics_daily is a ReplacingMergeTree whose ORDER BY key
+        # (org_id, team_id, repo_id, work_type, day, attribution_bucket) fully
+        # covers the producer's grouping, so an ungated double-write would
+        # eventually collapse rather than accumulate. The gate is still
+        # required: until a merge runs, both versions are live, and readers
+        # that do not dedup would double-count -- and the two paths disagree
+        # wherever the Go port's fixes apply (the uint64 revert-rule widening,
+        # and the incident reader's CHAOS-4269 valid_from guard), so which copy
+        # wins would decide the answer.
+        skip_ai_impact_write = "ai_impact" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1978,8 +2001,9 @@ async def run_daily_metrics_job(
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times and not skip_work_item_write:
                 s.write_work_item_cycle_times(wi_cycle_times)
-            if wi_team_attributions and hasattr(s, "write_work_item_team_attributions"):
-                s.write_work_item_team_attributions(wi_team_attributions)
+            # CHAOS-5233/CHAOS-3092: no write_work_item_team_attributions
+            # call here -- deleted alongside the compute call above; the
+            # native Go executor is the only writer now.
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
             if not skip_review_edges:
@@ -2012,7 +2036,7 @@ async def run_daily_metrics_job(
             if not skip_ai_governance_write:
                 s.write_ai_policy_events(ai_policy_events)
                 s.write_ai_governance_coverage_daily(ai_governance_coverage)
-            if ai_impact_metrics:
+            if ai_impact_metrics and not skip_ai_impact_write:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
                 s.write_ai_workflow_runs(ai_workflow_runs)

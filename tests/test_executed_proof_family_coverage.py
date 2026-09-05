@@ -56,6 +56,14 @@ KNOWN_UNCOVERED = {
     # evidence for, and would block this PR on their backlog.
     "work_item",
     "work_item_estimate",
+    # work_item_attribution is the fourth CHAOS-4283/#2246 family and belongs
+    # in this same pin for the identical reason -- this PR is what makes it
+    # native+golden-required for the first time (CHAOS-5078), and criterion 2
+    # (wiring it into the executed-proof gates) was explicitly deferred in
+    # #2246's own RISK-NOTES to a follow-up PR, pending evidence the
+    # executed-proof E2E seed's anchor partition actually produces
+    # work_item_team_attributions rows.
+    "work_item_attribution",
     # MINE (CHAOS-4285, #2229), pinned with evidence, not by default. The
     # executed-proof E2E seed loop above (ci/run_metrics_executed_proof.sh)
     # only drives four sync targets -- cicd, deployments, incidents, tests --
@@ -97,6 +105,18 @@ KNOWN_UNCOVERED = {
     # it needs a "prs" seed step added to the loop (or separate per-table
     # evidence), out of scope for a port PR.
     "work_graph_edges",
+    # MINE (CHAOS-4280, #2267/formerly #2236), pinned with evidence, same
+    # discipline as ai_governance and work_graph_edges above -- doubly so, in
+    # fact: this family hits BOTH of their gaps at once. Its attribution
+    # loader joins ai_attribution_resolved (built from `ai_attribution`, which
+    # no seeded target here writes -- ai_governance's exact reason), and its
+    # PR/review loaders need git_pull_requests/git_pull_request_reviews (no
+    # "prs" seed target -- work_graph_edges' exact reason). With zero rows on
+    # either input this harness cannot produce a nonzero sample for this
+    # family regardless of the port's correctness. Closing it needs both an
+    # "ai-attribution" seed step and a "prs" seed step added to the loop, out
+    # of scope for a port PR.
+    "ai_impact",
 }
 
 

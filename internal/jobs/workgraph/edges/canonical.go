@@ -4,8 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // DependencyRow is one `work_item_dependencies` row as the producer reads it.
@@ -88,8 +87,8 @@ const blockerProjectionRuleVersion = "canonical-blocks.v2"
 func CanonicalDependency(row DependencyRow) (string, string, string) {
 	source := row.SourceWorkItemID
 	target := row.TargetWorkItemID
-	relationship := pythonLower(row.RelationshipType)
-	raw := pythonLower(row.RelationshipRaw)
+	relationship := pythonparity.Lower(row.RelationshipType)
+	raw := pythonparity.Lower(row.RelationshipRaw)
 
 	// `str(row.get(...) or "legacy.v1")`: empty and missing both become the
 	// default, and they are indistinguishable afterwards (CHAOS-4812 context).
@@ -182,9 +181,6 @@ func EvidenceFor(row DependencyRow) string {
 //
 // TestPythonLowerMatchesLivePython re-derives the expansion set from the
 // interpreter, so a Unicode revision that adds another cannot pass unnoticed.
-func pythonLower(value string) string {
-	return pythonLowerCaser.String(value)
-}
 
 // pythonLowerCaser is `str.lower()`. `language.Und` is correct BY DESIGN, not by
 // observed agreement: CPython's `str.lower()` is locale-independent by
@@ -204,4 +200,3 @@ func pythonLower(value string) string {
 // plane only, so both planes emit the edge pointing opposite ways while every
 // total still balances. The U+0130 special case is gone because this caser
 // handles it correctly on its own.
-var pythonLowerCaser = cases.Lower(language.Und)

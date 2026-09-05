@@ -1,0 +1,297 @@
+{
+  "files": {
+    "rules_basic.py": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 10,
+          "name": "plain"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 15,
+          "name": "single_if"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 21,
+          "name": "if_elif_else"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 33,
+          "name": "for_with_else"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 43,
+          "name": "while_with_else"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 51,
+          "name": "try_except_else_finally"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 7,
+          "kind": "function",
+          "lineno": 65,
+          "name": "boolop_chain"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 74,
+          "name": "ternary"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 9,
+          "kind": "function",
+          "lineno": 79,
+          "name": "comprehensions"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 88,
+          "name": "asserts"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 94,
+          "name": "lambda_not_counted"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 5,
+          "kind": "function",
+          "lineno": 102,
+          "name": "nested_loops"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 113,
+          "name": "async_paths"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 121,
+          "name": "closure_excluded"
+        }
+      ],
+      "cyclomatic_avg": 3.642857142857143,
+      "cyclomatic_total": 51,
+      "functions_count": 14,
+      "high_complexity_functions": 0,
+      "loc": 134,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_classes.py": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "class",
+          "lineno": 10,
+          "name": "Empty"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "class",
+          "lineno": 14,
+          "name": "Simple"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 15,
+          "name": "method_a"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 3,
+          "kind": "method",
+          "lineno": 20,
+          "name": "method_b"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "class",
+          "lineno": 27,
+          "name": "WithBodyLogic"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 35,
+          "name": "only_method"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "class",
+          "lineno": 39,
+          "name": "Outer"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 46,
+          "name": "outer_method"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "class",
+          "lineno": 52,
+          "name": "WithClosure"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 53,
+          "name": "factory"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 64,
+          "name": "function_holding_a_class"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "class",
+          "lineno": 78,
+          "name": "DecoratedMethods"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 80,
+          "name": "stat"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 86,
+          "name": "prop"
+        }
+      ],
+      "cyclomatic_avg": 2.5,
+      "cyclomatic_total": 35,
+      "functions_count": 14,
+      "high_complexity_functions": 0,
+      "loc": 87,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_softkeywords.py": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 11,
+          "name": "match_is_a_variable"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 21,
+          "name": "match_statement"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 33,
+          "name": "match_with_wildcard"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 44,
+          "name": "match_with_named_capture"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 55,
+          "name": "match_only_wildcard"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 63,
+          "name": "keywords_in_strings"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 77,
+          "name": "keyword_lookalike_identifiers"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 87,
+          "name": "inline_suite"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 5,
+          "kind": "function",
+          "lineno": 94,
+          "name": "continued_lines"
+        }
+      ],
+      "cyclomatic_avg": 2.4444444444444446,
+      "cyclomatic_total": 22,
+      "functions_count": 9,
+      "high_complexity_functions": 0,
+      "loc": 103,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "radon_version": "6.0.1"
+}

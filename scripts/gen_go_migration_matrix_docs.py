@@ -39,6 +39,25 @@ was correctly rejected as the same "told done" drift class CHAOS-4433
 exists to prevent). ``DAILY_CITATION_LEDGER``/``REMAINING_EXECUTOR_LEDGER``
 below carry ONLY citation/route/ticket prose now, never the executor value.
 
+A THIRD EXECUTOR STATE (CHAOS-5118-class fix, 2026-09-05, gate-rounds finding
+via review-bench on #2230): the Go artifact only knows whether a family's
+REPO-scope partition executor is native -- it says nothing about
+``run_daily_metrics_finalize`` (job_daily.py), a separate, always-Python
+finalize step some families still depend on for their team/finalize scope.
+A family whose repo scope goes native could render bare ``NATIVE`` while
+Python still computes part of it, satisfying CHAOS-3092's "zero COMPAT
+rows" close condition by omission. ``load_daily_finalize_compat_families``
+closes this the same mechanical way as the rest of this file: it AST-walks
+``run_daily_metrics_finalize``'s real body for every call it makes, and
+every call matching the per-family write/compute naming shape MUST resolve
+to a live family (§2 or §3) or generation fails -- inverted from a curated
+allowlist specifically so a NEW Python finalize write cannot hide by nobody
+updating a dict. A family with both a native repo-scope AND a proven
+finalize-scope Python call renders "NATIVE (repo) / COMPAT-Python
+(finalize)"; ``is_compat_executor`` (not exact-equality) is what any
+COMPAT-counting logic, including this page's own ``count_compat_*``
+helpers, must test against so a split row still counts.
+
 Section 4 (workgraph/investment) has no families.json equivalent at all
 (``internal/jobs/families.json`` does not exist) -- WORKGRAPH_INVESTMENT_LEDGER
 is the sole source, entirely hand-maintained, with no live producer to
@@ -48,6 +67,7 @@ drift-guard against mechanically. Adding a machine-readable registry for these
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
@@ -61,6 +81,7 @@ REMAINING_FAMILIES_JSON = (
 NATIVE_FAMILIES_ARTIFACT = (
     ROOT / "contracts" / "native-families" / "v1" / "native-families.json"
 )
+JOB_DAILY_PY = ROOT / "src" / "dev_health_ops" / "metrics" / "job_daily.py"
 
 PROVIDER_BEGIN = "<!-- BEGIN GENERATED PROVIDER SYNC MATRIX -->"
 PROVIDER_END = "<!-- END GENERATED PROVIDER SYNC MATRIX -->"
@@ -366,6 +387,251 @@ def render_provider_sync_block() -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# THIRD STATE (CHAOS-5118-class fix, gate-rounds finding via review-bench on
+# #2230): a family's Executor verdict above comes from ONE Go-AST fact --
+# whether daily.go registers a native repo-scope partition executor for it.
+# But `run_daily_metrics_finalize` (job_daily.py) is a SEPARATE, always-Python
+# finalize step that some families still depend on for their team/finalize
+# SCOPE, independent of whether their repo scope has gone native. A family
+# whose repo scope goes native renders bare "NATIVE" with no way to see that
+# finalize still computes part of it in Python -- CHAOS-3092's "zero COMPAT
+# rows" close condition is then satisfiable while Python still computes half
+# a family.
+#
+# THE FIX, INVERTED (team-lead's ruling, 2026-09-05): rather than a curated
+# dict asserting WHICH families still have a Python finalize remainder (an
+# allowlist a NEW Python addition could silently miss), the AST-derived set
+# of every call inside run_daily_metrics_finalize's body is the source of
+# truth, and EVERY in-scope call (one matching the per-family write/compute
+# naming shape below) MUST resolve to a live family -- daily (§2) or
+# remaining (§3), since a finalize call can belong to either. An unresolved
+# in-scope call is a hard SystemExit: a new Python finalize write appeared
+# and nothing here was taught about it. This is the same completeness
+# direction _consistency_guard already uses elsewhere in this file, applied
+# to a function body instead of a JSON family list.
+# ---------------------------------------------------------------------------
+DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
+
+# Finalize calls that do NOT embed their family name in the
+# `_write_<family>_..._for_day` shape _finalize_call_family checks for by
+# convention. Kept as small as possible on purpose -- this dict only NAMES
+# an irregular call; it never asserts one exists (the AST walk does that).
+#
+# "_write_team_complexity_for_day" maps to §3's "complexity" family, not a
+# §2 daily family: it reads back `repo_complexity_daily` (complexity's own
+# output table) and writes a team-scope rollup, the same
+# CHAOS-4365-item-3 finalize-step shape compounding_risk's team rows follow.
+# Before this fix it had ZERO representation anywhere in this doc -- not
+# hidden behind NATIVE (complexity already renders COMPAT-Python correctly
+# today), just never mentioned on either axis. Found by this exact
+# completeness check, which is the point of building it this way.
+FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, str] = {
+    "compute_ic_metrics_daily": "ic_finalize",
+    "compute_ic_landscape_rolling": "ic_finalize",
+    "_write_team_complexity_for_day": "complexity",
+}
+
+
+def load_finalize_write_calls() -> set[str]:
+    """Mechanical fact, not hand-typed: every call name inside
+    run_daily_metrics_finalize's body in job_daily.py, read fresh from the
+    file's AST every run. This is what lets the completeness check below
+    catch a NEW Python finalize write nobody taught this generator about,
+    not just a stale citation for one it already knew existed."""
+    tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
+    target = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == DAILY_FINALIZE_FN
+        ),
+        None,
+    )
+    if target is None:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: {DAILY_FINALIZE_FN} not found in "
+            f"{JOB_DAILY_PY} -- function renamed/moved? Update load_finalize_write_calls "
+            "and DAILY_FINALIZE_FN."
+        )
+    calls: set[str] = set()
+    for node in ast.walk(target):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                calls.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                calls.add(func.attr)
+    return calls
+
+
+def _finalize_call_family(call_name: str, live_family_names: set[str]) -> str | None:
+    """Maps one finalize call name to the live family (§2 daily or §3
+    remaining -- callers pass the union) it writes/computes for.
+
+    Returns None for a call OUT OF SCOPE of this check: generic
+    infrastructure (loaders, sinks, resolvers, stdlib/dataclass calls) that
+    is not a per-family write/compute at all, identified by NOT matching the
+    `_write_*_for_day` naming convention and not being in the irregular-name
+    ledger. Most of run_daily_metrics_finalize's calls are this shape --
+    the completeness check below does not require every call to resolve,
+    only every IN-SCOPE one.
+
+    Raises SystemExit for an in-scope call (matches the naming convention,
+    or is in FINALIZE_CALL_IRREGULAR_FAMILY) that names NO live family --
+    the fail-closed case: a new finalize write was added, or an existing one
+    was renamed, and nothing here was updated to match.
+    """
+    if call_name in FINALIZE_CALL_IRREGULAR_FAMILY:
+        family = FINALIZE_CALL_IRREGULAR_FAMILY[call_name]
+        if family not in live_family_names:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY maps "
+                f"{call_name!r} to {family!r}, which is not a live daily or remaining "
+                "family name -- family renamed/removed? Update the ledger."
+            )
+        return family
+    if call_name.startswith("_write_") and call_name.endswith("_for_day"):
+        middle = call_name[len("_write_") : -len("_for_day")]
+        # Longest-name-first: a family name that is a prefix of another
+        # (e.g. "work_item" vs "work_item_state") must not steal a match
+        # that belongs to the longer, more specific family.
+        for family in sorted(live_family_names, key=len, reverse=True):
+            if middle == family or middle.startswith(family + "_"):
+                return family
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: finalize call {call_name!r} in "
+            f"{DAILY_FINALIZE_FN} matches the `_write_<family>_..._for_day` naming "
+            "convention but names no live daily or remaining family -- a new Python "
+            "finalize write was added with no matching family/ticket. Add the family "
+            "if it's genuinely new, or map this call in FINALIZE_CALL_IRREGULAR_FAMILY "
+            "if the name is just irregular."
+        )
+    return None
+
+
+def load_daily_finalize_compat_families(
+    daily_names: set[str], remaining_names: set[str]
+) -> set[str]:
+    """Every live family (§2 or §3) with a still-Python finalize-scope
+    write, proven by an ACTUAL call inside run_daily_metrics_finalize's
+    body -- never asserted by prose alone. Completeness runs in both
+    directions: every in-scope call must resolve to a family (checked here,
+    fails generation otherwise -- see _finalize_call_family), and every
+    FINALIZE_CALL_IRREGULAR_FAMILY entry must name a call that is actually
+    present (also checked here, via the AST-derived call set itself being
+    the only thing iterated -- a ledger entry for an absent call is simply
+    never visited, so a SEPARATE guard is needed for that direction; see
+    _assert_no_stale_finalize_ledger_entries)."""
+    all_names = daily_names | remaining_names
+    compat_families: set[str] = set()
+    for call_name in sorted(load_finalize_write_calls()):
+        family = _finalize_call_family(call_name, all_names)
+        if family is not None:
+            compat_families.add(family)
+    return compat_families
+
+
+def _assert_no_stale_finalize_ledger_entries(all_family_names: set[str]) -> None:
+    """The OTHER completeness direction: every FINALIZE_CALL_IRREGULAR_FAMILY
+    entry must name a call that is actually present in
+    run_daily_metrics_finalize's body right now, not one that used to be
+    there. load_daily_finalize_compat_families only iterates calls that ARE
+    present, so a renamed/removed irregular call would otherwise just
+    silently stop contributing its family to the compat set -- the doc
+    would go quiet instead of failing loudly."""
+    present_calls = load_finalize_write_calls()
+    stale = set(FINALIZE_CALL_IRREGULAR_FAMILY) - present_calls
+    if stale:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY names call(s) "
+            f"{sorted(stale)} that no longer appear in {DAILY_FINALIZE_FN}'s body -- "
+            "renamed or removed? Update or drop the ledger entry."
+        )
+    unmapped_families = set(FINALIZE_CALL_IRREGULAR_FAMILY.values()) - all_family_names
+    if unmapped_families:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY names family(ies) "
+            f"{sorted(unmapped_families)} that are not live daily or remaining families."
+        )
+
+
+def is_compat_executor(executor: str) -> bool:
+    """True for any rendered Executor status with a Python-compat
+    component -- covers plain "COMPAT-Python" AND a split
+    "NATIVE (repo) / COMPAT-Python (finalize)" row alike. CHAOS-3092's
+    "zero COMPAT rows" close condition MUST use this predicate, not an
+    exact-equality check against "COMPAT-Python" -- an equality check is
+    exactly the kind of check a partial-native split row passes by looking
+    done, which is the defect this whole section exists to close."""
+    return "COMPAT-Python" in executor
+
+
+def daily_family_executor(
+    name: str, artifact_daily: dict[str, str], finalize_compat_families: set[str]
+) -> str:
+    artifact_value = artifact_daily.get(name, "compat")
+    executor = "COMPAT-Python" if artifact_value == "compat" else "NATIVE"
+    if artifact_value == "post_bridge":
+        executor += ", post_bridge"
+    if name in finalize_compat_families and artifact_value != "compat":
+        executor = f"{executor} (repo) / COMPAT-Python (finalize)"
+    return executor
+
+
+def remaining_family_executor(
+    name: str, artifact_remaining: dict[str, str], finalize_compat_families: set[str]
+) -> str:
+    executor = "NATIVE" if artifact_remaining[name] == "native" else "COMPAT-Python"
+    if name == "work_item_attribution":
+        executor += " (narrow: staleness backstop only)"
+    if name in finalize_compat_families and artifact_remaining[name] == "native":
+        executor = f"{executor} (repo) / COMPAT-Python (finalize)"
+    return executor
+
+
+def count_compat_daily_families() -> int:
+    """Number of §2 daily families whose rendered Executor status is
+    Python-compat in any part (see is_compat_executor) -- the mechanical
+    count CHAOS-3092's "zero COMPAT rows" close condition must read for §2,
+    since a partial-native split row must still count."""
+    families = load_daily_families()
+    live_names = {f["name"] for f in families}
+    remaining_names = {f["name"] for f in load_remaining_families()}
+    artifact_daily = load_native_families_artifact()["daily"]
+    finalize_compat_families = load_daily_finalize_compat_families(
+        live_names, remaining_names
+    )
+    return sum(
+        1
+        for f in families
+        if is_compat_executor(
+            daily_family_executor(f["name"], artifact_daily, finalize_compat_families)
+        )
+    )
+
+
+def count_compat_remaining_families() -> int:
+    """Same as count_compat_daily_families, for §3 remaining families."""
+    families = load_remaining_families()
+    live_names = {f["name"] for f in load_daily_families()}
+    remaining_names = {f["name"] for f in families}
+    artifact_remaining = load_native_families_artifact()["remaining"]
+    finalize_compat_families = load_daily_finalize_compat_families(
+        live_names, remaining_names
+    )
+    return sum(
+        1
+        for f in families
+        if is_compat_executor(
+            remaining_family_executor(
+                f["name"], artifact_remaining, finalize_compat_families
+            )
+        )
+    )
+
+
 def render_daily_metrics_block() -> str:
     families = load_daily_families()
     live_names = {f["name"] for f in families}
@@ -385,6 +651,11 @@ def render_daily_metrics_block() -> str:
             "(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
             "TestNativeFamiliesArtifactUpToDate)."
         )
+    remaining_names = {f["name"] for f in load_remaining_families()}
+    _assert_no_stale_finalize_ledger_entries(live_names | remaining_names)
+    finalize_compat_families = load_daily_finalize_compat_families(
+        live_names, remaining_names
+    )
     lines = [
         DAILY_BEGIN,
         "| Family | Executor | Citation | Ticket |",
@@ -392,10 +663,7 @@ def render_daily_metrics_block() -> str:
     ]
     for family in sorted(families, key=lambda f: f["name"]):
         name = family["name"]
-        artifact_value = artifact_daily.get(name, "compat")
-        executor = "COMPAT-Python" if artifact_value == "compat" else "NATIVE"
-        if artifact_value == "post_bridge":
-            executor += ", post_bridge"
+        executor = daily_family_executor(name, artifact_daily, finalize_compat_families)
         row = DAILY_CITATION_LEDGER[name]
         lines.append(f"| {name} | {executor} | {row['citation']} | {row['ticket']} |")
     lines.append(DAILY_END)
@@ -420,15 +688,19 @@ def render_remaining_metrics_block() -> str:
         "Regenerate the artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test "
         "./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate).",
     )
+    daily_names = {f["name"] for f in load_daily_families()}
+    finalize_compat_families = load_daily_finalize_compat_families(
+        daily_names, live_names
+    )
     lines = [
         REMAINING_BEGIN,
         "| Family | Executor | Citation | Route transport | Ticket |",
         "| --- | --- | --- | --- | --- |",
     ]
     for name in sorted(REMAINING_EXECUTOR_LEDGER):
-        executor = "NATIVE" if artifact_remaining[name] == "native" else "COMPAT-Python"
-        if name == "work_item_attribution":
-            executor += " (narrow: staleness backstop only)"
+        executor = remaining_family_executor(
+            name, artifact_remaining, finalize_compat_families
+        )
         row = REMAINING_EXECUTOR_LEDGER[name]
         lines.append(
             f"| {name} | {executor} | {row['citation']} | {row['route']} | {row['ticket']} |"

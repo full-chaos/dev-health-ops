@@ -206,3 +206,125 @@ def test_remaining_families_executor_matches_the_daily_go_worker_wiring() -> Non
         "work_item_attribution",
     }
     assert compats == {"complexity", "release_impact"}
+
+
+def test_daily_finalize_compat_families_matches_known_calls() -> None:
+    """Pin today's known set of finalize-scope Python remainders (CHAOS-5118
+    class): every family with a REAL call inside run_daily_metrics_finalize's
+    body, proven by the AST walk, not asserted by citation prose. A future
+    change to which calls exist there must show up as a diff to this pin,
+    the same discipline test_remaining_families_executor_matches_the_daily_go_worker_wiring
+    uses for the artifact's native/compat split.
+    """
+    gen = _load_gen_module()
+    daily_names = {f["name"] for f in gen.load_daily_families()}
+    remaining_names = {f["name"] for f in gen.load_remaining_families()}
+    compat_families = gen.load_daily_finalize_compat_families(
+        daily_names, remaining_names
+    )
+    assert compat_families == {
+        "compounding_risk",
+        "team_cognitive_load",
+        "ic_finalize",
+        "complexity",
+    }
+
+
+def test_finalize_completeness_guard_rejects_an_unmapped_write_call() -> None:
+    """Falsification control: an in-scope finalize call (matches the
+    `_write_<family>_..._for_day` naming convention) that names no live
+    family must refuse to render -- the exact "new Python half hides by
+    omission" defect this whole mechanism exists to close. Mutates the
+    AST-derived call set in memory (never touches job_daily.py on disk).
+    """
+    gen = _load_gen_module()
+    original = getattr(gen, "load_finalize_write_calls")
+    try:
+        setattr(
+            gen,
+            "load_finalize_write_calls",
+            lambda: original() | {"_write_a_brand_new_family_for_day"},
+        )
+        try:
+            gen.load_daily_finalize_compat_families(
+                {f["name"] for f in gen.load_daily_families()},
+                {f["name"] for f in gen.load_remaining_families()},
+            )
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_daily_finalize_compat_families did not refuse an unmapped "
+            "_write_*_for_day call"
+        )
+    finally:
+        setattr(gen, "load_finalize_write_calls", original)
+
+
+def test_finalize_ledger_rejects_a_stale_irregular_entry() -> None:
+    """Falsification control, the OTHER completeness direction: an
+    irregular-name ledger entry naming a call that no longer exists in
+    run_daily_metrics_finalize's body must refuse to render, rather than
+    just silently stop contributing its family (which would look identical
+    to that family never having had a Python finalize remainder at all)."""
+    gen = _load_gen_module()
+    original = dict(gen.FINALIZE_CALL_IRREGULAR_FAMILY)
+    try:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY["a_call_that_does_not_exist"] = "complexity"
+        try:
+            gen._assert_no_stale_finalize_ledger_entries(
+                {f["name"] for f in gen.load_daily_families()}
+                | {f["name"] for f in gen.load_remaining_families()}
+            )
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "_assert_no_stale_finalize_ledger_entries did not refuse a stale "
+            "irregular-name entry"
+        )
+    finally:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.clear()
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.update(original)
+
+
+def test_is_compat_executor_counts_a_split_row_but_not_a_bare_native_one() -> None:
+    """Count-semantics contract (team-lead's 2026-09-05 ruling): a split
+    "NATIVE (repo) / COMPAT-Python (finalize)" row is Python-compat and must
+    count as one; a bare "NATIVE" row, or work_item_state's "NATIVE,
+    post_bridge" (a Python-WRITTEN INPUT dependency, not a Python SCOPE of
+    the family -- left as its own state per team-lead's ruling) must not.
+    """
+    gen = _load_gen_module()
+    assert gen.is_compat_executor("COMPAT-Python") is True
+    assert gen.is_compat_executor("NATIVE (repo) / COMPAT-Python (finalize)") is True
+    assert gen.is_compat_executor("NATIVE") is False
+    assert gen.is_compat_executor("NATIVE, post_bridge") is False
+
+
+def test_split_status_still_counts_as_compat_once_repo_scope_goes_native() -> None:
+    """End-to-end proof of the defect fix: simulate compounding_risk's (§2)
+    and complexity's (§3) repo scope going native -- as review-bench's #2230
+    is about to do for compounding_risk -- and assert the rendered row is
+    STILL is_compat_executor-true, not bare NATIVE. This is what makes
+    CHAOS-3092's "zero COMPAT rows" close condition correct across that
+    transition instead of satisfiable by omission.
+    """
+    gen = _load_gen_module()
+    daily_names = {f["name"] for f in gen.load_daily_families()}
+    remaining_names = {f["name"] for f in gen.load_remaining_families()}
+    finalize_compat = gen.load_daily_finalize_compat_families(
+        daily_names, remaining_names
+    )
+
+    daily_status = gen.daily_family_executor(
+        "compounding_risk", {"compounding_risk": "native"}, finalize_compat
+    )
+    assert daily_status == "NATIVE (repo) / COMPAT-Python (finalize)"
+    assert gen.is_compat_executor(daily_status) is True
+
+    remaining_status = gen.remaining_family_executor(
+        "complexity", {"complexity": "native"}, finalize_compat
+    )
+    assert remaining_status == "NATIVE (repo) / COMPAT-Python (finalize)"
+    assert gen.is_compat_executor(remaining_status) is True

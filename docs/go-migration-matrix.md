@@ -171,16 +171,25 @@ cross-contract inconsistency between the repo's two provider-sync contract files
 `cmd/dev-health-worker/daily.go` ~L680-820; everything else falls through to `HTTPCompatibilityExecutor` ->
 `POST /internal/worker/daily-metrics/v1/execute` -> `job_daily.py:1104 run_daily_metrics_job`) and 7
 independent `metrics.remaining.*` River kinds (`daily.go:566-646`) are the two WORKER-side families below.
-The **CLI verb layer largely bypasses both** -- several `dev-hops metrics` verbs call the Python compute
-function directly, even for families whose worker kind is now native:
+**CHAOS-5055 (landed, corrects a stale "the CLI verb layer bypasses the worker" claim this section
+used to make):** `daily`/`rebuild`/`complexity`/`dora`/`capacity`/`release-impact` no longer call a
+Python compute function in-process at all -- they shell out to `dev-health-workerctl` and let the
+worker's own native/bridge split decide, exactly like the post-sync/fixed-schedule fanout paths do.
+`workerctl_dispatch.py`'s own module docstring states why: the old direct-call path never passed
+`skip_families` the way the worker's HTTP bridge does, so a day the worker had already computed could
+be silently recomputed a second time in Python underneath it (`file_hotspots`, a SUM-aggregated table
+with no dedup on replay, was the concrete risk named). `complexity`/`release-impact` still resolve to
+COMPAT-Python once the request reaches the worker (their own families haven't ported, see the tables
+below) -- what changed is that the CLI no longer computes them ITSELF via a second, unguarded path.
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops metrics daily` | COMPAT-Python (direct call) | `job_daily.py` `_cmd_metrics_daily` -> `run_daily_metrics_job` -- **bypasses Go's native executors entirely**, unlike the worker's `metrics.daily_partition` kind (9/24 families native there, see table below) | -- |
-| `dev-hops metrics rebuild` | COMPAT-Python (direct call) | `job_daily.py` `_cmd_metrics_rebuild` -> `run_daily_metrics_job` per repo + `run_daily_metrics_finalize` -- **not** `partition_recompute.go`, that's a different mechanism (next row) | -- |
+| `dev-hops metrics daily` | same split as `metrics.daily_partition` (dispatches to the worker) | `workerctl_dispatch.py` `_cmd_metrics_daily` -> `dev-health-workerctl metrics daily-start` -> the SAME `StartRunTx` coordinator transaction (`internal/jobs/metrics/daily/manual_run.go`) the post-sync/fixed-schedule fanout use -- the worker decides native vs. bridge per family, same as any other trigger of this kind (CHAOS-5055) | -- |
+| `dev-hops metrics rebuild` | same split as `metrics.daily_partition` (dispatches to the worker) | `workerctl_dispatch.py` `_cmd_metrics_rebuild` -> identical `dev-health-workerctl metrics daily-start` request as `daily` (CHAOS-5055) -- kept as a separate verb for operator muscle memory only, **not** `partition_recompute.go` (a different mechanism, next row) | -- |
 | `dev-health-workerctl metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself then follows the ordinary native/bridge split below, it is not a compute engine on its own | CHAOS-4459 |
 | `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> triggers the ordinary native/bridge split on replay | `cmd/dev-health-workerctl/main.go:785-1193` | CHAOS-4358/4389/4405 |
-| `dev-hops metrics complexity` / `dora` / `capacity` / `release-impact` | COMPAT-Python (direct call, always -- bypasses the native worker kinds below regardless of their own split) | `job_complexity_db.py`/`job_dora.py`/`job_capacity.py`/`job_release_impact.py` | -- |
+| `dev-hops metrics dora` / `capacity` | NATIVE (dispatches to the worker; both families are native, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family {dora,capacity}` -> the shared remaining-family coordinator (CHAOS-5055) | -- |
+| `dev-hops metrics complexity` / `release-impact` | COMPAT-Python (both families still compute in Python once the request reaches the worker, see the remaining-families table below) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family {complexity,release_impact}` -> the shared remaining-family coordinator (CHAOS-5055) | -- |
 | `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | COMPAT-Python (standalone CLI wrapper; duplicate coverage -- `job_daily.py`'s finalize already writes `compounding_risk_daily` nightly regardless) | `job_compounding_risk.py:318` | CHAOS-4287 |
 | `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1598-1686` -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
@@ -248,7 +257,7 @@ family that would actually consume this code as a native executor).
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops recommendations compute` | COMPAT-Python (direct call) | `cli.py:260-287 _register_recommendations_commands` -> `_cmd_recommendations_compute` -> `RuleEngine` directly -- **bypasses** the now-native `metrics.remaining.recommendations` worker kind | -- |
+| `dev-hops recommendations compute` | N/A -- read-only preview, writes nothing (CHAOS-5055) | `cli.py` `_cmd_recommendations_compute` -> `RuleEngine` directly, evaluates and prints only; it used to persist via `sink.write_recommendations` on an independent, non-deduped schedule against the same table the native `metrics.remaining.recommendations` worker kind writes -- now the persisted path is exclusively `dev-health-workerctl metrics remaining trigger-backstop --family recommendations` | -- |
 | `metrics.remaining.recommendations` (worker kind) | NATIVE | see METRICS' remaining-families table above | CHAOS-4281/CHAOS-3092 (Done) |
 
 ## AI

@@ -200,7 +200,7 @@ function directly, even for families whose worker kind is now native:
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |
-| ic_finalize | COMPAT-Python | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
+| ic_finalize | NATIVE | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"time"
@@ -273,6 +274,20 @@ type Store interface {
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
+	// FailFinalizePermanently writes the TERMINAL finalize state --
+	// status='failed' AND finalization_status='failed' -- on the final River
+	// attempt (CHAOS-4290, #2241 confirmation pass).
+	//
+	// Nothing produced that state for a finalize before this. ReleaseFinalize
+	// sets finalization_status='failed' and leaves status='running', which
+	// ClaimFinalize treats as CLAIMABLE, so attempt 1 and an exhausted run were
+	// indistinguishable forever. The blocked marker keyed on the only state
+	// that existed and therefore fired on healthy retryable runs while never
+	// seeing a stranded one.
+	//
+	// Named after FailPartitionPermanently, which is the same shape one layer
+	// down: the point at which retrying stops and an operator has to look.
+	FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error
 }
 
 // RepositoryDiscoverer reads the authoritative repository IDs for one
@@ -1235,10 +1250,21 @@ func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]Na
 	if handler == nil {
 		return nil
 	}
-	for name := range families {
+	for name, executor := range families {
 		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
 			return fmt.Errorf("%w: %q (bridge gates on %v)",
 				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
+		}
+		// A nil executor passed the name check above but would silently vanish
+		// in computeNativeFinalizeFamilies (`if executor == nil { continue }`,
+		// WITHOUT adding the name to skipFamilies) -- Python's bridge would then
+		// compute this family too, exactly the two-writer hazard this function's
+		// own name-validation exists to prevent, just reached through a nil
+		// value instead of an unrecognised string. Reject it here, at the same
+		// "fail loudly, all-or-nothing" boundary as the name check, rather than
+		// let it degrade silently three calls later.
+		if executor == nil {
+			return fmt.Errorf("%w: %q registered with a nil executor", ErrUnknownFinalizeFamily, name)
 		}
 	}
 	names := make([]string, 0, len(families))
@@ -1274,16 +1300,37 @@ func (handler *FinalizeHandler) finalizeNow() time.Time {
 // observeFinalizeFamily reports one attempt. The observer's own error is
 // swallowed deliberately: telemetry that can fail a job is worse than no
 // telemetry, and this is the rule every observer in this package follows.
+// CHAOS-5151. The observer error used to be discarded outright (`_ =
+// ...ObserveDailyMetricsNativeFamily(...)`) -- exercised directly by
+// TestFailingNativeFinalizeFamilyIsReportedRefused's telemetry-down fixture,
+// which proved Work still succeeds when the observer errors but never checked
+// whether that failure left any trace. A family whose outcome telemetry
+// silently fails to record is invisible in exactly the same way an
+// unregistered family is (see dailyMetricsNativeFamilies' doc comment in
+// telemetry.go): the counter this call was supposed to move never moves, and
+// nothing says why. run carries the identifiers (run_id, org_id, target_day)
+// this call site has and the observer interface itself does not -- logged
+// here, not inside the observer, because only the caller knows which run and
+// family this failure belongs to.
 func (handler *FinalizeHandler) observeFinalizeFamily(
-	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
+	run Run, family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
 	rowsWritten int, started time.Time,
 ) {
 	if handler.nativeFinalizeObserver == nil {
 		return
 	}
-	_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+	if err := handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
 		family, outcome, rowsWritten, handler.finalizeNow().Sub(started),
-	)
+	); err != nil {
+		slog.Default().Error("daily finalize telemetry failed",
+			"error", err,
+			"run_id", run.ID,
+			"organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+			"family", family,
+			"outcome", outcome,
+		)
+	}
 }
 
 // computeNativeFinalizeFamilies runs every registered finalize-scope executor
@@ -1348,7 +1395,7 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 			// diverge as soon as a family is skipped for a nil executor.
 			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
 				handler.observeFinalizeFamily(
-					remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
+					run, remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 				)
 			}
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
@@ -1363,16 +1410,16 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 		switch {
 		case err == nil:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
 			)
 		case rowsWritten > 0:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
 			)
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		default:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
 			)
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
@@ -1421,6 +1468,52 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
+		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's
+		// metrics-executed-proof failure).
+		//
+		// The retryable error the caller returns is wrapped by the adapter into
+		// the fixed string "dev-health job failed [retryable]", and the cause is
+		// serialised NOWHERE. On #2243's E2E every finalize job on every run
+		// exhausted its four attempts -- 96 starts, 96 discards -- and the only
+		// evidence of WHY was 96 identical wrapper strings. A family that fails
+		// every attempt on every run must not be that quiet.
+		//
+		// Logged here rather than left to the adapter because this is the only
+		// frame that still has the family scope: which run, which org, which
+		// attempt of how many.
+		// slog.Default() rather than skipping on a nil logger, following
+		// providerunit.go's pattern. `if logger != nil { log }` would make a nil
+		// logger produce SILENCE -- reintroducing, in a different place, exactly
+		// the defect this block exists to remove.
+		finalizeLogger := execution.Logger
+		if finalizeLogger == nil {
+			finalizeLogger = slog.Default()
+		}
+		{
+			finalizeLogger.Error("daily finalize failed",
+				"error", err,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				"attempt", execution.Attempt,
+				"max_attempts", execution.Definition.MaxAttempts,
+				"native_families", handler.nativeFinalizeFamilyNames,
+				"terminal", execution.Attempt >= execution.Definition.MaxAttempts,
+			)
+		}
+		// FINAL ATTEMPT: write the terminal state rather than releasing for a
+		// retry that will never come. River discards after this, and without a
+		// terminal write the run sits at status='running',
+		// finalization_status='failed' -- byte-identical to attempt 1 -- so
+		// nothing downstream can tell a stranded run from a retrying one.
+		//
+		// Attempt and MaxAttempts come from the adapter's own pair, the same
+		// values River acts on, so "final" here means what River means by it
+		// rather than a parallel notion maintained beside it.
+		if execution.Attempt >= execution.Definition.MaxAttempts {
+			failFinalizePermanently(handler.store, ctx, *claim)
+			return retryCompatibilityError(err)
+		}
 		releaseFinalize(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
 	}
@@ -1549,4 +1642,14 @@ func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = store.ReleaseFinalize(releaseCtx, claim)
+}
+
+// failFinalizePermanently writes the terminal state on a context detached from
+// the failing one, exactly as releaseFinalize does: the work context may already
+// be cancelled, and a terminal write that silently did not happen is the whole
+// defect this fixes.
+func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) {
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.FailFinalizePermanently(terminalCtx, claim)
 }

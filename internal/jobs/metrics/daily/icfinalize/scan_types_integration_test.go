@@ -120,3 +120,60 @@ func TestLoaderScansAgreeWithTheRealSchemaColumnTypes(t *testing.T) {
 		t.Errorf("LoadRollingStats: ChurnLOC30d = %v, want 50", stats[0].ChurnLOC30d)
 	}
 }
+
+// TestLoadGitMetricsScansNullTeamColumns pins r2's finding #5 (CHAOS-4290):
+// user_metrics_daily's team_id/team_name are Nullable(String)
+// (001_metrics_v2.sql), and repouser's own default fills them with
+// "unassigned"/"Unassigned" on every write it controls -- but the schema
+// itself permits NULL, and nothing in this package's readback proved what
+// happens if a row without repouser's default ever lands (a manual backfill,
+// a future writer, a historical row). This EXECUTES that scan against the
+// real schema rather than arguing from the Go struct's field types.
+func TestLoadGitMetricsScansNullTeamColumns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	const orgID = "00000000-0000-4000-8000-000000000702"
+	repoID := uuid.MustParse("8f5c1f2e-6b4a-4a1e-9f0c-2f2a2d6d5a22")
+	day := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+
+	if err := conn.Exec(ctx, `INSERT INTO user_metrics_daily
+        (repo_id, day, author_email, identity_id, team_id, team_name, loc_added, loc_deleted,
+         loc_touched, prs_authored, prs_merged, median_pr_cycle_hours, pr_cycle_p90_hours,
+         computed_at, org_id)
+        VALUES (?, ?, 'null-team@example.com', 'null-team@example.com', NULL, NULL,
+                40, 10, 50, 3, 2, 6.5, 12.0, ?, ?)`,
+		repoID, day, day, orgID); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := NewExecutor(conn)
+	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
+	if err != nil {
+		t.Fatalf("loadGitMetrics must not error on a NULL team_id/team_name row "+
+			"(a Nullable(String) column is a legitimate, schema-permitted "+
+			"shape, not a scan-type defect the way UInt32-into-int64 was): %v", err)
+	}
+	if len(gitMetrics) != 1 {
+		t.Fatalf("loadGitMetrics: got %d rows, want 1", len(gitMetrics))
+	}
+	if got := gitMetrics[0].TeamID; got != "" {
+		t.Errorf("loadGitMetrics: TeamID = %q for a NULL column, want empty string "+
+			"(the merge layer's own unassigned-default path, not a NULL sentinel, "+
+			"is what decides team assignment downstream)", got)
+	}
+	if got := gitMetrics[0].TeamName; got != "" {
+		t.Errorf("loadGitMetrics: TeamName = %q for a NULL column, want empty string", got)
+	}
+}

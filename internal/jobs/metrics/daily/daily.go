@@ -1511,7 +1511,22 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		// values River acts on, so "final" here means what River means by it
 		// rather than a parallel notion maintained beside it.
 		if execution.Attempt >= execution.Definition.MaxAttempts {
-			failFinalizePermanently(handler.store, ctx, *claim)
+			// The terminal write's OWN error is logged, not discarded (r2
+			// finding #1, CHAOS-4290): a failure here means the run is left at
+			// status='running' -- byte-identical to attempt 1, invisible to the
+			// blocked-marker sweep -- and silently swallowing it would have made
+			// this exactly the "the fix reports success while doing nothing"
+			// shape FailFinalizePermanently's own RowsAffected check exists to
+			// catch on the write side, just moved one frame up to the caller
+			// that never looked.
+			if failErr := failFinalizePermanently(handler.store, ctx, *claim); failErr != nil {
+				finalizeLogger.Error("daily finalize terminal write failed",
+					"error", failErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			}
 			return retryCompatibilityError(err)
 		}
 		releaseFinalize(handler.store, ctx, *claim)
@@ -1648,8 +1663,14 @@ func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {
 // the failing one, exactly as releaseFinalize does: the work context may already
 // be cancelled, and a terminal write that silently did not happen is the whole
 // defect this fixes.
-func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) {
+//
+// Returns the store's own error (r2 finding #1, CHAOS-4290) instead of
+// discarding it: this is the LAST write in the finalize failure path -- unlike
+// releaseFinalize, whose failure a River-driven redrive or lease expiry can
+// still recover from, a terminal write that fails here has no other
+// mechanism behind it. The caller logs it with the run's own identifiers.
+func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) error {
 	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.FailFinalizePermanently(terminalCtx, claim)
+	return store.FailFinalizePermanently(terminalCtx, claim)
 }

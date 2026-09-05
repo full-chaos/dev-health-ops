@@ -114,6 +114,30 @@ func TestAFailedFinalizeReachesTheBlockedMarker(t *testing.T) {
 			"retrying one", outcome.Marked)
 	}
 
+	// r2 finding #2 (CHAOS-4290): the WRITE side above marks the terminal run
+	// even though its status is 'failed', not 'running' -- but outcome.Blocked
+	// (the gauge) and BlockedRuns (the workerctl operator readback) each ran
+	// their OWN separate query, still scoped to status='running' alone, before
+	// this fix. A marker nothing can read back is exactly as invisible as no
+	// marker at all.
+	if outcome.Blocked != 1 {
+		t.Fatalf("ReconcileBlockedRuns outcome.Blocked = %d, want 1 -- the gauge query "+
+			"must count a status='failed' finalize_blocked run, not only status='running' ones",
+			outcome.Blocked)
+	}
+	blockedRuns, err := store.BlockedRuns(ctx, orgID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blockedRuns) != 1 || blockedRuns[0].RunID != terminalRun {
+		t.Fatalf("BlockedRuns = %+v, want exactly the terminal run %s -- the operator "+
+			"readback must surface a finalize_blocked run the same way it surfaces a "+
+			"partition-blocked one", blockedRuns, terminalRun)
+	}
+	if blockedRuns[0].Reason != BlockedReasonFinalizeFailed {
+		t.Fatalf("BlockedRuns[0].Reason = %q, want %q", blockedRuns[0].Reason, BlockedReasonFinalizeFailed)
+	}
+
 	var blockedAt *time.Time
 	var reason *string
 	if err := pool.QueryRow(ctx,

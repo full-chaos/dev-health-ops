@@ -3,7 +3,6 @@
   "generated_from": "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
   "daily": {
     "ai_governance": "native",
-    "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",
     "deploy": "native",
@@ -20,6 +19,7 @@
     "work_item_state": "post_bridge"
   },
   "finalize": {
+    "benchmarking": "finalize",
     "ic_finalize": "finalize"
   },
   "remaining": {

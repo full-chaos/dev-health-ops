@@ -103,18 +103,30 @@ var benchmarkingSchema = []string{
   ORDER BY (insight_id, computed_at)`,
 }
 
-// TestBenchmarkingComputesOncePerOrgNotOncePerPartition is the proof of this
-// family's single deliberate divergence from Python, and it is the ONLY layer
-// that can show it: the compute-side golden never sees partition fan-out at all.
+// TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded is CHAOS-5194's
+// real-ClickHouse race test (team-lead's design ruling, point 5): the
+// once-per-org duplication proof this test replaces
+// (TestBenchmarkingComputesOncePerOrgNotOncePerPartition, removed --
+// finalize scope runs exactly once per RUN by construction, so there is no
+// anchor mechanism left to prove) is superseded by a STRONGER proof this
+// family's move to finalize scope was actually FOR: that it cannot compute
+// AT ALL while any partition is still open, against REAL ClickHouse writes,
+// not a mocked short-circuit.
 //
-// Python's run_benchmarking_for_day takes no repo_id but is called from every
-// repo partition, so an org with N repos writes N identical row sets into six
-// append-only tables each night. The native executor anchors on the org's
-// lexicographically-first repository id and no-ops on every other partition.
+// RED: with the org's partition barrier reporting 2 of 3 succeeded, the
+// executor must refuse and leave the output tables EMPTY.
+// GREEN: the SAME executor, SAME run, SAME ClickHouse data, with the barrier
+// now reporting 3 of 3 succeeded, must compute and write real rows.
 //
-// The org here has THREE repos. Running all three partitions must leave exactly
-// ONE row set behind -- under Python's behaviour it would be three.
-func TestBenchmarkingComputesOncePerOrgNotOncePerPartition(t *testing.T) {
+// The fakeStore stands in for Postgres here deliberately: this test's job is
+// to prove the EXECUTOR honours whatever the barrier reports against REAL
+// ClickHouse output, not to re-prove ClaimFinalize's own Postgres query
+// (that has its own coverage, postgres.go). A pure-Go unit test already
+// proves the barrier check fires before any ClickHouse read at all
+// (benchmarking_finalize_native_executor_test.go); this test is the
+// complementary proof that once past the barrier, real computation and real
+// writes actually happen.
+func TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -136,53 +148,65 @@ func TestBenchmarkingComputesOncePerOrgNotOncePerPartition(t *testing.T) {
 	}
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
-	repo1, repo2, repo3 := repos[0], repos[1], repos[2]
+	run := benchmarkingRun("run-race", repos)
+	org := run.OrganizationID
 
-	executor, err := NewBenchmarkingExecutor(conn, nil)
+	// ---- RED: 2 of 3 partitions succeeded ----------------------------------
+	redStore := &fakeStore{partitionTotal: 3, partitionSucceeded: 2}
+	redExecutor, err := NewBenchmarkingFinalizeExecutor(redStore, conn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := benchmarkingRun("run-a", repos)
-	org := run.OrganizationID
-
-	// Run EVERY partition, exactly as the fan-out would.
-	written := map[string]int{}
-	for _, repo := range []string{repo1, repo2, repo3} {
-		rows, err := executor.ComputeFamily(ctx, run, Partition{
-			ID: "partition-" + repo, RunID: "run-a",
-			RepoIDs: []RepositoryID{RepositoryID(repo)},
-		})
-		if err != nil {
-			t.Fatalf("partition %s: %v", repo, err)
-		}
-		written[repo] = rows
+	redRows, err := redExecutor.ComputeFinalizeFamily(ctx, run)
+	if err == nil {
+		t.Fatal("RED: ComputeFinalizeFamily succeeded with a partition still open (2/3) -- " +
+			"the barrier did not hold, which is exactly the race this family's finalize-scope " +
+			"move exists to prevent")
 	}
-
-	if written[repo1] == 0 {
-		t.Error("the anchor partition (lexicographically-first repo) wrote nothing")
+	if !errors.Is(err, ErrBenchmarkingPartitionsIncomplete) {
+		t.Errorf("RED: error does not wrap ErrBenchmarkingPartitionsIncomplete: %v", err)
 	}
-	if written[repo2] != 0 || written[repo3] != 0 {
-		t.Errorf(
-			"non-anchor partitions wrote rows (%d, %d) -- the once-per-org anchor is not "+
-				"holding, and this family would multiply its output by the repo count",
-			written[repo2], written[repo3],
-		)
+	if redRows != 0 {
+		t.Errorf("RED: reported %d rows, want 0", redRows)
 	}
-
-	// The durable proof: exactly one row set in the table, not three.
-	var baselineRows, distinctComputedAt uint64
+	var redBaselineRows uint64
 	if err := conn.QueryRow(ctx,
-		`SELECT count(), uniqExact(computed_at) FROM testops_metric_baselines WHERE org_id = ?`, org,
-	).Scan(&baselineRows, &distinctComputedAt); err != nil {
+		`SELECT count() FROM testops_metric_baselines WHERE org_id = ?`, org,
+	).Scan(&redBaselineRows); err != nil {
 		t.Fatal(err)
 	}
-	if baselineRows == 0 {
-		t.Fatal("no baseline rows written at all")
+	if redBaselineRows != 0 {
+		t.Fatalf("RED: %d row(s) landed in testops_metric_baselines despite the refusal -- "+
+			"the barrier check ran too late, after some write already happened", redBaselineRows)
+	}
+
+	// ---- GREEN: 3 of 3 partitions succeeded --------------------------------
+	greenStore := &fakeStore{partitionTotal: 3, partitionSucceeded: 3}
+	greenExecutor, err := NewBenchmarkingFinalizeExecutor(greenStore, conn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	greenRows, err := greenExecutor.ComputeFinalizeFamily(ctx, run)
+	if err != nil {
+		t.Fatalf("GREEN: ComputeFinalizeFamily failed with every partition succeeded (3/3): %v", err)
+	}
+	if greenRows == 0 {
+		t.Fatal("GREEN: 0 rows reported with every partition succeeded -- expected real output")
+	}
+
+	var greenBaselineRows, distinctComputedAt uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count(), uniqExact(computed_at) FROM testops_metric_baselines WHERE org_id = ?`, org,
+	).Scan(&greenBaselineRows, &distinctComputedAt); err != nil {
+		t.Fatal(err)
+	}
+	if greenBaselineRows == 0 {
+		t.Fatal("GREEN: no baseline rows written at all")
 	}
 	if distinctComputedAt != 1 {
 		t.Errorf(
-			"testops_metric_baselines carries %d distinct computed_at values for one org/day -- "+
-				"expected exactly 1, so more than one partition computed",
+			"GREEN: testops_metric_baselines carries %d distinct computed_at values -- "+
+				"expected exactly 1 (finalize scope runs exactly once per run)",
 			distinctComputedAt,
 		)
 	}
@@ -193,7 +217,7 @@ func TestBenchmarkingComputesOncePerOrgNotOncePerPartition(t *testing.T) {
 	if err := conn.QueryRow(ctx, `
 SELECT count() FROM testops_metric_baselines
 WHERE org_id = ? AND scope_type = 'repo'
-  AND scope_key NOT IN (?, ?, ?)`, org, repo1, repo2, repo3,
+  AND scope_key NOT IN (?, ?, ?)`, org, repos[0], repos[1], repos[2],
 	).Scan(&strayScopeKeys); err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +233,8 @@ WHERE org_id = ? AND scope_type = 'repo'
 	).Scan(&bandRows); err != nil {
 		t.Fatal(err)
 	}
-	if bandRows != baselineRows {
-		t.Errorf("maturity_bands has %d rows but baselines has %d -- they are emitted 1:1", bandRows, baselineRows)
+	if bandRows != greenBaselineRows {
+		t.Errorf("maturity_bands has %d rows but baselines has %d -- they are emitted 1:1", bandRows, greenBaselineRows)
 	}
 }
 
@@ -380,18 +404,19 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 	}
 
 	repos := seedBenchmarkingOrg(t, ctx, conn)
-	executor, err := NewBenchmarkingExecutor(conn, nil)
+	// All-succeeded fake Store: this test's job is the partial-write/
+	// ErrPartialWrite contract on real ClickHouse output, not the partition
+	// barrier (covered by TestBenchmarkingFinalizeRunsOnlyAfterEveryPartitionSucceeded
+	// and the pure-Go unit tests) -- so the barrier is held open throughout.
+	store := &fakeStore{partitionTotal: 1, partitionSucceeded: 1}
+	executor, err := NewBenchmarkingFinalizeExecutor(store, conn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	run := benchmarkingRun("run-partial", repos)
-	anchor := Partition{
-		ID: "partition-anchor", RunID: run.ID,
-		RepoIDs: []RepositoryID{RepositoryID(repos[0])},
-	}
 
 	// ---- CONTROL ----------------------------------------------------------
-	controlRows, err := executor.ComputeFamily(ctx, run, anchor)
+	controlRows, err := executor.ComputeFinalizeFamily(ctx, run)
 	if err != nil {
 		t.Fatalf("control run failed, so nothing below can be interpreted: %v", err)
 	}
@@ -446,7 +471,7 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := executor.ComputeFamily(ctx, run, anchor)
+	rows, err := executor.ComputeFinalizeFamily(ctx, run)
 	if err == nil {
 		t.Fatalf("writing to a DROPPED table %s succeeded -- the fault was not injected, so a "+
 			"pass here would be vacuous", breakTable)
@@ -508,7 +533,7 @@ func TestBenchmarkingPartialWriteIsReportedWithItsTrueRowCount(t *testing.T) {
 	if err := conn.Exec(ctx, benchmarkingDDL(t, breakTable)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executor.ComputeFamily(ctx, run, anchor); err != nil {
+	if _, err := executor.ComputeFinalizeFamily(ctx, run); err != nil {
 		t.Fatalf("re-drive after restoring %s failed: %v", breakTable, err)
 	}
 	redrive := benchmarkingCounts(t, ctx, conn, before)

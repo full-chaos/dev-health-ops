@@ -77,12 +77,35 @@ def _families() -> list[dict]:
     return data if isinstance(data, list) else data["families"]
 
 
+# Matches the logical line following --families: any run of characters that are
+# neither a newline nor a backslash, plus explicit backslash-newline
+# continuations. The two alternatives are DISJOINT -- `[^\n\\]` excludes the
+# backslash that `\\\n` requires -- so there is exactly one way to match any
+# input and the engine cannot backtrack between them.
+#
+# The previous pattern, `((?:[\w\- ]+\\?\s*)+?)`, nested `+` inside `+?` over
+# character classes that BOTH matched a space: a run of spaces could be split
+# between `[\w\- ]+` and `\s*` in exponentially many ways. CodeQL flagged it as
+# exponential backtracking on this PR and was right. The input here is a
+# repo-controlled shell script rather than user data, so it was not reachable
+# as a denial-of-service -- but "not currently exploitable" is a property of
+# today's callers, not of the regex, and this one is also simpler.
+_FAMILIES_FLAG = re.compile(r"--families[ \t]+((?:[^\n\\]|\\\n)*)")
+
+
 def _families_flag(path: Path) -> set[str]:
     """Names passed to --families in a shell script, across line continuations."""
-    text = path.read_text()
-    match = re.search(r"--families\s+((?:[\w\- ]+\\?\s*)+?)(?:--|\n\s*\})", text)
+    match = _FAMILIES_FLAG.search(path.read_text())
     assert match, f"no --families flag found in {path}"
-    return {token for token in match.group(1).replace("\\", " ").split() if token}
+    # Continuations join with whitespace; anything that looks like the NEXT flag
+    # (and everything after it) is not a family name.
+    tokens = match.group(1).replace("\\\n", " ").split()
+    names: set[str] = set()
+    for token in tokens:
+        if token.startswith("-"):
+            break
+        names.add(token)
+    return names
 
 
 def test_native_golden_required_families_are_named_in_both_gates() -> None:

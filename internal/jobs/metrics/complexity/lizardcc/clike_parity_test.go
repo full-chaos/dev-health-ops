@@ -507,10 +507,21 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 // NOTE for downstream PRs (#2268/#2269): add a case here for each new
 // suffix a later PR's own corpus introduces
 // (.cs.txt/.kt.txt/.scala.txt/.swift.txt/.java.txt), pointing at that
-// language's own *TokenPattern var (or cLikeTokenPattern ONLY if that
-// language genuinely has no per-language addition at all, e.g. Scala --
-// state that explicitly in the case, don't let it fall through the
-// default).
+// language's OWN *TokenPattern var -- ALWAYS, with NO exception, even
+// when that language's own addition is the empty string (e.g. Scala's
+// scalaTokenPattern = buildTokenPattern("")). "No addition" does NOT
+// mean "identical to cLikeTokenPattern": cLikeTokenPattern itself is
+// buildTokenPattern(cLikeAddition), where cLikeAddition is NON-empty
+// (the C/C++ raw-string pattern) -- substituting cLikeTokenPattern for
+// a language whose real analyzer tokenizes with a DIFFERENT pattern
+// var is exactly the bug this function's own identity test below
+// exists to catch (found in #2268's confirmation-pass round: the
+// .scala.txt case below used to return cLikeTokenPattern by this
+// exact wrong reasoning). If a language genuinely needs cLikeTokenPattern
+// verbatim, its own *TokenPattern var must be DEFINED as
+// buildTokenPattern("") (or whatever matches its real analyzer) and
+// THAT var referenced here -- never a different language's pattern
+// var, no matter how "equivalent" it looks.
 func filteredCorpusTokenPattern(t *testing.T, suffix string) *regexp.Regexp {
 	t.Helper()
 	switch suffix {
@@ -518,11 +529,123 @@ func filteredCorpusTokenPattern(t *testing.T, suffix string) *regexp.Regexp {
 		return goTokenPattern
 	case ".rs.txt":
 		return rustTokenPattern
+	case ".cs.txt":
+		return csharpTokenPattern
+	case ".kt.txt":
+		return kotlinTokenPattern
+	case ".swift.txt":
+		return swiftTokenPattern
+	case ".scala.txt":
+		return scalaTokenPattern
 	default:
 		t.Fatalf("filteredCorpusTokenPattern: no token pattern registered for suffix %q -- "+
 			"add a case pointing at that language's own *TokenPattern var (see this "+
 			"function's doc); do not let an unregistered suffix fall through silently", suffix)
 		return nil
+	}
+}
+
+// TestFilteredCorpusTokenPatternMatchesAnalyzerTokenizer closes the class
+// #2268's confirmation-pass round found: filteredCorpusTokenPattern's
+// .scala.txt case returned cLikeTokenPattern while AnalyzeScala's real
+// tokenizer is scalaTokenPattern -- a DIFFERENT *regexp.Regexp (Scala's own
+// addition is empty, but cLikeTokenPattern carries its own non-empty
+// cLikeAddition, so the two patterns are not interchangeable). A coverage
+// scan using the wrong pattern can disagree with what the real analyzer
+// actually tokenizes, silently certifying "coverage" for tokens the real
+// analyzer never reaches that way (or vice versa).
+//
+// This is a table-driven IDENTITY check (pointer equality on the package's
+// global *regexp.Regexp vars -- valid and exact here, since
+// filteredCorpusTokenPattern returns the SAME global var an Analyze*
+// function calls FindAllString on, never a copy): for every suffix this
+// package's coverage-manifest mechanism filters on, across every stack
+// (go-rust, jvm-swift), assert the switch returns EXACTLY the *TokenPattern
+// var its corresponding Analyze* function tokenizes with. This closes the
+// class for good -- a future suffix case pointing at the wrong var fails
+// this test immediately, rather than waiting for an adversarial reviewer
+// to construct the right fixture.
+func TestFilteredCorpusTokenPatternMatchesAnalyzerTokenizer(t *testing.T) {
+	cases := []struct {
+		suffix   string
+		expected *regexp.Regexp
+	}{
+		{".go.txt", goTokenPattern},       // AnalyzeGo (go_lang.go)
+		{".rs.txt", rustTokenPattern},     // AnalyzeRust (rust.go)
+		{".cs.txt", csharpTokenPattern},   // AnalyzeCSharp (csharp.go)
+		{".kt.txt", kotlinTokenPattern},   // AnalyzeKotlin (kotlin.go)
+		{".swift.txt", swiftTokenPattern}, // AnalyzeSwift (swift.go)
+		{".scala.txt", scalaTokenPattern}, // AnalyzeScala (scala.go)
+	}
+	for _, tc := range cases {
+		t.Run(tc.suffix, func(t *testing.T) {
+			got := filteredCorpusTokenPattern(t, tc.suffix)
+			if got != tc.expected {
+				t.Errorf("filteredCorpusTokenPattern(%q) returned a DIFFERENT *regexp.Regexp than "+
+					"the analyzer actually tokenizes with (got %q, want %q) -- the coverage-manifest "+
+					"scan and the real analyzer can now disagree on what a fixture's tokens are",
+					tc.suffix, got.String(), tc.expected.String())
+			}
+		})
+	}
+}
+
+// TestScalaCoverageScanDivergesFromCLikePatternOnRawStringShapedInput
+// executes codex's exact #2268 confirmation-pass repro scenario directly
+// (a Scala-suffixed file containing a C++-raw-string-SHAPED token that
+// spans across a real condition keyword) and proves the RED/GREEN split
+// this fix closes:
+//
+//   - RED (the OLD, buggy .scala.txt case): cLikeTokenPattern's raw-string
+//     alternative (`(?:u8|u|U|L)?R"\(.*?\)"`) swallows the entire
+//     `R"(a"if(x>0)"` span as ONE token -- "if" never appears as its own
+//     token, so a coverage scan using cLikeTokenPattern would silently
+//     certify NO coverage for "if" from this fixture even though the
+//     source text plainly contains it.
+//   - GREEN (the FIXED .scala.txt case): scalaTokenPattern has no
+//     raw-string alternative at all (Scala's real tokenizer doesn't either
+//     -- confirmed from lizard's Python source), so it tokenizes the same
+//     input piecewise and "if" DOES appear as its own token.
+//
+// Verified empirically (bigboy scratch probe) before writing this in:
+// FindAllString on this exact source under cLikeTokenPattern contains no
+// "if" element; under scalaTokenPattern it does. This is a permanent
+// regression test, not a one-off repro -- it fails again immediately if
+// filteredCorpusTokenPattern's .scala.txt case (or scalaTokenPattern's own
+// definition) ever regresses back toward cLikeTokenPattern's behavior.
+func TestScalaCoverageScanDivergesFromCLikePatternOnRawStringShapedInput(t *testing.T) {
+	const src = `R"(a"if(x>0)"b)" 1 else 0`
+
+	hasToken := func(tokens []string, want string) bool {
+		for _, tok := range tokens {
+			if tok == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	oldWrongTokens := cLikeTokenPattern.FindAllString(src, -1)
+	if hasToken(oldWrongTokens, "if") {
+		t.Fatalf("cLikeTokenPattern found \"if\" as a standalone token in %q -- this fixture no "+
+			"longer demonstrates the RED case (the raw-string alternative used to swallow it); "+
+			"pick a new repro string before trusting this test's GREEN half means anything", src)
+	}
+
+	fixedTokens := scalaTokenPattern.FindAllString(src, -1)
+	if !hasToken(fixedTokens, "if") {
+		t.Fatalf("scalaTokenPattern -- the FIXED, correct pattern for .scala.txt -- failed to find "+
+			"\"if\" as a standalone token in %q; got tokens %#v -- the GREEN case is not actually "+
+			"green", src, fixedTokens)
+	}
+
+	// Confirm filteredCorpusTokenPattern itself now routes .scala.txt to
+	// the GREEN pattern, not the RED one -- this is the actual production
+	// code path assertEveryConditionExercisedByFilteredCorpus calls.
+	if got := filteredCorpusTokenPattern(t, ".scala.txt"); got != scalaTokenPattern {
+		t.Fatalf("filteredCorpusTokenPattern(\".scala.txt\") = %q, want scalaTokenPattern (%q) -- "+
+			"the coverage-manifest scan is not using the pattern this test just proved is correct",
+			got.String(), scalaTokenPattern.String())
 	}
 }
 

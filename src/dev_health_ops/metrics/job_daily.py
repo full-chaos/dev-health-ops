@@ -13,7 +13,6 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for_day
 from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.active_incidents import (
@@ -1712,9 +1711,23 @@ async def run_daily_metrics_job(
                 day=d, incidents=incident_rows, computed_at=computed_at
             )
         )
-        ai_policy_events, ai_governance_coverage = build_governance_rows_for_day(
-            primary_sink, org_id=org_id, day=d
-        )
+        # CHAOS-5234/CHAOS-3092: ai_governance's daily compute is DELETED
+        # here, not skip-gated -- chris's standing rule (CHAOS-5233): once a
+        # family's Go executor is on main, its Python compute is deleted,
+        # never skip-gated. AIGovernanceExecutor (native Go) is now the only
+        # writer of ai_policy_events/ai_governance_coverage_daily for a
+        # daily partition. Unlike CHAOS-5233's work_item_attribution,
+        # build_governance_rows_for_day ITSELF is also deleted here (from
+        # audit/ai_governance/loaders.py) -- codegraph_explore + rg both
+        # confirm this job was its ONLY real caller (the other rg hits are
+        # its own definition/__all__ export, a docs-generator citation
+        # string, and test files that monkeypatched it to a no-op, all
+        # updated in this same PR). evaluate_artifacts/rollup_coverage_daily/
+        # AIGovernanceLoader (the functions it glued together) are NOT
+        # touched -- they have real, separate callers (the Go oracle
+        # comparator at internal/jobs/metrics/aigovernance/testdata/
+        # python_governance_oracle.py, the GraphQL API resolver, and their
+        # own dedicated tests).
         ai_attribution_rows = []
         ai_loader: Any = loader
         if hasattr(ai_loader, "load_ai_pr_attributions"):
@@ -1960,22 +1973,8 @@ async def run_daily_metrics_job(
         # repo_user_commit's own comment above warns about.
         skip_work_item_write = "work_item" in skip_families
         skip_work_item_estimate_write = "work_item_estimate" in skip_families
-        # CHAOS-4285: ai_governance has a native Go executor
-        # (AIGovernanceExecutor). Same write-only-skip shape as
-        # repo_user_commit above -- the compute stays unconditional to keep
-        # the diff minimal and match the reviewed precedent, and neither
-        # `ai_policy_events` nor `ai_governance_coverage` feeds anything else
-        # in this function (both are assigned at :1671 and used ONLY by the
-        # two writes below; verified by grep, not assumed).
-        #
-        # This gate is NOT optional hygiene for this family. ai_policy_events
-        # is a ReplacingMergeTree whose ORDER BY key ENDS in event_id, and
-        # Python's event_id is uuid4() -- so an ungated Python write can never
-        # merge with the native executor's rows, nor with its own from a
-        # previous run. Leaving both paths writing would accumulate duplicate
-        # policy events permanently, which is the exact defect the Go port's
-        # deterministic event_id exists to fix.
-        skip_ai_governance_write = "ai_governance" in skip_families
+        # CHAOS-5234/CHAOS-3092: no skip_ai_governance_write here -- deleted
+        # alongside the compute call above, not skip-gated.
         # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
         # Same write-only-skip shape as repo_user_commit above --
         # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
@@ -2039,9 +2038,10 @@ async def run_daily_metrics_job(
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
-            if not skip_ai_governance_write:
-                s.write_ai_policy_events(ai_policy_events)
-                s.write_ai_governance_coverage_daily(ai_governance_coverage)
+            # CHAOS-5234/CHAOS-3092: no write_ai_policy_events/
+            # write_ai_governance_coverage_daily call here -- deleted
+            # alongside the compute call above; AIGovernanceExecutor (native
+            # Go) is the only writer now.
             if ai_impact_metrics and not skip_ai_impact_write:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):

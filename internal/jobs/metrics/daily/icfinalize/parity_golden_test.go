@@ -72,6 +72,22 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 	// used its own wall-clock value at capture time; this fixes Go's to a
 	// stable, assertable one instead of chasing an inherently unequal field).
 	fixedNow := time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC)
+	// CHAOS-5274: the seed rows below and the executor's native write share
+	// user_metrics_daily's dedup key (org_id, repo_id, author_email, day) for
+	// alice and bob -- git-backed identities keep their OWN repo_id, per
+	// writeUserMetrics' comment. If both writes carried the SAME computed_at,
+	// `ORDER BY computed_at DESC LIMIT 1 BY` would have no defined winner
+	// between them, and this test observed exactly that nondeterminism on a
+	// real CI run: it read back the stale seed generation instead of the
+	// native one, with every merge-only field (PRsOpened, WorkItemsCompleted,
+	// DeliveryUnits, CycleP50/90Hours, the team_map-overridden TeamID) coming
+	// back as the seed row's own zero/literal value. seedNow is strictly
+	// EARLIER than the executor's clock so the native write is always the
+	// later, winning generation -- see the assertComputedAtIsExecutorGeneration
+	// checks below, which fail loudly if a future change reintroduces a tie
+	// instead of silently reading whichever generation ClickHouse happens to
+	// keep on top.
+	seedNow := fixedNow.Add(-1 * time.Hour)
 
 	repoAlice := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	repoBob := uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -90,7 +106,7 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
         VALUES (?, ?, 'alice@example.com', 'alice@example.com', 'team-git-a', 'Team Git A',
                 400, 150, 550, 4, 3, 45.8, 12, 9, 1, 18.5, 15.0, 22.0, 30.0, 3,
                 2.5, 6.0, 1.2, 0.8, 5, 1, 4, 1.25, 2, 3, 2, 6.5, 0, ?, ?)`,
-		repoAlice, day, fixedNow, orgID); err != nil {
+		repoAlice, day, seedNow, orgID); err != nil {
 		t.Fatal(err)
 	}
 	// bob: git-backed ONLY, zero-valued review/collaboration/burnout fields
@@ -102,7 +118,7 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
          computed_at, org_id)
         VALUES (?, ?, 'bob@example.com', 'bob@example.com', 'team-git-b', 'Team Git B',
                 90, 20, 110, 1, 1, 22.0, 5, 3, 0, 9.0, 9.0, ?, ?)`,
-		repoBob, day, fixedNow, orgID); err != nil {
+		repoBob, day, seedNow, orgID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +130,7 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
          cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id)
         VALUES (?, 'jira', 'scope-alice', 'alice@example.com', 'team-git-a', 'Team Git A',
                 6, 4, 2, 10.0, 20.0, ?, ?)`,
-		day, fixedNow, orgID); err != nil {
+		day, seedNow, orgID); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `INSERT INTO work_item_user_metrics_daily
@@ -123,7 +139,7 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
          cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id)
         VALUES (?, 'linear', 'scope-carol', 'carol@example.com', 'team-wi-c', 'Team WI C',
                 3, 2, 1, 14.0, 28.0, ?, ?)`,
-		day, fixedNow, orgID); err != nil {
+		day, seedNow, orgID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -151,8 +167,38 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 	gotUserMetrics := readBackUserMetrics(ctx, t, conn, orgID, day)
 	gotLandscape := readBackLandscape(ctx, t, conn, orgID, day)
 
+	// CHAOS-5274: assert the dedup read actually resolved to the NATIVE
+	// generation (computed_at == fixedNow, the executor's clock) rather than
+	// the stale seed generation (computed_at == seedNow) surviving a tied
+	// ORDER BY. This must fail LOUDLY if a future change reintroduces a tie,
+	// instead of silently reading whichever generation ClickHouse happens to
+	// keep on top -- exactly the failure mode this test hit on a real CI run.
+	assertComputedAtIsExecutorGeneration(t, gotUserMetrics, fixedNow)
+
 	assertUserMetricsMatchGolden(t, golden.UserMetrics, gotUserMetrics, orgID)
 	assertLandscapeMatchesGolden(t, golden.LandscapeRolling, gotLandscape)
+}
+
+// assertComputedAtIsExecutorGeneration is CHAOS-5274's regression guard: it
+// fails loudly, with the exact wrong timestamp, if the dedup read ever
+// resolves to the seed generation instead of the native write -- rather than
+// letting that show up only as a confusing cascade of zero-valued/reverted
+// fields in assertUserMetricsMatchGolden below.
+func assertComputedAtIsExecutorGeneration(
+	t *testing.T, got map[string]gotUserMetricRow, wantComputedAt time.Time,
+) {
+	t.Helper()
+	for email, row := range got {
+		if !row.ComputedAt.Equal(wantComputedAt) {
+			t.Errorf(
+				"%s: ComputedAt = %s, want %s (native executor generation) -- "+
+					"the dedup read resolved to a DIFFERENT generation than the one "+
+					"computeForDay just wrote, which means ORDER BY computed_at DESC "+
+					"LIMIT 1 BY had no defined winner (a tie) or picked the seed row",
+				email, row.ComputedAt, wantComputedAt,
+			)
+		}
+	}
 }
 
 // --- golden file shape (mirrors capture_ic_finalize_golden.py's dump) ---
@@ -239,6 +285,7 @@ type gotUserMetricRow struct {
 	DeliveryUnits      uint32
 	CycleP50Hours      float64
 	CycleP90Hours      float64
+	ComputedAt         time.Time
 }
 
 func readBackUserMetrics(
@@ -251,7 +298,7 @@ SELECT author_email, repo_id, identity_id, team_id, team_name,
        large_commits_count, avg_commit_size_loc, prs_authored, prs_merged,
        avg_pr_cycle_hours, median_pr_cycle_hours, prs_opened,
        work_items_completed, work_items_active, delivery_units,
-       cycle_p50_hours, cycle_p90_hours
+       cycle_p50_hours, cycle_p90_hours, computed_at
 FROM (
     SELECT * FROM user_metrics_daily
     ORDER BY computed_at DESC
@@ -271,7 +318,7 @@ WHERE day = ? AND org_id = ?`, day.Format("2006-01-02"), orgID)
 			&row.LargeCommitsCount, &row.AvgCommitSizeLOC, &row.PRsAuthored, &row.PRsMerged,
 			&row.AvgPRCycleHours, &row.MedianPRCycleHours, &row.PRsOpened,
 			&row.WorkItemsCompleted, &row.WorkItemsActive, &row.DeliveryUnits,
-			&row.CycleP50Hours, &row.CycleP90Hours,
+			&row.CycleP50Hours, &row.CycleP90Hours, &row.ComputedAt,
 		); err != nil {
 			t.Fatal(err)
 		}

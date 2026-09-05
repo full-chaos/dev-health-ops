@@ -98,9 +98,9 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     )
     monkeypatch.setattr(job_daily, "load_identity_resolver", lambda *a, **k: None)
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
-    monkeypatch.setattr(
-        job_daily, "build_governance_rows_for_day", lambda *a, **k: ([], [])
-    )
+    # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
+    # here anymore -- job_daily.py no longer calls it at all (deleted, not
+    # skip-gated; see CHAOS-5233's shape for work_item_attribution).
     monkeypatch.setattr(
         job_daily, "_extract_ai_workflow_for_day", lambda **k: ([], [], [], [], [], [])
     )

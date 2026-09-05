@@ -376,7 +376,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 42 -> 43 on its own branch: CHAOS-4989's internal/llmorgsettings and
     # CHAOS-4897's internal/teamownership. Merged total: 44.
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
-    # CURRENT TOTAL: 45 -- the one number to bump when a new
+    # CHAOS-4290 added internal/jobs/metrics/daily/icfinalize: 45 -> 46 -- the
+    # assert below was updated when this landed, but this comment trail
+    # wasn't (a stale copy of exactly the class of drift this test exists to
+    # catch, in its own documentation rather than the manifest). CHAOS-4279
+    # (review_edges) added no NEW package -- its one -tags=integration file,
+    # review_edges_integration_test.go, lives in the already-discovered
+    # internal/jobs/metrics/daily package.
+    # CURRENT TOTAL: 46 -- the one number to bump when a new
     # -tags=integration package is added.
     assert "46 package(s) discovered, 0 denylisted, 46 will run" in result.stdout
     assert "integration shard plan: 3 shard(s), 46 package(s)" in result.stdout
@@ -422,7 +429,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 42 -> 43 on its own branch: internal/llmorgsettings and
     # internal/teamownership. Merged total: 44.
     # CHAOS-5006 PR2 added internal/jobs/investment/categorize: 44 -> 45.
-    # CURRENT TOTAL: 45 -- the one number to bump.
+    # CHAOS-4290 added internal/jobs/metrics/daily/icfinalize: 45 -> 46.
+    # CURRENT TOTAL: 46 -- the one number to bump.
     assert len(flattened) == len(set(flattened)) == 46
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}

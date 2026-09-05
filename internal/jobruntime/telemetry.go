@@ -633,7 +633,14 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // r2 ruling a native finalize failure redrives the run instead of degrading to
 // Python, so an unregistered family would make a redrive loop invisible rather
 // than merely a silent degradation.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ic_finalize", "team_cognitive_load"}
+//
+// "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), and
+// "benchmarking" (CHAOS-4288) all added themselves the same way as the
+// families listed above.
+//
+// "work_graph_edges" (CHAOS-4286) added itself the same way as the families
+// listed above.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "work_graph_edges", "ic_finalize", "team_cognitive_load"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
@@ -1934,7 +1941,9 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	defer collector.mu.Unlock()
 	collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}]++
 	// Rows and duration are recorded for PartialWrite as well as Computed
-	// (CHAOS-4290, #2241 r2 Finding 4). Counting the partial_write event while
+	// (CHAOS-4290, #2241 r2 Finding 4; identical fix independently required by
+	// #2235/CHAOS-4288 -- see that PR for the full reasoning, kept in one
+	// place rather than duplicated). Counting the partial_write event while
 	// dropping its row count contradicted this type's own doc, which promises
 	// the outcome "carries the TRUE rows-written count, not zero ... precisely
 	// the number an operator needs to reason about duplication" -- and the rows
@@ -3475,7 +3484,7 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 		}
 	}
 
-	writeMetadata(output, "worker_daily_metrics_native_family_rows_written_total", "Rows written by native metrics.daily family executors, by family.", "counter")
+	writeMetadata(output, "worker_daily_metrics_native_family_rows_written_total", "Rows written by native metrics.daily family executors, by family. Includes rows that landed before a partial_write failure, which is exactly the count that sizes a re-drive's duplication risk.", "counter")
 	for _, family := range families {
 		writeUintSample(output, "worker_daily_metrics_native_family_rows_written_total",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyRowsWritten[family])

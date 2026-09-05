@@ -425,6 +425,57 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestGovernanceRowsMatchLivePythonProduction$' \
+        ./internal/jobs/metrics/aigovernance
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/ai-governance-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: ai_governance live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/workgraphedges (work_graph_edges port vs live Python, CHAOS-4286)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestWorkGraphEdgesMatchLivePythonProduction$' \
+        ./internal/jobs/metrics/workgraphedges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Own marker, checked separately, for the same reason as the siblings above:
+  # a shared marker would be satisfied by whichever oracle happened to run.
+  # This one compares edge_id too -- unlike ai_governance's, whose Python side
+  # randomises the id -- so it is the only guard that can catch a change to the
+  # _hash join or its part order.
+  proof_file="${proof_dir}/work-graph-edges-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: work_graph_edges live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294)\n'
   if ! (
     cd "${ROOT}"
@@ -692,6 +743,54 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/compounding-risk-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: compounding_risk golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/daily/reviewedges (frozen review_edges golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestReviewEdgesGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/daily/reviewedges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason as cicd-golden above (CHAOS-4279).
+  proof_file="${proof_dir}/review-edges-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: review_edges golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/daily/benchmarking (frozen benchmarking golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestBenchmarkingGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/daily/benchmarking
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason as cicd-golden above (CHAOS-4288).
+  proof_file="${proof_dir}/benchmarking-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: benchmarking golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

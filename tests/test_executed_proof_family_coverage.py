@@ -56,6 +56,21 @@ KNOWN_UNCOVERED = {
     # evidence for, and would block this PR on their backlog.
     "work_item",
     "work_item_estimate",
+    # MINE (CHAOS-4285, #2229), pinned with evidence, not by default. The
+    # executed-proof E2E seed loop above (ci/run_metrics_executed_proof.sh)
+    # only drives four sync targets -- cicd, deployments, incidents, tests --
+    # plus `fixtures generate` for git_commits/teams. ai_governance's join is
+    # ORG-scoped across ai_attribution_resolved (built from the `ai_attribution`
+    # table, which NO seeded target here writes), ci_pipeline_runs FINAL
+    # (seeded, by "cicd") and security_alerts FINAL (needs a "security" sync
+    # target, also not seeded). With zero ai_attribution rows the INNER JOIN
+    # that drives every ai_policy_events row matches nothing, so this harness
+    # cannot produce a nonzero sample for this family regardless of whether the
+    # Go port is correct -- adding it here would assert against a fixture gap,
+    # not test the code. Closing it needs a synthetic "ai-attribution" sync
+    # target (or an equivalent seed step) added to the loop, which is out of
+    # scope for a port PR.
+    "ai_governance",
     # MINE, and pinning them is the part of this change I like least: these are
     # the two families this stack ports, and pinning leaves them unchecked by
     # the very gate that exists to prove a native family ran. It is a gap, not
@@ -69,6 +84,19 @@ KNOWN_UNCOVERED = {
     # create, which turns a green gate red for a reason unrelated to the port.
     "review_edges",
     "benchmarking",
+    # MINE (CHAOS-4286, #2263/formerly #2240), pinned with evidence, same
+    # discipline as ai_governance above. The E2E seed loop
+    # (ci/run_metrics_executed_proof.sh) drives four sync targets -- cicd,
+    # deployments, incidents, tests -- and none of them is "prs", so neither
+    # git_pull_requests nor git_pull_request_reviews is seeded. This family's
+    # review_outcome_edges table needs pull-request review rows and cannot
+    # produce any without them, regardless of the port's correctness; whether
+    # the other two edge tables (pr_deployment_edges, deployment_incident_edges)
+    # can produce rows from deployments+incidents alone is unverified, so this
+    # is pinned rather than asserted on an unconfirmed partial result. Closing
+    # it needs a "prs" seed step added to the loop (or separate per-table
+    # evidence), out of scope for a port PR.
+    "work_graph_edges",
 }
 
 

@@ -605,6 +605,26 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 		rows, err := executor.ComputeFamily(ctx, run, partition)
 		duration := handler.nativeFamiliesNow().Sub(started)
 		if err != nil {
+			// PARTIAL WRITE IS NOT FAIL-OPEN. An executor that already wrote
+			// rows before failing wraps ErrPartialWrite; fail-open there would
+			// let the bridge write the same family again, and the output tables
+			// are append-only MergeTrees with no version column, so the earlier
+			// batches are not replaced -- they DUPLICATE. The family joins the
+			// skip list instead and the partition is re-driven.
+			//
+			// The rows count reported is the executor's TRUE count, not zero:
+			// zero would understate what landed, which is exactly the number an
+			// operator needs to judge duplication. See CHAOS-4288 / codex r1 on
+			// #2235.
+			if errors.Is(err, ErrPartialWrite) {
+				skipFamilies = append(skipFamilies, name)
+				if handler.nativeObserver != nil {
+					_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+						name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rows, duration,
+					)
+				}
+				continue
+			}
 			if handler.nativeObserver != nil {
 				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
 					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, duration,
@@ -700,8 +720,19 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 		duration := handler.nativeFamiliesNow().Sub(started)
 		outcome := jobruntime.DailyMetricsNativeFamilyOutcomeComputed
 		if err != nil {
-			rows = 0
-			outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
+			// A post_bridge partial write cannot cause BRIDGE duplication --
+			// Python was already told to skip this family unconditionally. But
+			// the outcome and the row count must still be truthful: reporting
+			// "refused, 0 rows" for a family that wrote several thousand before
+			// failing tells an operator the opposite of what happened, and the
+			// re-drive decision depends on knowing rows landed. So the outcome
+			// is distinguished here even though the skip decision is not.
+			if errors.Is(err, ErrPartialWrite) {
+				outcome = jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite
+			} else {
+				rows = 0
+				outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
+			}
 		}
 		if handler.nativeObserver != nil {
 			_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(name, outcome, rows, duration)

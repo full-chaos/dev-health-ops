@@ -448,7 +448,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294)\n'
+  printf 'go test -count=1: internal/jobs/metrics/aiimpact (ai_impact port vs live Python, CHAOS-4280)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -458,13 +458,78 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestComputePipelineMetricsMatchesLivePythonProductionOnRealRow|TestComputePipelineMetricsGroupingMatchesLivePythonProduction|TestComputeTestMetricsMatchesLivePythonProductionOnRealRows|TestComputeCoverageMetricMatchesLivePythonProductionOnRealRows)$' \
+        -run '^(TestAIImpactMatchesLivePythonProduction|TestRepoPatternResolverMatchesLivePython)$' \
+        ./internal/jobs/metrics/aiimpact
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Checked SEPARATELY, per the sibling goldens' reasoning: one shared marker
+  # would be satisfied by whichever guard happened to run, letting the other be
+  # skipped, renamed, or filtered out of the -run pattern unnoticed. The
+  # resolver oracle is not optional -- it is the sole source of ai_impact's
+  # team dimension.
+  for marker in ai-impact-golden ai-impact-repo-teams-golden; do
+    proof_file="${proof_dir}/${marker}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: ai_impact live Python oracle measurement did not occur (%s)\n' "${marker}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
+
+  printf 'go test -count=1: internal/jobs/metrics/workgraphedges (work_graph_edges port vs live Python, CHAOS-4286)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestWorkGraphEdgesMatchLivePythonProduction$' \
+        ./internal/jobs/metrics/workgraphedges
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Own marker, checked separately, for the same reason as the siblings above:
+  # a shared marker would be satisfied by whichever oracle happened to run.
+  # This one compares edge_id too -- unlike ai_governance's, whose Python side
+  # randomises the id -- so it is the only guard that can catch a change to the
+  # _hash join or its part order.
+  proof_file="${proof_dir}/work-graph-edges-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: work_graph_edges live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294/CHAOS-4284)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestComputePipelineMetricsMatchesLivePythonProductionOnRealRow|TestComputePipelineMetricsGroupingMatchesLivePythonProduction|TestComputeTestMetricsMatchesLivePythonProductionOnRealRows|TestComputeCoverageMetricMatchesLivePythonProductionOnRealRows|TestComputePipelineMetricsAvgQueueMatchesLivePythonSum)$' \
         ./internal/jobs/metrics/testops
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for marker in testops-pipeline-golden testops-pipeline-grouping-golden testops-test-golden testops-coverage-golden; do
+  # testops-pipeline-avgqueue-golden (CHAOS-4284) is checked alongside the
+  # other four for the reason the numerical package's sibling goldens are:
+  # one shared marker would be satisfied by whichever guard happened to run,
+  # letting another be skipped, renamed, or filtered out of the -run pattern
+  # unnoticed. This one specifically pins avg_queue_seconds to CPython's
+  # Neumaier-compensated sum() -- the four older oracles all pass against a
+  # NAIVE Go accumulation, which is how that defect survived CHAOS-4294.
+  for marker in testops-pipeline-golden testops-pipeline-grouping-golden testops-test-golden testops-coverage-golden testops-pipeline-avgqueue-golden; do
     proof_file="${proof_dir}/${marker}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: internal/jobs/metrics/testops live Python oracle measurement did not occur (%s)\n' "${marker}" >&2
@@ -739,6 +804,30 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/review-edges-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: review_edges golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/jobs/metrics/daily/benchmarking (frozen benchmarking golden vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestBenchmarkingGoldenMatchesLivePython$' \
+        ./internal/jobs/metrics/daily/benchmarking
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Its own marker, for the same reason as cicd-golden above (CHAOS-4288).
+  proof_file="${proof_dir}/benchmarking-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: benchmarking golden rot guard did not compare against live Python\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

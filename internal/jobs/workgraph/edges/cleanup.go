@@ -1,6 +1,7 @@
 package edges
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"sort"
 	"time"
 )
@@ -50,7 +51,7 @@ func BuildCleanupPlan(rows []DependencyRow, existingEdgeIDs []string) CleanupPla
 
 	for _, row := range rows {
 		// Python lowercases before the membership test (:927).
-		if _, isBlocker := blockerTypes[pythonLower(row.RelationshipType)]; !isBlocker {
+		if _, isBlocker := blockerTypes[pythonparity.Lower(row.RelationshipType)]; !isBlocker {
 			continue
 		}
 		// NOTE these are the RAW endpoints, NOT the canonicalised ones — Python

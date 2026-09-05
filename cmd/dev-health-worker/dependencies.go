@@ -13,6 +13,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/benchmarking"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
@@ -621,6 +623,21 @@ func configureWorkerDependenciesWithSources(
 	// family. That is the argument for writing the guard class-wide rather
 	// than asserting the one writer a reviewer happened to name.
 	if err := registry.RegisterMetrics("review_edges_writer", reviewedges.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4288: the third instance of this class, found by codex r1 on #2235
+	// and independently by TestEveryWriterMetricsSourceIsRegistered the moment
+	// that guard reached a branch containing this family.
+	if err := registry.RegisterMetrics("benchmarking_writer", benchmarking.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4280 (codex round chaos-4280-r1, finding 5): same process-wide-
+	// singleton-needs-registration shape as cicd_writer above -- ai_impact's
+	// native executor increments this whenever a partition's commit linkage
+	// is unavailable, regardless of which worker group runs the metricsQueue.
+	if err := registry.RegisterMetrics("ai_impact_linkage", aiimpact.LinkageMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

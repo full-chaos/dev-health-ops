@@ -84,6 +84,31 @@ KNOWN_UNCOVERED = {
     # create, which turns a green gate red for a reason unrelated to the port.
     "review_edges",
     "benchmarking",
+    # MINE (CHAOS-4286, #2263/formerly #2240), pinned with evidence, same
+    # discipline as ai_governance above. The E2E seed loop
+    # (ci/run_metrics_executed_proof.sh) drives four sync targets -- cicd,
+    # deployments, incidents, tests -- and none of them is "prs", so neither
+    # git_pull_requests nor git_pull_request_reviews is seeded. This family's
+    # review_outcome_edges table needs pull-request review rows and cannot
+    # produce any without them, regardless of the port's correctness; whether
+    # the other two edge tables (pr_deployment_edges, deployment_incident_edges)
+    # can produce rows from deployments+incidents alone is unverified, so this
+    # is pinned rather than asserted on an unconfirmed partial result. Closing
+    # it needs a "prs" seed step added to the loop (or separate per-table
+    # evidence), out of scope for a port PR.
+    "work_graph_edges",
+    # MINE (CHAOS-4280, #2267/formerly #2236), pinned with evidence, same
+    # discipline as ai_governance and work_graph_edges above -- doubly so, in
+    # fact: this family hits BOTH of their gaps at once. Its attribution
+    # loader joins ai_attribution_resolved (built from `ai_attribution`, which
+    # no seeded target here writes -- ai_governance's exact reason), and its
+    # PR/review loaders need git_pull_requests/git_pull_request_reviews (no
+    # "prs" seed target -- work_graph_edges' exact reason). With zero rows on
+    # either input this harness cannot produce a nonzero sample for this
+    # family regardless of the port's correctness. Closing it needs both an
+    # "ai-attribution" seed step and a "prs" seed step added to the loop, out
+    # of scope for a port PR.
+    "ai_impact",
 }
 
 

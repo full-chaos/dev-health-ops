@@ -32,16 +32,6 @@ from dev_health_ops.metrics.compute_ic import (
     compute_ic_metrics_daily,
 )
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
-from dev_health_ops.metrics.compute_testops import (
-    compute_coverage_metrics_daily,
-    compute_pipeline_metrics_daily,
-    compute_test_metrics_daily,
-)
-from dev_health_ops.metrics.compute_testops_risk import (
-    compute_pipeline_stability,
-    compute_quality_drag,
-    compute_release_confidence,
-)
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
@@ -1118,7 +1108,7 @@ async def run_daily_metrics_job(
     """Run the daily metrics compute+write pipeline.
 
     Returns a ``{day: [family, ...]}`` map of sub-families (currently
-    cicd/deploy/incident/testops_risk -- CHAOS-4246) that computed zero rows
+    cicd/deploy/incident -- CHAOS-4246) that computed zero rows
     for that day despite the rest of the run succeeding. This is a
     DEGRADE signal, not a failure: zero rows is often legitimate (no CI
     activity, no deploys, no incidents that day), so an empty result for one
@@ -1134,23 +1124,15 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
-    ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
+    ``file_risk_hotspots`` CHAOS-4277,
     ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
     ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
     chaos-4280-r3, finding 5 -- this doc had not been updated when
     ``ai_impact`` was wired below); naming any other family here has no
-    effect.
-
-    The three CHAOS-4284 names gate WRITES ONLY: their computed values still
-    feed ``compute_release_confidence``/``compute_quality_drag``/
-    ``compute_pipeline_stability`` in-process further down, so the compute runs
-    regardless of this set -- same shape as ``repo_user_commit`` and
-    ``testops_risk``, not ``team_wellbeing``'s compute+write skip. The gate is
-    load-bearing rather than cosmetic: their three target tables are plain
-    ``MergeTree`` with no dedup engine, so a write that is not suppressed after
-    the Go executor already wrote the same ``(org_id, repo_id, day)`` doubles
-    every metric silently instead of erroring.
+    effect. CHAOS-5245 deleted testops_pipeline/testops_test/
+    testops_coverage/testops_risk's Python compute entirely (their native
+    Go executors, CHAOS-4284/CHAOS-4294, have no Python fallback left) --
+    those four names no longer appear here at all, not even as a no-op.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -1251,22 +1233,7 @@ async def run_daily_metrics_job(
             current += timedelta(days=1)
         return result
 
-    # CHAOS-4350 PR 2: testops_loader is just `loader` (kept as its own name
-    # for readability at the testops call sites below). PR 1 built a per-day
-    # cache here to avoid refetching a rolling 30-day window on every
-    # backfilled day; PR 2 made that machinery unnecessary instead of fixing
-    # it further -- `compute_test_metrics_daily`'s only use of historical
-    # (non-current-day) case data is a small SQL-side aggregate
-    # (`load_testops_historical_failed_case_names`, bounded by distinct
-    # failing case names, not by day count x run count), so every testops
-    # fetch below is naturally single-day-sized regardless of
-    # `backfill_days` -- there is nothing left worth caching across days.
-    testops_loader: Any = loader
-
-    # Rolling buffer for pipeline stability (7-day window)
-    pipeline_metrics_buffer: list[Any] = []
-
-    # CHAOS-4246: cicd/deploy/incident/testops_risk stayed at zero rows for
+    # CHAOS-4246: cicd/deploy/incident stayed at zero rows for
     # 16 days while every metrics.daily_partition run reported succeeded --
     # the compute+write path was correct, but nothing recorded that these
     # specific families produced nothing. families_zero_rows makes that
@@ -1381,42 +1348,15 @@ async def run_daily_metrics_job(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
         h_start_date = d - timedelta(days=29)
-        (
-            testops_pipeline_rows,
-            testops_job_rows,
-        ) = await testops_loader.load_testops_pipeline_data(start, end, repo_id=repo_id)
-        # CHAOS-4350 PR 2: today's suite/case rows only (single-day window,
-        # naturally small and capped) -- the 29 days of history before it
-        # are no longer fetched as raw rows at all; see
-        # load_testops_historical_failed_case_names below.
-        (
-            testops_suite_rows,
-            testops_case_rows,
-        ) = await testops_loader.load_testops_test_data(start, end, repo_id=repo_id)
-        # The window is relative to THIS partition's day `d`, not wall-clock
-        # "now" -- `[d-29, d)`, i.e. up to but excluding today's own window.
-        # `current_day_end=end` (codex round 2 P2, team-lead ruling
-        # 2026-08-27): a run whose suites straddle `start` (UTC midnight for
-        # day `d`) shares one run_id across suites on both sides -- passing
-        # today's full window lets the loader exclude that run_id from
-        # "historical" (it belongs to today, per load_testops_test_data's
-        # own run_id-membership semantics), not just time-slice on `start`.
-        historical_failed_names_by_repo = (
-            await testops_loader.load_testops_historical_failed_case_names(
-                datetime.combine(h_start_date, time.min, tzinfo=timezone.utc),
-                start,
-                repo_id=repo_id,
-                current_day_end=end,
-            )
-        )
-        coverage_rows = await testops_loader.load_testops_coverage_data(
-            start, end, repo_id=repo_id
-        )
-        prior_coverage_rows = await testops_loader.load_testops_coverage_data(
-            datetime.combine(d - timedelta(days=30), time.min, tzinfo=timezone.utc),
-            start,
-            repo_id=repo_id,
-        )
+        # CHAOS-5245 deleted the testops_pipeline/testops_test/testops_coverage
+        # compute+write block that used to sit here (the loader fetches for
+        # testops_pipeline_rows/testops_job_rows/testops_suite_rows/
+        # testops_case_rows/historical_failed_names_by_repo/coverage_rows/
+        # prior_coverage_rows and the compute_pipeline_metrics_daily/
+        # compute_test_metrics_daily/compute_coverage_metrics_daily calls that
+        # consumed them) -- their native Go executors (CHAOS-4284) have no
+        # Python fallback left to feed. h_start_date stays: h_commit_rows below
+        # is unrelated (file/complexity history), not a testops fetch.
         incident_rows = await loader.load_incidents(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
@@ -1663,37 +1603,6 @@ async def run_daily_metrics_job(
             else compute_cicd_metrics_daily(
                 day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
             )
-        )
-        # CHAOS-4284: see the write block below for why these three are a
-        # WRITE-ONLY skip -- the computed values are still needed in-process by
-        # testops_risk's own three functions further down.
-        skip_testops_pipeline_write = "testops_pipeline" in skip_families
-        skip_testops_test_write = "testops_test" in skip_families
-        skip_testops_coverage_write = "testops_coverage" in skip_families
-        testops_pipeline_metrics = compute_pipeline_metrics_daily(
-            day=d,
-            pipeline_runs=testops_pipeline_rows,
-            job_runs=testops_job_rows,
-            computed_at=computed_at,
-            repo_team_resolver=repo_team_resolver,
-            repo_names_by_id=repo_names_by_id,
-        )
-        testops_test_metrics = compute_test_metrics_daily(
-            day=d,
-            suite_results=testops_suite_rows,
-            case_results=testops_case_rows,
-            computed_at=computed_at,
-            repo_team_resolver=repo_team_resolver,
-            repo_names_by_id=repo_names_by_id,
-            historical_failed_names_by_repo=historical_failed_names_by_repo,
-        )
-        testops_coverage_metrics = compute_coverage_metrics_daily(
-            day=d,
-            snapshots=coverage_rows,
-            prior_snapshots=prior_coverage_rows,
-            computed_at=computed_at,
-            repo_team_resolver=repo_team_resolver,
-            repo_names_by_id=repo_names_by_id,
         )
         deploy_metrics = compute_deploy_metrics_daily(
             day=d, deployments=deployment_rows, computed_at=computed_at
@@ -2009,27 +1918,10 @@ async def run_daily_metrics_job(
             if not skip_review_edges:
                 s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
-            # CHAOS-4284: testops_pipeline/testops_test/testops_coverage have
-            # native Go executors (TestopsPipelineExecutor/TestopsTestExecutor/
-            # TestopsCoverageExecutor). WRITE-ONLY skip, exactly like
-            # repo_user_commit and testops_risk above -- NOT team_wellbeing's
-            # compute+write skip: these three values are consumed IN-PROCESS a
-            # few hundred lines below by compute_release_confidence /
-            # compute_quality_drag / compute_pipeline_stability, so the compute
-            # must keep running here regardless of which side wrote the rows.
-            #
-            # Gating the writes is what actually prevents a double write. The
-            # three target tables are plain MergeTree ORDER BY (repo_id, day)
-            # (029_testops_tables.sql), NOT ReplacingMergeTree -- nothing
-            # collapses a duplicate (repo_id, day) row, so an ungated write
-            # after Go has already written the same scope would silently
-            # double every one of these metrics.
-            if not skip_testops_pipeline_write:
-                s.write_testops_pipeline_metrics(testops_pipeline_metrics)
-            if not skip_testops_test_write:
-                s.write_testops_test_metrics(testops_test_metrics)
-            if not skip_testops_coverage_write:
-                s.write_testops_coverage_metrics(testops_coverage_metrics)
+            # CHAOS-5245 deleted testops_pipeline/testops_test/testops_coverage's
+            # Python compute+write entirely (their native Go executors,
+            # CHAOS-4284, have no fallback left) -- there is nothing left here
+            # to gate.
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
@@ -2137,56 +2029,11 @@ async def run_daily_metrics_job(
         # observing inside that loop would double-count).
         record_team_metrics_daily_repo_rows(team_metrics)
 
-        # CHAOS-4294: testops_risk has a native Go executor
-        # (TestopsRiskExecutor). Mirrors repo_user_commit's WRITE-ONLY skip
-        # (job_daily.py's skip_repo_user_commit_write above), not
-        # team_wellbeing's compute+write skip: compute always runs here
-        # (cheap, ClickHouse-free -- it only consumes testops_pipeline_metrics/
-        # testops_test_metrics/testops_coverage_metrics, which are computed
-        # unconditionally a few lines above regardless of this family's own
-        # skip state) and _note_family_zero_rows always fires, so this
-        # family's zero-row degrade signal keeps working the same way
-        # whether Go or Python actually wrote the rows. Only the three
-        # s.write_* calls are gated -- skipping them is what actually
-        # prevents the double-write a family flipped to families.json
-        # port="go" would otherwise produce (Go's executor already wrote
-        # these rows for this scope; Python must not write them again).
-        release_conf = compute_release_confidence(
-            day=d,
-            pipeline_metrics=testops_pipeline_metrics,
-            test_metrics=testops_test_metrics,
-            coverage_metrics=testops_coverage_metrics,
-            computed_at=computed_at,
-        )
-        quality_drag = compute_quality_drag(
-            day=d,
-            pipeline_metrics=testops_pipeline_metrics,
-            test_metrics=testops_test_metrics,
-            computed_at=computed_at,
-        )
-        pipeline_metrics_buffer.extend(testops_pipeline_metrics)
-        # Keep only the last 7 days of pipeline metrics
-        cutoff = d - timedelta(days=6)
-        pipeline_metrics_buffer = [
-            m for m in pipeline_metrics_buffer if m.day >= cutoff
-        ]
-        pipeline_stab = compute_pipeline_stability(
-            day=d,
-            pipeline_metrics_7d=pipeline_metrics_buffer,
-            computed_at=computed_at,
-        )
-        skip_testops_risk_write = "testops_risk" in skip_families
-        for s in sinks:
-            if not skip_testops_risk_write:
-                if release_conf:
-                    s.write_release_confidence(release_conf)
-                if quality_drag:
-                    s.write_quality_drag(quality_drag)
-                if pipeline_stab:
-                    s.write_pipeline_stability(pipeline_stab)
-        _note_family_zero_rows("testops_risk.release_confidence", release_conf, day=d)
-        _note_family_zero_rows("testops_risk.quality_drag", quality_drag, day=d)
-        _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)
+        # CHAOS-5245 deleted testops_risk's Python compute+write entirely
+        # (its native Go executor, TestopsRiskExecutor/CHAOS-4294, has no
+        # fallback left, and its only input -- testops_pipeline_metrics/
+        # testops_test_metrics/testops_coverage_metrics -- no longer exists
+        # either now that CHAOS-4284's Python compute is also gone).
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights) MOVED to run_daily_metrics_finalize

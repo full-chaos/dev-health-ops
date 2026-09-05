@@ -227,16 +227,24 @@ page's own drift gate, per `.remember/remaining-python-compute-inventory-2026-09
 independently re-verified this pass; tracked as a follow-up ticket, not listed as a row here per team-lead's
 instruction not to fold doc-drift findings into the doc itself).
 
-**`internal/jobs/metrics/testops/compute.go`** is the pure Go compute (with live-Python oracles for parity)
-shared by `testops_risk` and the three `testops_{pipeline,test,coverage}` families. It was written by
-CHAOS-4294 as an internal dependency of `testops_risk`'s own input recompute and was, for a period,
-*built but not wired* -- no native family consumed it and nothing wrote
-`testops_{pipeline,test,coverage}_metrics_daily`. **CHAOS-4284 closed that gap**: those three families are
-NATIVE above, implemented in `internal/jobs/metrics/daily/testops_native_executor.go` on top of this same
-compute, with cap-free ClickHouse readers in `testops_native_clickhouse.go`. The Python compute in
-`compute_testops.py` is deliberately still present and still runs -- `job_daily.py` feeds its in-process
-results to `testops_risk`'s own functions -- but its three `s.write_testops_*` calls are now skip-gated, so
-Go owns the writes. Deleting the Python path is a deliberate follow-up, not part of CHAOS-4284.
+**`internal/jobs/metrics/testops/compute.go`** is the pure Go compute shared by `testops_risk` and the three
+`testops_{pipeline,test,coverage}` families. It was written by CHAOS-4294 as an internal dependency of
+`testops_risk`'s own input recompute and was, for a period, *built but not wired* -- no native family
+consumed it and nothing wrote `testops_{pipeline,test,coverage}_metrics_daily`. **CHAOS-4284 closed that
+gap**: those three families are NATIVE above, implemented in
+`internal/jobs/metrics/daily/testops_native_executor.go` on top of this same compute, with cap-free
+ClickHouse readers in `testops_native_clickhouse.go`. **CHAOS-5245 (folded from CHAOS-5246) deleted the
+Python compute entirely** for all four families (`compute_testops.py`, `compute_testops_risk.py`, their
+`job_daily.py` compute+write wiring, and the sink write methods) -- the native Go executors have no Python
+fallback left. The former live-Python-oracle rot guards for `compute.go` (the `testdata/python_*_oracle.py`
+scripts, `compute_test.go`, the `check_go.sh` `live-python-oracles` registrations) are deleted with them;
+`internal/pythonparity`'s Neumaier-sum guards and `accumulator_test.go`'s three pure-Go accumulator-parity
+tests (streaming vs. slice API) are what's left proving `compute.go` itself. The one exception:
+`pipeline_stability_fma_golden_test.go` reads a FROZEN `tests/fixtures/pipeline_stability_fma_golden.json`
+fixture (no live Python involved) and is now the permanent regression contract for
+`computePipelineStability`'s FMA-safety fix (CHAOS-4818) -- its own rot guard
+(`TestPipelineStabilityFMAGoldenMatchesLivePython`, which re-ran the now-deleted generator every CI run) is
+deleted, the frozen file and this one test survive.
 
 ### Remaining metrics families (`internal/jobs/metrics/remaining/families.json`)
 

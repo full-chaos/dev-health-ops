@@ -204,24 +204,6 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "citation": "Go: `internal/jobs/metrics/daily/cicd/`",
         "ticket": "CHAOS-4292 (Done)",
     },
-    "testops_pipeline": {
-        # CHAOS-5153's line-anchor fix (105 -> 114) is now moot: CHAOS-4284/
-        # #2226 ported this family to native Go after that fix landed.
-        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
-        "ticket": "CHAOS-4284",
-    },
-    "testops_test": {
-        # CHAOS-5153's line-anchor fix (207 -> 216) is now moot: CHAOS-4284/
-        # #2226 ported this family to native Go after that fix landed.
-        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent",
-        "ticket": "CHAOS-4284",
-    },
-    "testops_coverage": {
-        # CHAOS-5153's line-anchor fix (355 -> 371) is now moot: CHAOS-4284/
-        # #2226 ported this family to native Go after that fix landed.
-        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse",
-        "ticket": "CHAOS-4284",
-    },
     "deploy": {
         "citation": "Go: `internal/jobs/metrics/daily/deploy_native_executor.go`",
         "ticket": "CHAOS-4293 (Done)",
@@ -265,10 +247,6 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         # CHAOS-5153: the "NONE found" citation was stale -- CHAOS-5141 was
         # filed 2026-09-05 to track exactly this finalize-side gap.
         "ticket": "CHAOS-5141",
-    },
-    "testops_risk": {
-        "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
-        "ticket": "CHAOS-4294 (Done)",
     },
     "benchmarking": {
         "citation": "Python: `benchmarking/runner.py:259 run_benchmarking_for_day`",

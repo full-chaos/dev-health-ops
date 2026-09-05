@@ -181,33 +181,6 @@ class _FakeLoader:
         return [], []
 
 
-class _FakeLoaderWithTestopsPipeline(_FakeLoader):
-    """Like _FakeLoader, but returns ONE ci_pipeline_runs row so
-    compute_release_confidence/compute_quality_drag/compute_pipeline_stability
-    produce non-empty output -- needed to distinguish "write skipped because
-    skip_families named testops_risk" from "write skipped because there was
-    nothing to write" (test_repo_user_commit_in_skip_families_writes_nothing_
-    but_still_computes doesn't hit this ambiguity because compute_daily_metrics
-    already gets a real commit row from the base _FakeLoader)."""
-
-    async def load_testops_pipeline_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        pipeline_row = {
-            "repo_id": REPO_ID,
-            "run_id": "run-1",
-            "status": "success",
-            "queued_at": None,
-            "started_at": datetime(2025, 12, 18, 12, 0, tzinfo=timezone.utc),
-            "finished_at": datetime(2025, 12, 18, 12, 10, tzinfo=timezone.utc),
-            "duration_seconds": None,
-            "queue_seconds": None,
-            "retry_count": 0,
-            "team_id": None,
-            "service_id": None,
-            "org_id": ORG_ID,
-        }
-        return [pipeline_row], []
-
-
 class _FakeLoaderWithWorkItem(_FakeLoader):
     """Like _FakeLoader, but returns ONE real work item so
     compute_work_item_metrics_daily/compute_estimate_coverage_metrics_daily
@@ -367,8 +340,10 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
 ) -> None:
     """A family with no native executor is unaffected by being named in
     skip_families -- only team_wellbeing, repo_user_commit, incident, deploy,
-    cicd, and testops_risk check this set today. "file_hotspots" has no Go
-    executor yet."""
+    and cicd check this set today (testops_pipeline/testops_test/
+    testops_coverage/testops_risk used to as well, until CHAOS-5245 deleted
+    their Python compute+write entirely -- naming them now has no effect at
+    all, not even a no-op skip). "file_hotspots" has no Go executor yet."""
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
@@ -756,183 +731,6 @@ async def test_file_risk_hotspots_skip_families_none_writes_it(
     )
 
     assert "write_file_hotspot_daily" in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_testops_risk_in_skip_families_writes_nothing_but_still_computes(
-    monkeypatch: Any,
-) -> None:
-    """CHAOS-4294: like repo_user_commit, compute_release_confidence must
-    still run when testops_risk is skipped (nothing downstream reads its
-    result, but the compute is cheap/ClickHouse-free and matching
-    repo_user_commit's precedent keeps _note_family_zero_rows's degrade
-    signal live regardless of which side computed the rows -- team-lead
-    ruling 2026-09-01). Only the three writes are gated."""
-    compute_calls: list[Any] = []
-    original = job_daily.compute_release_confidence
-
-    def _spy(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(job_daily, "compute_release_confidence", _spy)
-
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(
-        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
-    )
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={"testops_risk"},
-    )
-
-    assert len(compute_calls) == 1
-    assert "write_release_confidence" not in sink.write_calls
-    assert "write_quality_drag" not in sink.write_calls
-    assert "write_pipeline_stability" not in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_testops_risk_skip_does_not_affect_other_families(
-    monkeypatch: Any,
-) -> None:
-    """Naming testops_risk in skip_families must not perturb team_metrics or
-    any other family's write path."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(
-        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
-    )
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={"testops_risk"},
-    )
-
-    assert "team_metrics" in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_testops_risk_not_skipped_writes_rows(monkeypatch: Any) -> None:
-    """Baseline for the two tests above: WITHOUT testops_risk in
-    skip_families, the same fixture actually writes release_confidence --
-    proves the "writes nothing" assertion above is because of the skip, not
-    because the fixture never produces rows in the first place."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(
-        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
-    )
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families=None,
-    )
-
-    assert "write_release_confidence" in sink.write_calls
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("family", "write_call"),
-    [
-        ("testops_pipeline", "write_testops_pipeline_metrics"),
-        ("testops_test", "write_testops_test_metrics"),
-        ("testops_coverage", "write_testops_coverage_metrics"),
-    ],
-)
-async def test_testops_family_in_skip_families_suppresses_only_its_own_write(
-    monkeypatch: Any, family: str, write_call: str
-) -> None:
-    """CHAOS-4284 (codex r2, P2): each of the three TestOps families gates its
-    OWN sink write and nothing else.
-
-    This is the guard with the worst failure mode in the whole port. The three
-    target tables are plain ``MergeTree`` with no dedup engine, so if a skip
-    stops firing -- a renamed flag, a misspelled family name, a branch that
-    stops being reached -- the Go executor's rows and Python's rows BOTH land
-    for the same ``(org_id, repo_id, day)`` and every metric silently doubles.
-    Nothing errors and nothing collapses them; the only signal is wrong
-    numbers downstream.
-
-    Parametrised deliberately rather than written once: a single test naming
-    one family would keep passing while the other two regressed, which is the
-    same "covers less than it looks like it covers" shape r1 found in the
-    integration fixture.
-    """
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(
-        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
-    )
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={family},
-    )
-
-    assert write_call not in sink.write_calls
-    # The OTHER two must be unaffected -- a skip that suppressed all three
-    # would pass a single-family assertion while silently over-skipping.
-    for other in (
-        "write_testops_pipeline_metrics",
-        "write_testops_test_metrics",
-        "write_testops_coverage_metrics",
-    ):
-        if other != write_call:
-            assert other in sink.write_calls, (
-                f"skipping {family} must not suppress {other}"
-            )
-    assert "team_metrics" in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_testops_families_not_skipped_write_all_three(
-    monkeypatch: Any,
-) -> None:
-    """Baseline for the parametrised test above: with an EMPTY skip set the
-    same fixture writes all three.
-
-    Without this, every "not in write_calls" assertion above would pass
-    vacuously if the fixture simply never produced testops rows -- the test
-    would be green while proving nothing about the skip.
-    """
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(
-        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
-    )
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families=set(),
-    )
-
-    assert "write_testops_pipeline_metrics" in sink.write_calls
-    assert "write_testops_test_metrics" in sink.write_calls
-    assert "write_testops_coverage_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

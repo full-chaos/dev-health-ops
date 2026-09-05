@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sort"
 	"time"
@@ -256,20 +255,6 @@ type Store interface {
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
-	// FailFinalizePermanently writes the TERMINAL finalize state --
-	// status='failed' AND finalization_status='failed' -- on the final River
-	// attempt (CHAOS-4290, #2241 confirmation pass).
-	//
-	// Nothing produced that state for a finalize before this. ReleaseFinalize
-	// sets finalization_status='failed' and leaves status='running', which
-	// ClaimFinalize treats as CLAIMABLE, so attempt 1 and an exhausted run were
-	// indistinguishable forever. The blocked marker keyed on the only state
-	// that existed and therefore fired on healthy retryable runs while never
-	// seeing a stranded one.
-	//
-	// Named after FailPartitionPermanently, which is the same shape one layer
-	// down: the point at which retrying stops and an operator has to look.
-	FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error
 }
 
 // RepositoryDiscoverer reads the authoritative repository IDs for one
@@ -1374,52 +1359,6 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
-		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's
-		// metrics-executed-proof failure).
-		//
-		// The retryable error the caller returns is wrapped by the adapter into
-		// the fixed string "dev-health job failed [retryable]", and the cause is
-		// serialised NOWHERE. On #2243's E2E every finalize job on every run
-		// exhausted its four attempts -- 96 starts, 96 discards -- and the only
-		// evidence of WHY was 96 identical wrapper strings. A family that fails
-		// every attempt on every run must not be that quiet.
-		//
-		// Logged here rather than left to the adapter because this is the only
-		// frame that still has the family scope: which run, which org, which
-		// attempt of how many.
-		// slog.Default() rather than skipping on a nil logger, following
-		// providerunit.go's pattern. `if logger != nil { log }` would make a nil
-		// logger produce SILENCE -- reintroducing, in a different place, exactly
-		// the defect this block exists to remove.
-		finalizeLogger := execution.Logger
-		if finalizeLogger == nil {
-			finalizeLogger = slog.Default()
-		}
-		{
-			finalizeLogger.Error("daily finalize failed",
-				"error", err,
-				"run_id", runID,
-				"organization_id", claim.Run.OrganizationID,
-				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
-				"attempt", execution.Attempt,
-				"max_attempts", execution.Definition.MaxAttempts,
-				"native_families", handler.nativeFinalizeFamilyNames,
-				"terminal", execution.Attempt >= execution.Definition.MaxAttempts,
-			)
-		}
-		// FINAL ATTEMPT: write the terminal state rather than releasing for a
-		// retry that will never come. River discards after this, and without a
-		// terminal write the run sits at status='running',
-		// finalization_status='failed' -- byte-identical to attempt 1 -- so
-		// nothing downstream can tell a stranded run from a retrying one.
-		//
-		// Attempt and MaxAttempts come from the adapter's own pair, the same
-		// values River acts on, so "final" here means what River means by it
-		// rather than a parallel notion maintained beside it.
-		if execution.Attempt >= execution.Definition.MaxAttempts {
-			failFinalizePermanently(handler.store, ctx, *claim)
-			return retryCompatibilityError(err)
-		}
 		releaseFinalize(handler.store, ctx, *claim)
 		return retryCompatibilityError(err)
 	}
@@ -1431,16 +1370,6 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return jobruntime.Retryable(err)
 	}
 	return nil
-}
-
-// failFinalizePermanently writes the terminal state on a context detached from
-// the failing one, exactly as releaseFinalize does: the work context may already
-// be cancelled, and a terminal write that silently did not happen is the whole
-// defect this fixes.
-func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) {
-	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	_ = store.FailFinalizePermanently(terminalCtx, claim)
 }
 
 func runWithLeaseRenewal(

@@ -183,6 +183,111 @@ func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
 	}
 }
 
+type recordingFinalizeObserver struct {
+	calls []string
+	rows  map[string]int
+	err   error
+}
+
+func (observer *recordingFinalizeObserver) ObserveDailyMetricsNativeFamily(
+	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome, rowsWritten int, _ time.Duration,
+) error {
+	if observer.rows == nil {
+		observer.rows = map[string]int{}
+	}
+	observer.calls = append(observer.calls, family+":"+string(outcome))
+	observer.rows[family] = rowsWritten
+	return observer.err
+}
+
+// CHAOS-4290 shipped the mechanism with fail-open and NO counter, which its own
+// RISK-NOTES admitted meant a family failing every run degraded to Python
+// invisibly. This is that gap closed: a REFUSED outcome must be reported even
+// though the finalize still succeeds.
+func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	compatibility := &recordingFinalizeCompatibility{}
+	handler, err := NewFinalizeHandler(store, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingFinalizeObserver{}
+	handler.SetNativeFinalizeFamilyObserver(observer)
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &stubFinalizeFamily{err: errors.New("clickhouse hiccup")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The attempt FAILS now (#2241 r2 Findings 1 and 2) instead of degrading to
+	// Python. This test survived the forward-merge textually while asserting the
+	// opposite semantics -- a clean auto-merge is not a semantic merge.
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded after a native family failed -- the run completes " +
+			"and is never redriven")
+	}
+	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
+	}
+	// The counter is still the point, and still the reason this test exists: a
+	// family that redrives forever with no counter is exactly as invisible as
+	// one that silently degraded to Python.
+	if len(observer.calls) != 1 || observer.calls[0] != "ic_finalize:refused" {
+		t.Fatalf("observed %v, want [ic_finalize:refused]", observer.calls)
+	}
+	if compatibility.callCount != 0 {
+		t.Fatalf("bridge calls = %d, want 0 -- Python must never compute a family "+
+			"registered as native", compatibility.callCount)
+	}
+}
+
+// A succeeding family reports computed WITH its row count, so the series can
+// distinguish "ran and wrote nothing" from "did not run".
+func TestSucceedingNativeFinalizeFamilyIsReportedComputedWithRows(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingFinalizeObserver{}
+	handler.SetNativeFinalizeFamilyObserver(observer)
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &stubFinalizeFamily{rows: 42},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
+		t.Fatal(err)
+	}
+	if len(observer.calls) != 1 || observer.calls[0] != "ic_finalize:computed" {
+		t.Fatalf("observed %v, want [ic_finalize:computed]", observer.calls)
+	}
+	if observer.rows["ic_finalize"] != 42 {
+		t.Fatalf("rows = %d, want 42 -- a computed outcome with no row count cannot "+
+			"distinguish 'wrote nothing' from 'did not run'", observer.rows["ic_finalize"])
+	}
+}
+
+// An observer that itself errors must not fail the job, matching every other
+// observer in this package.
+func TestFinalizeSucceedsWhenTheObserverFails(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFinalizeFamilyObserver(&recordingFinalizeObserver{err: errors.New("telemetry down")})
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &stubFinalizeFamily{rows: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
+		t.Fatalf("Work = %v, want success despite the observer failure", err)
+	}
+}
+
 // restoreRecognisedFinalizeFamilies puts the production set back. Taken as an
 // argument rather than read inside, so the deferred call captures the value at
 // defer time and a test cannot accidentally restore a set another test left

@@ -627,7 +627,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // "compounding_risk" (CHAOS-4287) is post_bridge for its own reason and
 // carries the same consequence: unregistered means every observation for it is
 // refused, and the family's absence becomes invisible rather than counted.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk"}
+//
+// "ic_finalize" (CHAOS-4290) is the first FINALIZE-scope family here, and the
+// argument above applies to it with one more turn of the screw: since #2241's
+// r2 ruling a native finalize failure redrives the run instead of degrading to
+// Python, so an unregistered family would make a redrive loop invisible rather
+// than merely a silent degradation.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ic_finalize"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

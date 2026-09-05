@@ -15,6 +15,9 @@
     "work_item_estimate": "post_bridge",
     "work_item_state": "post_bridge"
   },
+  "finalize": {
+    "ic_finalize": "finalize"
+  },
   "remaining": {
     "capacity": "native",
     "complexity": "compat",

@@ -54,7 +54,7 @@ import (
 // maps' mere key-set union could never see.
 func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	native, postBridge := dailyNativeFamilyRegistrations(githubWorkItemsBuildExecutorConn{}, nil, logger)
+	native, postBridge, finalize := dailyNativeFamilyRegistrations(githubWorkItemsBuildExecutorConn{}, nil, logger)
 
 	registeredPhase := make(map[string]string, len(native)+len(postBridge))
 	for family := range native {
@@ -67,6 +67,14 @@ func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 				"map wholesale, so a family present in both is dispatched twice, not once", family)
 		}
 		registeredPhase[family] = "post_bridge"
+	}
+	for family := range finalize {
+		if _, alreadyRegistered := registeredPhase[family]; alreadyRegistered {
+			t.Fatalf("family %q is registered as a finalize family AND in a partition "+
+				"map -- it would run once per partition AND once per run, writing the "+
+				"same rows repeatedly", family)
+		}
+		registeredPhase[family] = "finalize"
 	}
 
 	goFamilyPhase := readFamiliesJSONPortGoPhases(t)
@@ -152,9 +160,18 @@ func readFamiliesJSONPortGoPhases(t *testing.T) map[string]string {
 		if family.Port != "go" {
 			continue
 		}
-		if family.Phase == "post_bridge" {
+		switch family.Phase {
+		case "post_bridge":
 			goFamilyPhase[family.Name] = "post_bridge"
-		} else {
+		case "finalize":
+			// CHAOS-4290: a RUN-scoped family, registered through
+			// FinalizeHandler.SetNativeFinalizeFamilies rather than either
+			// partition map. A third bucket, not a variant of pre_bridge --
+			// a finalize family in a partition map would run once per
+			// PARTITION instead of once per run, writing the same rows
+			// repeatedly.
+			goFamilyPhase[family.Name] = "finalize"
+		default:
 			goFamilyPhase[family.Name] = "pre_bridge"
 		}
 	}

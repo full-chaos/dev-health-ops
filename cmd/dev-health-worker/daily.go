@@ -250,7 +250,7 @@ func buildDailyWorker(
 				// test that matters now calls dailyNativeFamilyRegistrations
 				// directly and asserts on its actual return value, not on
 				// source text.
-				nativeFamilies, postBridgeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				nativeFamilies, postBridgeFamilies, _ := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
@@ -281,6 +281,21 @@ func buildDailyWorker(
 				if handlerErr != nil {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
+				// is a pure function (see the partition case's comment on why the
+				// drift test calls it directly), so calling it again here is safe
+				// and keeps each case owning the maps it actually registers --
+				// the partition arm's locals are out of scope in this one.
+				// Registering an empty map is a no-op, so a build with no finalize
+				// executor behaves exactly as before this capability existed.
+				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				handler.SetNativeFinalizeFamilies(finalizeFamilies)
+				// Same fail-open discipline as the partition path: telemetry
+				// never gates, but a fail-open path with no counter cannot be
+				// distinguished from one that is working.
+				if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+					handler.SetNativeFinalizeFamilyObserver(nativeObserver)
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsFinalizeArgs](
 					registry, spec, handler, dailyDependencies,
@@ -694,8 +709,20 @@ func dailyNativeFamilyRegistrations(
 	clickhouseConnection driver.Conn,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
-) (native map[string]daily.NativeFamilyExecutor, postBridge map[string]daily.NativeFamilyExecutor) {
+) (
+	native map[string]daily.NativeFamilyExecutor,
+	postBridge map[string]daily.NativeFamilyExecutor,
+	finalize map[string]daily.NativeFinalizeFamilyExecutor,
+) {
 	native = map[string]daily.NativeFamilyExecutor{}
+	// CHAOS-4290: RUN-scoped families. Kept in their own map because
+	// FinalizeHandler registers them through SetNativeFinalizeFamilies -- a
+	// finalize family placed in either partition map would run once per
+	// PARTITION rather than once per run.
+	finalize = map[string]daily.NativeFinalizeFamilyExecutor{}
+	if clickhouseConnection != nil {
+		finalize[daily.ICFinalizeFamilyName] = daily.NewICFinalizeExecutor(clickhouseConnection)
+	}
 	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
 		native["team_wellbeing"] = teamWellbeingExecutor
 		// CHAOS-4329: per-team repo fan-out telemetry -- optional,
@@ -884,6 +911,7 @@ func dailyNativeFamilyRegistrations(
 			"error", workItemStateErr,
 		)
 	}
+
 	// CHAOS-4283: work_item and work_item_estimate read the SAME
 	// work_item_team_attributions rows work_item_state reads, for the
 	// same reason and with the same loader -- so they carry the same
@@ -927,7 +955,8 @@ func dailyNativeFamilyRegistrations(
 			"error", workItemEstimateErr,
 		)
 	}
-	return native, postBridge
+	return native, postBridge, finalize
+
 }
 
 func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {

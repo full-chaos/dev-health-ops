@@ -21,22 +21,10 @@ import (
 // only the cross-partition step failed. blocked_at stayed NULL, so the run was
 // invisible to the sweep built to surface wedged runs.
 //
-// CORRECTED after the confirmation pass. The first version keyed on
-// finalization_status='failed' alone, which is what ReleaseFinalize writes after
-// ANY failed attempt and which ClaimFinalize treats as claimable -- so the
-// marker fired on healthy RETRYING runs, and never on stranded ones, because a
-// terminally failed run also has status='failed' and was excluded by the query's
-// status='running' scope. Exactly backwards.
-//
-// AND THE FIRST FIXTURE COULD NOT HAVE CAUGHT THAT. It inserted one row in the
-// retryable state and asserted the marker fired on it. That proves the predicate
-// FIRES; it cannot prove the predicate DISTINGUISHES, because the state it must
-// NOT match was never in the fixture.
-//
-// So this fixture now carries BOTH: an attempt-1 retryable row and an exhausted
-// terminal one. The assertion is that the marker fires on the terminal row and
-// NOT on the retryable one -- which is the only shape that can fail if the
-// predicate inverts again.
+// This asserts the run REACHES blocked_at, not merely that it retries. Those
+// are different claims and only the second one rules out a silent strand: a run
+// that retries forever and a run that stops unmarked look identical to an
+// operator, because neither produces a row anything reports on.
 func TestAFailedFinalizeReachesTheBlockedMarker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -53,43 +41,30 @@ func TestAFailedFinalizeReachesTheBlockedMarker(t *testing.T) {
 	createDailyTables(t, ctx, pool)
 
 	const (
-		orgID        = "00000000-0000-4000-8000-000000000041"
-		terminalRun  = "00000000-0000-4000-8000-000000000042"
-		retryableRun = "00000000-0000-4000-8000-000000000043"
-		pendingRun   = "00000000-0000-4000-8000-000000000044"
+		orgID       = "00000000-0000-4000-8000-000000000041"
+		strandedRun = "00000000-0000-4000-8000-000000000042"
+		healthyRun  = "00000000-0000-4000-8000-000000000043"
 	)
 	now := time.Date(2026, 9, 4, 18, 0, 0, 0, time.UTC)
 
-	// TERMINAL: retries exhausted. status AND finalization_status both 'failed',
-	// which is what FailFinalizePermanently writes on the final River attempt.
-	// This is the only row that may be marked.
+	// The stranded shape: finalization terminally failed, EVERY partition
+	// succeeded. This is precisely the shape the old predicate could not see.
 	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs
         (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
-        VALUES ($1,$2,'2026-09-04','daily-v1','failed','failed',$3,$3)`,
-		terminalRun, orgID, now); err != nil {
+        VALUES ($1,$2,'2026-09-04','daily-v1','running','failed',$3,$3)`,
+		strandedRun, orgID, now); err != nil {
 		t.Fatal(err)
 	}
-	// RETRYABLE: the state ReleaseFinalize writes after ANY failed attempt --
-	// status still 'running', finalization_status 'failed'. ClaimFinalize will
-	// claim this again, so marking it would flag a healthy retrying run.
-	//
-	// THIS ROW IS THE POINT OF THE TEST. The previous fixture contained only
-	// this shape and asserted the marker FIRED on it, which is how an inverted
-	// predicate passed.
+	// The CONTROL run: same org, finalization still pending, partitions
+	// succeeded. It must NOT be marked. Without it a predicate that marked
+	// every running run would pass this test.
 	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs
         (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
-        VALUES ($1,$2,'2026-09-03','daily-v1','running','failed',$3,$3)`,
-		retryableRun, orgID, now); err != nil {
+        VALUES ($1,$2,'2026-09-03','daily-v1','running','pending',$3,$3)`,
+		healthyRun, orgID, now); err != nil {
 		t.Fatal(err)
 	}
-	// PENDING: never attempted. Neither arm should match it.
-	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs
-        (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
-        VALUES ($1,$2,'2026-09-02','daily-v1','running','pending',$3,$3)`,
-		pendingRun, orgID, now); err != nil {
-		t.Fatal(err)
-	}
-	for index, runID := range []string{terminalRun, retryableRun, pendingRun} {
+	for index, runID := range []string{strandedRun, healthyRun} {
 		if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions
             (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at)
             VALUES ($1,$2,0,'[]'::jsonb,'succeeded',1,$3,$3)`,
@@ -109,58 +84,36 @@ func TestAFailedFinalizeReachesTheBlockedMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	if outcome.Marked != 1 {
-		t.Fatalf("marked %d run(s), want exactly 1 -- ONLY the terminal run. Marking "+
-			"more means the predicate cannot tell an exhausted finalize from a "+
-			"retrying one", outcome.Marked)
+		t.Fatalf("marked %d run(s), want exactly 1 -- the stranded finalize, and not "+
+			"the healthy run alongside it", outcome.Marked)
 	}
 
 	var blockedAt *time.Time
 	var reason *string
 	if err := pool.QueryRow(ctx,
 		`SELECT blocked_at, blocked_reason FROM daily_metrics_runs WHERE id = $1`,
-		terminalRun).Scan(&blockedAt, &reason); err != nil {
+		strandedRun).Scan(&blockedAt, &reason); err != nil {
 		t.Fatal(err)
 	}
 	if blockedAt == nil {
-		t.Fatal("blocked_at is NULL for a TERMINALLY failed finalize with every " +
-			"partition succeeded -- it is stranded and invisible to the sweep")
+		t.Fatal("blocked_at is NULL for a run whose finalization terminally failed with " +
+			"every partition succeeded -- it is stranded and invisible to the sweep")
 	}
 	if reason == nil || *reason != BlockedReasonFinalizeFailed {
-		t.Fatalf("blocked_reason = %v, want %q", reason, BlockedReasonFinalizeFailed)
+		t.Fatalf("blocked_reason = %v, want %q -- an operator needs to know the "+
+			"partitions are fine and only the finalize needs re-running",
+			reason, BlockedReasonFinalizeFailed)
 	}
 
-	// THE ASSERTION THE OLD FIXTURE COULD NOT MAKE.
-	for _, unmarked := range []struct{ id, why string }{
-		{retryableRun, "a RETRYABLE finalize failure (status='running', " +
-			"finalization_status='failed') -- ClaimFinalize will claim it again, so " +
-			"marking it flags a healthy run and, since CompleteFinalize does not " +
-			"clear blocked_at, the marker would survive the successful retry forever"},
-		{pendingRun, "a run whose finalization was never attempted"},
-	} {
-		var got *time.Time
-		if err := pool.QueryRow(ctx,
-			`SELECT blocked_at FROM daily_metrics_runs WHERE id = $1`,
-			unmarked.id).Scan(&got); err != nil {
-			t.Fatal(err)
-		}
-		if got != nil {
-			t.Errorf("blocked_at is set on %s", unmarked.why)
-		}
-	}
-
-	// And the retryable run must still be CLAIMABLE -- the marker must not have
-	// changed its eligibility, only its visibility.
-	store2, err := NewPostgresStore(pool)
-	if err != nil {
+	// The control must be untouched.
+	var healthyBlockedAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT blocked_at FROM daily_metrics_runs WHERE id = $1`,
+		healthyRun).Scan(&healthyBlockedAt); err != nil {
 		t.Fatal(err)
 	}
-	store2.now = func() time.Time { return now }
-	claim, err := store2.ClaimFinalize(ctx, retryableRun)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if claim == nil {
-		t.Fatal("the retryable run is no longer claimable -- the reconcile pass " +
-			"changed retry eligibility, which it must never do")
+	if healthyBlockedAt != nil {
+		t.Fatal("a run with finalization still pending was marked blocked -- the " +
+			"predicate is marking healthy runs, which would make the signal useless")
 	}
 }

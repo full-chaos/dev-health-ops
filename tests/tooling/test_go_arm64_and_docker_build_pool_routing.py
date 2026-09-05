@@ -1,6 +1,6 @@
 """go.yml's go-arm64-numeric-parity and docker-images.yml's
-go-build-worker-arm64 self-hosted-only routing (CHAOS-4906, runner contract
-v1.6, amended 2026-09-04).
+go-build-worker-arm64 routing (CHAOS-4906, runner contract v1.6, amended
+2026-09-04 -- twice, the two jobs ending up with DIFFERENT shapes).
 
 WHY THIS TEST EXISTS
 ---------------------
@@ -11,26 +11,38 @@ jobs a hosted `ubuntu-26.04-arm` leg alongside a self-hosted `oci-arc-runners`
 leg, gated on complementary conditions over the same SELF_HOSTED_RUNNERS
 variable.
 
-AMENDED 2026-09-04 (chris, 16:59): the enterprise's GitHub-hosted runner
-label list is exactly ubuntu-latest/ubuntu-22.04/ubuntu-24.04 (+ windows/
-macos) -- ubuntu-26.04-arm was never a real hosted label there, so the
-"hosted" leg of both pairs could never actually have run. Both hosted legs
-were dropped; each self-hosted leg took over its pair's original job id
+AMENDED 2026-09-04, first pass (chris, 16:59): the enterprise's GitHub-hosted
+runner label list is exactly ubuntu-latest/ubuntu-22.04/ubuntu-24.04 (+
+windows/macos) -- ubuntu-26.04-arm was never a real hosted label there, so
+the "hosted" leg of both pairs could never actually have run. Both hosted
+legs were dropped; each self-hosted leg took over its pair's original job id
 (dropping the `-self-hosted` suffix), so it is now the sole, direct producer
-of the shared check name / `needs:` reference. Neither job has a valid
-non-arm64 hosted substitute (go-arm64-numeric-parity proves real-hardware FMA
-behavior; go-build-worker-arm64 builds a real linux/arm64 image), so when
-SELF_HOSTED_RUNNERS is 'disabled', or on a fork PR, each simply does not run
--- a coverage/publishing gap, not a routing bug, and not something either job
-retries onto x64.
+of the shared check name / `needs:` reference.
+
+AMENDED 2026-09-04, second pass (chris, follow-up ruling on go-build-worker-
+arm64 specifically): the two jobs' hosted-fallback story DIVERGES here.
+go-arm64-numeric-parity keeps NO fallback -- its whole purpose is proving
+real-hardware FMA behavior, an x64 run would prove nothing, and it is not a
+required context, so a coverage gap when SELF_HOSTED_RUNNERS is disabled or
+on a fork PR is accepted. go-build-worker-arm64 is different: it feeds the
+PUBLISHED `worker` image's linux/arm64 layer, so losing that fallback
+entirely would silently drop arm64 support from a real artifact -- it now
+carries the SAME `runs-on:`-level routing expression as the build/go-build
+matrix arm64 legs (ARC when eligible, else ubuntu-latest with QEMU
+cross-building `platforms: linux/arm64`), moving the routing decision OUT of
+`if:` and leaving only go-build's own eligibility condition there (plus
+tolerating dind-smoke-test's `skipped` result, since that job only runs when
+this leg actually lands on ARC).
 
 WHAT THIS ASSERTS
 -----------------
-1. Each job's `if:` is gated on the v1.6 self-hosted-eligible condition
-   (+ go-build's own eligibility condition, ANDed in, for the docker-build
-   job only -- CHAOS-4921's push-to-main-always-builds / paths-filter
-   logic).
-2. Each job's `runs-on` is the ARC pool, never a hosted label.
+1. go-arm64-numeric-parity's `if:` is exactly the v1.6 self-hosted-eligible
+   condition (no fallback); go-build-worker-arm64's `if:` is go-build's own
+   eligibility condition plus dind-tolerance (no SELF_HOSTED_RUNNERS/fork-PR
+   clause -- that moved to `runs-on:`).
+2. go-arm64-numeric-parity's `runs-on` is the bare ARC pool. go-build-
+   worker-arm64's `runs-on` is the ARC-or-x64-fallback routing expression,
+   with a "Set up QEMU" step for the fallback leg.
 3. go-arm64-numeric-parity needs NO `dind-smoke-test` dependency (it runs
    bit-pattern golden tests only, never touches a Docker socket) --
    go-build-worker-arm64 DOES need one (it builds+pushes a real image).
@@ -41,7 +53,8 @@ WHAT THIS ASSERTS
 5. docker-images.yml's `go-build` matrix excludes (worker, linux/arm64) so
    it is never built twice.
 6. `go-merge` needs go-build-worker-arm64 (single id, post-amendment) and
-   its own check tolerates that leg being skipped without treating it as a
+   its own check tolerates that leg being skipped (by the eligibility
+   condition, not by runner routing) without treating it as a
    pass-through failure.
 7. Neither job's steps contain a poll/wait step (structural confirmation the
    v1.5.1 poller pattern stays retired, not left dangling alongside the new
@@ -77,6 +90,17 @@ _ELIGIBILITY_CONDITION = (
     "github.event_name == 'release' || "
     "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
     "needs.changes.outputs.code == 'true'"
+)
+
+# The single-expression `runs-on:` form used by go-build-worker-arm64 and
+# the build/go-build matrix arm64 legs: ARC when SELF_HOSTED_RUNNERS is
+# enabled and this isn't a fork PR, else ubuntu-latest (x64, QEMU-assisted).
+_ROUTING_EXPRESSION = (
+    "${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && "
+    "(github.event_name != 'pull_request' || "
+    "github.event.pull_request.head.repo.full_name == github.repository)) "
+    '&& fromJSON(\'["self-hosted","oci-arc-runners"]\') '
+    "|| 'ubuntu-latest' }}"
 )
 
 
@@ -210,23 +234,53 @@ def test_arm64_parity_has_no_poll_step() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_docker_build_is_gated_on_self_hosted_and_eligibility() -> None:
+def test_docker_build_is_gated_on_eligibility_not_runner_choice() -> None:
+    # Amended 2026-09-04 (chris, follow-up ruling): unlike the other ARC-
+    # routed jobs in this file, go-build-worker-arm64 feeds the PUBLISHED
+    # `worker` image's linux/arm64 layer, so it must not skip just because
+    # SELF_HOSTED_RUNNERS is disabled or the PR is from a fork -- that
+    # routing decision moved into `runs-on` (see
+    # test_docker_build_routes_to_arc_or_falls_back_to_x64_qemu below)
+    # instead of gating the whole job. What remains in `if:` is: go-build's
+    # own eligibility condition, plus tolerating dind-smoke-test's `skipped`
+    # result (it only runs when this leg lands on ARC) while still
+    # rejecting a real dind failure/cancellation.
     job_if = str(_job(DOCKER_WORKFLOW_PATH, _DOCKER_BUILD_JOB).get("if", ""))
-    expected = f"{_SELF_HOSTED_CONDITION} && ({_ELIGIBILITY_CONDITION})"
+    expected = (
+        "always() && "
+        "needs.changes.result == 'success' && "
+        f"needs.{_DIND_JOB}.result != 'failure' && "
+        f"needs.{_DIND_JOB}.result != 'cancelled' && "
+        f"({_ELIGIBILITY_CONDITION})"
+    )
     assert job_if == expected, (
         f"{DOCKER_WORKFLOW_PATH.name}: {_DOCKER_BUILD_JOB!r}'s `if:` "
-        f"({job_if!r}) does not match the expected AND of the v1.6 "
-        f"self-hosted-eligible condition and go-build's own eligibility "
-        f"condition ({expected!r})"
+        f"({job_if!r}) does not match the expected eligibility + "
+        f"dind-tolerance condition ({expected!r})"
     )
 
 
-def test_docker_build_runs_on_the_arc_pool() -> None:
-    runs_on = _job(DOCKER_WORKFLOW_PATH, _DOCKER_BUILD_JOB).get("runs-on")
-    assert _is_self_hosted_arc(runs_on), (
+def test_docker_build_routes_to_arc_or_falls_back_to_x64_qemu() -> None:
+    # Unlike go-arm64-numeric-parity, this job has a real x64 fallback
+    # (chris's follow-up ruling: a published image losing its arm64 layer
+    # is product-facing, not just a coverage gap) -- so its `runs-on` is the
+    # SAME routing expression as the build/go-build matrix arm64 legs, not
+    # a bare self-hosted label.
+    job = _job(DOCKER_WORKFLOW_PATH, _DOCKER_BUILD_JOB)
+    runs_on = str(job.get("runs-on", ""))
+    assert runs_on == _ROUTING_EXPRESSION, (
         f"{DOCKER_WORKFLOW_PATH.name}: {_DOCKER_BUILD_JOB!r}'s runs-on "
-        f"({runs_on!r}) must be the self-hosted oci-arc-runners pool -- it "
-        "has no valid hosted fallback"
+        f"({runs_on!r}) does not match the expected ARC-or-x64-fallback "
+        f"routing expression ({_ROUTING_EXPRESSION!r})"
+    )
+    steps_raw = job.get("steps") or []
+    assert isinstance(steps_raw, list)
+    step_names = [s.get("name") for s in steps_raw if isinstance(s, dict)]
+    assert "Set up QEMU" in step_names, (
+        f"{DOCKER_WORKFLOW_PATH.name}: {_DOCKER_BUILD_JOB!r} must set up "
+        "QEMU -- its x64 fallback needs to cross-build platforms: "
+        "linux/arm64, which it never had to do while this leg only ever "
+        "ran on real arm64 hardware"
     )
 
 

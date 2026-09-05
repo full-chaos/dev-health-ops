@@ -873,31 +873,50 @@ jobs:
 
   # Runner contract v1.6 originally gave this job a hosted `ubuntu-26.04-arm`
   # twin (above this comment) plus this self-hosted one, gated on
-  # complementary conditions over SELF_HOSTED_RUNNERS. HOSTED TWIN DROPPED
-  # (chris 2026-09-04 16:59): ubuntu-26.04-arm was never a real hosted label
-  # in this enterprise (the real list is ubuntu-latest/ubuntu-22.04/
-  # ubuntu-24.04 + windows/macos), so it could never actually have run. This
-  # job (id kept as `go-build-worker-arm64`, dropping the old
-  # `-self-hosted` suffix so it is the sole, direct producer of the
-  # `go-build-worker-arm64` check that go-merge's `needs:` names) keeps its
-  # own `if:` unchanged: ANDs go-build's own eligibility condition
-  # (CHAOS-4921's "push to main always builds" / paths-filter logic) with
-  # the v1.6 self-hosted-eligible + not-a-fork-PR routing condition. When
-  # SELF_HOSTED_RUNNERS is 'disabled', or on a fork PR, this leg simply does
-  # not run and the (worker, linux/arm64) image is not built -- go-merge's
-  # own `if:` below already tolerates this leg being skipped (see its
-  # comment); it is not a ruleset-required context.
+  # complementary conditions over SELF_HOSTED_RUNNERS.
+  #
+  # AMENDED 2026-09-04 (chris 16:59, then a follow-up ruling on this exact
+  # job): ubuntu-26.04-arm was never a real hosted label in this enterprise
+  # (the real list is ubuntu-latest/ubuntu-22.04/ubuntu-24.04 + windows/
+  # macos), so the old hosted TWIN JOB is gone -- but unlike
+  # go-arm64-numeric-parity (a non-required, real-hardware-only proof that
+  # is allowed to simply not run), this job feeds the PUBLISHED `worker`
+  # image's linux/arm64 layer, so losing its fallback entirely would
+  # silently drop arm64 support from a real artifact. This one job (id kept
+  # as `go-build-worker-arm64`, no `-self-hosted` suffix, so it stays the
+  # sole, direct producer of the check `go-merge`'s `needs:` names) now
+  # carries the SAME routing shape as the `build`/`go-build` matrix arm64
+  # legs below: `runs-on` picks the ARC pool when SELF_HOSTED_RUNNERS is
+  # enabled and this isn't a fork PR, else falls back to ubuntu-latest (x64)
+  # with QEMU cross-building `platforms: linux/arm64`. The routing decision
+  # moved OUT of `if:` (which used to gate the whole job on
+  # SELF_HOSTED_RUNNERS) and into `runs-on` -- this job now runs on every
+  # eligible event, on one runner or the other, never skipped for that
+  # reason.
+  #
+  # `needs: dind-smoke-test` stays (still needed to prove the ARC pod's
+  # Docker daemon before risking a registry write, when this leg actually
+  # lands on ARC), but the `if:` below now tolerates dind-smoke-test's
+  # `skipped` result -- dind-smoke-test's OWN condition is exactly "enabled
+  # and not a fork PR", the same condition `runs-on` uses to pick ARC, so a
+  # skip there means "this leg is using the x64 fallback anyway, which
+  # already has a working Docker daemon" -- not a routing bug. A real
+  # `failure`/`cancelled` from dind-smoke-test still blocks this job, since
+  # in that case `runs-on` already resolved to ARC and its daemon is
+  # confirmed broken.
   go-build-worker-arm64:
     name: go-build-worker-arm64
     needs: [changes, dind-smoke-test]
     if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      always() &&
+      needs.changes.result == 'success' &&
+      needs.dind-smoke-test.result != 'failure' &&
+      needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       needs.changes.outputs.code == 'true')
-    runs-on: [self-hosted, oci-arc-runners]
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: Checkout code
@@ -905,6 +924,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up QEMU
+        # Required for the x64 (fork-PR / disabled-variable) fallback to
+        # cross-build `platforms: linux/arm64` below; harmless extra setup
+        # on the native-arm64 self-hosted leg.
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -934,8 +959,11 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        # timeout-minutes: 8, same double-bound as the hosted leg's
-        # identical step above -- see that step's comment.
+        # timeout-minutes: 8, the double-bound lesson from go.yml's own
+        # pilots (CF, 09-03, acr's near-miss) -- native GitHub Actions
+        # per-step syntax, since this is a `uses:` action with no command
+        # line to wrap a shell `timeout` around. Fires as a clean step
+        # failure well before this job's own 10m outer cap.
         timeout-minutes: 8
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -976,13 +1004,18 @@ jobs:
     # go-build-worker-arm64's former hosted twin was dropped (chris
     # 2026-09-04 16:59: ubuntu-26.04-arm was never a real hosted label) --
     # one job id now, so there is no "both legs skipped" ambiguity to guard
-    # against structurally. `always()` is still required: this leg can
-    # legitimately report "skipped" (SELF_HOSTED_RUNNERS disabled, or a fork
-    # PR), and GitHub's implicit needs-success check treats a skipped
-    # dependency as failing success() by default (the same trap go.yml's
-    # own aggregator already documents) -- the explicit checks below carry
-    # the real gating logic instead: go-build must have succeeded, and the
-    # arm64 leg (if it ran at all) may not have failed or been cancelled.
+    # against structurally. A later ruling the same day moved
+    # go-build-worker-arm64's SELF_HOSTED_RUNNERS/fork-PR routing decision
+    # OUT of its `if:` and into its `runs-on:` (ARC when eligible, else an
+    # x64+QEMU fallback), so that job no longer skips for either reason --
+    # it can still legitimately report "skipped" for the SAME eligibility
+    # reason go-build itself can (no relevant paths changed on this PR, see
+    # `changes` above). `always()` is still required: GitHub's implicit
+    # needs-success check treats a skipped dependency as failing success()
+    # by default (the same trap go.yml's own aggregator already documents)
+    # -- the explicit checks below carry the real gating logic instead:
+    # go-build must have succeeded, and the arm64 leg (if it ran at all)
+    # may not have failed or been cancelled.
     if: >-
       always() &&
       needs.go-build.result == 'success' &&

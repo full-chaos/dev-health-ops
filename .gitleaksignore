@@ -83,3 +83,24 @@ e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
 # convention, as the CHAOS-2690 precedent and the errors_test.go entry above.
 3a3cc1e50a277091c30098aa6494f31e329caf4f:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
 3a3cc1e50:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
+
+# CHAOS-4441 (#2227), RE-FINGERPRINTED AFTER A REBASE.
+#
+# A gitleaks fingerprint is <commit>:<path>:<rule>:<line>, and gitleaks scans
+# `git log -p` PER COMMIT -- so the fingerprint is bound to the sha of the
+# commit whose own diff introduces the literal. Rebasing REWRITES that sha,
+# which silently invalidates the entry: gitleaks re-finds the same fabricated
+# token in the rewritten commit and reports it as a new secret. The entry above
+# keyed on 3a3cc1e50, which no longer exists after chris's 2026-09-04 rebase
+# onto main; d1f5bb1f5 is the same change replayed.
+#
+# The LINE NUMBER is the literal's position in the file AS OF THE INTRODUCING
+# COMMIT (83), not at the branch tip (85) -- later commits in this PR added
+# lines above it. Using the tip line number would leave the finding unmatched.
+#
+# The literal itself is unchanged and is still not a credential: a fabricated
+# UUID-shaped claim token in `workgraph.Claim{Token: ...}` inside
+# materializeClaim(), present only so a Claim value passes validUUID() in a test
+# that never reaches a store. Nothing to rotate.
+d1f5bb1f55f56f0a5bdd7fba92664f58890ad875:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
+d1f5bb1f5:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83

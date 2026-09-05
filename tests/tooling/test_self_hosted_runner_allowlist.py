@@ -65,6 +65,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -309,20 +310,51 @@ def test_docker_build_matrix_arm64_legs_use_the_allowlist_condition() -> None:
         )
 
 
-# codex round 3 F3: three step-level `if:` sites (the "Configure self-hosted
-# Go cache paths" env-var steps) set GOMODCACHE/GOCACHE only on the
-# self-hosted leg -- distinct from the `cache:` field CACHE_NEGATION_JOBS
-# already checks (that's setup-go's own input, this is a separate step's own
-# `if:` gate) -- and were not covered by any test before this addition.
+# codex confirmation-pass finding (#2242, genuinely new in the pass, not a
+# re-find): the three step-level `if:` sites (the "Configure self-hosted Go
+# cache paths" env-var steps) set GOMODCACHE/GOCACHE only on the self-hosted
+# leg -- distinct from the `cache:` field CACHE_NEGATION_JOBS already checks
+# (that's setup-go's own input, this is a separate step's own `if:` gate).
+# r3's ORIGINAL coverage addition for these three sites used
+# `step_if.endswith(ALLOWLIST_CONDITION)` -- a SUFFIX check, exactly the
+# class F2 elsewhere in this file exists to close: each real `if:` string
+# has a real prefix before the allow-list condition (go-quality.yml gates on
+# `steps.relevance.outputs.relevant` first; test.yml/live-e2e.yml have no
+# such prefix), so `.endswith()` alone would still pass a regression that
+# PREPENDS an unsafe disjunct (e.g. `github.event_name == 'merge_group' ||
+# <correct condition>`) ahead of the allow-list text -- confirmed by
+# construction below and in the confirmation pass's own executed repro.
+# Fixed the same way as every other site in this file: exact equality
+# against each step's FULL live `if:` string, not just its allow-list
+# suffix. The two prefixes are NOT assumed identical -- read from the real
+# files (go-quality.yml's differs from test.yml's/live-e2e.yml's, which
+# happen to share one).
+_CACHE_PATH_STEP_IF_WITH_RELEVANCE = (
+    "steps.relevance.outputs.relevant == 'true' && " + ALLOWLIST_CONDITION
+)
+_CACHE_PATH_STEP_IF_PLAIN = ALLOWLIST_CONDITION
+
 _CACHE_PATH_STEP_SITES = {
-    "go-quality.yml": ("go-quality", "Configure self-hosted Go cache paths"),
-    "test.yml": ("test-matrix", "Configure self-hosted Go cache paths"),
-    "live-e2e.yml": ("metrics-executed-proof", "Configure self-hosted Go cache paths"),
+    "go-quality.yml": (
+        "go-quality",
+        "Configure self-hosted Go cache paths",
+        _CACHE_PATH_STEP_IF_WITH_RELEVANCE,
+    ),
+    "test.yml": (
+        "test-matrix",
+        "Configure self-hosted Go cache paths",
+        _CACHE_PATH_STEP_IF_PLAIN,
+    ),
+    "live-e2e.yml": (
+        "metrics-executed-proof",
+        "Configure self-hosted Go cache paths",
+        _CACHE_PATH_STEP_IF_PLAIN,
+    ),
 }
 
 
 def test_self_hosted_cache_path_steps_use_the_allowlist_condition() -> None:
-    for fname, (job_name, step_name) in _CACHE_PATH_STEP_SITES.items():
+    for fname, (job_name, step_name, expected_if) in _CACHE_PATH_STEP_SITES.items():
         jobs = yaml.safe_load(_read(fname))["jobs"]
         assert job_name in jobs, f"{fname}: job {job_name!r} not found"
         steps = jobs[job_name].get("steps", [])
@@ -333,7 +365,36 @@ def test_self_hosted_cache_path_steps_use_the_allowlist_condition() -> None:
             "step name rather than letting this assertion go stale"
         )
         step_if = str(matches[0].get("if", ""))
-        assert step_if.endswith(ALLOWLIST_CONDITION), (
-            f"{fname}:{job_name}:{step_name!r} if: does not end with the "
-            f"allow-list condition verbatim -- got {step_if!r}"
+        assert step_if == expected_if, (
+            f"{fname}:{job_name}:{step_name!r} if: does not EXACTLY match "
+            f"the expected condition -- got {step_if!r}, want {expected_if!r}"
         )
+
+
+def test_self_hosted_cache_path_step_exact_match_rejects_a_prepended_disjunct() -> None:
+    # Mutant-proof, executed here rather than only argued (codex
+    # confirmation-pass repro): construct a regression that PREPENDS an
+    # unsafe disjunct ahead of the correct allow-list condition -- e.g. a
+    # merge_group carve-out re-added ahead of the fix. This mirrors what the
+    # OLD `.endswith(ALLOWLIST_CONDITION)` form (r3's original F3 coverage)
+    # would have silently accepted, since the regressed string still ENDS
+    # WITH the condition verbatim.
+    for expected_if in (_CACHE_PATH_STEP_IF_WITH_RELEVANCE, _CACHE_PATH_STEP_IF_PLAIN):
+        regressed = "github.event_name == 'merge_group' || " + expected_if
+
+        # The OLD assertion shape: passes on the regressed value (this is
+        # the finding -- proven, not assumed).
+        assert regressed.endswith(expected_if), (
+            "positive control failed: the regressed string no longer ends "
+            "with the expected condition, so it would not even reach the "
+            "old suffix check -- this test no longer constructs the "
+            "regression it claims to"
+        )
+
+        # The FIX's actual assertion shape: must reject the same regressed
+        # value that the old form silently accepted.
+        with pytest.raises(AssertionError):
+            assert regressed == expected_if, (
+                f"if: does not EXACTLY match the expected condition -- "
+                f"got {regressed!r}, want {expected_if!r}"
+            )

@@ -289,18 +289,21 @@ WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
             'execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go\'s '
             "own doc comment)"
         ),
-        "route": "bridge, `cmd/dev-health-worker/workgraph.go:52-83` -- single `compatibility` executor for every kind, no native branch",
-        "ticket": "CHAOS-4441 (Backlog, unassigned)",
+        "route": "bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor`",
+        "ticket": "CHAOS-4924 (six remaining sub-builders + cutover)",
     },
     "investment.materialize": {
-        "executor": "COMPAT-Python",
+        "executor": "NATIVE",
         "citation": (
-            "Python: `work_graph/investment/materialize.py:1169-1854 materialize_investments()`; "
-            "Go: `internal/jobs/investment/materializecomponent.go` exists (deterministic-half "
-            "port) but has zero non-test callers -- built, not wired"
+            "Go: `internal/jobs/investment/nativeexecutor.go` (implements the same "
+            "`workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` "
+            "orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + "
+            "`categorize` LLM plane + `chwrite` write. Python "
+            "`materialize.py:1169-1854 materialize_investments()` is retained but no longer "
+            "reached from the worker path (removal is CHAOS-4767)"
         ),
-        "route": "bridge, `workgraph.go:52-83` (same wiring as workgraph.build)",
-        "ticket": "CHAOS-4441 (Backlog, shared with workgraph.build)",
+        "route": "river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment`",
+        "ticket": "CHAOS-4441 (cutover landed)",
     },
     "investment.dispatch": {
         "executor": "PYTHON-ONLY (dead Go shell)",
@@ -437,7 +440,52 @@ def render_remaining_metrics_block() -> str:
     return "\n".join(lines)
 
 
+# Kinds in the ledger that the native-families artifact also records, and the
+# ledger executor prefix each artifact label must agree with. The artifact is
+# AST-derived from addWorkgraphWorker's dispatch switch, so it -- not this
+# curated dict -- is the authority on native-vs-compat; the ledger keeps the
+# prose (citation/route/ticket) the artifact has no room for.
+_ARTIFACT_LABEL_TO_LEDGER_PREFIX: dict[str, tuple[str, ...]] = {
+    "native": ("NATIVE",),
+    "compat": ("COMPAT-Python", "PYTHON-ONLY"),
+}
+
+
+def _assert_ledger_matches_artifact() -> None:
+    """Fail loudly when the curated §4 verdict disagrees with the wiring.
+
+    This guard exists because CHAOS-4441 sat marked Done for a day while every
+    workgraph/investment kind still dispatched to the Python bridge, and NO
+    artifact in the tree could contradict the claim. The artifact now records
+    the dispatch switch, so §4's executor column can be checked rather than
+    trusted.
+    """
+    artifact = load_native_families_artifact().get("workgraph")
+    if not artifact:
+        raise SystemExit(
+            "gen_go_migration_matrix_docs: contracts/native-families/v1/native-families.json "
+            "has no `workgraph` section -- regenerate it with "
+            "UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... "
+            "-run TestNativeFamiliesArtifactUpToDate"
+        )
+    for kind, label in sorted(artifact.items()):
+        row = WORKGRAPH_INVESTMENT_LEDGER.get(kind)
+        if row is None:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: native-families artifact records kind {kind!r} "
+                f"but WORKGRAPH_INVESTMENT_LEDGER has no entry for it -- add one."
+            )
+        expected = _ARTIFACT_LABEL_TO_LEDGER_PREFIX[label]
+        if not row["executor"].startswith(expected):
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: kind {kind!r} is wired as {label!r} in "
+                f"addWorkgraphWorker (per the native-families artifact) but the curated ledger "
+                f"says {row['executor']!r}. The WIRING is authoritative -- fix the ledger."
+            )
+
+
 def render_workgraph_investment_block() -> str:
+    _assert_ledger_matches_artifact()
     lines = [
         WORKGRAPH_BEGIN,
         "| Kind/area | Executor | Citation | Route transport | Ticket |",

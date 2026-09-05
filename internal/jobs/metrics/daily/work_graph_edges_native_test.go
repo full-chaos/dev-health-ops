@@ -84,8 +84,10 @@ func TestRepoProvidersAreTheJobProviderNotTheColumn(t *testing.T) {
 	for _, repo := range []uuid.UUID{repoA, repoB} {
 		if got := providers[repo.String()]; got != "auto" {
 			t.Errorf("repo %s: got provider %q, want \"auto\" -- the JOB provider, not "+
-				"the repos.provider column. Reading the column splits these two repos "+
-				"across two extractPerProvider passes, which Python never does.", repo, got)
+				"the repos.provider column. Reading the column writes a provider Python "+
+				"never writes, and splits these repos across several extractPerProvider "+
+				"passes where Python makes one (which changes emitted ORDER, though "+
+				"measurably NOT which edges exist).", repo, got)
 		}
 	}
 	if len(providers) != 2 {

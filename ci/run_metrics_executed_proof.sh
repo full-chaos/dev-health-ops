@@ -709,65 +709,123 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # EVERY native family this gate asserts rows for, not the one family someone
 # happened to wire up first.
 NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk"
-METRICS_SNAPSHOT="$(curl -sS "http://127.0.0.1:${WORKER_HTTP_PORT}/metrics" 2>/dev/null || true)"
-if [ -z "${METRICS_SNAPSHOT}" ]; then
+# Bounded, and bounded deliberately: long enough that a slow family is not
+# reported as a failure, short enough that a genuine fail-open is not paid for
+# in minutes on every run.
+NATIVE_TELEMETRY_WAIT_SECS="${NATIVE_TELEMETRY_WAIT_SECS:-60}"
+NATIVE_TELEMETRY_POLL_SECS="${NATIVE_TELEMETRY_POLL_SECS:-5}"
+# Read the snapshot TWICE (team-lead ruling): once now, once after a bounded
+# wait. Pass/fail is decided on the SECOND read.
+#
+# WHY A SECOND READ DOES NOT PAPER OVER A REAL FAIL-OPEN. My objection was that
+# a retry could hide genuine intermittency, and it was wrong: a family whose
+# rows PYTHON wrote never produces a computed sample no matter how long you
+# wait, because the Go executor never observed anything. Waiting can only
+# convert "not yet" into "computed" -- it cannot invent a computed sample for a
+# family that fell open. So the second read SEPARATES race from real instead of
+# concealing either, and when it changes the answer the log says RACE outright.
+read_metrics_snapshot() {
+  curl -sS "http://127.0.0.1:${WORKER_HTTP_PORT}/metrics" 2>/dev/null || true
+}
+
+# family_computed <snapshot> <family> -> 0 when a computed sample >= 1 exists.
+# `grep -c`, never `grep -q`: -q exits on the FIRST match and closes the pipe
+# under printf, which emitted "printf: write error: Broken pipe" on every
+# SUCCESSFUL family -- an error string on the success path, printed directly
+# above the FAIL lines, where it reads as their cause.
+family_computed() {
+  _snapshot="$1"; _family="$2"
+  _hits="$(
+    printf '%s\n' "${_snapshot}" \
+      | grep -cE "^worker_daily_metrics_native_family_outcome_total\{[^}]*family=\"${_family}\"[^}]*outcome=\"computed\"[^}]*\} [1-9]" || true
+  )"
+  [ "${_hits}" -gt 0 ]
+}
+
+missing_families() {
+  _snapshot="$1"; _missing=""
+  for _family in ${NATIVE_TELEMETRY_FAMILIES}; do
+    family_computed "${_snapshot}" "${_family}" || _missing="${_missing} ${_family}"
+  done
+  printf '%s' "${_missing}"
+}
+
+METRICS_SNAPSHOT_T0="$(read_metrics_snapshot)"
+if [ -z "${METRICS_SNAPSHOT_T0}" ]; then
   echo "FAIL: worker /metrics returned nothing on port ${WORKER_HTTP_PORT} -- cannot prove"
   echo "      which path computed these rows. A green readback alone does not"
   echo "      distinguish the native executor from the Python fail-open fallback."
   exit 1
 fi
-NATIVE_TELEMETRY_MISSING=""
+
+MISSING_T0="$(missing_families "${METRICS_SNAPSHOT_T0}")"
+echo "  read 1 (T0):"
 for family in ${NATIVE_TELEMETRY_FAMILIES}; do
-  # outcome="computed" specifically: a "refused" or "partial_write" counter for
-  # the same family proves the executor RAN and did not produce the rows, which
-  # is the opposite of what this gate is asserting.
-  #
-  # `grep -c` rather than `grep -q`: -q exits on the FIRST match and closes the
-  # pipe under printf, which emitted "printf: write error: Broken pipe" into the
-  # log on every SUCCESSFUL family. An error string printed on the success path
-  # is worse than noise -- it sat directly above the FAIL lines and reads as
-  # their cause, which is exactly how it was nearly misdiagnosed.
-  family_matches="$(
-    printf '%s\n' "${METRICS_SNAPSHOT}" \
-      | grep -cE "^worker_daily_metrics_native_family_outcome_total\{[^}]*family=\"${family}\"[^}]*outcome=\"computed\"[^}]*\} [1-9]" || true
-  )"
-  if [ "${family_matches}" -gt 0 ]; then
-    echo "  ok   ${family}: native executor reported outcome=computed"
+  if family_computed "${METRICS_SNAPSHOT_T0}" "${family}"; then
+    echo "    ok   ${family}: outcome=computed"
   else
-    echo "  FAIL ${family}: no outcome=computed sample"
-    NATIVE_TELEMETRY_MISSING="${NATIVE_TELEMETRY_MISSING} ${family}"
+    echo "    --   ${family}: no outcome=computed sample yet"
   fi
 done
 
-# DIAGNOSTIC DUMP, printed whenever anything failed. Without it this step says
-# only "no outcome=computed sample" and the worker is torn down by the cleanup
-# trap moments later, taking the evidence with it -- so the same rerun costs the
-# same time and yields the same nothing.
+METRICS_SNAPSHOT="${METRICS_SNAPSHOT_T0}"
+NATIVE_TELEMETRY_WAITED=0
+if [ -n "${MISSING_T0}" ]; then
+  echo "  waiting up to ${NATIVE_TELEMETRY_WAIT_SECS}s for:${MISSING_T0}"
+  _elapsed=0
+  while [ "${_elapsed}" -lt "${NATIVE_TELEMETRY_WAIT_SECS}" ]; do
+    sleep "${NATIVE_TELEMETRY_POLL_SECS}"
+    _elapsed=$((_elapsed + NATIVE_TELEMETRY_POLL_SECS))
+    _snapshot="$(read_metrics_snapshot)"
+    [ -n "${_snapshot}" ] && METRICS_SNAPSHOT="${_snapshot}"
+    [ -z "$(missing_families "${METRICS_SNAPSHOT}")" ] && break
+  done
+  NATIVE_TELEMETRY_WAITED="${_elapsed}"
+fi
+
+NATIVE_TELEMETRY_MISSING="$(missing_families "${METRICS_SNAPSHOT}")"
+echo "  read 2 (T0+${NATIVE_TELEMETRY_WAITED}s) -- THIS read decides pass/fail:"
+for family in ${NATIVE_TELEMETRY_FAMILIES}; do
+  if family_computed "${METRICS_SNAPSHOT}" "${family}"; then
+    case " ${MISSING_T0} " in
+      *" ${family} "*)
+        echo "    RACE ${family}: absent at T0, computed after ${NATIVE_TELEMETRY_WAITED}s."
+        echo "         The gate read /metrics before this family finished. Not a"
+        echo "         fail-open -- but the earlier read was reporting a false failure."
+        ;;
+      *) echo "    ok   ${family}: outcome=computed" ;;
+    esac
+  else
+    echo "    FAIL ${family}: no outcome=computed sample after ${NATIVE_TELEMETRY_WAITED}s"
+  fi
+done
+
+# DUMP EVERY series for EVERY checked family, not only the failing ones: a
+# passing family is the baseline that makes a failing one legible, and the
+# worker is torn down by the cleanup trap moments later, taking the evidence
+# with it. The four cases this separates, each needing a different fix:
 #
-# WHAT THE DUMP DISTINGUISHES, and why each case needs a different fix:
-#
-#   computed=0, refused=0, series PRESENT
-#       the executor was never INVOKED for this family. Registration or
-#       dispatch, not fail-open. The series exist at zero from process start
-#       by design, so their presence at zero is meaningful, not absence.
-#   computed=0, refused>=1
-#       the executor RAN and declined. Fail-open to Python did happen, and the
-#       refusal reason is the thing to chase.
-#   computed=0, partial_write>=1
-#       rows landed AND it failed; a re-drive would duplicate.
-#   no series at all for the family
-#       the family is not in dailyMetricsNativeFamilies, so every observation
-#       was silently refused by the collector -- a wiring bug that makes a
-#       total write outage look like silence.
-if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
-  echo "--- native-family telemetry dump (every outcome series for the failing families)"
-  for family in ${NATIVE_TELEMETRY_MISSING}; do
+#   computed=0, refused=0, series PRESENT  executor never INVOKED. Registration
+#                                          or dispatch, not fail-open. The series
+#                                          exist at zero from process start by
+#                                          design, so presence-at-zero is a fact.
+#   computed=0, refused>=1                 executor RAN and declined; fail-open
+#                                          happened and the reason is next.
+#   computed=0, partial_write>=1           rows landed AND it failed; a re-drive
+#                                          would duplicate them.
+#   no series at all                       family missing from
+#                                          dailyMetricsNativeFamilies, so every
+#                                          observation was silently refused and a
+#                                          total write outage looks like silence.
+if [ -n "${NATIVE_TELEMETRY_MISSING}" ] || [ -n "${MISSING_T0}" ]; then
+  echo "--- native-family telemetry dump (all outcomes, every checked family)"
+  for family in ${NATIVE_TELEMETRY_FAMILIES}; do
     family_series="$(
       printf '%s\n' "${METRICS_SNAPSHOT}" \
         | grep -E "^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{[^}]*family=\"${family}\"" || true
     )"
     if [ -z "${family_series}" ]; then
-      echo "    ${family}: NO SERIES AT ALL -- family is not registered in"
+      echo "    ${family}: NO SERIES AT ALL -- not registered in"
       echo "               dailyMetricsNativeFamilies, so every observation for it was"
       echo "               refused by the collector and its absence is invisible."
     else
@@ -776,6 +834,7 @@ if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
   done
   echo "--- end dump"
 fi
+
 if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
   echo "FAIL: native-family telemetry missing for:${NATIVE_TELEMETRY_MISSING}"
   echo "      The readback proves rows LANDED; this proves the Go executor is what"

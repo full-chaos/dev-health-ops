@@ -1,0 +1,40 @@
+class Rectangle(val width: Int, val height: Int) {
+    fun area(): Int {
+        if (width > 0 && height > 0) {
+            return width * height
+        }
+        return 0
+    }
+
+    val isSquare: Boolean
+        get() {
+            if (width == height) {
+                return true
+            }
+            return false
+        }
+
+    fun classify(score: Int): Int = if (score > 90) 3 else if (score > 50) 2 else 1
+
+    fun pick(x: Int): Int {
+        when (x) {
+            0 -> return 10
+            1 -> return 11
+            2 -> return 12
+            else -> return -1
+        }
+    }
+
+    fun loop(n: Int): Int {
+        var total = 0
+        for (i in 0 until n) {
+            if (i % 2 == 0 || i % 3 == 0) {
+                total += i
+            }
+        }
+        while (total > 100 && n > 0) {
+            total -= n
+        }
+        return total
+    }
+}

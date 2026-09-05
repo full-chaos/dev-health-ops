@@ -40,29 +40,6 @@ func loadGoRustGolden(t *testing.T) oracleDoc {
 	return doc
 }
 
-// sameMultiset reports whether got and want hold the same values, any
-// order -- necessary because a GoLikeStates-derived reader's clone-based
-// body tracking can close functions in an order that does not match their
-// declaration order (see this file's TestGoMatchesLizardGoldenGoRust doc).
-func sameMultiset(got, want []int) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	counts := map[int]int{}
-	for _, v := range got {
-		counts[v]++
-	}
-	for _, v := range want {
-		counts[v]--
-	}
-	for _, c := range counts {
-		if c != 0 {
-			return false
-		}
-	}
-	return true
-}
-
 // TestLizardGoldenIsNotStaleGoRust closes codex round r1 finding #6 (the
 // P2 raised specifically against this PR: "no live-lizard staleness guard
 // on the go-rust golden") by calling the shared mechanism cfamily's

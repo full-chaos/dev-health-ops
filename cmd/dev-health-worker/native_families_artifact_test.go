@@ -415,6 +415,8 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// inputs are RAW SYNC tables, not another daily family's output, so
 		// nothing in this partition has to run before it.
 		"review_edges",
+		// CHAOS-4280, same shape as ai_governance above.
+		"ai_impact",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

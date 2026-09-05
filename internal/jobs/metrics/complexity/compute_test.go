@@ -418,6 +418,84 @@ func TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer(t *testing.T) {
 	}
 }
 
+// TestAnalyzeFileMatchesLizardAggregatesForJava is this PR's contract test
+// against PR1's seam for the java analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForCFamily.
+func TestAnalyzeFileMatchesLizardAggregatesForJava(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_java")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_java.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesJavaExtensionToItsAnalyzer proves .java reaches a
+// registered analyzer under the right language string.
+func TestLanguageForRoutesJavaExtensionToItsAnalyzer(t *testing.T) {
+	lang, known := LanguageFor("a.java")
+	if !known || lang != "java" {
+		t.Fatalf("a.java: LanguageFor got (%q, %v), want (\"java\", true)", lang, known)
+	}
+	if _, ok := DefaultAnalyzers()[lang]; !ok {
+		t.Fatalf("a.java: no analyzer registered for language %q", lang)
+	}
+}
+
 func TestAnalyzeFileSkipsUnanalysedExtensions(t *testing.T) {
 	// Python's _analyze_content returns None for an extension absent from
 	// LANGUAGE_BY_EXTENSION. That is a skip, not an error, and not a zero row.
@@ -437,9 +515,10 @@ func TestAnalyzeFileFailsClosedOnLizardLanguages(t *testing.T) {
 	// rather than skip: a skip would emit a plausible, badly-undercounted
 	// row for a repo in that language, and would let this executor be
 	// routed before the port lands. "b.go" moved out of this list when
-	// this PR registered `go` -- see TestLanguageForRoutesEveryGoRust
-	// ExtensionToItsAnalyzer below for its own now-ported assertion.
-	for _, path := range []string{"a.ts", "c.java", "d.rb", "e.vue"} {
+	// go-rust registered `go` (TestLanguageForRoutesEveryGoRustExtension
+	// ToItsAnalyzer proves its own now-ported assertion); "c.java" moved
+	// out when this PR registered `java`.
+	for _, path := range []string{"a.ts", "d.rb", "e.vue"} {
 		got, err := AnalyzeFile(path, "function f() { if (a && b) return 1; }", DefaultThresholds())
 		if !errors.Is(err, ErrLanguageNotPorted) {
 			t.Errorf("%s: expected ErrLanguageNotPorted, got err=%v", path, err)

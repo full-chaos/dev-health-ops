@@ -23,7 +23,16 @@ var scalaTokenPattern = buildTokenPattern("")
 func AnalyzeScala(path, source string) ([]int, bool, error) {
 	ctx := NewContext()
 	ctx.SetPath(path)
-	raw := scalaTokenPattern.FindAllString(source, -1)
+	// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2268, class sweep):
+	// this used to skip mergeTemplateQuestionRuns entirely, the same gap
+	// found independently in go_lang.go/rust.go (#2266 r2) and csharp.go
+	// (#2268 r2). Scala has no generate_tokens override in Python either
+	// (plain CodeReader.generate_tokens), and CodeReader's own tokenizer
+	// is exactly where the `<...?...>` lookahead-glue this pass replaces
+	// lives -- every reader inherits it, regardless of whether angle-
+	// bracket generics are idiomatic for that language. Ordered first,
+	// before filterWhitespaceKeepNewline.
+	raw := mergeTemplateQuestionRuns(scalaTokenPattern.FindAllString(source, -1))
 	tokens := filterWhitespaceKeepNewline(raw)
 	root := newScalaMachine(ctx)
 	return runGoLikeFamily(tokens, scalaConditions, root, ctx)

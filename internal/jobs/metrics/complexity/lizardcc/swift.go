@@ -43,7 +43,15 @@ var swiftTokenPattern = buildTokenPattern(swiftAddition)
 func AnalyzeSwift(path, source string) ([]int, bool, error) {
 	ctx := NewContext()
 	ctx.SetPath(path)
-	raw := swiftTokenPattern.FindAllString(source, -1)
+	// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2268, class sweep):
+	// this used to skip mergeTemplateQuestionRuns entirely, the same gap
+	// found independently in go_lang.go/rust.go (#2266 r2) and csharp.go
+	// (#2268 r2) -- a generic containing a `?` (e.g. `Array<Foo?>`) never
+	// got glued into one token, so its `?` reached condition_counter as
+	// a real ternary. Ordered first, before preprocessSwiftLabel,
+	// matching every other reader's "merge right after tokenization"
+	// placement.
+	raw := mergeTemplateQuestionRuns(swiftTokenPattern.FindAllString(source, -1))
 	tokens := preprocessSwiftLabel(raw, swiftAlphaConditions)
 	root := newSwiftMachine(ctx)
 	return runGoLikeFamily(tokens, swiftConditions, root, ctx)

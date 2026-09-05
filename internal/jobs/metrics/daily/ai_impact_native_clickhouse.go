@@ -61,10 +61,27 @@ import (
 // non-null and in [start, end) (ai_impact.py:344-350 filters again in-memory
 // on event_at, so the SQL window is the same predicate pushed down).
 //
-// org_id is carried through the dedup and filtered AFTER it, for the reason
-// spelled out in ai_governance's loader: migration 024 added org_id as a plain
-// column, NOT part of any sorting key, so two rows sharing a dedup key can
-// disagree on it and the FINAL-equivalent answer is the winning row's value.
+// # FINAL, NOT argMax -- codex round chaos-4280-r3, finding 1
+//
+// This used to dedup via a single argMax-over-tuple GROUP BY org_id,
+// repo_id, number -- correct in isolation (one whole row, no independent
+// per-column ties), but NOT what production Python does: `load_git_rows`
+// (loaders/clickhouse.py:283-307) reads `git_pull_requests` raw, no FINAL,
+// no argMax, and `compute_ai_impact_metrics_daily` (ai_impact.py:343-399)
+// processes every returned row. During an active sync, two physical PR
+// versions therefore produce one Go fact but two Python facts, changing
+// counts/averages/ratios for that partition.
+//
+// Same fix as LoadAIImpactReviews's identical finding (F2, this file, below):
+// FINAL is what Python's raw read converges to once merges settle, and
+// deterministic before that where argMax is measurably not (#2229 round 3).
+// Python's own merge-timing dependence on the raw read stays a documented,
+// pre-existing defect (CHAOS-5086), not silently corrected here.
+//
+// org_id is filtered in the WHERE, not carried through a dedup tuple -- FINAL
+// dedups on the table's own ORDER BY key, which already includes org_id
+// (migration 027, see this file's top-of-file dedup-rule comment), so there
+// is no cross-tenant winner-picks-wrong-org_id risk here.
 func LoadAIImpactPullRequests(
 	ctx context.Context, conn repositoryRows, organizationID string,
 	repoIDs []uuid.UUID, start, end time.Time,
@@ -79,32 +96,9 @@ func LoadAIImpactPullRequests(
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, number, created_at, merged_at, reviews_count,
        changes_requested_count, additions, deletions, changed_files
-FROM (
-    SELECT
-        repo_id,
-        number,
-        tupleElement(latest, 1) AS created_at,
-        tupleElement(latest, 2) AS merged_at,
-        tupleElement(latest, 3) AS reviews_count,
-        tupleElement(latest, 4) AS changes_requested_count,
-        tupleElement(latest, 5) AS additions,
-        tupleElement(latest, 6) AS deletions,
-        tupleElement(latest, 7) AS changed_files
-    FROM (
-        SELECT
-            repo_id,
-            number,
-            argMax(
-                tuple(created_at, merged_at, reviews_count, changes_requested_count,
-                      additions, deletions, changed_files),
-                last_synced
-            ) AS latest
-        FROM git_pull_requests
-        WHERE org_id = ? AND repo_id IN ?
-        GROUP BY org_id, repo_id, number
-    )
-)
-WHERE ((created_at >= ? AND created_at < ?)
+FROM git_pull_requests FINAL
+WHERE org_id = ? AND repo_id IN ?
+  AND ((created_at >= ? AND created_at < ?)
     OR (merged_at IS NOT NULL AND merged_at >= ? AND merged_at < ?))
 ORDER BY repo_id, number`,
 		organizationID, repositoryUUIDStrings(repoIDs),
@@ -425,6 +419,19 @@ WHERE p.org_id = ? AND p.repo_id IN ? AND p.pr_number IN ?`,
 // Ordered by id so the resolver's build order -- and therefore its stable
 // tie-break between equal-length prefixes -- is deterministic. Python's
 // get_all_teams has no such guarantee; see RepoPatternResolver's doc comment.
+//
+// # NO is_active FILTER -- codex round chaos-4280-r3, finding 2
+//
+// This used to filter `WHERE is_active = 1`, which has no basis in
+// production: `get_all_teams` (sinks/clickhouse/core.py:109) SELECTs
+// `id, name, members, project_keys, repo_patterns` -- it does not even read
+// `is_active` -- and `build_repo_pattern_resolver` (providers/teams.py:248)
+// never checks it either. Every team, active or not, participates in
+// production's pattern resolution. The filter had no comment justifying it
+// and no defect it was tracking; it was an unexamined assumption introduced
+// during the port. An inactive team with a matching pattern was silently
+// losing its PRs to the "unknown" bucket while Python still attributed them
+// to it.
 func LoadAIImpactTeams(
 	ctx context.Context, conn repositoryRows, organizationID string,
 ) ([]aiimpact.Team, error) {
@@ -437,16 +444,14 @@ FROM (
     SELECT
         id,
         tupleElement(latest, 1) AS name,
-        tupleElement(latest, 2) AS repo_patterns,
-        tupleElement(latest, 3) AS is_active
+        tupleElement(latest, 2) AS repo_patterns
     FROM (
-        SELECT id, argMax(tuple(name, repo_patterns, is_active), updated_at) AS latest
+        SELECT id, argMax(tuple(name, repo_patterns), updated_at) AS latest
         FROM teams
         WHERE org_id = ?
         GROUP BY org_id, id
     )
 )
-WHERE is_active = 1
 ORDER BY id`, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("load ai impact teams: %w", err)

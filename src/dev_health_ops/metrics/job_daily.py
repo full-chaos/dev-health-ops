@@ -1136,8 +1136,11 @@ async def run_daily_metrics_job(
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
-    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
+    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
+    chaos-4280-r3, finding 5 -- this doc had not been updated when
+    ``ai_impact`` was wired below); naming any other family here has no
+    effect.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_

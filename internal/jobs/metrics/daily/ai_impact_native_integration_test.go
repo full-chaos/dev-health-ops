@@ -312,6 +312,34 @@ WHERE org_id = ? AND attribution_bucket = 'ai_assisted'`, orgID).Scan(&reviewsPe
 			*reviewsPerPR)
 	}
 
+	// codex round chaos-4280-r3, finding 4 (F5's own gap): the linkage-counter
+	// assertion above only proves the join did not ERROR; it does not prove
+	// the join actually MATCHED PR 1's seeded git_commit_stats row. A
+	// schema-valid join predicate that matches nothing leaves the counter
+	// unchanged (no error, so no "unavailable" signal) but flips PR 1's
+	// has_test_change from true to a definite false -- which changes
+	// test_gap_rate for the ai_assisted bucket (PR 1 alone) from 0.0 to 1.0.
+	// Asserting the exact value closes that gap: it fails if the join is
+	// mutated to match nothing, and it fails if has_test_change degrades to
+	// unknown (test_gap_rate would then be NULL, since PR 1 would no longer
+	// count toward the known-test-status denominator).
+	var testGapRate *float64
+	if err := conn.QueryRow(ctx, `
+SELECT test_gap_rate FROM ai_impact_metrics_daily FINAL
+WHERE org_id = ? AND attribution_bucket = 'ai_assisted'`, orgID).Scan(&testGapRate); err != nil {
+		t.Fatalf("read ai_assisted bucket test_gap_rate: %v", err)
+	}
+	if testGapRate == nil {
+		t.Fatal("test_gap_rate is NULL for the ai_assisted bucket -- PR 1's has_test_change " +
+			"degraded to unknown, which means the commit-linkage join did not actually resolve")
+	}
+	if *testGapRate != 0 {
+		t.Fatalf("test_gap_rate = %v, want 0 -- PR 1 touches a real test file "+
+			"(src/thing.spec.ts) via a genuine work_graph_pr_commit/git_commits/git_commit_stats "+
+			"chain; a nonzero rate here means the git_commit_stats join did not actually match "+
+			"PR 1's linked commit, even though it returned no error", *testGapRate)
+	}
+
 	// The unknown bucket is always emitted, even though PR 2 carries no
 	// attribution -- ai_impact.py:419's `bucket != UNKNOWN_BUCKET` guard.
 	var unknownRows uint64
@@ -449,6 +477,112 @@ INSERT INTO git_pull_request_reviews (repo_id, number, review_id, reviewer, stat
 				"reviews reader, whose key is (org_id, repo_id, number, review_id)",
 				tenant.org, reviews[0].State, tenant.wantRevState)
 		}
+	}
+}
+
+// TestAIImpactReviewVersionDedupWithinOneTenant is codex round chaos-4280-r3's
+// finding 3: F2 switched LoadAIImpactReviews (and, in this same round,
+// LoadAIImpactPullRequests) from an argMax-over-tuple GROUP BY to FINAL, to
+// match production's git_pull_request_reviews raw-read semantics more
+// closely than the old dedup did. The existing tenant-scoped test seeds only
+// ONE physical version per tenant, so it cannot tell FINAL apart from a
+// mutant that deleted it entirely -- both would return exactly one row per
+// org, since there is only one to return. This test seeds TWO physical
+// versions for a SINGLE org's (repo_id, number, review_id) and
+// (repo_id, number), and asserts each reader still returns exactly one row.
+//
+// This is the reader-level regression guard the round asked for: it fails on
+// a mutant that removes FINAL from either query, because ClickHouse would
+// then return both physical rows and len(...) would be 2, not 1.
+func TestAIImpactReviewVersionDedupWithinOneTenant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, created_at DateTime64(3, 'UTC'),
+    merged_at Nullable(DateTime64(3, 'UTC')),
+    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
+    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_request_reviews (
+    repo_id UUID, number UInt32, review_id String, reviewer String, state String,
+    submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+	}
+
+	const (
+		orgID  = "00000000-0000-4000-8000-0000000000e1"
+		repoID = "00000000-0000-4000-8000-0000000000e2"
+	)
+	// Two physical PR versions, same key, different last_synced, disagreeing
+	// on reviews_count -- an ordinary re-sync overwrite, not a tie.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
+    changed_files, changes_requested_count, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 7, toDateTime64('2026-09-03 01:00:00', 3, 'UTC'), NULL,
+ 1, 1, 1, 0, 1, toDateTime64('2026-09-03 08:00:00', 3, 'UTC'), '`+orgID+`'),
+(toUUID('`+repoID+`'), 7, toDateTime64('2026-09-03 01:00:00', 3, 'UTC'), NULL,
+ 1, 1, 1, 0, 2, toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// Two physical review versions for the SAME review_id -- the exact
+	// overlapping-sync scenario the round's finding described (an older
+	// CHANGES_REQUESTED row, a newer APPROVED row).
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_request_reviews (repo_id, number, review_id, reviewer, state, submitted_at, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 7, 'rv1', 'alice', 'CHANGES_REQUESTED',
+ toDateTime64('2026-09-03 03:00:00', 3, 'UTC'), toDateTime64('2026-09-03 08:00:00', 3, 'UTC'), '`+orgID+`'),
+(toUUID('`+repoID+`'), 7, 'rv1', 'alice', 'APPROVED',
+ toDateTime64('2026-09-03 03:00:00', 3, 'UTC'), toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	repoIDs := []uuid.UUID{uuid.MustParse(repoID)}
+	start := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 1)
+
+	prs, err := LoadAIImpactPullRequests(ctx, conn, orgID, repoIDs, start, end)
+	if err != nil {
+		t.Fatalf("load PRs: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("got %d PR rows, want 1 -- FINAL must collapse the two physical versions to one; "+
+			"2 means FINAL was removed and both raw versions leaked through", len(prs))
+	}
+	if prs[0].ReviewsCount == nil || *prs[0].ReviewsCount != 2 {
+		t.Fatalf("reviews_count=%v, want 2 (the newer version) -- a deduped-but-wrong result "+
+			"would also fail len(prs)==1 above only by coincidence; this pins the WINNING value too",
+			prs[0].ReviewsCount)
+	}
+
+	reviews, err := LoadAIImpactReviews(ctx, conn, orgID, repoIDs, start, end)
+	if err != nil {
+		t.Fatalf("load reviews: %v", err)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("got %d review rows, want 1 -- FINAL must collapse the two physical review "+
+			"versions to one; 2 means FINAL was removed and both raw versions leaked through",
+			len(reviews))
+	}
+	if reviews[0].State == nil || *reviews[0].State != "APPROVED" {
+		t.Fatalf("review state=%v, want APPROVED (the newer version)", reviews[0].State)
 	}
 }
 

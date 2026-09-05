@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -120,6 +121,81 @@ func TestCoverageRatioAndCompleteness(t *testing.T) {
 	}
 	if got := DataCompleteness(6); math.Float64bits(got) != math.Float64bits(0.25) {
 		t.Fatalf("DataCompleteness(6) = %v, want 0.25", got)
+	}
+}
+
+// TestReleaseImpactRowComputeFieldsAreFloat64 guards the Float32 narrowing
+// boundary from the WRITE side: release_impact_daily's confidence/coverage/
+// completeness columns are Float32 (migration 034), but the boundary must sit
+// at writeReleaseImpactRows, not in releaseImpactRow itself -- narrowing a
+// struct field to float32 would silently move that boundary earlier, ahead of
+// anything that still expects full float64 precision (e.g. a future reader of
+// the row before it is written).
+func TestReleaseImpactRowComputeFieldsAreFloat64(t *testing.T) {
+	typ := reflect.TypeOf(releaseImpactRow{})
+	for _, name := range []string{"Confidence", "CoverageRatioTop", "DataCompleteness"} {
+		field, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("releaseImpactRow.%s not found", name)
+		}
+		if field.Type.Kind() != reflect.Float64 {
+			t.Fatalf(
+				"releaseImpactRow.%s is %s, want float64 -- Float32 narrowing "+
+					"must happen ONLY at the write boundary (writeReleaseImpactRows), "+
+					"never in the struct itself",
+				name, field.Type.Kind(),
+			)
+		}
+	}
+}
+
+// TestFloat32NarrowingIsRealAndDeferredToTheWriteBoundary reuses
+// TestComputeConfidenceFMABarrierIsLoadBearing's exact separating input: the
+// barriered and compiler-fused float64 values disagree by exactly 1 ULP. A
+// float32 round-trip has nowhere near 1-ULP-of-float64 resolution, so it
+// destroys that distinction completely for this input -- which makes it a
+// mutation probe for narrowing at the wrong point in the pipeline: if a
+// FUTURE edit narrowed the value earlier (inside ComputeConfidence, or when
+// building the releaseImpactRow literal) rather than only at
+// writeReleaseImpactRows's batch.Append call, the value arriving here would
+// already be float32-precision, and re-narrowing it would lose NOTHING
+// further -- the "still lossy" assertion below would then fail, catching the
+// earlier narrowing.
+func TestFloat32NarrowingIsRealAndDeferredToTheWriteBoundary(t *testing.T) {
+	confidence := ComputeConfidence(0.0025, 1, 8, 400)
+	const wantBits = 0x3fa1f671529a485d
+	if math.Float64bits(confidence) != wantBits {
+		t.Fatalf("ComputeConfidence's FMA-barrier value changed; fix that test first")
+	}
+
+	row := releaseImpactRow{
+		Confidence:       confidence,
+		CoverageRatioTop: confidence,
+		DataCompleteness: confidence,
+	}
+
+	// Assignment into the row must not have narrowed anything: bit-exact,
+	// not merely "close".
+	for name, got := range map[string]float64{
+		"Confidence":       row.Confidence,
+		"CoverageRatioTop": row.CoverageRatioTop,
+		"DataCompleteness": row.DataCompleteness,
+	} {
+		if math.Float64bits(got) != wantBits {
+			t.Fatalf("releaseImpactRow.%s narrowed before the write boundary", name)
+		}
+	}
+
+	// The write-boundary cast (writeReleaseImpactRows: float32(row.Confidence))
+	// must be LOSSY for this input -- proving the value still carried full
+	// float64 precision up to this exact point, and narrowing happens here,
+	// not earlier.
+	if narrowed := float64(float32(row.Confidence)); narrowed == row.Confidence {
+		t.Fatalf(
+			"float32 narrowing of the FMA-barrier value was lossless -- either " +
+				"the value arrived already narrowed (a mutation moved the cast " +
+				"earlier in the pipeline) or this is no longer a precision-sensitive input",
+		)
 	}
 }
 

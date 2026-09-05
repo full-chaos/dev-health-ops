@@ -8,7 +8,8 @@ package aiworkflow
 import (
 	"regexp"
 	"strings"
-	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/textrefs"
 )
 
 // Signal ports providers/_ai_detection.py's AIAttributionSignal, the pure
@@ -330,16 +331,26 @@ func DetectFromPRBody(body string) *Signal {
 // alone would miss -- U+0009-000D and U+0085 are control characters, not
 // separators), find every candidate match with THAT pattern and no \b at
 // all, then verify Unicode-aware word-boundary manually on each side using
-// unicode.IsLetter/IsDigit plus '_' -- Python's \w set exactly. Return the
-// FIRST candidate (leftmost start position) that passes both boundary
-// checks, matching re.search's leftmost-match semantics.
+// textrefs.PythonIsWord -- Python's \w set exactly, including the UCD-version
+// exclusion (see isPythonWordRune's own doc). Return the FIRST candidate
+// (leftmost start position) that passes both boundary checks, matching
+// re.search's leftmost-match semantics.
 // pythonUnicodeWhitespaceClassBody is the BODY of the Unicode-whitespace
 // bracket expression -- deliberately not wrapped in its own `[...]` here, so
 // callers can either wrap it standalone (a bare `\s` in the source pattern)
 // or splice it into an EXISTING bracket expression alongside other members
 // (`[\s\-]` in the source pattern, which already provides the enclosing
 // `[`/`]`). Two callers, two different targets: see unicodeWordBoundaryFind.
-const pythonUnicodeWhitespaceClassBody = `\t-\r \x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
+//
+// codex round chaos-5220 r2, P2: this class was missing U+001C-U+001F (FILE/
+// GROUP/RECORD/UNIT SEPARATOR) -- the entire, exhaustively-measured
+// difference between Python's `\s` and Go's unicode.IsSpace, per
+// textrefs.pythonIsSpace's own doc comment (internal/jobs/workgraph/textrefs/
+// charclass.go) and pythonparity.IsSpace's identical finding
+// (internal/pythonparity/whitespace.go) -- both already document and rely on
+// this exact four-codepoint set elsewhere in this repo. `\x{001C}-\x{001F}`
+// added to close the gap.
+const pythonUnicodeWhitespaceClassBody = `\t-\r \x{001C}-\x{001F}\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
 
 func unicodeWordBoundaryFind(corePattern string) func(string) (string, bool) {
 	// Order matters: `[\s\-]` must be rewritten as ONE merged bracket
@@ -386,14 +397,23 @@ func isPythonWordBoundary(text string, pos int) bool {
 // Nd (decimal digit). Python's \w is defined via str.isalnum(), which is true
 // for isalpha() OR isdecimal() OR isdigit() OR isnumeric() -- isnumeric()
 // additionally covers Nl (letter numbers, e.g. U+2160 ROMAN NUMERAL ONE) and
-// No (other numbers, e.g. superscripts, fractions). unicode.IsNumber reports
-// membership in category N as a whole (Nd+Nl+No), matching Python's broader
-// scope; IsDigit alone silently excluded Nl/No, so "Ⅰcopilot" wrongly
-// formed a word boundary before "copilot" in Go (false-positive signal) where
-// Python's \bcopilot\b correctly does not match (U+2160 is itself a Python
-// \w character, so no boundary forms there).
+// No (other numbers, e.g. superscripts, fractions).
+//
+// codex round chaos-5220 r2, P2: unicode.IsLetter/IsNumber alone are STILL
+// wrong in the other direction -- Go's compiled-in Unicode tables are newer
+// than CPython's bundled UCD (16.0.0), so Go recognizes some runes (e.g.
+// U+11DE0, a Kawi digit) as letters/numbers that Python's UCD does not know
+// exist at all; Python's \w cannot match a codepoint its own UCD has never
+// heard of, so those runes must be treated as NON-word to match Python,
+// regardless of what Go's newer tables say. This exact problem was already
+// solved once in this repo -- textrefs.PythonIsWord (ported from
+// work_graph/extractors/text_parser.py, internal/jobs/workgraph/textrefs/
+// ucdpin.go's generated pythonUnassigned exclusion set, CPython UCD 16.0.0)
+// -- so this delegates to that single source of truth rather than
+// re-deriving a second, independently-driftable copy of the same exclusion
+// logic.
 func isPythonWordRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'
+	return textrefs.PythonIsWord(r)
 }
 
 func runeBefore(text string, pos int) (rune, bool) {

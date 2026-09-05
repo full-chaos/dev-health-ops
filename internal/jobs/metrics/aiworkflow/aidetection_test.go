@@ -200,6 +200,40 @@ func TestDetectFromPRBodyUnicodeNumericBoundary(t *testing.T) {
 	}
 }
 
+// TestDetectFromPRBodyInformationSeparatorWhitespace pins a FOURTH measured
+// divergence (codex round chaos-5220 r2, P2): Python's \s (== str.isspace())
+// includes U+001C-U+001F (FILE/GROUP/RECORD/UNIT SEPARATOR) -- the entire,
+// exhaustively-measured difference from Go's unicode.IsSpace, per
+// textrefs.pythonIsSpace's and pythonparity.IsSpace's identical documented
+// finding elsewhere in this repo. Without these four codepoints in
+// pythonUnicodeWhitespaceClassBody, "ai\x1cassisted" fails to match
+// \bai[\s\-]assisted\b in Go where Python's \s correctly treats \x1c as the
+// separator and matches.
+func TestDetectFromPRBodyInformationSeparatorWhitespace(t *testing.T) {
+	body := "Generated\x1cwith ai" // U+001C FILE SEPARATOR, a Python \s character
+	if signal := DetectFromPRBody(body); signal == nil {
+		t.Fatal("expected a match on U+001C-separated 'generated\\u001cwith ai' -- Python's \\s includes U+001C")
+	}
+}
+
+// TestDetectFromPRBodyPythonUCDResidue pins a FIFTH measured divergence
+// (codex round chaos-5220 r2, P2), distinct from the U+2160 case above: Go's
+// compiled-in Unicode tables are NEWER than CPython's bundled UCD (16.0.0),
+// so Go recognizes some runes as word characters that Python's own UCD does
+// not know exist at all -- e.g. U+11DE0 (a Kawi digit assigned only in later
+// Unicode versions). Python's \bcopilot\b MATCHES "\U00011DE0copilot" because
+// U+11DE0 is non-word to Python (unassigned, so isalnum() is false); Go's
+// unicode.IsNumber alone would treat it as word and wrongly refuse the
+// boundary. isPythonWordRune must delegate to textrefs.PythonIsWord (which
+// excludes the pinned pythonUnassigned set) rather than raw unicode.IsLetter/
+// IsNumber, to match Python here.
+func TestDetectFromPRBodyPythonUCDResidue(t *testing.T) {
+	body := string(rune(0x11DE0)) + "copilot"
+	if signal := DetectFromPRBody(body); signal == nil {
+		t.Fatal("expected a match on U+11DE0-prefixed 'copilot' -- U+11DE0 is unassigned in CPython's UCD, so Python's \\w does not recognize it as a word character and \\bcopilot\\b matches")
+	}
+}
+
 // --------------------------------------------------------------------------
 // strongestSignal / max-confidence tie-break goldens (CHAOS-4280 ai_workflow
 // design approval condition 2: equal-confidence fixtures for every ordered

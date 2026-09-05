@@ -514,18 +514,65 @@ func (t *tokenizer) consumeString() error {
 	bodyStartLine := t.line
 	bodyStartCol := t.col
 
+	// braceDepth tracks nesting of f-string replacement fields (`{...}`)
+	// while scanning for the OUTER literal's closing quote. It is always 0
+	// for a non-f-string. PEP 701 (Python 3.12+, and this repo's CI runs
+	// 3.14) allows a replacement field to contain a nested string literal
+	// using the SAME quote character as the outer f-string -- e.g.
+	// `f"{x["key"]}"`. Without brace-depth awareness, the naive `c == quote`
+	// check below closes the outer string at that inner `"`, hiding
+	// whatever comes after it (an `if`/`else`, an `and`/`or`) from the
+	// complexity count entirely (CHAOS-4291 r2 P1 #2). While braceDepth > 0,
+	// a quote character is therefore routed to skipNestedStringInline
+	// instead of being tested against `quote`, exactly mirroring how
+	// findFieldEnd/skipNestedString (below) already treat a field's
+	// contents once expandFString takes over.
+	braceDepth := 0
 	for {
 		if t.pos >= len(t.src) {
 			return &ErrTokenize{Line: startLine, Msg: "unterminated string literal"}
 		}
 		c := t.src[t.pos]
 
-		if c == '\\' {
+		if isFString && braceDepth == 0 && c == '{' &&
+			t.pos+1 < len(t.src) && t.src[t.pos+1] == '{' {
+			// Escaped literal brace outside any field.
+			t.pos += 2
+			t.col += 2
+			continue
+		}
+		if isFString && braceDepth == 0 && c == '}' &&
+			t.pos+1 < len(t.src) && t.src[t.pos+1] == '}' {
+			t.pos += 2
+			t.col += 2
+			continue
+		}
+		if isFString && c == '{' {
+			braceDepth++
+			t.pos++
+			t.col++
+			continue
+		}
+		if isFString && braceDepth > 0 && c == '}' {
+			braceDepth--
+			t.pos++
+			t.col++
+			continue
+		}
+		if isFString && braceDepth > 0 && (c == '"' || c == '\'') {
+			t.skipNestedStringInline(c)
+			continue
+		}
+
+		if c == '\\' && (!isFString || braceDepth == 0) {
 			// In a raw string the backslash is retained but STILL
 			// prevents the next character from closing the literal, so
 			// the skip is identical either way. Keeping one branch
 			// documents that rather than implying raw strings ignore
-			// backslashes entirely.
+			// backslashes entirely. Gated to braceDepth == 0: inside an
+			// active replacement field a bare backslash is expression
+			// syntax (or belongs to a nested string, already consumed by
+			// skipNestedStringInline above), not an outer-literal escape.
 			_ = raw
 			t.pos += 2
 			t.col += 2
@@ -542,7 +589,7 @@ func (t *tokenizer) consumeString() error {
 			t.col = 0
 			continue
 		}
-		if c == quote {
+		if c == quote && braceDepth == 0 {
 			if triple {
 				if t.pos+2 < len(t.src) && t.src[t.pos+1] == quote && t.src[t.pos+2] == quote {
 					t.pos += 3
@@ -583,9 +630,72 @@ func (t *tokenizer) consumeString() error {
 		// on the spliced tokens are approximate (pinned to where the
 		// string began) -- nothing downstream uses a nested token's
 		// position, only its Kind/Text.
-		t.tokens = append(t.tokens, expandFString(t.src[bodyStart:bodyEnd], bodyStartLine, bodyStartCol)...)
+		fieldToks, err := expandFString(t.src[bodyStart:bodyEnd], bodyStartLine, bodyStartCol)
+		if err != nil {
+			// CHAOS-4291 r2 P2 #3: a field that never closes, or whose
+			// expression is not valid Python (e.g. a mismatched bracket),
+			// is a real SyntaxError on the CPython/radon side ("f-string:
+			// expecting '}'", or the expression's own parse error) --
+			// radon's caller catches it and skips the file. Swallowing the
+			// error here and emitting only the opaque STRING token instead
+			// silently accepted invalid Python as a normally-scored file.
+			return err
+		}
+		t.tokens = append(t.tokens, fieldToks...)
 	}
 	return nil
+}
+
+// skipNestedStringInline advances t.pos/t.line/t.col past one quoted
+// literal (short or triple) that opens at the current position with quote
+// character `quote`, honouring backslash escapes and embedded newlines
+// (legal inside a triple-quoted nested literal under PEP 701). It does not
+// require the nested quote to differ from the enclosing f-string's own
+// quote -- see the braceDepth comment in consumeString.
+func (t *tokenizer) skipNestedStringInline(quote rune) {
+	triple := t.pos+2 < len(t.src) && t.src[t.pos+1] == quote && t.src[t.pos+2] == quote
+	if triple {
+		t.pos += 3
+		t.col += 3
+	} else {
+		t.pos++
+		t.col++
+	}
+	for t.pos < len(t.src) {
+		c := t.src[t.pos]
+		if c == '\\' && t.pos+1 < len(t.src) {
+			t.pos += 2
+			t.col += 2
+			continue
+		}
+		if c == '\n' {
+			t.pos++
+			t.line++
+			t.col = 0
+			continue
+		}
+		if c == quote {
+			if triple {
+				if t.pos+2 < len(t.src) && t.src[t.pos+1] == quote && t.src[t.pos+2] == quote {
+					t.pos += 3
+					t.col += 3
+					return
+				}
+				t.pos++
+				t.col++
+				continue
+			}
+			t.pos++
+			t.col++
+			return
+		}
+		t.pos++
+		t.col++
+	}
+	// Ran off the end without finding a closer: the outer consumeString
+	// loop's own `t.pos >= len(t.src)` check reports this as an unterminated
+	// string literal on the next iteration, which is the correct outcome --
+	// CPython raises SyntaxError/unterminated string for the same input.
 }
 
 // expandFString extracts the real expression tokens out of an f-string's
@@ -593,7 +703,7 @@ func (t *tokenizer) consumeString() error {
 // into a format spec's own nested fields (`{expr:{width}}`). Literal text
 // outside `{...}` and an escaped `{{`/`}}` contribute no tokens, matching
 // radon: JoinedStr's plain Constant/str pieces carry no complexity.
-func expandFString(body []rune, line, col int) []Token {
+func expandFString(body []rune, line, col int) ([]Token, error) {
 	var out []Token
 	n := len(body)
 	i := 0
@@ -604,14 +714,38 @@ func expandFString(body []rune, line, col int) []Token {
 				i += 2
 				continue
 			}
-			exprEnd, specStart, fieldEnd := findFieldEnd(body, i+1)
+			exprEnd, specStart, fieldEnd, ok := findFieldEnd(body, i+1)
+			if !ok {
+				// The field never closed: CPython raises `SyntaxError:
+				// f-string: expecting '}'` and radon's caller skips the
+				// file. In practice consumeString's own braceDepth
+				// tracking already requires every `{` to be balanced
+				// before it will accept the outer literal as closed, so
+				// this is unreachable via the normal Tokenize path -- it
+				// stays a hard error (never a silent "treat as if it
+				// closed at the end") so a future change that decouples
+				// the two scans fails loudly instead of under-counting.
+				return nil, &ErrTokenize{Line: line, Msg: "f-string: expecting '}'"}
+			}
 			if exprEnd > i+1 {
-				if toks, err := tokenizeFStringExpr(body[i+1:exprEnd], line, col); err == nil {
-					out = append(out, toks...)
+				toks, err := tokenizeFStringExpr(body[i+1:exprEnd], line, col)
+				if err != nil {
+					// CHAOS-4291 r2 P2 #3: a field expression that is not
+					// valid Python (mismatched bracket, stray token) must
+					// fail the whole file, matching radon's SyntaxError ->
+					// skip. Discarding the error here and moving on used to
+					// silently accept invalid Python as a normally-scored
+					// block.
+					return nil, err
 				}
+				out = append(out, toks...)
 			}
 			if specStart >= 0 && specStart < fieldEnd {
-				out = append(out, expandFString(body[specStart:fieldEnd], line, col)...)
+				specToks, err := expandFString(body[specStart:fieldEnd], line, col)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, specToks...)
 			}
 			i = fieldEnd + 1
 			continue
@@ -622,7 +756,7 @@ func expandFString(body []rune, line, col int) []Token {
 		}
 		i++
 	}
-	return out
+	return out, nil
 }
 
 // findFieldEnd scans one replacement field starting right after its opening
@@ -632,7 +766,7 @@ func expandFString(body []rune, line, col int) []Token {
 // over nested string literals so a `:` or `!` inside them, or inside a
 // nested call/subscript/dict/set, is never mistaken for the field's own
 // conversion or format-spec marker.
-func findFieldEnd(body []rune, exprStart int) (exprEnd, specStart, fieldEnd int) {
+func findFieldEnd(body []rune, exprStart int) (exprEnd, specStart, fieldEnd int, ok bool) {
 	depth := 0
 	i := exprStart
 	n := len(body)
@@ -655,7 +789,7 @@ func findFieldEnd(body []rune, exprStart int) (exprEnd, specStart, fieldEnd int)
 				if exprEnd < 0 {
 					exprEnd = i
 				}
-				return exprEnd, specStart, i
+				return exprEnd, specStart, i, true
 			}
 			depth--
 			i++
@@ -676,10 +810,14 @@ func findFieldEnd(body []rune, exprStart int) (exprEnd, specStart, fieldEnd int)
 			i++
 		}
 	}
+	// The field's own `}` was never found at depth 0: an unterminated
+	// replacement field (CHAOS-4291 r2 P2 #3). ok=false tells the caller to
+	// fail closed rather than silently treating the field as if it closed
+	// at the end of body.
 	if exprEnd < 0 {
 		exprEnd = n
 	}
-	return exprEnd, specStart, n
+	return exprEnd, specStart, n, false
 }
 
 // skipNestedString skips one quoted literal (short or triple, any prefix
@@ -805,7 +943,17 @@ func isIdentStart(c rune) bool {
 }
 
 func isIdentPart(c rune) bool {
-	return c == '_' || unicode.IsLetter(c) || unicode.IsDigit(c)
+	// PEP 3131: an identifier's continuation characters are XID_Continue,
+	// which is XID_Start (letters, `_`) plus decimal digits PLUS the
+	// Unicode combining-mark categories Mn (nonspacing) and Mc (spacing
+	// combining) -- e.g. U+0301 COMBINING ACUTE ACCENT. Without Mn/Mc,
+	// `if́ = 1` (a valid identifier assignment) tokenizes as the
+	// keyword `if` followed by a stray combining-mark rune, inventing a
+	// decision point that does not exist (CHAOS-4291 r2 P2 #4). isIdentStart
+	// is deliberately untouched: a combining mark cannot legally START an
+	// identifier either in Python or in this port.
+	return c == '_' || unicode.IsLetter(c) || unicode.IsDigit(c) ||
+		unicode.Is(unicode.Mn, c) || unicode.Is(unicode.Mc, c)
 }
 
 func isStringPrefix(text string) bool {

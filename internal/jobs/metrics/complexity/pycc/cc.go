@@ -428,10 +428,53 @@ func isBareCapturePattern(tokens []Token) bool {
 		}
 		body = append(body, tok)
 	}
+	body = unwrapGroupingParens(body)
 	if len(body) != 1 {
 		return false
 	}
 	return body[0].Kind == TokenName && !IsKeyword(body[0].Text)
+}
+
+// unwrapGroupingParens strips any number of redundant enclosing paren
+// pairs around a capture pattern -- `case (value):` and `case ((value)):`
+// are both still the plain MatchAs `case value:` in Python's grammar, since
+// a lone name inside parens with no comma or `*` is grouping, not a
+// sequence pattern (CHAOS-4291 r2 P2 #5). `case (value,):` must NOT unwrap:
+// the trailing comma makes it a genuine one-element sequence pattern, which
+// is refutable, and stopping at len(body) != 1 after a single unwrap
+// already rejects it correctly (unwrapGroupingParens only ever removes a
+// pair that wraps the ENTIRE remaining token run).
+func unwrapGroupingParens(body []Token) []Token {
+	for len(body) >= 2 &&
+		body[0].Kind == TokenOp && body[0].Text == "(" &&
+		body[len(body)-1].Kind == TokenOp && body[len(body)-1].Text == ")" &&
+		parensWrapWhole(body) {
+		body = body[1 : len(body)-1]
+	}
+	return body
+}
+
+// parensWrapWhole reports whether body's leading `(` and trailing `)` are a
+// matched pair spanning the entire slice -- i.e. bracket depth returns to
+// exactly 0 only at the final token -- as opposed to two separate groups
+// like `(a), (b)` where the first `(` closes well before the end.
+func parensWrapWhole(body []Token) bool {
+	depth := 0
+	for i, tok := range body {
+		if tok.Kind != TokenOp {
+			continue
+		}
+		switch tok.Text {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			depth--
+			if depth == 0 && i != len(body)-1 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // TotalComplexity sums a block list the way analytics/complexity.py's

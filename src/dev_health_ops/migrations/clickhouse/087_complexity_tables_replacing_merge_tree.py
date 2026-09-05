@@ -297,6 +297,31 @@ def _table_exists(client, table: str) -> bool:
     return bool(rows and rows[0] and rows[0][0] > 0)
 
 
+def _is_table_already_exists_error(exc: BaseException) -> bool:
+    """True only for ClickHouse's TABLE_ALREADY_EXISTS (code 57) -- the one
+    failure shape `_acquire_lock`'s CREATE TABLE is meant to read as
+    "another runner already holds this lock" (r2 P3 #7).
+
+    Before this fix, `_acquire_lock` converted EVERY exception -- a
+    permission error, a transport/connection failure, a resource limit --
+    into the same `False`, so the caller logged "another runner holds the
+    lock" and either waited out the full `_LOCK_WAIT_TIMEOUT_SECS` or hit
+    `_wait_for_concurrent_conversion`'s "lock was released without
+    converting" error. Both outcomes bury the real exception behind a
+    fabricated contention story, sending an operator chasing a runner that
+    never existed instead of the actual cause. Matches the code/text-marker
+    convention already used for CH error discrimination elsewhere in this
+    codebase (api/graphql/resolvers/work_graph.py's
+    `_is_missing_membership_table_error`, code 60/UNKNOWN_TABLE).
+    """
+    text = str(exc)
+    return (
+        getattr(exc, "code", None) == 57
+        or "TABLE_ALREADY_EXISTS" in text
+        or "already exists" in text
+    )
+
+
 def _acquire_lock(client, table: str) -> bool:
     """Best-effort mutual exclusion for converting one table (r1 P1).
 
@@ -304,15 +329,19 @@ def _acquire_lock(client, table: str) -> bool:
     (without IF NOT EXISTS) is atomic and fails if the name already exists
     -- exactly the property a mutex needs. Returns True if this runner won
     the lock (and is responsible for releasing it via `_release_lock`),
-    False if another runner already holds it.
+    False if another runner already holds it. Any OTHER failure (r2 P3 #7)
+    propagates instead of being reported as contention -- see
+    `_is_table_already_exists_error`.
     """
     try:
         client.command(
             f"CREATE TABLE `{table}{_LOCK_SUFFIX}` (x UInt8) ENGINE = Memory"
         )
         return True
-    except Exception:
-        return False
+    except Exception as exc:
+        if _is_table_already_exists_error(exc):
+            return False
+        raise
 
 
 def _release_lock(client, table: str) -> None:
@@ -327,21 +356,42 @@ def _wait_for_concurrent_conversion(client, table: str) -> None:
 
     Polls rather than merely sleeping once, so this returns as soon as the
     other runner is actually done instead of always paying the full
-    timeout. If the lock disappears WITHOUT the table ever reaching
-    ReplacingMergeTree, the other runner's attempt failed -- raising here
+    timeout. If the lock disappears WITHOUT the table ever reaching a FULLY
+    converged state, the other runner's attempt failed -- raising here
     (rather than returning as if nothing was wrong) keeps that failure from
     being masked as a silent skip on this runner.
+
+    r2 P1 #1: "fully converged" means the engine is ReplacingMergeTree AND
+    the `<table>_new` shadow is gone -- NOT merely engine == RMT. `EXCHANGE
+    TABLES` (in `_rebuild_table`) flips the engine name to RMT immediately,
+    but the post-EXCHANGE catch-up (`_catch_up_and_drop`, which copies any
+    row written to the old table during the copy/EXCHANGE window and then
+    drops the shadow) can still be incomplete or never-run -- e.g. the
+    owning runner was hard-killed between EXCHANGE and catch-up, so its
+    `finally: _release_lock(...)` never executed and the lock table is
+    still present. The OLD check here (`engine == RMT` alone) returned
+    success the instant it observed the post-EXCHANGE engine name, even
+    though the shadow (holding rows never copied forward) was still sitting
+    there and its owning runner could never come back to finish -- silently
+    losing those rows while reporting the table as converged. Requiring the
+    shadow to be gone too means this now keeps waiting (and eventually times
+    out and raises, per the loop below) instead of declaring victory on a
+    stale, abandoned conversion.
     """
+    shadow = f"{table}_new"
     deadline = time.monotonic() + _LOCK_WAIT_TIMEOUT_SECS
     while time.monotonic() < deadline:
-        if _engine_name(client, table) == "ReplacingMergeTree":
+        engine_is_rmt = _engine_name(client, table) == "ReplacingMergeTree"
+        shadow_exists = _table_exists(client, shadow)
+        if engine_is_rmt and not shadow_exists:
             return
         if not _table_exists(client, f"{table}{_LOCK_SUFFIX}"):
             raise RuntimeError(
                 f"{table}: another runner's migration 087 lock was released "
-                f"without converting the table to ReplacingMergeTree -- its "
-                f"attempt likely failed; aborting rather than treating this "
-                f"as a skip"
+                f"without fully converting the table to ReplacingMergeTree "
+                f"(engine_is_rmt={engine_is_rmt}, shadow_exists={shadow_exists}) "
+                f"-- its attempt likely failed or crashed; aborting rather "
+                f"than treating this as a skip"
             )
         time.sleep(_LOCK_POLL_INTERVAL_SECS)
     raise RuntimeError(

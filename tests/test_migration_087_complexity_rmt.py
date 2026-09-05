@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -669,6 +670,60 @@ def test_acquire_lock_fails_when_a_lock_is_already_held(migration) -> None:
     assert migration._acquire_lock(client, table) is False
 
 
+def _acquire_lock_pre_r2_fix(client, table: str, migration: ModuleType) -> bool:
+    """Frozen inline copy of `_acquire_lock`'s pre-r2-fix behavior (codex r2
+    P3 #7): EVERY exception from the mutex `CREATE TABLE` -- contention or
+    not -- was converted into the same `False`. Kept inline here, not in a
+    fixture file, because this bug was introduced by this lane's own r1 fix
+    (the frozen r1-prefix fixture predates `_acquire_lock` entirely --
+    see test_concurrent_runner_lock_did_not_exist_before_this_fix -- so
+    there is no earlier real tip to load it from). This is a literal
+    snapshot of the code being fixed, used only to prove the OLD behavior
+    on the SAME injected failure the fixed test below exercises.
+    """
+    try:
+        client.command(
+            f"CREATE TABLE `{table}{migration._LOCK_SUFFIX}` (x UInt8) ENGINE = Memory"
+        )
+        return True
+    except Exception:
+        return False
+
+
+def test_acquire_lock_masked_non_contention_failures_before_r2_fix(migration) -> None:
+    """PROVE-BY-FAILURE for r2 P3 #7: an injected non-contention failure
+    (a permission/transport/resource error, not a name collision) during
+    the lock's CREATE TABLE read as ordinary contention under the pre-fix
+    code -- reported as False exactly like a real second-runner collision,
+    with the real cause discarded.
+    """
+    table = "repo_complexity_daily"
+    lock_name = f"{table}{migration._LOCK_SUFFIX}"
+    client = FakeClient(_catalog(table), fail_on=f"CREATE TABLE `{lock_name}`")
+
+    assert _acquire_lock_pre_r2_fix(client, table, migration) is False, (
+        "expected the pre-fix behavior to swallow ANY exception into False "
+        "-- if this now fails, the inline copy above may have drifted from "
+        "the actual pre-fix code (it must stay a literal snapshot)"
+    )
+
+
+def test_acquire_lock_reraises_a_non_contention_failure(migration) -> None:
+    """r2 P3 #7, fixed: the identical injected non-contention failure must
+    now propagate instead of being reported as lock contention -- a caller
+    treating this as "another runner holds the lock" would either wait out
+    the full timeout or hit `_wait_for_concurrent_conversion`'s own
+    "released without converting" error, both of which bury the real
+    exception.
+    """
+    table = "repo_complexity_daily"
+    lock_name = f"{table}{migration._LOCK_SUFFIX}"
+    client = FakeClient(_catalog(table), fail_on=f"CREATE TABLE `{lock_name}`")
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        migration._acquire_lock(client, table)
+
+
 def test_wait_for_concurrent_conversion_returns_once_the_other_runner_finishes(
     migration, monkeypatch
 ) -> None:
@@ -723,6 +778,133 @@ def test_wait_for_concurrent_conversion_raises_if_lock_vanishes_without_success(
 
     with pytest.raises(RuntimeError, match="lock was released"):
         migration._wait_for_concurrent_conversion(client, table)
+
+
+def _wait_for_concurrent_conversion_pre_r2_fix(
+    client, table: str, migration: ModuleType
+) -> None:
+    """Frozen inline copy of `_wait_for_concurrent_conversion`'s pre-r2-fix
+    success condition (codex r2 P1 #1): success was declared the instant
+    the engine read back as ReplacingMergeTree, with no check that the
+    `<table>_new` shadow -- and therefore the post-EXCHANGE catch-up -- was
+    actually done. Kept inline, not in a fixture file, for the same reason
+    as `_acquire_lock_pre_r2_fix` above: this function did not exist before
+    this lane's own r1 fix, so there is no earlier real tip to load it
+    from. This is a literal snapshot of the removed condition.
+    """
+    deadline = time.monotonic() + migration._LOCK_WAIT_TIMEOUT_SECS
+    while time.monotonic() < deadline:
+        if migration._engine_name(client, table) == "ReplacingMergeTree":
+            return  # THE BUG: no check that the shadow is gone too.
+        if not migration._table_exists(client, f"{table}{migration._LOCK_SUFFIX}"):
+            raise RuntimeError(
+                f"{table}: another runner's migration 087 lock was released "
+                f"without converting the table to ReplacingMergeTree"
+            )
+        time.sleep(migration._LOCK_POLL_INTERVAL_SECS)
+    raise RuntimeError(f"{table}: timed out")
+
+
+def _crash_window_catalog(
+    table: str, migration: ModuleType
+) -> dict[str, dict[str, str]]:
+    """The exact state codex r2 P1 #1 describes: a first runner completed
+    EXCHANGE (live table already ReplacingMergeTree) but was hard-killed
+    before `_catch_up_and_drop` and `_release_lock` could run -- so the
+    shadow (holding rows written between the snapshot copy and the swap)
+    and the lock table are both still present, and nothing will ever come
+    back to finish either.
+    """
+    catalog = _catalog(table)
+    catalog[table]["engine"] = "ReplacingMergeTree"
+    catalog[table]["sorting_key"] = LIVE_KEYS[table]
+    catalog[f"{table}_new"] = {
+        "ddl": _ddl(f"{table}_new", LIVE_KEYS[table]),
+        "engine": "MergeTree",
+        "sorting_key": LIVE_KEYS[table],
+    }
+    catalog[f"{table}{migration._LOCK_SUFFIX}"] = {
+        "ddl": "",
+        "engine": "Memory",
+        "sorting_key": "",
+    }
+    return catalog
+
+
+def test_wait_for_concurrent_conversion_accepted_the_crash_window_before_r2_fix(
+    migration,
+) -> None:
+    """PROVE-BY-FAILURE for r2 P1 #1: under the pre-fix condition, the
+    crash-window state (engine already RMT, shadow and lock both still
+    present, owning runner gone forever) reads as "the other runner
+    finished" -- returning cleanly with the shadow, and its never-caught-up
+    rows, left stranded.
+    """
+    table = "repo_complexity_daily"
+    client = FakeClient(_crash_window_catalog(table, migration))
+
+    _wait_for_concurrent_conversion_pre_r2_fix(
+        client, table, migration
+    )  # must NOT raise
+    assert f"{table}_new" in client.tables, (
+        "expected the pre-fix condition to reproduce the bug (declare "
+        "success with the shadow still present) -- if this now fails, the "
+        "inline copy above may have drifted from the actual pre-fix code"
+    )
+
+
+def test_wait_for_concurrent_conversion_fails_closed_on_the_crash_window(
+    migration, monkeypatch
+) -> None:
+    """r2 P1 #1, fixed: the identical crash-window state must NOT be
+    reported as done. The owning runner is gone and its lock will never be
+    released, so this must keep waiting and then fail closed -- never
+    silently declare the conversion finished while the shadow's rows are
+    still stranded there.
+    """
+    monkeypatch.setattr(migration, "_LOCK_WAIT_TIMEOUT_SECS", 0.05)
+    monkeypatch.setattr(migration, "_LOCK_POLL_INTERVAL_SECS", 0.01)
+
+    table = "repo_complexity_daily"
+    client = FakeClient(_crash_window_catalog(table, migration))
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        migration._wait_for_concurrent_conversion(client, table)
+    assert f"{table}_new" in client.tables, (
+        "the shadow -- and its never-caught-up rows -- must still be there: "
+        "this runner correctly refused to silently drop them"
+    )
+
+
+def test_lock_absent_shadow_present_still_runs_catch_up(migration) -> None:
+    """team-lead 09-05: engine already RMT, lock ABSENT (no other runner is
+    active), a leftover shadow from an earlier interrupted run --
+    `_rebuild_table`'s own convergence branch (reached because
+    `_acquire_lock` succeeds immediately; `_wait_for_concurrent_conversion`
+    is never even called) must still perform catch-up, not treat "already
+    ReplacingMergeTree" as "nothing to do" and leave the shadow's rows
+    stranded forever.
+    """
+    table = "repo_complexity_daily"
+    catalog = _catalog(table)
+    catalog[table]["engine"] = "ReplacingMergeTree"
+    catalog[table]["sorting_key"] = LIVE_KEYS[table]
+    catalog[f"{table}_new"] = {
+        "ddl": _ddl(f"{table}_new", LIVE_KEYS[table]),
+        "engine": "MergeTree",
+        "sorting_key": LIVE_KEYS[table],
+    }
+    client = FakeClient(catalog)
+
+    migration._rebuild_table(client, table)
+
+    assert f"{table}_new" not in client.tables, (
+        "catch-up must drop the shadow once it has run"
+    )
+    assert any(
+        cmd.startswith("INSERT INTO") and f"`{table}_new`" in cmd
+        for cmd in client.commands
+    ), "catch-up must copy the shadow's rows forward before dropping it"
 
 
 def test_upgrade_processes_every_table(migration) -> None:

@@ -191,10 +191,10 @@ function directly, even for families whose worker kind is now native:
 <!-- BEGIN GENERATED DAILY METRICS MATRIX -->
 | Family | Executor | Citation | Ticket |
 | --- | --- | --- | --- |
-| ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
+| ai_governance | COMPAT-Python | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | COMPAT-Python | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
-| ai_workflow | COMPAT-Python | Python: `work_graph/extractors/ai_workflow.py:212 _extract_ai_workflow_for_day` | CHAOS-4286 |
-| benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
+| ai_workflow | COMPAT-Python | Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day` | CHAOS-4286 |
+| benchmarking | COMPAT-Python | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
@@ -203,13 +203,13 @@ function directly, even for families whose worker kind is now native:
 | ic_finalize | COMPAT-Python | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
-| review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`) |
+| review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
+| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | CHAOS-5141 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
-| testops_coverage | COMPAT-Python | Python: `compute_testops.py:355 compute_coverage_metrics_daily` | CHAOS-4284 |
-| testops_pipeline | COMPAT-Python | Python: `compute_testops.py:105 compute_pipeline_metrics_daily` | CHAOS-4284 |
+| testops_coverage | COMPAT-Python | Python: `compute_testops.py:371 compute_coverage_metrics_daily` | CHAOS-4284 |
+| testops_pipeline | COMPAT-Python | Python: `compute_testops.py:114 compute_pipeline_metrics_daily` | CHAOS-4284 |
 | testops_risk | NATIVE | Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4294 (Done) |
-| testops_test | COMPAT-Python | Python: `compute_testops.py:207 compute_test_metrics_daily` | CHAOS-4284 |
+| testops_test | COMPAT-Python | Python: `compute_testops.py:216 compute_test_metrics_daily` | CHAOS-4284 |
 | work_graph_edges | COMPAT-Python | Python: `ai_workflow.py extract_review_deployment_incident_edges` | CHAOS-4286 |
 | work_item | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- post_bridge, reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily` | CHAOS-4283 |
 | work_item_attribution | COMPAT-Python | Python: `compute_work_items.py:1189 compute_work_item_team_attributions` (full daily compute -- distinct from §3's native staleness-only backstop of the same table) | CHAOS-4283 |
@@ -236,7 +236,7 @@ family that would actually consume this code as a native executor).
 | Family | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
 | capacity | NATIVE | Go: `internal/jobs/metrics/remaining/capacity_native.go`, `capacity_native_clickhouse.go` | river, native (`daily.go:571-581`) | CUT-20 R2 (Done) |
-| complexity | COMPAT-Python | Python: `metrics_extra.py` -> `job_complexity_db.py run_complexity_db_job` | river, bridge (`daily.go:582-585`, uses `compatibility` directly) | CHAOS-4291 |
+| complexity | COMPAT-Python | Python: `api/internal/worker_metrics.py _run_complexity` -> `job_complexity_db.py:238 run_complexity_db_job` | river, bridge (`daily.go:582-585`, uses `compatibility` directly) | CHAOS-4291 |
 | dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`daily.go:586-598`) | CHAOS-3092 R1 (Done) |
 | membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`daily.go:599-609`) | CHAOS-4282 (Done) |
 | recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`daily.go:610-620`) | CHAOS-4281/CHAOS-3092 (Done) |

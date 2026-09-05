@@ -68,6 +68,7 @@ import pytest
 
 import dev_health_ops.connectors  # noqa: F401  # lgtm[py/unused-import]
 from dev_health_ops.metrics import job_daily
+from dev_health_ops.models.work_items import WorkItem
 
 DAY = date(2025, 12, 18)
 ORG_ID = "22222222-2222-2222-2222-222222222222"
@@ -205,6 +206,29 @@ class _FakeLoaderWithTestopsPipeline(_FakeLoader):
             "org_id": ORG_ID,
         }
         return [pipeline_row], []
+
+
+class _FakeLoaderWithWorkItem(_FakeLoader):
+    """Like _FakeLoader, but returns ONE real work item so
+    compute_work_item_metrics_daily/compute_estimate_coverage_metrics_daily
+    produce non-empty output for the "siblings unaffected" assertion below
+    (base _FakeLoader.load_work_items returns ([], []), which never even
+    reaches the `if work_items:` block)."""
+
+    async def load_work_items(self, *a: Any, **k: Any) -> tuple[list, list]:
+        item = WorkItem(
+            work_item_id="gh:owner/repo#1",
+            provider="github",
+            title="Fix the thing",
+            type="issue",
+            status="in_progress",
+            status_raw="In Progress",
+            repo_id=REPO_ID,
+            org_id=ORG_ID,
+            created_at=datetime(2025, 12, 18, 9, 0, tzinfo=timezone.utc),
+            updated_at=datetime(2025, 12, 18, 10, 0, tzinfo=timezone.utc),
+        )
+        return [item], []
 
 
 class _NullResolver:
@@ -1168,3 +1192,54 @@ async def test_benchmarking_in_skip_families_runs_nothing(monkeypatch: Any) -> N
     )
 
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_work_item_attribution_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5233/CHAOS-3092 close condition 3.
+
+    Chris's ruling (verbatim, twice): "work_item_attribution python doesn't
+    need a skip, it just needs to be deleted" / "once go is in main that
+    does the same thing, skip flags are pointless." Unlike every other
+    family in this file, work_item_attribution gets NO skip_families
+    handling at all -- its daily compute+write call is gone from
+    run_daily_metrics_job entirely, in every mode. This is the RUNTIME
+    counterpart to test_every_native_daily_family_has_a_skip_families_branch
+    (renamed structural guard, tests/metrics/
+    test_job_daily_skip_families_structural_guard.py), which proves the same
+    thing at the source level.
+
+    compute_work_item_team_attributions itself is NOT deleted from the
+    codebase -- job_work_items.py's run_work_items_sync_job (a full-backfill
+    sync job, unrelated to this function) still calls it directly, as do its
+    own dedicated unit tests and the live-Python oracle comparator. Only
+    run_daily_metrics_job's own call is gone.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
+
+    assert not hasattr(job_daily, "compute_work_item_team_attributions"), (
+        "compute_work_item_team_attributions must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+
+    for skip_families in (None, {"work_item_attribution"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
+        assert "write_work_item_team_attributions" not in sink.write_calls
+        # work_item/work_item_estimate must be entirely unaffected by the
+        # deletion -- they share the same `if work_items:` block and the
+        # same attribution_context, but neither reads work_item_attribution's
+        # output.
+        assert "write_work_item_metrics" in sink.write_calls
+        assert "write_estimate_coverage_metrics" in sink.write_calls

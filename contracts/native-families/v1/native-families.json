@@ -19,9 +19,10 @@
     "testops_risk": "native",
     "testops_test": "native",
     "work_graph_edges": "native",
-    "work_item": "post_bridge",
-    "work_item_estimate": "post_bridge",
-    "work_item_state": "post_bridge"
+    "work_item": "native",
+    "work_item_attribution": "native",
+    "work_item_estimate": "native",
+    "work_item_state": "native"
   },
   "remaining": {
     "capacity": "native",

@@ -156,14 +156,25 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // `work_item_attribution_backstop_scoped_runs` -- the CHAOS-2433
 // write-then-marker run-marker pair, same shape as #2177's
 // work_unit_membership_runs/_scoped_runs.
-// 88 -> 89, CHAOS-4296: 088_release_impact_daily_replacing_merge_tree.py
+// 88 -> 91, CHAOS-4291: 087_complexity_tables_replacing_merge_tree.py
+// converts all THREE complexity tables from plain MergeTree to
+// ReplacingMergeTree(computed_at) -- `file_complexity_snapshots`,
+// `repo_complexity_daily`, `team_complexity_daily` -- fixing the 6-20x
+// append duplication the family had (measured live: 6.85x/6.01x/20.0x
+// before this migration). Confirmed the only drift: the failing run's
+// printed table list contained exactly these three names plus the
+// existing 88, no other Replacing table appeared or vanished.
+// 91 -> 92, CHAOS-4296: 088_release_impact_daily_replacing_merge_tree.py
 // converts `release_impact_daily` from plain MergeTree to
 // ReplacingMergeTree(computed_at), the 055/027/042 shadow-table pattern --
 // see that migration's own docstring for why (append-only duplication once
 // CHAOS-4256's ingest gap is fixed and the 7-day recompute window overlaps a
-// live day).
+// live day). Both this migration's and 087's increments apply from the same
+// base of 88 (they landed independently, on separate branches) -- the
+// authoritative count is their UNION, 88 + 1 (release_impact) + 3
+// (complexity's three tables) = 92, not either branch's own count alone.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 89
+	const wantCount = 92
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

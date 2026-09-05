@@ -110,36 +110,23 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	for _, family := range registry.Families {
 		byPhase[family.Name] = family.Phase
 	}
-	// work_item_state must stay phase=post_bridge until CHAOS-4283 ports
-	// work_item_attribution to Go (see families.json's phase_note) -- a
-	// families.json edit that silently drops this back to pre_bridge (empty)
-	// while cmd/dev-health-worker/daily.go still registers it via
-	// SetPostBridgeNativeFamilies would just be dead JSON, not a real
-	// regression by itself, but the two must be caught drifting apart
-	// together at the registration site instead (see cmd/dev-health-worker's
-	// own comment) -- this assertion is the families.json half of that pair.
-	if got := byPhase["work_item_state"]; got != "post_bridge" {
-		t.Fatalf("work_item_state must be phase=post_bridge (CHAOS-4278, pending CHAOS-4283), got %q", got)
-	}
-	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
-	// post_bridge, for the IDENTICAL reason -- all three read
-	// work_item_team_attributions, which the still-Python-bridged
-	// work_item_attribution family writes during the same partition's
-	// compatibility call. All three must be port=go AND phase=post_bridge;
-	// either half alone is a half-cutover (port=go without the phase would
-	// run them pre_bridge against a stale attribution snapshot, which is the
-	// exact P1 codex round 1 caught on CHAOS-4278).
+	// CHAOS-5078: all four work-item families are now port=go and pre_bridge
+	// (phase empty). The post_bridge workaround existed only because
+	// work_item_team_attributions was written by a still-Python family during
+	// the same partition call; that family is native now, and families.json's
+	// `after` edges sequence it ahead of its three readers WITHIN pre_bridge.
 	//
-	// CHAOS-5078 is the follow-up that moves all three back to pre_bridge
-	// once the DAILY work_item_attribution family has its own native executor
-	// that can be sequenced ahead of them. When that lands, this block and
-	// the allowlist below move together.
-	for _, family := range []string{"work_item", "work_item_estimate"} {
+	// The assertion is inverted rather than deleted. "No family declares a
+	// phase" is a real, checkable property, and it is the one that catches a
+	// family silently re-acquiring post_bridge -- deleting the block would
+	// leave the phase field unasserted entirely, which is how a half-cutover
+	// went unnoticed before (port flipped, phase not).
+	for _, family := range []string{"work_item", "work_item_estimate", "work_item_state", "work_item_attribution"} {
 		if got := byName[family]; got != "go" {
-			t.Fatalf("%s must be port=go (CHAOS-4283), got %q", family, got)
+			t.Fatalf("%s must be port=go (CHAOS-4283/CHAOS-5078), got %q", family, got)
 		}
-		if got := byPhase[family]; got != "post_bridge" {
-			t.Fatalf("%s must be phase=post_bridge (CHAOS-4283, pending CHAOS-5078), got %q", family, got)
+		if got := byPhase[family]; got != "" {
+			t.Fatalf("%s must be pre_bridge, i.e. NO phase declared (CHAOS-5078 moved it back), got %q", family, got)
 		}
 	}
 	// compounding_risk must stay phase=post_bridge until a finalize-side
@@ -152,11 +139,15 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// the families.json half, cmd/dev-health-worker/daily.go's registration is
 	// the other.
 	//
-	// A DIFFERENT reason from the CHAOS-4283 three above, and deliberately kept
-	// as its own block rather than folded into their loop: theirs is about a
-	// stale attribution snapshot written by the bridge, this one is about
+	// A DIFFERENT reason from the CHAOS-4283/CHAOS-5078 four above, and
+	// deliberately kept as its own block rather than folded into their loop:
+	// theirs was about a stale attribution snapshot written by the bridge
+	// (now retired by CHAOS-5078's native writer), this one is about
 	// sorted-order execution inside computeNativeFamilies. Merging them would
 	// suggest one fix retires both, and CHAOS-5078 does not touch this one.
+	// It is also the ONE exception to the "every OTHER family has no phase"
+	// loop below, not the whole set post_bridge was scoped to before
+	// CHAOS-5078.
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
@@ -169,22 +160,18 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["benchmarking"]; got != "post_bridge" {
 		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
 	}
-	postBridgeFamilies := map[string]struct{}{
-		"work_item_state": {}, "work_item": {}, "work_item_estimate": {},
-		"compounding_risk": {}, "benchmarking": {},
-	}
 	for name, phase := range byPhase {
-		if phase == "" {
+		if name == "compounding_risk" || name == "benchmarking" {
 			continue
 		}
-		if _, expected := postBridgeFamilies[name]; !expected {
+		if phase != "" {
 			t.Fatalf(
-				"family %q declares phase=%q -- only %v are expected to be "+
-					"non-default today; update this test if that changes deliberately",
-				name, phase, postBridgeFamilies)
-		}
-		if phase != "post_bridge" {
-			t.Fatalf("family %q declares unknown phase=%q; the only non-default phase is post_bridge", name, phase)
+				"family %q declares phase=%q, but no OTHER family is expected to be "+
+					"non-default after CHAOS-5078 (compounding_risk/CHAOS-4287 and "+
+					"benchmarking/CHAOS-4288 are the two deliberate exceptions, asserted "+
+					"separately above). post_bridge remains a working mechanism -- if you "+
+					"are using it deliberately, update this assertion in the same commit.",
+				name, phase)
 		}
 	}
 	// cicd is Wave 1B's first cutover (CHAOS-4292), following repo_user_commit/

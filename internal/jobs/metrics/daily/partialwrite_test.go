@@ -62,7 +62,7 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 			nativeFamiliesNow: time.Now,
 		}
 
-		skip := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
+		skip, err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
 
 		if len(skip) != 1 || skip[0] != "benchmarking" {
 			t.Fatalf("skip = %v, want [benchmarking] -- the bridge must NOT recompute a family "+
@@ -75,6 +75,11 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 		if observer.rows != 1234 {
 			t.Errorf("rows = %d, want 1234 -- reporting 0 understates what landed, which is "+
 				"exactly the number needed to judge duplication", observer.rows)
+		}
+		// CHAOS-5078 codex round 3: a partial write must also hold the
+		// PARTITION incomplete, not only skip the family from the bridge.
+		if !errors.Is(err, ErrPreBridgeFamilyIncomplete) {
+			t.Fatalf("err = %v, want it to wrap ErrPreBridgeFamilyIncomplete", err)
 		}
 	})
 
@@ -89,7 +94,7 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 			nativeFamiliesNow: time.Now,
 		}
 
-		skip := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
+		skip, err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
 
 		if len(skip) != 0 {
 			t.Fatalf("skip = %v, want empty -- a family that wrote NOTHING must fail open to "+
@@ -98,6 +103,11 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 		if observer.outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
 			t.Errorf("outcome = %q, want %q", observer.outcome,
 				jobruntime.DailyMetricsNativeFamilyOutcomeRefused)
+		}
+		// CHAOS-5078 codex round 3: an ordinary refusal must NOT hold the
+		// partition -- only a partial write does.
+		if err != nil {
+			t.Fatalf("err = %v, want nil -- an ordinary refusal stays fail-open at the partition level too", err)
 		}
 	})
 }

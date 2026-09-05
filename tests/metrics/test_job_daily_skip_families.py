@@ -820,3 +820,203 @@ async def test_testops_risk_not_skipped_writes_rows(monkeypatch: Any) -> None:
     )
 
     assert "write_release_confidence" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_compounding_risk_not_skipped_writes_repo_rows(
+    monkeypatch: Any,
+) -> None:
+    """Baseline for the skip test below: WITHOUT compounding_risk in
+    skip_families the per-partition repo-scope writer runs, so the "never
+    called" assertion below is because of the gate, not because the fixture
+    never reaches that call site."""
+    calls: list[dict[str, Any]] = []
+
+    def _spy(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 0
+
+    sink = _RecordingSink("clickhouse://test")
+    # AFTER _neutralize_daily_job: that helper stubs
+    # _write_compounding_risk_for_day itself, so a spy installed before it is
+    # silently overwritten and the assertions below pass vacuously.
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", _spy)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["org_id"] == ORG_ID
+
+
+@pytest.mark.asyncio
+async def test_compounding_risk_in_skip_families_writes_nothing(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4287: when the Go dispatcher reports compounding_risk already
+    computed and wrote this partition's REPO-scope rows, this job must not
+    call _write_compounding_risk_for_day at all.
+
+    The whole call is gated rather than only the write because nothing else
+    in run_daily_metrics_job consumes its output -- it writes straight to the
+    sinks -- which makes this the cicd/team_wellbeing shape rather than
+    repo_user_commit's write-only skip. And, as for cicd, no zero-rows note
+    may fire for the family under the skip: that would be a false
+    "no_rows_computed" DEGRADE signal on every native-executor partition
+    regardless of how many rows Go actually wrote."""
+    calls: list[dict[str, Any]] = []
+
+    def _spy(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 0
+
+    zero_rows_calls: list[tuple[str, str]] = []
+
+    def _spy_record(*, family: str, cause: str) -> None:
+        zero_rows_calls.append((family, cause))
+
+    sink = _RecordingSink("clickhouse://test")
+    # AFTER _neutralize_daily_job, for the same reason as the baseline above --
+    # otherwise `calls == []` would hold whether or not the gate exists.
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", _spy)
+    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"compounding_risk"},
+    )
+
+    assert calls == []
+    assert not any(
+        family.startswith("compounding_risk") for family, _cause in zero_rows_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_compounding_risk_skip_does_not_perturb_other_families(
+    monkeypatch: Any,
+) -> None:
+    """Naming compounding_risk in skip_families must not change any other
+    family's writes -- the gate is one `if` around one call site, and the
+    families around it (repo_metrics, team_metrics, cicd) must be untouched."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"compounding_risk"},
+    )
+
+    assert "repo_metrics" in sink.write_calls
+    assert "team_metrics" in sink.write_calls
+    assert "write_cicd_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_review_edges_not_skipped_computes_and_writes(monkeypatch: Any) -> None:
+    """Baseline for the skip test below: WITHOUT review_edges in
+    skip_families, compute_review_edges_daily runs, so the "never called"
+    assertion below is because of the gate rather than because the fixture
+    never reaches that call site."""
+    compute_calls: list[Any] = []
+    original_compute = job_daily.compute_review_edges_daily
+
+    def _spy_compute(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return original_compute(*args, **kwargs)
+
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "compute_review_edges_daily", _spy_compute)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert len(compute_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_review_edges_in_skip_families_computes_nothing(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4279: when the Go dispatcher reports review_edges already computed
+    and wrote this scope, this job must neither call compute_review_edges_daily
+    nor write the family.
+
+    Compute is skipped outright, not merely the write: nothing else in
+    run_daily_metrics_job reads review_edges between the compute and the write
+    block, which makes this the cicd/team_wellbeing shape rather than
+    repo_user_commit's write-only skip."""
+    compute_calls: list[Any] = []
+
+    def _spy_compute(*args: Any, **kwargs: Any) -> Any:
+        compute_calls.append((args, kwargs))
+        return []
+
+    sink = _RecordingSink("clickhouse://test")
+    # AFTER _neutralize_daily_job, so the helper cannot overwrite the spy.
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "compute_review_edges_daily", _spy_compute)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"review_edges"},
+    )
+
+    assert compute_calls == []
+    assert "write_review_edges" not in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_review_edges_skip_does_not_perturb_other_families(
+    monkeypatch: Any,
+) -> None:
+    """Naming review_edges in skip_families must not change any other family's
+    writes -- the gate is one conditional around one compute and one write."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"review_edges"},
+    )
+
+    assert "repo_metrics" in sink.write_calls
+    assert "team_metrics" in sink.write_calls
+    assert "write_cicd_metrics" in sink.write_calls

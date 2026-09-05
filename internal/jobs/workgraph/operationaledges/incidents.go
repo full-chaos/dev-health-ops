@@ -758,10 +758,16 @@ func BuildOperationalIncidentEdges(
 	// float64 precision (fixed per team-lead's r1 follow-up: an EARLIER
 	// version of this fix took heuristicConfidence as float32, which had
 	// already lost precision by the time it reached this function --
-	// validating a narrowed value is not validating the real one). The
-	// float32 narrowing edges.Row.Confidence requires happens only where the
-	// heuristic edge is actually constructed, below.
-	if err := edges.ValidateConfidenceFloat64(heuristicConfidence); err != nil {
+	// validating a narrowed value is not validating the real one).
+	// edges.Quantize validates-and-narrows ATOMICALLY, per team-lead's
+	// ruling on codex round chaos-4924-pr-a-r2 finding 1 (make the narrow
+	// happen in exactly one place, for every confidence this producer
+	// carries) -- heuristicConfidence is one fixed value for the whole
+	// call, so quantizing it ONCE here and reusing the float32 result at
+	// every linked_incident edge below is both correct and avoids
+	// re-validating the same value once per deployment-window match.
+	heuristicConfidenceQuantized, err := edges.Quantize(heuristicConfidence)
+	if err != nil {
 		return nil, fmt.Errorf("heuristic confidence: %w", err)
 	}
 
@@ -800,7 +806,19 @@ func BuildOperationalIncidentEdges(
 	for _, key := range preferredOrder {
 		m := preferred[key]
 		b.serviceRepos[key.serviceID] = append(b.serviceRepos[key.serviceID], key.repoID)
-		confidence := float32(mappingConfidence(m.RelationshipConfidence))
+		// edges.Quantize validates at the mapping row's OWN float64 precision
+		// and narrows to float32 ATOMICALLY -- makes it structurally
+		// impossible to narrow without checking, per team-lead's ruling on
+		// codex round chaos-4924-pr-a-r2 finding 1 (the SAME class of bug as
+		// finding 2/r1's heuristicConfidence, now fixed at the ONE place
+		// every confidence in this producer narrows, not with a second
+		// hand-rolled validate-then-cast). Python's WorkGraphEdge.__post_init__
+		// validates every edge unconditionally and would raise here on a
+		// malformed row rather than silently narrow it into range.
+		confidence, err := edges.Quantize(mappingConfidence(m.RelationshipConfidence))
+		if err != nil {
+			return nil, fmt.Errorf("mapping %s confidence: %w", key.serviceID, err)
+		}
 		evidence := strings.Join([]string{m.RelationshipProvenance, m.MappingKind, m.RuleID, m.SourceURL}, ":")
 		provider := m.Provider
 		if provider == "" {
@@ -907,7 +925,16 @@ func BuildOperationalIncidentEdges(
 		if inc.StartedAt != nil {
 			for _, mappedRepoID := range b.serviceRepos[inc.ServiceID] {
 				for _, d := range b.deploymentsByRepo[mappedRepoID] {
-					environment := strings.ToLower(strings.TrimSpace(d.Environment))
+					// Python: `str(deployment.get("environment") or "").casefold()`
+					// -- casefold ONLY, no trim (operational_edges.py:219). An
+					// earlier version of this port added a TrimSpace Python
+					// doesn't have, so a padded value like " UNKNOWN " matched
+					// the exclusion set here but wouldn't in Python, silently
+					// dropping an edge Python emits (codex round chaos-4924-
+					// pr-a-r2, finding 2). pythonparity.Fold, not
+					// strings.ToLower, for the same reason every other
+					// casefold call site in this package uses it.
+					environment := pythonparity.Fold(d.Environment)
 					if environment == "" || environment == "unknown" || environment == "unspecified" {
 						continue
 					}
@@ -923,7 +950,7 @@ func BuildOperationalIncidentEdges(
 						edges.NodeTypeDeployment, d.DeploymentID,
 						edges.EdgeTypeLinkedIncident,
 						edges.NodeTypeIncident, incidentID,
-						edges.ProvenanceHeuristic, float32(heuristicConfidence), evidence,
+						edges.ProvenanceHeuristic, heuristicConfidenceQuantized, evidence,
 						&mappedRepoID, d.DeployedAt, nil,
 					)
 				}

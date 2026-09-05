@@ -429,3 +429,72 @@ func TestReadServiceRepositoryMappingsTruncatesNowToWholeSeconds(t *testing.T) {
 		t.Fatalf("expected svc-precision, got %q", rows[0].ServiceID)
 	}
 }
+
+// TestBuildOperationalIncidentEdgesRejectsInvalidMappingConfidence pins
+// codex round chaos-4924-pr-a-r2 finding 1: a mapping row's OWN
+// relationship_confidence, not just heuristicConfidence, must be validated
+// at full float64 precision before the float32 narrowing
+// edges.Row.Confidence requires -- Python's WorkGraphEdge.__post_init__
+// validates every edge unconditionally.
+func TestBuildOperationalIncidentEdgesRejectsInvalidMappingConfidence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	conn := newSchemaConn(t, ctx)
+
+	const orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
+	if err := conn.Exec(ctx,
+		`INSERT INTO operational_service_repository_mappings
+		   (org_id, provider, provider_instance_id, source_entity_type, external_id,
+		    source_version_at, id, observed_at, last_synced,
+		    relationship_confidence, service_id, repo_id, is_active, valid_from, valid_to)
+		 VALUES
+		   ('`+orgID+`', 'pagerduty', 'test', 'mapping', 'map-invalid',
+		    '2026-09-01 00:00:01', 'map-invalid', '2026-09-01 00:00:01', '2026-09-01 00:00:01',
+		    1.00000001, 'svc-invalid', '00000000-0000-0000-0000-0000000000aa', 1,
+		    '2026-01-01 00:00:00', NULL)`,
+	); err != nil {
+		t.Fatalf("seed mapping: %v", err)
+	}
+
+	_, err := BuildOperationalIncidentEdges(
+		ctx, conn, orgID, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 7, 0.3, nil, nil, nil,
+	)
+	if err == nil {
+		t.Fatal("expected an error for relationship_confidence=1.00000001 (outside [0,1] at float64 precision)")
+	}
+}
+
+// TestBuildOperationalIncidentEdgesIncludesPaddedEnvironment pins codex
+// round chaos-4924-pr-a-r2 finding 2: Python casefolds the deployment
+// environment WITHOUT trimming (operational_edges.py:219), so a padded
+// value like " UNKNOWN " is NOT a member of the {"", "unknown",
+// "unspecified"} exclusion set and DOES produce a linked_incident edge.
+func TestBuildOperationalIncidentEdgesIncludesPaddedEnvironment(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	conn := newSchemaConn(t, ctx)
+	execSQLFile(t, ctx, conn, fixturePath(t, "seed_workgraph_operational_edges_synthetic.sql"))
+
+	if err := conn.Exec(ctx,
+		`INSERT INTO deployments (org_id, repo_id, deployment_id, environment, deployed_at)
+		 VALUES ('c4924000-0000-0000-0000-000000000001',
+		         'c4924000-0000-0000-0000-0000000000bb',
+		         'deploy-space', ' UNKNOWN ', '2026-08-30 22:00:00')`,
+	); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+
+	got, err := BuildOperationalIncidentEdges(
+		ctx, conn, "c4924000-0000-0000-0000-000000000001",
+		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 7, 0.3, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("BuildOperationalIncidentEdges: %v", err)
+	}
+	for _, e := range got {
+		if e.EdgeType == edges.EdgeTypeLinkedIncident && e.SourceID == "deploy-space" {
+			return
+		}
+	}
+	t.Fatal("expected a linked_incident edge for deploy-space (padded environment must not be excluded)")
+}

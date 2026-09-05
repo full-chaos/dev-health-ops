@@ -70,6 +70,43 @@ func TestSelectPreferredMappingsPreservesFirstSeenOrder(t *testing.T) {
 	}
 }
 
+// TestSelectPreferredMappingsOrderIsStableAcrossRepeatedCalls is the
+// multi-run half of finding 7's proof team-lead asked for: a single
+// fixed-expected-order assertion (the test above) has only a 1-in-6 chance
+// of catching a 3-element map-range mutant by luck (3! possible orders, one
+// of them happens to match). Calling the SAME input many times and requiring
+// EVERY run's order to match the FIRST is immune to that luck -- correct
+// (first-seen-order) code trivially satisfies this always; a map-range
+// mutant, whose iteration order is rehashed per call, will disagree with
+// itself within a handful of the 30 runs below with overwhelming probability.
+func TestSelectPreferredMappingsOrderIsStableAcrossRepeatedCalls(t *testing.T) {
+	repoA := uuid.MustParse("00000000-0000-0000-0000-0000000000aa")
+	repoB := uuid.MustParse("00000000-0000-0000-0000-0000000000bb")
+	repoC := uuid.MustParse("00000000-0000-0000-0000-0000000000cc")
+	repoD := uuid.MustParse("00000000-0000-0000-0000-0000000000dd")
+	mappings := []MappingRow{
+		{ServiceID: "svc-c", RepoID: &repoC, RelationshipConfidence: float64Ptr(0.9)},
+		{ServiceID: "svc-a", RepoID: &repoA, RelationshipConfidence: float64Ptr(0.9)},
+		{ServiceID: "svc-d", RepoID: &repoD, RelationshipConfidence: float64Ptr(0.9)},
+		{ServiceID: "svc-b", RepoID: &repoB, RelationshipConfidence: float64Ptr(0.9)},
+	}
+
+	_, first := selectPreferredMappings(mappings)
+	for i := 0; i < 30; i++ {
+		_, order := selectPreferredMappings(mappings)
+		if len(order) != len(first) {
+			t.Fatalf("run %d: length changed (%d vs %d)", i, len(order), len(first))
+		}
+		for j := range order {
+			if order[j] != first[j] {
+				t.Fatalf("run %d disagreed with run 0 at position %d: %v vs %v (order is not "+
+					"deterministic across calls -- a map was ranged instead of an ordered slice)",
+					i, j, order, first)
+			}
+		}
+	}
+}
+
 // TestSelectScopedIncidentsPreservesFirstSeenOrder is finding 7's other
 // half: the incident-edge-building loop must also iterate in the query's
 // own row-scan order, not map order.

@@ -261,6 +261,19 @@ type clikeStates struct {
 	// to empty before any other user is entered).
 	bracketStack []string
 
+	// globalState and decToImpState exist ONLY because Python's
+	// self._state_global / self._state_dec_to_imp, referenced from INSIDE
+	// clikeStates' own methods below, resolve dynamically to a subclass's
+	// override at runtime -- CSharpStates overrides both (csharp.go).
+	// Every place clike.py spells one of those two names as a plain
+	// `self.` reference is ported here as a read of the corresponding
+	// field, defaulting to this base's own method (the same pattern
+	// golike.go's funcNameState/expectFunctionImplState use, for the same
+	// reason). Every other self-reference in this file targets a method
+	// nothing overrides, so it stays a direct, hardcoded call.
+	globalState   state
+	decToImpState state
+
 	// savedTokens ports self._saved_tokens (clike.py:248,272-288):
 	// stateOldCParams's own buffer, populated by stateDecToImp's else
 	// branch and replayed through stateGlobal on ambiguous input. See
@@ -271,6 +284,8 @@ type clikeStates struct {
 func newCLikeStates(ctx *Context) *clikeStates {
 	m := &clikeStates{ctx: ctx}
 	m.state = m.stateGlobal
+	m.globalState = m.stateGlobal
+	m.decToImpState = m.stateDecToImp
 	return m
 }
 
@@ -337,8 +352,8 @@ func (m *clikeStates) stateFunction(tok string) {
 		m.state = m.stateTemplateInName
 		m.stateTemplateInName(tok)
 	default:
-		m.state = m.stateGlobal
-		m.stateGlobal(tok)
+		m.state = m.globalState
+		m.globalState(tok)
 	}
 }
 
@@ -396,7 +411,7 @@ func (m *clikeStates) stateDec(tok string) {
 	m.brCount += bracketDelta(tok, "(", ")")
 	m.stateDecBody(tok)
 	if m.brCount == 0 {
-		m.state = m.stateDecToImp
+		m.state = m.decToImpState
 	}
 }
 
@@ -408,7 +423,7 @@ func (m *clikeStates) stateDecBody(tok string) {
 		if len(m.bracketStack) > 0 {
 			m.bracketStack = m.bracketStack[:len(m.bracketStack)-1]
 		} else {
-			m.state = m.stateGlobal
+			m.state = m.globalState
 		}
 	}
 }
@@ -466,8 +481,8 @@ func (m *clikeStates) stateDecToImp(tok string) {
 		m.state = m.stateAttribute
 		m.stateAttribute(tok)
 	case !(firstByte(tok) == '_' || isAlpha(firstByte(tok))):
-		m.state = m.stateGlobal
-		m.stateGlobal(tok)
+		m.state = m.globalState
+		m.globalState(tok)
 	default:
 		m.state = m.stateOldCParams
 		m.savedTokens = []string{tok}
@@ -479,7 +494,7 @@ func (m *clikeStates) stateDecToImp(tok string) {
 func (m *clikeStates) stateThrow(tok string) {
 	m.brCount += bracketDelta(tok, "(", ")")
 	if m.brCount == 0 {
-		m.state = m.stateDecToImp
+		m.state = m.decToImpState
 	}
 }
 
@@ -489,8 +504,8 @@ func (m *clikeStates) stateThrows(tok string) {
 	if !oneOf(tok, ";{") {
 		return
 	}
-	m.state = m.stateDecToImp
-	m.stateDecToImp(tok)
+	m.state = m.decToImpState
+	m.decToImpState(tok)
 }
 
 // stateNoexcept ports _state_noexcept (clike.py:260-265).
@@ -498,7 +513,7 @@ func (m *clikeStates) stateNoexcept(tok string) {
 	if tok == "(" {
 		m.state = m.stateThrow
 	} else {
-		m.state = m.stateDecToImp
+		m.state = m.decToImpState
 	}
 	m.state(tok)
 }
@@ -509,8 +524,8 @@ func (m *clikeStates) stateTrailingReturn(tok string) {
 	if !oneOf(tok, ";{") {
 		return
 	}
-	m.state = m.stateDecToImp
-	m.stateDecToImp(tok)
+	m.state = m.decToImpState
+	m.decToImpState(tok)
 }
 
 // stateOldCParams ports _state_old_c_params (clike.py:272-288) in full,
@@ -552,11 +567,11 @@ func (m *clikeStates) stateOldCParams(tok string) {
 	switch tok {
 	case ";":
 		m.savedTokens = nil
-		m.state = m.stateDecToImp
+		m.state = m.decToImpState
 	case "{":
 		if len(m.savedTokens) == 2 {
 			m.savedTokens = nil
-			m.stateDecToImp(tok)
+			m.decToImpState(tok)
 			return
 		}
 		m.replaySavedTokensThroughGlobal()
@@ -572,6 +587,13 @@ func (m *clikeStates) stateOldCParams(tok string) {
 // attribute fresh each iteration, since a replayed token can itself
 // change m.state (e.g. an identifier-shaped one starts a new candidate
 // function via tryNewFunction) before the next replayed token arrives.
+//
+// Resets through m.globalState (the hook), not m.stateGlobal directly --
+// stateOldCParams is reachable from C# too (csharpMachine.stateDecToImp
+// falls through to clikeStates.stateDecToImp's own `default:` branch,
+// which enters this state directly, since C# has no override of its own
+// here), so the replay must invoke whichever stateGlobal override is
+// actually active, exactly like every other hook read in this file.
 func (m *clikeStates) replaySavedTokensThroughGlobal() {
 	// Telemetry (CHAOS-5156 review checklist): the candidate this
 	// declaration was building never reached ConfirmNewFunction (that only
@@ -584,7 +606,7 @@ func (m *clikeStates) replaySavedTokensThroughGlobal() {
 	logDroppedFunction(m.ctx, "ambiguous declaration abandoned (stateOldCParams replay)")
 	saved := m.savedTokens
 	m.savedTokens = nil
-	m.state = m.stateGlobal
+	m.state = m.globalState
 	for _, t := range saved {
 		m.state(t)
 	}
@@ -641,7 +663,7 @@ func (m *clikeStates) stateEnteringImp(tok string) {
 func (m *clikeStates) stateImp(tok string) {
 	m.brCount += bracketDelta(tok, "{", "}")
 	if m.brCount == 0 {
-		m.state = m.stateGlobal
+		m.state = m.globalState
 	}
 }
 
@@ -650,7 +672,7 @@ func (m *clikeStates) stateImp(tok string) {
 func (m *clikeStates) stateAttribute(tok string) {
 	m.brCount += bracketDelta(tok, "[", "]")
 	if m.brCount == 0 {
-		m.state = m.stateDecToImp
+		m.state = m.decToImpState
 	}
 }
 
@@ -713,8 +735,8 @@ func (m *clikeStates) stateLambdaBody(tok string) {
 	case tok == "mutable" || tok == "noexcept" || tok == "constexpr" || tok == "consteval":
 	case tok == "->":
 	case tok == ";" || tok == "," || tok == ")":
-		m.state = m.stateGlobal
-		m.stateGlobal(tok)
+		m.state = m.globalState
+		m.globalState(tok)
 	}
 }
 
@@ -727,7 +749,7 @@ func (m *clikeStates) stateLambdaBodySkip(tok string) {
 		if len(m.bracketStack) > 0 && m.bracketStack[len(m.bracketStack)-1] == "{" {
 			m.bracketStack = m.bracketStack[:len(m.bracketStack)-1]
 			if len(m.bracketStack) == 0 {
-				m.state = m.stateGlobal
+				m.state = m.globalState
 			}
 		}
 	}

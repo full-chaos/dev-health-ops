@@ -1,0 +1,295 @@
+{
+  "files": {
+    "basic.cs.txt": {
+      "cyclomatic_avg": 3.3333333333333335,
+      "cyclomatic_total": 20,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 10,
+          "long_name": "Shapes::Rectangle::Area()",
+          "name": "Rectangle::Area"
+        },
+        {
+          "complexity": 3,
+          "lineno": 19,
+          "long_name": "Shapes::Rectangle::Classify( int score)",
+          "name": "Rectangle::Classify"
+        },
+        {
+          "complexity": 3,
+          "lineno": 24,
+          "long_name": "Shapes::Sum()",
+          "name": "Point::Sum"
+        },
+        {
+          "complexity": 3,
+          "lineno": 36,
+          "long_name": "Shapes::Dispatcher::Pick( int a , int b , int c)",
+          "name": "Dispatcher::Pick"
+        },
+        {
+          "complexity": 2,
+          "lineno": 49,
+          "long_name": "Shapes::Dispatcher::Lookup( int ? x)",
+          "name": "Dispatcher::Lookup"
+        },
+        {
+          "complexity": 6,
+          "lineno": 54,
+          "long_name": "Shapes::Dispatcher::Loop( int n)",
+          "name": "Dispatcher::Loop"
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 65,
+      "very_high_complexity_functions": 0
+    },
+    "basic.kt.txt": {
+      "cyclomatic_avg": 3.6,
+      "cyclomatic_total": 18,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "area",
+          "name": "area"
+        },
+        {
+          "complexity": 2,
+          "lineno": 10,
+          "long_name": "get",
+          "name": "get"
+        },
+        {
+          "complexity": 3,
+          "lineno": 17,
+          "long_name": "classify score : Int",
+          "name": "classify"
+        },
+        {
+          "complexity": 4,
+          "lineno": 19,
+          "long_name": "pick x : Int",
+          "name": "pick"
+        },
+        {
+          "complexity": 6,
+          "lineno": 28,
+          "long_name": "loop n : Int",
+          "name": "loop"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 36,
+      "very_high_complexity_functions": 0
+    },
+    "basic.scala.txt": {
+      "cyclomatic_avg": 3.75,
+      "cyclomatic_total": 15,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "area",
+          "name": "area"
+        },
+        {
+          "complexity": 2,
+          "lineno": 10,
+          "long_name": "classify score : Int",
+          "name": "classify"
+        },
+        {
+          "complexity": 4,
+          "lineno": 13,
+          "long_name": "pick a : Int , b : Int , c : Int",
+          "name": "pick"
+        },
+        {
+          "complexity": 6,
+          "lineno": 21,
+          "long_name": "loop n : Int",
+          "name": "loop"
+        }
+      ],
+      "functions_count": 4,
+      "high_complexity_functions": 0,
+      "loc": 30,
+      "very_high_complexity_functions": 0
+    },
+    "basic.swift.txt": {
+      "cyclomatic_avg": 3.4,
+      "cyclomatic_total": 17,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 9,
+          "long_name": "init width : Int , height : Int",
+          "name": "init"
+        },
+        {
+          "complexity": 1,
+          "lineno": 19,
+          "long_name": "area",
+          "name": "area"
+        },
+        {
+          "complexity": 4,
+          "lineno": 23,
+          "long_name": "classify score : Int",
+          "name": "classify"
+        },
+        {
+          "complexity": 3,
+          "lineno": 33,
+          "long_name": "pick a : Int , b : Int , c : Int",
+          "name": "pick"
+        },
+        {
+          "complexity": 6,
+          "lineno": 44,
+          "long_name": "loop n : Int",
+          "name": "loop"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 50,
+      "very_high_complexity_functions": 0
+    },
+    "do_while_coverage.scala.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "countUp n : Int",
+          "name": "countUp"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 9,
+      "very_high_complexity_functions": 0
+    },
+    "elvis_coverage.kt.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "withDefault name : String?",
+          "name": "withDefault"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "exactly_25.swift.txt": {
+      "cyclomatic_avg": 25.0,
+      "cyclomatic_total": 25,
+      "functions": [
+        {
+          "complexity": 25,
+          "lineno": 6,
+          "long_name": "exactlyTwentyFive x : Int",
+          "name": "exactlyTwentyFive"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 1,
+      "loc": 27,
+      "very_high_complexity_functions": 0
+    },
+    "try_catch_coverage.cs.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 5,
+          "long_name": "Reader::ReadSafely( string path)",
+          "name": "Reader::ReadSafely"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 15,
+      "very_high_complexity_functions": 0
+    },
+    "very_high.cs.txt": {
+      "cyclomatic_avg": 14.0,
+      "cyclomatic_total": 28,
+      "functions": [
+        {
+          "complexity": 27,
+          "lineno": 3,
+          "long_name": "Monster::F( int a , int b , int c , int d , int e)",
+          "name": "Monster::F"
+        },
+        {
+          "complexity": 1,
+          "lineno": 26,
+          "long_name": "Monster::Quiet( int a)",
+          "name": "Monster::Quiet"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 1,
+      "loc": 26,
+      "very_high_complexity_functions": 1
+    },
+    "very_high.kt.txt": {
+      "cyclomatic_avg": 13.5,
+      "cyclomatic_total": 27,
+      "functions": [
+        {
+          "complexity": 26,
+          "lineno": 2,
+          "long_name": "f a : Int , b : Int , c : Int , d : Int , e : Int",
+          "name": "f"
+        },
+        {
+          "complexity": 1,
+          "lineno": 23,
+          "long_name": "quiet a : Int",
+          "name": "quiet"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 1,
+      "loc": 25,
+      "very_high_complexity_functions": 1
+    },
+    "very_high.scala.txt": {
+      "cyclomatic_avg": 14.0,
+      "cyclomatic_total": 28,
+      "functions": [
+        {
+          "complexity": 27,
+          "lineno": 2,
+          "long_name": "f a : Int , b : Int , c : Int , d : Int , e : Int",
+          "name": "f"
+        },
+        {
+          "complexity": 1,
+          "lineno": 23,
+          "long_name": "quiet a : Int",
+          "name": "quiet"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 1,
+      "loc": 25,
+      "very_high_complexity_functions": 1
+    }
+  },
+  "lizard_version": "1.23.0"
+}

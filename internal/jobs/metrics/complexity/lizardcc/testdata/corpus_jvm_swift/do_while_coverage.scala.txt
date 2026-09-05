@@ -1,0 +1,9 @@
+class Counter {
+  def countUp(n: Int): Int = {
+    var i = 0
+    do {
+      i += 1
+    } while (i < n)
+    i
+  }
+}

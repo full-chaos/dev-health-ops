@@ -1,6 +1,9 @@
 package pythonparity
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestMarshalPythonJSONCompactMatchesPythonGolden pins MarshalPythonJSONCompact
 // against values taken from a live CPython run of
@@ -64,6 +67,18 @@ func TestMarshalPythonJSONCompactMatchesPythonGolden(t *testing.T) {
 			`{"k":"a\"b\\c"}`,
 		},
 		{"empty list", map[string]any{"a": []any{}}, `{"a":[]}`},
+		{
+			// codex round chaos-4286a-r2, finding 4 (the required oracle
+			// attack): every OTHER case above nests a map only at the TOP
+			// level, or an array only of SCALARS -- a mutant using the
+			// spaced/default encoder for a map reached THROUGH an array would
+			// pass every one of them, because none puts a multi-key map
+			// inside an []any. This does. sort_keys=True is recursive in
+			// CPython, so the nested object's keys are sorted too.
+			"array of objects sorts keys at every nesting level",
+			map[string]any{"items": []any{map[string]any{"b": 1, "a": 2}}},
+			`{"items":[{"a":2,"b":1}]}`,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			encoded, err := MarshalPythonJSONCompact(testCase.value)
@@ -115,5 +130,39 @@ func TestMarshalPythonJSONCompactRefusesUnsupportedTypes(t *testing.T) {
 	}
 	if _, err := MarshalPythonJSONCompact(map[string]any{"k": uint64(1)}); err == nil {
 		t.Error("uint64 must be refused, not coerced")
+	}
+}
+
+// TestMarshalPythonJSONCompactDetectsMapCycle is codex round chaos-4286a-r2's
+// finding 3. keyFor (jsoninsertionorder.go, shared by every encoder in this
+// package) used to check ONLY reflect.Slice, so enterContainer's map branch
+// always got tracked=false back -- a cyclic map recursed to an unrecoverable
+// stack overflow (fatal error, not a panic, cannot be recovered) instead of
+// CPython's `ValueError: Circular reference detected`. Fixed by extending
+// keyFor to reflect.Map too, which shares Slice's Pointer()/Len() shape.
+func TestMarshalPythonJSONCompactDetectsMapCycle(t *testing.T) {
+	cyclic := map[string]any{}
+	cyclic["self"] = cyclic
+
+	_, err := MarshalPythonJSONCompact(cyclic)
+	if err == nil {
+		t.Fatal("expected a circular-reference error; a successful encode means " +
+			"the map branch is not tracked and this call only returned because " +
+			"map[string]any happens to require the SAME key at every recursion " +
+			"level (a Go implementation detail), not because anything caught the cycle")
+	}
+	if !strings.Contains(err.Error(), "circular reference") {
+		t.Errorf("error should name the circular reference; got %q", err)
+	}
+
+	// Negative control: the SAME map instance appearing twice as SIBLINGS,
+	// nested inside itself nowhere, must still encode -- CPython's `markers`
+	// discipline (add on entry, remove on exit) accepts this and json.dumps
+	// happily produces it; a visited-set that never removed entries would
+	// wrongly reject it, exactly the "shared containers are not cycles"
+	// distinction cycles_and_duplicates_test.go already pins for slices.
+	shared := map[string]any{"tag": "shared"}
+	if _, err := MarshalPythonJSONCompact(map[string]any{"a": shared, "b": shared}); err != nil {
+		t.Errorf("the same map twice as siblings is not a cycle; got %v", err)
 	}
 }

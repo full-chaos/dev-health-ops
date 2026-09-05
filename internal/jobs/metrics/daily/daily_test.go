@@ -1494,6 +1494,14 @@ type fakeStore struct {
 	releaseReason                 string
 	releaseWithReasonErr          error
 	releaseFinalizeErr            error
+	// partitionTotal/partitionSucceeded back PartitionCompletionCounts
+	// (CHAOS-5194). Zero-value default (0, 0) is deliberate: no existing test
+	// exercises a caller of this method, so the default cannot change any
+	// existing test's behaviour; a benchmarking-finalize test sets these
+	// explicitly to the shape it wants.
+	partitionTotal              int
+	partitionSucceeded          int
+	partitionCompletionCountErr error
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -1583,6 +1591,12 @@ func (store *fakeStore) FailFinalizePermanently(context.Context, FinalizeClaim) 
 func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeReleases++
 	return store.releaseFinalizeErr
+}
+func (store *fakeStore) PartitionCompletionCounts(context.Context, string) (int, int, error) {
+	if store.partitionCompletionCountErr != nil {
+		return 0, 0, store.partitionCompletionCountErr
+	}
+	return store.partitionTotal, store.partitionSucceeded, nil
 }
 
 type fakePublisher struct{}

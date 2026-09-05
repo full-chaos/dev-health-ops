@@ -159,9 +159,22 @@ WITH decided AS (
     FROM public.daily_metrics_runs AS run
     -- Widened from status='running' (CHAOS-4290 confirmation pass): a
     -- terminally failed finalize has status='failed', so the old scope excluded
-    -- the exact rows the finalize arm needs to see. The partition arms are
-    -- unaffected -- they additionally require a failed_permanent partition,
-    -- which a terminal finalize run does not have.
+    -- the exact rows the finalize arm needs to see.
+    --
+    -- WHAT KEEPS THIS SAFE is more than "the partition arms need a
+    -- failed_permanent partition" (peer read, lane-gate-rounds). Widening
+    -- exposes EVERY status='failed' row to both arms, including
+    -- MaterializeScheduledFanout's overCap rows. Three things hold the outcome:
+    --
+    --   1. finalize_blocked requires EXISTS(partition) -- overCap only fires
+    --      when the run has ZERO partitions, so those rows cannot match it.
+    --   2. finalize_blocked requires NOT EXISTS(partition <> 'succeeded'), so a
+    --      run with any unfinished or permanently-failed partition is excluded.
+    --   3. blocked_reason's CASE evaluates the PARTITION reasons first, so a row
+    --      that somehow satisfied both arms still reports the partition cause --
+    --      which is the one an operator must act on.
+    --
+    -- The guards are what make this correct, not the absence of overlap.
     WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
 )
 UPDATE public.daily_metrics_runs AS run

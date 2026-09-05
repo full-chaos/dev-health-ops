@@ -1937,8 +1937,12 @@ async def run_daily_metrics_job(
         #     empty work-item contribution for every user on every partition
         #     the Go executor handled -- a wrong number, not a missing one.
         #   * `estimate_coverage_metrics` feeds nothing else here, so its
-        #     compute COULD be skipped, but is left unconditional to match the
-        #     established file_hotspots precedent and keep the diff minimal.
+        #     compute COULD be skipped, but is left unconditional to keep this
+        #     diff minimal (work_item_estimate is its own separate deletion
+        #     target under CHAOS-5234/CHAOS-3092, not yet done as of this
+        #     comment -- file_hotspots, which this comment used to cite as
+        #     precedent for "unconditional is fine," has since had its own
+        #     compute+write deleted outright rather than left unconditional).
         #
         # CHAOS-4286: work_graph_edges has a native Go executor
         # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:

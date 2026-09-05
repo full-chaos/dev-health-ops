@@ -706,7 +706,10 @@ async def test_file_risk_hotspots_in_skip_families_skips_write_but_still_compute
     monkeypatch: Any,
 ) -> None:
     """file_risk_hotspots has a native Go executor (FileRiskHotspotsExecutor).
-    Same write-only-skip shape as file_hotspots/repo_user_commit above."""
+    Same write-only-skip shape as repo_user_commit above. (file_hotspots
+    itself used to share this shape too, but CHAOS-5234/CHAOS-3092 deleted
+    its compute+write entirely -- see
+    test_file_hotspots_compute_and_write_are_deleted_from_job_daily above.)"""
     compute_calls: list[Any] = []
     original = job_daily.compute_file_risk_hotspots
 
@@ -739,8 +742,14 @@ async def test_file_risk_hotspots_in_skip_families_skips_write_but_still_compute
 async def test_file_risk_hotspots_skip_families_none_writes_it(
     monkeypatch: Any,
 ) -> None:
-    """Red-on-baseline counterpart for file_risk_hotspots, mirroring
-    test_file_hotspots_skip_families_none_writes_it above."""
+    """Red-on-baseline counterpart for file_risk_hotspots: without the gate,
+    write_file_hotspot_daily fires every time regardless of skip_families --
+    this pins that it FIRES when file_risk_hotspots is NOT skipped, so the
+    skip test above is meaningful (not merely a family that never writes in
+    this fixture). (file_hotspots's own equivalent pairing was replaced by
+    test_file_hotspots_compute_and_write_are_deleted_from_job_daily above,
+    which exercises both skip_families states directly since there is no
+    write-only gate left to pin a "red" counterpart against.)"""
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 

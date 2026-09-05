@@ -115,9 +115,13 @@ type Context struct {
 	// Newline ports FileInfoBuilder.newline (lizard.py:454, set by
 	// add_nloc at lizard.py:482): true when the token currently being
 	// processed is the first one on a new source line (or itself contains
-	// an embedded newline, e.g. a multi-line comment). Neither Go nor Rust
-	// reads this (golikedriver.go maintains it unconditionally for every
-	// GoLikeStates-derived reader since a later PR's Scala reader does).
+	// an embedded newline, e.g. a multi-line comment). CLikeReader never
+	// reads this; golikedriver.go maintains it unconditionally for every
+	// GoLikeStates-derived reader, but Go and Rust don't read it either --
+	// ScalaStates.'_expect_function_body' is the one state that does
+	// (scala.go), to tell an expression-bodied `def f = x + 1` (no braces,
+	// ended by end of line) from one that continues onto a `{` on the next
+	// line.
 	Newline bool
 
 	// Forgive ports FileInfoBuilder.forgive (lizard.py:452, read/reset by
@@ -302,10 +306,12 @@ func (c *Context) lastFunctionInNestingStack() *function {
 // EndOfFunction ports FileInfoBuilder.end_of_function in full (lizard.py:
 // 515-523): record the finished function AND restore whichever function
 // was active before it (a stacked function, or file scope) -- ONE method,
-// not two. PopNesting calls this for the ordinary case (a function's own
-// '}'); a later PR's GoLikeStates-derived readers, whose function bodies
-// never go through the nesting-stack machinery this file's AddBareNesting/
-// PopNesting provide, will call it directly instead.
+// not two. PopNesting calls this for CLikeReader's family (a function's own
+// '}'); GoLikeStates-derived readers (kotlin.go, scala.go, swift.go) call
+// it DIRECTLY instead, since they never push a bare-nesting entry for a
+// function body at all (see golike.go's stateFunctionImpl doc) -- CSharpReader's
+// expression-bodied member (`=>`, ending at ';' not '}') calls it directly
+// too, for the same reason.
 //
 // The append-only half is guarded by two things: the `c.current !=
 // &c.global` pointer check (the safe, narrower form of Python's redundant
@@ -316,10 +322,18 @@ func (c *Context) lastFunctionInNestingStack() *function {
 // not ported). Forgive resets unconditionally below, matching Python's
 // `self.forgive = False` running regardless of which branch fired.
 //
-// The restore half is inert for CLikeReader today (stacked is never
-// populated -- PushNewFunction has no CLikeReader caller), but belongs
-// here rather than only in PopNesting: splitting them is what let a later
-// PR's direct EndOfFunction call silently skip the restore entirely.
+// BUG FIXED HERE (CHAOS-5156 PR2b, caught by Kotlin's basic.kt.txt fixture,
+// never by any 2a/PR2253 fixture since CLikeReader's stacked is always
+// empty): the restore half was originally split into PopNesting alone,
+// which is correct ONLY because CLikeReader never calls PushNewFunction, so
+// its stacked slice never holds anything -- inert there, but for
+// GoLikeStates, calling EndOfFunction alone (as this file's earlier
+// revision did) left ctx.current permanently pointed at the function that
+// just ended, so a SUBSEQUENT sibling function's condition tokens, and
+// even that sibling's own end_of_function append, landed on the WRONG
+// function. Restoring here, unconditionally, is what end_of_function
+// actually does in Python; PopNesting was never supposed to do it a second
+// time.
 func (c *Context) EndOfFunction() {
 	if c.current != &c.global {
 		if c.Forgive {

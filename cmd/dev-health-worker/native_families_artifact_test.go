@@ -404,6 +404,12 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// checks. Main's own codex r1 (P3) added the cardinality check below,
 		// and that check is what turned this silent gap into a failure.
 		"ai_governance",
+		// CHAOS-4280, same shape as ai_governance directly above: this branch
+		// registered ai_impact as a native daily executor but this expected
+		// split predates the merge-forward that brought ai_governance's fix
+		// (and this cardinality check) in -- add it now rather than let the
+		// one-way-subset gap reopen for a second family.
+		"ai_impact",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

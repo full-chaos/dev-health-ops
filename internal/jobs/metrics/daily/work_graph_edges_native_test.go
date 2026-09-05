@@ -344,12 +344,13 @@ type sendErrorBatch struct{ sendErr error }
 func (batch *sendErrorBatch) Append(...any) error             { return nil }
 func (batch *sendErrorBatch) Send() error                     { return batch.sendErr }
 func (batch *sendErrorBatch) Abort() error                    { return nil }
-func (batch *sendErrorBatch) AppendStruct(any) error           { return errors.New("unused") }
-func (batch *sendErrorBatch) Column(int) chdriver.BatchColumn  { return nil }
-func (batch *sendErrorBatch) Flush() error                     { return nil }
-func (batch *sendErrorBatch) IsSent() bool                     { return false }
-func (batch *sendErrorBatch) Rows() int                        { return 0 }
-func (batch *sendErrorBatch) Columns() []column.Interface      { return nil }
+func (batch *sendErrorBatch) AppendStruct(any) error          { return errors.New("unused") }
+func (batch *sendErrorBatch) Close() error                    { return nil }
+func (batch *sendErrorBatch) Column(int) chdriver.BatchColumn { return nil }
+func (batch *sendErrorBatch) Flush() error                    { return nil }
+func (batch *sendErrorBatch) IsSent() bool                    { return false }
+func (batch *sendErrorBatch) Rows() int                       { return 0 }
+func (batch *sendErrorBatch) Columns() []column.Interface     { return nil }
 
 type sendErrorBatchConn struct{ batch *sendErrorBatch }
 

@@ -7,6 +7,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/familyerr"
 )
 
 // TestWriteOutputsReportsTheFailingStepsOwnCountOnSendAmbiguity is the #2276
@@ -51,8 +53,17 @@ func TestWriteOutputsReportsTheFailingStepsOwnCountOnSendAmbiguity(t *testing.T)
 // 0`) must still correctly identify the "nothing landed at all" case and
 // keep the ordinary fail-open path, not wrap ErrPartialWrite when the very
 // FIRST step fails with zero rows ever appended.
+//
+// Codex confirmation-pass P3 (this test's own first draft, self-caught on
+// re-review): failTable alone fails at Send() time, AFTER every row in that
+// table's batch has already been appended -- so a fixture with 3 rows
+// reported written=3, exercising the SAME ambiguous-positive-count path as
+// TestWriteOutputsReportsTheFailingStepsOwnCountOnSendAmbiguity above, never
+// the total+written==0 branch this test's own doc comment claims to cover,
+// and never asserting ErrPartialWrite is ABSENT. Fixed with failPrepare: a
+// genuine pre-network PrepareBatch failure, nothing ever appended.
 func TestWriteOutputsStaysFailOpenWhenTheFirstStepFailsWithNothingWritten(t *testing.T) {
-	conn := &benchmarkingSendFailingConn{failTable: "testops_metric_baselines"}
+	conn := &benchmarkingSendFailingConn{failTable: "testops_metric_baselines", failPrepare: true}
 	writer, err := NewWriter(conn)
 	if err != nil {
 		t.Fatal(err)
@@ -61,18 +72,30 @@ func TestWriteOutputsStaysFailOpenWhenTheFirstStepFailsWithNothingWritten(t *tes
 
 	written, err := writer.WriteOutputs(context.Background(), outputs, "org-42")
 	if err == nil {
-		t.Fatal("expected the forced Send() failure to surface")
+		t.Fatal("expected the forced PrepareBatch failure to surface")
 	}
-	if written != 3 {
-		t.Fatalf("written=%d, want 3 -- the first (and only) step's own true count", written)
+	if written != 0 {
+		t.Fatalf("written=%d, want 0 -- PrepareBatch never crosses the network, so nothing was "+
+			"ever appended or sent", written)
+	}
+	if errors.Is(err, familyerr.ErrPartialWrite) {
+		t.Fatalf("err = %v, must NOT wrap ErrPartialWrite -- nothing was written, the ordinary "+
+			"fail-open path is still correct", err)
+	}
+	if conn.anomaliesBatchPrepared {
+		t.Fatal("testops_metric_anomalies batch must never be prepared -- WriteOutputs stops at the first failure")
 	}
 }
 
 // benchmarkingSendFailingConn/benchmarkingSendFailingBatch: PrepareBatch's
 // returned batch fails Send() when its table name matches failTable,
-// succeeding for every other table.
+// succeeding for every other table. If failPrepare is set instead,
+// PrepareBatch itself fails for failTable -- a genuine PRE-NETWORK failure
+// (nothing appended, nothing sent), unlike failTable/Send() which fails
+// only after every row in that table's batch has already been appended.
 type benchmarkingSendFailingConn struct {
 	failTable              string
+	failPrepare            bool
 	anomaliesBatchPrepared bool
 }
 
@@ -84,8 +107,11 @@ func (c *benchmarkingSendFailingConn) PrepareBatch(_ context.Context, query stri
 	if benchmarkingContainsTable(query, "testops_metric_anomalies") {
 		c.anomaliesBatchPrepared = true
 	}
-	fail := benchmarkingContainsTable(query, c.failTable)
-	return &benchmarkingSendFailingBatch{fail: fail}, nil
+	matches := benchmarkingContainsTable(query, c.failTable)
+	if matches && c.failPrepare {
+		return nil, errors.New("simulated pre-network PrepareBatch failure")
+	}
+	return &benchmarkingSendFailingBatch{fail: matches}, nil
 }
 
 func benchmarkingContainsTable(query, table string) bool {

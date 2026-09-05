@@ -502,3 +502,44 @@ func localStringAssignment(fn *ast.FuncDecl, name string) (string, bool) {
 	}
 	return found[0], true
 }
+
+// TestWrapWorkItemAttributionPartialWritePinsBothDirections is the codex
+// confirmation-pass P1 fix (2nd round on #2276): the 7th-site fix propagated
+// WriteAttributions' true row count correctly but returned the raw error
+// unwrapped, so computeNativeFamilies' dispatcher (which only excludes a
+// family from the Python bridge's recompute when the error wraps
+// ErrPartialWrite) treated a real partial write as an ordinary refusal and
+// fell open to the bridge -- risking a duplicate write for rows already
+// landed. Mirrors every other wrap*PartialWrite helper's exact shape: wrap
+// only when something already landed, never when nothing did.
+func TestWrapWorkItemAttributionPartialWritePinsBothDirections(t *testing.T) {
+	cause := errors.New("simulated ClickHouse send failure")
+
+	t.Run("failure after rows landed is a partial write", func(t *testing.T) {
+		rows, err := wrapWorkItemAttributionPartialWrite(5, cause)
+		if !errors.Is(err, ErrPartialWrite) {
+			t.Errorf("a failure after 5 rows landed must wrap ErrPartialWrite so the daily "+
+				"dispatcher excludes this family from the Python bridge's recompute; got %v", err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must survive wrapping; got %v", err)
+		}
+		if rows != 5 {
+			t.Errorf("the TRUE rows-written count must be reported, got %d, want 5", rows)
+		}
+	})
+
+	t.Run("failure with nothing written is an ordinary failure", func(t *testing.T) {
+		rows, err := wrapWorkItemAttributionPartialWrite(0, cause)
+		if errors.Is(err, ErrPartialWrite) {
+			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: nothing was " +
+				"written, so the ordinary fail-open path is still correct")
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must be returned unchanged; got %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("rows=%d, want 0", rows)
+		}
+	})
+}

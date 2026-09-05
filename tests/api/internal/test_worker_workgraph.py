@@ -210,16 +210,16 @@ async def test_execute_releases_read_transaction_before_long_running_work(
 )
 async def test_execute_rejects_a_retired_kind_request_row(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
     kind: str,
 ) -> None:
     # r2 finding F1 (P2, codex, CHAOS-4438) red/green: a request row naming
-    # a retired kind must be REJECTED -- logged with kind + request id,
-    # marked ambiguous so it does not sit claimed forever, and refused with
-    # a distinct status code -- rather than reaching _scope_arguments/
-    # _run_sync at all. GREEN is this test; RED would be the pre-fix
-    # behavior where such a row ran the retired kind's Python operation
-    # successfully (see the now-deleted test_river_investment_dispatch_
+    # a retired kind must be REJECTED -- marked ambiguous so it does not sit
+    # claimed forever, and refused with a distinct status code -- rather
+    # than reaching _scope_arguments/_run_sync at all. No new Python log
+    # line (chris's standing rule: Python telemetry additions are
+    # disallowed). GREEN is this test; RED would be the pre-fix behavior
+    # where such a row ran the retired kind's Python operation successfully
+    # (see the now-deleted test_river_investment_dispatch_
     # runs_sequentially_without_celery for what that used to look like).
     request_id = uuid.UUID("00000000-0000-4000-8000-000000000141")
     org_id = uuid.UUID("00000000-0000-4000-8000-000000000009")
@@ -247,9 +247,8 @@ async def test_execute_rejects_a_retired_kind_request_row(
     )
     request = ExecuteRequest(request_id=request_id, claim_token=claim_token)
 
-    with caplog.at_level("ERROR", logger=worker_workgraph.__name__):
-        with pytest.raises(HTTPException) as exc_info:
-            await worker_workgraph.execute(request, session, MagicMock(), "Bearer test")
+    with pytest.raises(HTTPException) as exc_info:
+        await worker_workgraph.execute(request, session, MagicMock(), "Bearer test")
 
     assert exc_info.value.status_code == 410
     assert kind in exc_info.value.detail
@@ -261,10 +260,6 @@ async def test_execute_rejects_a_retired_kind_request_row(
     assert kind in await_args.args[2]
     # The retired kind must never reach the actual dispatch path.
     run_until_disconnect.assert_not_awaited()
-    assert any(
-        kind in record.message and str(request_id) in record.message
-        for record in caplog.records
-    ), f"no log line named both {kind!r} and the request id:\n{caplog.text}"
 
 
 @pytest.mark.asyncio
@@ -289,9 +284,9 @@ async def test_mark_ambiguous_flips_both_records_when_the_request_update_applies
 
 
 @pytest.mark.asyncio
-async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_expired(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_expired() -> (
+    None
+):
     # r3 finding F1 (P2, codex, CHAOS-4438) RED half: the request update is
     # guarded by lease validity (WHERE ... lease_expires_at >
     # statement_timestamp()); if the lease already expired, that UPDATE
@@ -299,9 +294,9 @@ async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_exp
     # flipping to 'ambiguous' unconditionally -- leaving the request stuck
     # 'running' with an expired claim while the ledger says ambiguous, a
     # state the repair endpoint (requires BOTH ambiguous) can never
-    # resolve. The fix must skip the second update, still commit, and log
-    # the skip by request_id (team-lead's discard-on-error sweep) so an
-    # operator has a lead on why the ledger stayed 'executing'.
+    # resolve. The fix must skip the second update and still commit. No new
+    # Python log line (chris's standing rule: Python telemetry additions
+    # are disallowed).
     session = AsyncMock()
     request_update_result = MagicMock(rowcount=0)
     session.execute.side_effect = [request_update_result]
@@ -310,17 +305,13 @@ async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_exp
         claim_token=uuid.UUID("00000000-0000-4000-8000-000000000162"),
     )
 
-    with caplog.at_level("WARNING", logger=worker_workgraph.__name__):
-        await _mark_ambiguous(session, request, "some failure detail")
+    await _mark_ambiguous(session, request, "some failure detail")
 
     assert session.execute.await_count == 1, (
         "the ledger update ran even though the request update matched zero "
         "rows -- the two records can now disagree about ambiguous state"
     )
     session.commit.assert_awaited_once()
-    assert any(
-        str(request.request_id) in record.message for record in caplog.records
-    ), f"no log line named the request id when the lease had expired:\n{caplog.text}"
 
 
 @pytest.mark.asyncio

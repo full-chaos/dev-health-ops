@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import os
 import signal
 import sys
@@ -30,7 +29,6 @@ from dev_health_ops.api.internal.worker_auth import (
 )
 
 router = APIRouter(prefix="/internal/worker/workgraph/v1", include_in_schema=False)
-logger = logging.getLogger(__name__)
 
 # r2 finding F1 (P2, codex, CHAOS-4438): these 3 Go kinds were deleted
 # outright -- registerKind's switch (internal/jobrescue/registry.go) and
@@ -298,18 +296,13 @@ async def _mark_ambiguous(
     # keeps the two mutations atomic in effect: either both flip to
     # ambiguous, or neither does.
     if int(getattr(request_result, "rowcount", 0) or 0) == 0:
-        # Nothing to commit -- the UPDATE above matched no row -- but still
-        # close the transaction cleanly rather than leaving it open for
-        # whatever the caller does next with this session. team-lead
-        # ruling (CHAOS-4438, discard-on-error sweep): log this case by
-        # name (lease already expired) with the request_id, rather than
-        # let it pass silently -- an operator seeing the ledger stuck
-        # 'executing' with no matching request-side event would otherwise
-        # have no lead on why.
-        logger.warning(
-            "skipping ambiguous-ledger update for request %s: lease already expired",
-            request.request_id,
-        )
+        # Nothing to commit -- the UPDATE above matched no row (the lease
+        # already expired between the caller's read and this call) -- but
+        # still close the transaction cleanly rather than leaving it open
+        # for whatever the caller does next with this session. No new
+        # Python log line here (chris's standing rule: Python telemetry
+        # additions are disallowed) -- the Go-side telemetry this PR adds
+        # covers the equivalent discard-on-error class.
         await session.commit()
         return
     await session.execute(
@@ -366,13 +359,10 @@ async def execute(
         # r2 finding F1 (P2, codex, CHAOS-4438): fail closed rather than
         # execute a retired kind's Python compatibility path -- see
         # _RETIRED_KINDS' module-level comment for why this is reachable in
-        # principle even though nothing produces such a row today.
-        logger.error(
-            "rejecting execute request for retired job kind %s (request_id=%s org_id=%s)",
-            kind,
-            execution_row["id"],
-            execution_row["org_id"],
-        )
+        # principle even though nothing produces such a row today. No new
+        # Python log line here (chris's standing rule: Python telemetry
+        # additions are disallowed) -- the Go-side telemetry this PR adds
+        # covers the equivalent discard-on-error class.
         await _mark_ambiguous(
             session, request, f"job kind {kind} was retired under CHAOS-4438"
         )

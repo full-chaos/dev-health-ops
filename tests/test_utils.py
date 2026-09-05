@@ -271,18 +271,24 @@ class TestBatchProcessingCLIArguments:
 
         assert args.use_async is False
 
-    def test_metrics_daily_provider_default_is_auto(self):
-        """Test that metrics daily defaults to provider=auto."""
+    def test_metrics_daily_no_longer_accepts_provider(self):
+        """CHAOS-5055: `metrics daily` now dispatches to
+        `dev-health-workerctl metrics daily-start` instead of computing in
+        Python directly, and --provider has no equivalent on that path (the
+        worker's native/bridge split decides this per family, not the
+        caller). This pins the removal instead of a stale default."""
         parser = build_parser()
-        args = parser.parse_args(
-            [
-                "--db",
-                "sqlite+aiosqlite:///:memory:",
-                "metrics",
-                "daily",
-            ]
-        )
-        assert args.provider == "auto"
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                [
+                    "--db",
+                    "sqlite+aiosqlite:///:memory:",
+                    "metrics",
+                    "daily",
+                    "--provider",
+                    "auto",
+                ]
+            )
 
     def test_use_async_flag_when_provided(self):
         """Test that --use-async flag is True when provided."""

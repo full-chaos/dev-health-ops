@@ -45,9 +45,15 @@ type nativeFamiliesArtifact struct {
 	GeneratedFrom string            `json:"generated_from"`
 	Daily         map[string]string `json:"daily"`
 	Remaining     map[string]string `json:"remaining"`
+	// Workgraph covers the five workgraph/investment River kinds. Added by
+	// CHAOS-4441's cutover: before it, every one of those kinds took the same
+	// HTTP bridge executor, so there was nothing to record and the artifact had
+	// no key for them at all -- which is exactly why the artifact could not
+	// have detected that the cutover had never happened. It can now.
+	Workgraph map[string]string `json:"workgraph"`
 }
 
-const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
+const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
 
 func repoRootFromCmdDailyWorker(t *testing.T) string {
 	t.Helper()
@@ -321,6 +327,7 @@ func buildNativeFamiliesArtifact(t *testing.T) nativeFamiliesArtifact {
 		GeneratedFrom: nativeFamiliesGeneratedFrom,
 		Daily:         extractDailyNativeFamilies(t, file),
 		Remaining:     buildRemainingArtifact(t, repoRoot, file),
+		Workgraph:     extractWorkgraphExecutors(t, repoRoot),
 	}
 }
 
@@ -368,8 +375,8 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 9
-// native + 1 post_bridge daily split this page's reconciliation work found,
+// control: pins the exact 5-native/2-compat remaining split and the 8
+// native + 4 post_bridge daily split,
 // so a future accidental wiring change is caught here even if someone forgot
 // to regenerate the artifact (that case is ALSO caught by the drift test
 // above, but this one names the expected shape explicitly for a reviewer).
@@ -389,9 +396,32 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
 	}
-	wantDailyPostBridge := []string{"work_item_state"}
+	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
+	// post_bridge -- all three read work_item_team_attributions, which the
+	// still-Python work_item_attribution family writes in the same partition.
+	// CHAOS-4287: compounding_risk is post_bridge for a DIFFERENT reason from
+	// the three above -- not a stale attribution snapshot, but execution order.
+	// Its input repo_metrics_daily is written by repo_user_commit in the SAME
+	// partition, and computeNativeFamilies walks families in SORTED order,
+	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
+	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
+	// those three, does not touch this one.
+	wantDailyPostBridge := []string{
+		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
+	}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
+	// The cardinality check the Remaining half above already had, and this half
+	// did not. Without it these two assertions are one-way SUBSET checks: they
+	// prove every EXPECTED family has the expected verdict, and say nothing
+	// about families that are present and unexpected. Codex r1 (P3, EXECUTED)
+	// demonstrated the consequence -- this branch added work_item and
+	// work_item_estimate as post_bridge and the stale test still passed, so a
+	// test calling itself an "exact split" certified a split it had never seen.
+	if len(artifact.Daily) != len(wantDailyNative)+len(wantDailyPostBridge) {
+		t.Fatalf("expected exactly %d daily families, got %d: %v",
+			len(wantDailyNative)+len(wantDailyPostBridge), len(artifact.Daily), artifact.Daily)
+	}
 }
 
 func assertExecutorSet(t *testing.T, got map[string]string, names []string, want string) {
@@ -399,6 +429,176 @@ func assertExecutorSet(t *testing.T, got map[string]string, names []string, want
 	for _, name := range names {
 		if got[name] != want {
 			t.Errorf("expected %s executor for %q, got %q", want, name, got[name])
+		}
+	}
+}
+
+// --- workgraph/investment section (CHAOS-4441) ---
+
+// workgraphExecutorByIdent maps addWorkgraphWorker's executor VARIABLES to the
+// executor label the artifact records. The identifiers are the ones that
+// function actually passes to each New*Handler call, so a rename that is not
+// reflected here fails loudly in extractWorkgraphExecutors rather than
+// silently recording the wrong label.
+// The names are addWorkgraphWorker's own PARAMETERS, not the caller's
+// variables: buildWorkgraphWorker calls them `compatibility`/`nativeInvestment`
+// but the function under parse receives them as `executor`/`nativeInvestment`,
+// and this map reads the callee. Both spellings of the bridge parameter are
+// listed so a future rename in either direction is a deliberate edit here
+// rather than a silent mislabel.
+var workgraphExecutorByIdent = map[string]string{
+	"executor":         "compat",
+	"compatibility":    "compat",
+	"nativeInvestment": "native",
+}
+
+// extractWorkgraphExecutors statically parses cmd/dev-health-worker/workgraph.go's
+// addWorkgraphWorker switch and records, per River kind, WHICH executor that
+// kind's handler is constructed with.
+//
+// This is the machine-checked half of the cutover. The prose claim "investment
+// .materialize is native now" is worth nothing on its own -- CHAOS-4441 was
+// marked Done for a day while every kind still went to the bridge, and no
+// artifact in the tree could contradict it. This function makes the dispatch
+// switch itself the source of truth.
+func extractWorkgraphExecutors(t *testing.T, repoRoot string) map[string]string {
+	t.Helper()
+
+	kindValues := parseJobContractKindValues(t, repoRoot)
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "workgraph.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing workgraph.go: %v", err)
+	}
+
+	var dispatch *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == "addWorkgraphWorker" {
+			dispatch = function
+			break
+		}
+	}
+	if dispatch == nil {
+		t.Fatal("addWorkgraphWorker not found in workgraph.go -- the dispatch switch this artifact reads has moved")
+	}
+
+	result := map[string]string{}
+	ast.Inspect(dispatch, func(node ast.Node) bool {
+		clause, ok := node.(*ast.CaseClause)
+		if !ok || len(clause.List) != 1 {
+			return true
+		}
+		selector, ok := clause.List[0].(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		kind, known := kindValues[selector.Sel.Name]
+		if !known {
+			t.Fatalf("addWorkgraphWorker switches on jobcontract.%s, which is not a kind constant", selector.Sel.Name)
+		}
+
+		// Find the New*Handler call inside this case and read its SECOND
+		// argument -- the executor. Every handler constructor in this switch
+		// takes (store, executor, ...), so the position is uniform.
+		executor := ""
+		ast.Inspect(clause, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			function, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !handlerConstructorPattern.MatchString(function.Sel.Name) {
+				return true
+			}
+			ident, ok := call.Args[1].(*ast.Ident)
+			if !ok {
+				t.Fatalf("kind %q passes a non-identifier executor to %s -- this parse cannot label it", kind, function.Sel.Name)
+			}
+			label, known := workgraphExecutorByIdent[ident.Name]
+			if !known {
+				t.Fatalf(
+					"kind %q is constructed with executor variable %q, which has no label in "+
+						"workgraphExecutorByIdent. Add it there (and say whether it is native or compat) "+
+						"in the same change that introduced it.",
+					kind, ident.Name,
+				)
+			}
+			executor = label
+			return false
+		})
+		if executor == "" {
+			t.Fatalf("no handler constructor found for kind %q in addWorkgraphWorker", kind)
+		}
+		result[kind] = executor
+		return true
+	})
+
+	if len(result) == 0 {
+		t.Fatal("addWorkgraphWorker's switch yielded no kinds -- the parse is broken, not the wiring")
+	}
+	return result
+}
+
+var handlerConstructorPattern = regexp.MustCompile(`^New[A-Za-z]+Handler$`)
+
+// parseJobContractKindValues reads internal/jobcontract/types.go so the kind
+// STRINGS in the artifact are the real constant values rather than a
+// hand-transcribed table that could drift from them.
+func parseJobContractKindValues(t *testing.T, repoRoot string) map[string]string {
+	t.Helper()
+	path := filepath.Join(repoRoot, "internal", "jobcontract", "types.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	values := map[string]string{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		spec, ok := node.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || len(spec.Values) != 1 {
+			return true
+		}
+		literal, ok := spec.Values[0].(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			return true
+		}
+		unquoted, err := strconv.Unquote(literal.Value)
+		if err != nil {
+			return true
+		}
+		values[spec.Names[0].Name] = unquoted
+		return true
+	})
+	return values
+}
+
+// TestWorkgraphArtifactRecordsTheInvestmentCutover is the falsification control
+// for the flip: it names the expected executor per kind explicitly, so a
+// revert of the cutover fails HERE with a readable message even if someone
+// regenerated the artifact to match the reverted wiring.
+//
+// investment.dispatch/chunk/finalize stay compat deliberately -- they are dead
+// shells (CHAOS-4438) with no Python target either, so porting them would be
+// work with no runtime effect. workgraph.build stays compat until CHAOS-4924's
+// six remaining sub-builders land.
+func TestWorkgraphArtifactRecordsTheInvestmentCutover(t *testing.T) {
+	artifact := buildNativeFamiliesArtifact(t)
+
+	want := map[string]string{
+		"workgraph.build":        "compat",
+		"investment.materialize": "native",
+		"investment.dispatch":    "compat",
+		"investment.chunk":       "compat",
+		"investment.finalize":    "compat",
+	}
+	if len(artifact.Workgraph) != len(want) {
+		t.Fatalf("expected %d workgraph kinds, got %d: %v", len(want), len(artifact.Workgraph), artifact.Workgraph)
+	}
+	for kind, expected := range want {
+		if artifact.Workgraph[kind] != expected {
+			t.Errorf("expected %s executor for %q, got %q", expected, kind, artifact.Workgraph[kind])
 		}
 	}
 }

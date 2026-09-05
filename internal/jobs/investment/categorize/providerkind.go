@@ -153,7 +153,18 @@ func ResolveProviderKindForOrg(
 		if err != nil {
 			return "", err
 		}
-		if orgProvider != "" {
+		// #2223 peer read (lane-gate-rounds), LOW: the presence check must
+		// run on the TRIMMED value, not the raw one -- a whitespace-only
+		// resolver output (e.g. "   ") is non-empty by `!= ""` but
+		// normalizes to "" (normalizeProviderKind's own auto-substitution
+		// only fires for a truly empty string, not a whitespace-only one),
+		// so the old check let it enter this branch and return an EMPTY,
+		// invalid ProviderKind instead of falling through to the platform
+		// env / auto-detect like any other "no org BYO provider" case.
+		// Not reachable today -- llmorgsettings.Store.ResolveUsableProvider
+		// never returns a whitespace-only value -- but the check should be
+		// consistent with what it actually gates on regardless.
+		if strings.TrimSpace(orgProvider) != "" {
 			// codex round 1 (#2223), P3: this branch is the whole point of
 			// CHAOS-5006 -- an org's own BYO provider overriding the
 			// platform's LLM_PROVIDER for "auto" -- and had no telemetry at
@@ -234,6 +245,100 @@ var _ Provider = unimplementedProvider{}
 // any other file, and this source file never hardcodes a credential VALUE,
 // only the variable NAMES Python's own config module already uses.
 func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
+	return NewProviderFromEnvWithModel(kind, "")
+}
+
+// modelEnvByKind ports _MODEL_ENV_BY_PROVIDER (llm/providers/__init__.py:25-31),
+// narrowed to the kinds this port can construct.
+var modelEnvByKind = map[ProviderKind][]string{
+	ProviderKindOpenAI: {"LLM_MODEL_OPENAI"},
+	ProviderKindLocal:  {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	ProviderKindOllama: {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
+}
+
+// defaultModelByKind ports DEFAULT_MODEL_BY_PROVIDER (llm/providers/base.py:36-46),
+// narrowed the same way. Python falls back to this when no env var is set;
+// without it a stamp would record an EMPTY model for a run that used the
+// provider's built-in default.
+var defaultModelByKind = map[ProviderKind]string{
+	ProviderKindOpenAI: "gpt-5-mini",
+	ProviderKindLocal:  "llama3.2",
+	ProviderKindOllama: "llama3.2",
+}
+
+// ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and
+// therefore the model that must be stamped into
+// work_unit_investments.categorization_model_version.
+//
+// # ONE FUNCTION FOR BOTH, DELIBERATELY
+//
+// This is used by BOTH the provider construction below AND the durable stamp
+// (materialize.go's resolvedModelName). That is the whole point: codex r2's P1
+// was that the two disagreed -- the stamp fell back to the PROVIDER NAME while
+// the provider used its env-configured model, so every native row recorded a
+// model that never ran and the skip-existing lookup keyed on it. Two call sites
+// computing "the model" independently is what produced that defect; a single
+// function makes agreement structural rather than a thing to remember.
+//
+// # PRECEDENCE DIVERGES FROM PYTHON, AND THAT IS A RULING, NOT AN ACCIDENT
+//
+// Python checks the provider-specific env FIRST, then generic LLM_MODEL
+// (llm/providers/__init__.py:204-208). This checks generic LLM_MODEL FIRST, per
+// chris's CHAOS-4978 ruling (2026-09-03 13:14): the generic override must be
+// able to force a model on ANY provider without touching each provider-specific
+// var. The two orders differ ONLY when both are set to different values.
+//
+// Following Python's order here instead would re-open the very defect this
+// fixes: the provider path is already ruled generic-first, so a stamp using
+// Python's order would again record a model the run did not use. Matching what
+// RUNS is the invariant that matters; matching Python's precedence is not
+// available while CHAOS-4978 stands.
+//
+// The org-BYO branch (org_byo_provider_matches / resolve_llm_org_settings_model)
+// is omitted -- no Go caller threads an org_id through this package yet
+// (CHAOS-5006).
+func ResolveModelName(kind ProviderKind, requested string) string {
+	if kind == ProviderKindMock {
+		return "mock"
+	}
+	if kind == ProviderKindNone {
+		return ""
+	}
+	if requested != "" {
+		return requested
+	}
+	// Generic first (CHAOS-4978), then the per-kind chain, then the default.
+	names := append([]string{"LLM_MODEL"}, modelEnvByKind[kind]...)
+	if resolved := firstNonEmptyEnv(names...); resolved != "" {
+		return resolved
+	}
+	return defaultModelByKind[kind]
+}
+
+// NewProviderFromEnvWithModel is NewProviderFromEnv with an explicit model
+// override that WINS over every environment variable.
+//
+// This exists because a caller that knows which model it wants -- the
+// investment.materialize executor, which carries the request row's
+// `model_ref` -- must be able to say so. Python does exactly this:
+// materialize_investments passes `model=config.llm_model` into get_provider
+// (materialize.py:1189-1195), and resolve_model_name treats an explicit model
+// as winning over any env lookup (llm/providers/__init__.py's
+// resolve_model_name, mirrored in cmd/query-api's ResolveModelName).
+//
+// Dropping the override is not a cosmetic loss (codex r1 P1-b): the executor
+// stamps the REQUESTED model into work_unit_investments.categorization_model_version
+// and into the skip-existing lookup key, so calling the env-default model
+// while recording the requested one writes a row that the next run will treat
+// as a valid cached result FOR A MODEL THAT NEVER RAN. The error compounds
+// rather than self-correcting.
+//
+// An empty model means "no explicit request", which is the pre-existing
+// env-only behaviour NewProviderFromEnv keeps.
+func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, error) {
+	// Every provider below takes its model from the SAME resolver the durable
+	// stamp uses, so the two cannot drift apart (codex r2 P1).
+	resolved := ResolveModelName(kind, model)
 	switch kind {
 	case ProviderKindMock:
 		return MockProvider{}, nil
@@ -255,7 +360,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 			// on ANY provider -- e.g. pointing everything at one
 			// OpenAI-compatible endpoint/model without touching each
 			// provider-specific var individually.
-			Model: firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OPENAI"),
+			Model: resolved,
 		}), nil
 
 	case ProviderKindLocal:
@@ -267,7 +372,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
 			// Generic-first, same ruling as openai above.
-			Model:  firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"),
+			Model:  resolved,
 			APIKey: firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
@@ -281,12 +386,97 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		// -- OLLAMA_* stays as the native provider's own override tier.
 		return NewOllamaProvider(OllamaProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OLLAMA", "OLLAMA_MODEL"),
+			Model:   resolved,
 			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
 	// BYO LLM stubs: Python has a real client for each of these; this port
 	// does not yet.
+	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
+		return unimplementedProvider{kind: kind}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
+	}
+}
+
+// NewProviderFromCredentials is NewProviderFromEnv's org-BYO sibling
+// (CHAOS-5006 PR3): constructs a Provider for kind from EXPLICIT
+// apiKey/baseURL/model values -- an org's own decrypted settings,
+// resolved by internal/llmorgsettings -- instead of reading environment
+// variables. This is the source-bound half of CHAOS-2550's invariant
+// (resolve_llm_credentials: never mix a platform key with an org
+// base_url or vice versa): a caller passes either ALL-env
+// (NewProviderFromEnv) or ALL-org (this function) values for one
+// construction, never a blend of the two.
+//
+// No generic-LLM_*-env-overrides-any-provider layering here (unlike
+// NewProviderFromEnv's firstNonEmptyEnv calls) -- apiKey/baseURL/model
+// are already the caller's fully-resolved final values; layering a
+// platform env override underneath them would silently reintroduce the
+// exact credential mixing CHAOS-2550 forbids.
+//
+// This function never logs, wraps, or interpolates apiKey/baseURL into
+// any returned error string -- see providerkind_credentials_test.go's
+// TestNewProviderFromCredentialsNeverLeaksSecretsInErrors, which fails
+// the whole suite if that guarantee is ever broken by a future edit
+// here.
+func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string) (Provider, error) {
+	switch kind {
+	case ProviderKindMock:
+		return MockProvider{}, nil
+
+	case ProviderKindNone:
+		return NoneProvider{}, nil
+
+	case ProviderKindOpenAI:
+		if apiKey == "" {
+			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
+		}
+		return NewOpenAIProvider(OpenAIProviderConfig{
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+			Model:   model,
+		}), nil
+
+	case ProviderKindLocal:
+		// Same as NewProviderFromEnv's own comment: an empty base_url is
+		// not an error for "local" -- NewLocalProvider applies Ollama's
+		// default endpoint fallback regardless of where the (empty)
+		// value came from.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	case ProviderKindOllama:
+		// codex round 3 (#2234), P1: an org's stored "ollama" base_url
+		// follows Python's own contract -- local.py's OllamaProvider is a
+		// LocalProvider subclass, OpenAI-compatible /v1/chat/completions,
+		// defaulting to "http://localhost:11434/v1" (local.py:42,:283-298)
+		// -- NOT the native /api/chat wire protocol NewOllamaProvider
+		// speaks. Routing org-BYO "ollama" through NewOllamaProvider (as
+		// this case originally did, mirroring NewProviderFromEnv below for
+		// symmetry) sends a `/v1`-shaped stored base_url to the wrong path
+		// (".../v1/api/chat", a 404) and breaks every completion.
+		// NewProviderFromEnv's own ProviderKindOllama case is NOT changed
+		// here: it predates this PR (CHAOS-4978/#2189, already shipped on
+		// main) and has the SAME mismatch for an operator-set
+		// OLLAMA_BASE_URL/LLM_BASE_URL ending in /v1 -- team-lead's ruling
+		// was to fix org-BYO's newly-reachable path now and track the
+		// platform-env path as its own follow-up (see RISK NOTES in this
+		// PR's body for the ticket), not to re-litigate #2189's shipped
+		// decision here. The asymmetry between this case and
+		// NewProviderFromEnv's is therefore deliberate and temporary, not
+		// an oversight.
+		return NewLocalProvider(LocalProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
+			APIKey:  apiKey,
+		}), nil
+
+	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
 

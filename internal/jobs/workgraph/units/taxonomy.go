@@ -1,6 +1,10 @@
 package units
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 // The canonical investment taxonomy, ported from
 // dev_health_ops/investment_taxonomy.py.
@@ -135,4 +139,85 @@ func ThemeOf(subcategoryKey string) string {
 // pin in the golden corpus.
 func PromptCategoryList() string {
 	return strings.Join(SortedSubcategories[:], ", ")
+}
+
+// RollupSubcategoriesToThemes ports utils/normalization.py:40-52
+// `rollup_subcategories_to_themes`, specialised to this taxonomy the way
+// investment/utils.py:31-36 specialises it (SUBCATEGORY_TO_THEME + sorted(THEMES)).
+//
+// # TWO DIFFERENT SUMMATIONS, DELIBERATELY
+//
+// The reference accumulates theme totals with a plain `totals[theme] += value`
+// loop, then hands those totals to `normalize_scores`, whose own total is a
+// builtin `sum()` over a generator. Since CPython 3.12 `sum()` over floats is
+// Neumaier-compensated and `+=` is not (CHAOS-4824), so the two summations
+// genuinely differ in the reference and the port has to differ the same way:
+// plain sequential addition here, pythonparity.Sum in the normalize step.
+// Using compensated summation for BOTH would be the more "correct" numerics and
+// the wrong answer -- it would diverge from the deployed producer on inputs
+// where the uncompensated error is what got written.
+//
+// # WHY SORTED ITERATION IS THE FAITHFUL ORDER, NOT A CONVENIENCE
+//
+// Sequential `+=` is order-dependent, so the accumulation order is part of the
+// contract. Python iterates the dict in INSERTION order, and every caller that
+// reaches this function passes a vector built by `ensure_full_subcategory_vector`
+// -- a comprehension over `sorted(all_subcategories)` -- whether it came from
+// llm_schema.validate_llm_payload's success branch (llm_schema.py:216) or from
+// categorize.fallback_outcome's `_fallback_distribution()` (categorize.py:71-72).
+// Both are therefore sorted-key insertion order, so ranging SortedSubcategories
+// reproduces the reference's order exactly. Ranging the Go map instead would be
+// randomised per run and would produce a different last-bit answer on inputs
+// where the additions do not associate.
+func RollupSubcategoriesToThemes(subcategories map[string]float64) map[string]float64 {
+	totals := make(map[string]float64, len(SortedThemes))
+	for _, theme := range SortedThemes {
+		totals[theme] = 0.0
+	}
+	// The reference guards `if theme and theme in totals`: ThemeOf returns ""
+	// for an unknown key (its documented contract), and "" is never a theme, so
+	// the membership check covers both halves.
+	for _, subcategory := range SortedSubcategories {
+		value, present := subcategories[subcategory]
+		if !present {
+			continue
+		}
+		theme := ThemeOf(subcategory)
+		if _, ok := totals[theme]; !ok {
+			continue
+		}
+		totals[theme] += value
+	}
+	return normalizeScores(totals, SortedThemes[:])
+}
+
+// normalizeScores ports utils/normalization.py:15-21 `normalize_scores`.
+//
+// The total is `sum(...)` over a generator in the reference, so it takes
+// pythonparity.Sum. The `total <= 0.0` branch yields a uniform distribution --
+// note this catches NaN's way out too, since every comparison against NaN is
+// false, so a NaN total falls through to the division branch and propagates,
+// exactly as the reference does.
+func normalizeScores(scores map[string]float64, keys []string) map[string]float64 {
+	values := make([]float64, len(keys))
+	for i, key := range keys {
+		values[i] = scores[key]
+	}
+	total := pythonparity.Sum(values)
+
+	normalized := make(map[string]float64, len(keys))
+	if total <= 0.0 {
+		uniform := 0.0
+		if len(keys) > 0 {
+			uniform = 1.0 / float64(len(keys))
+		}
+		for _, key := range keys {
+			normalized[key] = uniform
+		}
+		return normalized
+	}
+	for i, key := range keys {
+		normalized[key] = values[i] / total
+	}
+	return normalized
 }

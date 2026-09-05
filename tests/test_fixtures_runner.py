@@ -1,4 +1,5 @@
 import argparse
+import os
 import uuid
 
 import pytest
@@ -1296,3 +1297,170 @@ class TestResolveAuthSeedPostgresUri:
         assert resolved is not None
         assert "localhost:5432/devhealth" in resolved
         assert "wrong" not in resolved
+
+
+class TestGenerateOrgParam:
+    """CHAOS-<n>: ``fixtures generate --org <uuid>`` writes into a caller-chosen
+    org instead of the fixed demo-org default.
+
+    ``org_id`` was already threaded through every write call inside
+    ``run_fixtures_generation`` (see e.g. ``TestGenerateUsersRespectsOrgId``
+    above, which already covers the auth-side org/membership/license rows) --
+    the CLI parser simply never exposed a way to set it, so
+    ``getattr(ns, "org", None)`` always evaluated to ``None`` and every run
+    silently fell back to the fixed demo-org UUID. This class covers the
+    parser wiring itself, plus one live end-to-end check that every table a
+    real run actually writes carries only the requested org_id.
+    """
+
+    _VALID_ORG = "22222222-2222-2222-2222-222222222222"
+
+    def _parser(self) -> argparse.ArgumentParser:
+        parser = argparse.ArgumentParser()
+        runner.register_commands(parser.add_subparsers(dest="command"))
+        return parser
+
+    def test_org_defaults_to_none(self):
+        ns = self._parser().parse_args(["fixtures", "generate"])
+        assert ns.org is None
+
+    def test_org_flag_canonicalizes_uuid(self):
+        # Mixed case and a form uuid.UUID accepts but does not itself emit
+        # (no hyphens) must come back as the CANONICAL, hyphenated, lowercase
+        # string -- generation, seeding, and the coherence validator all key
+        # off of str(uuid.UUID(...)) elsewhere in this module, so a caller
+        # passing an equivalent-but-differently-formatted UUID must still
+        # compare equal to that.
+        ns = self._parser().parse_args(
+            ["fixtures", "generate", "--org", "22222222222222222222222222222222"]
+        )
+        assert ns.org == self._VALID_ORG
+
+    def test_org_flag_rejects_invalid_uuid(self):
+        with pytest.raises(SystemExit):
+            self._parser().parse_args(["fixtures", "generate", "--org", "not-a-uuid"])
+
+
+CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
+_PROTECTED_DATABASES = frozenset({"", "default"})
+
+
+def _org_param_scratch_dsn(base_dsn: str) -> tuple[str, str]:
+    """Derive a uniquely-named SCRATCH database DSN from CLICKHOUSE_URI's own
+    host/user/password, the same protected-name guard convention as
+    ``test_ask_dev_gitlab_project_subject_live.py``'s ``_scratch_database`` --
+    duplicated deliberately rather than imported, so this file's protection
+    against ever touching ``default`` does not depend on that module.
+
+    Returns ``(dsn, database_name)`` -- the caller still needs the bare name
+    for the DDL statements a DSN cannot express (``CREATE``/``DROP DATABASE``,
+    ``system.columns`` lookups).
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(base_dsn)
+    database = f"test_fixtures_org_param_{uuid.uuid4().hex[:12]}"
+    if database.strip().lower() in _PROTECTED_DATABASES:  # pragma: no cover
+        raise RuntimeError(
+            "generated scratch database name collided with a protected name"
+        )
+    return urlunparse(parsed._replace(path=f"/{database}")), database
+
+
+@pytest.mark.clickhouse
+@pytest.mark.skipif(
+    not CLICKHOUSE_URI,
+    reason="Requires CLICKHOUSE_URI pointing at a reachable ClickHouse "
+    "(e.g. clickhouse://ch:ch@localhost:8123/default) -- this test creates "
+    "and drops its own uniquely-named scratch database, never touching the "
+    "database CLICKHOUSE_URI's own path names.",
+)
+@pytest.mark.asyncio
+async def test_generate_with_org_every_written_table_scoped_to_org():
+    """CHAOS-<n> end-to-end: a real ``fixtures generate --org <uuid>`` run,
+    against a fresh scratch ClickHouse database (``ClickHouseStore.__aenter__``
+    creates the schema itself, per its own ``_ensure_tables()`` call -- no
+    separate migration step needed), must leave every table it wrote scoped
+    to ONLY that org_id. Enumerated from ``system.columns`` rather than a
+    hand-maintained table list, so this does not silently stop covering a
+    table a future generator addition writes.
+    """
+    import clickhouse_connect
+
+    assert CLICKHOUSE_URI is not None
+    scratch_dsn, scratch_db = _org_param_scratch_dsn(CLICKHOUSE_URI)
+    org = "33333333-3333-3333-3333-333333333333"
+
+    parser = argparse.ArgumentParser()
+    runner.register_commands(parser.add_subparsers(dest="command"))
+    ns = parser.parse_args(
+        [
+            "fixtures",
+            "generate",
+            "--sink",
+            scratch_dsn,
+            "--org",
+            org,
+            "--repo-count",
+            "1",
+            "--days",
+            "2",
+            "--commits-per-day",
+            "2",
+            "--pr-count",
+            "3",
+            "--team-count",
+            "2",
+        ]
+    )
+
+    client = clickhouse_connect.get_client(dsn=CLICKHOUSE_URI)
+    try:
+        # ClickHouseStore.__aenter__ only ensures TABLES inside an already-
+        # selected database (via `_ensure_tables()`) -- clickhouse-connect
+        # itself fails to even open a client against a database path that
+        # does not exist yet, unlike Postgres's create-on-connect-string
+        # absence. The database itself must exist before `scratch_dsn` is
+        # handed to fixture generation.
+        client.command(f"DROP DATABASE IF EXISTS `{scratch_db}`")
+        client.command(f"CREATE DATABASE `{scratch_db}`")
+        try:
+            exit_code = await run_fixtures_generation(ns)
+            assert exit_code == 0, "fixture generation run itself failed"
+
+            org_id_columns = client.query(
+                "SELECT table FROM system.columns "
+                "WHERE database = {database:String} AND name = 'org_id'",
+                parameters={"database": scratch_db},
+            ).result_rows
+            assert org_id_columns, (
+                "no table in the scratch database declared an org_id column at "
+                "all -- either generation wrote nothing or the schema changed "
+                "in a way this test's enumeration no longer sees"
+            )
+
+            offenders: dict[str, list[str]] = {}
+            checked_any_nonempty = False
+            for (table,) in org_id_columns:
+                rows = client.query(
+                    f"SELECT DISTINCT org_id FROM `{scratch_db}`.`{table}`"
+                ).result_rows
+                if not rows:
+                    continue
+                checked_any_nonempty = True
+                seen = {str(r[0]) for r in rows}
+                if seen != {org}:
+                    offenders[table] = sorted(seen)
+
+            assert checked_any_nonempty, (
+                "every org_id-bearing table in the scratch database was "
+                "empty -- generation did not actually write anything to verify"
+            )
+            assert not offenders, (
+                "table(s) carrying an org_id other than the requested "
+                f"{org!r}: {offenders!r}"
+            )
+        finally:
+            client.command(f"DROP DATABASE IF EXISTS `{scratch_db}`")
+    finally:
+        client.close()

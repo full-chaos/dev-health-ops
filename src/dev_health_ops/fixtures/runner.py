@@ -3103,6 +3103,22 @@ async def run_product_telemetry_fixtures(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _org_uuid_arg(value: str) -> str:
+    """argparse `type=` for a single, validated org UUID (CHAOS-<n>).
+
+    Returns the CANONICAL string form (``str(uuid.UUID(value))``), not the
+    caller's raw text, so a differently-cased or -hyphenated but equivalent
+    UUID always compares equal to what generation, seeding, and the coherence
+    validator all key off of downstream.
+    """
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise argparse.ArgumentTypeError(
+            f"--org must be a valid UUID, got {value!r}"
+        ) from exc
+
+
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     fix = subparsers.add_parser("fixtures", help="Data simulation and fixtures.")
     fix_sub = fix.add_subparsers(dest="fixtures_command", required=True)
@@ -3115,6 +3131,17 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     fix_gen.add_argument(
         "--db-type", help="Explicit DB type (postgres, clickhouse, etc)."
+    )
+    fix_gen.add_argument(
+        "--org",
+        type=_org_uuid_arg,
+        default=None,
+        help=(
+            "Org id (UUID) to write fixtures into, instead of the fixed "
+            "demo-org default. Every table this command writes -- fixture "
+            "rows and, when this run also seeds auth (organizations/"
+            "memberships), those rows too -- carries only this org_id."
+        ),
     )
     fix_gen.add_argument(
         "--repo-name", default=DEFAULT_DEMO_REPO_NAME, help="Repo name."

@@ -15,14 +15,13 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 _SCRIPT = Path(__file__).parents[2] / "ci" / "assert_metrics_executed_proof.py"
 
 ORG = "org-33333333-cccc"
 RUN_START = datetime(2026, 9, 5, tzinfo=timezone.utc)
-LATE = RUN_START + timedelta(minutes=5)
 LIVE_REPO = "44444444-4444-4444-4444-444444444444"
 DEAD_REPO = "55555555-5555-5555-5555-555555555555"
 

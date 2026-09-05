@@ -44,6 +44,14 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # directly, as do its own dedicated unit tests), only job_daily.py's own
     # reference to it.
     "file_hotspots": "compute_file_hotspots",
+    # CHAOS-5234: file_risk_hotspots's daily compute deleted from
+    # job_daily.py -- the native Go executor (FileRiskHotspotsExecutor,
+    # CHAOS-4277) is the only writer of file_hotspot_daily for a daily
+    # partition now. compute_file_risk_hotspots itself is NOT deleted from
+    # the codebase (golden-fixture generators and the live-Python oracle
+    # comparator still call it directly, as do its own dedicated unit
+    # tests), only job_daily.py's own reference to it.
+    "file_risk_hotspots": "compute_file_risk_hotspots",
 }
 
 

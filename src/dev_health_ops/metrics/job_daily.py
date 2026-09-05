@@ -54,9 +54,6 @@ from dev_health_ops.metrics.compute_work_items import (
     compute_work_item_metrics_daily,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
-from dev_health_ops.metrics.hotspots import (
-    compute_file_risk_hotspots,
-)
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
     init_team_resolver,
@@ -927,9 +924,9 @@ def _hotspot_repo_ids(
 ) -> set[uuid.UUID]:
     """Repos eligible for the live ``file_hotspot_daily`` risk pass.
 
-    The risk-hotspot computation must NOT be gated on same-day activity:
-    ``compute_file_risk_hotspots`` unions complexity-only files with churned
-    files, so a discovered repo whose risk comes from static complexity (no
+    The risk-hotspot computation must NOT be gated on same-day activity: the
+    risk-hotspot compute unions complexity-only files with churned files, so
+    a discovered repo whose risk comes from static complexity (no
     commits/pipelines/deployments that day) must still produce rows. Returning
     ``active_repos`` UNION every discovered repo ensures idle complexity-only
     repos are covered; the compute returns no rows for repos with neither churn
@@ -1132,11 +1129,11 @@ async def run_daily_metrics_job(
     before this parameter existed. Only families with a Go native executor
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
-    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292,
-    ``file_risk_hotspots`` CHAOS-4277 (``file_hotspots`` itself, same
-    ticket, had its Python compute+write deleted outright rather than
-    gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
-    all), ``testops_risk`` CHAOS-4294,
+    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292
+    (``file_hotspots``/``file_risk_hotspots``, CHAOS-4277, had their Python
+    compute+write deleted outright rather than gated --
+    CHAOS-5234/CHAOS-3092 -- so neither checks this set at all anymore),
+    ``testops_risk`` CHAOS-4294,
     ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
     ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
     ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
@@ -1484,48 +1481,25 @@ async def run_daily_metrics_job(
                 repo_id=str(r_id), window_stats=h_commit_rows
             )
 
-        # file_hotspot_daily (risk treemap + hotspot drilldown on /complexity)
-        # is computed live here by merging the 30d churn window with the latest
-        # complexity snapshot per file, so real OAuth orgs get data instead of
-        # only fixtures (CHAOS-2376).
-        #
-        # The risk-hotspot pass is NOT gated on active_repos: a repo's risk can
-        # come purely from static complexity (compute_file_risk_hotspots unions
-        # complexity-only files with churned files), and discovered repos can
-        # have complexity snapshots with zero same-day commits/pipelines/
-        # deployments -- common right after onboarding or on quiet-but-risky
-        # repos. Gating on active_repos there left /complexity empty/stale for
-        # those repos. Iterate over active_repos UNION all discovered repos so
-        # idle complexity-only repos still produce rows; compute_file_risk_
-        # hotspots returns [] when a repo has neither churn nor complexity, so
-        # this never fabricates rows for genuinely empty repos (CHAOS-2376
-        # round-4).
-        all_file_hotspots = []
-        hotspot_repos = _hotspot_repo_ids(active_repos, repo_names_by_id)
-        for r_id in hotspot_repos:
-            complexity_map = _load_complexity_map_for_repo(
-                primary_sink=primary_sink,
-                org_id=org_id,
-                repo_id=r_id,
-                day=d,
-            )
-            # Ownership concentration per file from git_blame (backfilled on
-            # onboarding) feeds blame_concentration so the /complexity
-            # Ownership-risk dimension is non-NULL for real orgs (CHAOS-2376).
-            blame_map = _load_blame_map_for_repo(
-                primary_sink=primary_sink,
-                org_id=org_id,
-                repo_id=r_id,
-            )
-            file_hotspots = compute_file_risk_hotspots(
-                repo_id=r_id,
-                day=d,
-                window_stats=h_commit_rows,
-                complexity_map=complexity_map,
-                blame_map=blame_map,
-                computed_at=computed_at,
-            )
-            all_file_hotspots.extend(file_hotspots)
+        # CHAOS-5234/CHAOS-3092: file_risk_hotspots's daily compute (formerly
+        # `compute_file_risk_hotspots` over `hotspot_repos` -> `all_file_
+        # hotspots` -> write_file_hotspot_daily) is DELETED here, not
+        # skip-gated -- chris's ruling: "once go is in main that does the
+        # same thing, skip flags are pointless." The native Go executor
+        # (FileRiskHotspotsExecutor, CHAOS-4277) is the only writer of
+        # file_hotspot_daily now; all_file_hotspots fed nothing else
+        # downstream in this function (see the deleted gate comment's own
+        # admission), so there is no shared input to preserve.
+        # `compute_file_risk_hotspots` itself is NOT deleted -- it has real,
+        # unrelated callers (golden-fixture generators, the live-Python
+        # oracle comparator, and its own dedicated unit tests); only this
+        # call site is gone. `_hotspot_repo_ids`/`_load_complexity_map_for_
+        # repo`/`_load_blame_map_for_repo` are ALSO left in place: they are
+        # extensively unit-tested as standalone helpers
+        # (tests/metrics/test_job_daily_hotspots.py) and
+        # `_load_complexity_map_for_repo` is referenced by name in
+        # `post_sync_dispatch.py`'s own worker-chaining comment -- retiring
+        # them is a separate, larger cleanup outside this ticket's scope.
 
         result = compute_daily_metrics(
             day=d,
@@ -1910,21 +1884,11 @@ async def run_daily_metrics_job(
         # row's generation -- the same class of gap CHAOS-4275's own guard
         # above exists to close, caught here by codex round 1 on this port.
         skip_deploy_write = "deploy" in skip_families
-        # CHAOS-4277: file_risk_hotspots has a native Go executor
-        # (FileRiskHotspotsExecutor). Same write-only-skip shape as
-        # repo_user_commit above: all_file_hotspots feeds nothing else
-        # downstream in this function, so compute could also be skipped,
-        # but is left unconditional to match the established, reviewed
-        # precedent with the smallest possible diff. Missing this gate is
-        # exactly the defect repo_user_commit's own comment warns about --
-        # the native executor and this unconditional write would otherwise
-        # BOTH fire for every partition, doubling every row in
-        # file_hotspot_daily on every single run, not just on a recompute.
-        # (file_hotspots itself -- FileHotspotsExecutor's own family -- is no
-        # longer gated here at all: CHAOS-5234/CHAOS-3092 deleted its compute
-        # and write call sites entirely, see the comment a few lines above
-        # this loop.)
-        skip_file_risk_hotspots_write = "file_risk_hotspots" in skip_families
+        # CHAOS-4277/CHAOS-5234/CHAOS-3092: file_risk_hotspots (like
+        # file_hotspots, its sibling CHAOS-4277 family) no longer checks
+        # skip_families at all -- its compute+write is deleted entirely, see
+        # the comment above the deleted `compute_file_risk_hotspots` call
+        # site earlier in this function.
         # CHAOS-4283: work_item and work_item_estimate have native Go
         # executors (WorkItemExecutor/WorkItemEstimateExecutor). This is the
         # repo_user_commit shape, NOT the team_wellbeing shape -- skip ONLY
@@ -2077,17 +2041,12 @@ async def run_daily_metrics_job(
                 s.write_work_graph_deployment_incident_edges(
                     ai_deployment_incident_edges
                 )
-            # CHAOS-5234/CHAOS-3092: no write_file_metrics call here -- the
-            # file_hotspots compute+write is deleted entirely (see the
-            # comment above the deleted `compute_file_hotspots` call site);
-            # the native Go executor is the only writer of
-            # file_metrics_daily now.
-            if (
-                all_file_hotspots
-                and hasattr(s, "write_file_hotspot_daily")
-                and not skip_file_risk_hotspots_write
-            ):
-                s.write_file_hotspot_daily(all_file_hotspots)
+            # CHAOS-5234/CHAOS-3092: no write_file_metrics or
+            # write_file_hotspot_daily call here -- both file_hotspots' and
+            # file_risk_hotspots' compute+write are deleted entirely (see
+            # the comments above their deleted call sites); the native Go
+            # executors are the only writers of file_metrics_daily and
+            # file_hotspot_daily now.
 
         # CHAOS-4246: cicd/deploy/incident are written unconditionally above
         # (write_*_metrics no-ops on an empty list) -- note it here so a run
@@ -2408,8 +2367,8 @@ async def run_daily_metrics_finalize(
         )
 
     # CHAOS-4290: same gate shape as run_daily_metrics_job's families
-    # (`"file_risk_hotspots" in skip_families` a few hundred lines up, and
-    # its siblings). When a
+    # (`"deploy" in skip_families` a few hundred lines up, and its
+    # siblings). When a
     # native Go executor already computed and wrote ic_finalize for this run,
     # recomputing here would append a SECOND generation of the same rows --
     # and user_metrics_daily is append-only, deduped

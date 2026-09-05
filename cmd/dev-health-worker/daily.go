@@ -285,6 +285,12 @@ func buildDailyWorker(
 				// executor behaves exactly as before this capability existed.
 				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
 				handler.SetNativeFinalizeFamilies(finalizeFamilies)
+				// Same fail-open discipline as the partition path: telemetry
+				// never gates, but a fail-open path with no counter cannot be
+				// distinguished from one that is working.
+				if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+					handler.SetNativeFinalizeFamilyObserver(nativeObserver)
+				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsFinalizeArgs](
 					registry, spec, handler, dailyDependencies,
 				)

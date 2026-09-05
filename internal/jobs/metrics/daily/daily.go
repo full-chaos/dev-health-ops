@@ -1018,6 +1018,15 @@ type FinalizeHandler struct {
 	// path exactly as before this capability existed.
 	nativeFinalizeFamilies    map[string]NativeFinalizeFamilyExecutor
 	nativeFinalizeFamilyNames []string
+	// nativeFinalizeObserver reports each finalize family's outcome.
+	// CHAOS-4290 shipped the mechanism WITHOUT this, which meant a family
+	// that failed every run degraded to Python invisibly -- fail-open with no
+	// counter is indistinguishable from fail-open that never fires. Optional:
+	// nil is a silent no-op, matching every other observer here.
+	nativeFinalizeObserver jobruntime.DailyMetricsNativeFamilyObserver
+	// nativeFinalizeNow is injected so the duration a test observes is not
+	// wall-clock. nil means time.Now.
+	nativeFinalizeNow func() time.Time
 }
 
 func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*FinalizeHandler, error) {
@@ -1045,6 +1054,25 @@ func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]Na
 	handler.nativeFinalizeFamilyNames = names
 }
 
+// SetNativeFinalizeFamilyObserver wires the optional telemetry observer for
+// finalize-scope families. It REUSES DailyMetricsNativeFamilyObserver rather
+// than declaring a parallel interface: the shape is identical (family, outcome,
+// rows, duration), and a second interface would mean two dashboards for one
+// question. Never gates behaviour -- an observer error is ignored.
+func (handler *FinalizeHandler) SetNativeFinalizeFamilyObserver(observer jobruntime.DailyMetricsNativeFamilyObserver) {
+	if handler == nil {
+		return
+	}
+	handler.nativeFinalizeObserver = observer
+}
+
+func (handler *FinalizeHandler) finalizeNow() time.Time {
+	if handler == nil || handler.nativeFinalizeNow == nil {
+		return time.Now()
+	}
+	return handler.nativeFinalizeNow()
+}
+
 // computeNativeFinalizeFamilies runs every registered finalize-scope executor
 // and returns the names that SUCCEEDED, in sorted order.
 //
@@ -1064,10 +1092,25 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 		if executor == nil {
 			continue
 		}
-		if _, err := executor.ComputeFinalizeFamily(ctx, run); err != nil {
+		started := handler.finalizeNow()
+		rows, err := executor.ComputeFinalizeFamily(ctx, run)
+		duration := handler.finalizeNow().Sub(started)
+		if err != nil {
+			// Refused, not silent: this is the counter whose absence made a
+			// persistently failing family invisible.
+			if handler.nativeFinalizeObserver != nil {
+				_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, duration,
+				)
+			}
 			continue
 		}
 		skipFamilies = append(skipFamilies, name)
+		if handler.nativeFinalizeObserver != nil {
+			_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rows, duration,
+			)
+		}
 	}
 	return skipFamilies
 }

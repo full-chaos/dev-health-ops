@@ -2130,31 +2130,40 @@ async def run_daily_metrics_job(
         _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
-        # correlations, insights). Reads from ClickHouse via the sink.
+        # correlations, insights) MOVED to run_daily_metrics_finalize
+        # (CHAOS-5194, astra design-review finding F3), skip_families gate and
+        # all -- necessary PLUMBING, not a compute fix. It used to run HERE,
+        # once per partition (run_benchmarking_for_day takes no repo_id, so an
+        # org with N repos appended N identical row sets to six append-only
+        # tables), deduplicated on the Go side by an anchor-partition trick
+        # (fixed duplication, not the race F3 found: the anchor partition's
+        # own post_bridge phase could complete before every OTHER partition
+        # for the org/day had written its own inputs).
         #
-        # CHAOS-4288: benchmarking has a native Go executor
-        # (BenchmarkingExecutor). When the Go dispatcher names it in
-        # skip_families it has already computed and written this org/day, so
-        # skip the whole call -- nothing else in this function consumes its
-        # output, which makes this the cicd/team_wellbeing shape.
+        # The move is required for the skip_families MECHANISM to keep
+        # working, not optional: partition-scope skip_families (built by
+        # computeNativeFamilies/computePostBridgeNativeFamilies) and
+        # finalize-scope skip_families (built by
+        # computeNativeFinalizeFamilies) are TWO INDEPENDENT lists sent to
+        # TWO INDEPENDENT bridge calls. Once the Go executor registers
+        # "benchmarking" as a FINALIZE family instead of a post_bridge one,
+        # the partition-scope skip_families sent here would never contain it
+        # again -- leaving the OLD gate at this call site permanently open
+        # and duplicating Python's own compute on top of the native
+        # executor's correct one, a WORSE bug than before. Moving the call to
+        # where the matching skip_families list actually lives is what keeps
+        # "the Go executor computed it, so Python must not" true.
         #
-        # NOTE the native side computes ONCE PER ORG/DAY, on the partition
-        # holding the org's lexicographically-first repo, whereas this call
-        # runs on EVERY partition: run_benchmarking_for_day takes no repo_id,
-        # so an org with N repos appends N identical row sets to six
-        # append-only tables here. That divergence is deliberate and ruled --
-        # see BenchmarkingExecutor's doc comment.
-        if "benchmarking" not in skip_families:
-            for s in sinks:
-                try:
-                    run_benchmarking_for_day(
-                        s,
-                        as_of_day=d,
-                        computed_at=computed_at,
-                        org_id=org_id,
-                    )
-                except Exception as exc:
-                    logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        # This move does NOT fix Python's own compute logic (no ordering
+        # change, no query change) -- team-lead ruling, CHAOS-5194: Python's
+        # race stays exactly as buggy as it always was WHEN THIS CODE PATH
+        # ACTUALLY RUNS. In practice it incidentally runs behind the same
+        # partition barrier as the Go executor now (both live in
+        # run_daily_metrics_finalize, which only runs once every partition
+        # for the day has succeeded), and it runs at all only when the
+        # native executor is absent (skip_families gate below), which is the
+        # existing fail-open-to-Python contract every other native family
+        # already has.
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(
@@ -2352,12 +2361,33 @@ async def run_daily_metrics_finalize(
         for s in sinks_list:
             s.write_ic_landscape_rolling(ic_landscape)
 
+    computed_at = datetime.now(timezone.utc)
+
+    # CHAOS-5194 (astra F3): benchmarking, relocated here from
+    # run_daily_metrics_job -- see this function's sibling comment at the old
+    # call site for why the move is required plumbing, not a compute fix.
+    # Same skip_families gate shape as ic_finalize above: when the Go
+    # dispatcher names "benchmarking" in skip_families, the native
+    # BenchmarkingFinalizeExecutor already computed and wrote this org/day,
+    # so skip the whole call -- nothing else in this function consumes its
+    # output.
+    if "benchmarking" not in skip_families:
+        for s in sinks_list:
+            try:
+                run_benchmarking_for_day(
+                    s,
+                    as_of_day=day,
+                    computed_at=computed_at,
+                    org_id=org_id,
+                )
+            except Exception as exc:
+                logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
+
     # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily and
     # ALL of team_cognitive_load_daily are written exactly ONCE here, per
     # org/day, after every repo's own partition has landed -- never
     # in-process inside a single per-repo run_daily_metrics_job call (see
     # _write_compounding_risk_for_day's docstring for why that was wrong).
-    computed_at = datetime.now(timezone.utc)
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
     discovered_repos = discover_repos(

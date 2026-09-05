@@ -250,7 +250,7 @@ func buildDailyWorker(
 				// test that matters now calls dailyNativeFamilyRegistrations
 				// directly and asserts on its actual return value, not on
 				// source text.
-				nativeFamilies, postBridgeFamilies, _ := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				nativeFamilies, postBridgeFamilies, _ := dailyNativeFamilyRegistrations(store, clickhouseConnection, observer, logger)
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
@@ -289,7 +289,7 @@ func buildDailyWorker(
 				// the partition arm's locals are out of scope in this one.
 				// Registering an empty map is a no-op, so a build with no finalize
 				// executor behaves exactly as before this capability existed.
-				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(store, clickhouseConnection, observer, logger)
 				handler.SetNativeFinalizeFamilies(finalizeFamilies)
 				// Same fail-open discipline as the partition path: telemetry
 				// never gates, but a fail-open path with no counter cannot be
@@ -705,7 +705,15 @@ func buildDailyWorker(
 // closes it), observer, and logger straight through; every family's
 // construction/fail-open/optional-observer-wiring logic is unchanged from
 // before this extraction, only relocated.
+//
+// store (CHAOS-5194) is the first Postgres dependency this function has
+// needed: BenchmarkingFinalizeExecutor verifies its own partition-completion
+// barrier against daily_metrics_partitions, which lives in Postgres, not
+// ClickHouse. A nil store degrades ONLY benchmarking's finalize registration
+// (fail-open, matching every other family's construction-time policy) --
+// every other family in this function is unaffected.
 func dailyNativeFamilyRegistrations(
+	store daily.Store,
 	clickhouseConnection driver.Conn,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
@@ -722,6 +730,23 @@ func dailyNativeFamilyRegistrations(
 	finalize = map[string]daily.NativeFinalizeFamilyExecutor{}
 	if clickhouseConnection != nil {
 		finalize[daily.ICFinalizeFamilyName] = daily.NewICFinalizeExecutor(clickhouseConnection)
+	}
+	// CHAOS-5194: benchmarking, relocated from post_bridge (see the removed
+	// registration below, and BenchmarkingFinalizeExecutor's own doc comment
+	// for why). No co-registration dependency on ic_finalize above: this
+	// family reads repo_metrics_daily/testops_*/dora tables written by
+	// partition-scope families, never ic_finalize's user_metrics_daily output.
+	if benchmarkingFinalizeExecutor, benchmarkingFinalizeErr := daily.NewBenchmarkingFinalizeExecutor(
+		store, clickhouseConnection, logger,
+	); benchmarkingFinalizeErr == nil {
+		finalize[daily.BenchmarkingFamilyName] = benchmarkingFinalizeExecutor
+	} else {
+		logger.Error(
+			"benchmarking finalize native executor refused; the family "+
+				"stays on the Python compatibility bridge for every "+
+				"partition. Every other daily-metrics family is unaffected.",
+			"error", benchmarkingFinalizeErr,
+		)
 	}
 	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
 		native["team_wellbeing"] = teamWellbeingExecutor
@@ -930,32 +955,17 @@ func dailyNativeFamilyRegistrations(
 	}
 
 	postBridge = map[string]daily.NativeFamilyExecutor{}
-	// CHAOS-4288: benchmarking is post_bridge, NOT pre_bridge.
-	//
-	// The previous registration was pre_bridge, justified by a comment claiming
-	// this family "reads testops_*/work_item/dora daily tables as HISTORY ...
-	// so it has no same-partition write-ordering dependency". That was FALSE and
-	// was never checked. The window ENDS ON THE TARGET DAY:
-	// benchmarking_native_executor.go sets asOfDay = run.TargetDay and every
-	// fetch is Fetch(startDay, asOfDay), so day D's own rows are INSIDE it.
-	// Python writes them at job_daily.py:1919 and only calls
-	// run_benchmarking_for_day at :2091. "benchmarking" also sorts FIRST of all
-	// native families, so pre_bridge ran it before every Go writer as well --
-	// it benchmarked day D against a window missing day D.
-	//
-	// Same class as compounding_risk below and CHAOS-4278's work_item_state.
-	// Caught by codex r1 on #2235.
-	if benchmarkingExecutor, benchmarkingErr := daily.NewBenchmarkingExecutor(clickhouseConnection, logger); benchmarkingErr == nil {
-		postBridge["benchmarking"] = benchmarkingExecutor
-	} else {
-		logger.Error(
-			"benchmarking native executor refused; the family "+
-				"stays on the Python compatibility bridge for "+
-				"every partition. Every other daily-metrics "+
-				"family is unaffected.",
-			"error", benchmarkingErr,
-		)
-	}
+	// CHAOS-4288/CHAOS-5194: benchmarking used to register HERE, post_bridge,
+	// via an anchor-partition trick (one partition per org/day computed it,
+	// every other partition no-op'd). That fixed the duplication class
+	// (#2235/#2259) but not a race astra's F3 finding identified: the anchor
+	// partition's own post_bridge phase could complete before every OTHER
+	// partition for the same org/day had written its own cross-repo inputs.
+	// Relocated to FINALIZE scope (see dailyNativeFamilyRegistrations' finalize
+	// map below, and BenchmarkingFinalizeExecutor's own doc comment) --
+	// finalize is claimed only after every partition succeeds
+	// (ClaimFinalize's own barrier), which removes both the anchor mechanism
+	// and the race in the same move.
 
 	// CHAOS-4287: compounding_risk reads repo_metrics_daily, which
 	// repo_user_commit writes in the SAME partition. repo_user_commit

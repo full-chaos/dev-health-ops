@@ -44,12 +44,17 @@ type StepResult struct {
 	StrandClaimsLive                      int
 	StrandClaimsSettled                   int
 	StrandRaceLost                        int
-	Claimed                               int
-	Deferred                              int
-	Delivered                             int
-	Retried                               int
-	Dead                                  int
-	LeaseLost                             int
+	// RetiredKindObservations (r1 finding F1, codex, CHAOS-4438): see
+	// StrandRepairResult.RetiredKindObservations. Relayed here unmodified so
+	// ReconcilerLoop, the only layer in this chain holding a logger, can log
+	// one line per observation.
+	RetiredKindObservations []RetiredKindObservation
+	Claimed                 int
+	Deferred                int
+	Delivered               int
+	Retried                 int
+	Dead                    int
+	LeaseLost               int
 }
 
 // Relay is a single bounded reconciliation step. Process lifecycle and polling
@@ -220,6 +225,7 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.StrandClaimsLive = rearmed.SkippedClaimLive
 		result.StrandClaimsSettled = rearmed.SkippedClaimSettled
 		result.StrandRaceLost = rearmed.SkippedRaceLost
+		result.RetiredKindObservations = rearmed.RetiredKindObservations
 	}
 	return result, nil
 }

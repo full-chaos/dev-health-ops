@@ -67,6 +67,31 @@ type StrandRepairResult struct {
 	// and the contention is invisible, breaking the same "counted, not
 	// filtered" rule the other refusals follow.
 	SkippedRaceLost int
+	// RetiredKindObservations (r1 finding F1, codex, CHAOS-4438): rows in
+	// worker_job_outbox whose job_kind names a Go kind that has since been
+	// deleted outright (investment.dispatch/chunk/finalize -- registered
+	// handlers with zero producer anywhere, retired under CHAOS-4438). None
+	// of the three shapes above select these kinds any more, so a row like
+	// this would otherwise be invisible to every recovery path this repair
+	// runs -- exactly the swallowed-error class this whole result type
+	// exists to avoid for every OTHER refusal. This is a SEPARATE,
+	// lightweight survey (retiredKindsSQL), not a fourth shape: there is
+	// nothing to rearm or reclaim here, only something to make visible.
+	// Populated even though production should have zero producers for these
+	// kinds (per their own retired_kinds.reason in registry.json) -- the
+	// check costs one bounded query and proves that claim rather than
+	// assuming it.
+	RetiredKindObservations []RetiredKindObservation
+}
+
+// RetiredKindObservation is one worker_job_outbox row referencing a kind that
+// no longer has any Go handler. jobKind/organizationID are exactly what an
+// operator needs to find and manually resolve the row; outboxID lets them
+// look it up directly.
+type RetiredKindObservation struct {
+	OutboxID       string
+	JobKind        string
+	OrganizationID string
 }
 
 // StrandRepair rearms a daily-metrics or work-graph outbox row whose River
@@ -200,7 +225,43 @@ func (repair *StrandRepair) Step(
 		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
 		result.SkippedRaceLost += shapeResult.SkippedRaceLost
 	}
+	observed, err := repair.observeRetiredKinds(ctx, limit)
+	if err != nil {
+		return StrandRepairResult{}, err
+	}
+	result.RetiredKindObservations = observed
 	return result, nil
+}
+
+// observeRetiredKinds surveys for any worker_job_outbox row naming a kind
+// that has no Go handler at all any more (retiredWorkgraphKinds). It is
+// deliberately read-only -- there is nothing this repair can rearm or
+// reclaim for a kind with no worker, only something an operator needs told
+// about. A caller with a logger (ReconcilerLoop) is responsible for actually
+// emitting one log line per observation; this package stays DB-only by
+// design (see the StrandRepair doc comment on the two-pool split).
+func (repair *StrandRepair) observeRetiredKinds(
+	ctx context.Context,
+	limit int,
+) ([]RetiredKindObservation, error) {
+	rows, err := repair.queryQueue(ctx, retiredKindsSQL, retiredWorkgraphKinds, limit)
+	if err != nil || rows == nil {
+		return nil, classifyStrandError(err)
+	}
+	defer rows.Close()
+	observations := make([]RetiredKindObservation, 0)
+	for rows.Next() {
+		var found RetiredKindObservation
+		if err := rows.Scan(&found.OutboxID, &found.JobKind, &found.OrganizationID); err != nil {
+			return nil, ErrUnavailable
+		}
+		observations = append(observations, found)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, classifyStrandError(rows.Err())
+	}
+	return observations, nil
 }
 
 func (repair *StrandRepair) stepShape(
@@ -708,5 +769,28 @@ const repairStrandedWorkGraphSQL = `
 		%s
 	ORDER BY outbox.delivered_at, outbox.id
 	%s
+	LIMIT $2::int
+`
+
+// retiredWorkgraphKinds are Go job kinds deleted outright under CHAOS-4438
+// (registered handlers with zero producer anywhere -- same class as
+// CHAOS-4243's earlier retirements). None of the strandShape queries above
+// select them; retiredKindsSQL below is how this repair still notices one,
+// rather than a row of this kind being invisible to every path here.
+var retiredWorkgraphKinds = []string{
+	"investment.dispatch",
+	"investment.chunk",
+	"investment.finalize",
+}
+
+// retiredKindsSQL surveys worker_job_outbox for any row naming a kind this
+// worker fleet no longer has a handler for at all. Unlike the strandShape
+// queries, this is not scoped to 'delivered' -- a retired-kind row is worth
+// surfacing in ANY state, since nothing downstream can ever resolve it.
+const retiredKindsSQL = `
+	SELECT outbox.id::text, outbox.job_kind, coalesce(outbox.args ->> 'organization_id', '')
+	FROM public.worker_job_outbox AS outbox
+	WHERE outbox.job_kind = ANY($1::text[])
+	ORDER BY outbox.id
 	LIMIT $2::int
 `

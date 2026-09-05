@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river/rivertype"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 type fakeStrandRepair struct {
@@ -377,5 +380,73 @@ func TestReconcilerLoopExportsStrandCountersSeparately(t *testing.T) {
 	}
 	if strings.Contains(metrics.String(), "{") {
 		t.Fatalf("reconciler metrics must not expose labels:\n%s", metrics.String())
+	}
+}
+
+// TestReconcilerLoopLogsEachRetiredKindObservation is the red/green proof for
+// r1 finding F1 (P2, codex, CHAOS-4438): a worker_job_outbox row naming a
+// kind with no Go handler at all (investment.dispatch/chunk/finalize, or any
+// future retirement) must be logged with enough identity for an operator to
+// find and resolve it manually, not left invisible now that none of
+// StrandRepair's three shapes select these kinds any more.
+func TestReconcilerLoopLogsEachRetiredKindObservation(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)}
+
+	// GREEN: a step carrying one observation logs it with all three fields.
+	var buf bytes.Buffer
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{RetiredKindObservations: []RetiredKindObservation{
+			{
+				OutboxID:       "11111111-1111-1111-1111-111111111111",
+				JobKind:        "investment.chunk",
+				OrganizationID: "22222222-2222-2222-2222-222222222222",
+			},
+		}}, nil
+	})
+	loop, err := newReconcilerLoop(stepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&buf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	logged := buf.String()
+	for _, want := range []string{
+		`"msg":"outbox row references a retired job kind with no handler"`,
+		`"outbox_id":"11111111-1111-1111-1111-111111111111"`,
+		`"job_kind":"investment.chunk"`,
+		`"organization_id":"22222222-2222-2222-2222-222222222222"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log line missing %q:\n%s", want, logged)
+		}
+	}
+
+	// RED / negative control: an otherwise-identical step reporting NO
+	// observations must not log this line at all -- proves the line above
+	// is conditioned on real data, not emitted unconditionally every step.
+	var cleanBuf bytes.Buffer
+	cleanStepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, nil
+	})
+	cleanLoop, err := newReconcilerLoop(cleanStepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&cleanBuf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanLoop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cleanBuf.String(), "retired job kind") {
+		t.Fatalf("logged a retired-kind line with zero observations present:\n%s", cleanBuf.String())
 	}
 }

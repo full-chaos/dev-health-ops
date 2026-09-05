@@ -417,6 +417,10 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # `_write_<family>_..._for_day` shape _finalize_call_family checks for by
 # convention. Kept as small as possible on purpose -- this dict only NAMES
 # an irregular call; it never asserts one exists (the AST walk does that).
+# Values are (namespace, family) -- "daily" or "remaining" -- not a bare
+# family name: a name shared by both family sets (e.g. work_item_attribution)
+# is otherwise ambiguous, and an irregular call's name carries no naming-
+# convention clue to resolve that itself (round-1 finding F4/codex).
 #
 # "_write_team_complexity_for_day" maps to §3's "complexity" family, not a
 # §2 daily family: it reads back `repo_complexity_daily` (complexity's own
@@ -426,10 +430,10 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # hidden behind NATIVE (complexity already renders COMPAT-Python correctly
 # today), just never mentioned on either axis. Found by this exact
 # completeness check, which is the point of building it this way.
-FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, str] = {
-    "compute_ic_metrics_daily": "ic_finalize",
-    "compute_ic_landscape_rolling": "ic_finalize",
-    "_write_team_complexity_for_day": "complexity",
+FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
+    "compute_ic_metrics_daily": ("daily", "ic_finalize"),
+    "compute_ic_landscape_rolling": ("daily", "ic_finalize"),
+    "_write_team_complexity_for_day": ("remaining", "complexity"),
 }
 
 
@@ -438,7 +442,20 @@ def load_finalize_write_calls() -> set[str]:
     run_daily_metrics_finalize's body in job_daily.py, read fresh from the
     file's AST every run. This is what lets the completeness check below
     catch a NEW Python finalize write nobody taught this generator about,
-    not just a stale citation for one it already knew existed."""
+    not just a stale citation for one it already knew existed.
+
+    Raises SystemExit if the body contains a call whose target is NOT a
+    plain name or attribute access (e.g. `getattr(obj, "name")(...)`, a
+    call returned by another call, a subscript, ...) -- round-1 finding F1
+    (codex, CHAOS-5118): the walker cannot read a call name off an
+    indirect/dynamic dispatch shape, so it used to silently skip it,
+    meaning a finalize write hidden behind one evaded the completeness
+    check entirely -- the exact "cannot hide by omission" guarantee this
+    whole mechanism exists for, failing on the one call shape it couldn't
+    read. Failing closed on any such shape (there are none in the function
+    today) means a future rewrite to dynamic dispatch requires a human to
+    update this function, rather than silently losing coverage.
+    """
     tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
     target = next(
         (
@@ -456,6 +473,7 @@ def load_finalize_write_calls() -> set[str]:
             "and DAILY_FINALIZE_FN."
         )
     calls: set[str] = set()
+    opaque: list[str] = []
     for node in ast.walk(target):
         if isinstance(node, ast.Call):
             func = node.func
@@ -463,12 +481,46 @@ def load_finalize_write_calls() -> set[str]:
                 calls.add(func.id)
             elif isinstance(func, ast.Attribute):
                 calls.add(func.attr)
+            else:
+                opaque.append(ast.dump(func))
+    if opaque:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: {DAILY_FINALIZE_FN} in {JOB_DAILY_PY} "
+            f"contains {len(opaque)} call(s) whose target this AST walker cannot read "
+            f"as a plain name (e.g. dynamic dispatch via getattr/a returned callable): "
+            f"{opaque}. The completeness check cannot see what these calls write -- "
+            "resolve manually and either rewrite them as a plain name/attribute call "
+            "or teach load_finalize_write_calls to look inside this specific shape."
+        )
     return calls
 
 
-def _finalize_call_family(call_name: str, live_family_names: set[str]) -> str | None:
-    """Maps one finalize call name to the live family (§2 daily or §3
-    remaining -- callers pass the union) it writes/computes for.
+def _irregular_mapping_plausible(call_name: str, family: str) -> bool:
+    """A minimal, deliberately weak SEMANTIC sanity check for an irregular-
+    ledger mapping: at least one word (underscore-split, length >= 2) of the
+    target family name must appear literally in the call name.
+
+    This CANNOT prove a mapping is correct -- that is exactly why an
+    irregular name needs a human to name it at all, since by definition it
+    does not follow the naming convention the mechanical matcher otherwise
+    relies on. What it DOES catch: a copy/paste or rename that points a
+    real call at a family sharing no textual relationship with it whatsoever
+    (round-1 finding F3, codex, CHAOS-5118: `_write_team_complexity_for_day`
+    silently accepted a mapping to `release_impact`, a live family with zero
+    connection to the call's own name -- `complexity`, the correct target,
+    IS a substring of the call name and would have passed this check).
+    """
+    tokens = [t for t in family.split("_") if len(t) >= 2]
+    if not tokens:
+        return True
+    return any(token in call_name for token in tokens)
+
+
+def _finalize_call_family(
+    call_name: str, daily_names: set[str], remaining_names: set[str]
+) -> tuple[str, str] | None:
+    """Maps one finalize call name to the (namespace, family) -- namespace
+    is "daily" (§2) or "remaining" (§3) -- it writes/computes for.
 
     Returns None for a call OUT OF SCOPE of this check: generic
     infrastructure (loaders, sinks, resolvers, stdlib/dataclass calls) that
@@ -478,28 +530,82 @@ def _finalize_call_family(call_name: str, live_family_names: set[str]) -> str | 
     the completeness check below does not require every call to resolve,
     only every IN-SCOPE one.
 
-    Raises SystemExit for an in-scope call (matches the naming convention,
-    or is in FINALIZE_CALL_IRREGULAR_FAMILY) that names NO live family --
-    the fail-closed case: a new finalize write was added, or an existing one
-    was renamed, and nothing here was updated to match.
+    Raises SystemExit for an in-scope call that: names no live family in
+    either namespace (a new finalize write appeared, or an existing one was
+    renamed, and nothing here was updated to match); matches a family name
+    that exists in BOTH namespaces via the naming convention (round-1
+    finding F4, codex: e.g. work_item_attribution names both a full daily
+    compute and a narrower remaining staleness backstop -- genuinely
+    ambiguous from the call name alone, must be resolved by a human adding
+    an explicit FINALIZE_CALL_IRREGULAR_FAMILY entry stating which one);
+    or is an irregular-ledger mapping that fails the plausibility check.
     """
     if call_name in FINALIZE_CALL_IRREGULAR_FAMILY:
-        family = FINALIZE_CALL_IRREGULAR_FAMILY[call_name]
-        if family not in live_family_names:
+        namespace, family = FINALIZE_CALL_IRREGULAR_FAMILY[call_name]
+        live = daily_names if namespace == "daily" else remaining_names
+        if namespace not in ("daily", "remaining") or family not in live:
             raise SystemExit(
                 f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY maps "
-                f"{call_name!r} to {family!r}, which is not a live daily or remaining "
-                "family name -- family renamed/removed? Update the ledger."
+                f"{call_name!r} to ({namespace!r}, {family!r}), which is not a live "
+                f"{namespace} family name -- family renamed/removed, or namespace typo? "
+                "Update the ledger."
             )
-        return family
+        if not _irregular_mapping_plausible(call_name, family):
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY maps "
+                f"{call_name!r} to {family!r}, but no word of {family!r} appears in the "
+                "call name -- likely a copy/paste or rename error. Re-verify this "
+                "mapping against the actual function body before trusting it."
+            )
+        return namespace, family
     if call_name.startswith("_write_") and call_name.endswith("_for_day"):
         middle = call_name[len("_write_") : -len("_for_day")]
-        # Longest-name-first: a family name that is a prefix of another
-        # (e.g. "work_item" vs "work_item_state") must not steal a match
-        # that belongs to the longer, more specific family.
-        for family in sorted(live_family_names, key=len, reverse=True):
-            if middle == family or middle.startswith(family + "_"):
-                return family
+
+        def all_matches(names: set[str]) -> list[str]:
+            return sorted(
+                family
+                for family in names
+                if middle == family or middle.startswith(family + "_")
+            )
+
+        daily_matches = all_matches(daily_names)
+        remaining_matches = all_matches(remaining_names)
+        # Round-1 finding F2 (codex, CHAOS-5118): a prefix match is not
+        # unique just because a longest-match rule can always PICK one --
+        # "work_item" and "work_item_state" can both textually match
+        # "_write_work_item_state_details_for_day". Detecting the tie and
+        # failing closed (rather than deterministically resolving it) is
+        # what actually closes the ambiguity, in EITHER namespace alone,
+        # not just across the two namespaces (F4's narrower case, still
+        # checked below).
+        if len(daily_matches) > 1:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: finalize call {call_name!r} matches "
+                f"MULTIPLE daily families via the naming convention: {daily_matches} -- "
+                "ambiguous, cannot resolve mechanically. Add an explicit "
+                "FINALIZE_CALL_IRREGULAR_FAMILY entry naming the intended one."
+            )
+        if len(remaining_matches) > 1:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: finalize call {call_name!r} matches "
+                f"MULTIPLE remaining families via the naming convention: "
+                f"{remaining_matches} -- ambiguous, cannot resolve mechanically. Add an "
+                "explicit FINALIZE_CALL_IRREGULAR_FAMILY entry naming the intended one."
+            )
+        daily_match = daily_matches[0] if daily_matches else None
+        remaining_match = remaining_matches[0] if remaining_matches else None
+        if daily_match and remaining_match:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: finalize call {call_name!r} matches "
+                f"family {daily_match!r} via the naming convention in BOTH the daily "
+                "and remaining family sets -- ambiguous namespace, cannot resolve "
+                "mechanically. Add an explicit FINALIZE_CALL_IRREGULAR_FAMILY entry "
+                "naming which section this call actually belongs to."
+            )
+        if daily_match:
+            return "daily", daily_match
+        if remaining_match:
+            return "remaining", remaining_match
         raise SystemExit(
             f"gen_go_migration_matrix_docs: finalize call {call_name!r} in "
             f"{DAILY_FINALIZE_FN} matches the `_write_<family>_..._for_day` naming "
@@ -513,27 +619,30 @@ def _finalize_call_family(call_name: str, live_family_names: set[str]) -> str | 
 
 def load_daily_finalize_compat_families(
     daily_names: set[str], remaining_names: set[str]
-) -> set[str]:
-    """Every live family (§2 or §3) with a still-Python finalize-scope
-    write, proven by an ACTUAL call inside run_daily_metrics_finalize's
-    body -- never asserted by prose alone. Completeness runs in both
-    directions: every in-scope call must resolve to a family (checked here,
-    fails generation otherwise -- see _finalize_call_family), and every
+) -> set[tuple[str, str]]:
+    """Every live (namespace, family) -- §2 daily or §3 remaining -- with a
+    still-Python finalize-scope write, proven by an ACTUAL call inside
+    run_daily_metrics_finalize's body -- never asserted by prose alone, and
+    never losing which section a shared family name belongs to (round-1
+    finding F4). Completeness runs in both directions: every in-scope call
+    must resolve to exactly one (namespace, family) (checked here, fails
+    generation otherwise -- see _finalize_call_family), and every
     FINALIZE_CALL_IRREGULAR_FAMILY entry must name a call that is actually
     present (also checked here, via the AST-derived call set itself being
     the only thing iterated -- a ledger entry for an absent call is simply
     never visited, so a SEPARATE guard is needed for that direction; see
     _assert_no_stale_finalize_ledger_entries)."""
-    all_names = daily_names | remaining_names
-    compat_families: set[str] = set()
+    compat: set[tuple[str, str]] = set()
     for call_name in sorted(load_finalize_write_calls()):
-        family = _finalize_call_family(call_name, all_names)
-        if family is not None:
-            compat_families.add(family)
-    return compat_families
+        resolved = _finalize_call_family(call_name, daily_names, remaining_names)
+        if resolved is not None:
+            compat.add(resolved)
+    return compat
 
 
-def _assert_no_stale_finalize_ledger_entries(all_family_names: set[str]) -> None:
+def _assert_no_stale_finalize_ledger_entries(
+    daily_names: set[str], remaining_names: set[str]
+) -> None:
     """The OTHER completeness direction: every FINALIZE_CALL_IRREGULAR_FAMILY
     entry must name a call that is actually present in
     run_daily_metrics_finalize's body right now, not one that used to be
@@ -549,12 +658,14 @@ def _assert_no_stale_finalize_ledger_entries(all_family_names: set[str]) -> None
             f"{sorted(stale)} that no longer appear in {DAILY_FINALIZE_FN}'s body -- "
             "renamed or removed? Update or drop the ledger entry."
         )
-    unmapped_families = set(FINALIZE_CALL_IRREGULAR_FAMILY.values()) - all_family_names
-    if unmapped_families:
-        raise SystemExit(
-            f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY names family(ies) "
-            f"{sorted(unmapped_families)} that are not live daily or remaining families."
-        )
+    for call_name, (namespace, family) in FINALIZE_CALL_IRREGULAR_FAMILY.items():
+        live = daily_names if namespace == "daily" else remaining_names
+        if namespace not in ("daily", "remaining") or family not in live:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_IRREGULAR_FAMILY maps "
+                f"{call_name!r} to ({namespace!r}, {family!r}), which is not a live "
+                f"{namespace} family name."
+            )
 
 
 def is_compat_executor(executor: str) -> bool:
@@ -569,24 +680,24 @@ def is_compat_executor(executor: str) -> bool:
 
 
 def daily_family_executor(
-    name: str, artifact_daily: dict[str, str], finalize_compat_families: set[str]
+    name: str, artifact_daily: dict[str, str], finalize_compat: set[tuple[str, str]]
 ) -> str:
     artifact_value = artifact_daily.get(name, "compat")
     executor = "COMPAT-Python" if artifact_value == "compat" else "NATIVE"
     if artifact_value == "post_bridge":
         executor += ", post_bridge"
-    if name in finalize_compat_families and artifact_value != "compat":
+    if ("daily", name) in finalize_compat and artifact_value != "compat":
         executor = f"{executor} (repo) / COMPAT-Python (finalize)"
     return executor
 
 
 def remaining_family_executor(
-    name: str, artifact_remaining: dict[str, str], finalize_compat_families: set[str]
+    name: str, artifact_remaining: dict[str, str], finalize_compat: set[tuple[str, str]]
 ) -> str:
     executor = "NATIVE" if artifact_remaining[name] == "native" else "COMPAT-Python"
     if name == "work_item_attribution":
         executor += " (narrow: staleness backstop only)"
-    if name in finalize_compat_families and artifact_remaining[name] == "native":
+    if ("remaining", name) in finalize_compat and artifact_remaining[name] == "native":
         executor = f"{executor} (repo) / COMPAT-Python (finalize)"
     return executor
 
@@ -652,7 +763,7 @@ def render_daily_metrics_block() -> str:
             "TestNativeFamiliesArtifactUpToDate)."
         )
     remaining_names = {f["name"] for f in load_remaining_families()}
-    _assert_no_stale_finalize_ledger_entries(live_names | remaining_names)
+    _assert_no_stale_finalize_ledger_entries(live_names, remaining_names)
     finalize_compat_families = load_daily_finalize_compat_families(
         live_names, remaining_names
     )

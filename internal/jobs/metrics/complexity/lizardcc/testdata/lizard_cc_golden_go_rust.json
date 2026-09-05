@@ -130,6 +130,22 @@
       "loc": 7,
       "very_high_complexity_functions": 0
     },
+    "question_token_coverage.go.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 20,
+          "long_name": "questionToken",
+          "name": "questionToken"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 8,
+      "very_high_complexity_functions": 0
+    },
     "very_high.go.txt": {
       "cyclomatic_avg": 14.0,
       "cyclomatic_total": 28,

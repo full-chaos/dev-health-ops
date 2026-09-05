@@ -70,8 +70,9 @@ type nativeFamiliesArtifact struct {
 // from the constant it names. A selector the extractor does not know is an
 // ERROR, never a skip -- see extractDailyFamilies.
 var knownFamilyNameConstants = map[string]string{
-	"ICFinalizeFamilyName":        daily.ICFinalizeFamilyName,
-	"TeamCognitiveLoadFamilyName": daily.TeamCognitiveLoadFamilyName,
+	"ICFinalizeFamilyName":          daily.ICFinalizeFamilyName,
+	"TeamCognitiveLoadFamilyName":   daily.TeamCognitiveLoadFamilyName,
+	"CompoundingRiskTeamFamilyName": daily.CompoundingRiskTeamFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"

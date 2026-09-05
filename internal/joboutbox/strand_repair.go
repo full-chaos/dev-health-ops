@@ -658,7 +658,7 @@ const repairStrandedFinalizeSQL = `
 	LIMIT $2::int
 `
 
-// The work-graph shape carries one table for five kinds, so the request is
+// The work-graph shape carries one table for two kinds, so the request is
 // bound by kind as well as by id -- the same pair PostgresStore.Claim keys on.
 // The accepted states are exactly the two Claim will reclaim: 'pending', and
 // 'running' with an expired lease. Every other state is excluded by
@@ -667,6 +667,14 @@ const repairStrandedFinalizeSQL = `
 // of silently inheriting eligibility. That also keeps 'ambiguous' -- which
 // Claim refuses, and which CHAOS-3999's abandonment contract owns -- out of
 // this sweep without naming it.
+//
+// investment.dispatch/chunk/finalize were deleted outright under CHAOS-4438
+// (dead Go shells, zero producer ever) and dropped from this IN-list to
+// match: registerKind's switch (internal/jobrescue/registry.go) has no case
+// for them any more, so rearming a hypothetical row of one of these kinds
+// would reset it to 'pending' with nothing left able to execute it -- the
+// same requeue-into-a-void failure this query's own comment above is
+// designed to prevent for every OTHER kind by refusing unknown states.
 const repairStrandedWorkGraphSQL = `
 	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
@@ -681,8 +689,7 @@ const repairStrandedWorkGraphSQL = `
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
 	WHERE outbox.job_kind IN (
-			'workgraph.build', 'investment.materialize', 'investment.dispatch',
-			'investment.chunk', 'investment.finalize'
+			'workgraph.build', 'investment.materialize'
 		)
 		AND outbox.status = 'delivered'
 		AND outbox.river_job_id IS NOT NULL

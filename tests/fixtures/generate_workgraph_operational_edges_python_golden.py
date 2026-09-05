@@ -156,6 +156,21 @@ def _edge_to_dict(edge: WorkGraphEdge) -> dict[str, Any]:
     return d
 
 
+def _edge_record_to_dict(record: Any) -> dict[str, Any]:
+    """Serializes a WorkGraphEdgeRecord -- the SINK's write-time shape
+    (_edge_to_record already flattened every enum to its .value), unlike
+    WorkGraphEdge above which still carries NodeType/EdgeType/Provenance
+    enum members. capturing.edge_records holds records, not edges, because
+    that is what write_work_graph_edges receives."""
+    d = asdict(record)
+    d["repo_id"] = str(record.repo_id) if record.repo_id else None
+    d["discovered_at"] = _iso(record.discovered_at)
+    d["last_synced"] = _iso(record.last_synced)
+    d["event_ts"] = _iso(record.event_ts)
+    d["day"] = record.day.isoformat() if record.day else None
+    return d
+
+
 def _flag_link_record_to_dict(record: Any) -> dict[str, Any]:
     d = asdict(record)
     d["valid_from"] = _iso(record.valid_from)
@@ -238,7 +253,7 @@ def build_golden() -> dict[str, Any]:
             "fixture. A synthetic fixture is needed for those paths."
         ),
         "operational_incident_edges": [_edge_to_dict(e) for e in incident_edges],
-        "flag_guards_edges": [_edge_to_dict(e) for e in capturing.edge_records],
+        "flag_guards_edges": [_edge_record_to_dict(e) for e in capturing.edge_records],
         "feature_flag_link_rows": [
             _flag_link_record_to_dict(r) for r in capturing.flag_link_records
         ],

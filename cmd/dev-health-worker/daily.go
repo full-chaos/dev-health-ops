@@ -838,14 +838,24 @@ func dailyNativeFamilyRegistrations(
 		)
 	}
 
-	// CHAOS-4288: benchmarking reads testops_*/work_item/dora daily tables as
-	// HISTORY (30-90 day windows), not as this partition's fresh output, so it
-	// has no same-partition write-ordering dependency and registers pre_bridge.
-	// It is org-scoped compute and computes ONCE per org/day on the org's
-	// lexicographically-first repo partition -- see BenchmarkingExecutor's doc
-	// comment for why Python's per-repo re-run is fixed rather than mirrored.
+	postBridge = map[string]daily.NativeFamilyExecutor{}
+	// CHAOS-4288: benchmarking is post_bridge, NOT pre_bridge.
+	//
+	// The previous registration was pre_bridge, justified by a comment claiming
+	// this family "reads testops_*/work_item/dora daily tables as HISTORY ...
+	// so it has no same-partition write-ordering dependency". That was FALSE and
+	// was never checked. The window ENDS ON THE TARGET DAY:
+	// benchmarking_native_executor.go sets asOfDay = run.TargetDay and every
+	// fetch is Fetch(startDay, asOfDay), so day D's own rows are INSIDE it.
+	// Python writes them at job_daily.py:1919 and only calls
+	// run_benchmarking_for_day at :2091. "benchmarking" also sorts FIRST of all
+	// native families, so pre_bridge ran it before every Go writer as well --
+	// it benchmarked day D against a window missing day D.
+	//
+	// Same class as compounding_risk below and CHAOS-4278's work_item_state.
+	// Caught by codex r1 on #2235.
 	if benchmarkingExecutor, benchmarkingErr := daily.NewBenchmarkingExecutor(clickhouseConnection, logger); benchmarkingErr == nil {
-		native["benchmarking"] = benchmarkingExecutor
+		postBridge["benchmarking"] = benchmarkingExecutor
 	} else {
 		logger.Error(
 			"benchmarking native executor refused; the family "+
@@ -856,7 +866,6 @@ func dailyNativeFamilyRegistrations(
 		)
 	}
 
-	postBridge = map[string]daily.NativeFamilyExecutor{}
 	// CHAOS-4287: compounding_risk reads repo_metrics_daily, which
 	// repo_user_commit writes in the SAME partition. repo_user_commit
 	// is native and pre_bridge, but computeNativeFamilies walks

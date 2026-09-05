@@ -169,9 +169,10 @@ jobs:
   # across every PR at once, with nothing to serialise.
   #
   # `--raw`, not the non-raw `imagetools inspect` form: the non-raw form
-  # TRUNCATES a manifest list to a summary and can read as present when the
-  # underlying platform manifests are not what's expected -- filed as a
-  # trap (ticket pending via scribe) so a future edit here doesn't quietly switch back.
+  # truncates a manifest list to a summary -- the SAME trap this file's own
+  # "Verify every mirrored digest matches upstream" step already documents
+  # below (the MediaType/index-vs-platform-manifest confusion that
+  # misjudged valkey and postgres as amd64-only), filed 2026-09-02.
   precheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -264,9 +265,9 @@ jobs:
               *)   repo="${ref}";    tag="mirrored"   ;;
             esac
             dest="ghcr.io/${OWNER}/${repo}:${tag}"
-            # --raw: see this job's own header comment -- the
-            # non-raw form can misreport a truncated manifest list as
-            # present.
+            # --raw: see this job's own header comment (the 2026-09-02
+            # truncated-manifest-list trap this file's Verify step already
+            # documents).
             if docker buildx imagetools inspect --raw "${dest}" >/dev/null 2>&1; then
               printf 'OK      %s\n' "${dest}"
             else

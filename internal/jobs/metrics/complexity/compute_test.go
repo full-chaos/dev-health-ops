@@ -263,7 +263,10 @@ func TestBuildSnapshotsAggregatesLikePython(t *testing.T) {
 		{FilePath: "b.py", Language: "python", LOC: 500, CyclomaticTotal: 10,
 			FunctionsCount: 5, HighComplexityFunctions: 1, VeryHighComplexityFunctions: 0},
 	}
-	result := BuildSnapshots("repo-1", day, "refs/heads/main", files, computedAt, "org-1")
+	result, err := BuildSnapshots("repo-1", day, "refs/heads/main", files, computedAt, "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if len(result.Snapshots) != 2 {
 		t.Fatalf("snapshots: got %d, want 2", len(result.Snapshots))
@@ -295,9 +298,12 @@ func TestBuildSnapshotsZeroLOCDoesNotDivideByZero(t *testing.T) {
 	// is 0/0 -> NaN in Go, which ClickHouse stores as a Float64 NaN and every
 	// downstream average then poisons -- a silent, spreading corruption rather
 	// than a visible failure.
-	result := BuildSnapshots("repo-1", time.Now().UTC(), "ref",
+	result, err := BuildSnapshots("repo-1", time.Now().UTC(), "ref",
 		[]FileComplexity{{FilePath: "empty.py", Language: "python"}},
 		time.Now().UTC(), "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if result.Repo.CyclomaticPerKLOC != 0.0 {
 		t.Fatalf("cyclomatic_per_kloc: got %v, want 0.0", result.Repo.CyclomaticPerKLOC)
@@ -308,12 +314,44 @@ func TestBuildSnapshotsZeroLOCDoesNotDivideByZero(t *testing.T) {
 }
 
 func TestBuildSnapshotsEmptyFileListProducesNoSnapshots(t *testing.T) {
-	result := BuildSnapshots("repo-1", time.Now().UTC(), "ref", nil,
+	result, err := BuildSnapshots("repo-1", time.Now().UTC(), "ref", nil,
 		time.Now().UTC(), "org-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(result.Snapshots) != 0 {
 		t.Fatalf("snapshots: got %d, want 0", len(result.Snapshots))
 	}
 	if result.Repo.LOCTotal != 0 || result.Repo.CyclomaticTotal != 0 {
 		t.Fatalf("totals should be zero, got %+v", result.Repo)
+	}
+}
+
+// TestBuildSnapshotsFailsClosedOnANegativeCount proves the uint32/uint64
+// fail-closed guards actually fire (a guard that can never fire is no
+// assertion -- CORE rule from this lane's own migration-087 finding above).
+// Every FileComplexity field is meant to be a non-negative count; a
+// negative value can only come from an upstream bug, and silently
+// converting it with `uint32(negative)` would wrap to a value near 4
+// billion instead of surfacing the bug.
+func TestBuildSnapshotsFailsClosedOnANegativeCount(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []FileComplexity
+	}{
+		{"negative LOC", []FileComplexity{{FilePath: "a.py", LOC: -1}}},
+		{"negative FunctionsCount", []FileComplexity{{FilePath: "a.py", FunctionsCount: -1}}},
+		{"negative CyclomaticTotal", []FileComplexity{{FilePath: "a.py", CyclomaticTotal: -1}}},
+		{"negative HighComplexityFunctions", []FileComplexity{{FilePath: "a.py", HighComplexityFunctions: -1}}},
+		{"negative VeryHighComplexityFunctions", []FileComplexity{{FilePath: "a.py", VeryHighComplexityFunctions: -1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildSnapshots("repo-1", time.Now().UTC(), "ref", tc.files,
+				time.Now().UTC(), "org-1")
+			if err == nil {
+				t.Fatalf("expected an error for %s, got none", tc.name)
+			}
+		})
 	}
 }

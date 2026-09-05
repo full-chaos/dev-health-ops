@@ -595,7 +595,10 @@ def load_finalize_write_calls() -> set[str]:
                 else:
                     _refuse_unmodeled_binding(node, "a destructured Assign target")
         elif isinstance(node, ast.AnnAssign):
-            _refuse_unmodeled_binding(node, "an AnnAssign")
+            # A bare annotation with no value (`primary_sink: Any`) binds
+            # nothing at all -- only `x: T = value` actually assigns.
+            if node.value is not None:
+                _refuse_unmodeled_binding(node, "an AnnAssign")
         elif isinstance(node, ast.AugAssign):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)

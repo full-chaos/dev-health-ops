@@ -474,8 +474,11 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
-	wantRemainingNative := []string{"capacity", "dora", "membership_backfill", "recommendations", "work_item_attribution"}
-	wantRemainingCompat := []string{"complexity", "release_impact"}
+	wantRemainingNative := []string{
+		"capacity", "dora", "membership_backfill", "recommendations",
+		"release_impact", "work_item_attribution",
+	}
+	wantRemainingCompat := []string{"complexity"}
 	assertExecutorSet(t, artifact.Remaining, wantRemainingNative, "native")
 	assertExecutorSet(t, artifact.Remaining, wantRemainingCompat, "compat")
 	if len(artifact.Remaining) != len(wantRemainingNative)+len(wantRemainingCompat) {

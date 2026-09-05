@@ -33,7 +33,7 @@
     "dora": "native",
     "membership_backfill": "native",
     "recommendations": "native",
-    "release_impact": "compat",
+    "release_impact": "native",
     "work_item_attribution": "native"
   },
   "workgraph": {

@@ -75,6 +75,7 @@ type nativeFamiliesArtifact struct {
 var knownFamilyNameConstants = map[string]string{
 	"ICFinalizeFamilyName":        daily.ICFinalizeFamilyName,
 	"TeamCognitiveLoadFamilyName": daily.TeamCognitiveLoadFamilyName,
+	"BenchmarkingFamilyName":      daily.BenchmarkingFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
@@ -538,17 +539,15 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// not a stale attribution snapshot, but execution order -- its input
 	// repo_metrics_daily is written by repo_user_commit in the SAME
 	// partition, and computeNativeFamilies walks families in SORTED order,
-	// where "compounding_risk" precedes "repo_user_commit" (CHAOS-4287).
-	//
-	// CHAOS-4288: benchmarking is post_bridge for a THIRD distinct reason. Not a
-	// stale attribution snapshot (the CHAOS-4283 three, retired above) and not
-	// sorted-order execution (compounding_risk): its metric window ENDS ON THE
-	// TARGET DAY -- asOfDay = run.TargetDay and every fetch is
-	// Fetch(startDay, asOfDay) -- so day D's own rows are INSIDE the window,
-	// and Python writes them (job_daily.py:1919) before calling the family
-	// (:2091). A pre_bridge registration benchmarks day D against a window
-	// missing day D.
-	wantDailyPostBridge := []string{"compounding_risk", "benchmarking"}
+	// where "compounding_risk" precedes "repo_user_commit". CHAOS-5078
+	// already retired work_item_state/work_item/work_item_estimate from this
+	// list (moved to native/pre_bridge, per the comment above -- landed on
+	// the base branch between this PR's fork point and its squash-merge, so
+	// they never appear here at all in this PR's own diff).
+	// benchmarking (CHAOS-4288) is NO LONGER in this list either -- CHAOS-5194
+	// relocated it to finalize scope (see wantDailyFinalize below and
+	// BenchmarkingFinalizeExecutor's own doc comment).
+	wantDailyPostBridge := []string{"compounding_risk"}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half
@@ -567,7 +566,7 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// OWN exact-cardinality check rather than joining the count above, because
 	// the two scopes answer different questions and folding them would let a
 	// finalize family appear while a partition family silently disappeared.
-	wantDailyFinalize := []string{"ic_finalize", "team_cognitive_load"}
+	wantDailyFinalize := []string{"ic_finalize", "team_cognitive_load", "benchmarking"}
 	assertExecutorSet(t, artifact.Finalize, wantDailyFinalize, "finalize")
 	if len(artifact.Finalize) != len(wantDailyFinalize) {
 		t.Fatalf("expected exactly %d finalize families, got %d: %v",

@@ -66,9 +66,21 @@ func ComputeBenchmarkingForDay(
 ) (Outputs, error) {
 	var outputs Outputs
 
-	warn := func(message string, args ...any) {
+	// warnFetchFailure is the SINGLE choke point every swallowed fetch
+	// failure in this function goes through (forwarded finding, #2276 r2
+	// F2, P1): it counts the failure on outputs.FetchFailures (see that
+	// field's own doc comment) AND logs it with org_id/day identifiers
+	// alongside whatever call-site-specific fields (metric, scope, paired
+	// metric) the caller supplies -- centralizing this here means every
+	// call site gets both effects automatically, with no risk of one site
+	// remembering the counter increment and another forgetting it.
+	warnFetchFailure := func(message string, args ...any) {
+		outputs.FetchFailures++
 		if logger != nil {
-			logger.Warn(message, args...)
+			fields := append([]any{
+				"org_id", orgID, "day", asOfDay.Format("2006-01-02"),
+			}, args...)
+			logger.Warn(message, fields...)
 		}
 	}
 
@@ -86,7 +98,7 @@ func ComputeBenchmarkingForDay(
 			startDay := asOfDay.AddDate(0, 0, -(maxWindow - 1))
 			series, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, startDay, asOfDay, scopeType)
 			if err != nil {
-				warn("benchmark baselines failed",
+				warnFetchFailure("benchmark baselines failed",
 					"metric", metricName, "scope", scopeType, "error", err)
 				return
 			}
@@ -102,7 +114,7 @@ func ComputeBenchmarkingForDay(
 			startDay := asOfDay.AddDate(0, 0, -(DefaultRollingWindowDays + DefaultMinHistoryPoints))
 			series, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, startDay, asOfDay, scopeType)
 			if err != nil {
-				warn("benchmark anomalies failed",
+				warnFetchFailure("benchmark anomalies failed",
 					"metric", metricName, "scope", scopeType, "error", err)
 				return
 			}
@@ -122,13 +134,13 @@ func ComputeBenchmarkingForDay(
 
 			currentSeries, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, currentStart, currentEnd, scopeType)
 			if err != nil {
-				warn("period comparison failed",
+				warnFetchFailure("period comparison failed",
 					"metric", metricName, "scope", scopeType, "error", err)
 				return
 			}
 			priorSeries, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, priorStart, priorEnd, scopeType)
 			if err != nil {
-				warn("period comparison failed",
+				warnFetchFailure("period comparison failed",
 					"metric", metricName, "scope", scopeType, "error", err)
 				return
 			}
@@ -155,13 +167,13 @@ func ComputeBenchmarkingForDay(
 		func() {
 			left, err := fetcher.FetchMetricSeriesByScope(ctx, metricName, corrStart, corrEnd, scopeType)
 			if err != nil {
-				warn("correlation failed",
+				warnFetchFailure("correlation failed",
 					"metric", metricName, "paired", pairedMetricName, "scope", scopeType, "error", err)
 				return
 			}
 			right, err := fetcher.FetchMetricSeriesByScope(ctx, pairedMetricName, corrStart, corrEnd, scopeType)
 			if err != nil {
-				warn("correlation failed",
+				warnFetchFailure("correlation failed",
 					"metric", metricName, "paired", pairedMetricName, "scope", scopeType, "error", err)
 				return
 			}

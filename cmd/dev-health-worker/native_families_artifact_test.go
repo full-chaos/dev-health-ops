@@ -388,6 +388,14 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-4285. This entry was MISSING on this branch until the
+		// merge-forward of main exposed it. The branch registered
+		// ai_governance as a native daily executor and updated the generated
+		// artifact, but never updated this expected split -- and the test
+		// still passed, because at that point both halves were one-way SUBSET
+		// checks. Main's own codex r1 (P3) added the cardinality check below,
+		// and that check is what turned this silent gap into a failure.
+		"ai_governance",
 	}
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the

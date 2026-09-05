@@ -251,27 +251,43 @@ func workGraphEdgeIncidents(started []IncidentRow) []workgraphedges.IncidentRow 
 	return incidents
 }
 
-// LoadWorkGraphEdgeRepoProviders ports repo_provider_by_id (job_daily.py:1200)
-// together with the `source` rule inside discover_repos (:194).
+// LoadWorkGraphEdgeRepoProviders ports repo_provider_by_id (job_daily.py:1208).
 //
-// # THIS IS NOT repos.provider
+// # THE DAILY WORKER NEVER READS repos.provider
+//
+// An earlier version of this function -- and of this comment -- documented
+// the table-reading rule at job_daily.py:197:
 //
 //	source = r[3] if len(r) > 3 and r[3] != "unknown" else provider
-//	repo_provider_by_id = {str(r.repo_id): (r.source or "unknown")}
 //
-// so the resolution order is:
+// That branch is UNREACHABLE from the daily worker. discover_repos returns
+// early when repo_id is set (job_daily.py:129-136):
 //
-//  1. repos.provider, when it is non-empty AND not the literal "unknown";
-//  2. otherwise the JOB's provider argument -- commonly the literal "auto";
-//  3. otherwise "unknown".
+//	if repo_id:
+//	    return [DiscoveredRepo(repo_id=repo_id, ..., source=provider, ...)]
 //
-// A repo whose provider column literally reads "unknown" therefore does NOT
-// get "unknown"; it gets the job provider. "auto" is a real and expected value
-// in all three edge tables' provider columns.
+// and the worker always supplies one (worker_metrics.py:1729, CHAOS-4264 --
+// one repo_id per run_daily_metrics_job call), while job_daily.py:1198 passes
+// no provider= at all, so the parameter default provider="auto" applies. So on
+// the production path repo_provider_by_id is {repo: "auto"} for every repo,
+// every run. The repos table is never consulted.
 //
-// Getting this wrong is invisible to every structural check: `provider` is in
-// none of the three sorting keys, so a wrong value splits no rows, changes no
-// counts, and trips no dedup assertion. Only the live-Python oracle sees it.
+// This is NOT a cosmetic column. `provider` is the SPLIT KEY for
+// extractPerProvider: Python, seeing one provider, makes ONE pass with a
+// single deployments_by_repo index, while reading repos.provider could yield
+// {github, gitlab, ...} and split the same repos across several passes. The
+// heuristic incident fallback walks that index, so a deployment and an
+// incident Python links can land in different passes and fail to link. An
+// edge-set difference, not a presentation one.
+//
+// The live oracle cannot see it either: it drives the kernel directly with a
+// providers map, so it never exercises this adapter. Found by codex r1 (P1) on
+// #2240 and confirmed by reading the Python, not by the oracle.
+//
+// The query below is kept for the repo_id-is-None path, which enumerates the
+// org's repos -- that path exists in Python and the daily worker does not take
+// it. What CHANGED is the VALUE: every discovered repo maps to the job's
+// provider argument, exactly as the early return does.
 func LoadWorkGraphEdgeRepoProviders(
 	ctx context.Context, conn repositoryRows, organizationID, jobProvider string,
 ) (map[string]string, error) {
@@ -301,26 +317,16 @@ ORDER BY id`, organizationID)
 		if err := rows.Scan(&repoID, &provider); err != nil {
 			return nil, fmt.Errorf("scan work_graph_edges repo provider row: %w", err)
 		}
-		providers[repoID.String()] = resolveRepoProvider(provider, jobProvider)
+		// PARITY: the job provider, NOT the column. `provider` is scanned and
+		// deliberately discarded -- keeping the scan documents that the column
+		// exists and is not what Python uses here.
+		_ = provider
+		providers[repoID.String()] = jobProvider
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate work_graph_edges repo provider rows: %w", err)
 	}
 	return providers, nil
-}
-
-// resolveRepoProvider is the three-step rule from this file's
-// LoadWorkGraphEdgeRepoProviders comment, kept separate so it can be tested
-// without a ClickHouse connection.
-func resolveRepoProvider(repoProvider, jobProvider string) string {
-	resolved := repoProvider
-	if resolved == "" || resolved == "unknown" {
-		resolved = jobProvider
-	}
-	if resolved == "" {
-		return "unknown"
-	}
-	return resolved
 }
 
 // workGraphEdgesProviderFor mirrors _by_provider's lookup (job_daily.py:444):

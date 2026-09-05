@@ -372,3 +372,81 @@ func TestComplexityDeltaRatioFloorsTheDenominator(t *testing.T) {
 		t.Errorf("ComplexityDeltaRatio(NaN, 1) = %v, want NaN", got)
 	}
 }
+
+// TestOwnershipNormalizationMatchesCPythonAtTheCallSite is a CALL-SITE test,
+// and that is the whole point of it.
+//
+// codex r2 on #2230 killed an argument I had made and team-lead had ruled on.
+// I claimed the max()-vs-math.Max class was already guarded, and proved it by
+// mutating pythonMax's BODY -- TestPythonMaxSwallowsNaNUnlikeMathMax dies on
+// that, correctly. r2 chose a different mutant: leave pythonMax alone and
+// change the CALL at compute.go:70 to math.Max. Measured: that mutant COMPILES
+// and the ENTIRE package suite PASSES. A per-function test cannot see a
+// call-site substitution, by construction, and the frozen corpus contains no
+// non-finite inputs, so nothing in the tree distinguished it.
+//
+// This test therefore drives the REAL compute path and pins the two mutants r2
+// named:
+//
+//	compute.go:70  pythonMax(highest, candidate) -> math.Max(highest, candidate)
+//	pythonMax      `if b > a` -> `if b >= a`
+//
+// Both are reachable with values the loader accepts: the source columns are
+// unrestricted Float64 and Nullable(Float64), so NaN and signed zero arrive on
+// the wire.
+func TestOwnershipNormalizationMatchesCPythonAtTheCallSite(t *testing.T) {
+	nan := math.NaN()
+	negZero := math.Copysign(0, -1)
+
+	t.Run("NaN is swallowed, not propagated", func(t *testing.T) {
+		// CPython: max([0.0, nan]) -> 0.0, because `nan > 0.0` is False and max
+		// keeps the incumbent. math.Max(0, NaN) -> NaN. Kills the call-site
+		// math.Max mutant.
+		record := Compute(
+			goldenDay(), "repo", "org",
+			Inputs{
+				SingleOwnerRatio: opaquePtr(0.0),
+				OwnershipGini:    opaquePtr(nan),
+			},
+			goldenStamp(), DefaultWeights, DefaultThresholds, DefaultReferences,
+		)
+		if record.OwnershipNorm == nil {
+			t.Fatal("ownership_norm is nil; expected a value from the two candidates")
+		}
+		if math.IsNaN(*record.OwnershipNorm) {
+			t.Errorf(
+				"ownership_norm = NaN; CPython's max([0.0, nan]) is 0.0 -- the call site " +
+					"is propagating NaN, which is math.Max's behaviour, not max()'s",
+			)
+		}
+		if *record.OwnershipNorm != 0.0 {
+			t.Errorf("ownership_norm = %v, want 0", *record.OwnershipNorm)
+		}
+	})
+
+	t.Run("signed-zero tie keeps the first operand", func(t *testing.T) {
+		// CPython: max([+0.0, -0.0]) -> +0.0. `-0.0 > +0.0` is False, so the
+		// incumbent survives. A `b >= a` mutant returns -0.0 because the two
+		// compare EQUAL. Kills the >= mutant.
+		//
+		// == cannot see this: -0.0 == +0.0 is true. Sign bit is the only
+		// discriminator, which is also why a decoded-JSON DeepEqual misses it.
+		record := Compute(
+			goldenDay(), "repo", "org",
+			Inputs{
+				SingleOwnerRatio: opaquePtr(0.0),
+				OwnershipGini:    opaquePtr(negZero),
+			},
+			goldenStamp(), DefaultWeights, DefaultThresholds, DefaultReferences,
+		)
+		if record.OwnershipNorm == nil {
+			t.Fatal("ownership_norm is nil; expected a value from the two candidates")
+		}
+		if math.Signbit(*record.OwnershipNorm) {
+			t.Errorf(
+				"ownership_norm is NEGATIVE zero; CPython's max([+0.0, -0.0]) is +0.0 -- " +
+					"the tie is resolving to the second operand, which is `b >= a`, not `b > a`",
+			)
+		}
+	})
+}

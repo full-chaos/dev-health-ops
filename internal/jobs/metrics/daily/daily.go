@@ -1169,8 +1169,10 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 // The last case is fail-CLOSED and it is deliberately the pessimistic choice:
 // one possibly-partial writer is recoverable by a re-run, whereas two writers
 // racing on an append-only table is a silent, self-concealing corruption. It is
-// reported under its own "uncertain" outcome, never folded into "refused",
-// because refused promises the bridge covered the family and here nothing did.
+// reported as "partial_write", never folded into "refused", because refused
+// promises the bridge covered the family and here nothing did. That outcome is
+// shared with CHAOS-4288 (#2235), which named the identical condition on the
+// partition side -- one vocabulary, so the two dashboards agree.
 //
 // Degrading one family to Python still never fails the whole finalize, and a
 // transient ClickHouse hiccup still never becomes a Permanent error.
@@ -1208,10 +1210,11 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
 			)
 		case rowsWritten > 0:
-			// Uncertain: it may have written. Keep it skipped so the bridge
-			// cannot become a second writer over a partial native result.
+			// Partial write: rows are already in an append-only table. Keep the
+			// family skipped so the bridge cannot become a second writer over
+			// what the native executor already landed.
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeUncertain, rowsWritten, started,
+				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
 			)
 		default:
 			// Provably wrote nothing: safe to let the bridge compute it.

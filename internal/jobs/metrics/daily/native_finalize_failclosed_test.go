@@ -72,7 +72,7 @@ func TestAFailingFamilyThatWroteRowsKeepsTheBridgeOut(t *testing.T) {
 	if len(bridge.sawSkip) != 1 || bridge.sawSkip[0] != "ic_finalize" {
 		t.Fatalf("skip=%v, want [ic_finalize]", bridge.sawSkip)
 	}
-	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomeUncertain, 3)
+	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, 3)
 }
 
 // The other half of the same predicate, and the reason this is not simply

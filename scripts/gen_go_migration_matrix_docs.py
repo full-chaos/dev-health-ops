@@ -150,11 +150,11 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4277 (Done)",
     },
     "work_item": {
-        "citation": "Python: `compute_work_items.py:766 compute_work_item_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- post_bridge, reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily`",
         "ticket": "CHAOS-4283",
     },
     "work_item_estimate": {
-        "citation": "Python: `compute_work_items.py:1116`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- post_bridge, same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily`",
         "ticket": "CHAOS-4283",
     },
     "work_item_attribution": {

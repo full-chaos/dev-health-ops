@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -570,6 +569,8 @@ func dispatch(ctx context.Context, runtime *operatorRuntime, args []string, stdo
 		return dispatchJobs(ctx, runtime, args[1:], stdout, stderr)
 	case "metrics":
 		return dispatchMetrics(ctx, runtime, args[1:], stdout, stderr)
+	case "workgraph":
+		return dispatchWorkgraph(ctx, runtime, args[1:], stdout, stderr)
 	case "queues":
 		return dispatchQueues(ctx, runtime, args[1:], stdout, stderr)
 	case "contracts":
@@ -890,15 +891,77 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 			"ledger_repair": ledgerRepair,
 			"partitions":    outcome,
 		})
+	case "daily-blocked":
+		return dispatchMetricsDailyBlocked(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-finalize":
 		return dispatchMetricsDailyFinalize(ctx, runtime, args[1:], stdout, stderr)
 	case "finalize-redrive":
 		return dispatchMetricsFinalizeRedrive(ctx, runtime, args[1:], stdout, stderr)
 	case "partition-recompute":
 		return dispatchMetricsPartitionRecompute(ctx, runtime, args[1:], stdout, stderr)
+	case "execution-repair":
+		return dispatchMetricsExecutionRepair(ctx, args[1:], stdout, stderr)
+	case "list-ambiguous-executions":
+		return dispatchMetricsListAmbiguousExecutions(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// dispatchMetricsDailyBlocked handles `metrics daily-blocked` (CHAOS-5040):
+// the read-only operator view of runs that can never reach finalize. It
+// writes nothing -- there is deliberately no --repair here, because the only
+// safe way out is `metrics daily-redrive`, which requires the operator to
+// state what they verified first.
+//
+// "blocked_runs" is the level the CHAOS-5041 alert names as its
+// human-checkable counterpart: the marked/cleared metrics are counters (a
+// per-organization pass cannot correctly SET a fleet-wide gauge), so the
+// alert fires on increase(..._marked_total[24h]) > 0 and an operator answers
+// "how many right now" with this command.
+func dispatchMetricsDailyBlocked(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics daily-blocked")
+	org := flags.String("org", "", "organization id (uuid)")
+	limit := flags.Int("limit", 0, "maximum runs to list (default: the sweep limit)")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	blocked, err := store.BlockedRuns(ctx, *org, *limit)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	runs := make([]map[string]any, 0, len(blocked))
+	for _, run := range blocked {
+		runs = append(runs, map[string]any{
+			"run_id":     run.RunID,
+			"target_day": run.TargetDay.UTC().Format("2006-01-02"),
+			"blocked_at": run.BlockedAt.UTC().Format(time.RFC3339),
+			"reason":     run.Reason,
+			// The bounded failure_reason values on the failed_permanent
+			// partitions -- what actually refused, not just that something
+			// did.
+			"partition_failure_reasons": run.FailureReasons,
+			// How much real output a redrive would recompute. Families whose
+			// readers SUM raw rows rather than deduplicating by computed_at
+			// inflate on a duplicate write, so this is the number that
+			// decides whether a redrive is safe.
+			"failed_permanent_partitions": run.PermanentPartitions,
+			"succeeded_partitions":        run.SucceededPartitions,
+		})
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"blocked_runs": len(runs),
+		"runs":         runs,
+	})
 }
 
 // dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):
@@ -2029,14 +2092,6 @@ func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, review
 	if len(runIDs) == 0 {
 		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
 	}
-	baseURL, ok := resolveRequired("WORKER_OPERATIONAL_BRIDGE_URL", os.LookupEnv)
-	if !ok {
-		return nil, errors.New("WORKER_OPERATIONAL_BRIDGE_URL is not configured")
-	}
-	token, ok := resolveRequired("WORKER_METRIC_REPAIR_TOKEN", os.LookupEnv)
-	if !ok {
-		return nil, errors.New("WORKER_METRIC_REPAIR_TOKEN is not configured")
-	}
 	requestPayload := map[string]any{
 		"run_ids":         runIDs,
 		"review_evidence": reviewEvidence,
@@ -2044,33 +2099,22 @@ func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, review
 	if len(operations) > 0 {
 		requestPayload["operations"] = operations
 	}
-	body, err := json.Marshal(requestPayload)
+	// CHAOS-5042: shares postWorkerBridge (repair_bridge.go) with the
+	// workgraph/metric-execution repair verbs -- same auth/timeout/decode
+	// shape, just a different token env var, path, and expected 2xx response
+	// shape (redriveLedgerBridgeResponse). codex rounds 1 and 2 both found
+	// the same CLASS of defect here (an undecodable body, then a decodable
+	// but incomplete one) -- postWorkerBridge's strict shape validation on
+	// every 2xx response (repair_bridge.go) is the fix for the class, not a
+	// second one-off check bolted onto this call site specifically.
+	status, decoded, err := postWorkerBridge[redriveLedgerBridgeResponse](
+		ctx, "WORKER_METRIC_REPAIR_TOKEN", "/internal/worker/daily-metrics/v1/redrive", requestPayload,
+	)
 	if err != nil {
 		return nil, err
 	}
-	requestURL := strings.TrimRight(baseURL.Reveal(), "/") + "/internal/worker/daily-metrics/v1/redrive"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+token.Reveal())
-	client := &http.Client{Timeout: 30 * time.Second}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = response.Body.Close() }()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ledger redrive returned status %d", response.StatusCode)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return nil, err
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("ledger redrive returned status %d", status)
 	}
 	return decoded, nil
 }

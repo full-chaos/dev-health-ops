@@ -214,9 +214,9 @@ function directly, even for families whose worker kind is now native:
 | testops_risk | NATIVE | Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute | CHAOS-4294 (Done) |
 | testops_test | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent | CHAOS-4284 |
 | work_graph_edges | COMPAT-Python | Python: `ai_workflow.py extract_review_deployment_incident_edges` | CHAOS-4286 |
-| work_item | COMPAT-Python | Python: `compute_work_items.py:766 compute_work_item_metrics_daily` | CHAOS-4283 |
+| work_item | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- post_bridge, reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily` | CHAOS-4283 |
 | work_item_attribution | COMPAT-Python | Python: `compute_work_items.py:1189 compute_work_item_team_attributions` (full daily compute -- distinct from §3's native staleness-only backstop of the same table) | CHAOS-4283 |
-| work_item_estimate | COMPAT-Python | Python: `compute_work_items.py:1116` | CHAOS-4283 |
+| work_item_estimate | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- post_bridge, same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |
 | work_item_state | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- post_bridge, runs AFTER the Python bridge (reads `work_item_team_attributions`, itself still Python-written) | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
 

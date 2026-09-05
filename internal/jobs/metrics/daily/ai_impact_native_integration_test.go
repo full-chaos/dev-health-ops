@@ -109,10 +109,15 @@ QUALIFY ROW_NUMBER() OVER (
     repo_id UUID, hash String, committer_when DateTime64(3, 'UTC'),
     last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
+		// codex round chaos-4280-r2, finding 5: this table used to lack org_id,
+		// so LoadAIImpactPRCommitLinkage's `s.org_id = p.org_id` join condition
+		// failed schema validation and the executor's swallow-to-unavailable
+		// path silently absorbed it -- this test asserted rows were written
+		// and never noticed the linkage path never actually succeeded.
 		`CREATE TABLE git_commit_stats (
     repo_id UUID, commit_hash String, file_path String,
-    last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, commit_hash, file_path)`,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
 		// repo_patterns is Array(String) -- another distinct scan type.
 		`CREATE TABLE teams (
     id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
@@ -212,8 +217,8 @@ INSERT INTO git_commits (repo_id, hash, committer_when, last_synced, org_id) VAL
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `
-INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, last_synced) VALUES
-(toUUID('`+repoID+`'), 'aaa', 'src/thing.spec.ts', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'))`); err != nil {
+INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 'aaa', 'src/thing.spec.ts', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
 		t.Fatal(err)
 	}
 	// Team resolution: repos.repo "acme/alpha" must match the "acme/*" pattern
@@ -236,6 +241,22 @@ INSERT INTO repos (id, repo, last_synced, org_id) VALUES
 	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
 	partition := Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(repoID)}}
 
+	// codex round chaos-4280-r2, finding 5: this test asserted rows were
+	// written, team resolution, dedup, the unknown bucket, and rerun
+	// idempotency, but never asserted the commit-linkage query itself
+	// SUCCEEDED -- it could pass identically whether PR 1's has_test_change
+	// resolved to true (the fixture's actual intent, see the comment above
+	// the work_graph_pr_commit/git_commits/git_commit_stats inserts) or
+	// silently degraded to unavailable via the swallow path
+	// (ai_impact_native_executor.go, aiimpact.RecordLinkageUnavailable).
+	// Capturing the counter here, before the fix, is what made that gap
+	// visible: the fixture's git_commit_stats table lacked org_id, so the
+	// linkage join failed schema validation on every run of this test.
+	var linkageBefore bytes.Buffer
+	if err := aiimpact.LinkageMetricsSource().WritePrometheus(&linkageBefore); err != nil {
+		t.Fatalf("read linkage metric before: %v", err)
+	}
+
 	written, err := executor.ComputeFamily(ctx, run, partition)
 	if err != nil {
 		// Every one of the six readers runs before the first write, so a
@@ -244,6 +265,19 @@ INSERT INTO repos (id, repo, last_synced, org_id) VALUES
 	}
 	if written == 0 {
 		t.Fatal("wrote zero rows; the family computed nothing from a seeded fixture")
+	}
+
+	var linkageAfter bytes.Buffer
+	if err := aiimpact.LinkageMetricsSource().WritePrometheus(&linkageAfter); err != nil {
+		t.Fatalf("read linkage metric after: %v", err)
+	}
+	if before, after := parseLinkageUnavailableCounter(t, linkageBefore.String()),
+		parseLinkageUnavailableCounter(t, linkageAfter.String()); after != before {
+		t.Fatalf("dev_health_ai_impact_linkage_unavailable_total went %d -> %d, want unchanged -- "+
+			"this fixture's commit linkage must SUCCEED (PR 1 has a real, well-formed "+
+			"work_graph_pr_commit/git_commits/git_commit_stats chain), so a fresh increment "+
+			"here means the linkage query silently failed and PR 1's has_test_change degraded "+
+			"to unavailable instead of resolving true", before, after)
 	}
 
 	// The team dimension came from the resolver, not from the attribution row

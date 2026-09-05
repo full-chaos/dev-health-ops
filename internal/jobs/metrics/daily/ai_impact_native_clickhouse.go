@@ -151,8 +151,28 @@ ORDER BY repo_id, number`,
 	return result, nil
 }
 
-// LoadAIImpactReviews reads git_pull_request_reviews for the window, deduped
-// to the table's ORDER BY key (repo_id, number, review_id).
+// LoadAIImpactReviews reads git_pull_request_reviews for the window.
+//
+// # FINAL, NOT argMax -- codex round chaos-4280-r2, finding 2
+//
+// This used to dedup via `argMax(tuple(state, submitted_at), last_synced)
+// GROUP BY org_id, repo_id, number, review_id` -- correct per this file's
+// general standing rule above, but NOT what production Python does:
+// `loaders/clickhouse.py`'s review_query is a bare SELECT with no FINAL and no
+// argMax at all, so during an active sync Python can see BOTH physical
+// versions of one review (e.g. an older CHANGES_REQUESTED row and a newer
+// APPROVED row for the same review_id) as two separate rows, while any Go
+// dedup collapses them to one.
+//
+// Applying the SAME fix work_graph_edges applied to this identical table
+// (git_pull_request_reviews, #2263/CHAOS-4286 -- see that file's "DEDUP:
+// FINAL, NOT argMax" header) for consistency across both families reading it:
+// FINAL is what Python's raw read converges to once merges settle, and it is
+// deterministic before that where argMax measurably is not (#2229 round 3,
+// ties on last_synced). Python's own merge-timing dependence on the raw read
+// stays a documented, pre-existing defect (CHAOS-5086), not silently
+// corrected here -- this only makes the Go side deterministic, not
+// byte-identical to Python during the overlap window itself.
 func LoadAIImpactReviews(
 	ctx context.Context, conn repositoryRows, organizationID string,
 	repoIDs []uuid.UUID, start, end time.Time,
@@ -166,25 +186,9 @@ func LoadAIImpactReviews(
 
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, number, state, submitted_at
-FROM (
-    SELECT
-        repo_id,
-        number,
-        review_id,
-        tupleElement(latest, 1) AS state,
-        tupleElement(latest, 2) AS submitted_at
-    FROM (
-        SELECT
-            repo_id,
-            number,
-            review_id,
-            argMax(tuple(state, submitted_at), last_synced) AS latest
-        FROM git_pull_request_reviews
-        WHERE org_id = ? AND repo_id IN ?
-        GROUP BY org_id, repo_id, number, review_id
-    )
-)
-WHERE submitted_at >= ? AND submitted_at < ?
+FROM git_pull_request_reviews FINAL
+WHERE org_id = ? AND repo_id IN ?
+  AND submitted_at >= ? AND submitted_at < ?
 ORDER BY repo_id, number, review_id`,
 		organizationID, repositoryUUIDStrings(repoIDs), start.UTC(), end.UTC(),
 	)

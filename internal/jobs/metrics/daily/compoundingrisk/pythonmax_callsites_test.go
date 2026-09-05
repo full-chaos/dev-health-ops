@@ -216,20 +216,45 @@ func pythonMaxCallSites(t *testing.T) map[string]int {
 		parsed++
 
 		for _, declaration := range file.Decls {
-			label := name + ":<package-level>"
-			if function, ok := declaration.(*ast.FuncDecl); ok {
-				label = name + ":" + functionLabel(function)
+			switch typed := declaration.(type) {
+			case *ast.FuncDecl:
+				countPythonMaxCalls(sites, name+":"+functionLabel(typed), typed)
+			case *ast.GenDecl:
+				// Package-level initialisers, keyed by the DECLARED NAME rather
+				// than one shared "<package-level>" bucket.
+				//
+				// A shared bucket would let two package-level call sites swap --
+				// one removed, a different one added, the bucket's total
+				// unchanged -- and that is precisely the "swap hiding under a
+				// total" this guard exists to close, only at package-level
+				// rather than function-level granularity. There are no such
+				// sites today, which is exactly why it was cheap to close now
+				// instead of leaving a documented hole for someone to walk into.
+				// (lane-gate-rounds peer read on #2230.)
+				attributed := 0
+				for _, spec := range typed.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for index, expression := range value.Values {
+						attributed += countPythonMaxCalls(
+							sites, name+":"+valueSpecLabel(value, index), expression)
+					}
+				}
+				// GUARD THE GUARD. If a pythonMax call ever lives somewhere in a
+				// GenDecl that the ValueSpec walk above does not reach, the two
+				// counts disagree and this says so, rather than silently
+				// dropping the call and reporting a clean package.
+				total := countPythonMaxCalls(map[string]int{}, "", typed)
+				if total != attributed {
+					t.Errorf(
+						"%s: a declaration block contains %d pythonMax call(s) but only %d could "+
+							"be attributed to a declared name. The enumerator does not reach that "+
+							"position, so it cannot be trusted to have found every call site.",
+						name, total, attributed)
+				}
 			}
-			ast.Inspect(declaration, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "pythonMax" {
-					sites[label]++
-				}
-				return true
-			})
 		}
 
 		// Every mention of pythonMax must be either its own declaration or the
@@ -285,6 +310,41 @@ func functionLabel(function *ast.FuncDecl) string {
 		return function.Name.Name
 	}
 	return receiverTypeName(function.Recv.List[0].Type) + "." + function.Name.Name
+}
+
+// countPythonMaxCalls adds every direct pythonMax call under node to sites
+// under label, and returns how many it found.
+func countPythonMaxCalls(sites map[string]int, label string, node ast.Node) int {
+	found := 0
+	ast.Inspect(node, func(inner ast.Node) bool {
+		call, ok := inner.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "pythonMax" {
+			found++
+			if label != "" {
+				sites[label]++
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// valueSpecLabel names a package-level initialiser the way its declaration
+// reads: `var x = ...` becomes "var x". Names and values line up one-to-one in
+// the ordinary case; the fallbacks cover `var a, b = f()` (fewer values than
+// names) and any shape where they do not correspond.
+func valueSpecLabel(value *ast.ValueSpec, index int) string {
+	switch {
+	case index < len(value.Names):
+		return "var " + value.Names[index].Name
+	case len(value.Names) > 0:
+		return "var " + value.Names[0].Name
+	default:
+		return "<package-level>"
+	}
 }
 
 func receiverTypeName(expression ast.Expr) string {

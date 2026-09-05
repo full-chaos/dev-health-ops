@@ -34,7 +34,13 @@ LOCAL_VALIDATE_SH = REPO_ROOT / "ci/local_validate.sh"
 # Native golden-required families NOT yet named in both gates. Every entry is a
 # real coverage gap, not an exemption -- shrinking this set is the goal.
 KNOWN_UNCOVERED = {
-    "team_wellbeing",
+    # team_wellbeing was here and is GONE, removed 2026-09-05: #2247
+    # (CHAOS-4794) added it to local_validate.sh's --families, and the proof
+    # gate already named it, so it is covered by both and the reverse assertion
+    # required its removal. That is the guard working in the direction that
+    # matters -- coverage improved, and the pin was not allowed to keep
+    # claiming a gap that had been closed. work_item_state came in the same
+    # commit but only reached local_validate, so it stays below.
     "file_hotspots",
     "file_risk_hotspots",
     "work_item_state",

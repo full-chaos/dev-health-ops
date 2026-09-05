@@ -1659,7 +1659,30 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # The other new test this round, TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse
     # (cmd/dev-health-worker), is `-tags=integration`, so it does not touch this
     # count -- the integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1319
+    # CHAOS-5045 (GitHub TestOps duplicate report ingestion): +5 top-level
+    # (1319 -> 1324), integration-tagged UNCHANGED at 152.
+    #
+    # This PR ships NO production change. Two designs were attempted and both
+    # were withdrawn after adversarial review found a P1 in each:
+    #   r1: bounding the report window on the run's updated_at silently and
+    #       permanently dropped a report published after updated_at settles.
+    #   r2/r3: suppressing the redundant INSERT instead put an optimisation in
+    #       front of a fail-closed validation (r2), and then lost a concurrent
+    #       update by deciding on a stale read (r3, no cheap fix -- ClickHouse
+    #       has no compare-and-set).
+    # The duplication is now tracked WASTE, not a defect being fixed here; it
+    # is invisible to every reader that goes through FINAL. See CHAOS-5045 and
+    # CHAOS-5046.
+    #
+    # What remains is the regression evidence, which is worth keeping on its
+    # own: TestGitHubTestsLatePublishedArtifactIsNotLostForever (the guard for
+    # r1's defect -- red on the withdrawn design), plus the window tests that
+    # pin the CURRENT behaviour (a run updated inside the window is collected,
+    # a payload with no updated_at is never excluded, a backfill claim with no
+    # SinceAt filters nothing) and TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt,
+    # which asserts GitLab bounds its own report phase server-side so the two
+    # providers cannot drift apart silently.
+    assert len(expected_provider_tests) == 1324
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1676,7 +1699,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1319
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1324
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1763,7 +1786,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1319
+    assert len(selected_tests) == len(set(selected_tests)) == 1324
     assert set(selected_tests) == expected_tests
 
 

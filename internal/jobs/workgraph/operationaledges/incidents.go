@@ -44,6 +44,19 @@ func logReadErr(ctx context.Context, op, orgID string, err error, attrs ...any) 
 	return fmt.Errorf("%s: %w", op, err)
 }
 
+// repoIDLogAttr renders an optional repo scope for a log line -- "" when the
+// call was not scoped to a single repo, so a repo-scoped failure is
+// distinguishable from an org-wide one instead of every log line showing
+// org_id alone (codex round chaos-4924-pr-a-r3, confirmation-pass finding:
+// ReadServiceRepositoryMappings and ReadDeployments both bind an optional
+// repoID filter but their failure logs never surfaced it).
+func repoIDLogAttr(repoID *uuid.UUID) string {
+	if repoID == nil {
+		return ""
+	}
+	return repoID.String()
+}
+
 // mappingConfidence and mappingProvenance mirror operational_edges.py's
 // _mapping_confidence/_mapping_provenance helpers.
 // mappingConfidence returns full float64 precision, matching Python's own
@@ -140,7 +153,7 @@ func ReadServiceRepositoryMappings(
 	}
 	contract, err := remaining.ConfiguredOperationalOrderingContract()
 	if err != nil {
-		return nil, logReadErr(ctx, "mapping ordering contract", organizationID, err)
+		return nil, logReadErr(ctx, "mapping ordering contract", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 	}
 	slog.Default().InfoContext(ctx, "workgraph operationaledges: resolved ordering contract",
 		"org_id", organizationID, "table", "operational_service_repository_mappings", "contract", contract)
@@ -167,7 +180,7 @@ func ReadServiceRepositoryMappings(
 
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, logReadErr(ctx, "read operational_service_repository_mappings", organizationID, err)
+		return nil, logReadErr(ctx, "read operational_service_repository_mappings", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 	}
 	defer rows.Close()
 
@@ -182,7 +195,7 @@ func ReadServiceRepositoryMappings(
 			&r.ServiceID, &repoIDStr, &r.Provider, &r.RelationshipProvenance,
 			&confidence, &r.MappingKind, &r.RuleID, &r.SourceURL,
 		); err != nil {
-			return nil, logReadErr(ctx, "scan operational_service_repository_mappings row", organizationID, err)
+			return nil, logReadErr(ctx, "scan operational_service_repository_mappings row", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 		}
 		r.RelationshipConfidence = confidence
 		if repoIDStr != nil && *repoIDStr != "" {
@@ -196,7 +209,7 @@ func ReadServiceRepositoryMappings(
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, logReadErr(ctx, "iterate operational_service_repository_mappings", organizationID, err)
+		return nil, logReadErr(ctx, "iterate operational_service_repository_mappings", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 	}
 	return out, nil
 }
@@ -629,7 +642,8 @@ func ReadDeployments(
 	}
 	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
-		return nil, logReadErr(ctx, "read deployments", organizationID, err, "mapped_repo_count", len(mappedRepoIDs))
+		return nil, logReadErr(ctx, "read deployments", organizationID, err,
+			"mapped_repo_count", len(mappedRepoIDs), "repo_id", repoIDLogAttr(repoID))
 	}
 	defer rows.Close()
 
@@ -637,12 +651,13 @@ func ReadDeployments(
 	for rows.Next() {
 		var r DeploymentRow
 		if err := rows.Scan(&r.RepoID, &r.DeploymentID, &r.Environment, &r.DeployedAt); err != nil {
-			return nil, logReadErr(ctx, "scan deployments row", organizationID, err)
+			return nil, logReadErr(ctx, "scan deployments row", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, logReadErr(ctx, "iterate deployments", organizationID, err, "mapped_repo_count", len(mappedRepoIDs))
+		return nil, logReadErr(ctx, "iterate deployments", organizationID, err,
+			"mapped_repo_count", len(mappedRepoIDs), "repo_id", repoIDLogAttr(repoID))
 	}
 	return out, nil
 }

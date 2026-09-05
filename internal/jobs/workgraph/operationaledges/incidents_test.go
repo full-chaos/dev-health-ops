@@ -265,3 +265,28 @@ func TestReadIncidentsLogsConfigurationErrorWithOrgID(t *testing.T) {
 		t.Fatalf("expected the log record to name the failing operation, got: %s", logged)
 	}
 }
+
+// TestReadServiceRepositoryMappingsLogsRepoIDOnFailure pins the r3
+// confirmation-pass finding: a repo-scoped call's failure log must carry the
+// requested repo_id, not just org_id -- otherwise a repo-scoped failure is
+// indistinguishable in the logs from an org-wide one for the same org.
+func TestReadServiceRepositoryMappingsLogsRepoIDOnFailure(t *testing.T) {
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "not-a-valid-contract")
+
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(previous)
+
+	const orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
+	repoID := uuid.MustParse("00000000-0000-0000-0000-0000000000aa")
+	_, err := ReadServiceRepositoryMappings(context.Background(), nil, orgID, time.Now(), &repoID)
+	if err == nil {
+		t.Fatal("expected an error for an invalid ordering contract, got nil")
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "repo_id="+repoID.String()) {
+		t.Fatalf("expected the log record to carry the requested repo_id=%s, got: %s", repoID, logged)
+	}
+}

@@ -16014,11 +16014,11 @@
         "worker_operational_bridge_token"
       ],
       "primary_validator": {
-        "description": "authorize_workgraph_repair() (shared helper) checks Authorization: Bearer against WORKER_WORKGRAPH_REPAIR_TOKEN with hmac.compare_digest + bounded length; fails closed (401) if unset. A repair-token route additionally rejects the value if it equals the ordinary bridge token, so bridge and repair capabilities can't be confused.",
+        "description": "authorize_workgraph_repair() delegates to authorize_metric_repair() -- one shared operator repair token (WORKER_METRIC_REPAIR_TOKEN) authorizes both workgraph and metric-execution repair (CHAOS-5042, chris ruling: a second, distinct token was over-engineering). authorize_metric_repair checks Authorization: Bearer with hmac.compare_digest + bounded length, fails closed (401) if unset, and rejects the value if it equals the ordinary bridge token so bridge and repair capabilities can't be confused.",
         "anchor": {
           "path": "src/dev_health_ops/api/internal/worker_auth.py",
-          "line": 30,
-          "line_end": 38
+          "line": 31,
+          "line_end": 41
         }
       },
       "token_shape": {

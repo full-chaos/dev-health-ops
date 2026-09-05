@@ -104,7 +104,22 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		if errors.Is(err, ErrLeaseLost) {
 			return jobruntime.Retryable(err)
 		}
-		_ = releaseAmbiguous(handler.store, ctx, *claim, "compatibility execution outcome is unknown")
+		// A failure the executor could positively place as "never sent" or
+		// "the bridge declined" carries no possibility of a half-applied
+		// side effect, so there is nothing ambiguous to record. Releasing
+		// ambiguous here is what wedged CHAOS-4970's chain: 'ambiguous' is a
+		// state Claim refuses and joboutbox's strand-repair sweep excludes
+		// by construction, and no Go caller exists for the Python /repair
+		// endpoint that is the only way out of it -- so a transient DNS
+		// blip or a 401 became a permanently dead request. Leaving the lease
+		// alone instead keeps the ordinary reclaim path reachable: the next
+		// attempt parks on LeaseActiveError until the lease expires, then
+		// Claim's expired-lease branch reclaims it, all inside River's own
+		// attempt budget.
+		if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
+			return jobruntime.Retryable(err)
+		}
+		_ = releaseAmbiguous(handler.store, ctx, *claim, compatibilityAmbiguousDetail(err))
 		return jobruntime.Permanent(err)
 	}
 	if err := handler.store.Complete(ctx, *claim, evidence); err != nil {
@@ -114,6 +129,29 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+// maxAmbiguousDetailBytes mirrors the ledger's own bound. PostgresStore's
+// transition refuses a detail outside 1..1024 characters, and alembic 0060
+// carries the same CHECK on work_graph_execution_ledger.failure_detail -- an
+// overflowing detail would turn a recorded ambiguity into ErrInvalidState and
+// lose the discriminator entirely, which is the exact failure this replaces.
+const maxAmbiguousDetailBytes = 1024
+
+// compatibilityAmbiguousDetail carries the executor's own classification and
+// diagnostic into the ledger row instead of the fixed literal that used to be
+// written for every outcome. It never returns the empty string: an empty
+// detail is rejected by the same bound above.
+func compatibilityAmbiguousDetail(err error) string {
+	const fallback = "compatibility execution outcome is unknown"
+	if err == nil {
+		return fallback
+	}
+	detail := sanitizeDetail(err.Error(), maxAmbiguousDetailBytes)
+	if detail == "" {
+		return fallback
+	}
+	return detail
 }
 
 func releaseAmbiguous(store Store, ctx context.Context, claim Claim, detail string) error {

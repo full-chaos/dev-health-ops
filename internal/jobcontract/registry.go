@@ -538,9 +538,6 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindRemainingWorkItemAttribution: {"partition_id"},
 		KindWorkGraphBuild:               {"request_id"},
 		KindInvestmentMaterialize:        {"request_id"},
-		KindInvestmentDispatch:           {"request_id"},
-		KindInvestmentChunk:              {"chunk_id"},
-		KindInvestmentFinalize:           {"run_id"},
 		KindHeartbeat:                    {"scheduled_for"},
 		KindSyncCoverageRefresh:          {"scheduled_for", "limit"},
 		KindRetentionCleanup:             {"batch_size", "delete_before", "retention_policy"},
@@ -565,7 +562,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if kind == KindReportExecuteOnDemand || kind == KindReportExecuteScheduled {
 		return validateUUIDProperty(properties["report_id"])
 	}
-	if kind == KindDailyMetricsDispatch || kind == KindDailyMetricsFinalize || kind == KindInvestmentFinalize {
+	if kind == KindDailyMetricsDispatch || kind == KindDailyMetricsFinalize {
 		return validateUUIDProperty(properties["run_id"])
 	}
 	if kind == KindDailyMetricsPartition {
@@ -574,10 +571,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if kind == KindTeamAutoimport || kind == KindTeamRepoOwnershipDerivation {
 		return validateUUIDProperty(properties["sync_run_id"])
 	}
-	if kind == KindInvestmentChunk {
-		return validateUUIDProperty(properties["chunk_id"])
-	}
-	if kind == KindWorkGraphBuild || kind == KindInvestmentMaterialize || kind == KindInvestmentDispatch {
+	if kind == KindWorkGraphBuild || kind == KindInvestmentMaterialize {
 		return validateUUIDProperty(properties["request_id"])
 	}
 	if remainingKind(kind) {

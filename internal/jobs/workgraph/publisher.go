@@ -224,12 +224,6 @@ func envelopeFor(request Request) jobcontract.Envelope {
 		payload = jobcontract.WorkGraphBuildPayload{RequestID: request.ID}
 	case KindMaterialize:
 		payload = jobcontract.InvestmentMaterializePayload{RequestID: request.ID}
-	case KindDispatch:
-		payload = jobcontract.InvestmentDispatchPayload{RequestID: request.ID}
-	case KindChunk:
-		payload = jobcontract.InvestmentChunkPayload{ChunkID: request.ID}
-	case KindFinalize:
-		payload = jobcontract.InvestmentFinalizePayload{RunID: request.ID}
 	default:
 		panic(fmt.Sprintf("unsupported work graph kind %q", request.Kind))
 	}
@@ -247,10 +241,6 @@ func domainFor(kind Kind) string {
 	switch kind {
 	case KindBuild:
 		return "work_graph_request"
-	case KindChunk:
-		return "investment_chunk"
-	case KindFinalize:
-		return "investment_run"
 	default:
 		return "investment_request"
 	}

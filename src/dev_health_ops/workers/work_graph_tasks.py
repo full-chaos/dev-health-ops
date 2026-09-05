@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 # promoted, migration-state.json keeps these routes on Celery; this map makes a
 # missing/renamed task fail contract coverage rather than silently losing its
 # future River target.
+#
+# CHAOS-4438 removed dispatch_investment_materialize_partitioned/
+# run_investment_materialize_chunk/finalize_investment_materialize_partitioned:
 RIVER_CONTRACT_TARGETS = {
     "run_work_graph_build": "workgraph.build",
     "run_investment_materialize": "investment.materialize",
-    "dispatch_investment_materialize_partitioned": "investment.dispatch",
-    "run_investment_materialize_chunk": "investment.chunk",
-    "finalize_investment_materialize_partitioned": "investment.finalize",
 }
 
 

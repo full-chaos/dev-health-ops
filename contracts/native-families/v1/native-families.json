@@ -3,6 +3,7 @@
   "generated_from": "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
   "daily": {
     "ai_governance": "native",
+    "ai_impact": "native",
     "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",
@@ -13,7 +14,10 @@
     "repo_user_commit": "native",
     "review_edges": "native",
     "team_wellbeing": "native",
+    "testops_coverage": "native",
+    "testops_pipeline": "native",
     "testops_risk": "native",
+    "testops_test": "native",
     "work_graph_edges": "native",
     "work_item": "native",
     "work_item_attribution": "native",

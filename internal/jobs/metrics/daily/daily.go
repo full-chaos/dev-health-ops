@@ -563,13 +563,13 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 }
 
 type PartitionHandler struct {
-	store               Store
-	publisher           Publisher
-	compatibility       CompatibilityExecutor
-	sourceChecker       SourceDataChecker
-	zeroRowsObserver    jobruntime.DailyMetricsZeroRowsObserver
-	nativeFamilies      map[string]NativeFamilyExecutor
-	nativeFamilyNames   []string
+	store             Store
+	publisher         Publisher
+	compatibility     CompatibilityExecutor
+	sourceChecker     SourceDataChecker
+	zeroRowsObserver  jobruntime.DailyMetricsZeroRowsObserver
+	nativeFamilies    map[string]NativeFamilyExecutor
+	nativeFamilyNames []string
 	// nativeFamilyDependencies (CHAOS-5078 codex r2 F3) is each pre_bridge
 	// native family's DIRECT `after` dependencies, restricted to the
 	// registered subset -- see registeredDependencies. computeNativeFamilies
@@ -579,9 +579,9 @@ type PartitionHandler struct {
 	// to produce THIS partition.
 	nativeFamilyDependencies map[string][]string
 	nativeObserver           jobruntime.DailyMetricsNativeFamilyObserver
-	nativeFamilyLogger  NativeFamilyRefusalLogger
-	nativeFamiliesNow   func() time.Time
-	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
+	nativeFamilyLogger       NativeFamilyRefusalLogger
+	nativeFamiliesNow        func() time.Time
+	compatRetryObserver      jobruntime.DailyMetricsCompatRetryObserver
 
 	// postBridgeFamilies/postBridgeFamilyNames (CHAOS-4278) are native
 	// families that must run AFTER the compatibility bridge call for the

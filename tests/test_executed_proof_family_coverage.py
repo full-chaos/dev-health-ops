@@ -105,6 +105,18 @@ KNOWN_UNCOVERED = {
     # it needs a "prs" seed step added to the loop (or separate per-table
     # evidence), out of scope for a port PR.
     "work_graph_edges",
+    # MINE (CHAOS-4280, #2267/formerly #2236), pinned with evidence, same
+    # discipline as ai_governance and work_graph_edges above -- doubly so, in
+    # fact: this family hits BOTH of their gaps at once. Its attribution
+    # loader joins ai_attribution_resolved (built from `ai_attribution`, which
+    # no seeded target here writes -- ai_governance's exact reason), and its
+    # PR/review loaders need git_pull_requests/git_pull_request_reviews (no
+    # "prs" seed target -- work_graph_edges' exact reason). With zero rows on
+    # either input this harness cannot produce a nonzero sample for this
+    # family regardless of the port's correctness. Closing it needs both an
+    # "ai-attribution" seed step and a "prs" seed step added to the loop, out
+    # of scope for a port PR.
+    "ai_impact",
 }
 
 

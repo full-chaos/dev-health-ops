@@ -864,6 +864,21 @@ func dailyNativeFamilyRegistrations(
 			"error", aiGovernanceErr,
 		)
 	}
+	// CHAOS-4280: ai_impact. Same fail-open construction policy, and
+	// PRE-BRIDGE like the rest: it reads only raw sync tables plus the
+	// incident family's own reader, never another compat family's daily
+	// output. Repo-scoped, unlike ai_governance above.
+	if aiImpactExecutor, aiImpactErr := daily.NewAIImpactExecutor(clickhouseConnection); aiImpactErr == nil {
+		native["ai_impact"] = aiImpactExecutor
+	} else {
+		logger.Error(
+			"ai_impact native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiImpactErr,
+		)
+	}
 	// CHAOS-4286: work_graph_edges. Same fail-open construction policy, and
 	// PRE-BRIDGE: it reads raw sync tables plus the shared incident
 	// projection (LoadIncidentsStarted), never another compat family's daily
@@ -943,12 +958,51 @@ func dailyNativeFamilyRegistrations(
 	// ("once CHAOS-4283 ports work_item_attribution to Go") is the condition
 	// that has now been met.
 	//
-	// postBridge stays declared and returned, EMPTY. The phase itself is not
-	// removed: it is a working mechanism with a real use (a native family whose
-	// correctness depends on a still-Python family's same-partition write), and
-	// the next family to need it should find it here rather than re-deriving
-	// it. An empty map means SetPostBridgeNativeFamilies is never called, which
-	// is the intended no-op.
+	// postBridge stays declared and returned, EMPTY of these three families
+	// (benchmarking/compounding_risk below still populate it for their own,
+	// different reasons). The phase itself is not removed: it is a working
+	// mechanism with a real use (a native family whose correctness depends on
+	// a still-Python family's same-partition write), and the next family to
+	// need it should find it here rather than re-deriving it.
+	//
+	// CHAOS-4284: testops_pipeline / testops_test / testops_coverage.
+	// Registered as THREE separate families, matching families.json, so a
+	// failure in one leaves only that one on the Python bridge -- see
+	// TestopsPipelineExecutor's doc comment for why they are not one
+	// executor. Same fail-open construction policy as every family above.
+	if testopsPipelineExecutor, testopsPipelineErr := daily.NewTestopsPipelineExecutor(clickhouseConnection); testopsPipelineErr == nil {
+		native["testops_pipeline"] = testopsPipelineExecutor
+	} else {
+		logger.Error(
+			"testops_pipeline native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsPipelineErr,
+		)
+	}
+	if testopsTestExecutor, testopsTestErr := daily.NewTestopsTestExecutor(clickhouseConnection); testopsTestErr == nil {
+		native["testops_test"] = testopsTestExecutor
+	} else {
+		logger.Error(
+			"testops_test native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsTestErr,
+		)
+	}
+	if testopsCoverageExecutor, testopsCoverageErr := daily.NewTestopsCoverageExecutor(clickhouseConnection); testopsCoverageErr == nil {
+		native["testops_coverage"] = testopsCoverageExecutor
+	} else {
+		logger.Error(
+			"testops_coverage native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsCoverageErr,
+		)
+	}
 	// CHAOS-4279: review_edges reads only RAW SYNC tables
 	// (git_pull_requests, git_pull_request_reviews), written by
 	// the provider sync path rather than by any daily family, so

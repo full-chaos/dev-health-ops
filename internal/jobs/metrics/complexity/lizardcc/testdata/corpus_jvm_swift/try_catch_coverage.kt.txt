@@ -1,0 +1,14 @@
+// CHAOS-5156: closes a coverage gap codex round r3 on #2268 surfaced --
+// the mixed corpus_jvm_swift directory previously let a C#-only fixture
+// (try_catch_coverage.cs.txt) silently satisfy Kotlin's own "catch"
+// coverage too, since the unfiltered coverage scan didn't separate
+// languages. Kotlin has real try/catch syntax, unlike Go's bare-
+// identifier quirk fixtures elsewhere in this package. Measured
+// directly against real lizard 1.23.0: complexity 2 (base 1 + catch).
+fun f(): Int {
+    try {
+        return 1
+    } catch (e: Exception) {
+        return 0
+    }
+}

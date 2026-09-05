@@ -222,6 +222,16 @@ func pythonISOFormat(value time.Time) string {
 	return utcValue.Format("2006-01-02T15:04:05.000000+00:00")
 }
 
+// optionalUUID renders a nullable repo_id the way the Python oracle emits it:
+// the canonical string, or the literal "<nil>" when absent. Needed because the
+// Go side carries *uuid.UUID and Python emits `str(...)` or JSON null.
+func optionalUUID(value *uuid.UUID) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return value.String()
+}
+
 func optionalString(value *string) string {
 	if value == nil {
 		return "<nil>"
@@ -233,9 +243,27 @@ func optionalString(value *string) string {
 // it runs the REAL extract_review_deployment_incident_edges and compares every
 // persisted column of all three edge lists, including edge_id.
 //
+// # THAT SENTENCE WAS FALSE UNTIL #2240 ROUND 1
+//
+// It is kept verbatim so the correction stays visible. The comparator used to
+// omit org_id, provider and repo_id from the deployment and incident loops,
+// and repo_id from the review loop, while this comment claimed full coverage.
+// The reviewer proved it: setting the deployment edges' Provider to a literal
+// left every asserted field unchanged -- provider is not in the hash, so
+// edge_id did not move either -- and the oracle passed on rows carrying a
+// wrong persisted provider.
+//
+// Widening it surfaced NO mismatches: the kernel was correct all along. That
+// is exactly why the gap survived. A comparator that omits a field it happens
+// to get right never fails, so nothing ever points at the omission; only
+// enumerating what is actually asserted finds it. Do not add a field to the
+// structs above without adding it here.
+//
 // Comparing edge_id is possible here and was not on #2229: Python's edge ids
 // are a sha256 over the identity tuple, not a uuid4, so there is a stable
-// Python answer to assert against.
+// Python answer to assert against. That single difference is the whole of this
+// oracle's advantage over #2229's -- it is not broadly "stronger", and an
+// earlier version of this comment overstated it as such.
 func TestWorkGraphEdgesMatchLivePythonProduction(t *testing.T) {
 	expected := runPythonOracle(t, "work-graph-edges-golden")
 
@@ -278,6 +306,10 @@ func TestWorkGraphEdgesMatchLivePythonProduction(t *testing.T) {
 		if got.Evidence != want.Evidence {
 			t.Errorf("review[%d] evidence: Go %s, Python %s", index, got.Evidence, want.Evidence)
 		}
+		if optionalUUID(got.RepoID) != optionalString(want.RepoID) {
+			t.Errorf("review[%d] repo_id: Go %s, Python %s",
+				index, optionalUUID(got.RepoID), optionalString(want.RepoID))
+		}
 		if pythonISOFormat(got.ObservedAt) != want.ObservedAt {
 			t.Errorf("review[%d] observed_at: Go %s, Python %s",
 				index, pythonISOFormat(got.ObservedAt), want.ObservedAt)
@@ -298,6 +330,16 @@ func TestWorkGraphEdgesMatchLivePythonProduction(t *testing.T) {
 		}
 		if got.DeploymentID != want.DeploymentID {
 			t.Errorf("deployment[%d] deployment_id: Go %s, Python %s", index, got.DeploymentID, want.DeploymentID)
+		}
+		if got.OrgID.String() != want.OrgID {
+			t.Errorf("deployment[%d] org_id: Go %s, Python %s", index, got.OrgID, want.OrgID)
+		}
+		if got.Provider != want.Provider {
+			t.Errorf("deployment[%d] provider: Go %s, Python %s", index, got.Provider, want.Provider)
+		}
+		if optionalUUID(got.RepoID) != optionalString(want.RepoID) {
+			t.Errorf("deployment[%d] repo_id: Go %s, Python %s",
+				index, optionalUUID(got.RepoID), optionalString(want.RepoID))
 		}
 		if got.Confidence != want.Confidence {
 			t.Errorf("deployment[%d] confidence: Go %v, Python %v", index, got.Confidence, want.Confidence)
@@ -328,6 +370,16 @@ func TestWorkGraphEdgesMatchLivePythonProduction(t *testing.T) {
 		}
 		if got.IncidentID != want.IncidentID {
 			t.Errorf("incident[%d] incident_id: Go %s, Python %s", index, got.IncidentID, want.IncidentID)
+		}
+		if got.OrgID.String() != want.OrgID {
+			t.Errorf("incident[%d] org_id: Go %s, Python %s", index, got.OrgID, want.OrgID)
+		}
+		if got.Provider != want.Provider {
+			t.Errorf("incident[%d] provider: Go %s, Python %s", index, got.Provider, want.Provider)
+		}
+		if optionalUUID(got.RepoID) != optionalString(want.RepoID) {
+			t.Errorf("incident[%d] repo_id: Go %s, Python %s",
+				index, optionalUUID(got.RepoID), optionalString(want.RepoID))
 		}
 		if got.Confidence != want.Confidence {
 			t.Errorf("incident[%d] confidence: Go %v, Python %v", index, got.Confidence, want.Confidence)

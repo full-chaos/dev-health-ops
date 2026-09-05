@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workgraphedges"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Loaders and writers for the work_graph_edges native family (CHAOS-4286),
@@ -106,10 +107,21 @@ ORDER BY repo_id, number, review_id`,
 		if err := rows.Scan(&repoID, &number, &reviewID, &state, &submittedAt, &lastSynced); err != nil {
 			return nil, fmt.Errorf("scan work_graph_edges review row: %w", err)
 		}
+		// DecodeClickHouseStringValue on every String that reaches a hash or a
+		// Python comparison (chstring.go:46-52). review_id feeds edge_id's
+		// sha256; state feeds the evidence JSON, which the oracle compares
+		// byte-for-byte. clickhouse-go scans a String without validating it, so
+		// invalid UTF-8 arrives here as raw bytes while Python's driver has
+		// already hex-encoded it -- same row, two different strings, two
+		// different edge_ids.
+		if state != nil {
+			decoded := pythonparity.DecodeClickHouseStringValue(*state)
+			state = &decoded
+		}
 		reviews = append(reviews, workgraphedges.ReviewRow{
 			RepoID:      repoID,
 			Number:      number,
-			ReviewID:    reviewID,
+			ReviewID:    pythonparity.DecodeClickHouseStringValue(reviewID),
 			State:       state,
 			SubmittedAt: submittedAt,
 			LastSynced:  lastSynced,
@@ -173,8 +185,9 @@ ORDER BY repo_id, deployment_id`,
 			return nil, fmt.Errorf("scan work_graph_edges deployment row: %w", err)
 		}
 		deployments = append(deployments, workgraphedges.DeploymentRow{
-			RepoID:            repoID,
-			DeploymentID:      deploymentID,
+			RepoID: repoID,
+			// Feeds edge_id's sha256 -- see the review loop's note.
+			DeploymentID:      pythonparity.DecodeClickHouseStringValue(deploymentID),
 			PullRequestNumber: prNumber,
 			StartedAt:         startedAt,
 			FinishedAt:        finishedAt,
@@ -221,8 +234,9 @@ func workGraphEdgeIncidents(started []IncidentRow) []workgraphedges.IncidentRow 
 	for _, row := range started {
 		startedAt := row.StartedAt
 		incidents = append(incidents, workgraphedges.IncidentRow{
-			RepoID:       row.RepoID,
-			IncidentID:   row.IncidentID,
+			RepoID: row.RepoID,
+			// Feeds edge_id's sha256 -- see the review loop's note.
+			IncidentID:   pythonparity.DecodeClickHouseStringValue(row.IncidentID),
 			DeploymentID: "",
 			StartedAt:    &startedAt,
 			LastSynced:   nil,

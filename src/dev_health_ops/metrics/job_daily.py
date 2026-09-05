@@ -1136,8 +1136,8 @@ async def run_daily_metrics_job(
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
-    ``compounding_risk`` CHAOS-4287, and ``review_edges`` CHAOS-4279); naming
-    any other family here has no effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -1916,6 +1916,22 @@ async def run_daily_metrics_job(
         # repo_user_commit's own comment above warns about.
         skip_work_item_write = "work_item" in skip_families
         skip_work_item_estimate_write = "work_item_estimate" in skip_families
+        # CHAOS-4285: ai_governance has a native Go executor
+        # (AIGovernanceExecutor). Same write-only-skip shape as
+        # repo_user_commit above -- the compute stays unconditional to keep
+        # the diff minimal and match the reviewed precedent, and neither
+        # `ai_policy_events` nor `ai_governance_coverage` feeds anything else
+        # in this function (both are assigned at :1671 and used ONLY by the
+        # two writes below; verified by grep, not assumed).
+        #
+        # This gate is NOT optional hygiene for this family. ai_policy_events
+        # is a ReplacingMergeTree whose ORDER BY key ENDS in event_id, and
+        # Python's event_id is uuid4() -- so an ungated Python write can never
+        # merge with the native executor's rows, nor with its own from a
+        # previous run. Leaving both paths writing would accumulate duplicate
+        # policy events permanently, which is the exact defect the Go port's
+        # deterministic event_id exists to fix.
+        skip_ai_governance_write = "ai_governance" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1944,8 +1960,9 @@ async def run_daily_metrics_job(
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
-            s.write_ai_policy_events(ai_policy_events)
-            s.write_ai_governance_coverage_daily(ai_governance_coverage)
+            if not skip_ai_governance_write:
+                s.write_ai_policy_events(ai_policy_events)
+                s.write_ai_governance_coverage_daily(ai_governance_coverage)
             if ai_impact_metrics:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
@@ -2094,16 +2111,30 @@ async def run_daily_metrics_job(
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights). Reads from ClickHouse via the sink.
-        for s in sinks:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=d,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        #
+        # CHAOS-4288: benchmarking has a native Go executor
+        # (BenchmarkingExecutor). When the Go dispatcher names it in
+        # skip_families it has already computed and written this org/day, so
+        # skip the whole call -- nothing else in this function consumes its
+        # output, which makes this the cicd/team_wellbeing shape.
+        #
+        # NOTE the native side computes ONCE PER ORG/DAY, on the partition
+        # holding the org's lexicographically-first repo, whereas this call
+        # runs on EVERY partition: run_benchmarking_for_day takes no repo_id,
+        # so an org with N repos appends N identical row sets to six
+        # append-only tables here. That divergence is deliberate and ruled --
+        # see BenchmarkingExecutor's doc comment.
+        if "benchmarking" not in skip_families:
+            for s in sinks:
+                try:
+                    run_benchmarking_for_day(
+                        s,
+                        as_of_day=d,
+                        computed_at=computed_at,
+                        org_id=org_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(

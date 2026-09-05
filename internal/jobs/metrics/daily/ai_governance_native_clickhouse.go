@@ -1,0 +1,506 @@
+package daily
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
+)
+
+// governanceArtifactsSQL is the artifact query, extracted to a package-level
+// const so the integration guard can run THE QUERY PRODUCTION RUNS instead of
+// a copy of it.
+//
+// The copy was not hypothetical: TestGovernanceDedupKeepsANewerNullStatus
+// embedded its own argMax version of the scan subquery, and when the loader
+// moved to FINAL that test went on exercising SQL production no longer ran.
+// A guard that reimplements the thing it guards cannot see the thing change.
+const governanceArtifactsSQL = `
+SELECT
+    toString(a.org_id) AS org_id,
+    a.repo_id AS repo_id,
+    a.subject_type AS subject_type,
+    a.subject_id AS subject_id,
+    a.observed_at AS observed_at,
+    a.source IN ('manual', 'pr_label', 'commit_trailer') AS declared_ai,
+    if(a.subject_type = 'pull_request', pr.reviews_count > 0, NULL) AS human_reviewed,
+    if(a.subject_type = 'pull_request', scan.scan_count > 0, NULL) AS security_scanned,
+    finding.finding_count > 0 AS license_or_dependency_finding,
+    JSONExtractString(a.evidence, 'tool_name') AS tool_name,
+    JSONExtractString(a.evidence, 'model_name') AS model_name,
+    multiIf(
+        allow_exact.status != '', allow_exact.status,
+        allow_wild.status != '', allow_wild.status,
+        'unknown'
+    ) AS tool_allowlist_status,
+    a.source AS source,
+    a.kind AS kind,
+    a.confidence AS confidence
+FROM ai_attribution_resolved AS a
+-- FINAL where Python reads raw (loaders.py:242-246 joins this table with no
+-- dedup at all). git_pull_requests is a ReplacingMergeTree, so FINAL is what
+-- Python's raw read CONVERGES TO once merges settle: equal to Python
+-- post-merge, and deterministic before it.
+--
+-- This carried an argMax dedup until #2229 r3. That was justified as "Go is
+-- deterministic where Python is merge-timing dependent", and the justification
+-- was false -- a bare argMax is nondeterministic on a tied last_synced
+-- (measured; see the tie section above), and a batch sync writes many rows of
+-- this table in the same millisecond. So it diverged from Python while
+-- delivering none of the determinism that was its only purpose. FINAL delivers
+-- both halves; argMax delivered neither (team-lead ruling, 2026-09-04).
+--
+-- Python's own merge-timing dependence here stays recorded as a pre-existing
+-- defect (CHAOS-5086), not silently corrected.
+LEFT JOIN (
+    SELECT repo_id, number, reviews_count
+    FROM git_pull_requests FINAL
+    WHERE org_id = ?
+) AS pr
+    ON a.repo_id = pr.repo_id
+    AND a.subject_type = 'pull_request'
+    AND a.subject_id = toString(pr.number)
+-- FINAL, exactly as Python reads it (loaders.py:248). NOT argMax -- see the
+-- doc comment's tie section: argMax is nondeterministic on a tied version and
+-- FINAL is not, and status ties are routine here.
+LEFT JOIN (
+    SELECT repo_id, count() AS scan_count
+    FROM ci_pipeline_runs FINAL
+    WHERE lower(coalesce(status, '')) IN ('success', 'passed', 'completed')
+      AND org_id = ?
+    GROUP BY repo_id
+) AS scan ON a.repo_id = scan.repo_id
+-- FINAL, exactly as Python reads it (loaders.py:255). Same reasoning.
+LEFT JOIN (
+    SELECT repo_id, count() AS finding_count
+    FROM security_alerts FINAL
+    WHERE lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
+      AND org_id = ?
+    GROUP BY repo_id
+) AS finding ON a.repo_id = finding.repo_id
+-- Allowlist precedence (CHAOS-2209), ported verbatim: an exact tool+model row
+-- beats a wildcard row, each side already deduped by argMax over computed_at.
+-- Wildcard means nullIf(model_name, '') IS NULL -- legacy '' rows are
+-- wildcard, never exact, because JSONExtractString yields '' for missing model
+-- evidence and a '' "exact" key would phantom-match every artifact lacking it.
+LEFT JOIN (
+    SELECT
+        org_id,
+        tool_name,
+        model_name AS model_key,
+        argMax(status, computed_at) AS status
+    FROM ai_tool_allowlist
+    WHERE nullIf(model_name, '') IS NOT NULL
+    GROUP BY org_id, tool_name, model_key
+) AS allow_exact
+    ON toString(a.org_id) = allow_exact.org_id
+    AND JSONExtractString(a.evidence, 'tool_name') = allow_exact.tool_name
+    AND JSONExtractString(a.evidence, 'model_name') = allow_exact.model_key
+LEFT JOIN (
+    SELECT
+        org_id,
+        tool_name,
+        argMax(status, computed_at) AS status
+    FROM ai_tool_allowlist
+    WHERE nullIf(model_name, '') IS NULL
+    GROUP BY org_id, tool_name
+) AS allow_wild
+    ON toString(a.org_id) = allow_wild.org_id
+    AND JSONExtractString(a.evidence, 'tool_name') = allow_wild.tool_name
+WHERE toString(a.org_id) = ?
+  AND a.observed_at >= ?
+  AND a.observed_at <= ?
+ORDER BY a.subject_type, a.subject_id, a.source
+`
+
+// LoadGovernanceArtifacts ports _ARTIFACTS_SQL plus _artifact_from_row
+// (audit/ai_governance/loaders.py:214 and :126) -- the input half of
+// build_governance_rows_for_day.
+//
+// # Window
+//
+// Python bounds the scan with datetime.combine(day, time.min) and
+// time.MAX -- i.e. an INCLUSIVE upper bound at 23:59:59.999999, not an
+// exclusive next-midnight bound (loaders.py:41-42, `observed_at <= {end}`).
+// Reproduced exactly rather than "cleaned up" to a half-open window: the
+// column is DateTime64(3) so the two agree in practice, but a port that
+// silently changed a boundary operator would be a behavioural assumption
+// rather than a proven equivalence.
+//
+// # FINAL -> argMax, GROUPED BY THE CURRENT SORTING KEY (team-lead ruling, design.md Q4)
+//
+// Python's scan/finding subqueries read `... FINAL ... GROUP BY repo_id`, which
+// is FINAL underneath an aggregation -- the shape the standing rule forbids,
+// because it makes the answer depend on background-merge timing. Both are
+// replaced with `argMax(<col>, <version>) GROUP BY <the table's CURRENT
+// sorting key>`.
+//
+// # WHERE PYTHON READS FINAL AND THE VERSION CAN TIE, THIS READS FINAL TOO
+//
+// An earlier version of this comment claimed the argMax rewrite "is the FINAL
+// winner merge-independently". That is FALSE when the version column TIES, and
+// the difference is not theoretical -- it was measured on ClickHouse 26.7.6.57
+// (codex round 3 on #2229, P1, confirmed by execution):
+//
+//	400 keys, each two rows at an IDENTICAL last_synced, 40 unmerged parts,
+//	SYSTEM STOP MERGES so nothing moved during the measurement.
+//	Same query, five consecutive runs:
+//	    disagreeing keys = 60, 300, 180, 120, 80
+//	    argMax returned a MIX of both values, varying per run
+//	    FINAL returned the last-inserted value EVERY time
+//	after OPTIMIZE FINAL: 0 disagreements.
+//
+// So `FINAL` is deterministic on a tie and a bare `argMax` is not: ClickHouse
+// leaves argMax unspecified when several rows share the maximum, and under
+// parallel aggregation it genuinely varies between runs of the same query on
+// the same bytes. Pre-merge -- which is the normal state during an active sync,
+// exactly when this job runs -- the port could report `success` where Python
+// reports `pending`, suppressing MISSING_SECURITY_SCAN and inflating
+// security_scanned_prs, DIFFERENTLY on each re-run of the same day.
+//
+// A deterministic tie-break (appending the projected column to the version)
+// was tried first and REJECTED: it makes the answer stable, but it still does
+// not agree with Python, because FINAL's tie rule is "last inserted wins" and
+// insertion order is NOT a column -- no pure SQL aggregate can express it.
+// Stable-but-different is not parity, and parity is the whole point of the
+// family.
+//
+// So (team-lead ruling, 2026-09-04) the rule is now:
+//
+//	Python reads FINAL and the version can tie  -> the Go port reads FINAL.
+//	argMax is permitted ONLY where the version is provably unique per key.
+//
+// Applied here, site by site:
+//
+//	ci_pipeline_runs   Python FINAL (loaders.py:248) -> FINAL
+//	security_alerts    Python FINAL (loaders.py:255) -> FINAL
+//	git_pull_requests  Python has NO dedup; ours exists to be deterministic,
+//	                   and last_synced is not unique per key -> FINAL
+//	ai_tool_allowlist  Python uses argMax(status, computed_at) (loaders.py:276,
+//	                   :288) and NOT FINAL -> argMax, matching Python exactly.
+//	                   computed_at can tie there too, so Python is itself
+//	                   nondeterministic on that join; reproducing it is parity,
+//	                   and "fixing" it here would be a silent divergence. That
+//	                   is a pre-existing Python defect, recorded rather than
+//	                   patched, in the same class as CHAOS-5086.
+//
+// This reverses the older "FINAL under aggregation is forbidden, always use
+// argMax" rule for the FINAL sites. That rule was written to avoid
+// merge-timing dependence, and it turns out argMax trades merge-timing
+// dependence for RUN-TO-RUN nondeterminism, which is worse: it cannot even be
+// reproduced by re-running the same query on the same bytes.
+//
+// # READ THE CURRENT KEY FROM THE REKEY MIGRATIONS, NOT FROM CREATE TABLE
+//
+// Every sorting key here starts with org_id:
+//
+//	git_pull_requests         (org_id, repo_id, number)
+//	ci_pipeline_runs          (org_id, repo_id, run_id)
+//	security_alerts           (org_id, repo_id, alert_id)
+//
+// from 027_add_org_id_to_sorting_keys.py:63-65 and
+// 042_rmt_org_id_dedup_keys.py:93, which REBUILT these tables. The CREATE
+// statements in 000_raw_tables.sql / 032_security_alerts.sql are stale for
+// every one of them, and migration 024 -- which says org_id was added as a
+// plain column NOT in any sorting key -- was true when written and is now
+// false.
+//
+// This file's FIRST version grouped by (repo_id, number) / (repo_id, run_id) /
+// (repo_id, alert_id) on the strength of that 024 note, and cited 024 in this
+// comment, which made a stale claim look verified. The consequence was not
+// cosmetic: two orgs legitimately share a repo_id, so an argMax that omits
+// org_id selects the newest row ACROSS TENANTS. Org A's reviewed PR could be
+// suppressed by org B's newer row, and Go would emit a spurious
+// MISSING_HUMAN_REVIEW for A. Found by codex round 1 on #2229.
+//
+// Because org_id is IN the key, the org filter now sits BEFORE the dedup:
+// rows of other tenants form different groups, so filtering early is the same
+// answer and prunes the scan instead of reading every tenant's history. The
+// earlier "carried through the dedup and filtered AFTER it" design was a
+// correct consequence of a false premise.
+//
+// RULE for anyone adding a reader here: derive the GROUP BY from 027/042's key
+// maps, never from a CREATE TABLE or a migration's prose. A migration comment
+// is a snapshot of the day it was written.
+//
+// # ONE argMax OVER A TUPLE WHEN MORE THAN ONE NON-KEY COLUMN
+//
+// Two aggregates over the same GROUP BY resolve ties INDEPENDENTLY: on a shared
+// last_synced, one argMax can take its value from row A while another takes its
+// value from row B, emitting a row that never existed. Where a dedup projects
+// more than one non-key column, take a SINGLE argMax over a tuple and unwrap it
+// with tupleElement (the shape discover_repos adopted for CHAOS-2787,
+// job_daily.py:176-189). The tuple also preserves NULLs, which a bare argMax
+// over a Nullable column silently skips.
+//
+// THE TUPLE HAS TWO JOBS, AND ONLY ONE OF THEM IS ABOUT TIES.
+//
+// Job 1, tie coherence: two aggregates over one GROUP BY can take values from
+// different rows. Needs two-or-more non-key columns to bite.
+//
+// Job 2, NULL PRESERVATION: `argMax(x, y)` SKIPS rows where x is NULL, so an
+// older non-NULL value silently outlives a genuinely NULL latest one.
+// `argMax(tuple(x), y)` does not, because tuple(NULL) is itself never NULL --
+// the row competes, and tupleElement returns the NULL. This bites at ONE
+// column.
+//
+// The org_id rekey collapsed each dedup to a single non-key column and I
+// dropped the tuples with it -- reasoning only about job 1, on a comment that
+// (two paragraphs above) already spelled out job 2. That reintroduced the
+// NULL-skip on ci_pipeline_runs.status, which is Nullable(String)
+// (000_raw_tables.sql:100): a newer NULL status would lose to an older
+// 'success', marking every AI PR in the repo security-scanned when Python --
+// whose FINAL keeps the NULL and then coalesces -- reports MISSING_SECURITY_SCAN.
+// Found by codex round 2 (P1). A repair is a new piece of code; removing a
+// guard because its OTHER reason no longer applies is how guards die.
+//
+// So: ci_pipeline_runs keeps a tuple for its Nullable `status`.
+// security_alerts.source is `String` NOT NULL (032_security_alerts.sql:4) and
+// git_pull_requests.reviews_count is `UInt32 DEFAULT 0` (000_raw_tables.sql:80),
+// so those two need no tuple -- neither job applies. The ai_tool_allowlist
+// subqueries likewise project only a non-nullable `status`.
+// Pinned by TestGovernanceDedupKeepsANewerNullStatus.
+//
+// Pinned by TestGovernanceDedupPicksOneWholeRowOnALastSyncedTie (tuple
+// coherence) and TestGovernanceDedupIsTenantScoped (the org_id key).
+//
+// # git_pull_requests dedup: A DELIBERATE DIVERGENCE (Finding A)
+//
+// Python LEFT JOINs git_pull_requests with NEITHER FINAL NOR any dedup
+// (loaders.py:241-245). That table is ReplacingMergeTree(last_synced) ORDER
+// BY (repo_id, number) -- and, again, org_id is not in the sorting key -- so
+// every un-merged duplicate PR row MULTIPLIES the artifact it joins to. The
+// duplicates inflate ai_artifacts/declared_artifacts/human_reviewed_prs/
+// security_scanned_prs/in_policy_artifacts and emit duplicate policy events,
+// by an amount that depends on when ClickHouse last merged the part. Python's
+// output for a fixed input is therefore NOT deterministic.
+//
+// This loader dedups the join to one row per (repo_id, number). The Go path
+// becomes deterministic; Python's does not, so the two disagree exactly when
+// duplicates are present and agree otherwise. Same port-with-fix shape as
+// LoadIncidentsStarted's CHAOS-4269 guard. The live-Python oracle runs on a
+// duplicate-free fixture (where the comparison is a real bit-exact parity
+// proof); the integration test carries the duplicate fixture and asserts this
+// path's determinism. See this PR's RISK-NOTES.
+func LoadGovernanceArtifacts(
+	ctx context.Context, conn repositoryRows, organizationID string,
+	windowStart, windowEndInclusive time.Time,
+) ([]aigovernance.Artifact, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" || windowEndInclusive.Before(windowStart) {
+		return nil, ErrInvalidState
+	}
+
+	rows, err := conn.Query(ctx, governanceArtifactsSQL,
+		organizationID, organizationID, organizationID,
+		organizationID, windowStart.UTC(), windowEndInclusive.UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load ai governance artifacts: %w", err)
+	}
+	defer rows.Close()
+
+	var artifacts []aigovernance.Artifact
+	for rows.Next() {
+		var (
+			orgID       string
+			repoID      *uuid.UUID
+			subjectType string
+			subjectID   string
+			observedAt  time.Time
+			// BOOLEAN COLUMNS ARE UInt8 ON THE WIRE, NOT Bool.
+			//
+			// ClickHouse comparison and IN operators yield UInt8, so
+			// `a.source IN (...)` and `finding.finding_count > 0` arrive as
+			// UInt8, and `if(cond, x, NULL)` arrives as Nullable(UInt8). The
+			// driver matches the DECLARED column type, so a *bool target (and
+			// therefore a **bool argument to Scan) is rejected outright --
+			// which is what CI's go-storage-integration shard caught on the
+			// first version of this file, exactly the driver-type class this
+			// package's integration test exists to find and that no unit test
+			// with a fake scanner can.
+			//
+			// Scanned at the wire type and converted below rather than asking
+			// the driver to coerce: the two `if(...)` projections are genuinely
+			// nullable (a non-pull_request subject yields NULL, which is
+			// Optional[bool] in Python and must stay distinct from false), and
+			// the two bare comparisons are not.
+			declaredAI          uint8
+			humanReviewed       *uint8
+			securityScanned     *uint8
+			licenseFinding      uint8
+			toolName            string
+			modelName           string
+			toolAllowlistStatus string
+			source              string
+			kind                string
+			// confidence is Float32 on the wire (035_ai_attribution). Scanned
+			// as float32 and widened to float64 exactly once, which is what
+			// clickhouse-connect hands Python before json.dumps renders it --
+			// so the persisted evidence bytes match. Widening a DIFFERENT
+			// value (e.g. re-parsing a formatted string) would not.
+			confidence *float32
+		)
+		if err := rows.Scan(
+			&orgID, &repoID, &subjectType, &subjectID, &observedAt,
+			&declaredAI, &humanReviewed, &securityScanned, &licenseFinding,
+			&toolName, &modelName, &toolAllowlistStatus,
+			&source, &kind, &confidence,
+		); err != nil {
+			return nil, fmt.Errorf("scan ai governance artifact row: %w", err)
+		}
+
+		artifact := aigovernance.Artifact{
+			OrgID:       orgID,
+			TeamID:      nil, // _ARTIFACTS_SQL selects a literal NULL team_id.
+			RepoID:      repoID,
+			SubjectType: subjectType,
+			SubjectID:   subjectID,
+			ObservedAt:  observedAt,
+			// The SQL projects literal 1/0/1 for these three, so
+			// _artifact_from_row's row.get(..., default) fallbacks never fire.
+			AIDetected:                 true,
+			SensitiveRepo:              false,
+			RepoAllowsAI:               true,
+			DeclaredAI:                 declaredAI != 0,
+			HumanReviewed:              optionalGovernanceBool(humanReviewed),
+			SecurityScanned:            optionalGovernanceBool(securityScanned),
+			LicenseOrDependencyFinding: licenseFinding != 0,
+			// _optional_str maps BOTH None and "" to None (loaders.py:179).
+			ToolName:            optionalGovernanceString(toolName),
+			ModelName:           optionalGovernanceString(modelName),
+			ToolAllowlistStatus: aigovernance.ParseToolAllowlistStatus(toolAllowlistStatus),
+			Evidence: aigovernance.ArtifactEvidence{
+				Source: optionalGovernanceString(source),
+				Kind:   optionalGovernanceString(kind),
+				// evidence["confidence"] is row.get("confidence") RAW -- it is
+				// NOT passed through _optional_str, so a real 0.0 stays 0.0
+				// rather than collapsing to None the way an empty string would.
+				Confidence: widenConfidence(confidence),
+				// _ARTIFACTS_SQL projects a literal '' for artifact_url, and
+				// _optional_str turns '' into None -- so this is ALWAYS null in
+				// the persisted evidence. Written explicitly so a later reader
+				// does not "fix" it into a real column read.
+				ArtifactURL: nil,
+			},
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ai governance artifact rows: %w", err)
+	}
+	return artifacts, nil
+}
+
+// optionalGovernanceBool converts a Nullable(UInt8) scan target into the
+// Optional[bool] the compute kernel expects. NULL stays nil, which is
+// _artifact_from_row's `_optional_bool(None) -> None` -- and that distinction
+// is load-bearing: evaluate_artifact tests `human_reviewed is not True`, so
+// UNKNOWN and False both violate, but only False is a stated answer.
+func optionalGovernanceBool(value *uint8) *bool {
+	if value == nil {
+		return nil
+	}
+	converted := *value != 0
+	return &converted
+}
+
+func optionalGovernanceString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func widenConfidence(value *float32) *float64 {
+	if value == nil {
+		return nil
+	}
+	widened := float64(*value)
+	return &widened
+}
+
+// aiGovernanceBatchConn is the narrow write capability the two governance
+// writers need.
+type aiGovernanceBatchConn interface {
+	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
+}
+
+// WriteAIPolicyEvents ports write_ai_policy_events
+// (sinks/clickhouse/ai_governance.py:111) and _policy_event_row (:64) --
+// same table, same column order as POLICY_EVENT_COLUMNS (:27).
+func WriteAIPolicyEvents(
+	ctx context.Context, conn aiGovernanceBatchConn,
+	violations []aigovernance.Violation, computedAt time.Time,
+) (int, error) {
+	if len(violations) == 0 {
+		return 0, nil
+	}
+	if conn == nil {
+		return 0, ErrInvalidState
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO ai_policy_events (
+		event_id, org_id, team_id, repo_id, rule_id, severity,
+		subject_type, subject_id, observed_at, evidence, computed_at)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare ai_policy_events batch: %w", err)
+	}
+	computedAtUTC := computedAt.UTC()
+	for _, violation := range violations {
+		evidence, err := violation.EvidenceJSON()
+		if err != nil {
+			return 0, fmt.Errorf("encode ai_policy_events evidence: %w", err)
+		}
+		if err := batch.Append(
+			violation.EventID, violation.OrgID, violation.TeamID, violation.RepoID,
+			string(violation.RuleID), string(violation.Severity),
+			violation.SubjectType, violation.SubjectID,
+			violation.ObservedAt.UTC(), evidence, computedAtUTC,
+		); err != nil {
+			return 0, fmt.Errorf("append ai_policy_events row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, fmt.Errorf("send ai_policy_events batch: %w", err)
+	}
+	return len(violations), nil
+}
+
+// WriteAIGovernanceCoverageDaily ports write_ai_governance_coverage_daily
+// (sinks/clickhouse/ai_governance.py:125) and _coverage_row (:90) -- same
+// table, same column order as COVERAGE_COLUMNS (:50).
+func WriteAIGovernanceCoverageDaily(
+	ctx context.Context, conn aiGovernanceBatchConn,
+	rows []aigovernance.CoverageDaily, computedAt time.Time,
+) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	if conn == nil {
+		return 0, ErrInvalidState
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO ai_governance_coverage_daily (
+		org_id, team_id, repo_id, day, ai_artifacts, declared_artifacts,
+		human_reviewed_prs, security_scanned_prs, in_policy_artifacts, computed_at)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare ai_governance_coverage_daily batch: %w", err)
+	}
+	computedAtUTC := computedAt.UTC()
+	for _, row := range rows {
+		if err := batch.Append(
+			row.OrgID, row.TeamID, row.RepoID, row.Day,
+			row.AIArtifacts, row.DeclaredArtifacts, row.HumanReviewedPRs,
+			row.SecurityScannedPRs, row.InPolicyArtifacts, computedAtUTC,
+		); err != nil {
+			return 0, fmt.Errorf("append ai_governance_coverage_daily row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, fmt.Errorf("send ai_governance_coverage_daily batch: %w", err)
+	}
+	return len(rows), nil
+}

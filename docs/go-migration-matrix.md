@@ -191,12 +191,12 @@ function directly, even for families whose worker kind is now native:
 <!-- BEGIN GENERATED DAILY METRICS MATRIX -->
 | Family | Executor | Citation | Ticket |
 | --- | --- | --- | --- |
-| ai_governance | COMPAT-Python | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
+| ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | COMPAT-Python | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
 | ai_workflow | COMPAT-Python | Python: `work_graph/extractors/ai_workflow.py:212 _extract_ai_workflow_for_day` | CHAOS-4286 |
-| benchmarking | COMPAT-Python | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
+| benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
-| compounding_risk | NATIVE, post_bridge | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
+| compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |

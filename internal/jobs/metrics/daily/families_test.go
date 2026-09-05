@@ -176,6 +176,15 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
+	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
+	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
+	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
+	// are inside it, and Python writes those rows (job_daily.py:1919) before
+	// calling the family (:2091). It also sorts FIRST of all native families,
+	// so pre_bridge ran it ahead of every Go writer too.
+	if got := byPhase["benchmarking"]; got != "post_bridge" {
+		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
 	// which family it belongs to and why. Widening it to accept anything in
@@ -190,6 +199,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		"work_item":          "post_bridge",
 		"work_item_estimate": "post_bridge",
 		"compounding_risk":   "post_bridge",
+		"benchmarking":       "post_bridge",
 		"ic_finalize":        "finalize",
 	}
 	for name, phase := range byPhase {

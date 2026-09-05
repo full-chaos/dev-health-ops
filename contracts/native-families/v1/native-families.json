@@ -17,6 +17,7 @@
     "testops_pipeline": "native",
     "testops_risk": "native",
     "testops_test": "native",
+    "work_graph_edges": "native",
     "work_item": "post_bridge",
     "work_item_estimate": "post_bridge",
     "work_item_state": "post_bridge"

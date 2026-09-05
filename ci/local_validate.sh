@@ -1597,6 +1597,22 @@ metrics_readback() {
   # cicd/deployments/incidents/tests seeding never touches git data at all.
   # CLICKHOUSE_URI in the environment, not --clickhouse-uri in argv: same
   # reason as --sink above. assert_metrics_executed_proof.py reads the env.
+  # WHAT THIS STAGE CANNOT PROVE (CHAOS-4288, codex r3 on #2230). It proves rows
+  # EXIST for the seeded org with a fresh computed_at. It does NOT prove a Go
+  # native executor produced them, and it structurally cannot: this stage runs
+  # `dev-hops metrics daily`, which calls Python's run_daily_metrics_job
+  # directly -- there is no dev-health-worker process here at all, so there is no
+  # native-family registration and no telemetry to read. The readback would stay
+  # green with every native executor disabled, because Python still writes the
+  # rows.
+  #
+  # That is not a gap to paper over here; it is the honest boundary of this
+  # gate. The proof that Go wrote the rows lives in
+  # ci/run_metrics_executed_proof.sh, which runs the real worker and now FAILS
+  # (rather than warning) when a family has no outcome="computed" sample. Do not
+  # add a native assertion to this stage without first giving it a worker --
+  # asserting native execution from a path that never runs Go would be a check
+  # that cannot fail, which is worse than the absence of one.
   CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
     --org-id "${METRICS_READBACK_ORG_ID}" \
     --run-start "${run_start}" \

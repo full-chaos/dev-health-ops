@@ -2441,35 +2441,43 @@ async def run_daily_metrics_finalize(
                 },
             )
 
-    team_complexity_count = _write_team_complexity_for_day(
-        sinks=sinks_list,
-        primary_sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        computed_at=computed_at,
-        repo_names_by_id=repo_names_by_id,
-        repo_team_resolver=repo_team_resolver,
-    )
-    if not team_complexity_count:
-        # CHAOS-4365 item 3: a resolver failure, an org with no
-        # ownership-resolvable repos, or a day with no repo_complexity_daily
-        # rows yet (the complexity scan job runs on its own cadence,
-        # separate from the daily partition loop) all degrade to zero rows
-        # here, never raise -- same CHAOS-4246 contract every other finalize
-        # family follows. record_metrics_family_zero_rows makes a sustained
-        # gap alertable instead of only visible in logs.
-        record_metrics_family_zero_rows(
-            family="team_complexity", cause="no_rows_computed"
+    # CHAOS-5051: same skip_families gate shape as team_cognitive_load above
+    # (:2246) and ic_finalize. When a native Go executor already computed and
+    # wrote team_complexity for this run, recomputing here would append a
+    # SECOND generation of the same rows -- team_complexity_daily is
+    # append-only, deduped by every reader's own argMax(<col>, computed_at)
+    # GROUP BY (org_id, team_id, day), so the later writer wins silently and
+    # the native rows would vanish with nothing failing.
+    if "team_complexity" not in skip_families:
+        team_complexity_count = _write_team_complexity_for_day(
+            sinks=sinks_list,
+            primary_sink=primary_sink,
+            day=day,
+            org_id=org_id,
+            computed_at=computed_at,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
         )
-        logger.warning(
-            "metrics.daily.finalize family produced zero rows",
-            extra={
-                "family": "team_complexity",
-                "day": day.isoformat(),
-                "org_id": org_id,
-                "cause": "no_rows_computed",
-            },
-        )
+        if not team_complexity_count:
+            # CHAOS-4365 item 3: a resolver failure, an org with no
+            # ownership-resolvable repos, or a day with no repo_complexity_daily
+            # rows yet (the complexity scan job runs on its own cadence,
+            # separate from the daily partition loop) all degrade to zero rows
+            # here, never raise -- same CHAOS-4246 contract every other finalize
+            # family follows. record_metrics_family_zero_rows makes a sustained
+            # gap alertable instead of only visible in logs.
+            record_metrics_family_zero_rows(
+                family="team_complexity", cause="no_rows_computed"
+            )
+            logger.warning(
+                "metrics.daily.finalize family produced zero rows",
+                extra={
+                    "family": "team_complexity",
+                    "day": day.isoformat(),
+                    "org_id": org_id,
+                    "cause": "no_rows_computed",
+                },
+            )
 
     logger.info("IC finalize complete for day=%s", day.isoformat())
 

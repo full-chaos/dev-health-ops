@@ -1156,9 +1156,19 @@ var ErrNativeFinalizeFamilyFailed = errors.New("daily: native finalize family fa
 
 // SetNativeFinalizeFamilies registers the finalize-scope families computed
 // natively in Go instead of by the Python compatibility bridge. Mirrors
-// PartitionHandler.SetNativeFamilies exactly -- REPLACES the map on every
-// call and sorts the names, so iteration is deterministic and one family's
-// failure never makes another's inclusion depend on Go map order.
+// PartitionHandler.SetNativeFamilies in INTENT (deterministic iteration,
+// nothing depending on Go map order) but NOT in mechanism: that one sorts by
+// name because its families are independent and order-blind. Finalize
+// families are not -- computeNativeFinalizeFamilies below walks
+// nativeFinalizeFamilyNames and, on a mid-loop cancellation, marks every name
+// from the current loop INDEX onward as refused
+// (nativeFinalizeFamilyNames[index:]), so which family comes first decides
+// which families get computed before a cancellation and which get marked
+// refused without ever running. That is part of the contract, not an
+// implementation detail a lexical sort should get to decide, so iteration
+// order here is pythonRecognisedFinalizeFamilies' own DECLARED order instead
+// -- see TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName, which pins
+// it with two families whose sorted and declared orders differ.
 //
 // IT VALIDATES THE NAMES (CHAOS-4290, #2241 r1 Finding 2). The names travel to
 // Python as SkipFamilies and are compared there by string equality, so a name
@@ -1176,15 +1186,18 @@ func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]Na
 	if handler == nil {
 		return nil
 	}
-	names := make([]string, 0, len(families))
 	for name := range families {
 		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
 			return fmt.Errorf("%w: %q (bridge gates on %v)",
 				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
 		}
-		names = append(names, name)
 	}
-	sort.Strings(names)
+	names := make([]string, 0, len(families))
+	for _, name := range pythonRecognisedFinalizeFamilies {
+		if _, registered := families[name]; registered {
+			names = append(names, name)
+		}
+	}
 	handler.nativeFinalizeFamilies = families
 	handler.nativeFinalizeFamilyNames = names
 	return nil

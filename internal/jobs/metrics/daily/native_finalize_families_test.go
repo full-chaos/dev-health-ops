@@ -146,10 +146,20 @@ func TestFinalizeWithoutNativeFamiliesIsUnchanged(t *testing.T) {
 	}
 }
 
-// Deterministic order, mirroring SetNativeFamilies. Without sorting, the skip
-// list would depend on Go map iteration order and two identical runs could
-// send different bytes.
-func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
+// Deterministic order, and specifically pythonRecognisedFinalizeFamilies'
+// DECLARED order rather than sort.Strings(names) -- the two are chosen to
+// DISAGREE here ("zeta" declared before "alpha") so a regression back to a
+// lexical sort cannot pass this test by accident the way it could if the
+// declared and sorted orders happened to coincide.
+//
+// Why it has to be declared order, not just A deterministic one:
+// computeNativeFinalizeFamilies marks every name from the current loop INDEX
+// onward as refused when the run's context is cancelled mid-loop
+// (nativeFinalizeFamilyNames[index:]) -- so which family runs first, and
+// which families are still ahead of it when a cancellation lands, is a real
+// operational decision, not an implementation detail a name's spelling should
+// get to make.
+func TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName(t *testing.T) {
 	store := finalizeStoreWithClaim()
 	compatibility := &recordingFinalizeCompatibility{}
 	handler, err := NewFinalizeHandler(store, compatibility)
@@ -162,23 +172,23 @@ func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
 	// way to get there: inventing three production family names would make the
 	// guard's own test lie about what Python understands.
 	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
-	pythonRecognisedFinalizeFamilies = []string{"alpha", "mid", "zeta"}
+	pythonRecognisedFinalizeFamilies = []string{"zeta", "alpha", "mid"}
 
 	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
-		"zeta": &stubFinalizeFamily{}, "alpha": &stubFinalizeFamily{}, "mid": &stubFinalizeFamily{},
+		"alpha": &stubFinalizeFamily{}, "mid": &stubFinalizeFamily{}, "zeta": &stubFinalizeFamily{},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"alpha", "mid", "zeta"}
+	want := []string{"zeta", "alpha", "mid"} // declared order -- sorted would be alpha, mid, zeta
 	if len(compatibility.sawSkip) != len(want) {
 		t.Fatalf("skip=%v, want %v", compatibility.sawSkip, want)
 	}
 	for i, name := range want {
 		if compatibility.sawSkip[i] != name {
-			t.Fatalf("skip=%v, want %v (sorted)", compatibility.sawSkip, want)
+			t.Fatalf("skip=%v, want %v (declared order, not sorted)", compatibility.sawSkip, want)
 		}
 	}
 }

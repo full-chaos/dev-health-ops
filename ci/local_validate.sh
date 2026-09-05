@@ -1600,7 +1600,7 @@ metrics_readback() {
   CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
     --org-id "${METRICS_READBACK_ORG_ID}" \
     --run-start "${run_start}" \
-    --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots
+    --families cicd deploy testops_pipeline testops_test repo_user_commit dora complexity file_hotspots compounding_risk
 }
 
 print_summary() {

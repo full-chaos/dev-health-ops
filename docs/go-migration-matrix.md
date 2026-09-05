@@ -200,10 +200,10 @@ below) -- what changed is that the CLI no longer computes them ITSELF via a seco
 <!-- BEGIN GENERATED DAILY METRICS MATRIX -->
 | Family | Executor | Citation | Ticket |
 | --- | --- | --- | --- |
-| ai_governance | COMPAT-Python | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
+| ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | COMPAT-Python | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
 | ai_workflow | COMPAT-Python | Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day` | CHAOS-4286 |
-| benchmarking | COMPAT-Python | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
+| benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
@@ -212,7 +212,7 @@ below) -- what changed is that the CLI no longer computes them ITSELF via a seco
 | ic_finalize | COMPAT-Python | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
-| review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
+| review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
 | team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | CHAOS-5141 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | COMPAT-Python | Python: `compute_testops.py:371 compute_coverage_metrics_daily` | CHAOS-4284 |

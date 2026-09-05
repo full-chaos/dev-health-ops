@@ -168,11 +168,22 @@ jobs:
   # see the header comment above), safe to run concurrently with itself
   # across every PR at once, with nothing to serialise.
   #
-  # `--raw`, not the non-raw `imagetools inspect` form: the non-raw form
-  # truncates a manifest list to a summary -- the SAME trap this file's own
-  # "Verify every mirrored digest matches upstream" step already documents
-  # below (the MediaType/index-vs-platform-manifest confusion that
-  # misjudged valkey and postgres as amd64-only), filed 2026-09-02.
+  # DIGEST-AWARE, not just presence-aware, for every resolved image that
+  # carries a digest (CHAOS-4928 codex round 1, P1): presence alone cannot
+  # tell a stale destination tag from a current one, so a PR that bumps
+  # `image@sha256:OLD` to `@sha256:NEW` while the mirror still serves OLD
+  # under that tag used to read `missing=false` -- exactly the shape the
+  # incident above never covered, because it happened to the tag existing,
+  # not being absent. ci/mirror_precheck_lib.sh (shared with the "check"
+  # step below) compares the destination's actual manifest digest against
+  # the pin for anything digest-pinned; only an UNPINNED upstream tag
+  # (clickhouse/clickhouse-server:26.7, valkey/valkey:8-alpine -- see the
+  # job-level `concurrency` comment above) stays presence-only via `--raw`,
+  # not the non-raw `imagetools inspect` form: the non-raw form truncates a
+  # manifest list to a summary -- the SAME trap this file's own "Verify
+  # every mirrored digest matches upstream" step already documents below
+  # (the MediaType/index-vs-platform-manifest confusion that misjudged
+  # valkey and postgres as amd64-only), filed 2026-09-02.
   precheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -255,23 +266,15 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
+          # Shared with the `mirror_precheck_lib_test.sh` fixture suite --
+          # see ci/mirror_precheck_lib.sh's own header for why this exists.
+          source ci/mirror_precheck_lib.sh
           missing=false
           while read -r image; do
             [ -n "${image}" ] || continue
-            ref="${image}"
-            case "${ref}" in *@sha256:*) ref="${ref%@*}" ;; esac
-            case "${ref}" in
-              *:*) repo="${ref%:*}"; tag="${ref##*:}" ;;
-              *)   repo="${ref}";    tag="mirrored"   ;;
-            esac
-            dest="ghcr.io/${OWNER}/${repo}:${tag}"
-            # --raw: see this job's own header comment (the 2026-09-02
-            # truncated-manifest-list trap this file's Verify step already
-            # documents).
-            if docker buildx imagetools inspect --raw "${dest}" >/dev/null 2>&1; then
-              printf 'OK      %s\n' "${dest}"
+            if mirror_image_missing "${OWNER}" "${image}"; then
+              :
             else
-              printf 'MISSING %s (from %s)\n' "${dest}" "${image}"
               missing=true
             fi
           done < images.txt

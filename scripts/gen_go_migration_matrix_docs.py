@@ -320,9 +320,12 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4291",
     },
     "release_impact": {
-        "citation": "Python: `job_release_impact.py` -> `release_impact.py`",
-        "route": "river, bridge (`daily.go:621-624`, uses `compatibility` directly)",
-        "ticket": "CHAOS-4296",
+        "citation": (
+            "Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, "
+            "`release_impact_native_clickhouse.go`"
+        ),
+        "route": "river, native (`daily.go:590-621`)",
+        "ticket": "CHAOS-4296 (Done)",
     },
 }
 

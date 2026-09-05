@@ -1135,6 +1135,24 @@ type MetricsCollector struct {
 	// positive statement an alert can bind to.
 	doraRefusals map[string]uint64
 
+	// Native release_impact compute (CHAOS-4296/CHAOS-4258). Same rationale as
+	// the DORA counters above: the HTTP compatibility bridge could only report
+	// a status code, so going native is what makes the work itself observable.
+	//
+	// releaseImpactDegradedMissingTelemetry is CHAOS-4258's whole point: before
+	// it, a day with deployments but no telemetry and a genuinely quiet day
+	// were BOTH rows_written=0, indistinguishable from the outside. It stays an
+	// aggregate total rather than per-org -- org_id is an unbounded label in
+	// this codebase's metrics (every other label here is a small closed set:
+	// family, reason, outcome, pool, provider) and would turn one counter into
+	// unbounded cardinality; per-org detail belongs to the structured log the
+	// executor also emits, not this series.
+	releaseImpactPartitions               uint64
+	releaseImpactDays                     uint64
+	releaseImpactRowsWritten              uint64
+	releaseImpactEmptyOutcomes            uint64
+	releaseImpactDegradedMissingTelemetry uint64
+
 	// workItemAttributionRefusals counts native work item attribution
 	// backstop construction refusals BY REASON, for the same reason
 	// doraRefusals exists: absence is not a signal.
@@ -2454,6 +2472,44 @@ func (collector *MetricsCollector) ObserveDORAPartition(
 	return nil
 }
 
+// ObserveReleaseImpactPartition records one completed native release_impact
+// partition (CHAOS-4296): days it covered across every trigger day, and rows
+// written. Mirrors ObserveDORAPartition's reasoning -- a rows-written counter
+// alone flattens a broken cutover and a quiet day into the same line, so the
+// empty-outcome counter below is tracked separately.
+func (collector *MetricsCollector) ObserveReleaseImpactPartition(days int, rowsWritten int) error {
+	if days < 0 || rowsWritten < 0 {
+		return errors.New("release impact partition counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.releaseImpactPartitions++
+	collector.releaseImpactDays += uint64(days)
+	collector.releaseImpactRowsWritten += uint64(rowsWritten)
+	if rowsWritten == 0 {
+		collector.releaseImpactEmptyOutcomes++
+	}
+	return nil
+}
+
+// ObserveReleaseImpactDegradedMissingTelemetry records CHAOS-4258's degraded
+// state: deployments existed for the (org, day) but telemetry produced no
+// scope, so a zero-row result is a data gap rather than a quiet day. day and
+// deployments are accepted for the structured-log call site's convenience but
+// are NOT metric labels -- see the field comment on releaseImpactDegraded
+// MissingTelemetry for why org_id/day stay out of the series.
+func (collector *MetricsCollector) ObserveReleaseImpactDegradedMissingTelemetry(
+	orgID string, day time.Time, deployments int,
+) error {
+	if deployments < 0 {
+		return errors.New("release impact degraded deployment count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.releaseImpactDegradedMissingTelemetry++
+	return nil
+}
+
 // DORA refusal reasons. A closed set, because an unbounded reason string
 // becomes an unbounded label cardinality.
 const (
@@ -3650,6 +3706,17 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	writeUintSample(output, "worker_dora_native_skipped_rows_total", nil, collector.doraSkippedRows)
 	writeMetadata(output, "worker_dora_native_empty_partitions_total", "Native DORA partitions that completed having written no rows.", "counter")
 	writeUintSample(output, "worker_dora_native_empty_partitions_total", nil, collector.doraEmptyOutcomes)
+
+	writeMetadata(output, "worker_release_impact_native_partitions_total", "Partitions computed by the native Go release_impact executor.", "counter")
+	writeUintSample(output, "worker_release_impact_native_partitions_total", nil, collector.releaseImpactPartitions)
+	writeMetadata(output, "worker_release_impact_native_days_total", "Days covered by native release_impact partitions.", "counter")
+	writeUintSample(output, "worker_release_impact_native_days_total", nil, collector.releaseImpactDays)
+	writeMetadata(output, "worker_release_impact_native_rows_written_total", "Metric rows written by the native Go release_impact executor.", "counter")
+	writeUintSample(output, "worker_release_impact_native_rows_written_total", nil, collector.releaseImpactRowsWritten)
+	writeMetadata(output, "worker_release_impact_native_empty_partitions_total", "Native release_impact partitions that completed having written no rows.", "counter")
+	writeUintSample(output, "worker_release_impact_native_empty_partitions_total", nil, collector.releaseImpactEmptyOutcomes)
+	writeMetadata(output, "dev_health_release_impact_degraded_missing_telemetry_total", "CHAOS-4258: days where deployments existed but telemetry produced no scope, so a zero-row result is a data gap rather than a quiet day. Aggregate, not per-org -- see the org/day detail in the paired structured log.", "counter")
+	writeUintSample(output, "dev_health_release_impact_degraded_missing_telemetry_total", nil, collector.releaseImpactDegradedMissingTelemetry)
 
 	// Emitted for EVERY reason, including zeros. A series that only appears
 	// once it fires cannot be alerted on with a rate() rule until after the

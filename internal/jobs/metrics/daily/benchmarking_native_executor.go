@@ -185,11 +185,15 @@ func (executor *BenchmarkingExecutor) ComputeFamily(
 		return 0, err
 	}
 
-	rowsWritten, err := executor.writer.WriteOutputs(ctx, outputs, run.OrganizationID)
-	if err != nil {
-		return 0, err
-	}
-	return rowsWritten, nil
+	// THE COUNT SURVIVES THE ERROR. WriteOutputs returns the TRUE number of
+	// rows already on disk when it fails after a batch has landed, and
+	// computeNativeFamilies reports exactly this number as the family's
+	// partial_write row count. Collapsing it to 0 here -- which this function
+	// did until the integration test below caught it -- would throw away the
+	// one number an operator needs to judge how much duplication a re-drive
+	// would create, and would do it silently, since 0 is also what a genuine
+	// refusal reports.
+	return executor.writer.WriteOutputs(ctx, outputs, run.OrganizationID)
 }
 
 func containsRepository(repoIDs []uuid.UUID, target uuid.UUID) bool {

@@ -59,8 +59,8 @@ var reviewEdgesSchema = []string{
 // Python queries both ReplacingMergeTree sources RAW -- no FINAL, no argMax
 // (loaders/clickhouse.py:283-320) -- so a re-synced review row is COUNTED
 // TWICE and inflates reviews_count, and a re-synced PR row makes the author
-// last-write-wins over an unordered result set. The native loader dedups with
-// argMax(col, last_synced) GROUP BY each table's own ORDER BY key, so:
+// last-write-wins over an unordered result set. The native loader reads
+// FINAL (clickhouse.go:91, :163), so:
 //
 //   - the duplicated review is counted ONCE (native count is LOWER than
 //     Python's here, and correct), and
@@ -97,7 +97,7 @@ func TestReviewEdgesComputeFamilyDeduplicatesResyncedRows(t *testing.T) {
 		repoB = "00000000-0000-4000-8000-0000000000b1"
 	)
 
-	// PR 1: two rows, same key, different last_synced. argMax must take the
+	// PR 1: two rows, same key, different last_synced. FINAL must take the
 	// LATER author (ann@…), never the earlier decoy.
 	if err := conn.Exec(ctx, `
 INSERT INTO git_pull_requests
@@ -174,11 +174,11 @@ WHERE org_id = ? ORDER BY reviewer`, orgA)
 			t.Errorf("edge %d: got %+v, want %+v", index, got[index], want[index])
 		}
 	}
-	// The author proves argMax took the LATER PR row: 'stale@example.com'
+	// The author proves FINAL took the LATER PR row: 'stale@example.com'
 	// would mean the dedup picked by insertion order instead of last_synced.
 	for _, e := range got {
 		if e.author == "stale@example.com" {
-			t.Error("author resolved to the earlier-synced PR row -- argMax(last_synced) is not taking effect")
+			t.Error("author resolved to the earlier-synced PR row -- FINAL is not resolving by last_synced")
 		}
 	}
 
@@ -274,29 +274,36 @@ INSERT INTO git_pull_request_reviews
 	}
 }
 
-// TestReviewEdgesTupleDedupTakesTheWholeWinningRowIncludingItsNulls pins the
-// argMax(tuple(...)) form's NULL behaviour, which is the half of the dedup
-// change no unit test can reach and no frozen golden can see.
+// TestReviewEdgesTupleDedupTakesTheWholeWinningRowIncludingItsNulls pins
+// whole-row NULL behaviour: the half of the dedup no unit test can reach and no
+// frozen golden can see.
 //
-// # Why this differs from N independent argMax calls
+// NAME AND HISTORY. This test was written when the loader used
+// argMax(tuple(...)) and is named for it. The loader now reads FINAL
+// (clickhouse.go:91, :163) -- so the mechanism named in the test's name is gone
+// while what it PINS is unchanged, and deliberately so. The name is kept
+// because it is what the CHAOS-4547 ledger rows cite; renaming it would orphan
+// that history for a cosmetic gain.
+//
+// # What is actually being defended
 //
 // ClickHouse aggregate functions SKIP rows whose argument is NULL. With one
 // argMax per column, a PR whose NEWEST row has a NULL author_email but whose
 // OLDER row has a value returns the STALE value -- the dedup surfaces a
-// composite that never existed, and does so while claiming to surface "the
-// latest". CHAOS-4547 verified that mechanism against a live ClickHouse.
+// composite that never existed, while claiming to surface "the latest".
+// CHAOS-4547 verified that mechanism against a live ClickHouse.
 //
-// A tuple is never NULL, so argMax(tuple(...), last_synced) cannot null-skip:
-// it returns the whole winning row, NULLs included. That is what a
-// ReplacingMergeTree actually holds -- per-column latest-non-NULL is not a
-// state the table can ever be in -- so the tuple form is the one that emulates
-// FINAL, and the independent form was the divergence.
+// FINAL cannot do that: it resolves a whole row, NULLs included, which is what
+// a ReplacingMergeTree actually holds -- per-column latest-non-NULL is not a
+// state the table can ever be in. argMax(tuple(...)) was chosen earlier for the
+// same reason, as an EMULATION of FINAL; reading FINAL directly is the same
+// property obtained from the engine rather than reconstructed.
 //
-// Concretely here: the newest row for PR 1 has author_email NULL and
-// author_name 'Newest'. The tuple form must therefore resolve the author from
-// the NAME ('Newest'), not from the older row's email. If someone splits this
-// back into per-column argMax, the author becomes 'stale@example.com' and this
-// test says so.
+// So the assertion is unchanged and still discriminating: the newest row for
+// PR 1 has author_email NULL and author_name 'Newest', so the author must
+// resolve from the NAME, not from the older row's email. A regression to
+// per-column argMax makes the author 'stale@example.com' and this test says so
+// -- which is why it is still worth running under FINAL.
 func TestReviewEdgesTupleDedupTakesTheWholeWinningRowIncludingItsNulls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -325,7 +332,7 @@ func TestReviewEdgesTupleDedupTakesTheWholeWinningRowIncludingItsNulls(t *testin
 
 	// OLDER row: author_email present. NEWER row: author_email NULL, name set.
 	// Independent argMax(author_email, last_synced) would skip the NULL and
-	// return 'stale@example.com'; the tuple form returns the newer row whole.
+	// return 'stale@example.com'; FINAL returns the newer row whole.
 	if err := conn.Exec(ctx, `
 INSERT INTO git_pull_requests
 (repo_id, number, author_name, author_email, created_at, merged_at, last_synced, org_id) VALUES
@@ -385,10 +392,12 @@ INSERT INTO git_pull_request_reviews
 //
 // # What this defends
 //
-// Migrations 027/042 rekeyed git_pull_requests to (org_id, repo_id, number).
-// A dedup whose GROUP BY omits org_id therefore does not match the table's
-// sorting key: argMax collapses BOTH tenants' rows for a shared repo_id into
-// one group and the newest row wins across the tenant boundary.
+// Migrations 027/042 rekeyed git_pull_requests to (org_id, repo_id, number),
+// and FINAL resolves rows BY that sorting key -- so two tenants sharing a
+// repo_id are separate rows to it, not one. Under the earlier GROUP BY dedup a
+// key omitting org_id collapsed BOTH tenants' rows into one group and the
+// newest won across the tenant boundary; that shape is what this test was
+// written against and it remains the regression to guard.
 //
 // Today this loader is safe regardless, because its org filter is
 // PRE-aggregation -- in the same SELECT as the GROUP BY, so WHERE runs first

@@ -3,6 +3,7 @@ package benchmarking
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/familyerr"
 	"strings"
 	"time"
 
@@ -230,9 +231,9 @@ func NewWriter(connection conn) (*Writer, error) {
 	return &Writer{conn: connection}, nil
 }
 
-// WriteOutputs writes every non-empty collection and returns the total rows
-// written. Column lists and their order are the sink's verbatim
-// (sinks/clickhouse/dora.py:56-198).
+// WriteOutputs writes every non-empty collection across the six benchmarking
+// output tables and returns the total rows written. Column lists and their
+// order are the sink's verbatim (sinks/clickhouse/dora.py:56-198).
 //
 // Fails closed on an empty orgID: org_id is a filter column on all six tables
 // and an unscoped row is invisible to every org-bound read.
@@ -240,6 +241,32 @@ func NewWriter(connection conn) (*Writer, error) {
 // Mirrors write_benchmarking_outputs' per-collection emptiness checks
 // (runner.py:243-256) -- an empty collection is skipped, not written as zero
 // rows.
+//
+// PARTIAL WRITES ARE REPORTED, NOT SWALLOWED (CHAOS-4288, codex r1 on #2235).
+//
+// The six tables are written sequentially and each write is a separate batch,
+// so a failure on the third leaves the first two ON DISK. Every output table is
+// a plain MergeTree with no version column, so nothing replaces those rows
+// later -- and if the caller fails open to the Python bridge, the bridge writes
+// all six again and the first two DUPLICATE. The duplication is invisible to
+// readers (argMax-style reads still return a sane latest value) and shows up
+// only as row-count growth, which is why it could run for a long time
+// unnoticed.
+//
+// So this returns TWO things on failure that the old shape threw away:
+//
+//   - the TRUE number of rows written before the failure, not 0. Reporting 0
+//     for a write that landed thousands of rows tells an operator the opposite
+//     of what happened, and the re-drive decision depends on knowing.
+//   - an error wrapping familyerr.ErrPartialWrite, but ONLY once something has
+//     actually been written. Before the first successful write there is nothing
+//     to duplicate, so the ordinary fail-open path is still correct and the
+//     error is returned plain. Wrapping too eagerly would suppress the bridge's
+//     legitimate fallback and lose the family for that partition -- the
+//     opposite failure, equally silent.
+//
+// The compute/write split lives in the caller: everything above this function
+// is pure computation and can fail freely without touching a table.
 func (writer *Writer) WriteOutputs(ctx context.Context, outputs Outputs, orgID string) (int, error) {
 	if writer == nil || writer.conn == nil {
 		return 0, fmt.Errorf("benchmarking: writer unavailable")
@@ -248,42 +275,52 @@ func (writer *Writer) WriteOutputs(ctx context.Context, outputs Outputs, orgID s
 		return 0, fmt.Errorf("benchmarking: organization id is required to write benchmarking tables")
 	}
 
+	// Ordered so the failure report can name the table, and so "how many
+	// batches landed" is answerable from the index alone.
+	steps := []struct {
+		table string
+		write func() (int, error)
+	}{
+		{"testops_metric_baselines", func() (int, error) {
+			return writer.writeBaselines(ctx, outputs.Baselines, orgID)
+		}},
+		{"testops_maturity_bands", func() (int, error) {
+			return writer.writeMaturityBands(ctx, outputs.MaturityBands, orgID)
+		}},
+		{"testops_metric_anomalies", func() (int, error) {
+			return writer.writeAnomalies(ctx, outputs.Anomalies, orgID)
+		}},
+		{"testops_period_comparisons", func() (int, error) {
+			return writer.writePeriodComparisons(ctx, outputs.PeriodComparisons, orgID)
+		}},
+		{"testops_metric_correlations", func() (int, error) {
+			return writer.writeCorrelations(ctx, outputs.Correlations, orgID)
+		}},
+		{"testops_benchmark_insights", func() (int, error) {
+			return writer.writeInsights(ctx, outputs.Insights, orgID)
+		}},
+	}
+
 	total := 0
-	written, err := writer.writeBaselines(ctx, outputs.Baselines, orgID)
-	if err != nil {
-		return 0, err
+	for index, step := range steps {
+		written, err := step.write()
+		if err != nil {
+			if total == 0 {
+				// Nothing landed: no duplication is possible, so the caller's
+				// ordinary fail-open to the Python bridge is still correct.
+				return 0, fmt.Errorf("benchmarking: write %s: %w", step.table, err)
+			}
+			// Rows are already on disk in append-only tables. The caller must
+			// NOT fail open, and it needs the real count.
+			recordRowsWritten(total, orgID != "")
+			return total, fmt.Errorf(
+				"benchmarking: write %s (table %d of %d, %d row(s) already written to %d earlier table(s)): %w: %v",
+				step.table, index+1, len(steps), total, index,
+				familyerr.ErrPartialWrite, err,
+			)
+		}
+		total += written
 	}
-	total += written
-
-	written, err = writer.writeMaturityBands(ctx, outputs.MaturityBands, orgID)
-	if err != nil {
-		return 0, err
-	}
-	total += written
-
-	written, err = writer.writeAnomalies(ctx, outputs.Anomalies, orgID)
-	if err != nil {
-		return 0, err
-	}
-	total += written
-
-	written, err = writer.writePeriodComparisons(ctx, outputs.PeriodComparisons, orgID)
-	if err != nil {
-		return 0, err
-	}
-	total += written
-
-	written, err = writer.writeCorrelations(ctx, outputs.Correlations, orgID)
-	if err != nil {
-		return 0, err
-	}
-	total += written
-
-	written, err = writer.writeInsights(ctx, outputs.Insights, orgID)
-	if err != nil {
-		return 0, err
-	}
-	total += written
 
 	recordRowsWritten(total, orgID != "")
 	return total, nil

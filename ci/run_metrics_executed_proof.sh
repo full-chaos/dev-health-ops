@@ -644,7 +644,7 @@ assert_readback() {
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing team_cognitive_load \
+    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 
@@ -700,9 +700,42 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # tested). Read from the worker's own /metrics endpoint while it is still
 # running -- this must happen before the cleanup trap tears it down at
 # script exit.
-curl -sS "http://127.0.0.1:${WORKER_HTTP_PORT}/metrics" 2>/dev/null \
-  | grep -E '^worker_daily_metrics_native_family_(outcome_total|rows_written_total)\{family="team_wellbeing"' \
-  || echo "WARNING: no worker_daily_metrics_native_family_* series found for team_wellbeing"
+#
+# CHAOS-4288 (codex r3 on #2230): this check used to grep for team_wellbeing
+# ONLY, and end in `|| echo "WARNING: ..."` -- so a MISSING series printed a
+# warning and the gate still passed. A proof that cannot fail is not a proof,
+# and it was the one step distinguishing "the Go executor ran" from "Python
+# wrote the row after the native call fell open". It is now FATAL and covers
+# EVERY native family this gate asserts rows for, not the one family someone
+# happened to wire up first.
+NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk"
+METRICS_SNAPSHOT="$(curl -sS "http://127.0.0.1:${WORKER_HTTP_PORT}/metrics" 2>/dev/null || true)"
+if [ -z "${METRICS_SNAPSHOT}" ]; then
+  echo "FAIL: worker /metrics returned nothing on port ${WORKER_HTTP_PORT} -- cannot prove"
+  echo "      which path computed these rows. A green readback alone does not"
+  echo "      distinguish the native executor from the Python fail-open fallback."
+  exit 1
+fi
+NATIVE_TELEMETRY_MISSING=""
+for family in ${NATIVE_TELEMETRY_FAMILIES}; do
+  # outcome="computed" specifically: a "refused" or "partial_write" counter for
+  # the same family proves the executor RAN and did not produce the rows, which
+  # is the opposite of what this gate is asserting.
+  if printf '%s\n' "${METRICS_SNAPSHOT}" \
+    | grep -qE "^worker_daily_metrics_native_family_outcome_total\{[^}]*family=\"${family}\"[^}]*outcome=\"computed\"[^}]*\} [1-9]"; then
+    echo "  ok   ${family}: native executor reported outcome=computed"
+  else
+    echo "  FAIL ${family}: no outcome=computed sample"
+    NATIVE_TELEMETRY_MISSING="${NATIVE_TELEMETRY_MISSING} ${family}"
+  fi
+done
+if [ -n "${NATIVE_TELEMETRY_MISSING}" ]; then
+  echo "FAIL: native-family telemetry missing for:${NATIVE_TELEMETRY_MISSING}"
+  echo "      The readback proves rows LANDED; this proves the Go executor is what"
+  echo "      wrote them. Without it a green gate is satisfied by Python's fail-open"
+  echo "      fallback, which is precisely the regression this gate exists to catch."
+  exit 1
+fi
 
 if [ "${FINAL_RC}" -ne 0 ]; then
   # Dispatch-path diagnostic dump (CHAOS-4266): the readback assertion only

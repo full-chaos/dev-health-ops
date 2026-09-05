@@ -219,16 +219,26 @@ func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
-		t.Fatalf("Work = %v, want success -- telemetry must not gate the job", err)
+	// The attempt FAILS now (#2241 r2 Findings 1 and 2) instead of degrading to
+	// Python. This test survived the forward-merge textually while asserting the
+	// opposite semantics -- a clean auto-merge is not a semantic merge.
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded after a native family failed -- the run completes " +
+			"and is never redriven")
 	}
+	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
+	}
+	// The counter is still the point, and still the reason this test exists: a
+	// family that redrives forever with no counter is exactly as invisible as
+	// one that silently degraded to Python.
 	if len(observer.calls) != 1 || observer.calls[0] != "ic_finalize:refused" {
-		t.Fatalf("observed %v, want [ic_finalize:refused] -- a fail-open path with "+
-			"no counter is indistinguishable from one that is working", observer.calls)
+		t.Fatalf("observed %v, want [ic_finalize:refused]", observer.calls)
 	}
-	// And the skip list is still empty, so the bridge still computes it.
-	if len(compatibility.sawSkip) != 0 {
-		t.Fatalf("bridge saw skip=%v, want empty", compatibility.sawSkip)
+	if compatibility.callCount != 0 {
+		t.Fatalf("bridge calls = %d, want 0 -- Python must never compute a family "+
+			"registered as native", compatibility.callCount)
 	}
 }
 

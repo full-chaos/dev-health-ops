@@ -133,12 +133,25 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
+	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
+	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
+	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
+	// are inside it, and Python writes those rows (job_daily.py:1919) before
+	// calling the family (:2091). It also sorts FIRST of all native families,
+	// so pre_bridge ran it ahead of every Go writer too.
+	if got := byPhase["benchmarking"]; got != "post_bridge" {
+		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	}
 	// The allowlist, not a blanket exemption: any OTHER family gaining a phase
 	// still has to come through this test deliberately.
-	expectedPostBridge := map[string]bool{"work_item_state": true, "compounding_risk": true}
+	expectedPostBridge := map[string]bool{
+		"work_item_state":  true,
+		"compounding_risk": true,
+		"benchmarking":     true,
+	}
 	for name, phase := range byPhase {
 		if phase != "" && !expectedPostBridge[name] {
-			t.Fatalf("family %q declares phase=%q -- only work_item_state and compounding_risk are expected to be non-default today; update this test if that changes deliberately", name, phase)
+			t.Fatalf("family %q declares phase=%q -- only work_item_state, compounding_risk and benchmarking are expected to be non-default today; update this test if that changes deliberately", name, phase)
 		}
 	}
 	// cicd is Wave 1B's first cutover (CHAOS-4292), following repo_user_commit/

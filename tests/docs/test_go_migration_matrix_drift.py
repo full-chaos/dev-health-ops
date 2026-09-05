@@ -604,3 +604,110 @@ def test_load_finalize_write_calls_rejects_an_unresolvable_alias(tmp_path) -> No
         )
     finally:
         setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_resolves_a_for_loop_alias(tmp_path) -> None:
+    """Positive control for round-3 finding F1: a call reached through a
+    `for` loop binding over a single-element literal container
+    (`for writer in (real_fn,): writer(...)`) must resolve to the real
+    function's name, the exact shape codex's r3 round demonstrated the
+    round-2 fix missed (it only collected `ast.Assign` bindings).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    for writer in (_write_compounding_risk_team_rows_for_day,):\n"
+        "        writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls did not resolve the for-loop alias to "
+            f"the assigned function's name: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_resolves_a_chained_alias(tmp_path) -> None:
+    """Positive control for round-3 finding F1's other shape: an
+    alias-of-an-alias (`first = real_fn; second = first; second()`) must
+    resolve all the way to the real function's name, not stop at the
+    first hop (which would record the call as the intermediate alias
+    name `"first"`, an ordinary-looking identifier that silently reads
+    as out-of-scope infrastructure).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    first = _write_compounding_risk_team_rows_for_day\n"
+        "    second = first\n"
+        "    second()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls did not resolve the alias chain to "
+            f"the real function's name: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_an_alias_cycle(tmp_path) -> None:
+    """Negative control: a cyclic alias chain (`a = b` then, elsewhere,
+    `b = a`) can never resolve to a real function no matter how far it is
+    followed -- must refuse rather than loop forever or silently pick
+    one side of the cycle.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n    a = b\n    b = a\n    a()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, "load_finalize_write_calls did not refuse a cyclic alias chain"
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_a_with_statement_alias(tmp_path) -> None:
+    """Negative control: `with x() as y:` binds y to whatever
+    `x().__enter__()` returns, which cannot be determined from source --
+    a call through such a binding must refuse, never be silently treated
+    as a direct reference to a module-level function named `y`.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    with make_writer() as writer:\n"
+        "        writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse a call through a "
+            "with-statement binding"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)

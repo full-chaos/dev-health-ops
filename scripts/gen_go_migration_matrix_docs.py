@@ -473,23 +473,39 @@ def load_finalize_write_calls() -> set[str]:
 
     Also resolves a PLAIN-NAME LOCAL ALIAS (round-2 finding F1, codex,
     CHAOS-5118: `writer = _write_compounding_risk_team_rows_for_day;
-    writer(...)`): a bare `Name` call target that is itself the target of
-    an `Assign` somewhere in this function's body is a local variable, not
-    a direct reference to a module-level function -- calling it by its own
+    writer(...)`): a bare `Name` call target that is itself LOCALLY BOUND
+    somewhere in this function's body is a local variable, not a direct
+    reference to a module-level function -- calling it by its own
     identifier (here, `"writer"`) would never match the `_write_*_for_day`
     naming convention, so the write it makes would silently read as
     generic out-of-scope infrastructure (indistinguishable from a
-    `logger.info(...)` call) instead of the real family write it is. If
-    the alias resolves to EXACTLY ONE assigned `Name`/`Attribute` target
-    across the whole function, that target's own name is used in its
-    place. If the alias is assigned more than once, assigned a
-    non-Name/Attribute value (a call result, a subscript, ...), or never
-    assigned at all despite being called as if it were local, this
-    function REFUSES (SystemExit) rather than silently treating the bare
-    alias identifier as an ordinary, presumably-irrelevant call name --
-    the same fail-closed shape as the opaque-call case above, for the
-    same reason: a call this walker cannot resolve must never be treated
-    as though it were already known to be out of scope.
+    `logger.info(...)` call) instead of the real family write it is.
+
+    Round-3 finding F1 (codex, CHAOS-5118) widened this past plain
+    `Assign`: a `for writer in (real_fn,): writer(...)` loop-target binding
+    (`ast.For`), and a CHAIN of aliases (`first = real_fn; second = first;
+    second(...)`), both silently fell through the round-2 fix the same
+    way the original alias case fell through round-1's. The fix now:
+    (1) collects every LOCAL BINDING of a plain name -- `Assign` and
+    `AugAssign` targets, `For`/`AsyncFor` loop targets, `With`/`AsyncWith`
+    `as` targets, and comprehension targets -- not just `Assign`; (2) for
+    the two shapes that unambiguously determine a single bound value
+    (`Assign` to a `Name`/`Attribute`, and `For` over a single-element
+    `Tuple`/`List` literal of one `Name`/`Attribute`) records that value;
+    every OTHER binding shape (multiple assignments to the same name,
+    `With`, comprehensions, a `for` over anything but a literal
+    one-element container, ...) is marked immediately unresolvable rather
+    than guessed at; (3) CHAINS are followed to their root by resolving
+    repeatedly (`second` -> `first` -> `real_fn`) with cycle detection,
+    so an alias-of-an-alias resolves all the way through instead of
+    stopping at the first hop. If the chain ever passes through an
+    unresolvable link, or a local binding is never resolvable in the
+    first place, this function REFUSES (SystemExit) rather than silently
+    treating the bare alias identifier as an ordinary, presumably-
+    irrelevant call name -- the same fail-closed shape as the opaque-call
+    case above, for the same reason: a call this walker cannot resolve
+    must never be treated as though it were already known to be out of
+    scope.
     """
     tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
     target = next(
@@ -508,31 +524,67 @@ def load_finalize_write_calls() -> set[str]:
             "and DAILY_FINALIZE_FN."
         )
 
-    # First pass: every plain `name = <value>` assignment in the function,
-    # so a later Call(func=Name(id=name)) can be told apart from a direct
-    # reference to a module-level function of that same name. `None` marks
-    # an alias that cannot be resolved (multiple distinct assignments, or a
-    # value that is itself not a plain Name/Attribute).
-    # None marks an alias this walker cannot resolve to one function name.
-    aliases: dict[str, str | None] = {}
+    # First pass: every LOCAL BINDING of a plain name in the function, so a
+    # later Call(func=Name(id=name)) can be told apart from a direct
+    # reference to a module-level function of that same name. `raw_next`
+    # maps a bound name to the ONE-HOP value it resolves to; `None` marks a
+    # binding this walker refuses to guess at (multiple distinct bindings,
+    # or a shape it does not specifically resolve).
+    raw_next: dict[str, str | None] = {}
+
+    def _bind(name: str, resolved: str | None) -> None:
+        if name in raw_next and raw_next[name] != resolved:
+            raw_next[name] = None
+        else:
+            raw_next[name] = resolved
+
+    def _one_hop_value(value: ast.expr) -> str | None:
+        if isinstance(value, ast.Name):
+            return value.id
+        if isinstance(value, ast.Attribute):
+            return value.attr
+        return None
+
     for node in ast.walk(target):
-        if not isinstance(node, ast.Assign):
-            continue
-        for element in node.targets:
-            if not isinstance(element, ast.Name):
-                continue
-            value = node.value
-            resolved: str | None
-            if isinstance(value, ast.Name):
-                resolved = value.id
-            elif isinstance(value, ast.Attribute):
-                resolved = value.attr
-            else:
+        if isinstance(node, ast.Assign):
+            for element in node.targets:
+                if isinstance(element, ast.Name):
+                    _bind(element.id, _one_hop_value(node.value))
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name):
+                _bind(node.target.id, None)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            if isinstance(node.target, ast.Name):
                 resolved = None
-            if element.id in aliases and aliases[element.id] != resolved:
-                aliases[element.id] = None
-            else:
-                aliases[element.id] = resolved
+                if (
+                    isinstance(node.iter, (ast.Tuple, ast.List))
+                    and len(node.iter.elts) == 1
+                ):
+                    resolved = _one_hop_value(node.iter.elts[0])
+                _bind(node.target.id, resolved)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if isinstance(item.optional_vars, ast.Name):
+                    # `with x as y:` binds y to x.__enter__()'s return, not
+                    # to x itself -- never resolvable from source alone.
+                    _bind(item.optional_vars.id, None)
+        elif isinstance(node, ast.comprehension):
+            if isinstance(node.target, ast.Name):
+                _bind(node.target.id, None)
+
+    def _resolve_chain(name: str, seen: set[str]) -> str | None:
+        if name in seen:
+            return None  # cycle
+        if name not in raw_next:
+            return name  # not a further local binding -- a real reference
+        value = raw_next[name]
+        if value is None:
+            return None
+        return _resolve_chain(value, seen | {name})
+
+    aliases: dict[str, str | None] = {
+        name: _resolve_chain(name, set()) for name in raw_next
+    }
 
     calls: set[str] = set()
     opaque: list[str] = []

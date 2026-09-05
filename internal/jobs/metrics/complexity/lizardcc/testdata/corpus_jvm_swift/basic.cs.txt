@@ -1,0 +1,72 @@
+using System;
+
+namespace Shapes
+{
+    public class Rectangle
+    {
+        public int Width;
+        public int Height;
+
+        public int Area()
+        {
+            if (Width > 0 && Height > 0)
+            {
+                return Width * Height;
+            }
+            return 0;
+        }
+
+        public int Classify(int score) => score > 90 ? 3 : score > 50 ? 2 : 1;
+    }
+
+    public class Point(int X, int Y)
+    {
+        public int Sum()
+        {
+            if (X > 0 && Y > 0)
+            {
+                return X + Y;
+            }
+            return 0;
+        }
+    }
+
+    public class Dispatcher
+    {
+        public int Pick(int a, int b, int c)
+        {
+            switch (a)
+            {
+                case 1:
+                    return b;
+                case 2:
+                    return c;
+                default:
+                    return a;
+            }
+        }
+
+        public int? Lookup(int? x)
+        {
+            return x ?? -1;
+        }
+
+        public int Loop(int n)
+        {
+            int total = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (i % 2 == 0 || i % 3 == 0)
+                {
+                    total += i;
+                }
+            }
+            while (total > 100 && n > 0)
+            {
+                total -= n;
+                n--;
+            }
+            return total;
+        }
+    }
+}

@@ -49,7 +49,7 @@ two family tables are generated from `families.json`'s family-name sets (coverag
 `cmd/dev-health-worker/native_families_artifact_test.go` statically parses out of `daily.go`'s own
 registration wiring, so no curated Python dict or hand-set JSON field can silently drift from what the
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
-for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
+for those 2 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
 METRICS/RECOMMENDATIONS/WEBHOOKS/STREAMS/SCHEDULER-RECONCILER-OPERATOR is hand-curated prose (read against
 both CLI trees -- Python `dev_health_ops.cli` and Go `cmd/dev-health-workerctl`/`dev-health-stream-runner` --
 at the pinned sha below), because no JSON registry maps a CLI verb to a River kind or Python entrypoint.
@@ -272,7 +272,7 @@ Go owns the writes. Deleting the Python path is a deliberate follow-up, not part
 | `dev-hops work-graph build` | COMPAT-Python | `work_graph/runner.py run_work_graph_build`, wired through the SAME `workgraph.build` bridge as the worker path (table below) | CHAOS-4441 |
 | `dev-hops investment materialize` | COMPAT-Python | `work_graph/runner.py run_investment_materialization`. NOTE: the CLI verb is a SEPARATE entry point from the `investment.materialize` River kind, which is NATIVE (table below) -- the CLI still runs the Python implementation directly, and re-pointing it is CHAOS-4767's follow-up. | CHAOS-4767 |
 
-No `families.json` equivalent exists for these 5 River kinds (`internal/jobs/families.json` does not exist)
+No `families.json` equivalent exists for these 2 River kinds (`internal/jobs/families.json` does not exist)
 -- the table below is entirely hand-tracked in `WORKGRAPH_INVESTMENT_LEDGER` in
 `scripts/gen_go_migration_matrix_docs.py`; there is no live producer to drift-guard against mechanically.
 Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather than re-deriving there.
@@ -282,9 +282,6 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | --- | --- | --- | --- | --- |
 | DORA | NATIVE | see §3 | river, native | CHAOS-3092 R1 (Done) |
 | cognitive load (team_cognitive_load) | COMPAT-Python | see §2 | bridge | NONE found |
-| investment.chunk | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
-| investment.dispatch | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
-| investment.finalize | PYTHON-ONLY (dead Go shell) | Go: wired, never invoked (`internal/jobs/workgraph/handler.go`); Python: Celery-only target, itself unreachable | bridge (dead in both directions) | CHAOS-4438 (dead-code removal, Backlog) |
 | investment.materialize | NATIVE | Go: `internal/jobs/investment/nativeexecutor.go` (implements the same `workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + `categorize` LLM plane + `chwrite` write. Python `materialize.py:1169-1854 materialize_investments()` is retained but no longer reached from the worker path (removal is CHAOS-4767) | river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment` | CHAOS-4441 (cutover landed) |
 | recommendations | NATIVE | see §3 | river, native | CHAOS-4281/CHAOS-3092 (Done) |
 | workgraph.build | COMPAT-Python (narrow native pre/post-step) | Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go's own doc comment) | bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor` | CHAOS-4924 (six remaining sub-builders + cutover) |

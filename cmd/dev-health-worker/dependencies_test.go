@@ -1487,9 +1487,6 @@ func executableHeavyRegistry(
 	demoted := map[string]bool{
 		jobcontract.KindWorkGraphBuild:        true,
 		jobcontract.KindInvestmentMaterialize: true,
-		jobcontract.KindInvestmentDispatch:    true,
-		jobcontract.KindInvestmentChunk:       true,
-		jobcontract.KindInvestmentFinalize:    true,
 	}
 	for _, job := range document.Jobs {
 		kind, _ := job["kind"].(string)

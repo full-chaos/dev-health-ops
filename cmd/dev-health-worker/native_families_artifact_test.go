@@ -55,11 +55,14 @@ type nativeFamiliesArtifact struct {
 	// same kind of thing, and would also silently change Daily's cardinality.
 	Finalize  map[string]string `json:"finalize"`
 	Remaining map[string]string `json:"remaining"`
-	// Workgraph covers the five workgraph/investment River kinds. Added by
-	// CHAOS-4441's cutover: before it, every one of those kinds took the same
-	// HTTP bridge executor, so there was nothing to record and the artifact had
-	// no key for them at all -- which is exactly why the artifact could not
-	// have detected that the cutover had never happened. It can now.
+	// Workgraph covers the two live workgraph/investment River kinds
+	// (workgraph.build, investment.materialize) -- investment.dispatch/
+	// chunk/finalize were deleted under CHAOS-4438 (dead Go shells, zero
+	// producers). Added by CHAOS-4441's cutover: before it, every one of
+	// these kinds took the same HTTP bridge executor, so there was nothing
+	// to record and the artifact had no key for them at all -- which is
+	// exactly why the artifact could not have detected that the cutover had
+	// never happened. It can now.
 	Workgraph map[string]string `json:"workgraph"`
 }
 
@@ -793,19 +796,16 @@ func parseJobContractKindValues(t *testing.T, repoRoot string) map[string]string
 // revert of the cutover fails HERE with a readable message even if someone
 // regenerated the artifact to match the reverted wiring.
 //
-// investment.dispatch/chunk/finalize stay compat deliberately -- they are dead
-// shells (CHAOS-4438) with no Python target either, so porting them would be
-// work with no runtime effect. workgraph.build stays compat until CHAOS-4924's
-// six remaining sub-builders land.
+// investment.dispatch/chunk/finalize were deleted entirely under CHAOS-4438
+// (dead Go shells, zero producers ever created a request row for them) --
+// they no longer appear in the artifact at all. workgraph.build stays compat
+// until CHAOS-4924's six remaining sub-builders land.
 func TestWorkgraphArtifactRecordsTheInvestmentCutover(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
 	want := map[string]string{
 		"workgraph.build":        "compat",
 		"investment.materialize": "native",
-		"investment.dispatch":    "compat",
-		"investment.chunk":       "compat",
-		"investment.finalize":    "compat",
 	}
 	if len(artifact.Workgraph) != len(want) {
 		t.Fatalf("expected %d workgraph kinds, got %d: %v", len(want), len(artifact.Workgraph), artifact.Workgraph)

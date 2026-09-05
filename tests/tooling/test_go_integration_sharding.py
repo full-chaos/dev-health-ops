@@ -2528,12 +2528,18 @@ _IMAGE_PULLING_ACTION_DEBT = {
     # CHAOS-4906 (runner contract v1.6): the re-added (worker, linux/arm64)
     # self-hosted-pool pilot (ported from closed #2180 into v1.6 shape) --
     # same tradeoff as go-build/go-merge above, not a new one.
+    #
+    # CHAOS-5197: this job used to be TWO separate jobs -- an always-hosted
+    # `go-build-worker-arm64` and an always-self-hosted
+    # `go-build-worker-arm64-self-hosted` sibling, deny-list era. The
+    # allow-list conversion consolidated them into ONE job (id kept as
+    # `go-build-worker-arm64`, see docker-images.yml's own comment there)
+    # whose `runs-on:` now routes via the allow-list ternary instead of two
+    # separate job definitions -- so the `-self-hosted` entry this list used
+    # to carry no longer names a real job and was deleted here, per this
+    # test's own stale-entry error message ("delete them so the list cannot
+    # rot into a silent allowlist").
     ("docker-images.yml", "go-build-worker-arm64", "docker/setup-buildx-action"),
-    (
-        "docker-images.yml",
-        "go-build-worker-arm64-self-hosted",
-        "docker/setup-buildx-action",
-    ),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

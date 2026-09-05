@@ -2,69 +2,6 @@
   "schema_version": 1,
   "jobs": [
     {
-      "kind": "investment.chunk",
-      "state": "go_default",
-      "producer_version": 1,
-      "consumer_versions": [
-        1
-      ],
-      "required_queues": [
-        "investment"
-      ],
-      "route": "river",
-      "rollback_route": "celery",
-      "evidence": [
-        "contract_schema",
-        "cross_language_golden",
-        "family_inventory",
-        "fenced_request_ledger",
-        "handler_wiring",
-        "replay_recovery"
-      ]
-    },
-    {
-      "kind": "investment.dispatch",
-      "state": "go_default",
-      "producer_version": 1,
-      "consumer_versions": [
-        1
-      ],
-      "required_queues": [
-        "investment"
-      ],
-      "route": "river",
-      "rollback_route": "celery",
-      "evidence": [
-        "contract_schema",
-        "cross_language_golden",
-        "family_inventory",
-        "fenced_request_ledger",
-        "handler_wiring",
-        "replay_recovery"
-      ]
-    },
-    {
-      "kind": "investment.finalize",
-      "state": "go_default",
-      "producer_version": 1,
-      "consumer_versions": [
-        1
-      ],
-      "required_queues": [
-        "investment"
-      ],
-      "route": "river",
-      "rollback_route": "celery",
-      "evidence": [
-        "contract_schema",
-        "cross_language_golden",
-        "family_inventory",
-        "fenced_request_ledger",
-        "handler_wiring",
-        "replay_recovery"
-      ]
-    },
-    {
       "kind": "investment.materialize",
       "state": "go_default",
       "producer_version": 1,

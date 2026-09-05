@@ -24,6 +24,17 @@
 // and migrating it to share this package's pattern engine is follow-up work,
 // not a blocker for CHAOS-5084 (team-lead ruling, 2026-09-05). Documented
 // here so the next reader knows the gap is known, not missed.
+//
+// This package's own tests prove cross-language equivalence for the
+// precedence/gating logic (a frozen golden from the REAL Python function,
+// plus a live-Python rot guard) — deliberately NOT a real-ClickHouse
+// container test comparing this package end-to-end against Python: the
+// ClickHouse QUERY correctness underneath (teamownership.OwnedRepoIDs /
+// load_team_repo_ownership_map) is a separate, pre-existing, already-
+// documented-as-equivalent component, not new logic this extraction
+// introduces, and building a computeparity-style whole-container harness for
+// a resolver function this narrow would be exactly the over-engineering
+// ruled out (team-lead, 2026-09-05).
 package teamresolve
 
 import (

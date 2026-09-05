@@ -295,8 +295,24 @@ func (executor *Executor) computeForDay(
 	if err != nil {
 		return written, err
 	}
+	// ComputeLandscape's own team_map is a fallback used only when a stat row's
+	// OWN team_id is empty (compute_ic.py's `if not team_id: team_id =
+	// team_map.get(identity, "unassigned")`), unlike MergeICUserMetrics'
+	// override semantics above -- but it is resolved through the same
+	// TeamResolver, built here per rolling-stat identity rather than passed a
+	// pre-built map, for the same reason MergeICUserMetrics takes the resolver
+	// directly: identity normalization stays inside the resolver's own
+	// implementation.
+	landscapeTeams := map[string]string{}
+	if resolveTeam != nil {
+		for _, stat := range stats {
+			if mapped, ok := resolveTeam(stat.IdentityID); ok && mapped != "" {
+				landscapeTeams[stat.IdentityID] = mapped
+			}
+		}
+	}
 	landscapeWritten, err := executor.writeLandscape(
-		ctx, orgID, day, computedAt, ComputeLandscape(stats, teamMap))
+		ctx, orgID, day, computedAt, ComputeLandscape(stats, landscapeTeams))
 	if err != nil {
 		return written, err
 	}

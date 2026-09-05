@@ -341,16 +341,16 @@
       "dispatch_mechanism": "celery_task_decorator",
       "owner_role": "contributor",
       "target_owner": {
-        "type": "native_kind",
-        "value": "investment.chunk"
+        "type": "explicit_removal",
+        "value": "Go registry kind `investment.chunk` deleted outright under CHAOS-4438 (dead handler, zero producer anywhere) -- no replacement, no bridge route left to feed"
       },
-      "target_kind_id": "kind:investment.chunk",
+      "target_kind_id": "removed_kind:investment.chunk",
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `investment.chunk` no longer routes through the HTTP compatibility bridge.",
+      "deletion_evidence_requirement": "CONFIRMED under CHAOS-4438: registry kind `investment.chunk` and its Go handler were deleted outright (see contracts/jobs/v1/registry.json's retired_kinds ledger) -- the HTTP compatibility bridge this Celery task fed no longer has anything to route to. The Celery task itself is unchanged (Python side stays out of CHAOS-4438's scope); this row now documents an orphaned surface, not a live compatibility dependency.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "registry kind investment.chunk"
+      "notes": "registry kind investment.chunk retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.chunk"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:429",
@@ -365,16 +365,16 @@
       "dispatch_mechanism": "celery_task_decorator",
       "owner_role": "contributor",
       "target_owner": {
-        "type": "native_kind",
-        "value": "investment.finalize"
+        "type": "explicit_removal",
+        "value": "Go registry kind `investment.finalize` deleted outright under CHAOS-4438 (dead handler, zero producer anywhere) -- no replacement, no bridge route left to feed"
       },
-      "target_kind_id": "kind:investment.finalize",
+      "target_kind_id": "removed_kind:investment.finalize",
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `investment.finalize` no longer routes through the HTTP compatibility bridge.",
+      "deletion_evidence_requirement": "CONFIRMED under CHAOS-4438: registry kind `investment.finalize` and its Go handler were deleted outright (see contracts/jobs/v1/registry.json's retired_kinds ledger) -- the HTTP compatibility bridge this Celery task fed no longer has anything to route to. The Celery task itself is unchanged (Python side stays out of CHAOS-4438's scope); this row now documents an orphaned surface, not a live compatibility dependency.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "registry kind investment.finalize"
+      "notes": "registry kind investment.finalize retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.finalize"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:503",
@@ -389,16 +389,16 @@
       "dispatch_mechanism": "celery_task_decorator",
       "owner_role": "contributor",
       "target_owner": {
-        "type": "native_kind",
-        "value": "investment.dispatch"
+        "type": "explicit_removal",
+        "value": "Go registry kind `investment.dispatch` deleted outright under CHAOS-4438 (dead handler, zero producer anywhere) -- no replacement, no bridge route left to feed"
       },
-      "target_kind_id": "kind:investment.dispatch",
+      "target_kind_id": "removed_kind:investment.dispatch",
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
       "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `investment.dispatch` no longer routes through the HTTP compatibility bridge.",
+      "deletion_evidence_requirement": "CONFIRMED under CHAOS-4438: registry kind `investment.dispatch` and its Go handler were deleted outright (see contracts/jobs/v1/registry.json's retired_kinds ledger) -- the HTTP compatibility bridge this Celery task fed no longer has anything to route to. The Celery task itself is unchanged (Python side stays out of CHAOS-4438's scope); this row now documents an orphaned surface, not a live compatibility dependency.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "registry kind investment.dispatch"
+      "notes": "registry kind investment.dispatch retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.dispatch"
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:665",

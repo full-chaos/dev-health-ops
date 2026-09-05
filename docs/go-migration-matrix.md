@@ -201,7 +201,7 @@ below) -- what changed is that the CLI no longer computes them ITSELF via a seco
 | Family | Executor | Citation | Ticket |
 | --- | --- | --- | --- |
 | ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
-| ai_impact | COMPAT-Python | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
+| ai_impact | NATIVE | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
 | ai_workflow | COMPAT-Python | Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day` | CHAOS-4286 |
 | benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |

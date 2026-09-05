@@ -45,7 +45,7 @@
       "rollback_route": "celery",
       "historical_limitation": "The existing seven-day late-data recomputation window and retained telemetry buckets define the recoverable history.",
       "parity_state": "partial_numerical_oracle",
-      "port": "pending"
+      "port": "go"
     },
     {
       "name": "capacity",

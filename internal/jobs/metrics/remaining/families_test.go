@@ -78,6 +78,7 @@ func TestFamilyPortMatchesKnownSplit(t *testing.T) {
 	wantGo := map[string]bool{
 		"capacity": true, "dora": true, "recommendations": true,
 		"membership_backfill": true, "work_item_attribution": true,
+		"release_impact": true,
 	}
 	for _, family := range inventory.Families {
 		want := "pending"

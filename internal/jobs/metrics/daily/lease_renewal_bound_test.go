@@ -24,8 +24,22 @@ import (
 // work is cancelled WELL BEFORE the parent deadline -- if the bound is absent,
 // nothing cancels it until the parent expires.
 func TestLeaseRenewalIsBoundedByTheLease(t *testing.T) {
-	const lease = 150 * time.Millisecond
-	parent, cancelParent := context.WithTimeout(context.Background(), 3*time.Second)
+	// The two durations are deliberately an ORDER OF MAGNITUDE apart. The
+	// discriminator is "cancelled promptly" versus "cancelled only when the
+	// parent expires" -- not a precise latency -- so the threshold must have
+	// enough headroom to survive a loaded scheduler.
+	//
+	// The first version of this test asserted elapsed <= lease (150ms) against
+	// an expected ~100ms, which left 50ms of margin and FLAKED on bigboy at
+	// load1 62: it passed at 0.10s and failed at 0.17s on the same code. A
+	// timing assertion tight enough to measure scheduler noise measures the
+	// scheduler, not the defect -- and an intermittently red test is worse than
+	// no test, because it trains people to re-run.
+	const (
+		lease         = 150 * time.Millisecond
+		parentTimeout = 5 * time.Second
+	)
+	parent, cancelParent := context.WithTimeout(context.Background(), parentTimeout)
 	defer cancelParent()
 
 	var renewCalls atomic.Int64
@@ -57,13 +71,17 @@ func TestLeaseRenewalIsBoundedByTheLease(t *testing.T) {
 
 	select {
 	case elapsed := <-workCancelled:
-		// One tick (lease/3) to fire, plus one bounded renewal (lease/3) to time
-		// out. Anything near the parent's 3s means nothing bounded the renewal.
-		if elapsed > lease {
-			t.Fatalf("work ran %v with a %v lease -- the renewal was not bounded, so the "+
-				"executor kept writing past a lease another worker can reclaim", elapsed, lease)
+		// Bounded: one tick (lease/3) to fire plus one renewal timeout (lease/3),
+		// so ~100ms. Unbounded: the full parentTimeout, 5s. Half the parent
+		// separates those two by a factor of 25 in each direction and cannot be
+		// crossed by scheduling jitter.
+		if elapsed > parentTimeout/2 {
+			t.Fatalf("work ran %v against a %v lease and a %v parent -- it was cancelled "+
+				"by the PARENT deadline, not by the lease bound, so the executor kept "+
+				"writing past a lease another worker can reclaim",
+				elapsed, lease, parentTimeout)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(parentTimeout + time.Second):
 		t.Fatal("work was never cancelled -- an unbounded renewal holds the job open " +
 			"while its lease expires, which is the two-writer hazard via timing")
 	}

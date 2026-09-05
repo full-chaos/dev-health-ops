@@ -169,7 +169,17 @@ func workgraphBuildPreSteps(
 	if stepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	steps := []workgraph.NativePreStep{step}
+
+	flagGuardsStep, flagGuardsStepErr := newFlagGuardsEdgesPreStep(connection)
+	if flagGuardsStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	operationalIncidentStep, operationalIncidentStepErr := newOperationalIncidentEdgesPreStep(connection)
+	if operationalIncidentStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
+	steps := []workgraph.NativePreStep{step, flagGuardsStep, operationalIncidentStep}
 
 	// The constructed steps must match the DECLARED order exactly. Without
 	// this, the declaration would be a comment: a step could be added to the
@@ -233,11 +243,13 @@ func buildPostStepOrder() []string {
 // the actual dispatch" split daily_native_family_registration_test.go uses.
 //
 // Appending here is a real decision, not a formality: see the ordering
-// invariant on workgraph.NativePreStep. lane-4752-go's edge producer straddles
-// this step in Python's build() and therefore needs at least two entries, one
-// before and one after "issue_pr_links".
+// invariant on workgraph.NativePreStep. "flag_guards_edges" and
+// "operational_incident_edges" (CHAOS-4924) read neither work_graph_issue_pr
+// nor any table another pre-step writes, so their position relative to
+// "issue_pr_links" is free -- placed last, preserving Python's own relative
+// order between the two of them (builder.py:468/470).
 func buildPreStepOrder() []string {
-	return []string{"issue_pr_links"}
+	return []string{"issue_pr_links", "flag_guards_edges", "operational_incident_edges"}
 }
 
 // addWorkgraphWorker routes each kind to its executor. `executor` is the

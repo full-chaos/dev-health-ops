@@ -142,7 +142,7 @@ func isNowOrRefuseAccessor(decl ast.Decl) bool {
 	}
 	return ident.Name == "DORAExecutor" || ident.Name == "CapacityExecutor" ||
 		ident.Name == "WorkItemAttributionExecutor" || ident.Name == "RecommendationsExecutor" ||
-		ident.Name == "MembershipExecutor"
+		ident.Name == "MembershipExecutor" || ident.Name == "ReleaseImpactExecutor"
 }
 
 // findNowUTCReferences walks every top-level declaration in every file,

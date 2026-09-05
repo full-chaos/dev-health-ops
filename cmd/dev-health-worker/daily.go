@@ -617,6 +617,56 @@ func buildDailyWorker(
 			}
 		}
 
+		// CHAOS-4296: the release_impact kind computes natively too. Same
+		// per-kind discipline as dora/capacity/recommendations above -- a
+		// refusal takes THIS KIND out of service and leaves its siblings
+		// registered, with an error log rather than a metric that merely
+		// stops moving.
+		var releaseImpactExecutor *remaining.ReleaseImpactExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingReleaseImpact
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					// codex r2 (CHAOS-4296/#2262): connectionErr was checked
+					// but never logged -- the caller saw only the generic
+					// errWorkerDependencyUnavailable sentinel, with no way to
+					// tell a DNS failure from a bad password from a refused
+					// connection. This exact discard is pre-existing at every
+					// other clickhousestore.Open call site in this function
+					// (dora/capacity/work_item_attribution/etc.), tracked
+					// fleet-wide as CHAOS-5102's sibling gap and out of scope
+					// to fix everywhere in this PR; fixed here because this
+					// call site is this PR's own diff.
+					logger.Error("release_impact ClickHouse connection failed",
+						"error", connectionErr)
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var releaseImpactObserver remaining.ReleaseImpactObserver
+			if candidate, ok := observer.(remaining.ReleaseImpactObserver); ok {
+				releaseImpactObserver = candidate
+			}
+			executor, executorErr := remaining.NewReleaseImpactExecutor(
+				context.Background(), metricsClickHouse, releaseImpactObserver, logger)
+			if executorErr != nil {
+				logger.Error(
+					"release impact native executor refused; the release_impact "+
+						"kind will not be served and its partitions will "+
+						"accumulate unclaimed. Every other remaining kind is "+
+						"unaffected.",
+					"error", executorErr,
+				)
+			} else {
+				releaseImpactExecutor = executor
+			}
+		}
+
 		for _, spec := range remainingSpecs {
 			family := remainingFamilies[spec.Kind]
 			var registeredSpec jobruntime.HandlerSpec
@@ -673,8 +723,18 @@ func buildDailyWorker(
 					workers, registry, spec, store, recommendationsExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingReleaseImpact:
+				if releaseImpactExecutor == nil {
+					// The native executor refused above (or was never
+					// constructed because no release_impact spec is being
+					// served). Skip rather than register a handler around a
+					// nil executor, which would claim partitions and then
+					// fail each one -- turning a clean "not served" into a
+					// retry loop that looks like flapping.
+					continue
+				}
+				// Native, not `compatibility` -- this is the CHAOS-4296 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, releaseImpactExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingWorkItemAttribution:
 				if workItemAttributionExecutor == nil {
@@ -900,6 +960,22 @@ func dailyNativeFamilyRegistrations(
 				"every partition. Every other daily-metrics "+
 				"family is unaffected.",
 			"error", workGraphEdgesErr,
+		)
+	}
+	// CHAOS-4280 part B / CHAOS-4286 part B: ai_workflow. Same fail-open
+	// construction policy, and PRE-BRIDGE: it reads git_pull_requests and
+	// work_graph_issue_pr, never another compat family's daily output.
+	// Shares the SAME "auto" job-provider convention as work_graph_edges
+	// above for the identical reason (discover_repos' own default).
+	if aiWorkflowExecutor, aiWorkflowErr := daily.NewAIWorkflowExecutor(clickhouseConnection, "auto"); aiWorkflowErr == nil {
+		native["ai_workflow"] = aiWorkflowExecutor
+	} else {
+		logger.Error(
+			"ai_workflow native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiWorkflowErr,
 		)
 	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as

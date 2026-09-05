@@ -4,6 +4,7 @@
   "daily": {
     "ai_governance": "native",
     "ai_impact": "native",
+    "ai_workflow": "native",
     "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",
@@ -30,7 +31,7 @@
     "dora": "native",
     "membership_backfill": "native",
     "recommendations": "native",
-    "release_impact": "compat",
+    "release_impact": "native",
     "work_item_attribution": "native"
   },
   "workgraph": {

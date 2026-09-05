@@ -235,14 +235,11 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4280",
     },
     "ai_workflow": {
-        # CHAOS-5153: was `work_graph/extractors/ai_workflow.py:212
-        # _extract_ai_workflow_for_day` -- wrong three ways at once.
-        # _extract_ai_workflow_for_day is actually defined in
-        # metrics/job_daily.py, not ai_workflow.py at all; ai_workflow.py:212
-        # is extract_review_deployment_incident_edges, a DIFFERENT family's
-        # (work_graph_edges, next row below) function -- the same function
-        # was named for two different families, once correctly, once not.
-        "citation": "Python: `metrics/job_daily.py:258 _extract_ai_workflow_for_day`",
+        # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212
+        # -- the module AND the line were both wrong before) is now moot:
+        # CHAOS-4286 ported this family to native Go, same shape as the
+        # testops_* rows above.
+        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`)",
         "ticket": "CHAOS-4286",
     },
     "work_graph_edges": {
@@ -323,9 +320,12 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4291",
     },
     "release_impact": {
-        "citation": "Python: `job_release_impact.py` -> `release_impact.py`",
-        "route": "river, bridge (`daily.go:621-624`, uses `compatibility` directly)",
-        "ticket": "CHAOS-4296",
+        "citation": (
+            "Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, "
+            "`release_impact_native_clickhouse.go`"
+        ),
+        "route": "river, native (`daily.go:590-621`)",
+        "ticket": "CHAOS-4296 (Done)",
     },
 }
 

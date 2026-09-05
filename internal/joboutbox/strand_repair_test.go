@@ -450,3 +450,107 @@ func TestReconcilerLoopLogsEachRetiredKindObservation(t *testing.T) {
 		t.Fatalf("logged a retired-kind line with zero observations present:\n%s", cleanBuf.String())
 	}
 }
+
+// TestRelayStepRecoveryPreservesStrandResultOnObservationError is the
+// reproduction + fix for r2 finding F2 (P2, codex, CHAOS-4438): the 3 real
+// repair shapes inside StrandRepair.Step commit their rearms in their own
+// queue-pool transactions BEFORE the trailing retired-kind observation
+// query runs. If that read-only query then fails, StrandRepair.Step still
+// returns the already-committed counts alongside the error (see its own
+// fix); this test proves Relay.stepRecovery does not throw that away a
+// second time by copying fields only after checking err.
+func TestRelayStepRecoveryPreservesStrandResultOnObservationError(t *testing.T) {
+	observationErr := errors.New("retired-kind observation query failed")
+	strand := &fakeStrandRepair{
+		result: StrandRepairResult{
+			Rearmed:             4,
+			SkippedJobLive:      2,
+			SkippedClaimLive:    1,
+			SkippedClaimSettled: 3,
+			SkippedRaceLost:     2,
+		},
+		err: observationErr,
+	}
+	relay := &Relay{repair: fakeTerminalRepair{}, strandRepair: strand}
+	result, err := relay.stepRecovery(context.Background(), time.Now(), 1)
+	if !errors.Is(err, observationErr) {
+		t.Fatalf("stepRecovery error = %v, want observationErr", err)
+	}
+	if result.StrandsRearmed != 4 || result.StrandJobsSkippedLive != 2 ||
+		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 ||
+		result.StrandRaceLost != 2 {
+		t.Fatalf("result = %+v, want the already-committed strand counts preserved despite the error", result)
+	}
+}
+
+// TestRetiredKindObservationsLikelyTruncated is the red/green proof for r2
+// finding F3 (P2, codex, CHAOS-4438): the observation query has a fixed cap
+// with no cursor between ticks, so a count that never reaches the cap
+// proves nothing was missed, while a count that DOES reach it must be
+// flagged -- an occasional false alarm at the exact boundary is the correct
+// fail-closed direction (see the function's own doc comment).
+func TestRetiredKindObservationsLikelyTruncated(t *testing.T) {
+	for _, tc := range []struct {
+		observed int
+		want     bool
+	}{
+		{observed: 0, want: false},
+		{observed: retiredKindsObservationCap - 1, want: false},
+		{observed: retiredKindsObservationCap, want: true},
+	} {
+		if got := retiredKindObservationsLikelyTruncated(tc.observed); got != tc.want {
+			t.Fatalf("retiredKindObservationsLikelyTruncated(%d) = %v, want %v", tc.observed, got, tc.want)
+		}
+	}
+}
+
+// TestReconcilerLoopLogsRetiredKindTruncation is the red/green proof that
+// the truncation signal (r2 finding F3) actually reaches the operator, the
+// same way TestReconcilerLoopLogsEachRetiredKindObservation proves the
+// per-row signal does.
+func TestReconcilerLoopLogsRetiredKindTruncation(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)}
+
+	// GREEN: a step reporting truncation logs the distinct error line.
+	var buf bytes.Buffer
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{RetiredKindObservationsTruncated: true}, nil
+	})
+	loop, err := newReconcilerLoop(stepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&buf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "hit its cap") {
+		t.Fatalf("truncation was not logged:\n%s", buf.String())
+	}
+
+	// RED / negative control: an otherwise-identical step reporting NO
+	// truncation must not log this line.
+	var cleanBuf bytes.Buffer
+	cleanStepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, nil
+	})
+	cleanLoop, err := newReconcilerLoop(cleanStepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&cleanBuf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanLoop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cleanBuf.String(), "hit its cap") {
+		t.Fatalf("logged truncation with none reported:\n%s", cleanBuf.String())
+	}
+}

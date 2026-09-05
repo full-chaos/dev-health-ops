@@ -374,6 +374,16 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 			"organization_id", observation.OrganizationID,
 		)
 	}
+	// r2 finding F3 (P2, codex, CHAOS-4438): the observation query has no
+	// cursor between ticks, so it would silently return the SAME first page
+	// forever if the true count ever exceeded its cap -- surfacing that
+	// possibility explicitly, separate from the per-row lines above, is the
+	// only way an operator learns there may be MORE than what got logged.
+	if result.RetiredKindObservationsTruncated {
+		loop.logger().ErrorContext(
+			ctx, "retired job kind observation query hit its cap -- more rows may exist than were logged this tick",
+		)
+	}
 	if err == nil {
 		loop.ready.Store(true)
 	}

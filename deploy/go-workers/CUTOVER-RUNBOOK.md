@@ -132,9 +132,17 @@ list). CHAOS-4438 retired three more the same way --
 `investment.dispatch`/`investment.chunk`/`investment.finalize` (also
 registered handlers with zero producer anywhere) -- dropped from the loop
 below the same way CHAOS-4243's retirements were. The verification loop
-below reflects the current 22-kind registry (`contracts/jobs/v1/registry.json`);
-`job-routes apply` is a verifying no-op for every one of them, which makes it
-a safe read-back:
+below is `0066`'s own 23-kind cohort minus those 5 retirements (18 kinds),
+**not** every kind in the current registry -- `sync.provider_unit`
+(deliberately still on `river_canary`, see "What this document deliberately
+does not cover" above), the four sync-dispatch kinds (a separate transport,
+`sync_dispatch_transport_routes`, never touched by `0066`), and kinds added
+by later, unrelated tickets (`metrics.remaining.work_item_attribution`,
+`sync.team_repo_ownership_derivation`, `system.sync_coverage_refresh`) are
+correctly absent -- this runbook was never about them, and asserting
+`transport=river` for the canary kind would wrongly fail a healthy
+deployment. `job-routes apply` is a verifying no-op for every one of the 18
+kinds below, which makes it a safe read-back:
 
 ```bash
 for kind in \
@@ -143,11 +151,10 @@ for kind in \
   metrics.remaining.capacity metrics.remaining.complexity metrics.remaining.dora \
   metrics.remaining.membership_backfill \
   metrics.remaining.recommendations metrics.remaining.release_impact \
-  metrics.remaining.work_item_attribution \
   operational.billing_notification operational.webhook_delivery \
   report.execute_on_demand report.execute_scheduled \
-  sync.provider_unit sync.team_autoimport sync.team_repo_ownership_derivation \
-  system.heartbeat system.retention_cleanup system.sync_coverage_refresh \
+  sync.team_autoimport \
+  system.heartbeat system.retention_cleanup \
   workgraph.build
 do
   dev-health-workerctl job-routes status "$kind"

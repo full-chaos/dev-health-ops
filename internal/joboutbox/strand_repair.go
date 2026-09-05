@@ -82,6 +82,35 @@ type StrandRepairResult struct {
 	// check costs one bounded query and proves that claim rather than
 	// assuming it.
 	RetiredKindObservations []RetiredKindObservation
+	// RetiredKindObservationsTruncated (r2 finding F3, P2, codex,
+	// CHAOS-4438): true when the observation query returned exactly
+	// retiredKindsObservationCap rows -- meaning there may be MORE retired-
+	// kind rows this pass could not see at all, not just later ones queued
+	// for a future pass. The query orders by id with no cursor between
+	// calls, so unlike the real repair shapes (bounded by the reconciler's
+	// own claim/lease state machine, which naturally drains), a kind with
+	// no producer can only ever accumulate outbox rows, never resolve them
+	// -- the SAME first page would repeat forever without this signal.
+	RetiredKindObservationsTruncated bool
+}
+
+// retiredKindsObservationCap is deliberately independent of the reconciler's
+// own operational limit (minReconcilerLimit..maxReconcilerLimit, currently
+// capped at 100): this query is read-only and diagnostic, not a repair
+// batch a claim/lease state machine will drain over successive passes, so
+// it can afford a much larger single read. Kept far below "unbounded" only
+// so a truly pathological accumulation cannot make one tick scan an
+// unreasonable number of rows.
+const retiredKindsObservationCap = 1000
+
+// retiredKindObservationsLikelyTruncated is a heuristic, not a proof: exactly
+// reaching the cap does not GUARANTEE more rows exist (the true count could
+// happen to equal the cap), but falling short of it DOES guarantee nothing
+// was missed, since the query has no other filter that could hide a row.
+// Fail-closed direction: an occasional false alarm at the boundary is far
+// cheaper than a silent gap, so this is deliberately "biased toward warning".
+func retiredKindObservationsLikelyTruncated(observed int) bool {
+	return observed >= retiredKindsObservationCap
 }
 
 // RetiredKindObservation is one worker_job_outbox row referencing a kind that
@@ -225,11 +254,21 @@ func (repair *StrandRepair) Step(
 		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
 		result.SkippedRaceLost += shapeResult.SkippedRaceLost
 	}
-	observed, err := repair.observeRetiredKinds(ctx, limit)
+	observed, err := repair.observeRetiredKinds(ctx)
 	if err != nil {
-		return StrandRepairResult{}, err
+		// r2 finding F2 (P2, codex, CHAOS-4438): the 3 shapes above already
+		// COMMITTED their rearms by this point (rearm() runs inside its own
+		// queue-pool transaction, phase 3 of stepShape) -- discarding
+		// `result` here would report zero repair activity for work that
+		// really happened, matching Relay.stepRecovery's own principle one
+		// layer up (it returns its accumulated `result` on a seam error
+		// too, never a fresh zero value). This is a read-only OBSERVABILITY
+		// query failing after the real repair work is done; it must never
+		// erase evidence of that work.
+		return result, err
 	}
 	result.RetiredKindObservations = observed
+	result.RetiredKindObservationsTruncated = retiredKindObservationsLikelyTruncated(len(observed))
 	return result, nil
 }
 
@@ -242,9 +281,8 @@ func (repair *StrandRepair) Step(
 // design (see the StrandRepair doc comment on the two-pool split).
 func (repair *StrandRepair) observeRetiredKinds(
 	ctx context.Context,
-	limit int,
 ) ([]RetiredKindObservation, error) {
-	rows, err := repair.queryQueue(ctx, retiredKindsSQL, retiredWorkgraphKinds, limit)
+	rows, err := repair.queryQueue(ctx, retiredKindsSQL, retiredWorkgraphKinds, retiredKindsObservationCap)
 	if err != nil || rows == nil {
 		return nil, classifyStrandError(err)
 	}

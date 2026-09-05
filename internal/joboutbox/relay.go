@@ -49,11 +49,14 @@ type StepResult struct {
 	// ReconcilerLoop, the only layer in this chain holding a logger, can log
 	// one line per observation.
 	RetiredKindObservations []RetiredKindObservation
-	Claimed                 int
-	Deferred                int
-	Delivered               int
-	Retried                 int
-	Dead                    int
+	// RetiredKindObservationsTruncated: see
+	// StrandRepairResult.RetiredKindObservationsTruncated (r2 finding F3).
+	RetiredKindObservationsTruncated bool
+	Claimed                          int
+	Deferred                         int
+	Delivered                        int
+	Retried                          int
+	Dead                             int
 	LeaseLost               int
 }
 
@@ -217,15 +220,24 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 	}
 	if relay.strandRepair != nil {
 		rearmed, err := relay.strandRepair.Step(ctx, now, limit)
-		if err != nil {
-			return result, err
-		}
+		// r2 finding F2 (P2, codex, CHAOS-4438): copy rearmed's fields into
+		// result BEFORE checking err, not after -- StrandRepair.Step can
+		// return a non-zero result alongside a non-nil error (its own
+		// shapes already committed rearms; only the trailing read-only
+		// retired-kind observation query failed). Checking err first and
+		// returning early, as this used to, would silently re-introduce
+		// the exact "discard already-committed work" bug the callee was
+		// just fixed to avoid, one layer up.
 		result.StrandsRearmed = rearmed.Rearmed
 		result.StrandJobsSkippedLive = rearmed.SkippedJobLive
 		result.StrandClaimsLive = rearmed.SkippedClaimLive
 		result.StrandClaimsSettled = rearmed.SkippedClaimSettled
 		result.StrandRaceLost = rearmed.SkippedRaceLost
 		result.RetiredKindObservations = rearmed.RetiredKindObservations
+		result.RetiredKindObservationsTruncated = rearmed.RetiredKindObservationsTruncated
+		if err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

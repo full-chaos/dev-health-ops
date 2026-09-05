@@ -1136,8 +1136,8 @@ async def run_daily_metrics_job(
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
     ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
-    ``compounding_risk`` CHAOS-4287, and ``review_edges`` CHAOS-4279); naming
-    any other family here has no effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -2094,16 +2094,30 @@ async def run_daily_metrics_job(
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights). Reads from ClickHouse via the sink.
-        for s in sinks:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=d,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        #
+        # CHAOS-4288: benchmarking has a native Go executor
+        # (BenchmarkingExecutor). When the Go dispatcher names it in
+        # skip_families it has already computed and written this org/day, so
+        # skip the whole call -- nothing else in this function consumes its
+        # output, which makes this the cicd/team_wellbeing shape.
+        #
+        # NOTE the native side computes ONCE PER ORG/DAY, on the partition
+        # holding the org's lexicographically-first repo, whereas this call
+        # runs on EVERY partition: run_benchmarking_for_day takes no repo_id,
+        # so an org with N repos appends N identical row sets to six
+        # append-only tables here. That divergence is deliberate and ruled --
+        # see BenchmarkingExecutor's doc comment.
+        if "benchmarking" not in skip_families:
+            for s in sinks:
+                try:
+                    run_benchmarking_for_day(
+                        s,
+                        as_of_day=d,
+                        computed_at=computed_at,
+                        org_id=org_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "generated_from": "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
   "daily": {
+    "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",
     "deploy": "native",

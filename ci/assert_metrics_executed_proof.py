@@ -138,6 +138,20 @@ SCOPE_ID_REPO_FAMILIES: dict[str, str] = {
     "compounding_risk": "compounding_risk_daily",
 }
 
+# Scope-KEY families (CHAOS-4288): a FOURTH shape. The benchmarking tables are
+# keyed (metric_name, scope_type, scope_key, period_end) -- no repo_id, no
+# team_id, and no `day` column at all. Their repo-scope rows carry the repo id
+# in `scope_key` (a String), so the same dead-id oracle applies, but the column
+# NAMES differ from compounding_risk's scope/scope_id pair, which is why this
+# cannot reuse SCOPE_ID_REPO_FAMILIES' query.
+#
+# One representative table per family, as everywhere else here:
+# testops_metric_baselines is written from the same in-process call as the
+# other five, so checking it is checking the call executed.
+SCOPE_KEY_FAMILIES: dict[str, str] = {
+    "benchmarking": "testops_metric_baselines",
+}
+
 
 def live_repo_ids(client, org_id: str) -> set[str]:
     """The org's real ClickHouse repo ids.
@@ -244,6 +258,39 @@ def team_readback(
     }
 
 
+def scope_key_repo_readback(
+    client, table: str, org_id: str, repo_ids: set[str], run_start: datetime
+) -> dict[str, FamilyRowCount]:
+    """scope_id_repo_readback's counterpart for scope_type/scope_key tables.
+
+    Same two properties: `scope_type = 'repo'` is pinned so team- and
+    global-scope rows cannot stand in as proof the repo path ran, and
+    `scope_key` is bound as Array(String) because it is a String column.
+    """
+    if not repo_ids:
+        return {}
+    result = client.query(
+        f"""
+        SELECT scope_key, count() AS n, max(computed_at) AS latest
+        FROM {table}
+        WHERE org_id = {{org_id:String}}
+          AND scope_type = 'repo'
+          AND scope_key IN {{repo_ids:Array(String)}}
+          AND computed_at >= {{run_start:DateTime64(6)}}
+        GROUP BY scope_key
+        """,
+        parameters={
+            "org_id": org_id,
+            "repo_ids": sorted(repo_ids),
+            "run_start": run_start,
+        },
+    )
+    return {
+        str(row[0]): {"rows": int(row[1]), "latest_computed_at": str(row[2])}
+        for row in result.result_rows
+    }
+
+
 def scope_id_repo_readback(
     client, table: str, org_id: str, repo_ids: set[str], run_start: datetime
 ) -> dict[str, FamilyRowCount]:
@@ -318,6 +365,7 @@ def main() -> int:
         sorted(REPO_DAY_FAMILIES)
         + sorted(TEAM_DAY_FAMILIES)
         + sorted(SCOPE_ID_REPO_FAMILIES)
+        + sorted(SCOPE_KEY_FAMILIES)
     )
     parser.add_argument(
         "--families",
@@ -386,6 +434,27 @@ def main() -> int:
                         f"{family} ({table}): zero_rows_with_source_data -- no "
                         f"row with computed_at >= {args.run_start} for "
                         f"org {args.org_id}."
+                    )
+                continue
+
+            if family in SCOPE_KEY_FAMILIES:
+                table = SCOPE_KEY_FAMILIES[family]
+                key_rows = scope_key_repo_readback(
+                    client, table, args.org_id, repo_ids, run_start
+                )
+                total_rows = sum(int(v["rows"]) for v in key_rows.values())
+                summary[family] = {
+                    "table": table,
+                    "org_id": args.org_id,
+                    "rows_written": total_rows,
+                    "repos_with_rows": sorted(key_rows),
+                }
+                if total_rows == 0:
+                    failures.append(
+                        f"{family} ({table}): zero_rows_with_source_data -- no "
+                        f"scope_type='repo' row with computed_at >= "
+                        f"{args.run_start} for any of org {args.org_id}'s "
+                        f"{len(repo_ids)} live repo(s)."
                     )
                 continue
 

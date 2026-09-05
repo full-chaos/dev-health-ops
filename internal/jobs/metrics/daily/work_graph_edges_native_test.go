@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workgraphedges"
 	"github.com/google/uuid"
@@ -77,7 +78,7 @@ func TestRepoProvidersAreTheJobProviderNotTheColumn(t *testing.T) {
 	}}
 
 	providers, err := LoadWorkGraphEdgeRepoProviders(
-		context.Background(), conn, "70d529e0-3c06-4597-8480-794fd02328b6", "auto")
+		context.Background(), conn, "70d529e0-3c06-4597-8480-794fd02328b6", "auto", nil)
 	if err != nil {
 		t.Fatalf("load providers: %v", err)
 	}
@@ -113,6 +114,41 @@ func TestUnmappedRepositoryFallsBackToUnknownNotTheJobProvider(t *testing.T) {
 	}
 	if got := workGraphEdgesProviderFor(providers, unmapped); got != "unknown" {
 		t.Errorf("unmapped repo: got %q, want unknown (NOT the job provider)", got)
+	}
+}
+
+// TestPartitionRepoIsSeededEvenWhenTheReposQueryMissesIt is codex round
+// chaos-4286a-r2's finding 2. On the production path discover_repos
+// short-circuits on repo_id with NO `repos` read at all (see the doc comment
+// on LoadWorkGraphEdgeRepoProviders and on this test's sibling above), so
+// Python's map is NEVER missing the partition's own repo. The Go query can
+// miss it (a stale/absent `repos` row), and before the fix that meant the
+// repo read as "unknown" here -- this pins that it now reads jobProvider
+// instead, while a repo genuinely OUTSIDE the partition still falls back to
+// "unknown" exactly as TestUnmappedRepositoryFallsBackToUnknownNotTheJobProvider
+// pins.
+func TestPartitionRepoIsSeededEvenWhenTheReposQueryMissesIt(t *testing.T) {
+	partitionRepo := uuid.MustParse("d4f322ad-2102-1fbf-8425-7400573194f7")
+	outsidePartition := uuid.MustParse("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d")
+	// The query returns NOTHING for partitionRepo -- simulating a stale or
+	// absent `repos` row -- so only the seeding step can supply it.
+	conn := &providerConnStub{rows: &providerRowsStub{}}
+
+	providers, err := LoadWorkGraphEdgeRepoProviders(
+		context.Background(), conn, "70d529e0-3c06-4597-8480-794fd02328b6", "auto",
+		[]uuid.UUID{partitionRepo})
+	if err != nil {
+		t.Fatalf("load providers: %v", err)
+	}
+	if got := workGraphEdgesProviderFor(providers, partitionRepo); got != "auto" {
+		t.Errorf("partition repo missing from the query: got %q, want \"auto\" -- "+
+			"the partition's own repo must be seeded with the job provider even when "+
+			"the repos-table query misses it, matching Python's short-circuit guarantee", got)
+	}
+	// Negative control: a repo the partition never named must still fall back
+	// to "unknown", so the fix cannot have degenerated into "seed everything".
+	if got := workGraphEdgesProviderFor(providers, outsidePartition); got != "unknown" {
+		t.Errorf("repo outside the partition: got %q, want \"unknown\"", got)
 	}
 }
 
@@ -296,5 +332,58 @@ func TestWorkGraphEdgesPartialWriteNamesEachTableByPosition(t *testing.T) {
 		if strings.Contains(err.Error(), name) {
 			t.Errorf("out-of-range position named a real table (%q), which would mislead an operator: %v", name, err)
 		}
+	}
+}
+
+// sendErrorBatch's Append succeeds (nothing crossed the network yet) but Send
+// fails -- the ambiguous shape a real ack-loss produces: ClickHouse may have
+// committed the batch server-side, ack-loss is a transport failure, not a
+// database rejection.
+type sendErrorBatch struct{ sendErr error }
+
+func (batch *sendErrorBatch) Append(...any) error             { return nil }
+func (batch *sendErrorBatch) Send() error                     { return batch.sendErr }
+func (batch *sendErrorBatch) Abort() error                    { return nil }
+func (batch *sendErrorBatch) AppendStruct(any) error           { return errors.New("unused") }
+func (batch *sendErrorBatch) Column(int) chdriver.BatchColumn  { return nil }
+func (batch *sendErrorBatch) Flush() error                     { return nil }
+func (batch *sendErrorBatch) IsSent() bool                     { return false }
+func (batch *sendErrorBatch) Rows() int                        { return 0 }
+func (batch *sendErrorBatch) Columns() []column.Interface      { return nil }
+
+type sendErrorBatchConn struct{ batch *sendErrorBatch }
+
+func (conn *sendErrorBatchConn) PrepareBatch(
+	context.Context, string, ...chdriver.PrepareBatchOption,
+) (chdriver.Batch, error) {
+	return conn.batch, nil
+}
+
+// TestWorkGraphEdgesWriteReportsRowsOnSendAckLoss is codex round
+// chaos-4286a-r2's finding 1. Before the fix, each WriteWorkGraph*Edges
+// function returned (0, err) on ANY Send failure, including one where
+// ClickHouse actually committed the batch and only the acknowledgement was
+// lost in transit -- understating `written` in the caller and letting
+// wrapWorkGraphEdgesPartialWrite's `written > 0` guard stay CLOSED on a batch
+// that may already be sitting in the table, so the Python bridge would
+// rewrite it too. The fix reports len(rows) on a Send error specifically
+// (PrepareBatch/Append errors, which never crossed the network, still
+// correctly report 0).
+func TestWorkGraphEdgesWriteReportsRowsOnSendAckLoss(t *testing.T) {
+	sendErr := errors.New("simulated ack loss: connection reset after write")
+	conn := &sendErrorBatchConn{batch: &sendErrorBatch{sendErr: sendErr}}
+	rows := []workgraphedges.PRReviewOutcomeEdge{
+		{EdgeID: "e1", OrgID: uuid.New(), PRID: "pr-1", ReviewOutcomeID: "ro-1", Provider: "github", Source: "native"},
+		{EdgeID: "e2", OrgID: uuid.New(), PRID: "pr-2", ReviewOutcomeID: "ro-2", Provider: "github", Source: "native"},
+	}
+
+	written, err := WriteWorkGraphPRReviewOutcomeEdges(context.Background(), conn, rows, time.Now())
+	if !errors.Is(err, sendErr) {
+		t.Fatalf("err = %v, want it to wrap the Send error", err)
+	}
+	if written != len(rows) {
+		t.Fatalf("written = %d, want %d (the ambiguous-ack case must report the rows as landed, "+
+			"not 0 -- a caller that trusts 0 here can fail OPEN onto a batch ClickHouse already has)",
+			written, len(rows))
 	}
 }

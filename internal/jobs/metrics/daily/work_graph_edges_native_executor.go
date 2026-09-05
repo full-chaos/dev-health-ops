@@ -98,7 +98,7 @@ func (executor *WorkGraphEdgesExecutor) ComputeFamily(
 	dayEnd := dayStart.Add(24 * time.Hour)
 	computedAt := executor.nowUTC()
 
-	providers, err := LoadWorkGraphEdgeRepoProviders(ctx, executor.conn, run.OrganizationID, executor.jobProvider)
+	providers, err := LoadWorkGraphEdgeRepoProviders(ctx, executor.conn, run.OrganizationID, executor.jobProvider, repoIDs)
 	if err != nil {
 		return 0, err
 	}

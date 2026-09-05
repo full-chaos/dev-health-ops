@@ -299,8 +299,19 @@ func workGraphEdgeIncidents(started []IncidentRow) []workgraphedges.IncidentRow 
 // org's repos -- that path exists in Python and the daily worker does not take
 // it. What CHANGED is the VALUE: every discovered repo maps to the job's
 // provider argument, exactly as the early return does.
+//
+// codex round chaos-4286a-r2, finding 2: the query above can OMIT the
+// partition's own repo(s) -- a `repos` row that is temporarily absent or
+// replication-lagged behind the sync that already wrote this partition's
+// source rows -- and workGraphEdgesProviderFor then reads that repo as
+// "unknown", diverging from Python's GUARANTEE for this exact path: since
+// discover_repos short-circuits on repo_id with no `repos` read at all, the
+// production map is never missing the partition's own repo, ever. `repoIDs`
+// is therefore seeded directly with jobProvider, independent of what the
+// query above returns -- the query stays for the never-taken org-wide
+// enumeration path, seeding covers the path the worker actually takes.
 func LoadWorkGraphEdgeRepoProviders(
-	ctx context.Context, conn repositoryRows, organizationID, jobProvider string,
+	ctx context.Context, conn repositoryRows, organizationID, jobProvider string, repoIDs []uuid.UUID,
 ) (map[string]string, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidState
@@ -336,6 +347,13 @@ ORDER BY id`, organizationID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate work_graph_edges repo provider rows: %w", err)
+	}
+	// Seed the partition's own repo(s) unconditionally -- see the doc comment
+	// above. Every value here is jobProvider anyway (the query's own result
+	// discards the column and writes jobProvider too), so this only ever ADDS
+	// an entry the query missed; it never overwrites a different value.
+	for _, repoID := range repoIDs {
+		providers[repoID.String()] = jobProvider
 	}
 	return providers, nil
 }
@@ -386,7 +404,18 @@ func WriteWorkGraphPRReviewOutcomeEdges(
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send work_graph_pr_review_outcome_edges batch: %w", err)
+		// codex round chaos-4286a-r2, finding 1: Send is the one call in this
+		// function that crosses the network, so a Send ERROR is AMBIGUOUS --
+		// ClickHouse may have committed the insert server-side and only the
+		// acknowledgement was lost. Returning 0 here would tell the caller
+		// nothing landed, understating `written` and letting
+		// wrapWorkGraphEdgesPartialWrite's `written > 0` guard stay closed on
+		// a batch that may already be sitting in the table -- the Python
+		// bridge would then rewrite it too. Report len(rows) on this specific
+		// error path (never on PrepareBatch/Append, which have not crossed
+		// the network and genuinely wrote nothing) so the caller fails CLOSED
+		// on the ambiguity instead of silently open.
+		return len(rows), fmt.Errorf("send work_graph_pr_review_outcome_edges batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -420,7 +449,10 @@ func WriteWorkGraphPRDeploymentEdges(
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send work_graph_pr_deployment_edges batch: %w", err)
+		// Same ambiguous-ack reasoning as WriteWorkGraphPRReviewOutcomeEdges:
+		// Send crosses the network, so an error here does not prove the
+		// insert never landed. Report len(rows), not 0.
+		return len(rows), fmt.Errorf("send work_graph_pr_deployment_edges batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -455,7 +487,10 @@ func WriteWorkGraphDeploymentIncidentEdges(
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send work_graph_deployment_incident_edges batch: %w", err)
+		// Same ambiguous-ack reasoning as WriteWorkGraphPRReviewOutcomeEdges:
+		// Send crosses the network, so an error here does not prove the
+		// insert never landed. Report len(rows), not 0.
+		return len(rows), fmt.Errorf("send work_graph_deployment_incident_edges batch: %w", err)
 	}
 	return len(rows), nil
 }

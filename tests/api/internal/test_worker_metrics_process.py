@@ -647,8 +647,9 @@ async def test_metric_compatibility_process_remaining_metrics_never_safe_to_retr
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Codex R2 finding (CHAOS-4264): remaining-metrics families
-    (capacity/complexity/dora/release_impact/recommendations/
-    membership_backfill) never emit progress at all, so "zero progress"
+    (capacity/complexity/dora/recommendations/membership_backfill --
+    release_impact deleted, CHAOS-5234) never emit progress at all, so
+    "zero progress"
     would be indistinguishable from "wrote one repo's rows then crashed" --
     a fabricated safety claim, not an observed one. Even a signal-killed
     remaining execution with zero progress lines must stay unsafe to

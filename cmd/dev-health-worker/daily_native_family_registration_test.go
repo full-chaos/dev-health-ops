@@ -8,7 +8,17 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 )
+
+// fakeDailyStoreForRegistrationTest is the daily.Store analog of
+// githubWorkItemsBuildExecutorConn below: a non-nil value that satisfies the
+// interface for construction-time nil checks (CHAOS-5194:
+// NewBenchmarkingFinalizeExecutor requires store != nil) without ever having
+// a method called -- ClickHouse/Postgres I/O happens later, when the handler
+// executes a run, never at construction.
+type fakeDailyStoreForRegistrationTest struct{ daily.Store }
 
 // CHAOS-4292 rebase-gate finding (codex, 2026-09-01, two rounds): the
 // pre-existing drift checks this metrics.daily cutover wave relied on --
@@ -54,7 +64,9 @@ import (
 // maps' mere key-set union could never see.
 func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	native, postBridge, finalize := dailyNativeFamilyRegistrations(githubWorkItemsBuildExecutorConn{}, nil, logger)
+	native, postBridge, finalize := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, nil, logger,
+	)
 
 	registeredPhase := make(map[string]string, len(native)+len(postBridge))
 	for family := range native {

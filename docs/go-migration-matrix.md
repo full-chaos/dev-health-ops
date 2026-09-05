@@ -203,16 +203,8 @@ function directly, even for families whose worker kind is now native:
 | ic_finalize | NATIVE | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
-<<<<<<< HEAD
-| review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. Python `team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained as the compatibility-bridge fallback, gated behind `skip_families` | CHAOS-5141 |
-||||||| ae3faa8c7
-| review_edges | COMPAT-Python | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`) |
-=======
 | review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
-| team_cognitive_load | COMPAT-Python | Python: `team_cognitive_load.py build_team_cognitive_load_rows_for_day` (finalize scope) | NONE found (per `.remember/remaining-python-compute-inventory-2026-09-01.md`) |
->>>>>>> d46f0b3963f9f42546e9e97813976e183c2b87f0
+| team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. Python `team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained as the compatibility-bridge fallback, gated behind `skip_families` | CHAOS-5141 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | COMPAT-Python | Python: `compute_testops.py:355 compute_coverage_metrics_daily` | CHAOS-4284 |
 | testops_pipeline | COMPAT-Python | Python: `compute_testops.py:105 compute_pipeline_metrics_daily` | CHAOS-4284 |

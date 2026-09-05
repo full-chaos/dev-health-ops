@@ -476,6 +476,28 @@ FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
     "_write_team_complexity_for_day": ("remaining", "complexity"),
 }
 
+# CHAOS-5141: `_write_team_cognitive_load_for_day` is the FIRST call this
+# generator has seen that is the INVERSE of ic_finalize's shape above --
+# where ic_finalize's calls were irregular-NAMED but genuinely dormant
+# (removable from the ledger, falling through to None), this call fits the
+# `_write_<family>_..._for_day` naming convention EXACTLY (it naturally
+# resolves to ("daily", "team_cognitive_load") via that convention, with no
+# ledger entry needed or possible to remove) -- but it is JUST AS DORMANT:
+# the entire call is gated behind `if "team_cognitive_load" not in
+# skip_families:` in job_daily.py (CHAOS-5141's own routing-only change,
+# team_cognitive_load_native_executor.go's co-registration ruling), the
+# identical dormant-bridge-fallback shape every other wholly-native family
+# uses. Left unhandled, the naming-convention match alone would render the
+# same misleading "NATIVE (repo) / COMPAT-Python (finalize)" split label
+# ic_finalize used to get -- implying a repo-scope component that does not
+# exist for a family whose ENTIRE scope is finalize. This set names calls
+# that WOULD resolve via the naming convention but must be forced dormant
+# instead; checked in `_finalize_call_family` before the naming-convention
+# branch runs.
+FINALIZE_CALL_DORMANT_SKIP_GATED: set[str] = {
+    "_write_team_cognitive_load_for_day",
+}
+
 
 def load_finalize_write_calls() -> set[str]:
     """Mechanical fact, not hand-typed: every call name inside
@@ -839,6 +861,13 @@ def _finalize_call_family(
     an explicit FINALIZE_CALL_IRREGULAR_FAMILY entry stating which one);
     or is an irregular-ledger mapping that fails the plausibility check.
     """
+    if call_name in FINALIZE_CALL_DORMANT_SKIP_GATED:
+        # Forced dormant BEFORE the naming-convention branch below ever runs
+        # -- this call WOULD otherwise resolve via that convention (see
+        # FINALIZE_CALL_DORMANT_SKIP_GATED's own comment), but is proven
+        # skip_families-gated for its entire scope, same as every other
+        # wholly-native family's dormant bridge fallback.
+        return None
     if call_name in FINALIZE_CALL_IRREGULAR_FAMILY:
         namespace, family = FINALIZE_CALL_IRREGULAR_FAMILY[call_name]
         live = daily_names if namespace == "daily" else remaining_names
@@ -948,8 +977,23 @@ def _assert_no_stale_finalize_ledger_entries(
     there. load_daily_finalize_compat_families only iterates calls that ARE
     present, so a renamed/removed irregular call would otherwise just
     silently stop contributing its family to the compat set -- the doc
-    would go quiet instead of failing loudly."""
+    would go quiet instead of failing loudly. Same completeness direction
+    applied to FINALIZE_CALL_DORMANT_SKIP_GATED: a renamed/removed dormant
+    call would silently stop being forced dormant, and -- since it still
+    matches the naming convention under its OLD name only -- a rename would
+    just as silently make it fall through to the None branch anyway (the
+    call is simply gone from the AST), so this guard's real job is catching
+    the call being RENAMED to something the set no longer names while a
+    call of the OLD name lingers nowhere -- i.e. proving the set names
+    exactly the calls actually present, not a stale leftover."""
     present_calls = load_finalize_write_calls()
+    stale_dormant = FINALIZE_CALL_DORMANT_SKIP_GATED - present_calls
+    if stale_dormant:
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED names "
+            f"call(s) {sorted(stale_dormant)} that no longer appear in "
+            f"{DAILY_FINALIZE_FN}'s body -- renamed or removed? Update or drop the entry."
+        )
     stale = set(FINALIZE_CALL_IRREGULAR_FAMILY) - present_calls
     if stale:
         raise SystemExit(

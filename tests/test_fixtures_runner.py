@@ -1376,7 +1376,7 @@ def _org_param_scratch_dsn(base_dsn: str) -> tuple[str, str]:
     "database CLICKHOUSE_URI's own path names.",
 )
 @pytest.mark.asyncio
-async def test_generate_with_org_every_written_table_scoped_to_org():
+async def test_generate_with_org_every_written_table_scoped_to_org(monkeypatch):
     """CHAOS-<n> end-to-end: a real ``fixtures generate --org <uuid>`` run,
     against a fresh scratch ClickHouse database (``ClickHouseStore.__aenter__``
     creates the schema itself, per its own ``_ensure_tables()`` call -- no
@@ -1384,8 +1384,25 @@ async def test_generate_with_org_every_written_table_scoped_to_org():
     to ONLY that org_id. Enumerated from ``system.columns`` rather than a
     hand-maintained table list, so this does not silently stop covering a
     table a future generator addition writes.
+
+    ``monkeypatch`` clears ``DATABASE_URI``/``POSTGRES_URI``: this file's own
+    ``setup_test_env`` autouse fixture (tests/conftest.py) forces
+    ``DATABASE_URI=sqlite:///:memory:`` for every test by default, and
+    ``run_fixtures_generation``'s auth-seeding branch for a non-SQLAlchemy
+    sink (this test's ClickHouse one) reads that env var via
+    ``resolve_auth_seed_postgres_uri`` and, finding it set, tries to seed
+    auth rows into that ephemeral SQLite -- which has no schema, so the run
+    crashes before ever reaching the ClickHouse writes this test actually
+    checks. Clearing both env vars routes generation down the documented
+    "no PostgreSQL URI configured -- skipping user/org seeding" branch
+    instead, which is correct here: this test verifies ClickHouse-side
+    org scoping, not the (already separately covered, by
+    TestGenerateUsersRespectsOrgId) auth-side rows.
     """
     import clickhouse_connect
+
+    monkeypatch.delenv("DATABASE_URI", raising=False)
+    monkeypatch.delenv("POSTGRES_URI", raising=False)
 
     assert CLICKHOUSE_URI is not None
     scratch_dsn, scratch_db = _org_param_scratch_dsn(CLICKHOUSE_URI)

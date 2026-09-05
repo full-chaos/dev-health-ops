@@ -940,6 +940,7 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 					"organization_id", run.OrganizationID,
 					"target_day", run.TargetDay,
 					"partition_id", partition.ID,
+					"repo_ids", partition.RepoIDs,
 					"run_id", run.ID,
 				)
 			}
@@ -1001,6 +1002,7 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 					"organization_id", run.OrganizationID,
 					"target_day", run.TargetDay,
 					"partition_id", partition.ID,
+					"repo_ids", partition.RepoIDs,
 					"run_id", run.ID,
 					"error", err,
 				)

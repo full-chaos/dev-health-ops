@@ -1,9 +1,39 @@
 package daily
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 )
+
+// TestPreBridgeReasonIsAcceptedByPostgresStore is CHAOS-5078 codex round 3's
+// direct proof that "pre_bridge_family_incomplete" is actually wired into
+// dailyMetricsPartitionFailureReasons, the closed vocabulary
+// ReleasePartitionWithReason/FailPartitionPermanently check BEFORE touching
+// the database. Mirrors lane-ci-required-to-arc's
+// TestPostBridgeReasonIsAcceptedByPostgresStore (#2276), added there after
+// codex r1 caught the same class as a P2: a reason string used by Work but
+// missing from this map is silently rejected with ErrInvalidState on every
+// real production call, invisible to any fakeStore-based test, because
+// fakeStore does not enforce this vocabulary at all.
+//
+// A zero-value &PostgresStore{} has no pool, so store.valid() is false and
+// ReleasePartitionWithReason's OWN vocabulary check runs first -- if the
+// reason were missing from the map, this would return ErrInvalidState. It
+// instead reaches transitionPartition, which fails on the absent pool with
+// ErrUnavailable. That specific error (not ErrInvalidState) is the proof the
+// vocabulary check passed.
+func TestPreBridgeReasonIsAcceptedByPostgresStore(t *testing.T) {
+	store := &PostgresStore{}
+	err := store.ReleasePartitionWithReason(context.Background(), PartitionClaim{}, "pre_bridge_family_incomplete")
+	if errors.Is(err, ErrInvalidState) {
+		t.Fatalf("err = %v, want NOT ErrInvalidState -- \"pre_bridge_family_incomplete\" must be registered in dailyMetricsPartitionFailureReasons", err)
+	}
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable (the zero-value store's own guard, proving the vocabulary check itself passed)", err)
+	}
+}
 
 // TestDailyRepositoryPartitionSizeEnvKeyIsTheCoordinatedCHAOS4264Contract
 // pins the exact env key and default CHAOS-4263 and CHAOS-4264 (bridge-runner

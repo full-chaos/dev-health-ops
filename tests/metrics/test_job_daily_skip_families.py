@@ -823,6 +823,95 @@ async def test_testops_risk_not_skipped_writes_rows(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("family", "write_call"),
+    [
+        ("testops_pipeline", "write_testops_pipeline_metrics"),
+        ("testops_test", "write_testops_test_metrics"),
+        ("testops_coverage", "write_testops_coverage_metrics"),
+    ],
+)
+async def test_testops_family_in_skip_families_suppresses_only_its_own_write(
+    monkeypatch: Any, family: str, write_call: str
+) -> None:
+    """CHAOS-4284 (codex r2, P2): each of the three TestOps families gates its
+    OWN sink write and nothing else.
+
+    This is the guard with the worst failure mode in the whole port. The three
+    target tables are plain ``MergeTree`` with no dedup engine, so if a skip
+    stops firing -- a renamed flag, a misspelled family name, a branch that
+    stops being reached -- the Go executor's rows and Python's rows BOTH land
+    for the same ``(org_id, repo_id, day)`` and every metric silently doubles.
+    Nothing errors and nothing collapses them; the only signal is wrong
+    numbers downstream.
+
+    Parametrised deliberately rather than written once: a single test naming
+    one family would keep passing while the other two regressed, which is the
+    same "covers less than it looks like it covers" shape r1 found in the
+    integration fixture.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(
+        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
+    )
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={family},
+    )
+
+    assert write_call not in sink.write_calls
+    # The OTHER two must be unaffected -- a skip that suppressed all three
+    # would pass a single-family assertion while silently over-skipping.
+    for other in (
+        "write_testops_pipeline_metrics",
+        "write_testops_test_metrics",
+        "write_testops_coverage_metrics",
+    ):
+        if other != write_call:
+            assert other in sink.write_calls, (
+                f"skipping {family} must not suppress {other}"
+            )
+    assert "team_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_testops_families_not_skipped_write_all_three(
+    monkeypatch: Any,
+) -> None:
+    """Baseline for the parametrised test above: with an EMPTY skip set the
+    same fixture writes all three.
+
+    Without this, every "not in write_calls" assertion above would pass
+    vacuously if the fixture simply never produced testops rows -- the test
+    would be green while proving nothing about the skip.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(
+        monkeypatch, sink=sink, loader=_FakeLoaderWithTestopsPipeline()
+    )
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=set(),
+    )
+
+    assert "write_testops_pipeline_metrics" in sink.write_calls
+    assert "write_testops_test_metrics" in sink.write_calls
+    assert "write_testops_coverage_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
 async def test_compounding_risk_not_skipped_writes_repo_rows(
     monkeypatch: Any,
 ) -> None:

@@ -289,9 +289,9 @@ async def test_mark_ambiguous_flips_both_records_when_the_request_update_applies
 
 
 @pytest.mark.asyncio
-async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_expired() -> (
-    None
-):
+async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_expired(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     # r3 finding F1 (P2, codex, CHAOS-4438) RED half: the request update is
     # guarded by lease validity (WHERE ... lease_expires_at >
     # statement_timestamp()); if the lease already expired, that UPDATE
@@ -299,7 +299,9 @@ async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_exp
     # flipping to 'ambiguous' unconditionally -- leaving the request stuck
     # 'running' with an expired claim while the ledger says ambiguous, a
     # state the repair endpoint (requires BOTH ambiguous) can never
-    # resolve. The fix must skip the second update and still commit.
+    # resolve. The fix must skip the second update, still commit, and log
+    # the skip by request_id (team-lead's discard-on-error sweep) so an
+    # operator has a lead on why the ledger stayed 'executing'.
     session = AsyncMock()
     request_update_result = MagicMock(rowcount=0)
     session.execute.side_effect = [request_update_result]
@@ -308,13 +310,17 @@ async def test_mark_ambiguous_skips_the_ledger_update_when_the_lease_already_exp
         claim_token=uuid.UUID("00000000-0000-4000-8000-000000000162"),
     )
 
-    await _mark_ambiguous(session, request, "some failure detail")
+    with caplog.at_level("WARNING", logger=worker_workgraph.__name__):
+        await _mark_ambiguous(session, request, "some failure detail")
 
     assert session.execute.await_count == 1, (
         "the ledger update ran even though the request update matched zero "
         "rows -- the two records can now disagree about ambiguous state"
     )
     session.commit.assert_awaited_once()
+    assert any(
+        str(request.request_id) in record.message for record in caplog.records
+    ), f"no log line named the request id when the lease had expired:\n{caplog.text}"
 
 
 @pytest.mark.asyncio

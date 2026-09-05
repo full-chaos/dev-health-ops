@@ -300,7 +300,16 @@ async def _mark_ambiguous(
     if int(getattr(request_result, "rowcount", 0) or 0) == 0:
         # Nothing to commit -- the UPDATE above matched no row -- but still
         # close the transaction cleanly rather than leaving it open for
-        # whatever the caller does next with this session.
+        # whatever the caller does next with this session. team-lead
+        # ruling (CHAOS-4438, discard-on-error sweep): log this case by
+        # name (lease already expired) with the request_id, rather than
+        # let it pass silently -- an operator seeing the ledger stuck
+        # 'executing' with no matching request-side event would otherwise
+        # have no lead on why.
+        logger.warning(
+            "skipping ambiguous-ledger update for request %s: lease already expired",
+            request.request_id,
+        )
         await session.commit()
         return
     await session.execute(

@@ -633,6 +633,11 @@ func TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError(t *testing.T
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Step() error = %v, want shape b's survey error classified as ErrUnavailable", err)
 	}
+	// team-lead ruling (CHAOS-4438, discard-on-error sweep): the error must
+	// name the shape it happened in, not just classify to a bare sentinel.
+	if !strings.Contains(err.Error(), `shape "b"`) {
+		t.Fatalf("Step() error = %v, want it to name shape %q", err, "b")
+	}
 	if result.SkippedJobLive != 1 {
 		t.Fatalf("Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite shape b's error", result)
 	}

@@ -272,8 +272,13 @@ func (repair *StrandRepair) Step(
 		// layer up (it returns its accumulated `result` on a seam error
 		// too, never a fresh zero value). This is a read-only OBSERVABILITY
 		// query failing after the real repair work is done; it must never
-		// erase evidence of that work.
-		return result, err
+		// erase evidence of that work. Wrapped with a static identifier
+		// (team-lead's discard-on-error sweep, CHAOS-4438) so the eventual
+		// log line at the ReconcilerLoop caller names which of Step's two
+		// query stages failed, without this package taking on a logger of
+		// its own (see the observeRetiredKinds doc comment on staying
+		// DB-only by design).
+		return result, fmt.Errorf("observe retired kinds: %w", err)
 	}
 	result.RetiredKindObservations = observed
 	result.RetiredKindObservationsTruncated = retiredKindObservationsLikelyTruncated(len(observed))
@@ -332,7 +337,15 @@ func (repair *StrandRepair) stepShape(
 	// is correct, not a discard -- unlike phases 2/3 below.
 	candidates, err := repair.survey(ctx, shape.survey, now, limit)
 	if err != nil {
-		return StrandRepairResult{}, err
+		// team-lead ruling (CHAOS-4438, discard-on-error sweep): every error
+		// this function returns must name the shape it happened in --
+		// classifyStrandError already collapses the real DB error down to a
+		// bare sentinel (ErrUnavailable/ErrNotAuthorized) to avoid leaking
+		// raw PG detail, so the shape name is the only identifier left to
+		// carry once that classification has happened. Wrapping (not
+		// replacing) keeps errors.Is(_, ErrUnavailable) true for every
+		// existing caller.
+		return StrandRepairResult{}, fmt.Errorf("shape %q: survey: %w", shape.name, err)
 	}
 	eligible := make([]strandCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -342,7 +355,10 @@ func (repair *StrandRepair) stepShape(
 		case dispositionRearm:
 			eligible = append(eligible, candidate)
 		default:
-			return StrandRepairResult{}, ErrUnavailable
+			return StrandRepairResult{}, fmt.Errorf(
+				"shape %q: outbox %s (job_kind=%q): %w",
+				shape.name, candidate.outboxID, candidate.jobKind, ErrUnavailable,
+			)
 		}
 	}
 	if len(eligible) == 0 {
@@ -356,7 +372,7 @@ func (repair *StrandRepair) stepShape(
 	// those.
 	approved, live, settled, err := repair.filterByClaim(ctx, eligible, now)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("shape %q: filterByClaim: %w", shape.name, err)
 	}
 	result.SkippedClaimLive += live
 	result.SkippedClaimSettled += settled
@@ -368,7 +384,7 @@ func (repair *StrandRepair) stepShape(
 	// reasoning: `result` already carries phases 1-2's real counts.
 	rearmed, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("shape %q: rearm: %w", shape.name, err)
 	}
 	result.Rearmed += rearmed
 	result.SkippedRaceLost += lost

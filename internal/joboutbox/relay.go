@@ -213,7 +213,12 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 	if relay.repair != nil {
 		recovered, err := relay.repair.Step(ctx, now, limit)
 		if err != nil {
-			return result, err
+			// team-lead ruling (CHAOS-4438, discard-on-error sweep): name
+			// the seam so a caller's log line (recordStepFailure) shows
+			// which of the two recovery stages failed, not just "step
+			// failed." Wraps, never replaces, so errors.Is on the original
+			// sentinel still holds.
+			return result, fmt.Errorf("terminal delivery repair: %w", err)
 		}
 		result.Recovered = recovered.Recovered
 		result.PostRepairContractRejectionsRecovered = recovered.PostRepairContractRejectionsRecovered
@@ -236,7 +241,10 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.RetiredKindObservations = rearmed.RetiredKindObservations
 		result.RetiredKindObservationsTruncated = rearmed.RetiredKindObservationsTruncated
 		if err != nil {
-			return result, err
+			// Same naming as the terminal-delivery seam above; strandRepair's
+			// own error already names its shape (see stepShape), this adds
+			// which SEAM of stepRecovery that shape error came from.
+			return result, fmt.Errorf("strand repair: %w", err)
 		}
 	}
 	return result, nil
@@ -273,8 +281,11 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 		// counts survive their own errors, per F2's fix) -- a THIRD discard
 		// layer here, on a claimDueExcept failure that has nothing to do
 		// with what recovery already did, would erase that evidence a third
-		// time. Same fix shape as stepRecovery's two seams.
-		return result, err
+		// time. Same fix shape as stepRecovery's two seams. Named with the
+		// bounded claim request's own identifiers (limit, lease duration --
+		// there is no per-job identifier yet, nothing has been claimed) per
+		// team-lead's discard-on-error sweep.
+		return result, fmt.Errorf("claim due jobs (limit=%d, lease=%s): %w", limit, relay.config.LeaseDuration, err)
 	}
 	result.Claimed = len(claims)
 	for _, claim := range claims {

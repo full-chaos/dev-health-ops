@@ -1135,8 +1135,16 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, and ``testops_risk`` CHAOS-4294);
-    naming any other family here has no effect.
+    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``benchmarking`` CHAOS-4288); naming any other family here has no effect.
+
+    ``compounding_risk`` is REPO scope only: the native executor writes the
+    per-partition repo rows, so this set gates the ``_write_compounding_risk_
+    for_day`` call below. The TEAM-scope rows are emitted once per org/day from
+    ``run_daily_metrics_finalize`` and are NOT covered by this set -- the Go
+    finalize handler has no per-family registration to skip them with, so they
+    remain Python regardless of what this set names.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -1605,11 +1613,23 @@ async def run_daily_metrics_job(
                 )
             )
 
-        review_edges = compute_review_edges_daily(
-            day=d,
-            pull_request_rows=pr_rows,
-            pull_request_review_rows=review_rows,
-            computed_at=computed_at,
+        # CHAOS-4279: review_edges has a native Go executor
+        # (ReviewEdgesExecutor), registered pre_bridge. When the Go dispatcher
+        # names it in skip_families it has already computed and written this
+        # scope, so skip compute entirely rather than only the write --
+        # nothing else in this function reads review_edges before the write
+        # block, which makes this the cicd/team_wellbeing shape rather than
+        # repo_user_commit's write-only skip.
+        skip_review_edges = "review_edges" in skip_families
+        review_edges = (
+            []
+            if skip_review_edges
+            else compute_review_edges_daily(
+                day=d,
+                pull_request_rows=pr_rows,
+                pull_request_review_rows=review_rows,
+                computed_at=computed_at,
+            )
         )
         # CHAOS-4292: cicd has a native Go executor (CICDExecutor). When the
         # Go dispatcher reports it already computed and wrote this scope,
@@ -1938,7 +1958,8 @@ async def run_daily_metrics_job(
                 s.write_work_item_team_attributions(wi_team_attributions)
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
-            s.write_review_edges(review_edges)
+            if not skip_review_edges:
+                s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
             s.write_testops_pipeline_metrics(testops_pipeline_metrics)
             s.write_testops_test_metrics(testops_test_metrics)
@@ -2004,16 +2025,35 @@ async def run_daily_metrics_job(
         if "incident" not in skip_families:
             _note_family_zero_rows("incident", incident_metrics, day=d)
 
-        _write_compounding_risk_for_day(
-            sinks=sinks,
-            primary_sink=primary_sink,
-            day=d,
-            org_id=org_id,
-            repo_metrics_rows=result.repo_metrics,
-            computed_at=computed_at,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-        )
+        # CHAOS-4287: compounding_risk has a native Go executor
+        # (CompoundingRiskExecutor), registered post_bridge. When the Go
+        # dispatcher names it in skip_families it has already computed and
+        # written this partition's REPO-scope rows, so skip the whole call
+        # rather than only the write -- nothing else in this function consumes
+        # its output (it writes straight to the sinks), which makes this the
+        # cicd/team_wellbeing shape rather than repo_user_commit's write-only
+        # skip. No _note_family_zero_rows here either way: this call site never
+        # had one, and adding it under a skip would be a false zero-rows signal
+        # exactly as it would have been for cicd.
+        #
+        # TEAM-scope rows are NOT covered by this gate. They are written once
+        # per org/day from run_daily_metrics_finalize
+        # (_write_compounding_risk_team_rows_for_day), which the Go side still
+        # reaches through the opaque compatibility.Finalize bridge call -- there
+        # is no per-family registration or skip-list at finalize to carve them
+        # out with. They stay Python until that hook exists; CHAOS-4287 stays
+        # open until then.
+        if "compounding_risk" not in skip_families:
+            _write_compounding_risk_for_day(
+                sinks=sinks,
+                primary_sink=primary_sink,
+                day=d,
+                org_id=org_id,
+                repo_metrics_rows=result.repo_metrics,
+                computed_at=computed_at,
+                repo_names_by_id=repo_names_by_id,
+                repo_team_resolver=repo_team_resolver,
+            )
 
         # CHAOS-4365 finalize-step fix: team_cognitive_load has no repo-scope
         # table at all -- it is emitted ONCE per org/day from
@@ -2084,16 +2124,30 @@ async def run_daily_metrics_job(
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
         # correlations, insights). Reads from ClickHouse via the sink.
-        for s in sinks:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=d,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        #
+        # CHAOS-4288: benchmarking has a native Go executor
+        # (BenchmarkingExecutor). When the Go dispatcher names it in
+        # skip_families it has already computed and written this org/day, so
+        # skip the whole call -- nothing else in this function consumes its
+        # output, which makes this the cicd/team_wellbeing shape.
+        #
+        # NOTE the native side computes ONCE PER ORG/DAY, on the partition
+        # holding the org's lexicographically-first repo, whereas this call
+        # runs on EVERY partition: run_benchmarking_for_day takes no repo_id,
+        # so an org with N repos appends N identical row sets to six
+        # append-only tables here. That divergence is deliberate and ruled --
+        # see BenchmarkingExecutor's doc comment.
+        if "benchmarking" not in skip_families:
+            for s in sinks:
+                try:
+                    run_benchmarking_for_day(
+                        s,
+                        as_of_day=d,
+                        computed_at=computed_at,
+                        org_id=org_id,
+                    )
+                except Exception as exc:
+                    logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(

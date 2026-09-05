@@ -442,6 +442,20 @@ type DailyMetricsNativeFamilyOutcome string
 const (
 	DailyMetricsNativeFamilyOutcomeComputed DailyMetricsNativeFamilyOutcome = "computed"
 	DailyMetricsNativeFamilyOutcomeRefused  DailyMetricsNativeFamilyOutcome = "refused"
+	// DailyMetricsNativeFamilyOutcomePartialWrite is a family that FAILED after
+	// already writing at least one row (CHAOS-4288, codex r1 on #2235).
+	//
+	// It is a third outcome rather than a flavour of "refused" because the two
+	// demand opposite responses. "refused" means nothing was written, so the
+	// compatibility bridge can safely compute the family and fail-open is
+	// correct. A partial write means rows are ALREADY in append-only tables, so
+	// letting the bridge run would DUPLICATE them -- the family is added to the
+	// skip list instead and the partition is re-driven.
+	//
+	// It also carries the TRUE rows-written count, not zero: a partial write
+	// that reports zero understates what landed, which is precisely the number
+	// an operator needs to reason about duplication.
+	DailyMetricsNativeFamilyOutcomePartialWrite DailyMetricsNativeFamilyOutcome = "partial_write"
 )
 
 // WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
@@ -501,6 +515,7 @@ func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
 		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
+		DailyMetricsNativeFamilyOutcomePartialWrite,
 	}
 }
 
@@ -596,7 +611,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // ObserveDailyMetricsNativeFamily's error is discarded at its call site).
 // "deploy" (CHAOS-4293) and "work_item_state" (CHAOS-4278) added themselves
 // correctly -- included here from those merges.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "ai_governance", "ai_impact", "work_graph_edges"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "review_edges", "benchmarking", "ai_governance", "ai_impact", "work_graph_edges"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

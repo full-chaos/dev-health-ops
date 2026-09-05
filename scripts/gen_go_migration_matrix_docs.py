@@ -210,7 +210,13 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4286",
     },
     "compounding_risk": {
-        "citation": "Python: `job_daily.py:502 _write_compounding_risk_for_day`",
+        # CHAOS-4287: the ticket and this citation both said :502, which is
+        # inside _repo_to_team_map_for_compounding_risk, not the writer. The
+        # writer is :568. The TEAM-scope half lives at :613
+        # (_write_compounding_risk_team_rows_for_day, called from
+        # run_daily_metrics_finalize) and is still Python -- see the family's
+        # phase_note in internal/jobs/metrics/daily/families.json.
+        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python)",
         "ticket": "CHAOS-4287",
     },
     "team_cognitive_load": {

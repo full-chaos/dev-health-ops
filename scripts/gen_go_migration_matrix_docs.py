@@ -223,7 +223,7 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4280",
     },
     "ai_workflow": {
-        "citation": "Python: `work_graph/extractors/ai_workflow.py:212 _extract_ai_workflow_for_day`",
+        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`)",
         "ticket": "CHAOS-4286",
     },
     "work_graph_edges": {

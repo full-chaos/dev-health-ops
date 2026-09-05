@@ -82,12 +82,8 @@ from dev_health_ops.metrics.quality import (
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.schemas import (
     FileComplexitySnapshot,
-    TeamMetricsDailyRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.team_cognitive_load import (
-    build_team_cognitive_load_rows_for_day,
-)
 from dev_health_ops.metrics.team_complexity import build_team_complexity_rows_for_day
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
@@ -672,112 +668,6 @@ def _write_compounding_risk_team_rows_for_day(
     for s in sinks:
         s.write_compounding_risk_daily(team_rows)
     return len(team_rows)
-
-
-def _try_parse_uuid(value: str) -> uuid.UUID | None:
-    """Parse ``value`` as a UUID, returning ``None`` instead of raising.
-
-    ``repo_names_by_id`` is keyed by ``uuid.UUID``, but callers here may only
-    have a repo id as ``str`` (e.g. ``TeamMetricsDailyRecord.repo_id``) --
-    this lets them probe the map without a try/except at every call site.
-    """
-    try:
-        return uuid.UUID(value)
-    except (ValueError, AttributeError, TypeError):
-        return None
-
-
-def _write_team_cognitive_load_for_day(
-    *,
-    sinks: list[Any],
-    primary_sink: Any,
-    day: date,
-    org_id: str,
-    user_metrics_rows: list[Any],
-    team_wellbeing_rows: list[Any],
-    computed_at: datetime,
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-) -> int:
-    """CHAOS-4365 item 2 (4347-C): team-keyed cognitive load, OWNERSHIP-scoped.
-
-    Aggregates THIS run's already-computed ``user_metrics_rows`` /
-    ``team_wellbeing_rows`` (never re-queries ClickHouse for them) by
-    ``repo_id``, resolves each repo's team the SAME way item 1's
-    compounding-risk producer does -- ``team_repo_ownership`` (loaded fresh,
-    as-of this day's own instant) merged over the ``teams.repo_patterns``
-    pattern resolver -- and deliberately ignores both input row types' own
-    ``team_id`` field (CHAOS-4396: it can fall back to author-membership
-    resolution, which CHAOS-4321 forbids as a team-attribution source).
-    """
-    if not user_metrics_rows and not team_wellbeing_rows:
-        return 0
-
-    try:
-        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-        team_repo_ownership_map = load_team_repo_ownership_map(
-            primary_sink, org_id, as_of=as_of
-        )
-        repo_to_team: dict[str, str] = {}
-        for row in (*user_metrics_rows, *team_wellbeing_rows):
-            row_repo_id = getattr(row, "repo_id", None)
-            if not row_repo_id:
-                continue
-            repo_id_str = str(row_repo_id)
-            if repo_id_str in repo_to_team:
-                continue
-            # UserMetricsDailyRecord.repo_id is a uuid.UUID;
-            # TeamMetricsDailyRecord.repo_id is already a str -- coerce to
-            # uuid.UUID either way, since repo_names_by_id is keyed by
-            # uuid.UUID regardless of which record type supplied the id
-            # (CHAOS-4365 codex R1: the str case was previously skipped
-            # entirely, silently disabling pattern-fallback resolution for
-            # every team_wellbeing-only repo).
-            repo_uuid = (
-                row_repo_id
-                if isinstance(row_repo_id, uuid.UUID)
-                else _try_parse_uuid(repo_id_str)
-            )
-            if repo_uuid is None or repo_uuid not in repo_names_by_id:
-                # CHAOS-4365 codex R2 (P2): not in the current repos catalog
-                # -- neither source is trusted, matching
-                # _repo_to_team_map_for_compounding_risk's existing guard.
-                # team_repo_ownership rows never expire on their own
-                # (writers only ever INSERT; CHAOS-2610 tracks writer-side
-                # valid_to retirement), so a repo removed/renamed since
-                # auto-import last ran can still carry a stale ownership row
-                # -- without this guard a deleted repo would keep
-                # contributing cognitive load to a team.
-                continue
-            team_id = team_repo_ownership_map.get(repo_id_str)
-            if not team_id:
-                full_name = repo_names_by_id[repo_uuid]
-                team_id, _ = repo_team_resolver.resolve(full_name)
-            if team_id:
-                repo_to_team[repo_id_str] = team_id
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "repo_team_resolver failed for team cognitive load: org_id=%s day=%s %s",
-            org_id,
-            day.isoformat(),
-            exc,
-        )
-        repo_to_team = {}
-
-    cognitive_load_rows = build_team_cognitive_load_rows_for_day(
-        day=day,
-        org_id=org_id,
-        user_metrics_rows=user_metrics_rows,
-        team_wellbeing_rows=team_wellbeing_rows,
-        repo_to_team=repo_to_team,
-        computed_at=computed_at,
-    )
-    if not cognitive_load_rows:
-        return 0
-    for s in sinks:
-        if hasattr(s, "write_team_cognitive_load_daily"):
-            s.write_team_cognitive_load_daily(cognitive_load_rows)
-    return len(cognitive_load_rows)
 
 
 def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
@@ -2411,11 +2301,15 @@ async def run_daily_metrics_finalize(
         for s in sinks_list:
             s.write_ic_landscape_rolling(ic_landscape)
 
-    # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily and
-    # ALL of team_cognitive_load_daily are written exactly ONCE here, per
-    # org/day, after every repo's own partition has landed -- never
-    # in-process inside a single per-repo run_daily_metrics_job call (see
-    # _write_compounding_risk_for_day's docstring for why that was wrong).
+    # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily is
+    # written exactly ONCE here, per org/day, after every repo's own
+    # partition has landed -- never in-process inside a single per-repo
+    # run_daily_metrics_job call (see _write_compounding_risk_for_day's
+    # docstring for why that was wrong). team_cognitive_load_daily used to
+    # be written from this same finalize step too; CHAOS-5141 deleted that
+    # Python compute entirely once it was confirmed unreachable in
+    # production -- it is now written ONLY by the Go worker's native
+    # FinalizeHandler, never from this Python path.
     computed_at = datetime.now(timezone.utc)
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
@@ -2453,117 +2347,19 @@ async def run_daily_metrics_finalize(
             },
         )
 
-    team_metrics_field_names = {f.name for f in _dc.fields(TeamMetricsDailyRecord)}
-    # CHAOS-4365 codex R2 (P1): dedup_from('team_metrics_daily') keys on
-    # (org_id, team_id, repo_id, day) -- team_id INCLUDED, because that
-    # registration exists for readers that actually want the tainted
-    # legacy team_id dimension kept apart (CHAOS-4329). This aggregator
-    # deliberately ignores that column and remaps every row via ownership
-    # instead (CHAOS-4396/CHAOS-4321) -- if a repo's legacy team_id changed
-    # between two compute generations for the same day, dedup_from would
-    # keep BOTH generations (different team_id -> different key), and
-    # summing both here double-counts that repo's commits/ratios. Dedup by
-    # (org_id, repo_id, day) ONLY instead, so a recompute always collapses
-    # to its single latest generation regardless of what its legacy
-    # team_id happened to be at write time.
-    # Neither ``day`` nor ``computed_at`` is selected from ClickHouse --
-    # both are injected from the outer scope instead (below). Aliasing an
-    # aggregate output with the SAME name as a plain column referenced
-    # elsewhere in the same SELECT list is rejected by ClickHouse
-    # (ILLEGAL_AGGREGATION: this version resolves the bare identifier
-    # against the SELECT-list alias, not the source column, even inside an
-    # unrelated argMax(...) call or the WHERE clause). Every row this query
-    # returns is already restricted to exactly one day by the WHERE clause,
-    # and TeamMetricsDailyRecord.computed_at is never read by the
-    # aggregator these rows feed (build_team_cognitive_load_rows_for_day
-    # only reads repo_id/commits_count/after_hours_commits_count/
-    # weekend_commits_count off team_wellbeing_rows) -- stamping it with
-    # this finalize call's own computed_at is a safe, meaningless-to-omit
-    # placeholder, not a value anything downstream depends on.
-    # CHAOS-4365 codex R3 (P1): a single-step argMax(..., computed_at)
-    # GROUP BY (org_id, repo_id) picks exactly ONE row per repo -- correct
-    # when a recompute leaves stale OLDER-generation rows behind (that's
-    # the R2 fix), but WRONG when the pattern resolver misses and
-    # team_wellbeing falls back to membership: a repo can then legitimately
-    # get MULTIPLE rows in the SAME compute generation (same computed_at),
-    # one per matched legacy team_id split. argMax would silently pick one
-    # of those arbitrarily, dropping the rest. Two-step instead: find each
-    # repo's latest computed_at (its generation), then INNER JOIN back and
-    # SUM every row that shares that exact timestamp -- so multiple
-    # same-generation splits are summed together, while an older, stale
-    # generation (a different, earlier computed_at) is excluded entirely.
-    day_filter = "day = {day:Date}"
-    team_metrics_params: dict[str, Any] = {"day": day}
-    if org_id:
-        day_filter += " AND org_id = {org_id:String}"
-        team_metrics_params["org_id"] = org_id
-    team_metrics_query = f"""
-        SELECT
-            t.org_id AS org_id,
-            t.repo_id AS repo_id,
-            any(t.team_id) AS team_id,
-            any(t.team_name) AS team_name,
-            sum(t.commits_count) AS commits_count,
-            sum(t.after_hours_commits_count) AS after_hours_commits_count,
-            sum(t.weekend_commits_count) AS weekend_commits_count,
-            any(t.after_hours_commit_ratio) AS after_hours_commit_ratio,
-            any(t.weekend_commit_ratio) AS weekend_commit_ratio
-        FROM team_metrics_daily AS t
-        INNER JOIN (
-            SELECT org_id, repo_id, max(computed_at) AS latest_computed_at
-            FROM team_metrics_daily
-            WHERE {day_filter}
-            GROUP BY org_id, repo_id
-        ) AS latest_gen
-        ON t.org_id = latest_gen.org_id
-           AND t.repo_id = latest_gen.repo_id
-           AND t.computed_at = latest_gen.latest_computed_at
-        WHERE {day_filter}
-        GROUP BY t.org_id, t.repo_id
-    """
-    org_team_metrics: list[Any] = []
-    for row in deps.clickhouse_query_dicts(
-        ch_client, team_metrics_query, team_metrics_params
-    ):
-        try:
-            fields = {k: v for k, v in row.items() if k in team_metrics_field_names}
-            fields["day"] = day
-            fields["computed_at"] = computed_at
-            org_team_metrics.append(TeamMetricsDailyRecord(**fields))
-        except Exception:
-            logger.debug("Skipping malformed team_metrics row: %s", row)
-
-    # CHAOS-5141: same skip_families gate shape as ic_finalize above (:2246).
-    # When a native Go executor already computed and wrote
-    # team_cognitive_load for this run, recomputing here would append a
-    # SECOND generation of the same rows -- team_cognitive_load_daily is
-    # append-only, deduped by every reader's own
-    # argMax(<col>, computed_at) GROUP BY (org_id, team_id, day), so the
-    # later writer wins silently and the native rows would vanish with
-    # nothing failing.
-    if "team_cognitive_load" not in skip_families:
-        team_cognitive_load_count = _write_team_cognitive_load_for_day(
-            sinks=sinks_list,
-            primary_sink=primary_sink,
-            day=day,
-            org_id=org_id,
-            user_metrics_rows=git_metrics,
-            team_wellbeing_rows=org_team_metrics,
-            computed_at=computed_at,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-        )
-        if not team_cognitive_load_count:
-            logger.warning(
-                "metrics.daily.finalize family produced zero rows",
-                extra={
-                    "family": "team_cognitive_load",
-                    "day": day.isoformat(),
-                    "org_id": org_id,
-                    "cause": "no_rows_computed",
-                },
-            )
-
+    # CHAOS-5141: team_cognitive_load's Python compute (the team_metrics_daily
+    # aggregation query + _write_team_cognitive_load_for_day) was DELETED
+    # here, not merely skip-gated. Reachability analysis at deletion time:
+    # buildDailyWorker (cmd/dev-health-worker/daily.go) refuses the WHOLE
+    # daily worker if the ClickHouse connection fails to open, before
+    # dailyNativeFamilyRegistrations is ever called -- so team_cognitive_load
+    # (and ic_finalize, its co-registration dependency) are guaranteed to
+    # register natively in every real deployment; a construction-time
+    # fallback to this Python path was never actually reachable. On a
+    # RUNTIME native failure, FinalizeHandler.Work's computeNativeFinalizeFamilies
+    # error path explicitly never calls the Python bridge either (daily.go's
+    # own comment: "The bridge is NOT called"). No straddle, no live fallback
+    # path -- safe to delete outright rather than leave skip_families-gated.
     team_complexity_count = _write_team_complexity_for_day(
         sinks=sinks_list,
         primary_sink=primary_sink,
@@ -2669,16 +2465,19 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             # pattern, which this bare-CLI path now also follows).
             skip_finalize=True,
         )
-        # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily and
-        # ALL of team_cognitive_load_daily are written from
-        # run_daily_metrics_finalize, not from run_daily_metrics_job itself
-        # -- this bare `dev-hops metrics daily` path (AGENTS.md's documented
-        # usage) is the ONLY caller that did not already invoke the
-        # standalone finalizer (_cmd_metrics_rebuild always has; the worker
-        # partition loop triggers a separate "finalize" operation after all
-        # repos land). Without this, the command exits 0 having silently
-        # produced neither family. Idempotent to call even for a
-        # single-repo run (--repo-id): finalize reads the WHOLE org's
+        # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
+        # written from run_daily_metrics_finalize, not from
+        # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`
+        # path (AGENTS.md's documented usage) is the ONLY caller that did not
+        # already invoke the standalone finalizer (_cmd_metrics_rebuild
+        # always has; the worker partition loop triggers a separate
+        # "finalize" operation after all repos land). Without this, the
+        # command exits 0 having silently produced no compounding_risk_team
+        # rows. (team_cognitive_load_daily USED to be produced here too;
+        # CHAOS-5141 deleted its Python compute -- this bare CLI path no
+        # longer produces it at all, only the Go worker's finalize handler
+        # does now.) Idempotent to call even for a single-repo run
+        # (--repo-id): finalize reads the WHOLE org's
         # repo_metrics_daily/user_metrics_daily/team_metrics_daily back from
         # ClickHouse, so it reflects every repo's already-persisted state,
         # not just this run's repo_id scope.

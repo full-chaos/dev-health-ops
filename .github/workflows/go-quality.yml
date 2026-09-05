@@ -46,8 +46,22 @@ concurrency:
 
 jobs:
   go-quality:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
+    # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT: route the
+    # ruleset-required contexts to oci-arc-runners so merges can continue).
+    # Flipping the repo variable SELF_HOSTED_RUNNERS back to 'disabled'
+    # restores the hosted runner with no code change. Fork PRs always stay
+    # hosted -- same safety condition as go.yml's dual-leg jobs (a public
+    # repo must never hand a fork's untrusted PR code a self-hosted runner).
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    # 20m -> 45m (chris/team-lead, first-live-run finding): this job's own
+    # PR (#2242) timed out and was cancelled at the 20m cap on ARC -- load1
+    # on bigboy was 160+ during that run (shared with codex rounds/
+    # batteries), not a flake. 20m was sized for a dedicated GitHub-hosted
+    # VM; it is the wrong budget for a shared self-hosted pool. 45m is a
+    # deliberately generous multiple, not a tight refit -- retune down once
+    # real completion times on ARC are known.
+    timeout-minutes: 45
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
@@ -94,12 +108,28 @@ jobs:
           echo "on.pull_request.paths list. This job still REPORTS, so the required"
           echo "check is satisfied honestly rather than by a second workflow."
 
+      - name: Configure self-hosted Go cache paths
+        # CHAOS-4906: the oci-arc-runners pool exports GOMODCACHE/GOCACHE to a
+        # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
+        # filesystem), same as go.yml's self-hosted legs. Only set on the
+        # self-hosted leg; the hosted leg keeps setup-go's normal cache.
+        if: steps.relevance.outputs.relevant == 'true' && vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+        run: |
+          echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
+          echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
+
       - name: Set up Go
         if: steps.relevance.outputs.relevant == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # `false` on the self-hosted leg: setup-go's own cache defaults to
+          # `true`, which would restore/save a GitHub Actions cache tarball
+          # into the pool's persistent, concurrently-shared hostPath above --
+          # a corruption risk against other jobs reading/writing it at the
+          # same time (same reasoning as go.yml's self-hosted legs).
+          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
 
       - name: Install locked live provider oracle dependencies
         if: steps.relevance.outputs.relevant == 'true'
@@ -148,11 +178,43 @@ jobs:
         run: |
           set -euo pipefail
           version=0.11.0
-          sha=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-          tarball="shellcheck-v${version}.linux.x86_64.tar.xz"
+          # Arch-selected, not hardcoded: the oci-arc-runners pool is ARM64
+          # (CHAOS-4906), and shellcheck's release does not publish a single
+          # binary that runs on both -- an x86_64-only tarball fails "exec
+          # format error" under aarch64. Both shas verified against the
+          # upstream release asset bytes directly (sha256sum on a fresh
+          # download of each), not copied from an unverified source.
+          #
+          # .tar.gz, not .tar.xz: PR #2242's own first live ARC run failed
+          # here with `tar (child): xz: Cannot exec: No such file or
+          # directory` -- the oci-arc-runners image (docker/arc-runner/
+          # Dockerfile) has no xz-utils, only what that Dockerfile
+          # explicitly adds (make/postgresql-client/gcc/libc6-dev) on top of
+          # the upstream actions-runner base; GitHub-hosted ubuntu-latest
+          # ships xz-utils by default, so this never surfaced there. gzip
+          # needs no such assumption -- it's a dependency of apt itself, so
+          # it is present on any Debian/Ubuntu-derived image without a
+          # Dockerfile change. shellcheck publishes a .tar.gz for every
+          # platform; both shas below verified the same way as the .tar.xz
+          # ones above (sha256sum on a fresh download of each).
+          case "$(uname -m)" in
+            x86_64)
+              arch=x86_64
+              sha=b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+              ;;
+            aarch64|arm64)
+              arch=aarch64
+              sha=68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+              ;;
+            *)
+              echo "unsupported architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          tarball="shellcheck-v${version}.linux.${arch}.tar.gz"
           curl -fsSL -o "${RUNNER_TEMP}/${tarball}" "https://github.com/koalaman/shellcheck/releases/download/v${version}/${tarball}"
           echo "${sha}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
-          tar -xJf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}"
           mkdir -p "${RUNNER_TEMP}/bin"
           install -m 0755 "${RUNNER_TEMP}/shellcheck-v${version}/shellcheck" "${RUNNER_TEMP}/bin/shellcheck"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"

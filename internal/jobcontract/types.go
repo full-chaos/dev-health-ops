@@ -38,9 +38,6 @@ const (
 	KindRemainingWorkItemAttribution = "metrics.remaining.work_item_attribution"
 	KindWorkGraphBuild               = "workgraph.build"
 	KindInvestmentMaterialize        = "investment.materialize"
-	KindInvestmentDispatch           = "investment.dispatch"
-	KindInvestmentChunk              = "investment.chunk"
-	KindInvestmentFinalize           = "investment.finalize"
 	KindSyncProviderUnit             = "sync.provider_unit"
 	RetentionWorkerTerminal          = "worker_job_terminal"
 	// Retention policies are table-scoped. Each one names exactly one
@@ -214,15 +211,6 @@ type WorkGraphBuildPayload struct {
 type InvestmentMaterializePayload struct {
 	RequestID string `json:"request_id"`
 }
-type InvestmentDispatchPayload struct {
-	RequestID string `json:"request_id"`
-}
-type InvestmentChunkPayload struct {
-	ChunkID string `json:"chunk_id"`
-}
-type InvestmentFinalizePayload struct {
-	RunID string `json:"run_id"`
-}
 
 // RemainingMetricsPartitionPayload carries only the authoritative partition
 // identity. JobKind is injected by the fixed per-family type and never crosses
@@ -366,9 +354,6 @@ var definitions = map[string]contractDefinition{
 	},
 	KindWorkGraphBuild:               {Kind: KindWorkGraphBuild, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "work_graph_request", OrganizationScope: "tenant"},
 	KindInvestmentMaterialize:        {Kind: KindInvestmentMaterialize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
-	KindInvestmentDispatch:           {Kind: KindInvestmentDispatch, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_request", OrganizationScope: "tenant"},
-	KindInvestmentChunk:              {Kind: KindInvestmentChunk, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_chunk", OrganizationScope: "tenant"},
-	KindInvestmentFinalize:           {Kind: KindInvestmentFinalize, CurrentVersion: ContractVersionV1, SupportedVersions: []int{ContractVersionV1}, DomainLink: "investment_run", OrganizationScope: "tenant"},
 	KindRemainingCapacity:            remainingDefinition(KindRemainingCapacity),
 	KindRemainingComplexity:          remainingDefinition(KindRemainingComplexity),
 	KindRemainingDORA:                remainingDefinition(KindRemainingDORA),
@@ -540,33 +525,6 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
-	case KindInvestmentDispatch:
-		var value InvestmentDispatchPayload
-		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
-			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
-		}
-		if err := value.validate(); err != nil {
-			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
-		}
-		payload = value
-	case KindInvestmentChunk:
-		var value InvestmentChunkPayload
-		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
-			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
-		}
-		if err := value.validate(); err != nil {
-			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
-		}
-		payload = value
-	case KindInvestmentFinalize:
-		var value InvestmentFinalizePayload
-		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
-			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
-		}
-		if err := value.validate(); err != nil {
-			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
-		}
-		payload = value
 	case KindRemainingCapacity, KindRemainingComplexity, KindRemainingDORA,
 		KindRemainingMembership,
 		KindRemainingRecommendations, KindRemainingReleaseImpact,
@@ -636,12 +594,6 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindWorkGraphBuild
 	case InvestmentMaterializePayload:
 		kind = KindInvestmentMaterialize
-	case InvestmentDispatchPayload:
-		kind = KindInvestmentDispatch
-	case InvestmentChunkPayload:
-		kind = KindInvestmentChunk
-	case InvestmentFinalizePayload:
-		kind = KindInvestmentFinalize
 	case RemainingMetricsPartitionPayload:
 		kind = envelope.Payload.(RemainingMetricsPartitionPayload).JobKind
 	case ProviderUnitPayload:
@@ -816,15 +768,6 @@ func (payload WorkGraphBuildPayload) validate() error {
 }
 func (payload InvestmentMaterializePayload) validate() error {
 	return validateUUID("request_id", payload.RequestID)
-}
-func (payload InvestmentDispatchPayload) validate() error {
-	return validateUUID("request_id", payload.RequestID)
-}
-func (payload InvestmentChunkPayload) validate() error {
-	return validateUUID("chunk_id", payload.ChunkID)
-}
-func (payload InvestmentFinalizePayload) validate() error {
-	return validateUUID("run_id", payload.RunID)
 }
 
 func validateUUID(name, value string) error {

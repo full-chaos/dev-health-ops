@@ -1,0 +1,16 @@
+using System;
+
+public class Reader
+{
+    public int ReadSafely(string path)
+    {
+        try
+        {
+            return path.Length;
+        }
+        catch (Exception e)
+        {
+            return -1;
+        }
+    }
+}

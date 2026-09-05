@@ -324,6 +324,100 @@ func TestLanguageForRoutesEveryGoRustExtensionToItsAnalyzer(t *testing.T) {
 	}
 }
 
+// TestAnalyzeFileMatchesLizardAggregatesForJVMSwiftFamily is CHAOS-5156
+// PR2b's contract test against PR1's seam, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForCFamily for the four analyzers
+// this PR registers (csharp/kotlin/scala/swift). Only the FILE-LEVEL
+// aggregates are asserted here (LOC/count/total/average/threshold), all
+// order-independent -- lizardcc's own jvmswift_parity_test.go is what
+// proves the raw per-function numbers, including why order itself is
+// NOT asserted there for this family.
+func TestAnalyzeFileMatchesLizardAggregatesForJVMSwiftFamily(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_jvm_swift")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_jvm_swift.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer proves every
+// extension PR2b registers reaches the right analyzer under the right
+// language string.
+func TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer(t *testing.T) {
+	cases := []struct {
+		path string
+		lang string
+	}{
+		{"a.cs", "csharp"}, {"a.kt", "kotlin"}, {"a.kts", "kotlin"},
+		{"a.scala", "scala"}, {"a.swift", "swift"},
+	}
+	analyzers := DefaultAnalyzers()
+	for _, c := range cases {
+		lang, known := LanguageFor(c.path)
+		if !known || lang != c.lang {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (%q, true)", c.path, lang, known, c.lang)
+		}
+		if _, ok := analyzers[lang]; !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", c.path, lang)
+		}
+	}
+}
+
 func TestAnalyzeFileSkipsUnanalysedExtensions(t *testing.T) {
 	// Python's _analyze_content returns None for an extension absent from
 	// LANGUAGE_BY_EXTENSION. That is a skip, not an error, and not a zero row.

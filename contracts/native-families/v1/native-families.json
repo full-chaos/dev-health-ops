@@ -39,9 +39,6 @@
     "work_item_attribution": "native"
   },
   "workgraph": {
-    "investment.chunk": "compat",
-    "investment.dispatch": "compat",
-    "investment.finalize": "compat",
     "investment.materialize": "native",
     "workgraph.build": "compat"
   }

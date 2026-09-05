@@ -282,96 +282,41 @@ jobs:
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
   # lane-4904-acr-runners/contract-v1.6-signed.md -- supersedes v1.5.1's
-  # fallback-poller pattern for routed jobs). This converts #2145's
-  # pick-runner/go-arm64-numeric-parity-self-hosted/go-arm64-numeric-
-  # parity-fallback trio to the SAME v1.6 shape #2194 (CHAOS-4906) already
-  # gave go-container-reproducibility below: a single job (no matrix), so
-  # both legs share one `name:` directly and branch protection resolves
-  # the required check on that shared name -- no aggregator wrapper and
-  # no `dind-smoke-test` dependency needed (this job runs bit-pattern
-  # golden tests only, never touches a Docker socket, unlike the storage
-  # shards/reproducibility/docker-build legs).
+  # fallback-poller pattern for routed jobs) originally gave this job TWO
+  # legs sharing one `name:` (a hosted `ubuntu-26.04-arm` leg plus this
+  # self-hosted one), same shape as go-container-reproducibility below.
   #
-  # Sizing reverts to this job's OWN pre-poller baseline (timeout-minutes:
-  # 10 on both legs, unchanged since 97792e2b2/CHAOS-4818's original
-  # single-job version) now that the fallback's polling budget (the old
-  # fallback job's timeout-minutes: 20, sized for up to ~18m of queue +
-  # attempt polling) is gone -- there is no poll to budget for under v1.6,
-  # each leg just runs the test directly. The `-timeout 8m` inner bound
-  # (328f91ca0) is kept verbatim on both legs: it already leaves >2m of
-  # headroom under a 10m outer cap and fires with an actionable goroutine
-  # dump before an ambiguous job-level cancellation could.
+  # HOSTED LEG DROPPED (chris 2026-09-04 16:59): the enterprise's
+  # GitHub-hosted runner label list is exactly ubuntu-latest/ubuntu-22.04/
+  # ubuntu-24.04 (+ windows/macos) -- ubuntu-26.04-arm was never a real
+  # hosted label there. There is no non-arm64 substitute either: this job's
+  # entire purpose is proving CHAOS-4818's FMA bit-pattern behavior on REAL
+  # arm64 hardware (see "Confirm this runner is actually arm64" below,
+  # which fails loud rather than silently validate the wrong
+  # architecture), so an x64 fallback would prove nothing and is worse than
+  # not running. This job (id kept as `go-arm64-numeric-parity`, dropping
+  # the old `-self-hosted` suffix so it is the sole, direct producer of the
+  # `go-arm64-numeric-parity` check) now runs ONLY when the ARC pool is
+  # routable: `vars.SELF_HOSTED_RUNNERS == 'enabled'` and not a fork PR
+  # (fork PRs never get a self-hosted runner in a public repo). When
+  # SELF_HOSTED_RUNNERS is 'disabled', or on a fork PR, this check simply
+  # does not run -- it is not one of the five ruleset-required contexts, so
+  # that is a coverage gap, not a merge blocker.
+  #
+  # Sizing kept at this job's pre-poller baseline (timeout-minutes: 10,
+  # unchanged since 97792e2b2/CHAOS-4818's original single-job version).
+  # The `-timeout 8m` inner bound (328f91ca0) already leaves >2m of headroom
+  # under that outer cap and fires with an actionable goroutine dump before
+  # an ambiguous job-level cancellation could.
   go-arm64-numeric-parity:
     name: go-arm64-numeric-parity
     if: >-
-      vars.SELF_HOSTED_RUNNERS != 'enabled' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
-    runs-on: ubuntu-26.04-arm
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-          # This job runs on the self-hosted oci-arc-runners pool, which
-          # exports GOMODCACHE/GOCACHE to a SHARED hostPath across every pod
-          # the pool schedules -- unlike a GitHub-hosted runner's ephemeral,
-          # per-job filesystem. setup-go's default cache (enabled when
-          # `cache` is unset) would extract its cache tarball into that
-          # shared path, racing any other job the pool runs concurrently.
-          # See tests/tooling/test_go_self_hosted_setup_go_cache_disabled.py.
-          cache: false
-
-      - name: Confirm this runner is actually arm64
-        # A mislabeled or reassigned runner would make this job's absence of
-        # findings mean nothing -- fail loud rather than silently validate
-        # the wrong architecture (same principle as ci/check_go.sh's stage
-        # manifest: a skipped check must never read as a passed one).
-        run: |
-          set -euo pipefail
-          arch="$(go env GOARCH)"
-          if [ "${arch}" != "arm64" ]; then
-            echo "expected GOARCH=arm64 on ubuntu-26.04-arm, got '${arch}' -- CHAOS-4818's FMA class does not reproduce on any other architecture, so this job proves nothing if it is not actually running on arm64" >&2
-            exit 1
-          fi
-
-      - name: Run FMA bit-pattern goldens on real arm64
-        # team-lead ruling (CHAOS-4818): `go test -run <pattern>` exits 0
-        # when the pattern matches ZERO tests -- correct Go semantics, but
-        # if a future rename ever empties this job's -run pattern (a test
-        # renamed, a package moved, a typo in the regex), this job would
-        # stay green forever having proved nothing, which IS a false
-        # green from this job's own perspective (its entire purpose is
-        # proving these specific tests ran on real arm64). `-json` output
-        # lets us count actual RUN events for named Test* functions and
-        # fail loud if none ran, rather than trusting the bare exit code.
-        run: |
-          set -euo pipefail
-          # -timeout 8m: the DOUBLE-BOUND lesson from acr's own self-hosted
-          # sibling (CF, 09-03) -- a job relying solely on its outer
-          # `timeout-minutes` risks ordinary wall-time variance turning an
-          # actually-passing run into an ambiguous job CANCELLED, instead
-          # of a real test failure with an actionable goroutine dump.
-          # 8m leaves >2m of headroom under this job's 10m outer cap for
-          # checkout/setup-go/binary startup.
-          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... \
-            -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
-            | tee go-test-output.json
-          ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
-          echo "tests actually run: ${ran}"
-          if [ "${ran}" -eq 0 ]; then
-            echo "0 tests matched the -run pattern -- this job would prove NOTHING and stay green even if every named test were renamed or deleted. Failing loud rather than reporting a silent pass." >&2
-            exit 1
-          fi
-
-  go-arm64-numeric-parity-self-hosted:
-    name: go-arm64-numeric-parity
-    if: >-
       vars.SELF_HOSTED_RUNNERS == 'enabled' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
+      github.event_name == 'release' ||
+      github.event_name == 'schedule')
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     env:
@@ -413,8 +358,12 @@ jobs:
       - name: Run FMA bit-pattern goldens on real arm64
         run: |
           set -euo pipefail
-          # -timeout 8m: see the hosted leg's identical comment above --
-          # this job's own one real measurement (1m12s total, run
+          # -timeout 8m: double-bound lesson from acr's own self-hosted
+          # sibling (CF, 09-03) -- a job relying solely on its outer
+          # `timeout-minutes` risks ordinary wall-time variance turning an
+          # actually-passing run into an ambiguous job CANCELLED, instead of
+          # a real test failure with an actionable goroutine dump. this
+          # job's own one real measurement (1m12s total, run
           # 33728426935, job 100573965740) shows 8m is generous, but that
           # measurement is n=1, which is exactly why the inner bound
           # matters: it fails loud on its own terms rather than depending
@@ -476,7 +425,7 @@ jobs:
   # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
   # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
-    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
     # here and on go-container-reproducibility-self-hosted, then REVERTED
@@ -749,8 +698,12 @@ jobs:
   go-container-reproducibility:
     name: go-container-reproducibility
     if: >-
-      vars.SELF_HOSTED_RUNNERS != 'enabled' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+      !(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
+      github.event_name == 'release' ||
+      github.event_name == 'schedule'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -764,7 +717,11 @@ jobs:
     needs: dind-smoke-test
     if: >-
       vars.SELF_HOSTED_RUNNERS == 'enabled' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
+      github.event_name == 'release' ||
+      github.event_name == 'schedule')
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): a job-level `concurrency:` group was added here
     # the same day to serialize pool access (two concurrent

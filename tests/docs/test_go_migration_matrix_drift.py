@@ -206,3 +206,672 @@ def test_remaining_families_executor_matches_the_daily_go_worker_wiring() -> Non
         "work_item_attribution",
     }
     assert compats == {"complexity", "release_impact"}
+
+
+def test_daily_finalize_compat_families_matches_known_calls() -> None:
+    """Pin today's known set of finalize-scope Python remainders (CHAOS-5118
+    class): every family with a REAL call inside run_daily_metrics_finalize's
+    body, proven by the AST walk, not asserted by citation prose. A future
+    change to which calls exist there must show up as a diff to this pin,
+    the same discipline test_remaining_families_executor_matches_the_daily_go_worker_wiring
+    uses for the artifact's native/compat split.
+    """
+    gen = _load_gen_module()
+    daily_names = {f["name"] for f in gen.load_daily_families()}
+    remaining_names = {f["name"] for f in gen.load_remaining_families()}
+    compat_families = gen.load_daily_finalize_compat_families(
+        daily_names, remaining_names
+    )
+    assert compat_families == {
+        ("daily", "compounding_risk"),
+        ("daily", "team_cognitive_load"),
+        ("daily", "ic_finalize"),
+        ("remaining", "complexity"),
+    }
+
+
+def test_finalize_completeness_guard_rejects_an_unmapped_write_call() -> None:
+    """Falsification control: an in-scope finalize call (matches the
+    `_write_<family>_..._for_day` naming convention) that names no live
+    family must refuse to render -- the exact "new Python half hides by
+    omission" defect this whole mechanism exists to close. Mutates the
+    AST-derived call set in memory (never touches job_daily.py on disk).
+    """
+    gen = _load_gen_module()
+    original = getattr(gen, "load_finalize_write_calls")
+    try:
+        setattr(
+            gen,
+            "load_finalize_write_calls",
+            lambda: original() | {"_write_a_brand_new_family_for_day"},
+        )
+        try:
+            gen.load_daily_finalize_compat_families(
+                {f["name"] for f in gen.load_daily_families()},
+                {f["name"] for f in gen.load_remaining_families()},
+            )
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_daily_finalize_compat_families did not refuse an unmapped "
+            "_write_*_for_day call"
+        )
+    finally:
+        setattr(gen, "load_finalize_write_calls", original)
+
+
+def test_finalize_ledger_rejects_a_stale_irregular_entry() -> None:
+    """Falsification control, the OTHER completeness direction: an
+    irregular-name ledger entry naming a call that no longer exists in
+    run_daily_metrics_finalize's body must refuse to render, rather than
+    just silently stop contributing its family (which would look identical
+    to that family never having had a Python finalize remainder at all)."""
+    gen = _load_gen_module()
+    original = dict(gen.FINALIZE_CALL_IRREGULAR_FAMILY)
+    try:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY["a_call_that_does_not_exist"] = (
+            "remaining",
+            "complexity",
+        )
+        try:
+            gen._assert_no_stale_finalize_ledger_entries(
+                {f["name"] for f in gen.load_daily_families()},
+                {f["name"] for f in gen.load_remaining_families()},
+            )
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "_assert_no_stale_finalize_ledger_entries did not refuse a stale "
+            "irregular-name entry"
+        )
+    finally:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.clear()
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.update(original)
+
+
+def test_is_compat_executor_counts_a_split_row_but_not_a_bare_native_one() -> None:
+    """Count-semantics contract (team-lead's 2026-09-05 ruling): a split
+    "NATIVE (repo) / COMPAT-Python (finalize)" row is Python-compat and must
+    count as one; a bare "NATIVE" row, or work_item_state's "NATIVE,
+    post_bridge" (a Python-WRITTEN INPUT dependency, not a Python SCOPE of
+    the family -- left as its own state per team-lead's ruling) must not.
+    """
+    gen = _load_gen_module()
+    assert gen.is_compat_executor("COMPAT-Python") is True
+    assert gen.is_compat_executor("NATIVE (repo) / COMPAT-Python (finalize)") is True
+    assert gen.is_compat_executor("NATIVE") is False
+    assert gen.is_compat_executor("NATIVE, post_bridge") is False
+
+
+def test_split_status_still_counts_as_compat_once_repo_scope_goes_native() -> None:
+    """End-to-end proof of the defect fix: simulate compounding_risk's (§2)
+    and complexity's (§3) repo scope going native -- as review-bench's #2230
+    is about to do for compounding_risk -- and assert the rendered row is
+    STILL is_compat_executor-true, not bare NATIVE. This is what makes
+    CHAOS-3092's "zero COMPAT rows" close condition correct across that
+    transition instead of satisfiable by omission.
+    """
+    gen = _load_gen_module()
+    daily_names = {f["name"] for f in gen.load_daily_families()}
+    remaining_names = {f["name"] for f in gen.load_remaining_families()}
+    finalize_compat = gen.load_daily_finalize_compat_families(
+        daily_names, remaining_names
+    )
+
+    daily_status = gen.daily_family_executor(
+        "compounding_risk", {"compounding_risk": "native"}, finalize_compat
+    )
+    assert daily_status == "NATIVE (repo) / COMPAT-Python (finalize)"
+    assert gen.is_compat_executor(daily_status) is True
+
+    remaining_status = gen.remaining_family_executor(
+        "complexity", {"complexity": "native"}, finalize_compat
+    )
+    assert remaining_status == "NATIVE (repo) / COMPAT-Python (finalize)"
+    assert gen.is_compat_executor(remaining_status) is True
+
+
+def test_split_render_fires_through_the_actual_count_helpers_and_reverses() -> None:
+    """Required before merge (team-lead, 2026-09-05): prove the split render
+    and count_compat_daily_families FIRE TOGETHER through the real counting
+    function (not just the underlying predicate, which the previous test
+    already covers) -- AND that the effect reverses once the Python
+    remainder is genuinely gone, so this isn't a one-way ratchet that keeps
+    counting a family as compat forever just because it once had a finalize
+    call.
+
+    Two states compared against the SAME baseline count:
+    1. compounding_risk's repo scope goes native, finalize call untouched
+       (still real) -- count_compat_daily_families must NOT drop: the split
+       row still counts.
+    2. ALSO remove `_write_compounding_risk_team_rows_for_day` from the
+       AST-walked call set (simulating the Python port genuinely
+       finishing) -- NOW the family must drop out of the compat count, and
+       its rendered status must degrade to bare "NATIVE".
+    """
+    gen = _load_gen_module()
+    baseline = gen.count_compat_daily_families()
+
+    original_artifact = getattr(gen, "load_native_families_artifact")
+
+    def native_compounding_risk() -> dict:
+        real = original_artifact()
+        return {**real, "daily": {**real["daily"], "compounding_risk": "native"}}
+
+    try:
+        setattr(gen, "load_native_families_artifact", native_compounding_risk)
+
+        after_native = gen.count_compat_daily_families()
+        assert after_native == baseline, (
+            "a family whose repo scope went native but still has a real finalize "
+            "call must still count as compat (split row) -- count must not drop"
+        )
+
+        daily_names = {f["name"] for f in gen.load_daily_families()}
+        remaining_names = {f["name"] for f in gen.load_remaining_families()}
+        finalize_compat = gen.load_daily_finalize_compat_families(
+            daily_names, remaining_names
+        )
+        artifact_daily = gen.load_native_families_artifact()["daily"]
+        assert (
+            gen.daily_family_executor(
+                "compounding_risk", artifact_daily, finalize_compat
+            )
+            == "NATIVE (repo) / COMPAT-Python (finalize)"
+        )
+
+        original_calls = getattr(gen, "load_finalize_write_calls")
+        try:
+            setattr(
+                gen,
+                "load_finalize_write_calls",
+                lambda: (
+                    original_calls() - {"_write_compounding_risk_team_rows_for_day"}
+                ),
+            )
+
+            after_mutation = gen.count_compat_daily_families()
+            assert after_mutation == baseline - 1, (
+                "once the finalize call is actually gone, the family must drop "
+                "OUT of the compat count -- otherwise this is a one-way ratchet"
+            )
+
+            finalize_compat_after = gen.load_daily_finalize_compat_families(
+                daily_names, remaining_names
+            )
+            assert "compounding_risk" not in finalize_compat_after
+            status_after = gen.daily_family_executor(
+                "compounding_risk", artifact_daily, finalize_compat_after
+            )
+            assert status_after == "NATIVE"
+            assert gen.is_compat_executor(status_after) is False
+        finally:
+            setattr(gen, "load_finalize_write_calls", original_calls)
+    finally:
+        setattr(gen, "load_native_families_artifact", original_artifact)
+
+
+# ---------------------------------------------------------------------------
+# Round-2 findings (codex, CHAOS-5118). F3: the 4 tests below are
+# falsification controls for guard branches round-1's own tests never
+# exercised (F1/F2/F4 fixes above; the two existing tests above only reach
+# the unmapped-write-call and stale-irregular-entry branches). Each proves
+# reachability explicitly: the mutation/input is the MINIMAL one that drives
+# execution into the specific branch under test, not just "reddens somewhere".
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_call_family_rejects_multiple_matches_in_one_namespace() -> None:
+    """Falsification control for the same-namespace multi-match guard
+    (`_finalize_call_family`'s `len(daily_matches) > 1` branch): a call
+    whose `_write_<...>_for_day` middle prefix-matches MORE THAN ONE daily
+    family name must refuse, not silently pick the longest.
+
+    Reachability: `work_item` and `work_item_state` both legitimately
+    prefix-match the constructed middle `work_item_state_details`
+    (`middle == family or middle.startswith(family + "_")` for each), so
+    both land in `daily_matches` and the length-2 check at the top of the
+    ambiguity block is what raises -- not any other guard in the function.
+    """
+    gen = _load_gen_module()
+    try:
+        gen._finalize_call_family(
+            "_write_work_item_state_details_for_day",
+            {"work_item", "work_item_state"},
+            set(),
+        )
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised, (
+        "_finalize_call_family did not refuse a call matching multiple "
+        "daily families via the naming convention"
+    )
+
+
+def test_finalize_call_family_rejects_an_implausible_irregular_mapping() -> None:
+    """Falsification control for the irregular-mapping plausibility guard
+    inside `_finalize_call_family` (distinct from
+    test_finalize_ledger_rejects_a_stale_irregular_entry, which tests
+    `_assert_no_stale_finalize_ledger_entries` -- a different function):
+    an irregular-ledger entry that fails `_irregular_mapping_plausible`
+    must refuse to resolve, not silently return the implausible family.
+
+    Reachability: `_write_team_complexity_for_day` is a real key already in
+    FINALIZE_CALL_IRREGULAR_FAMILY (restored in `finally`); retargeting its
+    value to `("daily", "team_wellbeing")` sends `_finalize_call_family`
+    down the irregular-entry branch (the call name is a real key), past the
+    live-family-membership check (`team_wellbeing` is live), and into the
+    plausibility check specifically -- which must reject this pairing
+    (round-2 F2's own reported false-positive case).
+    """
+    gen = _load_gen_module()
+    original = dict(gen.FINALIZE_CALL_IRREGULAR_FAMILY)
+    try:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY["_write_team_complexity_for_day"] = (
+            "daily",
+            "team_wellbeing",
+        )
+        try:
+            gen._finalize_call_family(
+                "_write_team_complexity_for_day", {"team_wellbeing"}, {"complexity"}
+            )
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "_finalize_call_family did not refuse an implausible irregular mapping"
+        )
+    finally:
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.clear()
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY.update(original)
+
+
+def test_finalize_call_family_rejects_a_name_valid_in_both_namespaces() -> None:
+    """Falsification control for the daily/remaining cross-namespace
+    ambiguity guard (`_finalize_call_family`'s `if daily_match and
+    remaining_match` branch) -- the exact CHAOS-5118 round-1 F4 shape
+    (`work_item_attribution` names both a full daily compute and a
+    narrower remaining staleness backstop).
+
+    Reachability: passing the SAME family name in both `daily_names` and
+    `remaining_names` makes the call's middle prefix-match exactly one
+    family in EACH namespace individually (no multi-match guard fires
+    first), so only the cross-namespace check can be what raises.
+    """
+    gen = _load_gen_module()
+    try:
+        gen._finalize_call_family(
+            "_write_work_item_attribution_for_day",
+            {"work_item_attribution"},
+            {"work_item_attribution"},
+        )
+        raised = False
+    except SystemExit:
+        raised = True
+    assert raised, (
+        "_finalize_call_family did not refuse a name valid in both the daily "
+        "and remaining namespaces"
+    )
+
+
+def test_load_finalize_write_calls_rejects_an_opaque_call_target(tmp_path) -> None:
+    """Falsification control for the opaque-call guard in
+    load_finalize_write_calls (round-1 F1) -- proves it still fires on a
+    fresh input, not just that today's real job_daily.py happens to have
+    zero opaque calls (which the real-file run alone cannot distinguish
+    from a guard that never fires at all).
+
+    Reachability: a synthetic job_daily.py, pointed to via a monkeypatched
+    `JOB_DAILY_PY`, whose `run_daily_metrics_finalize` calls through a
+    subscript (`dispatch["x"]()`) -- a shape that is neither `ast.Name` nor
+    `ast.Attribute`, landing in the `opaque` branch specifically.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n    dispatch = {}\n    dispatch['x']()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, "load_finalize_write_calls did not refuse an opaque call target"
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_resolves_a_plain_name_alias(tmp_path) -> None:
+    """Positive control for round-2 finding F1's fix: a call reached
+    through an unambiguous local alias (`writer = _write_x_for_day;
+    writer(...)`) must resolve to the ALIASED function's name, not the
+    bare alias identifier -- proving the fix actually closes the gap
+    codex demonstrated, not just that it refuses somewhere new.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    writer = _write_compounding_risk_team_rows_for_day\n"
+        "    writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls did not resolve the alias to the "
+            f"assigned function's name: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_an_unresolvable_alias(tmp_path) -> None:
+    """Negative control alongside the positive one above: an alias
+    assigned MORE THAN ONCE to different targets cannot be resolved to a
+    single function name, and must refuse rather than silently falling
+    back to treating the bare alias identifier as an ordinary (and
+    therefore presumed out-of-scope) call name.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    if True:\n"
+        "        writer = _write_compounding_risk_team_rows_for_day\n"
+        "    else:\n"
+        "        writer = _write_team_complexity_for_day\n"
+        "    writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse an alias assigned to "
+            "two different targets"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_resolves_a_for_loop_alias(tmp_path) -> None:
+    """Positive control for round-3 finding F1: a call reached through a
+    `for` loop binding over a single-element literal container
+    (`for writer in (real_fn,): writer(...)`) must resolve to the real
+    function's name, the exact shape codex's r3 round demonstrated the
+    round-2 fix missed (it only collected `ast.Assign` bindings).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    for writer in (_write_compounding_risk_team_rows_for_day,):\n"
+        "        writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls did not resolve the for-loop alias to "
+            f"the assigned function's name: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_resolves_a_chained_alias(tmp_path) -> None:
+    """Positive control for round-3 finding F1's other shape: an
+    alias-of-an-alias (`first = real_fn; second = first; second()`) must
+    resolve all the way to the real function's name, not stop at the
+    first hop (which would record the call as the intermediate alias
+    name `"first"`, an ordinary-looking identifier that silently reads
+    as out-of-scope infrastructure).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    first = _write_compounding_risk_team_rows_for_day\n"
+        "    second = first\n"
+        "    second()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls did not resolve the alias chain to "
+            f"the real function's name: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_an_alias_cycle(tmp_path) -> None:
+    """Negative control: a cyclic alias chain (`a = b` then, elsewhere,
+    `b = a`) can never resolve to a real function no matter how far it is
+    followed -- must refuse rather than loop forever or silently pick
+    one side of the cycle.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n    a = b\n    b = a\n    a()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, "load_finalize_write_calls did not refuse a cyclic alias chain"
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_a_with_statement_alias(tmp_path) -> None:
+    """Negative control: `with x() as y:` binds y to whatever
+    `x().__enter__()` returns, which cannot be determined from source --
+    a call through such a binding must refuse, never be silently treated
+    as a direct reference to a module-level function named `y`.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    with make_writer() as writer:\n"
+        "        writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse a call through a "
+            "with-statement binding"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_a_r3_destructured_for_alias(
+    tmp_path,
+) -> None:
+    """Negative control for confirmation-pass finding F1: a `for` loop whose
+    target is DESTRUCTURED (`for (writer,) in get_writers(): writer()`)
+    matched none of the r3 fix's per-shape branches (only a bare `Name`
+    target was handled) and so was never added to raw_next/aliases at all --
+    the call fell through as an ordinary, presumably-irrelevant call name
+    instead of refusing. Must now refuse outright.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    for (writer,) in get_writers():\n"
+        "        writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse a call through a "
+            "destructured for-loop target"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_an_annotated_alias(tmp_path) -> None:
+    """Negative control for confirmation-pass finding F3: an `AnnAssign`
+    (`writer: object = get_writer()`) originally matched no branch in the
+    r3 fix at all (only `ast.Assign` was modeled), so `writer` was never
+    added to raw_next/aliases -- the later call fell through as an
+    ordinary, presumably-irrelevant call name instead of refusing.
+    `AnnAssign` to a `Name` target is now resolved the same way `Assign`
+    is (a call's value, like here, is unresolvable via `_one_hop_value`),
+    so the later bare call still refuses -- just via the same path
+    `writer = get_writer(); writer()` already took, not a hardcoded
+    AnnAssign-specific refusal.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    writer: object = get_writer()\n"
+        "    writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse a call through an "
+            "annotated-assignment alias"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_allows_an_annotated_literal_declaration(
+    tmp_path,
+) -> None:
+    """Positive control: an `AnnAssign` to a `Name` target whose value is an
+    ordinary literal (`ch_client: Any = None`) is real, common code --
+    job_daily.py itself declares `ch_client: Any = None` and
+    `git_metrics: list[Any] = []` this way -- and must NOT be refused just
+    because it has a value. It resolves to an unresolvable alias exactly
+    like a plain `Assign` to a literal would, which is harmless unless
+    something later calls it bare (see the sibling
+    rejects_an_annotated_alias test for that case).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    ch_client: object = None\n"
+        "    _write_compounding_risk_team_rows_for_day()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls wrongly refused/misbehaved on an "
+            f"annotated literal declaration that is never called: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_allows_a_subscript_or_attribute_target(
+    tmp_path,
+) -> None:
+    """Positive control: `d[k] = v` / `obj.attr = v` mutate something that
+    already exists and introduce NO new bare local name -- unlike a
+    destructured Tuple/List/Starred target, they can never be the thing a
+    later bare `name()` call resolves through. Real code does this
+    routinely (job_daily.py: `team_metrics_params["org_id"] = org_id`), so
+    this must be skipped, not refused as an unmodeled destructuring shape.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    params['org_id'] = org_id\n"
+        "    obj.attr = org_id\n"
+        "    _write_compounding_risk_team_rows_for_day()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls wrongly refused a Subscript/Attribute "
+            f"assignment target: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_allows_a_destructured_target_never_called(
+    tmp_path,
+) -> None:
+    """Positive control for the final F1 design: a destructured `for k, v
+    in ...:` loop target is real, common code (job_daily.py:
+    `for k, v in ... if k in team_metrics_field_names`) that never calls
+    `k` or `v` bare. Refusing the moment a destructuring pattern EXISTS,
+    regardless of whether any of its names are ever called, was tried
+    first and broke on exactly this shape -- it must instead be tracked
+    as unresolvable and only refuse if a later bare call actually reaches
+    it (see the sibling rejects_a_r3_destructured_for_alias test for that
+    case).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    pairs = {}\n"
+        "    pair_source = []\n"
+        "    for k, v in pair_source:\n"
+        "        pairs[k] = v\n"
+        "    _write_compounding_risk_team_rows_for_day()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls wrongly refused a destructured "
+            f"for-loop target that is never called bare: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)

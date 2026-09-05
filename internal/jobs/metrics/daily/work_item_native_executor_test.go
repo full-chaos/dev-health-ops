@@ -309,6 +309,22 @@ func whereClauseOf(t *testing.T, fileName, funcName string) string {
 		}
 		for _, arg := range call.Args {
 			folded, ok := foldStringExpr(arg)
+			// The SQL may be built into a local variable and passed by name --
+			// `query := "SELECT " + cols + " FROM ... WHERE ..."` then
+			// `Query(ctx, conn, query, ...)`. The argument is then an Ident,
+			// which folds to "" and would silently yield "no WHERE-bearing
+			// query" on a function that plainly has one.
+			//
+			// Resolving it stays bound to the argument ACTUALLY PASSED: we look
+			// up that one identifier's assignment inside this function, not any
+			// string literal that happens to appear nearby. That is what
+			// preserves r2's property -- a decoy literal elsewhere in the body
+			// still cannot satisfy the guard, because nothing passes it.
+			if ident, isIdent := arg.(*ast.Ident); isIdent {
+				if assigned, found := localStringAssignment(target, ident.Name); found {
+					folded, ok = assigned, true
+				}
+			}
 			if ok && strings.Contains(folded, "WHERE") {
 				queries = append(queries, folded)
 			}
@@ -400,4 +416,32 @@ func TestWorkItemAttributionSubjectQuerySharesTheLoadWorkItemsPredicate(t *testi
 				"equality assertion above is vacuous", attribution, required)
 		}
 	}
+}
+
+// localStringAssignment folds the value assigned to `name` inside fn, for the
+// single-assignment case (`name := <string expr>` or `name = <string expr>`).
+// It deliberately refuses to guess when the identifier is assigned more than
+// once: two assignments mean the value at the call site depends on control
+// flow, which this guard cannot evaluate, and picking either one would be a
+// coin flip presented as a fact.
+func localStringAssignment(fn *ast.FuncDecl, name string) (string, bool) {
+	var found []string
+	ast.Inspect(fn, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		lhs, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok || lhs.Name != name {
+			return true
+		}
+		if value, folded := foldStringExpr(assign.Rhs[0]); folded {
+			found = append(found, value)
+		}
+		return true
+	})
+	if len(found) != 1 {
+		return "", false
+	}
+	return found[0], true
 }

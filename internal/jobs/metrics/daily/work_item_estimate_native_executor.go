@@ -64,7 +64,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, repoID, scope.start, scope.end,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
 		}
 		if len(items) == 0 {
 			continue
@@ -73,7 +73,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, repoID,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
 		}
 
 		computedAt := executor.nowUTC()
@@ -89,7 +89,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 			ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,
 		)
 		if err != nil {
-			return total, err
+			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
 		}
 		total += written
 	}

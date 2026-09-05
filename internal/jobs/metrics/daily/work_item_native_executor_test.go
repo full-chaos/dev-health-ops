@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -371,6 +372,62 @@ func foldStringExpr(expr ast.Expr) (string, bool) {
 		return "", true
 	default:
 		return "", false
+	}
+}
+
+// TestWorkItemAndWorkItemEstimatePartialWriteGuardPinsBothDirections is the
+// codex round 3 red-first proof (astra scale review): the FOURTH instance
+// of the class round 2's F3 already found in
+// work_item_state_native_executor.go -- WorkItemExecutor's `work_item` and
+// WorkItemEstimateExecutor's `work_item_estimate` share the identical
+// per-repo loop shape and had the identical unwrapped-return-total-err bug
+// at every early-return site. Mirrors
+// TestWorkGraphEdgesPartialWriteGuardPinsBothDirections's and
+// TestWorkItemStatePartialWriteGuardPinsBothDirections's exact shape: wrap
+// only when something already landed, never when nothing did. Both
+// families share the one wrapWorkItemPartialWrite helper (parametrized by
+// family name), so one test covers both call sites.
+func TestWorkItemAndWorkItemEstimatePartialWriteGuardPinsBothDirections(t *testing.T) {
+	cause := errors.New("simulated ClickHouse send failure")
+	repoID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+
+	for _, family := range []string{"work_item", "work_item_estimate"} {
+		t.Run(family, func(t *testing.T) {
+			t.Run("failure AFTER a write is a partial write", func(t *testing.T) {
+				rows, err := wrapWorkItemPartialWrite(family, 5, repoID, cause)
+				if !errors.Is(err, ErrPartialWrite) {
+					t.Errorf("a failure after 5 rows landed must wrap ErrPartialWrite so the "+
+						"dispatcher reports PartialWrite, not Refused; got %v", err)
+				}
+				if !errors.Is(err, cause) {
+					t.Errorf("the original cause must survive wrapping; got %v", err)
+				}
+				if rows != 5 {
+					t.Errorf("the TRUE rows-written count must be reported, got %d, want 5 -- "+
+						"reporting 0 here tells an operator the opposite of what happened and "+
+						"misinforms the re-drive decision", rows)
+				}
+				if !strings.Contains(err.Error(), family) {
+					t.Errorf("the wrapped error must name the failing family (%q) so an operator "+
+						"reading it can tell work_item from work_item_estimate; got %v", family, err)
+				}
+			})
+
+			t.Run("failure BEFORE any write is an ordinary failure", func(t *testing.T) {
+				rows, err := wrapWorkItemPartialWrite(family, 0, repoID, cause)
+				if errors.Is(err, ErrPartialWrite) {
+					t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: this " +
+						"repo's loop iteration produced zero rows, so there is nothing to " +
+						"distinguish from an ordinary refusal")
+				}
+				if !errors.Is(err, cause) {
+					t.Errorf("the original cause must be returned unchanged; got %v", err)
+				}
+				if rows != 0 {
+					t.Errorf("rows=%d, want 0", rows)
+				}
+			})
+		})
 	}
 }
 

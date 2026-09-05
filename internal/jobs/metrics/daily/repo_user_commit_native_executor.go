@@ -123,9 +123,32 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 
 	repoRows, userRows, commitRows, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {
-		return 0, err
+		// codex sweep (CHAOS-5190 r3 follow-up, team-lead-requested):
+		// WriteResult's OWN return values already correctly thread the true
+		// partial count through every one of its three sequential-table
+		// failure paths (repoRows on a userMetrics failure, repoRows+userRows
+		// on a commitMetrics failure) -- but this call site used to discard
+		// all of that with a bare `return 0, err`, exactly the class already
+		// fixed in work_item_state/work_item/work_item_estimate/
+		// work_graph_edges/ai_governance. A later table's failure after an
+		// earlier one already landed rows must not read as a full refusal.
+		return wrapRepoUserCommitPartialWrite(repoRows+userRows+commitRows, err)
 	}
 	return repoRows + userRows + commitRows, nil
+}
+
+// wrapRepoUserCommitPartialWrite mirrors wrapAIGovernancePartialWrite's/
+// wrapWorkGraphEdgesPartialWrite's exact shape: total == 0 returns the
+// error unwrapped (nothing landed); total > 0 wraps ErrPartialWrite naming
+// the true row count already durable across repo_metrics_daily/
+// user_metrics_daily/commit_metrics.
+func wrapRepoUserCommitPartialWrite(total int, err error) (int, error) {
+	if total == 0 {
+		return 0, err
+	}
+	return total, fmt.Errorf(
+		"%w: repo_user_commit failed after %d row(s) already landed across repo_metrics_daily/user_metrics_daily/commit_metrics: %w",
+		ErrPartialWrite, total, err)
 }
 
 var _ NativeFamilyExecutor = (*RepoUserCommitExecutor)(nil)

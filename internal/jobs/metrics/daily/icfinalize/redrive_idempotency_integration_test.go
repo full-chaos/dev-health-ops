@@ -8,6 +8,7 @@ import (
 	"time"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -29,33 +30,15 @@ import (
 // NEW key on every redrive. If this test had only git-backed identities it
 // would pass against the un-fixed code and prove nothing.
 
-const twoTableDDL = `CREATE TABLE user_metrics_daily (
-    repo_id UUID, day Date, author_email String, identity_id String,
-    team_id String, loc_touched UInt32, prs_opened UInt32,
-    work_items_completed UInt32, work_items_active UInt32, delivery_units UInt32,
-    cycle_p50_hours Float64, cycle_p90_hours Float64,
-    prs_authored UInt32 DEFAULT 0, prs_merged UInt32 DEFAULT 0,
-    loc_added UInt32 DEFAULT 0, loc_deleted UInt32 DEFAULT 0,
-    median_pr_cycle_hours Float64 DEFAULT 0, pr_cycle_p90_hours Float64 DEFAULT 0,
-    computed_at DateTime, org_id String
-) ENGINE = MergeTree PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, repo_id, author_email, day)`
-
-const landscapeDDL = `CREATE TABLE ic_landscape_rolling_30d (
-    repo_id UUID, as_of_day Date, identity_id String, team_id String,
-    map_name String, x_raw Float64, y_raw Float64, x_norm Float64, y_norm Float64,
-    churn_loc_30d UInt64, delivery_units_30d UInt32, cycle_p50_30d_hours Float64,
-    wip_max_30d UInt32, computed_at DateTime, org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(as_of_day)
-ORDER BY (org_id, repo_id, team_id, map_name, as_of_day, identity_id)`
-
-const workItemDDL = `CREATE TABLE work_item_user_metrics_daily (
-    day Date, provider String, work_scope_id String, user_identity String,
-    team_id String, team_name String, items_started UInt32, items_completed UInt32,
-    wip_count_end_of_day UInt32, cycle_time_p50_hours Nullable(Float64),
-    cycle_time_p90_hours Nullable(Float64), computed_at DateTime, org_id String
-) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day)
-ORDER BY (org_id, provider, work_scope_id, user_identity, day)`
+// This file authors no DDL. user_metrics_daily, ic_landscape_rolling_30d and
+// work_item_user_metrics_daily come from the actual Python ClickHouse
+// migration chain via chschema.Apply, the same authority every other
+// migrated-schema integration test in this repo reads from (e.g.
+// internal/providersync's *_effects_integration_test.go). A hand-typed
+// CREATE TABLE copy proves the copy agrees with itself, not that it agrees
+// with the deployed schema -- which is exactly how this file's own
+// prs_authored column went missing for however long this test never actually
+// ran (go test ./... excludes -tags=integration; CHAOS-5152).
 
 // The production read forms, copied from the executor's own queries so the
 // assertion sees what a reader sees rather than a raw row count.
@@ -75,16 +58,15 @@ func TestARedriveSupersedesInsteadOfAccumulating(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer instance.Close(context.Background())
+	// Apply before opening the Go connection so a migration failure is
+	// reported at the authority boundary rather than later as a missing-
+	// table query.
+	chschema.Apply(ctx, t, instance)
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	for _, ddl := range []string{twoTableDDL, landscapeDDL, workItemDDL} {
-		if err := conn.Exec(ctx, ddl); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	const orgID = "00000000-0000-4000-8000-000000000700"
 	const gitRepo = "8f5c1f2e-6b4a-4a1e-9f0c-2f2a2d6d5a10"

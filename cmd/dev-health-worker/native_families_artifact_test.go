@@ -388,11 +388,17 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-5078: work_item_attribution is native, and its three readers
+		// return to the pre_bridge (native) phase with it. They read
+		// work_item_team_attributions, which it WRITES; families.json's
+		// `after` edges order the writer ahead of its readers within the
+		// phase, which is what made post_bridge unnecessary.
+		"work_item_attribution", "work_item_state", "work_item", "work_item_estimate",
 	}
-	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
-	// post_bridge -- all three read work_item_team_attributions, which the
-	// still-Python work_item_attribution family writes in the same partition.
-	wantDailyPostBridge := []string{"work_item_state", "work_item", "work_item_estimate"}
+	// EMPTY, deliberately, and asserted rather than omitted. post_bridge is a
+	// working mechanism kept for the next family that needs it; asserting the
+	// set is empty is what would catch a family silently landing there again.
+	wantDailyPostBridge := []string{}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half

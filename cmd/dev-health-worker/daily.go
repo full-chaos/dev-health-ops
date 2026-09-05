@@ -834,27 +834,58 @@ func dailyNativeFamilyRegistrations(
 			"error", testopsRiskErr,
 		)
 	}
-	// CHAOS-4278: work_item_state reads its team attribution
-	// from work_item_team_attributions.is_primary=1 rather than
-	// recomputing the 9-source cascade -- see
-	// WorkItemStateExecutor's and
-	// LoadWorkItemPrimaryTeamAttributions's doc comments. It is
-	// registered POST-BRIDGE, not in the native map
-	// above (SetPostBridgeNativeFamilies, not SetNativeFamilies)
-	// -- families.json declares "phase":"post_bridge" for the
-	// SAME reason: work_item_team_attributions is written by
-	// work_item_attribution, still Python-bridged (CHAOS-4283),
-	// in the SAME partition's compatibility call, so this
-	// executor must run AFTER that call returns, not before
-	// (codex round-1 P1 on this PR caught the pre_bridge
-	// placement reading stale data -- see
-	// computePostBridgeNativeFamilies's doc comment). TEMPORARY:
-	// move back into native above once CHAOS-4283 ports
-	// work_item_attribution to Go and families.json's phase_note
-	// says work_item_state can return to pre_bridge.
+	// CHAOS-5078: work_item_attribution is now NATIVE, and it is the reason the
+	// three families below can return to pre_bridge. It WRITES
+	// work_item_team_attributions; work_item, work_item_estimate and
+	// work_item_state READ it. families.json declares that with
+	// `"after":["work_item_attribution"]` on each reader, and FamilyRunOrder
+	// turns those edges into the execution order -- so the writer runs first
+	// WITHIN the pre_bridge phase, which is what made the post_bridge
+	// workaround unnecessary.
+	//
+	// Moving them back is a resilience IMPROVEMENT, not merely tidying:
+	// skipFamiliesForBridge adds pre_bridge names only for families that
+	// actually RAN, but post_bridge names UNCONDITIONALLY. Under post_bridge a
+	// refused executor meant nobody wrote the family for that partition; under
+	// pre_bridge a refusal falls back to the Python bridge again.
+	if workItemAttributionExecutor, workItemAttributionErr := daily.NewWorkItemAttributionExecutor(clickhouseConnection); workItemAttributionErr == nil {
+		native["work_item_attribution"] = workItemAttributionExecutor
+	} else {
+		logger.Error(
+			"work_item_attribution native executor refused; the family "+
+				"stays on the Python compatibility bridge for every "+
+				"partition. Its READERS (work_item, work_item_estimate, "+
+				"work_item_state) still run natively and still read "+
+				"work_item_team_attributions -- the bridge writes it in the "+
+				"same partition call, so they would read the PREVIOUS run's "+
+				"rows. Every other daily-metrics family is unaffected.",
+			"error", workItemAttributionErr,
+		)
+	}
+	// CHAOS-4278/CHAOS-5078: work_item_state reads its team attribution from
+	// work_item_team_attributions.is_primary=1 rather than recomputing the
+	// 9-source cascade -- see WorkItemStateExecutor's and
+	// LoadWorkItemPrimaryTeamAttributions's doc comments.
+	//
+	// It shipped pre_bridge, was moved to POST_BRIDGE by codex round-1 P1
+	// (2026-09-01) because work_item_team_attributions was written by the
+	// still-Python work_item_attribution family in the SAME partition call, so
+	// a pre_bridge read saw the PREVIOUS run's rows -- and is now back in the
+	// native (pre_bridge) map above, because that writer is native as of
+	// CHAOS-5078 and families.json's `after` edges order it ahead of its
+	// readers within the phase. The condition the old comment named
+	// ("once CHAOS-4283 ports work_item_attribution to Go") is the condition
+	// that has now been met.
+	//
+	// postBridge stays declared and returned, EMPTY. The phase itself is not
+	// removed: it is a working mechanism with a real use (a native family whose
+	// correctness depends on a still-Python family's same-partition write), and
+	// the next family to need it should find it here rather than re-deriving
+	// it. An empty map means SetPostBridgeNativeFamilies is never called, which
+	// is the intended no-op.
 	postBridge = map[string]daily.NativeFamilyExecutor{}
 	if workItemStateExecutor, workItemStateErr := daily.NewWorkItemStateExecutor(clickhouseConnection); workItemStateErr == nil {
-		postBridge["work_item_state"] = workItemStateExecutor
+		native["work_item_state"] = workItemStateExecutor
 		// CHAOS-4278: the team-attribution-READ guard counter --
 		// see WorkItemStateMissingAttributionObserver's doc
 		// comment. Same optional-observer discipline as
@@ -889,7 +920,7 @@ func dailyNativeFamilyRegistrations(
 	// DailyMetricsNativeFamilyOutcomeRefused counter is the
 	// operator-visible signal.
 	if workItemExecutor, workItemErr := daily.NewWorkItemExecutor(clickhouseConnection); workItemErr == nil {
-		postBridge["work_item"] = workItemExecutor
+		native["work_item"] = workItemExecutor
 	} else {
 		logger.Error(
 			"work_item native executor refused; NO writer produces "+
@@ -902,7 +933,7 @@ func dailyNativeFamilyRegistrations(
 		)
 	}
 	if workItemEstimateExecutor, workItemEstimateErr := daily.NewWorkItemEstimateExecutor(clickhouseConnection); workItemEstimateErr == nil {
-		postBridge["work_item_estimate"] = workItemEstimateExecutor
+		native["work_item_estimate"] = workItemEstimateExecutor
 	} else {
 		logger.Error(
 			"work_item_estimate native executor refused; NO writer "+

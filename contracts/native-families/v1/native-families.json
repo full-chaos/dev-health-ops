@@ -10,9 +10,10 @@
     "repo_user_commit": "native",
     "team_wellbeing": "native",
     "testops_risk": "native",
-    "work_item": "post_bridge",
-    "work_item_estimate": "post_bridge",
-    "work_item_state": "post_bridge"
+    "work_item": "native",
+    "work_item_attribution": "native",
+    "work_item_estimate": "native",
+    "work_item_state": "native"
   },
   "remaining": {
     "capacity": "native",

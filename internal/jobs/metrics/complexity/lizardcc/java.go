@@ -14,14 +14,30 @@ package lizardcc
 // parameterOpen/parameterClose, firstByte, isAlpha) are reused from
 // clike.go; the declaration-parsing states below (stateFunction,
 // stateDec/stateDecBody, stateDecToImp, stateThrows,
-// stateTemplateInName) are copied from it because Java needs them
-// UNCHANGED, minus the pieces Java can never reach: C++ operator overloads
-// ("::"/"operator" in clike.py's _state_function/_state_name_with_space,
-// never used by Java's own declaration syntax), throw-specifiers,
-// trailing-return-types, initializer lists and C++11 attributes (Java has
-// none of these), and lambda-check ('[' in _state_global) -- clike.py's
-// own base _state_global disables that path FOR Java specifically via
-// `if not hasattr(self, 'class_name')`, and JavaStates always has one.
+// stateTemplateInName, stateNameWithSpace, stateOperator/
+// stateOperatorNext, stateTrailingReturn) are copied from it because Java
+// needs them UNCHANGED -- INCLUDING "::"/"operator" (stateFunction's
+// "::" branch and stateNameWithSpace, both inherited by JavaStates
+// unmodified since it overrides neither) and ref-qualifiers/trailing-
+// return/function-pointer-return (all reachable via stateDecToImp, which
+// JavaStates also does not override). CORRECTED (CHAOS-5156, codex round
+// r1 on #2292, independently verified against java.py/clike.py source):
+// an earlier version of this doc wrongly claimed these were "pieces Java
+// can never reach" -- Java syntax genuinely has none of these constructs,
+// but lizard's tolerant, non-parsing tokenizer still processes a token
+// stream shaped like one (matching this whole package's design), and
+// JavaStates inherits the relevant clike.py states UNCHANGED rather than
+// overriding them out. The ONE real exception, still correctly excluded:
+// try_new_function (java.py:63-71) IS a full override with no "operator"
+// special-case of its own, so a BARE (unqualified) `operator+()` is NOT
+// specially handled -- only a QUALIFIED one (`Foo::operator+()`,
+// reaching stateOperator via stateNameWithSpace) is. Throw-specifiers/
+// noexcept/initializer-lists remain genuinely unported (a known,
+// out-of-scope gap, not re-claimed as unreachable). Lambda-check ('['
+// in _state_global) stays excluded for the reason already stated:
+// clike.py's own base _state_global disables that path FOR Java
+// specifically via `if not hasattr(self, 'class_name')`, and JavaStates
+// always has one.
 //
 // ONE dynamic-dispatch hook survives here for the same reason clike.go
 // needed globalState/decToImpState: JavaStates, JavaFunctionBodyStates and
@@ -290,9 +306,22 @@ func (m *javaMachine) javaStateGlobal(tok string) {
 // clikeStateGlobal ports CLikeStates._state_global (clike.go's
 // clikeStates.stateGlobal) for Java: the lambda-check branch is dropped
 // (unreachable -- see this file's package doc).
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r1 on #2292): this used to check
+// only `b == '_' || isAlpha(b)` -- but clikeStates.stateGlobal (clike.go,
+// the canonical port this function is a hand-written copy of, rather than
+// a shared call) also accepts `b == '~'`. The shared `preprocessor.step`
+// (tokenize.go) already glues a bare "~" onto the next token ("~" + "Foo"
+// -> "~Foo") for EVERY reader that runs it, cfamily's Analyze included --
+// AnalyzeJava runs the exact same preprocessor loop, so a merged "~Foo"
+// token was already arriving here correctly, just never recognized as a
+// function start. Verified: real lizard 1.23.0 measures a
+// destructor-shaped construct's body as complexity 2 (base 1 + if); this
+// port measured 1 (the body's own "if" misattributed to a phantom
+// function) before this fix, 2 (matching) after.
 func (m *javaMachine) clikeStateGlobal(tok string) {
 	b := firstByte(tok)
-	if b == '_' || isAlpha(b) {
+	if b == '_' || b == '~' || isAlpha(b) {
 		m.tryNewFunction(tok)
 	}
 }
@@ -385,17 +414,64 @@ func (m *javaMachine) stateRecordConstructorBody(tok string) {
 // clike.py references from code Java shares unmodified.
 // ---------------------------------------------------------------------
 
+// BUG FIXED HERE (CHAOS-5156, codex round r1 on #2292): this was missing
+// clikeStates.stateFunction's own `case "::"` branch entirely (clike.go),
+// falling through to the `default` (abandon to global scope) instead --
+// a qualified out-of-line definition (`Foo::bar() {...}`, a shape real
+// lizard's JavaReader can tokenize even though it's not valid Java,
+// matching this whole package's tolerant-tokenizer philosophy) lost its
+// body's condition count. Verified: real lizard 1.23.0 measures such a
+// construct at complexity 2 (base 1 + if); this port measured 1 before
+// this fix, 2 (matching) after.
 func (m *javaMachine) stateFunction(tok string) {
 	switch tok {
 	case "(":
 		m.state = m.stateDec
 		m.stateDec(tok)
+	case "::":
+		m.state = m.stateNameWithSpace
 	case "<":
 		m.state = m.stateTemplateInName
 		m.stateTemplateInName(tok)
 	default:
 		m.state = m.globalState
 		m.globalState(tok)
+	}
+}
+
+// stateNameWithSpace ports _state_name_with_space (clike.py:202-205) for
+// Java: JavaStates does NOT override this state (confirmed from source --
+// no `_state_name_with_space` definition anywhere in java.py), so it is
+// inherited from CLikeStates UNCHANGED by real lizard, unlike
+// try_new_function (java.py:63-71, a FULL override with no "operator"
+// special-case of its own -- do not add one to tryNewFunction above,
+// that would be a NEW divergence, not a fix). This is the only place a
+// bare "operator" token reaches stateOperator for Java: via a qualified
+// name (`Foo::operator+()`), never via a top-level `operator+()` with no
+// "::" -- a bare top-level one is NOT specially handled by real lizard's
+// Java reader either (verified: measures as a phantom function from a
+// later "if" token, same shape this port already produced before this
+// fix -- left unchanged, matching).
+func (m *javaMachine) stateNameWithSpace(tok string) {
+	if tok == "operator" {
+		m.state = m.stateOperator
+	} else {
+		m.state = m.stateFunction
+	}
+}
+
+// stateOperator/stateOperatorNext port _state_operator/_state_operator_next
+// (clike.py:191-200), reachable only via stateNameWithSpace above (a
+// qualified `Foo::operator+()`-shaped construct).
+func (m *javaMachine) stateOperator(tok string) {
+	if tok != "(" {
+		m.state = m.stateOperatorNext
+	}
+}
+
+func (m *javaMachine) stateOperatorNext(tok string) {
+	if tok == "(" {
+		m.stateFunction(tok)
 	}
 }
 
@@ -451,10 +527,41 @@ func (m *javaMachine) stateDecBody(tok string) {
 // count. Measured directly: `int f()[] { if(true){...} return ...; }`
 // went from Go=[1] to Go=[2] (matching real lizard's [2], base 1 + if)
 // after adding this branch + stateAttribute below.
+//
+// FURTHER BUGS FIXED HERE (CHAOS-5156, codex round r1 on #2292): this
+// function's doc previously claimed every OTHER branch clike.py's real
+// `_state_dec_to_imp` has was "C++-only and unreachable for Java" -- that
+// premise is only PARTLY right. JavaStates does NOT override
+// `_state_dec_to_imp` at all (confirmed from source: no
+// `_state_dec_to_imp` definition anywhere in java.py), so real lizard's
+// Java reader inherits clike.py's version UNCHANGED and every one of its
+// branches is reachable by the same tolerant-tokenizer argument as the
+// "[" fix above. Added here: the `const`/`&`/`&&` no-op (ref-qualifier
+// accumulation) and `->` (trailing-return) branches, plus the `(`
+// (function-pointer-return) branch, matching the three constructs codex
+// round r1 actually found and this fix's own live repros confirmed (each
+// went Go=[1] -> Go=[2], matching real lizard's [2]). `throw` (singular)/
+// `noexcept`/`:` (init-list) remain UNPORTED -- reachable in principle by
+// the same argument, but outside this round's actual finding; left as a
+// known, explicitly-named gap rather than re-labeled "unreachable."
 func (m *javaMachine) stateDecToImp(tok string) {
 	switch {
+	case tok == "const" || tok == "&" || tok == "&&":
+		// no-op: stay in stateDecToImp, matching clikeStates'
+		// add_to_long_function_name-only side effect (this package
+		// tracks no long name, so there is nothing else to do).
 	case tok == "throws":
 		m.state = m.stateThrows
+	case tok == "->":
+		m.state = m.stateTrailingReturn
+	case tok == "(":
+		// A function returning a function pointer, e.g.
+		// `int (*make(int))(int)` -- mirrors clikeStates' own comment:
+		// this package tracks no long name, so the dummy "" argument
+		// below is never "operator" (the only string tryNewFunction
+		// would inspect if it did), functionally identical either way.
+		m.tryNewFunction("")
+		m.stateFunction(tok)
 	case tok == "{":
 		m.stateEnteringImp(tok)
 	case tok == "[":
@@ -466,6 +573,18 @@ func (m *javaMachine) stateDecToImp(tok string) {
 	default:
 		m.state = m.stateOldCParams
 	}
+}
+
+// stateTrailingReturn ports _state_trailing_return (clike.py:264-268) for
+// Java: JavaStates doesn't override this either, so it's reachable by the
+// same inherited-unchanged argument as the branch above that transitions
+// here.
+func (m *javaMachine) stateTrailingReturn(tok string) {
+	if !oneOf(tok, ";{") {
+		return
+	}
+	m.state = m.stateDecToImp
+	m.stateDecToImp(tok)
 }
 
 // stateAttribute ports _state_attribute (clike.py:319-322) for Java:

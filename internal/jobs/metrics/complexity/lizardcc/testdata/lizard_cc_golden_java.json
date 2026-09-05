@@ -64,6 +64,22 @@
       "loc": 77,
       "very_high_complexity_functions": 0
     },
+    "function_pointer_return.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 10,
+          "long_name": "C::C::int( * make(int x))( int y)",
+          "name": "C::C::int( * make(int x))"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 8,
+      "very_high_complexity_functions": 0
+    },
     "old_style_array_return.java.txt": {
       "cyclomatic_avg": 2.0,
       "cyclomatic_total": 2,
@@ -78,6 +94,38 @@
       "functions_count": 1,
       "high_complexity_functions": 0,
       "loc": 8,
+      "very_high_complexity_functions": 0
+    },
+    "qualified_operator_name.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 13,
+          "long_name": "C::Foo::operator +()",
+          "name": "C::Foo::operator +"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
+      "very_high_complexity_functions": 0
+    },
+    "qualified_out_of_line_name.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 9,
+          "long_name": "C::Foo::bar()",
+          "name": "C::Foo::bar"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
       "very_high_complexity_functions": 0
     },
     "records_and_local_classes.java.txt": {
@@ -106,6 +154,60 @@
       "functions_count": 3,
       "high_complexity_functions": 0,
       "loc": 28,
+      "very_high_complexity_functions": 0
+    },
+    "ref_qualified_method.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 11,
+          "long_name": "C::f() &",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 17,
+          "long_name": "C::g() &&",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 14,
+      "very_high_complexity_functions": 0
+    },
+    "tilde_destructor_name.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 13,
+          "long_name": "C::~Foo()",
+          "name": "C::~Foo"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
+      "very_high_complexity_functions": 0
+    },
+    "trailing_return_type.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 10,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 8,
       "very_high_complexity_functions": 0
     },
     "try_catch_coverage.java.txt": {

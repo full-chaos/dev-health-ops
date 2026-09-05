@@ -1980,10 +1980,15 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	return nil
 }
 
-// ObserveDailyMetricsCompatRetry records one ambiguous_refused metrics.daily
-// compatibility-bridge execution's terminal disposition (CHAOS-4319). See
-// DailyMetricsCompatRetryDecision for why Go only ever reports
-// "persisted_failed".
+// ObserveDailyMetricsCompatRetry records one durable release-with-reason
+// decision for a metrics.daily partition -- originally scoped to the
+// compatibility-bridge's ambiguous_refused terminal disposition (CHAOS-4319)
+// and its CHAOS-4543 non-terminal released_* siblings, widened (CHAOS-5078
+// codex confirmation pass) to also accept
+// DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete, whose
+// trigger is a pre_bridge NATIVE family, not the compatibility bridge. See
+// DailyMetricsCompatRetryDecision's own doc comment for the full bounded
+// vocabulary this accepts and why Go never reports "retry_authorized".
 func (collector *MetricsCollector) ObserveDailyMetricsCompatRetry(decision DailyMetricsCompatRetryDecision) error {
 	if !slices.Contains(dailyMetricsCompatRetryDecisions(), decision) {
 		return errors.New("daily metrics compat retry decision is not registered")
@@ -3518,7 +3523,12 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 
 // writeDailyMetricsCompatRetry exposes the terminal ambiguous_refused
 // disposition counter (CHAOS-4319) plus the CHAOS-4543 non-terminal
-// released-with-reason decisions. The metric name and "decision" label are
+// released-with-reason decisions -- widened (CHAOS-5078 codex confirmation
+// pass) to also include DailyMetricsCompatRetryDecisionReleasedPreBridge
+// FamilyIncomplete, whose trigger is a pre_bridge native family, not the
+// compatibility bridge; it is emitted here (including at zero) via the
+// SAME generic loop over dailyMetricsCompatRetryDecisions() as every other
+// decision, no separate code path. The metric name and "decision" label are
 // a deliberate cross-language contract with the Python bridge's
 // dev_health_metric_compat_retry_total (worker_metrics.py) -- see
 // DailyMetricsCompatRetryDecision for the full bounded vocabulary this side

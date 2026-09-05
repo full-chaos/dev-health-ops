@@ -436,6 +436,75 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 	}
 }
 
+// assertEveryConditionExercisedByFilteredCorpus is
+// assertEveryConditionExercisedByCorpus narrowed to fixtures whose name
+// ends with suffix -- for a corpus dir SHARED by more than one language
+// (go-rust's testdata/corpus_go_rust holds both .go.txt and .rs.txt
+// fixtures side by side), the unfiltered version lets one language's
+// keyword be satisfied by the OTHER language's fixture, since both share
+// the same cLikeTokenPattern token stream and the same directory.
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2266): exactly this --
+// TestEveryConditionIsExercisedByTheGoRustCorpus scanned the whole mixed
+// corpus for both goConditions and rustConditions, so Rust's "catch"
+// condition was silently satisfied by a Go-only fixture
+// (catch_token_coverage.go.txt, no Rust code at all). Verified directly:
+// deleting "catch": true from rustConditions entirely left every existing
+// guard passing (golden staleness, coverage, no-unexpected-disabled,
+// golden comparator) while the ACTUAL Rust behavior silently regressed
+// (measured got=[1] vs lizard's real [2] for a bare `catch` identifier in
+// a Rust fn, completely undetected).
+func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[string]bool, corpusDir, suffix string) {
+	t.Helper()
+	entries, err := os.ReadDir(corpusDir)
+	if err != nil {
+		t.Fatalf("read corpus dir: %v", err)
+	}
+	seen := map[string]bool{}
+	matched := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		matched++
+		raw, err := os.ReadFile(filepath.Join(corpusDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		for _, tok := range cLikeTokenPattern.FindAllString(string(raw), -1) {
+			if isComment(tok) || strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") {
+				continue
+			}
+			seen[tok] = true
+		}
+	}
+	if matched == 0 {
+		t.Fatalf("no fixture in %s matches suffix %q; this test proved nothing", corpusDir, suffix)
+	}
+
+	keys := make([]string, 0, len(conditions))
+	for k, v := range conditions {
+		if v {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	var uncovered []string
+	for _, k := range keys {
+		if !seen[k] {
+			uncovered = append(uncovered, k)
+		}
+	}
+	if len(uncovered) > 0 {
+		t.Fatalf("condition keyword(s) never exercised by any %q fixture in %s: %v -- "+
+			"add a fixture (in THIS language, not a sibling sharing the same corpus dir) "+
+			"using each one (a real lizard-measured golden entry, not a hand-derived "+
+			"number) so a future regression in that specific keyword's handling has "+
+			"something to catch it", suffix, corpusDir, uncovered)
+	}
+}
+
 // TestNoUnexpectedDisabledConditions closes the residual gap codex round
 // r2's finding #3 disclosed: assertEveryConditionExercisedByCorpus's
 // value==true check means a keyword set to `false` is silently EXCLUDED

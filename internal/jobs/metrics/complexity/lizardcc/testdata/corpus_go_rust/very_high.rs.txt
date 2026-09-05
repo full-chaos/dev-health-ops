@@ -1,0 +1,60 @@
+fn monster(a: i32, b: i32, c: i32, d: i32, e: i32) -> i32 {
+    if a > 0 && b > 0 {
+        return 1;
+    }
+    if a > 1 && b > 1 {
+        return 1;
+    }
+    if a > 2 && b > 2 {
+        return 1;
+    }
+    if a > 3 && b > 3 {
+        return 1;
+    }
+    if a > 4 && b > 4 {
+        return 1;
+    }
+    if a > 5 && b > 5 {
+        return 1;
+    }
+    if a > 6 && b > 6 {
+        return 1;
+    }
+    if a > 7 && b > 7 {
+        return 1;
+    }
+    if a > 8 && b > 8 {
+        return 1;
+    }
+    if a > 9 && b > 9 {
+        return 1;
+    }
+    match c {
+        0 => {}
+        1 => {}
+        2 => {}
+        3 => {}
+        4 => {}
+        _ => {}
+    }
+    if d > e {
+        return d;
+    }
+    if a == 0 {
+        return 0;
+    }
+    if b == 0 {
+        return 0;
+    }
+    if c == 0 {
+        return 0;
+    }
+    if d == 0 {
+        return 0;
+    }
+    e
+}
+
+fn quiet(a: i32) -> i32 {
+    a + 1
+}

@@ -112,6 +112,14 @@ type Context struct {
 	// return value of the AnalyzerFunc contract (compute.go).
 	Complexities []int
 
+	// Newline ports FileInfoBuilder.newline (lizard.py:454, set by
+	// add_nloc at lizard.py:482): true when the token currently being
+	// processed is the first one on a new source line (or itself contains
+	// an embedded newline, e.g. a multi-line comment). Neither Go nor Rust
+	// reads this (golikedriver.go maintains it unconditionally for every
+	// GoLikeStates-derived reader since a later PR's Scala reader does).
+	Newline bool
+
 	// Forgive ports FileInfoBuilder.forgive (lizard.py:452, read/reset by
 	// end_of_function at lizard.py:516-521): a bare `#lizard forgive`
 	// comment anywhere in the file sets this true, and the very next
@@ -191,6 +199,19 @@ func (c *Context) RestartNewFunction() {
 func (c *Context) PushNewFunction() {
 	c.stacked = append(c.stacked, c.current)
 	c.RestartNewFunction()
+}
+
+// InRealFunction ports the ONE reader of stacked_functions in Python
+// outside PushNewFunction/EndOfFunction themselves: GoLikeStates._function_name's
+// disambiguation between a method receiver's parens and an anonymous
+// function literal's own parameter list (golike.py:41-45 --
+// `len(self.context.stacked_functions) > 0 and
+// self.context.stacked_functions[-1].name != '*global*'`). Since this
+// package tracks no names, "the top of the stack is the global
+// pseudo-function" is checked the same way EndOfFunction already
+// distinguishes it: pointer identity against &c.global.
+func (c *Context) InRealFunction() bool {
+	return len(c.stacked) > 0 && c.stacked[len(c.stacked)-1] != &c.global
 }
 
 // AddCondition ports lizard.py:503-504. inc is usually 1 (condition_counter,

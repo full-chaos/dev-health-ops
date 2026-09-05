@@ -2,12 +2,13 @@ package daily
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workgraphedges"
+	"github.com/google/uuid"
 )
 
 // TestResolveRepoProviderFollowsDiscoverReposFallbackChain pins the rule that
@@ -206,4 +207,52 @@ func TestWorkGraphEdgesPartialWriteGuardPinsBothDirections(t *testing.T) {
 			t.Errorf("nothing was written, so the count must be 0, got %d", rows)
 		}
 	})
+}
+
+// TestWorkGraphEdgesPartialWriteNamesEachTableByPosition pins the operator-facing
+// message at EVERY write position, not just the one the ClickHouse test happens
+// to exercise.
+//
+// It exists because the index is positional: a fourth write inserted in the
+// middle renumbers the ones after it, and the ONLY thing that still needs a
+// human is adding the new table's name to workGraphEdgesWriteOrder. If someone
+// inserts a write and forgets the name, this test fails here rather than
+// shipping a message that names the wrong table -- which would be worse than no
+// name at all, since a wrong table sends an operator to the wrong data.
+func TestWorkGraphEdgesPartialWriteNamesEachTableByPosition(t *testing.T) {
+	cause := errors.New("clickhouse: connection reset")
+	total := len(workGraphEdgesWriteOrder)
+
+	for step, want := range []string{
+		"work_graph_pr_review_outcome_edges",
+		"work_graph_pr_deployment_edges",
+		"work_graph_deployment_incident_edges",
+	} {
+		position := step + 1
+		_, err := wrapWorkGraphEdgesPartialWrite(11, position, cause)
+		msg := err.Error()
+		if !strings.Contains(msg, want) {
+			t.Errorf("write %d: message does not name %q: %s", position, want, msg)
+		}
+		if fragment := fmt.Sprintf("write %d of %d", position, total); !strings.Contains(msg, fragment) {
+			t.Errorf("write %d: message does not carry %q: %s", position, fragment, msg)
+		}
+		if !strings.Contains(msg, "11 row(s) landed") {
+			t.Errorf("write %d: message drops the true row count: %s", position, msg)
+		}
+	}
+
+	// NEGATIVE CONTROL. A step past the end means a write was added without its
+	// name. The message must SAY so rather than silently naming the last table
+	// or panicking, so this asserts the loud marker and asserts the absence of
+	// any real table name.
+	_, err := wrapWorkGraphEdgesPartialWrite(11, total+1, cause)
+	if !strings.Contains(err.Error(), "UNREGISTERED TABLE") {
+		t.Errorf("an out-of-range write position must be called out loudly, got: %v", err)
+	}
+	for _, name := range workGraphEdgesWriteOrder {
+		if strings.Contains(err.Error(), name) {
+			t.Errorf("out-of-range position named a real table (%q), which would mislead an operator: %v", name, err)
+		}
+	}
 }

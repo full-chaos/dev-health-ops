@@ -807,6 +807,51 @@ func dailyNativeFamilyRegistrations(
 			"error", fileRiskHotspotsErr,
 		)
 	}
+	// CHAOS-4285: ai_governance. Same fail-open construction policy as every
+	// other native family above, and registered PRE-BRIDGE like them: this
+	// family reads only raw sync tables (ai_attribution_resolved,
+	// git_pull_requests, ci_pipeline_runs, security_alerts,
+	// ai_tool_allowlist), never another compat family's daily output, so it
+	// has none of work_item_state's post_bridge ordering dependency.
+	//
+	// Unlike every other entry here it is ORG-scoped, not repo-scoped --
+	// see AIGovernanceExecutor's doc comment for why that matches Python
+	// exactly and why the deterministic event_id is what makes the
+	// resulting once-per-partition rewrite idempotent.
+	if aiGovernanceExecutor, aiGovernanceErr := daily.NewAIGovernanceExecutor(clickhouseConnection); aiGovernanceErr == nil {
+		native["ai_governance"] = aiGovernanceExecutor
+	} else {
+		logger.Error(
+			"ai_governance native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiGovernanceErr,
+		)
+	}
+	// CHAOS-4286: work_graph_edges. Same fail-open construction policy, and
+	// PRE-BRIDGE: it reads raw sync tables plus the shared incident
+	// projection (LoadIncidentsStarted), never another compat family's daily
+	// output.
+	//
+	// The "auto" argument is the daily job's `provider`, which discover_repos
+	// falls back to when a repo's own provider column is empty or literally
+	// "unknown" (job_daily.py:194). It is NOT a guess: the compatibility
+	// bridge passes no provider at all, so the Python side runs on
+	// discover_repos' own default, which is "auto" (job_daily.py:127).
+	// Consequence worth knowing when reading rows: "auto" is a real, expected
+	// value in these tables' provider columns.
+	if workGraphEdgesExecutor, workGraphEdgesErr := daily.NewWorkGraphEdgesExecutor(clickhouseConnection, "auto"); workGraphEdgesErr == nil {
+		native["work_graph_edges"] = workGraphEdgesExecutor
+	} else {
+		logger.Error(
+			"work_graph_edges native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", workGraphEdgesErr,
+		)
+	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as
 	// every other native family above.
 	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {
@@ -838,7 +883,53 @@ func dailyNativeFamilyRegistrations(
 	// move back into native above once CHAOS-4283 ports
 	// work_item_attribution to Go and families.json's phase_note
 	// says work_item_state can return to pre_bridge.
+	// CHAOS-4279: review_edges reads only RAW SYNC tables
+	// (git_pull_requests, git_pull_request_reviews), written by
+	// the provider sync path rather than by any daily family, so
+	// it has no same-partition write-ordering dependency and
+	// registers PRE-bridge like cicd -- unlike compounding_risk
+	// below, whose input repo_metrics_daily is written by
+	// repo_user_commit in the same partition.
+	if reviewEdgesExecutor, reviewEdgesErr := daily.NewReviewEdgesExecutor(clickhouseConnection); reviewEdgesErr == nil {
+		native["review_edges"] = reviewEdgesExecutor
+	} else {
+		logger.Error(
+			"review_edges native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", reviewEdgesErr,
+		)
+	}
+
 	postBridge = map[string]daily.NativeFamilyExecutor{}
+	// CHAOS-4288: benchmarking is post_bridge, NOT pre_bridge.
+	//
+	// The previous registration was pre_bridge, justified by a comment claiming
+	// this family "reads testops_*/work_item/dora daily tables as HISTORY ...
+	// so it has no same-partition write-ordering dependency". That was FALSE and
+	// was never checked. The window ENDS ON THE TARGET DAY:
+	// benchmarking_native_executor.go sets asOfDay = run.TargetDay and every
+	// fetch is Fetch(startDay, asOfDay), so day D's own rows are INSIDE it.
+	// Python writes them at job_daily.py:1919 and only calls
+	// run_benchmarking_for_day at :2091. "benchmarking" also sorts FIRST of all
+	// native families, so pre_bridge ran it before every Go writer as well --
+	// it benchmarked day D against a window missing day D.
+	//
+	// Same class as compounding_risk below and CHAOS-4278's work_item_state.
+	// Caught by codex r1 on #2235.
+	if benchmarkingExecutor, benchmarkingErr := daily.NewBenchmarkingExecutor(clickhouseConnection, logger); benchmarkingErr == nil {
+		postBridge["benchmarking"] = benchmarkingExecutor
+	} else {
+		logger.Error(
+			"benchmarking native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", benchmarkingErr,
+		)
+	}
+
 	// CHAOS-4287: compounding_risk reads repo_metrics_daily, which
 	// repo_user_commit writes in the SAME partition. repo_user_commit
 	// is native and pre_bridge, but computeNativeFamilies walks

@@ -13,9 +13,11 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/benchmarking"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/cicd"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -611,6 +613,22 @@ func configureWorkerDependenciesWithSources(
 	// that is defined, incremented, and unregistered is indistinguishable at the
 	// scrape from a writer that never ran.
 	if err := registry.RegisterMetrics("compounding_risk_writer", compoundingrisk.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4279: same shape again. NOT found by a codex round -- found by
+	// TestEveryWriterMetricsSourceIsRegistered, the class guard added for
+	// compounding_risk, the first time it ran on a branch containing this
+	// family. That is the argument for writing the guard class-wide rather
+	// than asserting the one writer a reviewer happened to name.
+	if err := registry.RegisterMetrics("review_edges_writer", reviewedges.RowsWrittenMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4288: the third instance of this class, found by codex r1 on #2235
+	// and independently by TestEveryWriterMetricsSourceIsRegistered the moment
+	// that guard reached a branch containing this family.
+	if err := registry.RegisterMetrics("benchmarking_writer", benchmarking.RowsWrittenMetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

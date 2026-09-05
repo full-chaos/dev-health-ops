@@ -435,3 +435,83 @@ func TestAuthoritativeOwnerByRepoRanksIsPrimaryThenSpecificityThenUpdatedAt(t *t
 		t.Fatalf("sole-owned repo owner=%q, want team-solo", got)
 	}
 }
+
+// TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow is the red-first proof
+// for CHAOS-5141, #2255 r2 finding 1: the schema permits an empty team_id
+// (051_team_attribution_dimensions.sql has no non-empty constraint on it),
+// and Python's load_team_repo_ownership_map skips such a row entirely
+// (`if not repo_id or not team_id: continue`, teams.py:411) rather than let
+// an empty string win a repo -- the caller then falls back to the
+// pattern-resolver for that repo. A prior revision of AuthoritativeOwnerByRepo
+// only guarded against an invalid/zero repo_id, not an empty team_id, so an
+// empty-team_id row (however it got there) silently won the repo and
+// suppressed both a real lower-ranked claim AND the pattern-resolver
+// fallback the caller applies when a repo has no entry at all.
+func TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate clickhouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const orgID = "org-teamownership-empty-team-id"
+	asOf := time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+	before := asOf.AddDate(0, 0, -30)
+
+	insert := func(teamID string, isPrimary uint8, specificity uint16, repoID uuid.UUID) {
+		if err := conn.Exec(ctx, `
+            INSERT INTO team_repo_ownership
+                (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+                 source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+            VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', ?, ?, 0, ?, NULL, ?)
+        `, orgID, teamID, repoID, repoID.String(), isPrimary, specificity, before, before); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+
+	onlyEmptyClaim := uuid.New()
+	emptyClaimWinsRankButLowerRealClaimExists := uuid.New()
+
+	// A repo whose ONLY claim has an empty team_id -- must be ABSENT from the
+	// result entirely (so the caller's pattern-resolver fallback applies),
+	// never present with team_id="".
+	insert("", 1, 1, onlyEmptyClaim)
+
+	// A repo where the TOP-RANKED claim (is_primary=1) has an empty
+	// team_id, but a LOWER-ranked claim (is_primary=0) has a real team --
+	// the real team must win, the empty one must not suppress it.
+	insert("", 1, 1, emptyClaimWinsRankButLowerRealClaimExists)
+	insert("team-real", 0, 1, emptyClaimWinsRankButLowerRealClaimExists)
+
+	owners, err := AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	if err != nil {
+		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+	}
+
+	if teamID, present := owners[onlyEmptyClaim.String()]; present {
+		t.Fatalf("repo with only an empty-team_id claim: owner=%q present=%v, "+
+			"want ABSENT from the map so the caller's pattern-resolver fallback "+
+			"applies -- an empty team_id must never win a repo", teamID, present)
+	}
+	if got := owners[emptyClaimWinsRankButLowerRealClaimExists.String()]; got != "team-real" {
+		t.Fatalf("repo with a top-ranked empty-team_id claim and a lower-ranked "+
+			"real claim: owner=%q, want team-real -- the empty claim must not "+
+			"suppress the real one further down the ranked order", got)
+	}
+}

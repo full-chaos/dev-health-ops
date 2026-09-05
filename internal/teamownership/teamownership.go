@@ -176,6 +176,22 @@ func AuthoritativeOwnerByRepo(
 			// rather than let it enter the map under a bogus key.
 			continue
 		}
+		if teamID == "" {
+			// CHAOS-5141, #2255 r2 finding 1: the schema permits an empty
+			// team_id (051_team_attribution_dimensions.sql has no NOT NULL /
+			// non-empty constraint on it), and Python's
+			// load_team_repo_ownership_map skips this row entirely --
+			// `if not repo_id or not team_id: continue` (teams.py:411) --
+			// rather than let an empty string win a repo. Skipping here (not
+			// just failing to overwrite) matters: it lets a LOWER-ranked row
+			// for the SAME repo, if one exists with a real team_id, still
+			// win via the setdefault-equivalent check below -- an empty
+			// authoritative owner must never suppress a real one further
+			// down the ranked order, and must never suppress the
+			// pattern-resolver fallback the caller applies when this map
+			// has no entry for a repo at all.
+			continue
+		}
 		// ORDER BY already put the best (is_primary, specificity, updated_at)
 		// row for a given repo first -- keep only the FIRST team seen per
 		// repo, exactly matching Python's setdefault semantics.

@@ -77,6 +77,17 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # computed_at column, so it needs no new readback shape -- it slots into
     # the repo-keyed family above unchanged.
     "review_edges": "review_edges_daily",
+    # CHAOS-4290: ic_finalize is FINALIZE-scoped (families.json's phase_note --
+    # it runs once per run, after every partition, not once per partition),
+    # but its first write target, user_metrics_daily, is still plain
+    # (repo_id, day, computed_at)-shaped like every other REPO_DAY_FAMILIES
+    # table -- family_readback groups on repo_id/computed_at only, and the
+    # extra author_email granularity here does not change that shape. The
+    # second write, ic_landscape_rolling_30d, is not checked separately for
+    # the same reason no other family here checks every table in its own
+    # `writes` list: one table in a single in-process compute call proves the
+    # call executed.
+    "ic_finalize": "user_metrics_daily",
 }
 
 # Team-keyed families (CHAOS-4276): unlike REPO_DAY_FAMILIES, these tables are

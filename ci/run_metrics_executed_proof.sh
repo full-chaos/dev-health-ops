@@ -644,7 +644,7 @@ assert_readback() {
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk \
+    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk ic_finalize \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 

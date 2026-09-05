@@ -458,6 +458,249 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 	}
 }
 
+// assertEveryConditionExercisedByFilteredCorpus is
+// assertEveryConditionExercisedByCorpus narrowed to fixtures whose name
+// ends with suffix -- for a corpus dir SHARED by more than one language
+// (go-rust's testdata/corpus_go_rust holds both .go.txt and .rs.txt
+// fixtures side by side), the unfiltered version lets one language's
+// keyword be satisfied by the OTHER language's fixture, since both share
+// the same cLikeTokenPattern token stream and the same directory.
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2266): exactly this --
+// TestEveryConditionIsExercisedByTheGoRustCorpus scanned the whole mixed
+// corpus for both goConditions and rustConditions, so Rust's "catch"
+// condition was silently satisfied by a Go-only fixture
+// (catch_token_coverage.go.txt, no Rust code at all). Verified directly:
+// deleting "catch": true from rustConditions entirely left every existing
+// guard passing (golden staleness, coverage, no-unexpected-disabled,
+// golden comparator) while the ACTUAL Rust behavior silently regressed
+// (measured got=[1] vs lizard's real [2] for a bare `catch` identifier in
+// a Rust fn, completely undetected).
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r3 on #2266): this used
+// cLikeTokenPattern (the plain base pattern) for EVERY suffix, but
+// cLikeTokenPattern has no per-language addition -- it does not know Go's
+// backtick raw strings, Rust's lifetimes, C#'s `??`, etc. A `?` inside a
+// Go backtick string (basic.go.txt's own negative-test fixture,
+// deliberately containing "if"/"&&"/"||"/"?" as a string literal so a
+// real miscount would be caught) is glued into ONE token by Go's own
+// goTokenPattern (correctly excluded from coverage) but split into
+// separate real-looking tokens by cLikeTokenPattern, so the coverage
+// scan falsely counted goConditions["?"] as covered by a STRING LITERAL,
+// not real code -- confirmed directly: a synthetic corpus containing
+// ONLY a backtick string with a "?" inside (no other "?" anywhere)
+// passed the coverage check before this fix. Fixed: pick each suffix's
+// OWN token pattern (matching what that language's real analyzer uses),
+// falling back to cLikeTokenPattern only for an unrecognised suffix.
+// BUG FIXED HERE (CHAOS-5156, go-rust confirmation pass): this used to
+// FAIL OPEN for any suffix not in the switch (`default: return
+// cLikeTokenPattern`) -- a future PR adding a new suffix without adding
+// a case here would silently tokenize that language's fixtures with the
+// PLAIN base pattern, reopening the exact backtick/raw-string/lifetime
+// class of bug this whole mechanism exists to close, with no test
+// failure to catch the omission (the comment warned about this but
+// enforced nothing). Fixed: fail CLOSED -- an unregistered suffix is a
+// test-authoring bug, not a legitimate "use the generic pattern" signal,
+// so it fails loudly via t.Fatalf instead of silently choosing a
+// pattern that might be wrong for that language.
+//
+// NOTE for downstream PRs (#2268/#2269): add a case here for each new
+// suffix a later PR's own corpus introduces
+// (.cs.txt/.kt.txt/.scala.txt/.swift.txt/.java.txt), pointing at that
+// language's OWN *TokenPattern var -- ALWAYS, with NO exception, even
+// when that language's own addition is the empty string (e.g. Scala's
+// scalaTokenPattern = buildTokenPattern("")). "No addition" does NOT
+// mean "identical to cLikeTokenPattern": cLikeTokenPattern itself is
+// buildTokenPattern(cLikeAddition), where cLikeAddition is NON-empty
+// (the C/C++ raw-string pattern) -- substituting cLikeTokenPattern for
+// a language whose real analyzer tokenizes with a DIFFERENT pattern
+// var is exactly the bug this function's own identity test below
+// exists to catch (found in #2268's confirmation-pass round: the
+// .scala.txt case below used to return cLikeTokenPattern by this
+// exact wrong reasoning). If a language genuinely needs cLikeTokenPattern
+// verbatim, its own *TokenPattern var must be DEFINED as
+// buildTokenPattern("") (or whatever matches its real analyzer) and
+// THAT var referenced here -- never a different language's pattern
+// var, no matter how "equivalent" it looks.
+func filteredCorpusTokenPattern(t *testing.T, suffix string) *regexp.Regexp {
+	t.Helper()
+	switch suffix {
+	case ".go.txt":
+		return goTokenPattern
+	case ".rs.txt":
+		return rustTokenPattern
+	case ".cs.txt":
+		return csharpTokenPattern
+	case ".kt.txt":
+		return kotlinTokenPattern
+	case ".swift.txt":
+		return swiftTokenPattern
+	case ".scala.txt":
+		return scalaTokenPattern
+	default:
+		t.Fatalf("filteredCorpusTokenPattern: no token pattern registered for suffix %q -- "+
+			"add a case pointing at that language's own *TokenPattern var (see this "+
+			"function's doc); do not let an unregistered suffix fall through silently", suffix)
+		return nil
+	}
+}
+
+// TestFilteredCorpusTokenPatternMatchesAnalyzerTokenizer closes the class
+// #2268's confirmation-pass round found: filteredCorpusTokenPattern's
+// .scala.txt case returned cLikeTokenPattern while AnalyzeScala's real
+// tokenizer is scalaTokenPattern -- a DIFFERENT *regexp.Regexp (Scala's own
+// addition is empty, but cLikeTokenPattern carries its own non-empty
+// cLikeAddition, so the two patterns are not interchangeable). A coverage
+// scan using the wrong pattern can disagree with what the real analyzer
+// actually tokenizes, silently certifying "coverage" for tokens the real
+// analyzer never reaches that way (or vice versa).
+//
+// This is a table-driven IDENTITY check (pointer equality on the package's
+// global *regexp.Regexp vars -- valid and exact here, since
+// filteredCorpusTokenPattern returns the SAME global var an Analyze*
+// function calls FindAllString on, never a copy): for every suffix this
+// package's coverage-manifest mechanism filters on, across every stack
+// (go-rust, jvm-swift), assert the switch returns EXACTLY the *TokenPattern
+// var its corresponding Analyze* function tokenizes with. This closes the
+// class for good -- a future suffix case pointing at the wrong var fails
+// this test immediately, rather than waiting for an adversarial reviewer
+// to construct the right fixture.
+func TestFilteredCorpusTokenPatternMatchesAnalyzerTokenizer(t *testing.T) {
+	cases := []struct {
+		suffix   string
+		expected *regexp.Regexp
+	}{
+		{".go.txt", goTokenPattern},       // AnalyzeGo (go_lang.go)
+		{".rs.txt", rustTokenPattern},     // AnalyzeRust (rust.go)
+		{".cs.txt", csharpTokenPattern},   // AnalyzeCSharp (csharp.go)
+		{".kt.txt", kotlinTokenPattern},   // AnalyzeKotlin (kotlin.go)
+		{".swift.txt", swiftTokenPattern}, // AnalyzeSwift (swift.go)
+		{".scala.txt", scalaTokenPattern}, // AnalyzeScala (scala.go)
+	}
+	for _, tc := range cases {
+		t.Run(tc.suffix, func(t *testing.T) {
+			got := filteredCorpusTokenPattern(t, tc.suffix)
+			if got != tc.expected {
+				t.Errorf("filteredCorpusTokenPattern(%q) returned a DIFFERENT *regexp.Regexp than "+
+					"the analyzer actually tokenizes with (got %q, want %q) -- the coverage-manifest "+
+					"scan and the real analyzer can now disagree on what a fixture's tokens are",
+					tc.suffix, got.String(), tc.expected.String())
+			}
+		})
+	}
+}
+
+// TestScalaCoverageScanDivergesFromCLikePatternOnRawStringShapedInput
+// executes codex's exact #2268 confirmation-pass repro scenario directly
+// (a Scala-suffixed file containing a C++-raw-string-SHAPED token that
+// spans across a real condition keyword) and proves the RED/GREEN split
+// this fix closes:
+//
+//   - RED (the OLD, buggy .scala.txt case): cLikeTokenPattern's raw-string
+//     alternative (`(?:u8|u|U|L)?R"\(.*?\)"`) swallows the entire
+//     `R"(a"if(x>0)"` span as ONE token -- "if" never appears as its own
+//     token, so a coverage scan using cLikeTokenPattern would silently
+//     certify NO coverage for "if" from this fixture even though the
+//     source text plainly contains it.
+//   - GREEN (the FIXED .scala.txt case): scalaTokenPattern has no
+//     raw-string alternative at all (Scala's real tokenizer doesn't either
+//     -- confirmed from lizard's Python source), so it tokenizes the same
+//     input piecewise and "if" DOES appear as its own token.
+//
+// Verified empirically (bigboy scratch probe) before writing this in:
+// FindAllString on this exact source under cLikeTokenPattern contains no
+// "if" element; under scalaTokenPattern it does. This is a permanent
+// regression test, not a one-off repro -- it fails again immediately if
+// filteredCorpusTokenPattern's .scala.txt case (or scalaTokenPattern's own
+// definition) ever regresses back toward cLikeTokenPattern's behavior.
+func TestScalaCoverageScanDivergesFromCLikePatternOnRawStringShapedInput(t *testing.T) {
+	const src = `R"(a"if(x>0)"b)" 1 else 0`
+
+	hasToken := func(tokens []string, want string) bool {
+		for _, tok := range tokens {
+			if tok == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	oldWrongTokens := cLikeTokenPattern.FindAllString(src, -1)
+	if hasToken(oldWrongTokens, "if") {
+		t.Fatalf("cLikeTokenPattern found \"if\" as a standalone token in %q -- this fixture no "+
+			"longer demonstrates the RED case (the raw-string alternative used to swallow it); "+
+			"pick a new repro string before trusting this test's GREEN half means anything", src)
+	}
+
+	fixedTokens := scalaTokenPattern.FindAllString(src, -1)
+	if !hasToken(fixedTokens, "if") {
+		t.Fatalf("scalaTokenPattern -- the FIXED, correct pattern for .scala.txt -- failed to find "+
+			"\"if\" as a standalone token in %q; got tokens %#v -- the GREEN case is not actually "+
+			"green", src, fixedTokens)
+	}
+
+	// Confirm filteredCorpusTokenPattern itself now routes .scala.txt to
+	// the GREEN pattern, not the RED one -- this is the actual production
+	// code path assertEveryConditionExercisedByFilteredCorpus calls.
+	if got := filteredCorpusTokenPattern(t, ".scala.txt"); got != scalaTokenPattern {
+		t.Fatalf("filteredCorpusTokenPattern(\".scala.txt\") = %q, want scalaTokenPattern (%q) -- "+
+			"the coverage-manifest scan is not using the pattern this test just proved is correct",
+			got.String(), scalaTokenPattern.String())
+	}
+}
+
+func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[string]bool, corpusDir, suffix string) {
+	t.Helper()
+	entries, err := os.ReadDir(corpusDir)
+	if err != nil {
+		t.Fatalf("read corpus dir: %v", err)
+	}
+	pattern := filteredCorpusTokenPattern(t, suffix)
+	seen := map[string]bool{}
+	matched := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		matched++
+		raw, err := os.ReadFile(filepath.Join(corpusDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		for _, tok := range pattern.FindAllString(string(raw), -1) {
+			if isComment(tok) || isStringLikeToken(tok) {
+				continue
+			}
+			seen[tok] = true
+		}
+	}
+	if matched == 0 {
+		t.Fatalf("no fixture in %s matches suffix %q; this test proved nothing", corpusDir, suffix)
+	}
+
+	keys := make([]string, 0, len(conditions))
+	for k, v := range conditions {
+		if v {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	var uncovered []string
+	for _, k := range keys {
+		if !seen[k] {
+			uncovered = append(uncovered, k)
+		}
+	}
+	if len(uncovered) > 0 {
+		t.Fatalf("condition keyword(s) never exercised by any %q fixture in %s: %v -- "+
+			"add a fixture (in THIS language, not a sibling sharing the same corpus dir) "+
+			"using each one (a real lizard-measured golden entry, not a hand-derived "+
+			"number) so a future regression in that specific keyword's handling has "+
+			"something to catch it", suffix, corpusDir, uncovered)
+	}
+}
+
 // rawStringPrefixPattern matches a C++ raw-string token's OPENING shape
 // (tokenize.go's cLikeAddition: `(?:u8|u|U|L)?R"\(`) -- enough to
 // recognise the token as a string literal without re-deriving the whole
@@ -465,14 +708,20 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 var rawStringPrefixPattern = regexp.MustCompile(`^(?:u8|u|U|L)?R"\(`)
 
 // isStringLikeToken reports whether tok is a string/char-literal token
-// that assertEveryConditionExercisedByCorpus (and its filtered sibling)
-// must exclude from coverage -- a condition keyword's TEXT appearing
-// only inside a string literal is not the keyword being exercised as a
-// real token. Ordinary `"..."`/`'...'` tokens are covered by their
-// literal opening character; a C++ raw string opens with `R"` (or a
-// u8/u/U/L prefix before it), which neither prefix check catches.
+// that assertEveryConditionExercisedByCorpus (and its filtered sibling,
+// assertEveryConditionExercisedByFilteredCorpus) must exclude from
+// coverage -- a condition keyword's TEXT appearing only inside a string
+// literal is not the keyword being exercised as a real token. Ordinary
+// `"..."`/`'...'` tokens are covered by their literal opening character;
+// a C++ raw string opens with `R"` (or a u8/u/U/L prefix before it,
+// which neither prefix check catches), and Go's backtick-quoted string
+// opens with a backtick, which also needs its own check -- MERGED here
+// (during go-rust's confirmation-pass merge-forward from cfamily) so
+// both the shared and the filtered variant use the SAME literal-shape
+// check instead of two copies that can drift apart.
 func isStringLikeToken(tok string) bool {
-	return strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") || rawStringPrefixPattern.MatchString(tok)
+	return strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") ||
+		strings.HasPrefix(tok, "`") || rawStringPrefixPattern.MatchString(tok)
 }
 
 // TestNoUnexpectedDisabledConditions closes the residual gap codex round

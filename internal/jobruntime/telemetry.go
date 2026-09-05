@@ -667,6 +667,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // "compounding_risk" (CHAOS-4287) is post_bridge for its own reason and
 // carries the same consequence: unregistered means every observation for it is
 // refused, and the family's absence becomes invisible rather than counted.
+//
+// "ic_finalize" (CHAOS-4290) is the first FINALIZE-scope family here, and the
+// argument above applies to it with one more turn of the screw: since #2241's
+// r2 ruling a native finalize failure redrives the run instead of degrading to
+// Python, so an unregistered family would make a redrive loop invisible rather
+// than merely a silent degradation.
+//
 // "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), "benchmarking"
 // (CHAOS-4288), "ai_impact" (CHAOS-4280), "work_graph_edges" (CHAOS-4286 part
 // A), and "ai_workflow" (CHAOS-4286 part B) all added themselves the same
@@ -674,7 +681,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 //
 // "work_item_attribution" (CHAOS-5078) moved to pre_bridge and added itself
 // the same way, included here from merging main forward.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow"}
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

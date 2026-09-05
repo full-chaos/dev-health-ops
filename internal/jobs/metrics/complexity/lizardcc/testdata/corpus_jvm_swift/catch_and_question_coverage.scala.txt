@@ -1,0 +1,20 @@
+// CHAOS-5156: closes a coverage gap codex round r3 on #2268 surfaced --
+// the mixed corpus_jvm_swift directory previously let sibling-language
+// fixtures silently satisfy Scala's own "catch"/"?" coverage too, since
+// the unfiltered coverage scan didn't separate languages. Scala has real
+// try/catch syntax; it has NO ternary operator at all (if/else is used
+// as an expression instead), so a bare "?" token can only ever appear as
+// a deliberately non-compiling expression -- same shape as
+// question_token_coverage.go.txt for Go, which has the identical
+// structural gap. Measured directly against real lizard 1.23.0:
+// complexity 4 (base 1 + catch + case + ?-as-token).
+class Parser {
+  def f(): Int = {
+    try {
+      val x = 0 ? 1
+      x
+    } catch {
+      case e: Exception => 0
+    }
+  }
+}

@@ -408,7 +408,7 @@ func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) 
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			store := &fakeStore{claim: testClaim(time.Second)}
-			handler, err := NewBuildHandler(store, classifyingExecutor{err: testCase.err}, nil, nil)
+			handler, err := NewBuildHandler(store, classifyingExecutor{err: testCase.err}, nil, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -437,7 +437,7 @@ func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) 
 func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
 	executeErr := compatibilityFailure(ErrCompatibilityUnknown, http.StatusInternalServerError, `{"detail":"bridge exploded"}`)
 	store := &fakeStore{claim: testClaim(time.Second)}
-	handler, err := NewBuildHandler(store, classifyingExecutor{err: executeErr}, nil, nil)
+	handler, err := NewBuildHandler(store, classifyingExecutor{err: executeErr}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

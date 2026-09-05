@@ -246,7 +246,7 @@ func buildPreStepOrder() []string {
 func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, nativeInvestment workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
-		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps)
+		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps, dependencies.Logger)
 		if err != nil {
 			return err
 		}
@@ -260,7 +260,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 		if nativeInvestment == nil {
 			return errWorkerDependencyUnavailable
 		}
-		h, err := workgraph.NewMaterializeHandler(store, nativeInvestment)
+		h, err := workgraph.NewMaterializeHandler(store, nativeInvestment, dependencies.Logger)
 		if err != nil {
 			return err
 		}
@@ -270,7 +270,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 		}
 		return river.AddWorkerSafely(workers, a)
 	case jobcontract.KindInvestmentDispatch:
-		h, err := workgraph.NewDispatchHandler(store, executor)
+		h, err := workgraph.NewDispatchHandler(store, executor, dependencies.Logger)
 		if err != nil {
 			return err
 		}
@@ -280,7 +280,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 		}
 		return river.AddWorkerSafely(workers, a)
 	case jobcontract.KindInvestmentChunk:
-		h, err := workgraph.NewChunkHandler(store, executor)
+		h, err := workgraph.NewChunkHandler(store, executor, dependencies.Logger)
 		if err != nil {
 			return err
 		}
@@ -290,7 +290,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 		}
 		return river.AddWorkerSafely(workers, a)
 	case jobcontract.KindInvestmentFinalize:
-		h, err := workgraph.NewFinalizeHandler(store, executor)
+		h, err := workgraph.NewFinalizeHandler(store, executor, dependencies.Logger)
 		if err != nil {
 			return err
 		}

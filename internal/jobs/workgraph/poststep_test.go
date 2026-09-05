@@ -38,6 +38,7 @@ func TestPostStepsRunAfterTheBridgeAndPreStepsBeforeIt(t *testing.T) {
 		sequencingExecutor{sequence: &sequence},
 		[]NativePreStep{&recordingPreStep{name: "mapping", sequence: &sequence}},
 		[]NativePostStep{&recordingPostStep{name: "edges", sequence: &sequence}},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +73,7 @@ func TestAPostStepFailureFailsTheBuild(t *testing.T) {
 		[]NativePostStep{&recordingPostStep{
 			name: "edges", sequence: &sequence, err: errors.New("clickhouse refused the batch"),
 		}},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -94,6 +96,7 @@ func TestAPostStepFailureFailsTheBuild(t *testing.T) {
 func TestANilPostStepIsRefused(t *testing.T) {
 	if _, err := NewBuildHandler(
 		&fakeStore{}, blockingExecutor{}, nil, []NativePostStep{nil},
+		nil,
 	); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("a nil post-step was accepted, got %v", err)
 	}
@@ -112,6 +115,7 @@ func TestPostStepEvidenceIsMergedUnderItsName(t *testing.T) {
 		[]NativePostStep{&recordingPostStep{
 			name: "edges", sequence: &sequence, fragment: map[string]any{"edges_written": 3},
 		}},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

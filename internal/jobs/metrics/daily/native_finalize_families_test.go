@@ -1,8 +1,12 @@
 package daily
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,10 +150,20 @@ func TestFinalizeWithoutNativeFamiliesIsUnchanged(t *testing.T) {
 	}
 }
 
-// Deterministic order, mirroring SetNativeFamilies. Without sorting, the skip
-// list would depend on Go map iteration order and two identical runs could
-// send different bytes.
-func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
+// Deterministic order, and specifically pythonRecognisedFinalizeFamilies'
+// DECLARED order rather than sort.Strings(names) -- the two are chosen to
+// DISAGREE here ("zeta" declared before "alpha") so a regression back to a
+// lexical sort cannot pass this test by accident the way it could if the
+// declared and sorted orders happened to coincide.
+//
+// Why it has to be declared order, not just A deterministic one:
+// computeNativeFinalizeFamilies marks every name from the current loop INDEX
+// onward as refused when the run's context is cancelled mid-loop
+// (nativeFinalizeFamilyNames[index:]) -- so which family runs first, and
+// which families are still ahead of it when a cancellation lands, is a real
+// operational decision, not an implementation detail a name's spelling should
+// get to make.
+func TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName(t *testing.T) {
 	store := finalizeStoreWithClaim()
 	compatibility := &recordingFinalizeCompatibility{}
 	handler, err := NewFinalizeHandler(store, compatibility)
@@ -162,23 +176,161 @@ func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
 	// way to get there: inventing three production family names would make the
 	// guard's own test lie about what Python understands.
 	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
-	pythonRecognisedFinalizeFamilies = []string{"alpha", "mid", "zeta"}
+	pythonRecognisedFinalizeFamilies = []string{"zeta", "alpha", "mid"}
 
 	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
-		"zeta": &stubFinalizeFamily{}, "alpha": &stubFinalizeFamily{}, "mid": &stubFinalizeFamily{},
+		"alpha": &stubFinalizeFamily{}, "mid": &stubFinalizeFamily{}, "zeta": &stubFinalizeFamily{},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"alpha", "mid", "zeta"}
+	want := []string{"zeta", "alpha", "mid"} // declared order -- sorted would be alpha, mid, zeta
 	if len(compatibility.sawSkip) != len(want) {
 		t.Fatalf("skip=%v, want %v", compatibility.sawSkip, want)
 	}
 	for i, name := range want {
 		if compatibility.sawSkip[i] != name {
-			t.Fatalf("skip=%v, want %v (sorted)", compatibility.sawSkip, want)
+			t.Fatalf("skip=%v, want %v (declared order, not sorted)", compatibility.sawSkip, want)
+		}
+	}
+}
+
+type recordingFinalizeObserver struct {
+	calls []string
+	rows  map[string]int
+	err   error
+}
+
+func (observer *recordingFinalizeObserver) ObserveDailyMetricsNativeFamily(
+	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome, rowsWritten int, _ time.Duration,
+) error {
+	if observer.rows == nil {
+		observer.rows = map[string]int{}
+	}
+	observer.calls = append(observer.calls, family+":"+string(outcome))
+	observer.rows[family] = rowsWritten
+	return observer.err
+}
+
+// CHAOS-4290 shipped the mechanism with fail-open and NO counter, which its own
+// RISK-NOTES admitted meant a family failing every run degraded to Python
+// invisibly. This is that gap closed: a REFUSED outcome must be reported even
+// though the finalize still succeeds.
+func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	compatibility := &recordingFinalizeCompatibility{}
+	handler, err := NewFinalizeHandler(store, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingFinalizeObserver{}
+	handler.SetNativeFinalizeFamilyObserver(observer)
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &stubFinalizeFamily{err: errors.New("clickhouse hiccup")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The attempt FAILS now (#2241 r2 Findings 1 and 2) instead of degrading to
+	// Python. This test survived the forward-merge textually while asserting the
+	// opposite semantics -- a clean auto-merge is not a semantic merge.
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded after a native family failed -- the run completes " +
+			"and is never redriven")
+	}
+	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
+	}
+	// The counter is still the point, and still the reason this test exists: a
+	// family that redrives forever with no counter is exactly as invisible as
+	// one that silently degraded to Python.
+	if len(observer.calls) != 1 || observer.calls[0] != "ic_finalize:refused" {
+		t.Fatalf("observed %v, want [ic_finalize:refused]", observer.calls)
+	}
+	if compatibility.callCount != 0 {
+		t.Fatalf("bridge calls = %d, want 0 -- Python must never compute a family "+
+			"registered as native", compatibility.callCount)
+	}
+}
+
+// A succeeding family reports computed WITH its row count, so the series can
+// distinguish "ran and wrote nothing" from "did not run".
+func TestSucceedingNativeFinalizeFamilyIsReportedComputedWithRows(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingFinalizeObserver{}
+	handler.SetNativeFinalizeFamilyObserver(observer)
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &stubFinalizeFamily{rows: 42},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
+		t.Fatal(err)
+	}
+	if len(observer.calls) != 1 || observer.calls[0] != "ic_finalize:computed" {
+		t.Fatalf("observed %v, want [ic_finalize:computed]", observer.calls)
+	}
+	if observer.rows["ic_finalize"] != 42 {
+		t.Fatalf("rows = %d, want 42 -- a computed outcome with no row count cannot "+
+			"distinguish 'wrote nothing' from 'did not run'", observer.rows["ic_finalize"])
+	}
+}
+
+// An observer that itself errors must not fail the job, matching every other
+// observer in this package.
+//
+// CHAOS-5151: this fixture already existed and PROVED HALF the point --
+// "still succeeds" -- but never checked the other half: the observer's error
+// used to be discarded outright (`_ = ...ObserveDailyMetricsNativeFamily(...)`),
+// so a family whose telemetry silently failed to record was AS INVISIBLE as
+// one that was never registered at all, and the only sign anything went wrong
+// would have been a counter that quietly never moved. Captures slog.Default()
+// (the same fallback the finalize-failure log uses) for the duration of the
+// test to assert the underlying error and identifiers actually land somewhere
+// an operator can read.
+func TestFinalizeSucceedsWhenTheObserverFails(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFinalizeFamilyObserver(&recordingFinalizeObserver{err: errors.New("telemetry down")})
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &stubFinalizeFamily{rows: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
+		t.Fatalf("Work = %v, want success despite the observer failure", err)
+	}
+
+	line := captured.String()
+	if line == "" {
+		t.Fatal("the observer's error was not logged -- a family whose telemetry " +
+			"silently fails to record is exactly as invisible as one never registered")
+	}
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.Split(line, "\n")[0])), &record); err != nil {
+		t.Fatalf("log line is not JSON: %v\n%s", err, line)
+	}
+	if got, _ := record["error"].(string); !strings.Contains(got, "telemetry down") {
+		t.Errorf("logged error = %q, want it to contain the underlying cause", got)
+	}
+	for _, field := range []string{"run_id", "organization_id", "target_day", "family"} {
+		if _, present := record[field]; !present {
+			t.Errorf("log line is missing %q; got keys %v", field, keysOf(record))
 		}
 	}
 }
@@ -189,4 +341,213 @@ func TestNativeFinalizeFamilyOrderIsDeterministic(t *testing.T) {
 // behind.
 func restoreRecognisedFinalizeFamilies(original []string) {
 	pythonRecognisedFinalizeFamilies = original
+}
+
+// CHAOS-5151. SetNativeFinalizeFamilies validated only the NAME, not the
+// executor value -- a nil executor for a recognised name was accepted,
+// registered into nativeFinalizeFamilyNames, and would then vanish silently
+// in computeNativeFinalizeFamilies's `if executor == nil { continue }`
+// WITHOUT being added to skipFamilies. Python's bridge would compute that
+// family too: the exact two-writer hazard the name-validation a few lines up
+// exists to prevent, reached through a nil value instead of a typo'd string.
+func TestSetNativeFinalizeFamiliesRejectsNilExecutor(t *testing.T) {
+	store := finalizeStoreWithClaim()
+	compatibility := &recordingFinalizeCompatibility{}
+	handler, err := NewFinalizeHandler(store, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": nil,
+	})
+	if err == nil {
+		t.Fatal("SetNativeFinalizeFamilies accepted a nil executor for a recognised name")
+	}
+	if !errors.Is(err, ErrUnknownFinalizeFamily) {
+		t.Fatalf("error = %v, want ErrUnknownFinalizeFamily", err)
+	}
+	// All-or-nothing, matching the name-rejection path just above it: a
+	// rejected registration must not leave the handler in a half-registered
+	// state believing the family is native.
+	if len(handler.nativeFinalizeFamilyNames) != 0 {
+		t.Fatalf("nativeFinalizeFamilyNames = %v, want empty after a rejected registration",
+			handler.nativeFinalizeFamilyNames)
+	}
+}
+
+// The three tests below close the coverage gap the r3 class-sweep found
+// (CHAOS-4290): releaseFinalize's error was discarded at three call sites in
+// Work, all fixed to log via finalizeExecutionLogger/finalizeLogger, but none
+// of the three logging branches had ANY test forcing ReleaseFinalize itself
+// to fail -- go tool cover showed finalizeExecutionLogger at 0.0%. Each test
+// below drives Work down one of the three call sites and asserts the log
+// line, mirroring TestFinalizeSucceedsWhenTheObserverFails' capture pattern.
+
+// TestFinalizeLogsAReleaseFailureFromTheMismatchGuard hits the first call
+// site (Work's claim/run mismatch guard, before any native family runs).
+func TestFinalizeLogsAReleaseFailureFromTheMismatchGuard(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.releaseFinalizeErr = errors.New("release down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A different org than the claim's own triggers the mismatch guard
+	// (claim.Run.OrganizationID != *execution.OrganizationID) without
+	// touching any native family.
+	execution := finalizeExecutionFor(testRunID)
+	mismatchedOrg := "org-does-not-match"
+	execution.OrganizationID = &mismatchedOrg
+	execution.Envelope.OrganizationID = &mismatchedOrg
+	execution.Args.EnvelopeArgs.OrganizationID = &mismatchedOrg
+
+	workErr := handler.Work(context.Background(), execution)
+	if !errors.Is(workErr, ErrInvalidState) {
+		t.Fatalf("Work = %v, want it to wrap ErrInvalidState", workErr)
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1 -- the mismatch guard must still attempt a release", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+}
+
+// TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure hits the second
+// call site: a native family fails on an attempt that is NOT the final one,
+// so Work releases (rather than terminalizes) the claim for a future retry.
+func TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.releaseFinalizeErr = errors.New("release down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	family := &stubFinalizeFamily{err: errors.New("clickhouse hiccup")}
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{"ic_finalize": family}); err != nil {
+		t.Fatal(err)
+	}
+
+	execution := finalizeExecutionFor(testRunID)
+	execution.Attempt = 0
+	execution.Definition.MaxAttempts = 3 // attempt (0) < max (3): retryable, not terminal.
+
+	workErr := handler.Work(context.Background(), execution)
+	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
+		t.Fatalf("Work = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
+	}
+	if store.failedFinalizePermanently != 0 {
+		t.Fatalf("failedFinalizePermanently = %d, want 0 -- attempt 0 of 3 must release, not terminalize",
+			store.failedFinalizePermanently)
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+}
+
+// TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure hits the third
+// call site: every native family and the bridge call succeed, but
+// CompleteFinalize itself fails, so Work releases the claim it can no longer
+// mark complete.
+func TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.releaseFinalizeErr = errors.New("release down")
+	store.completionErr = errors.New("completion down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded despite CompleteFinalize failing")
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "release down")
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "completion down")
+}
+
+// TestFinalizeLogsACompleteFinalizeFailureEvenWhenReleaseSucceeds is the r3
+// finding: CompleteFinalize's OWN error was never logged, only a SUBSEQUENT
+// release failure -- so the common case (completion fails, release
+// succeeds) left no log at all naming why completion failed. Isolated from
+// the test above, which always failed both calls and so could not tell
+// completion's own log line apart from coincidentally passing because
+// release's failure was logged instead.
+func TestFinalizeLogsACompleteFinalizeFailureEvenWhenReleaseSucceeds(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	store := finalizeStoreWithClaim()
+	store.completionErr = errors.New("completion down")
+	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded despite CompleteFinalize failing")
+	}
+	if store.finalizeReleases != 1 {
+		t.Fatalf("finalizeReleases = %d, want 1", store.finalizeReleases)
+	}
+	assertFinalizeReleaseFailureLogged(t, captured.String(), "completion down")
+}
+
+// assertFinalizeReleaseFailureLogged is the three tests' shared assertion:
+// exactly the shape TestFinalizeSucceedsWhenTheObserverFails already
+// verifies for the telemetry-observer class of swallowed error, applied here
+// to the store-release class instead.
+func assertFinalizeReleaseFailureLogged(t *testing.T, logOutput, wantErrSubstring string) {
+	t.Helper()
+	if logOutput == "" {
+		t.Fatal("ReleaseFinalize's error was not logged -- a release failure here is " +
+			"exactly as invisible as the terminal-write failure r2 finding #1 fixed")
+	}
+	// The release-failure log line is not necessarily the FIRST line: the
+	// native-family-failure or CompleteFinalize-failure test scenarios log
+	// their OWN cause first via the existing "daily finalize failed" line,
+	// and the release-failure line follows it -- find the line naming this
+	// test's own error, rather than assume line 1.
+	var record map[string]any
+	var found bool
+	for _, line := range strings.Split(strings.TrimSpace(logOutput), "\n") {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			t.Fatalf("log line is not JSON: %v\n%s", err, line)
+		}
+		if got, _ := candidate["error"].(string); strings.Contains(got, wantErrSubstring) {
+			record = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no log line contained error %q; got:\n%s", wantErrSubstring, logOutput)
+	}
+	for _, field := range []string{"run_id", "organization_id", "target_day"} {
+		if _, present := record[field]; !present {
+			t.Errorf("log line is missing %q; got keys %v", field, keysOf(record))
+		}
+	}
 }

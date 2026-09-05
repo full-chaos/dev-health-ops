@@ -144,15 +144,25 @@ func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
 // DefaultAnalyzers returns the analyzers available natively, keyed by the
 // language name LanguageFor reports.
 //
-// PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) adds `c` and
-// `cpp`. The remaining lizard languages land in PR2b/2c by adding more
-// entries here -- no other function, the dispatch, the result type, or the
-// extension map needs to change for them.
+// PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) added `c`
+// and `cpp`. PR2253/go-rust added `go` and `rust` (the GoLikeStates clone-
+// based infra). This PR adds `csharp`, `kotlin`, `scala` and `swift`
+// (sharing that same GoLikeStates infra, except csharp which reuses PR2a's
+// CLikeReader-family architecture via hooks). Java and the remaining
+// lizard languages land in later stacked PRs by adding more entries here
+// -- no other function, the dispatch, the result type, or the extension
+// map needs to change for any of them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
 	return map[string]AnalyzerFunc{
 		"python": PythonAnalyzer,
 		"c":      CFamilyAnalyzer,
 		"cpp":    CFamilyAnalyzer,
+		"go":     lizardcc.AnalyzeGo,
+		"rust":   lizardcc.AnalyzeRust,
+		"csharp": lizardcc.AnalyzeCSharp,
+		"kotlin": lizardcc.AnalyzeKotlin,
+		"scala":  lizardcc.AnalyzeScala,
+		"swift":  lizardcc.AnalyzeSwift,
 	}
 }
 

@@ -19,7 +19,7 @@ const (
 
 func TestBuildRenewsFenceAndCompletes(t *testing.T) {
 	store := &fakeStore{claim: testClaim(30 * time.Millisecond)}
-	handler, err := NewBuildHandler(store, blockingExecutor{delay: 80 * time.Millisecond}, nil, nil)
+	handler, err := NewBuildHandler(store, blockingExecutor{delay: 80 * time.Millisecond}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestBuildRenewsFenceAndCompletes(t *testing.T) {
 // outcome, because only the snooze proves the job survived to reclaim at all.
 func TestBuildParksWhileAnotherClaimantHoldsALiveLease(t *testing.T) {
 	store := &fakeStore{claimErr: &LeaseActiveError{RetryAfter: 7 * time.Minute}}
-	handler, err := NewBuildHandler(store, blockingExecutor{}, nil, nil)
+	handler, err := NewBuildHandler(store, blockingExecutor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestBuildParksWhileAnotherClaimantHoldsALiveLease(t *testing.T) {
 func TestBuildLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 	store := &fakeStore{claim: testClaim(30 * time.Millisecond), loseAt: 1}
 	executor := blockingExecutor{waitForCancellation: true}
-	handler, err := NewBuildHandler(store, executor, nil, nil)
+	handler, err := NewBuildHandler(store, executor, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestBuildLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 
 func TestCompatibilityFailureIsAmbiguousNotRetried(t *testing.T) {
 	store := &fakeStore{claim: testClaim(time.Second)}
-	handler, err := NewBuildHandler(store, failingExecutor{}, nil, nil)
+	handler, err := NewBuildHandler(store, failingExecutor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestCompatibilityFailureIsAmbiguousNotRetried(t *testing.T) {
 
 func TestBuildRejectsTenantEnvelopeMismatchBeforeClaim(t *testing.T) {
 	store := &fakeStore{claim: testClaim(time.Second)}
-	handler, err := NewBuildHandler(store, failingExecutor{}, nil, nil)
+	handler, err := NewBuildHandler(store, failingExecutor{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -214,6 +214,111 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 	return result, nil
 }
 
+// repoMetricsOrgWideQuery ports _fetch_repo_metrics_for_day
+// (src/dev_health_ops/metrics/job_daily.py:613-660's finalize-step caller,
+// via job_compounding_risk.py:49-83's CLI-job twin of the same query shape)
+// for CHAOS-5084's TEAM-scope finalize read: every repo's row for the
+// org/day, not one partition's repo_ids. This is the query
+// _write_compounding_risk_team_rows_for_day actually runs -- unlike
+// repoMetricsQuery above (deliberately narrower than its own Python
+// caller's primary path), there is no narrower Python path to prefer here:
+// team rows need every repo in the org to attribute correctly by team.
+//
+// Carries the SAME two documented deviations as repoMetricsQuery, for the
+// SAME reasons: an explicit ORDER BY repo_id (Python's GROUP BY has none;
+// changes row order only -- see BuildTeamRows' doc comment for why this
+// specific query's order is now load-bearing for byte-exact team means, not
+// merely cosmetic the way it is for the repo-scope query), and ONE
+// argMax(tuple(...)) rather than five independent argMax calls (Python's
+// job_compounding_risk.py:75-86 has the same tie-on-computed_at exposure
+// repoMetricsQuery's doc comment describes; this port does not inherit it
+// here either).
+const repoMetricsOrgWideQuery = `
+SELECT
+    repo_id,
+    tupleElement(latest, 1) AS rework_churn_ratio_30d,
+    tupleElement(latest, 2) AS single_owner_file_ratio_30d,
+    tupleElement(latest, 3) AS code_ownership_gini,
+    tupleElement(latest, 4) AS bus_factor,
+    tupleElement(latest, 5) AS pr_first_review_p90_hours
+FROM (
+    SELECT
+        repo_id,
+        argMax(
+            tuple(
+                rework_churn_ratio_30d,
+                single_owner_file_ratio_30d,
+                code_ownership_gini,
+                bus_factor,
+                pr_first_review_p90_hours
+            ),
+            computed_at
+        ) AS latest
+    FROM repo_metrics_daily
+    WHERE org_id = {org_id:String}
+      AND day = {day:Date}
+    GROUP BY org_id, repo_id
+)
+ORDER BY repo_id`
+
+// LoadRepoMetricsForOrgDay returns EVERY repo's argMax-deduplicated
+// repo_metrics_daily row for one org/day, ordered by repo_id -- the
+// finalize-step, TEAM-scope sibling of LoadRepoMetrics (which is scoped to a
+// partition's own repos). See repoMetricsOrgWideQuery's doc comment for why
+// this one is org-wide where the other is deliberately not.
+func (loader *ClickHouseLoader) LoadRepoMetricsForOrgDay(
+	ctx context.Context, orgID string, day time.Time,
+) ([]RepoMetricsRow, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("compoundingrisk: loader unavailable")
+	}
+	if orgID == "" {
+		return nil, fmt.Errorf("compoundingrisk: organization id is required")
+	}
+	rows, err := loader.conn.Query(ctx, repoMetricsOrgWideQuery,
+		clickhouse.Named("org_id", orgID),
+		// Bound as a string -- see the ANCHOR note in LoadRepoMetrics for why a
+		// time.Time cannot be bound directly to a {name:Date} parameter.
+		clickhouse.Named("day", day.Format(clickHouseDateLayout)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load org-wide repo metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RepoMetricsRow
+	for rows.Next() {
+		// Scan types follow the DDL, exactly as LoadRepoMetrics documents above
+		// -- same table, same columns, same nullability.
+		var (
+			repoID           uuid.UUID
+			reworkChurn      float64
+			singleOwnerRatio float64
+			ownershipGini    float64
+			busFactor        uint32
+			reviewP90        *float64
+		)
+		if err := rows.Scan(
+			&repoID, &reworkChurn, &singleOwnerRatio, &ownershipGini, &busFactor, &reviewP90,
+		); err != nil {
+			return nil, fmt.Errorf("scan org-wide repo metrics row: %w", err)
+		}
+		busFactorFloat := float64(busFactor)
+		result = append(result, RepoMetricsRow{
+			RepoID:                  repoID.String(),
+			ReworkChurnRatio30D:     &reworkChurn,
+			SingleOwnerFileRatio30D: &singleOwnerRatio,
+			CodeOwnershipGini:       &ownershipGini,
+			BusFactor:               &busFactorFloat,
+			PRFirstReviewP90Hours:   reviewP90,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // ComplexityWindowDays mirrors COMPLEXITY_WINDOW_DAYS (compounding_risk.py:410).
 const ComplexityWindowDays = 30
 

@@ -1,6 +1,10 @@
 package compoundingrisk
 
-import "time"
+import (
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 // pythonMax reproduces CPython's two-argument builtin `max(a, b)`.
 //
@@ -90,12 +94,52 @@ func SeverityFor(score *float64, thresholds Thresholds) string {
 	return SeverityLow
 }
 
-// Compute ports compute_compounding_risk (compounding_risk.py:319-402) for one
-// scope. It ALWAYS returns a row: when a required input is missing the score is
-// nil and the severity is "unknown", and the row is still persisted so
-// absence-of-signal stays inspectable.
+// Compute ports compute_compounding_risk (compounding_risk.py:319-402) for the
+// REPO scope. It ALWAYS returns a row: when a required input is missing the
+// score is nil and the severity is "unknown", and the row is still persisted
+// so absence-of-signal stays inspectable.
+//
+// This signature is unchanged by CHAOS-5084's team-scope addition -- every
+// existing repo-scope call site (ComputeForRepos, and every test that calls
+// Compute directly) keeps working untouched. See ComputeTeam for the
+// TEAM-scope sibling; both delegate to computeScored so a formula fix can
+// never diverge between the two scopes.
 func Compute(
 	day time.Time,
+	scopeID string,
+	orgID string,
+	inputs Inputs,
+	computedAt time.Time,
+	weights Weights,
+	thresholds Thresholds,
+	references References,
+) Record {
+	return computeScored(day, ScopeRepo, scopeID, orgID, inputs, computedAt, weights, thresholds, references)
+}
+
+// ComputeTeam is compute_compounding_risk called with scope="team"
+// (compounding_risk.py:591-599, inside _build_team_rows) -- CHAOS-5084's
+// TEAM-scope sibling of Compute. Identical formula; only the scope tag on the
+// persisted row differs. See the package doc comment for why team rows are
+// computed once per org/day at finalize time rather than per partition.
+func ComputeTeam(
+	day time.Time,
+	teamID string,
+	orgID string,
+	inputs Inputs,
+	computedAt time.Time,
+	weights Weights,
+	thresholds Thresholds,
+	references References,
+) Record {
+	return computeScored(day, ScopeTeam, teamID, orgID, inputs, computedAt, weights, thresholds, references)
+}
+
+// computeScored is the scope-parametric core both Compute and ComputeTeam
+// delegate to.
+func computeScored(
+	day time.Time,
+	scope string,
 	scopeID string,
 	orgID string,
 	inputs Inputs,
@@ -141,7 +185,7 @@ func Compute(
 	return Record{
 		OrgID:   orgID,
 		Day:     day,
-		Scope:   ScopeRepo,
+		Scope:   scope,
 		ScopeID: scopeID,
 
 		CompoundingRisk: score,
@@ -222,4 +266,125 @@ func ComputeForRepos(
 		))
 	}
 	return records
+}
+
+// MeanOrNone ports _mean_or_none (compounding_risk.py:544-548): the
+// arithmetic mean of the non-nil values, or nil if every value is nil.
+//
+// CPython's sum() over floats has been NEUMAIER-COMPENSATED since 3.12, not a
+// naive running total (see pythonparity.Sum's own doc comment for measured
+// divergence rates) -- a `total += v` loop here would silently disagree with
+// Python on a meaningful fraction of real inputs once a team has enough
+// repos contributing a component.
+//
+// ORDER MATTERS: compensated summation is not order-invariant at the bit
+// level, so `values` must arrive in the SAME order Python's own list
+// comprehension would produce for the identical team -- see BuildTeamRows'
+// doc comment for how that order is established and kept identical on both
+// sides.
+func MeanOrNone(values []*float64) *float64 {
+	nums := make([]float64, 0, len(values))
+	for _, v := range values {
+		if v != nil {
+			nums = append(nums, *v)
+		}
+	}
+	if len(nums) == 0 {
+		return nil
+	}
+	mean := pythonparity.Sum(nums) / float64(len(nums))
+	return &mean
+}
+
+// RepoInputs pairs one repo's Inputs with its repo_id, so BuildTeamRows can
+// group by team while preserving the CALLER's row order rather than a Go
+// map's undefined iteration order.
+type RepoInputs struct {
+	RepoID string
+	Inputs Inputs
+}
+
+// BuildTeamRows ports _build_team_rows (compounding_risk.py:554-604):
+// aggregate each team's repos into ONE row per team, via an unweighted mean
+// of each *raw input* across the team's repos, then feed the means into the
+// same Compute path (ComputeTeam) so the team score is auditable under the
+// identical formula as repo rows.
+//
+// ORDER, and why it is asserted here rather than assumed: Python builds
+// `by_team` by iterating `repo_inputs.items()` (dict insertion order) and
+// appending into each team's list in THAT order; every mean computed from
+// that list is therefore evaluated in a SPECIFIC, Python-determined order,
+// and pythonparity.Sum is not order-invariant at the bit level (see its own
+// doc comment). `repoInputs` here is a caller-supplied SLICE, not a map, for
+// exactly this reason: it lets the caller establish one deterministic row
+// order (LoadRepoMetricsForOrgDay's own explicit ORDER BY repo_id) and this
+// function preserves it exactly, both for which repos land in which team's
+// list AND the order within that list -- so a golden fixture generated by
+// feeding Python's real _build_team_rows the SAME repo_id-ordered input, in
+// the same order, is bit-exactly comparable to this function's output. This
+// package's golden_rot_guard_test.go and the team-scope oracle it extends to
+// depend on that equivalence; changing this function to reorder or
+// deduplicate before grouping would silently break it without any test
+// necessarily catching a small-magnitude drift.
+//
+// Team row emission order (the returned slice's order, as opposed to the
+// per-team input order above) follows first-occurrence-of-team-id in
+// `repoInputs`, mirroring Python dict insertion order for `by_team` exactly
+// -- not sorted, because Python's own order is exactly this and a reader
+// diffing two runs' output expects the same row order Python would have
+// produced for the same input.
+func BuildTeamRows(
+	day time.Time,
+	orgID string,
+	repoInputs []RepoInputs,
+	repoToTeam map[string]string,
+	computedAt time.Time,
+	weights Weights,
+	thresholds Thresholds,
+	references References,
+) []Record {
+	byTeam := make(map[string][]Inputs, len(repoToTeam))
+	teamOrder := make([]string, 0, len(repoToTeam))
+	for _, ri := range repoInputs {
+		teamID, ok := repoToTeam[ri.RepoID]
+		if !ok || teamID == "" {
+			continue
+		}
+		if _, seen := byTeam[teamID]; !seen {
+			teamOrder = append(teamOrder, teamID)
+		}
+		byTeam[teamID] = append(byTeam[teamID], ri.Inputs)
+	}
+
+	out := make([]Record, 0, len(teamOrder))
+	for _, teamID := range teamOrder {
+		allInputs := byTeam[teamID]
+		reworkChurn := make([]*float64, len(allInputs))
+		complexityDelta := make([]*float64, len(allInputs))
+		reviewLatency := make([]*float64, len(allInputs))
+		singleOwnerRatio := make([]*float64, len(allInputs))
+		ownershipGini := make([]*float64, len(allInputs))
+		for i, inputs := range allInputs {
+			reworkChurn[i] = inputs.ReworkChurn
+			complexityDelta[i] = inputs.ComplexityDelta
+			reviewLatency[i] = inputs.ReviewLatencyP90H
+			singleOwnerRatio[i] = inputs.SingleOwnerRatio
+			ownershipGini[i] = inputs.OwnershipGini
+		}
+		teamInputs := Inputs{
+			ReworkChurn:       MeanOrNone(reworkChurn),
+			ComplexityDelta:   MeanOrNone(complexityDelta),
+			ReviewLatencyP90H: MeanOrNone(reviewLatency),
+			SingleOwnerRatio:  MeanOrNone(singleOwnerRatio),
+			OwnershipGini:     MeanOrNone(ownershipGini),
+			// BusFactor is not aggregated: _build_team_rows never reads it into
+			// team_inputs (compounding_risk.py:568-578 omits it), matching
+			// CompoundingInputs.bus_factor's own status as pure metadata never
+			// consumed by the formula.
+		}
+		out = append(out, ComputeTeam(
+			day, teamID, orgID, teamInputs, computedAt, weights, thresholds, references,
+		))
+	}
+	return out
 }

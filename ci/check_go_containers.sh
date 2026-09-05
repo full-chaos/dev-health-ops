@@ -53,11 +53,30 @@ die() {
 # instruction exists today" into an enforced, checked fact rather than an
 # assumption that quietly stops being true.
 assert_cache_mounts_not_copied_out() {
-  local path leaked
+  local path leaked joined residual
+  # CODEX ROUND 3 (P1, real false-negative in the round-2 guard): the
+  # original version matched PATH and a copy verb on the SAME PHYSICAL
+  # line, so a multi-line RUN -- this repo's own house style, e.g.
+  #   RUN --mount=type=cache,target=/go/pkg/mod \
+  #       cp \
+  #       /go/pkg/mod/.leak \
+  #       /runtime/worker/leak
+  # -- defeats it entirely: the mount clause is on its own line (filtered
+  # out), the verb "cp" is on a line with no path text, and the path is on
+  # a line with no verb text. Fixed by joining backslash-continued
+  # physical lines into one logical line PER INSTRUCTION first, so a leak
+  # spread across several lines is checked as a whole. Joining first would
+  # also put the mount clause's OWN legitimate `target=<path>` text on the
+  # same logical line as everything else in that RUN -- so the exclusion
+  # can no longer be "skip the whole line if it mentions --mount=type=cache
+  # anywhere" (that would blind the guard to a real leak in the same RUN
+  # as a legitimate mount) -- it strips only the mount clause's own token
+  # before checking whether the path is ALSO referenced elsewhere by a
+  # copy verb in that same instruction.
+  joined="$(awk '{ if (sub(/\\[[:space:]]*$/, "")) { printf "%s ", $0; next } print }' "${DOCKERFILE}")"
   for path in /go/pkg/mod /root/.cache/go-build; do
-    leaked="$(grep -n -F -- "${path}" "${DOCKERFILE}" \
-      | grep -v -- '--mount=type=cache' \
-      | grep -E 'COPY|cp |mv ')" || true
+    residual="$(printf '%s\n' "${joined}" | sed -E 's/--mount=type=cache[^[:space:]]*//g')"
+    leaked="$(printf '%s\n' "${residual}" | grep -F -- "${path}" | grep -E 'COPY|cp |mv ')" || true
     [ -z "${leaked}" ] \
       || die "cache-mount path ${path} is referenced by a COPY/cp/mv outside its --mount=type=cache declaration -- cache mounts survive --no-cache by design, so this could leak stale content past the reproducibility check undetected: ${leaked}"
   done

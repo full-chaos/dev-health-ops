@@ -54,7 +54,14 @@ jobs:
     # hosted -- same safety condition as go.yml's dual-leg jobs (a public
     # repo must never hand a fork's untrusted PR code a self-hosted runner).
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    # 20m -> 45m (chris/team-lead, first-live-run finding): this job's own
+    # PR (#2242) timed out and was cancelled at the 20m cap on ARC -- load1
+    # on bigboy was 160+ during that run (shared with codex rounds/
+    # batteries), not a flake. 20m was sized for a dedicated GitHub-hosted
+    # VM; it is the wrong budget for a shared self-hosted pool. 45m is a
+    # deliberately generous multiple, not a tight refit -- retune down once
+    # real completion times on ARC are known.
+    timeout-minutes: 45
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:

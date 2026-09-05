@@ -193,7 +193,10 @@ jobs:
     # ~6h until GitHub's default job timeout finally cancelled it. Bound the
     # job explicitly so a recurrence fails fast instead of burning the full
     # 360-minute default.
-    timeout-minutes: 20
+    # 20m -> 45m (chris/team-lead, same PR #2242 ARC-routing finding as
+    # go-quality: bigboy load1 160+ during shared codex-round/battery
+    # contention makes a hosted-VM-sized cap the wrong budget here).
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read

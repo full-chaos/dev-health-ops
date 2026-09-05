@@ -364,7 +364,11 @@ jobs:
     # workday. Tighten once the root fix (serializing the live-Postgres tests
     # the way test-matrix already does) restores a real completion to compare
     # against.
-    timeout-minutes: 25
+    # 25m -> 45m (chris/team-lead, PR #2242 ARC-routing finding: bigboy
+    # load1 160+ during shared codex-round/battery contention makes a
+    # hosted-VM-sized cap the wrong budget on this venue -- same fix as
+    # go-quality/metrics-executed-proof).
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read

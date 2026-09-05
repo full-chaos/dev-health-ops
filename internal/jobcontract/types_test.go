@@ -27,9 +27,6 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		{KindDailyMetricsFinalize, "examples/metrics.daily_finalize.v1.json", DailyMetricsFinalizePayload{RunID: "00000000-0000-4000-8000-000000000001"}},
 		{KindWorkGraphBuild, "examples/workgraph.build.v1.json", WorkGraphBuildPayload{RequestID: "00000000-0000-4000-8000-000000000101"}},
 		{KindInvestmentMaterialize, "examples/investment.materialize.v1.json", InvestmentMaterializePayload{RequestID: "00000000-0000-4000-8000-000000000102"}},
-		{KindInvestmentDispatch, "examples/investment.dispatch.v1.json", InvestmentDispatchPayload{RequestID: "00000000-0000-4000-8000-000000000103"}},
-		{KindInvestmentChunk, "examples/investment.chunk.v1.json", InvestmentChunkPayload{ChunkID: "00000000-0000-4000-8000-000000000104"}},
-		{KindInvestmentFinalize, "examples/investment.finalize.v1.json", InvestmentFinalizePayload{RunID: "00000000-0000-4000-8000-000000000105"}},
 		{KindSyncProviderUnit, "examples/sync.provider_unit.v1.json", ProviderUnitPayload{UnitID: "00000000-0000-4000-8000-000000000022"}},
 	}
 	for _, kind := range []string{

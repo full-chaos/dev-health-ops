@@ -59,9 +59,11 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             # (registered handlers with zero producer anywhere) -- 25 minus
             # those two, plus the post-0064 system.sync_coverage_refresh,
             # CHAOS-4365 sync.team_repo_ownership_derivation, and CHAOS-3092
-            # PR-B's metrics.remaining.work_item_attribution additions
-            # asserted below.
-            assert len(registry_kinds) == 25
+            # PR-B's metrics.remaining.work_item_attribution additions,
+            # minus CHAOS-4438's retired investment.dispatch/chunk/finalize
+            # (same class as CHAOS-4243's retirements: registered Go handlers
+            # with zero producer anywhere) -- asserted below.
+            assert len(registry_kinds) == 22
             assert set(registry_kinds) - set(migration._KINDS) == {
                 "system.sync_coverage_refresh",
                 "sync.team_repo_ownership_derivation",
@@ -79,16 +81,30 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             assert tuple(row[0] for row in rows) == migration._KINDS
             assert all(row[1:] == ("celery", 0, 1) for row in rows)
 
-            # CHAOS-4243 retired metrics.remaining.extra_metrics/team_metrics:
-            # resolve_worker_job_route consults the CURRENT migration-state
-            # policy, which no longer has an entry for either, so they are
-            # excluded from this live-resolution check (the seeded-row
-            # assertions above already cover the historical migration's own
-            # behavior for every kind, retired or not).
+            # CHAOS-4243/CHAOS-4438 retired kinds: resolve_worker_job_route
+            # consults the CURRENT migration-state policy, which no longer
+            # has an entry for any of these, so they are excluded from this
+            # live-resolution check (the seeded-row assertions above already
+            # cover the historical migration's own behavior for every kind,
+            # retired or not).
             retired_since_0064 = {
                 "metrics.remaining.extra_metrics",
                 "metrics.remaining.team_metrics",
+                "investment.dispatch",
+                "investment.chunk",
+                "investment.finalize",
             }
+            # r1 finding F4 (P3, codex, CHAOS-4438): retired_since_0064 was
+            # used ONLY as an exclusion filter below -- a name removed or
+            # misspelled here would still make the loop pass, because the
+            # excluded kind's live-resolution assertion would simply never
+            # run. This subset assertion is the missing positive check
+            # (test_river_route_activation_migration.py's retired_since_0066
+            # already has the equivalent for migration 0066): every retired
+            # kind must actually be present in the historical migration's own
+            # pinned set, so removing or misspelling an entry here fails
+            # loudly instead of silently narrowing what gets checked.
+            assert retired_since_0064 <= set(migration._KINDS)
             with Session(bind=connection) as session:
                 for kind in migration._KINDS:
                     if kind in retired_since_0064:

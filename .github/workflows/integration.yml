@@ -29,7 +29,15 @@ permissions:
 jobs:
   integration:
     name: Integration Tests (conditional)
-    runs-on: ubuntu-26.04-arm
+    # ubuntu-26.04-arm is not a real enterprise hosted label (chris
+    # 2026-09-04 16:59) -- routed to the ARC pool instead, same
+    # variable-gated shape as the required-context jobs elsewhere in this
+    # PR. This workflow only triggers on push-to-main/workflow_dispatch
+    # (never pull_request), so the fork-PR clause is inert here but kept for
+    # the same textual shape as every other routed job. Falls back to
+    # ubuntu-latest (x64) when disabled -- there is no valid hosted ARM
+    # label, and this suite has no arm64-specific assertions.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # Integration tests need package read access for dependency installs.
     permissions:
       contents: read

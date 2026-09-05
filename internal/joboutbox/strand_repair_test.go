@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river/rivertype"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 type fakeStrandRepair struct {
@@ -377,5 +380,455 @@ func TestReconcilerLoopExportsStrandCountersSeparately(t *testing.T) {
 	}
 	if strings.Contains(metrics.String(), "{") {
 		t.Fatalf("reconciler metrics must not expose labels:\n%s", metrics.String())
+	}
+}
+
+// TestReconcilerLoopLogsEachRetiredKindObservation is the red/green proof for
+// r1 finding F1 (P2, codex, CHAOS-4438): a worker_job_outbox row naming a
+// kind with no Go handler at all (investment.dispatch/chunk/finalize, or any
+// future retirement) must be logged with enough identity for an operator to
+// find and resolve it manually, not left invisible now that none of
+// StrandRepair's three shapes select these kinds any more.
+func TestReconcilerLoopLogsEachRetiredKindObservation(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)}
+
+	// GREEN: a step carrying one observation logs it with all three fields.
+	var buf bytes.Buffer
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{RetiredKindObservations: []RetiredKindObservation{
+			{
+				OutboxID:       "11111111-1111-1111-1111-111111111111",
+				JobKind:        "investment.chunk",
+				OrganizationID: "22222222-2222-2222-2222-222222222222",
+			},
+		}}, nil
+	})
+	loop, err := newReconcilerLoop(stepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&buf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	logged := buf.String()
+	for _, want := range []string{
+		`"msg":"outbox row references a retired job kind with no handler"`,
+		`"outbox_id":"11111111-1111-1111-1111-111111111111"`,
+		`"job_kind":"investment.chunk"`,
+		`"organization_id":"22222222-2222-2222-2222-222222222222"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log line missing %q:\n%s", want, logged)
+		}
+	}
+
+	// RED / negative control: an otherwise-identical step reporting NO
+	// observations must not log this line at all -- proves the line above
+	// is conditioned on real data, not emitted unconditionally every step.
+	var cleanBuf bytes.Buffer
+	cleanStepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, nil
+	})
+	cleanLoop, err := newReconcilerLoop(cleanStepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&cleanBuf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanLoop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cleanBuf.String(), "retired job kind") {
+		t.Fatalf("logged a retired-kind line with zero observations present:\n%s", cleanBuf.String())
+	}
+}
+
+// TestRelayStepRecoveryPreservesStrandResultOnObservationError is the
+// reproduction + fix for r2 finding F2 (P2, codex, CHAOS-4438): the 3 real
+// repair shapes inside StrandRepair.Step commit their rearms in their own
+// queue-pool transactions BEFORE the trailing retired-kind observation
+// query runs. If that read-only query then fails, StrandRepair.Step still
+// returns the already-committed counts alongside the error (see its own
+// fix); this test proves Relay.stepRecovery does not throw that away a
+// second time by copying fields only after checking err.
+func TestRelayStepRecoveryPreservesStrandResultOnObservationError(t *testing.T) {
+	observationErr := errors.New("retired-kind observation query failed")
+	strand := &fakeStrandRepair{
+		result: StrandRepairResult{
+			Rearmed:             4,
+			SkippedJobLive:      2,
+			SkippedClaimLive:    1,
+			SkippedClaimSettled: 3,
+			SkippedRaceLost:     2,
+		},
+		err: observationErr,
+	}
+	relay := &Relay{repair: fakeTerminalRepair{}, strandRepair: strand}
+	result, err := relay.stepRecovery(context.Background(), time.Now(), 1)
+	if !errors.Is(err, observationErr) {
+		t.Fatalf("stepRecovery error = %v, want observationErr", err)
+	}
+	if result.StrandsRearmed != 4 || result.StrandJobsSkippedLive != 2 ||
+		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 ||
+		result.StrandRaceLost != 2 {
+		t.Fatalf("result = %+v, want the already-committed strand counts preserved despite the error", result)
+	}
+}
+
+// TestRetiredKindObservationsLikelyTruncated is the red/green proof for r2
+// finding F3 (P2, codex, CHAOS-4438): the observation query has a fixed cap
+// with no cursor between ticks, so a count that never reaches the cap
+// proves nothing was missed, while a count that DOES reach it must be
+// flagged -- an occasional false alarm at the exact boundary is the correct
+// fail-closed direction (see the function's own doc comment).
+func TestRetiredKindObservationsLikelyTruncated(t *testing.T) {
+	for _, tc := range []struct {
+		observed int
+		want     bool
+	}{
+		{observed: 0, want: false},
+		{observed: retiredKindsObservationCap - 1, want: false},
+		{observed: retiredKindsObservationCap, want: true},
+	} {
+		if got := retiredKindObservationsLikelyTruncated(tc.observed); got != tc.want {
+			t.Fatalf("retiredKindObservationsLikelyTruncated(%d) = %v, want %v", tc.observed, got, tc.want)
+		}
+	}
+}
+
+// TestReconcilerLoopLogsRetiredKindTruncation is the red/green proof that
+// the truncation signal (r2 finding F3) actually reaches the operator, the
+// same way TestReconcilerLoopLogsEachRetiredKindObservation proves the
+// per-row signal does.
+func TestReconcilerLoopLogsRetiredKindTruncation(t *testing.T) {
+	clock := &testReconcilerClock{now: time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)}
+
+	// GREEN: a step reporting truncation logs the distinct error line.
+	var buf bytes.Buffer
+	stepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{RetiredKindObservationsTruncated: true}, nil
+	})
+	loop, err := newReconcilerLoop(stepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&buf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "hit its cap") {
+		t.Fatalf("truncation was not logged:\n%s", buf.String())
+	}
+
+	// RED / negative control: an otherwise-identical step reporting NO
+	// truncation must not log this line.
+	var cleanBuf bytes.Buffer
+	cleanStepper := loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+		return StepResult{}, nil
+	})
+	cleanLoop, err := newReconcilerLoop(cleanStepper, ReconcilerLoopConfig{
+		PollInterval: minReconcilerPollInterval,
+		Limit:        7,
+		Registry:     health.NewRegistry(time.Second),
+		Logger:       slog.New(slog.NewJSONHandler(&cleanBuf, nil)),
+	}, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanLoop.step(context.Background(), clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cleanBuf.String(), "hit its cap") {
+		t.Fatalf("logged truncation with none reported:\n%s", cleanBuf.String())
+	}
+}
+
+// fakeStrandSurveyRows is a minimal pgx.Rows fake covering exactly the
+// methods StrandRepair.survey calls (Next/Scan/Close/Err) -- enough to
+// drive one strandCandidate row through without needing a real database.
+type fakeStrandSurveyRows struct {
+	rows [][]any
+	idx  int
+}
+
+func (f *fakeStrandSurveyRows) Close()                                       {}
+func (f *fakeStrandSurveyRows) Err() error                                   { return nil }
+func (f *fakeStrandSurveyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (f *fakeStrandSurveyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (f *fakeStrandSurveyRows) Values() ([]any, error)                       { return nil, nil }
+func (f *fakeStrandSurveyRows) RawValues() [][]byte                          { return nil }
+func (f *fakeStrandSurveyRows) Conn() *pgx.Conn                              { return nil }
+
+func (f *fakeStrandSurveyRows) Next() bool {
+	if f.idx >= len(f.rows) {
+		return false
+	}
+	f.idx++
+	return true
+}
+
+func (f *fakeStrandSurveyRows) Scan(dest ...any) error {
+	row := f.rows[f.idx-1]
+	for i, d := range dest {
+		switch v := d.(type) {
+		case *string:
+			*v, _ = row[i].(string)
+		case *int64:
+			*v, _ = row[i].(int64)
+		default:
+			return fmt.Errorf("fakeStrandSurveyRows.Scan: unsupported dest type %T", d)
+		}
+	}
+	return nil
+}
+
+// TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError is the
+// reproduction + fix for r3 finding F2 (P2, codex, CHAOS-4438): F2's
+// original fix only covered the trailing observeRetiredKinds error --
+// Step's own shape loop still discarded an EARLIER shape's real counts
+// when a LATER shape failed. Shape "a" surveys one skip_job_live
+// candidate (counted in phase 1, no phase 2/3 needed); shape "b"'s survey
+// then errors. The fix must return shape "a"'s count alongside the error,
+// not a fresh zero result.
+func TestStrandRepairStepPreservesPriorShapeResultOnLaterShapeError(t *testing.T) {
+	call := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		call++
+		switch call {
+		case 1:
+			return &fakeStrandSurveyRows{rows: [][]any{
+				{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+			}}, nil
+		case 2:
+			return nil, errors.New("shape b survey failed")
+		default:
+			t.Fatalf("unexpected queryQueue call #%d", call)
+			return nil, nil
+		}
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
+		shapes: []strandShape{
+			{name: "a", survey: "SELECT 1", lock: "SELECT 1"},
+			{name: "b", survey: "SELECT 1", lock: "SELECT 1"},
+		},
+	}
+
+	result, err := repair.Step(context.Background(), time.Now(), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v, want shape b's survey error classified as ErrUnavailable", err)
+	}
+	// team-lead ruling (CHAOS-4438, discard-on-error sweep): the error must
+	// name the shape it happened in, not just classify to a bare sentinel.
+	if !strings.Contains(err.Error(), `shape "b"`) {
+		t.Fatalf("Step() error = %v, want it to name shape %q", err, "b")
+	}
+	if result.SkippedJobLive != 1 {
+		t.Fatalf("Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite shape b's error", result)
+	}
+}
+
+// TestStrandRepairStepShapeDefaultDispositionPreservesEarlierCounts is the
+// reproduction + fix for the confirmation pass's F1 (P3, codex, CHAOS-4438):
+// stepShape's phase-1 classification loop increments result.SkippedJobLive
+// for an EARLIER candidate, then discarded it by returning a fresh zero
+// StrandRepairResult when a LATER candidate in the same loop hit the
+// unknown-disposition default branch. "Nothing is counted yet at phase 1" was
+// only true up to the first classified candidate, not the whole loop.
+func TestStrandRepairStepShapeDefaultDispositionPreservesEarlierCounts(t *testing.T) {
+	call := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		call++
+		if call != 1 {
+			t.Fatalf("unexpected queryQueue call #%d", call)
+		}
+		return &fakeStrandSurveyRows{rows: [][]any{
+			{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+			{"22222222-2222-2222-8222-222222222222", int64(2), "workgraph.build", "dedupe-b", "unexpected-disposition"},
+		}}, nil
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
+	}
+	shape := strandShape{name: "a", survey: "SELECT 1", lock: "SELECT 1"}
+
+	// limit=2: survey() itself refuses (len(candidates) > limit) if the fake
+	// returns more rows than the caller's own bound -- 2 rows need limit>=2.
+	result, err := repair.stepShape(context.Background(), shape, time.Now(), 2)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("stepShape() error = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), `shape "a"`) ||
+		!strings.Contains(err.Error(), "22222222-2222-2222-8222-222222222222") {
+		t.Fatalf("stepShape() error = %v, want it to name shape %q and the offending outbox id", err, "a")
+	}
+	if result.SkippedJobLive != 1 {
+		t.Fatalf(
+			"stepShape() result = %+v, want the earlier skip_job_live candidate's count preserved despite the later unexpected-disposition candidate",
+			result,
+		)
+	}
+}
+
+// TestRelayStepPreservesRecoveryResultOnClaimDueExceptError is the
+// reproduction + fix for the confirmation pass's F2/withdrawn-N/A finding (P2,
+// codex, CHAOS-4438): the original claim that claimDueExcept has no
+// deterministic error path reachable without new production surface was
+// wrong. Repository.claimDueExcept's OWN validation guard (repository.go,
+// first line of the function body: "repository == nil || repository.pool ==
+// nil || ...") already returns ErrInvalidConfiguration deterministically for
+// a zero-value *Repository{} -- no fault-injection hook, no DB, no new
+// production code needed. This drives Relay.Step's claimDueExcept error path
+// directly (not just stepRecovery), proving the recovery seams' counts
+// survive it.
+func TestRelayStepPreservesRecoveryResultOnClaimDueExceptError(t *testing.T) {
+	strand := &fakeStrandRepair{result: StrandRepairResult{
+		Rearmed: 4, SkippedJobLive: 2, SkippedClaimLive: 1, SkippedClaimSettled: 3, SkippedRaceLost: 2,
+	}}
+	relay := &Relay{
+		repository:   &Repository{}, // zero value: nil pool -- claimDueExcept fails closed on its own guard
+		repair:       fakeTerminalRepair{},
+		strandRepair: strand,
+		config:       DefaultRelayConfig(),
+	}
+
+	result, err := relay.Step(context.Background(), time.Now(), 1)
+	if !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("Step() error = %v, want ErrInvalidConfiguration (from claimDueExcept's nil-pool guard)", err)
+	}
+	if result.StrandsRearmed != 4 || result.StrandJobsSkippedLive != 2 ||
+		result.StrandClaimsLive != 1 || result.StrandClaimsSettled != 3 || result.StrandRaceLost != 2 {
+		t.Fatalf(
+			"Step() result = %+v, want stepRecovery's strand-repair counts preserved despite claimDueExcept's error",
+			result,
+		)
+	}
+}
+
+// TestStrandRepairStepPreservesShapeResultOnObserveRetiredKindsError closes a
+// coverage gap found while building confirmation pass 2's context (team-lead
+// ruling, CHAOS-4438: every error branch of a touched function must be
+// exercised, or fixed, before the next round launches). r2's F2 fix at
+// strand_repair.go's trailing observeRetiredKinds error return was pinned
+// ONLY via a fake at Relay.stepRecovery (TestRelayStepRecoveryPreservesStrand
+// ResultOnObservationError) -- the REAL StrandRepair.Step never had a direct
+// test driving this exact path. Same fix shape as this file's other Step
+// tests: one shape produces a real, non-zero result; the trailing
+// observeRetiredKinds call then errors; the shape's result must survive.
+func TestStrandRepairStepPreservesShapeResultOnObserveRetiredKindsError(t *testing.T) {
+	call := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		call++
+		switch call {
+		case 1:
+			return &fakeStrandSurveyRows{rows: [][]any{
+				{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionSkipJobLive},
+			}}, nil
+		case 2:
+			return nil, errors.New("observe retired kinds query failed")
+		default:
+			t.Fatalf("unexpected queryQueue call #%d", call)
+			return nil, nil
+		}
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: func(context.Context, string, ...any) (pgx.Rows, error) { return nil, errors.New("unused") },
+		client:      riverDeleteAdapter{},
+		shapes: []strandShape{
+			{name: "a", survey: "SELECT 1", lock: "SELECT 1"},
+		},
+	}
+
+	result, err := repair.Step(context.Background(), time.Now(), 1)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step() error = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), "observe retired kinds") {
+		t.Fatalf("Step() error = %v, want it to name the observe-retired-kinds stage", err)
+	}
+	if result.SkippedJobLive != 1 {
+		t.Fatalf(
+			"Step() result = %+v, want shape a's SkippedJobLive=1 preserved despite observeRetiredKinds' error",
+			result,
+		)
+	}
+}
+
+// TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState is
+// the reproduction + fix for confirmation pass 2's finding (P3, codex,
+// CHAOS-4438), found by a whole-package sweep for the discard-on-error class
+// after filterByClaim (this test's target) turned out to be a third instance
+// of the same shape: filterByClaim's own classification loop increments
+// liveCount/settledCount for an earlier candidate, then discarded them by
+// returning a fresh 0, 0 when a LATER candidate's claim state matched none of
+// claim_live/claim_settled/""/claim_reclaimable. Unlike rearm()'s or
+// TerminalDeliveryRepair.Step()'s internal write loops (which correctly
+// return zero on error because their whole transaction rolls back and
+// nothing they counted was ever committed), filterByClaim does a pure
+// in-memory read with no transaction to roll back -- there is no
+// state-consistency reason to discard an already-observed count here.
+func TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState(t *testing.T) {
+	surveyCall := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		surveyCall++
+		if surveyCall != 1 {
+			t.Fatalf("unexpected queryQueue call #%d", surveyCall)
+		}
+		return &fakeStrandSurveyRows{rows: [][]any{
+			{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionRearm},
+			{"22222222-2222-2222-8222-222222222222", int64(2), "workgraph.build", "dedupe-b", dispositionRearm},
+		}}, nil
+	}
+	domainCall := 0
+	queryDomain := func(context.Context, string, ...any) (pgx.Rows, error) {
+		domainCall++
+		if domainCall != 1 {
+			t.Fatalf("unexpected queryDomain call #%d", domainCall)
+		}
+		return &fakeStrandSurveyRows{rows: [][]any{
+			{"workgraph.build", "dedupe-a", claimLive},
+			{"workgraph.build", "dedupe-b", "unexpected-claim-state"},
+		}}, nil
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: queryDomain,
+		client:      riverDeleteAdapter{},
+	}
+	shape := strandShape{name: "a", survey: "SELECT 1", lock: "SELECT 1"}
+
+	result, err := repair.stepShape(context.Background(), shape, time.Now(), 2)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("stepShape() error = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), `shape "a"`) || !strings.Contains(err.Error(), "dedupe-b") {
+		t.Fatalf("stepShape() error = %v, want it to name shape %q and the offending dedupe key", err, "a")
+	}
+	if result.SkippedClaimLive != 1 {
+		t.Fatalf(
+			"stepShape() result = %+v, want candidate a's claim_live count preserved despite candidate b's unexpected claim state",
+			result,
+		)
 	}
 }

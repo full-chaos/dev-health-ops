@@ -39,14 +39,11 @@ type Kind string
 const (
 	KindBuild       Kind = "workgraph.build"
 	KindMaterialize Kind = "investment.materialize"
-	KindDispatch    Kind = "investment.dispatch"
-	KindChunk       Kind = "investment.chunk"
-	KindFinalize    Kind = "investment.finalize"
 )
 
 func (kind Kind) Valid() bool {
 	switch kind {
-	case KindBuild, KindMaterialize, KindDispatch, KindChunk, KindFinalize:
+	case KindBuild, KindMaterialize:
 		return true
 	default:
 		return false

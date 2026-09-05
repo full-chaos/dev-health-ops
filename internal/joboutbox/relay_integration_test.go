@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -519,7 +520,12 @@ INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, c
 			t.Fatal(err)
 		}
 		result, err := relay.Step(ctx, now.Add(2*time.Second), 1)
-		if err != nil || result != (StepResult{}) {
+		// StepResult carries a []RetiredKindObservation field (CHAOS-4438),
+		// which makes the struct non-comparable with == / != -- reflect.
+		// DeepEqual is the replacement, not a per-field rewrite, since a
+		// future field addition would otherwise need this assertion updated
+		// by hand every time.
+		if err != nil || !reflect.DeepEqual(result, StepResult{}) {
 			t.Fatalf("Step() = %#v, %v", result, err)
 		}
 

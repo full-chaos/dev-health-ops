@@ -61,9 +61,10 @@ WHERE day = {day:Date} AND org_id = {org_id:String}`
 
 // Executor computes the ic_finalize family natively.
 type Executor struct {
-	conn  Conn
-	now   func() time.Time
-	newID func() uuid.UUID
+	conn       Conn
+	now        func() time.Time
+	newID      func() uuid.UUID
+	teamMapper TeamMapper
 }
 
 // NewExecutor builds the executor. now and newID are injected so the two
@@ -136,7 +137,8 @@ const landscapeInsertSQL = `INSERT INTO ic_landscape_rolling_30d (
 // than "improved".
 var landscapeRepoID = uuid.UUID{}
 
-// ComputeFinalizeFamily implements daily.NativeFinalizeFamilyExecutor.
+// computeForDay is the real work, taking its scope explicitly so tests can
+// drive it without constructing a daily.Run.
 //
 // It reads back what the partitions wrote for the day, merges git and
 // work-item metrics, writes the merged user rows, then reads the 30-day
@@ -146,7 +148,7 @@ var landscapeRepoID = uuid.UUID{}
 // The ordering is load-bearing and mirrors run_daily_metrics_finalize: the
 // landscape input is a READBACK of the user-metrics write, so the two halves
 // cannot be reordered or run independently.
-func (executor *Executor) ComputeFinalizeFamily(
+func (executor *Executor) computeForDay(
 	ctx context.Context, orgID string, day time.Time, teamMap map[string]string,
 ) (int, error) {
 	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
@@ -236,4 +238,39 @@ func (executor *Executor) writeLandscape(
 		return 0, err
 	}
 	return len(records), nil
+}
+
+// TeamMapper resolves identity -> team, mirroring Python's load_team_map().
+// Injected rather than read here so the executor has one reason to fail.
+type TeamMapper func(ctx context.Context) (map[string]string, error)
+
+// SetTeamMapper wires the resolver. A nil mapper means an empty map, which is
+// the reference's behaviour when load_team_map() returns nothing: identities
+// fall through to "unassigned" rather than the family failing.
+func (executor *Executor) SetTeamMapper(mapper TeamMapper) { executor.teamMapper = mapper }
+
+// ComputeFinalizeFamily implements daily.NativeFinalizeFamilyExecutor.
+//
+// The interface is deliberately run-scoped rather than day-scoped: the run
+// carries both the organization and the target day, and taking them from ONE
+// place removes any chance of computing a day for the wrong org. computeForDay
+// keeps the explicit form for tests.
+func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScope) (int, error) {
+	teamMap := map[string]string{}
+	if executor.teamMapper != nil {
+		resolved, err := executor.teamMapper(ctx)
+		if err != nil {
+			return 0, err
+		}
+		teamMap = resolved
+	}
+	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamMap)
+}
+
+// RunScope is the subset of daily.Run this package needs. Declaring it here
+// rather than importing daily keeps the dependency pointing one way -- daily
+// registers icfinalize, not the reverse -- and avoids an import cycle.
+type RunScope struct {
+	OrganizationID string
+	TargetDay      time.Time
 }

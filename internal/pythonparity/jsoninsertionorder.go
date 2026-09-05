@@ -139,12 +139,22 @@ type containerKey struct {
 	length  int
 }
 
+// codex round chaos-4286a-r2, finding 3: this used to check ONLY
+// reflect.Slice, so a map value was silently NEVER tracked -- every caller's
+// map branch called enterContainer, got tracked=false back, and a cyclic map
+// (`m["self"] = m`) recursed to an unrecoverable stack overflow instead of
+// CPython's ValueError. reflect.Map supports the same Pointer()/Len() shape
+// Slice does (both are reference kinds with an internal data pointer and a
+// count), so extending the kind check is the whole fix -- no new field, no
+// new struct.
 func keyFor(value any) (containerKey, bool) {
 	reflected := reflect.ValueOf(value)
-	if reflected.Kind() != reflect.Slice {
+	switch reflected.Kind() {
+	case reflect.Slice, reflect.Map:
+		return containerKey{pointer: reflected.Pointer(), length: reflected.Len()}, true
+	default:
 		return containerKey{}, false
 	}
-	return containerKey{pointer: reflected.Pointer(), length: reflected.Len()}, true
 }
 
 // enterContainer implements CPython's `markers` discipline exactly: a container

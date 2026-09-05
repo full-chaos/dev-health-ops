@@ -56,6 +56,14 @@ KNOWN_UNCOVERED = {
     # evidence for, and would block this PR on their backlog.
     "work_item",
     "work_item_estimate",
+    # work_item_attribution is the fourth CHAOS-4283/#2246 family and belongs
+    # in this same pin for the identical reason -- this PR is what makes it
+    # native+golden-required for the first time (CHAOS-5078), and criterion 2
+    # (wiring it into the executed-proof gates) was explicitly deferred in
+    # #2246's own RISK-NOTES to a follow-up PR, pending evidence the
+    # executed-proof E2E seed's anchor partition actually produces
+    # work_item_team_attributions rows.
+    "work_item_attribution",
     # MINE, and pinning them is the part of this change I like least: these are
     # the two families this stack ports, and pinning leaves them unchecked by
     # the very gate that exists to prove a native family ran. It is a gap, not

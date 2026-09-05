@@ -156,8 +156,16 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // `work_item_attribution_backstop_scoped_runs` -- the CHAOS-2433
 // write-then-marker run-marker pair, same shape as #2177's
 // work_unit_membership_runs/_scoped_runs.
+// 88 -> 91, CHAOS-4291: 087_complexity_tables_replacing_merge_tree.py
+// converts all THREE complexity tables from plain MergeTree to
+// ReplacingMergeTree(computed_at) -- `file_complexity_snapshots`,
+// `repo_complexity_daily`, `team_complexity_daily` -- fixing the 6-20x
+// append duplication the family had (measured live: 6.85x/6.01x/20.0x
+// before this migration). Confirmed the only drift: the failing run's
+// printed table list contained exactly these three names plus the
+// existing 88, no other Replacing table appeared or vanished.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 88
+	const wantCount = 91
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

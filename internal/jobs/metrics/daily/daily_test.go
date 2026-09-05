@@ -146,6 +146,194 @@ func TestPartitionNativeFamilyFailureFallsOpenToCompatibility(t *testing.T) {
 	}
 }
 
+// TestPreBridgePartialWriteHoldsPartitionIncomplete is CHAOS-5078 codex
+// round 3's RED-ON-BASELINE proof (astra scale review F1's pre_bridge twin,
+// mirroring lane-ci-required-to-arc's post_bridge
+// TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete in #2276): a
+// pre_bridge family that fails AFTER already writing rows must hold the
+// WHOLE PARTITION out of CompletePartition -- before this fix, the family
+// was correctly excluded from the bridge's own recompute (skipFamilies), but
+// nothing stopped the partition from completing 'succeeded' anyway over that
+// silent gap, because the comment claiming "the partition is re-driven" was
+// never backed by any code.
+func TestPreBridgePartialWriteHoldsPartitionIncomplete(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{rowsWritten: 42, err: fmt.Errorf("%w: wrote 42 rows before failing", ErrPartialWrite)}
+	observer := &recordingNativeFamilyObserver{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(observer)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete", workErr)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0 -- a partial write must never let the partition complete", store.partitionCompletions)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != jobruntime.ReasonPreBridgeFamilyIncomplete.String() {
+		t.Fatalf("releasesWithReason=%d reason=%q, want 1/%q", store.releasesWithReason, store.releaseReason, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+	}
+	// The bridge is still told to skip the family (unchanged contract: a
+	// partial write must not be recomputed by the bridge, only held).
+	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "team_wellbeing" {
+		t.Fatalf("skipFamilies=%v, want [team_wellbeing]", got)
+	}
+	// Per-family telemetry (CHAOS-4288) is unchanged by this fix.
+	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite || observer.calls[0].rowsWritten != 42 {
+		t.Fatalf("observations=%#v, want PartialWrite with the TRUE row count preserved", observer.calls)
+	}
+}
+
+// TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved is
+// CHAOS-5078 codex confirmation pass's RED-ON-BASELINE proof (the P2 the
+// confirmation round found): releasePartitionWithReason's durable write can
+// itself fail (a transient DB error, or the lease already expired out from
+// under this attempt) -- releaseWithReasonErr injects exactly that. Before
+// this fix, the outcome was discarded with `_ =`: no log, and (had the
+// observe call been unconditional, which it never was here) no telemetry
+// distinction either. Mirrors TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry's
+// existing shape for the compat-bridge branches, extended with the log-line
+// assertion this fix adds to the SHARED helper (so it also covers those five
+// pre-existing call sites, not just this one).
+func TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{rowsWritten: 7, err: fmt.Errorf("%w: wrote 7 rows before failing", ErrPartialWrite)}
+	familyObserver := &recordingNativeFamilyObserver{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(familyObserver)
+	logger := &recordingRefusalLogger{}
+	handler.SetNativeFamilyLogger(logger)
+	retryObserver := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(retryObserver)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to still wrap ErrPreBridgeFamilyIncomplete", workErr)
+	}
+	// jobruntime's markedError.Error() deliberately never surfaces its wrapped
+	// cause's text (see errors.go) -- only errors.Unwrap/Is/As traverse to
+	// it. The explicit note this fix adds therefore lives on the UNWRAPPED
+	// cause, not on workErr.Error() itself.
+	cause := errors.Unwrap(workErr)
+	if cause == nil || !strings.Contains(cause.Error(), "durable release-with-reason also failed to persist") {
+		t.Fatalf("unwrapped cause = %v, want it to explicitly note the durable release failure", cause)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
+	}
+	if len(retryObserver.decisions) != 0 {
+		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", retryObserver.decisions)
+	}
+	// The per-family PartialWrite telemetry from computeNativeFamilies fired
+	// earlier in the pipeline and must be unaffected by whether the LATER
+	// partition-release write succeeds or fails.
+	if len(familyObserver.calls) != 1 || familyObserver.calls[0].family != "team_wellbeing" ||
+		familyObserver.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite {
+		t.Fatalf("family observations=%#v, want the PartialWrite observation unaffected", familyObserver.calls)
+	}
+	if len(logger.calls) != 1 {
+		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	}
+	call := logger.calls[0]
+	if !strings.Contains(call.msg, "release-with-reason failed") {
+		t.Fatalf("log message %q does not describe the release-with-reason failure", call.msg)
+	}
+	if !call.hasArg("organization_id", testOrgID) {
+		t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
+	}
+	if !call.hasArg("run_id", testRunID) {
+		t.Fatalf("log call %#v does not carry run_id=%s", call, testRunID)
+	}
+	if !call.hasArg("partition_id", testPartitionID) {
+		t.Fatalf("log call %#v does not carry partition_id=%s", call, testPartitionID)
+	}
+	if !call.hasArg("reason", jobruntime.ReasonPreBridgeFamilyIncomplete.String()) {
+		t.Fatalf("log call %#v does not carry reason=%s", call, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+	}
+	if !call.hasArg("error", ErrLeaseLost) {
+		t.Fatalf("log call %#v does not carry the underlying store error %v", call, ErrLeaseLost)
+	}
+}
+
+// TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttribution
+// is CHAOS-5078 codex round 2 F3's RED-ON-BASELINE proof. work_item_attribution
+// and work_item_state are registered natively with their REAL families.json
+// `after` edge (work_item_state declares "after":["work_item_attribution"]),
+// so this reaches the real dependency-blocking path through SetNativeFamilies
+// -> FamilyRunOrder/registeredDependencies -> computeNativeFamilies, not a
+// synthetic family name. When attribution's executor fails, work_item_state's
+// executor must NEVER be called natively -- calling it would read whatever
+// snapshot the table already held (this partition's own write never landed),
+// then exclude it from the bridge's recompute by adding it to skipFamilies.
+func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttribution(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attribution := &fakeNativeFamilyExecutor{err: errors.New("dependency edge load failed")}
+	reader := &fakeNativeFamilyExecutor{rowsWritten: 9}
+	observer := &recordingNativeFamilyObserver{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{
+		"work_item_attribution": attribution,
+		"work_item_state":       reader,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(observer)
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatalf("a blocked dependent must not fail the partition either: %v", err)
+	}
+	if attribution.calls != 1 {
+		t.Fatalf("attribution executor calls=%d, want 1", attribution.calls)
+	}
+	if reader.calls != 0 {
+		t.Fatalf("work_item_state executor calls=%d, want 0 -- it must never run natively when its "+
+			"work_item_attribution dependency failed this pass", reader.calls)
+	}
+	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
+		t.Fatalf("skipFamilies=%v, want empty -- BOTH the failed dependency and its blocked reader "+
+			"must stay on the compatibility path so the bridge can compute them consistently", got)
+	}
+	sort.Slice(observer.calls, func(i, j int) bool { return observer.calls[i].family < observer.calls[j].family })
+	if len(observer.calls) != 2 ||
+		observer.calls[0].family != "work_item_attribution" || observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused ||
+		observer.calls[1].family != "work_item_state" || observer.calls[1].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+		t.Fatalf("observations=%#v", observer.calls)
+	}
+}
+
 // sharedOrderingState lets a test observe whether a family's ComputeFamily
 // call sees data the compatibility bridge writes DURING the same partition
 // -- CHAOS-4278's whole reason for the post_bridge phase existing. Mirrors,

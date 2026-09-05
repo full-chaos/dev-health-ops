@@ -1,0 +1,103 @@
+"""Corpus: match/case as SOFT keywords, plus keywords hidden in literals.
+
+These are the two families of mistake a keyword-counting port makes, and
+both appear in real code in this repository -- `match` is routinely bound to
+a regex result, and docstrings routinely contain the word `if`.
+"""
+
+import re
+
+
+def match_is_a_variable(text):
+    """`match` here is an ordinary name. Nothing about it is a decision
+    point, and the walrus form must not be read as a match statement."""
+    match = re.search(r"\d+", text)
+    if match:
+        return match.group(0)
+    other = match
+    return other
+
+
+def match_statement(command):
+    """A real match statement: += max(0, len(cases) - <bare capture>)."""
+    match command:
+        case "start":
+            return 1
+        case "stop":
+            return 2
+        case "pause":
+            return 3
+    return 0
+
+
+def match_with_wildcard(command):
+    """A bare `_` case acts as the else, so ONE case is subtracted."""
+    match command:
+        case "start":
+            return 1
+        case "stop":
+            return 2
+        case _:
+            return 0
+
+
+def match_with_named_capture(command):
+    """A bare NAME capture is also irrefutable: radon's test is
+    `case.pattern.pattern is None`, which is true for `case other:` just as
+    it is for `case _:`. Counting only `_` over-counts this function."""
+    match command:
+        case "start":
+            return 1
+        case other:
+            return other
+
+
+def match_only_wildcard(command):
+    """max(0, 1 - 1) == 0: a match whose only case is a wildcard adds
+    nothing at all."""
+    match command:
+        case _:
+            return 0
+
+
+def keywords_in_strings(x):
+    """None of these `if`/`for`/`and` occurrences are code."""
+    a = "if x and y for z"
+    b = 'or else while'
+    c = """
+    if this were code it would count
+    for every line and then some
+    """
+    d = f"value {x} if formatted"
+    e = r"raw \n if not counted"
+    # if for while and or assert except -- a comment, counts nothing
+    return a, b, c, d, e
+
+
+def keyword_lookalike_identifiers():
+    """Identifiers that merely CONTAIN a keyword must not match."""
+    ifs = 1
+    formatting = 2
+    android = 3
+    ored = 4
+    assertion = 5
+    return ifs, formatting, android, ored, assertion
+
+
+def inline_suite(x):
+    """A one-line suite still opens a body."""
+    if x: return 1
+    for i in range(3): print(i)
+    return 0
+
+
+def continued_lines(a, b, c):
+    """A logical line spanning several physical ones is still one line for
+    structure, and the operators inside it still count."""
+    if (a and
+            b and
+            c):
+        return 1
+    total = (a or
+             b)
+    return total

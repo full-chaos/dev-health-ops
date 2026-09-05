@@ -120,6 +120,11 @@ FILES=(
   "${ROOT}/ci/check_shellcheck_pin.sh"
   # CHAOS-4922: the single source of truth for PYTHON_BASE_IMAGE.
   "${ROOT}/ci/python_base_ref.sh"
+  # CHAOS-4928 codex round 1, P1 fix: mirror-test-images.yml's `precheck`
+  # sources this, and its own fixture suite is enrolled alongside it so
+  # neither escapes the lint the way lane-4441 found this script itself once did.
+  "${ROOT}/ci/mirror_precheck_lib.sh"
+  "${ROOT}/ci/mirror_precheck_lib_test.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"

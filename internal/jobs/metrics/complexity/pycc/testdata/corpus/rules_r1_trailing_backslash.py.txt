@@ -1,0 +1,3 @@
+def trailing_backslash():
+    return 1
+\

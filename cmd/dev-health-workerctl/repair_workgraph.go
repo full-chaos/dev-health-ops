@@ -34,6 +34,8 @@ func dispatchWorkgraph(ctx context.Context, runtime *operatorRuntime, args []str
 		return dispatchWorkgraphListAmbiguous(ctx, runtime, args[1:], stdout, stderr)
 	case "repair":
 		return dispatchWorkgraphRepair(ctx, args[1:], stdout, stderr)
+	case "trigger":
+		return dispatchWorkgraphTrigger(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}

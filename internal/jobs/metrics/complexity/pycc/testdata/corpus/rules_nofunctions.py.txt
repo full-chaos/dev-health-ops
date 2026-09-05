@@ -1,0 +1,36 @@
+"""Corpus: a module with NO functions and NO classes.
+
+radon returns an empty block list here -- not an exception -- so
+_build_result runs with an empty list and Python writes a REAL row of zeros:
+functions_count=0, cyclomatic_total=0, cyclomatic_avg=0.0. That is a
+different outcome from a SKIP, and the two must not be conflated: a skipped
+file contributes no row at all, while this file contributes a zero row that
+counts toward loc_total.
+
+The module-level decision points below are deliberately NOT counted by radon:
+they live outside any function or class, so no block contains them.
+"""
+
+import os
+import sys
+
+DEFAULT_TIMEOUT = 30
+RETRIES = 3
+
+# Module-level control flow. radon reports no block for this, so none of it
+# reaches cyclomatic_total -- a port that counted module scope as an implicit
+# block would inflate every constants file in the repository.
+if sys.platform == "darwin":
+    PLATFORM = "mac"
+elif sys.platform.startswith("linux"):
+    PLATFORM = "linux"
+else:
+    PLATFORM = "other"
+
+PATHS = [p for p in os.environ.get("PATH", "").split(":") if p]
+
+SETTINGS = {
+    "timeout": DEFAULT_TIMEOUT,
+    "retries": RETRIES,
+    "platform": PLATFORM,
+}

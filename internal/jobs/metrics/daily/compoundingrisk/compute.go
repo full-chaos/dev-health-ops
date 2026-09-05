@@ -364,12 +364,14 @@ func BuildTeamRows(
 		reviewLatency := make([]*float64, len(allInputs))
 		singleOwnerRatio := make([]*float64, len(allInputs))
 		ownershipGini := make([]*float64, len(allInputs))
+		busFactor := make([]*float64, len(allInputs))
 		for i, inputs := range allInputs {
 			reworkChurn[i] = inputs.ReworkChurn
 			complexityDelta[i] = inputs.ComplexityDelta
 			reviewLatency[i] = inputs.ReviewLatencyP90H
 			singleOwnerRatio[i] = inputs.SingleOwnerRatio
 			ownershipGini[i] = inputs.OwnershipGini
+			busFactor[i] = inputs.BusFactor
 		}
 		teamInputs := Inputs{
 			ReworkChurn:       MeanOrNone(reworkChurn),
@@ -377,10 +379,15 @@ func BuildTeamRows(
 			ReviewLatencyP90H: MeanOrNone(reviewLatency),
 			SingleOwnerRatio:  MeanOrNone(singleOwnerRatio),
 			OwnershipGini:     MeanOrNone(ownershipGini),
-			// BusFactor is not aggregated: _build_team_rows never reads it into
-			// team_inputs (compounding_risk.py:568-578 omits it), matching
-			// CompoundingInputs.bus_factor's own status as pure metadata never
-			// consumed by the formula.
+			// BusFactor IS aggregated too (compounding_risk.py:590), even
+			// though it is pure metadata never consumed by the formula -- a
+			// team row still persists a mean bus_factor for inspectability,
+			// same as a repo row persists its own. An earlier revision of this
+			// function omitted it based on a misreading of the source; caught
+			// by the golden oracle (team-alpha/beta/solo's bus_factor came back
+			// non-null from live Python where this function was producing
+			// null).
+			BusFactor: MeanOrNone(busFactor),
 		}
 		out = append(out, ComputeTeam(
 			day, teamID, orgID, teamInputs, computedAt, weights, thresholds, references,

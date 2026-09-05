@@ -333,11 +333,26 @@ func DetectFromPRBody(body string) *Signal {
 // unicode.IsLetter/IsDigit plus '_' -- Python's \w set exactly. Return the
 // FIRST candidate (leftmost start position) that passes both boundary
 // checks, matching re.search's leftmost-match semantics.
-var pythonUnicodeWhitespaceClass = `[\t-\r \x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]`
+// pythonUnicodeWhitespaceClassBody is the BODY of the Unicode-whitespace
+// bracket expression -- deliberately not wrapped in its own `[...]` here, so
+// callers can either wrap it standalone (a bare `\s` in the source pattern)
+// or splice it into an EXISTING bracket expression alongside other members
+// (`[\s\-]` in the source pattern, which already provides the enclosing
+// `[`/`]`). Two callers, two different targets: see unicodeWordBoundaryFind.
+const pythonUnicodeWhitespaceClassBody = `\t-\r \x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
 
 func unicodeWordBoundaryFind(corePattern string) func(string) (string, bool) {
-	// \s -> the explicit Unicode class; \- stays literal (already is).
-	rewritten := strings.ReplaceAll(corePattern, `\s`, pythonUnicodeWhitespaceClass)
+	// Order matters: `[\s\-]` must be rewritten as ONE merged bracket
+	// expression BEFORE the bare-`\s` pass runs, or the bare-`\s` pass would
+	// wrap the class body in its OWN `[...]`, nesting brackets inside the
+	// existing `[\s\-]` -- Go's regexp (RE2) has no nested-class syntax, so
+	// the first unescaped `]` in the nested text would close the OUTER class
+	// early, silently truncating the pattern into something that matches
+	// neither a Unicode space NOR a literal hyphen (measured: this exact bug
+	// broke `ai[\s\-]assisted` and `agent[\s\-]created` outright -- neither
+	// matched "ai-assisted" nor "ai assisted" until this fix).
+	rewritten := strings.ReplaceAll(corePattern, `[\s\-]`, `[`+pythonUnicodeWhitespaceClassBody+`\-]`)
+	rewritten = strings.ReplaceAll(rewritten, `\s`, `[`+pythonUnicodeWhitespaceClassBody+`]`)
 	re := regexp.MustCompile(`(?i)` + rewritten)
 	return func(text string) (string, bool) {
 		for _, loc := range re.FindAllStringIndex(text, -1) {

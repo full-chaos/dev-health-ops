@@ -87,7 +87,7 @@ func TestDetectFromBranchNameMatchesDelimitedTokens(t *testing.T) {
 		{"copilot/fix-bug", true, KindAIAssisted},
 		{"feature/copilot-tweak", true, KindAIAssisted},
 		{"devin/refactor", true, KindAgentCreated},
-		{"feature/my-copilot-thing-inline", false, ""}, // "copilot" not delimiter-framed
+		{"feature/mycopilotthing-inline", false, ""}, // "copilot" not delimiter-framed (no "-"/"/" on either side)
 		{"feature/cache", false, ""},
 	} {
 		signal := DetectFromBranchName(tc.branch)

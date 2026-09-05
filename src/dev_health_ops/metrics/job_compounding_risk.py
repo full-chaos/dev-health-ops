@@ -307,11 +307,11 @@ async def run_compounding_risk_job(
     # (total_rows) and just spent the previous ~15 lines logging. That made
     # `run_compounding_risk_job`'s int return lie about being a row count --
     # every caller, including the CLI wrapper below, always saw 0 regardless
-    # of how many rows actually wrote. run_release_impact_job (the sibling
-    # job in job_release_impact.py) already returns its real written count;
-    # _cmd_compounding_risk below is updated to match _cmd_release_impact's
-    # pattern (discard the count, always exit 0 on success) so this change
-    # is CLI-exit-code neutral.
+    # of how many rows actually wrote. This function now returns its real
+    # written count (matching the sibling "return the real row count"
+    # pattern other daily jobs already used); _cmd_compounding_risk below is
+    # updated to discard the count and always exit 0 on success, so this
+    # change is CLI-exit-code neutral.
     return total_rows
 
 
@@ -336,9 +336,9 @@ async def _cmd_compounding_risk(ns: argparse.Namespace) -> int:
         day, backfill_days = resolve_date_range(ns)
         org_id = getattr(ns, "org", None) or os.getenv("ORG_ID") or ""
         # CHAOS-4243: run_compounding_risk_job now returns the real rows-
-        # written count, not a 0/1 exit code. Matches _cmd_release_impact's
-        # pattern in job_release_impact.py: discard the count, always exit 0
-        # on success -- a normal day writing rows is not a CLI failure.
+        # written count, not a 0/1 exit code. This CLI wrapper discards the
+        # count and always exits 0 on success -- a normal day writing rows
+        # is not a CLI failure.
         await run_compounding_risk_job(
             db_url=db_url,
             day=day,

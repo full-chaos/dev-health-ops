@@ -10,7 +10,6 @@ import pytest
 from dev_health_ops.metrics.release_impact import (
     _compute_confidence,
     _compute_day,
-    compute_release_impact_daily,
 )
 
 
@@ -101,53 +100,6 @@ def test_compute_day_single_release():
     assert rec.release_impact_confidence_score is not None
     assert rec.release_impact_confidence_score > 0.0
     assert rec.release_impact_confidence_score <= 1.0
-
-
-@pytest.mark.asyncio
-async def test_compute_release_impact_daily_writes_to_sink():
-    client = _make_client(
-        [
-            FakeQueryResult(["release_ref", "environment"], []),
-        ]
-    )
-    sink = MagicMock()
-    sink.client = client
-    sink.write_release_impact_daily = MagicMock()
-
-    written = await compute_release_impact_daily(
-        ch_client=client,
-        sink=sink,
-        org_id="org1",
-        day=date(2026, 3, 15),
-        recomputation_window_days=1,
-    )
-    assert written == 0
-    sink.write_release_impact_daily.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_compute_release_impact_daily_recomputation_window():
-    call_count = 0
-
-    def fake_query(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return FakeQueryResult(["release_ref", "environment"], [])
-
-    client = MagicMock()
-    client.query = MagicMock(side_effect=fake_query)
-    sink = MagicMock()
-    sink.client = client
-    sink.write_release_impact_daily = MagicMock()
-
-    await compute_release_impact_daily(
-        ch_client=client,
-        sink=sink,
-        org_id="org1",
-        day=date(2026, 3, 15),
-        recomputation_window_days=3,
-    )
-    assert call_count == 3
 
 
 def test_compute_day_missing_deploy_timestamp():

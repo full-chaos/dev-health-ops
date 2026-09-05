@@ -251,7 +251,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "tables": "`release_impact_daily`",
         "evidence": "argued — wired `daily.go:590-621`",
         "state": "native",
-        "ticket": "n/a — Python `run_release_impact_job` (`job_release_impact.py:29`) is retired from this path; CHAOS-4296 is Done",
+        "ticket": "n/a — Python `run_release_impact_job`/`job_release_impact.py` DELETED entirely (CHAOS-5234/CHAOS-5244); `release_impact.py`'s per-day helper (`_compute_day`) survives only for `fixtures/runner.py`'s golden-data generator, an unrelated live caller",
     },
     # --- operational / system / report / sync family ---------------------------------------------
     "operational.billing_notification": {

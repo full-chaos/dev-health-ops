@@ -574,6 +574,19 @@ const (
 	// operator changes something) is distinguishable from ordinary
 	// transient resource pressure on this same shared counter.
 	DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic DailyMetricsCompatRetryDecision = "released_resource_exhausted_deterministic"
+	// DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete
+	// (CHAOS-5190, astra scale review F1; team-lead ruling on codex r2's F1)
+	// is the one decision on this counter that is NOT a compatibility-
+	// bridge execution at all -- the bridge call already returned
+	// successfully; this fires when a post_bridge native family refused or
+	// only partially wrote afterward, and the partition is released
+	// 'failed' with ReasonPostBridgeFamilyIncomplete. Sharing this counter
+	// (rather than inventing a separate one) keeps every "released the
+	// partition with a durable reason" disposition visible to an operator
+	// on one dashboard, at the cost of this type's doc comment no longer
+	// being strictly compat-bridge-scoped -- see PartitionHandler.Work's
+	// ErrPostBridgeFamilyIncomplete branch for where this fires.
+	DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete DailyMetricsCompatRetryDecision = "released_post_bridge_family_incomplete"
 )
 
 func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
@@ -584,6 +597,7 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 		DailyMetricsCompatRetryDecisionReleasedResourceExhausted,
 		DailyMetricsCompatRetryDecisionReleasedProcessSignaled,
 		DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic,
+		DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete,
 	}
 }
 

@@ -1105,17 +1105,44 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// safety net here. Released 'failed' (re-dispatchable, same
 			// safe-replay shape as the compat-error branches below) rather
 			// than completed, so a retry can still fill the gap instead of
-			// a silently-incomplete partition reading as succeeded. Not
-			// wired through retryCompatibilityError, and NOT observed via
-			// observeCompatRetry: this is not a compatibility bridge error
-			// (the bridge call already returned successfully) -- reusing
-			// either would misclassify a post_bridge native failure as a
-			// compat-bridge one. The durable failure_reason column
-			// (written by releasePartitionWithReason below) is this
-			// branch's own record; per-family detail already landed via
-			// nativeObserver inside computePostBridgeNativeFamilies.
-			_ = releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPostBridgeFamilyIncomplete.String())
-			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPostBridgeFamilyIncomplete)
+			// a silently-incomplete partition reading as succeeded. NOT
+			// routed through retryCompatibilityError: this is not a
+			// compatibility bridge error (the bridge call already returned
+			// successfully), and reusing it would misclassify a post_bridge
+			// native failure as a compat-bridge one. It DOES share
+			// observeCompatRetry's counter (team-lead ruling on codex r2's
+			// F1) via its own DailyMetricsCompatRetryDecision value
+			// (ReleasedPostBridgeFamilyIncomplete) -- see that constant's
+			// doc comment for why this one decision on that counter isn't
+			// actually a compat-bridge disposition. The durable
+			// failure_reason column (written by releasePartitionWithReason
+			// below) is this branch's own record; per-family detail already
+			// landed via nativeObserver inside computePostBridgeNativeFamilies.
+			//
+			// codex r2 F1 / shared with #2246's pre_bridge sibling: the
+			// release call's own success MUST be checked, not discarded --
+			// `_ = releasePartitionWithReason(...)` meant a failed durable
+			// write (lease already expired, a transient Postgres error)
+			// left this partition stuck 'running' under its old lease,
+			// indistinguishable here from the release having actually
+			// landed, the exact CHAOS-4319 class of silent loss. The
+			// classification stays Retryable either way (this was never a
+			// candidate for Permanent, unlike the ambiguous_stuck/
+			// resource_exhausted_deterministic branches below) -- but a
+			// failed release is now named explicitly in the returned
+			// error's wrapped cause, since nothing else durable records it
+			// when the write itself is what failed. Sibling idiom: mirrors
+			// the progress_stalled/capacity_exhausted/resource_exhausted/
+			// process_signaled branches' `if releasePartitionWithReason(...)
+			// { observeCompatRetry(...) }` shape exactly.
+			if releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPostBridgeFamilyIncomplete.String()) {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete)
+				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPostBridgeFamilyIncomplete)
+			}
+			return jobruntime.WithReason(
+				jobruntime.Retryable(fmt.Errorf("%w (and releasing the partition durably also failed)", err)),
+				jobruntime.ReasonPostBridgeFamilyIncomplete,
+			)
 		}
 		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
 			// CHAOS-4319: this ledger row will refuse every future attempt

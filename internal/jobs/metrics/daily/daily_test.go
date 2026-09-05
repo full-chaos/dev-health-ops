@@ -440,6 +440,95 @@ func TestPostBridgeReasonIsAcceptedByPostgresStore(t *testing.T) {
 	}
 }
 
+// TestPostBridgeReleaseFailureIsNamedInTheReturnedError is the codex round 2
+// F1 red-first proof (shared defect with #2246's pre_bridge sibling): the
+// ErrPostBridgeFamilyIncomplete branch used to do
+// `_ = releasePartitionWithReason(...)`, discarding whether the durable
+// release write itself succeeded -- every OTHER releasePartitionWithReason
+// call site in this file (progress_stalled, capacity_exhausted,
+// resource_exhausted x2, process_signaled) checks that bool, this one alone
+// did not. A failed release (lease already expired, a transient Postgres
+// error) left the partition stuck 'running' under its old lease,
+// indistinguishable here from the release having actually landed -- the
+// CHAOS-4319 class of silent loss. This test injects that failure via
+// fakeStore's releaseWithReasonErr (the same mechanism
+// TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry uses for the
+// sibling branches) and asserts the release is still ATTEMPTED and the
+// returned error NAMES the release failure explicitly, rather than reading
+// identically to a successful release.
+func TestPostBridgeReleaseFailureIsNamedInTheReturnedError(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+		releaseWithReasonErr: ErrLeaseLost,
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": nil})
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPostBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to still wrap ErrPostBridgeFamilyIncomplete", workErr)
+	}
+	if !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("Work error = %v, want it classified Retryable -- a failed release is not a candidate for Permanent", workErr)
+	}
+	if store.releasesWithReason != 1 {
+		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED even though it will fail", store.releasesWithReason)
+	}
+	// markedError.Error() deliberately returns only "job error category:
+	// <category>" (CHAOS-4242's safe-error pattern) -- the release-failure
+	// text lives in the wrapped cause, reachable via Unwrap, not in the
+	// top-level .Error() string. Check the actual chain, not the string a
+	// log line would print.
+	cause := errors.Unwrap(workErr)
+	if cause == nil || (!strings.Contains(cause.Error(), "durably") && !strings.Contains(cause.Error(), "release")) {
+		t.Fatalf("Work error's unwrapped cause = %v, want it to name the release failure explicitly, not read identically to a successful release", cause)
+	}
+}
+
+// TestPostBridgeReleaseSuccessObservesCompatRetry proves the sibling-idiom
+// half of the codex round 2 F1 fix (team-lead's ruling): on a SUCCESSFUL
+// release, this branch now calls observeCompatRetry with
+// DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete, exactly
+// like the progress_stalled/capacity_exhausted/resource_exhausted/
+// process_signaled branches call it with their own decision on success. A
+// nil observer (the default in every OTHER test in this file) is a no-op
+// per observeCompatRetry's own nil-safety, so those tests are unaffected by
+// this addition -- this test wires a recordingCompatRetryObserver
+// specifically to confirm the new decision actually fires.
+func TestPostBridgeReleaseSuccessObservesCompatRetry(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{
+			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
+			Token:         "00000000-0000-4000-8000-000000000003",
+			LeaseDuration: 30 * time.Millisecond,
+		},
+		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": nil})
+	observer := &recordingCompatRetryObserver{}
+	handler.SetCompatRetryObserver(observer)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPostBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPostBridgeFamilyIncomplete", workErr)
+	}
+	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete {
+		t.Fatalf("observer decisions = %v, want exactly [released_post_bridge_family_incomplete]", observer.decisions)
+	}
+}
+
 // TestNativeFamilyRefusalIsLogged proves a native family's runtime refusal
 // -- pre_bridge (computeNativeFamilies) and post_bridge
 // (computePostBridgeNativeFamilies) -- is logged with the family name and

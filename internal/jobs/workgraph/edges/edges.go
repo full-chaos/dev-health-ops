@@ -42,6 +42,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"time"
 
 	"github.com/google/uuid"
@@ -267,7 +268,7 @@ var Divergences = []Divergence{
 		GoldenCanSee: false,
 		implemented: func() bool {
 			// U+A7CE is one of the 28: x/text lowers it, CPython 16 does not.
-			return pythonLower("\uA7CE") != "\uA7CE"
+			return pythonparity.Lower("\uA7CE") != "\uA7CE"
 		},
 	},
 }

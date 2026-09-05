@@ -3,6 +3,7 @@ package edges
 import (
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,8 +26,8 @@ func TestPythonLowerMatchesStrLowerOnTheKnownDivergences(t *testing.T) {
 		"mixed":            {"Is_Blocked_By", "is_blocked_by"},
 	}
 	for name, testCase := range cases {
-		if got := pythonLower(testCase.input); got != testCase.python {
-			t.Errorf("%s: pythonLower(%q) = %q, python gives %q",
+		if got := pythonparity.Lower(testCase.input); got != testCase.python {
+			t.Errorf("%s: pythonparity.Lower(%q) = %q, python gives %q",
 				name, testCase.input, got, testCase.python)
 		}
 	}
@@ -34,7 +35,7 @@ func TestPythonLowerMatchesStrLowerOnTheKnownDivergences(t *testing.T) {
 	// The point of the exercise: blocker-set membership must agree, because that
 	// is what decides the branch.
 	for name, testCase := range cases {
-		_, goSays := blockerTypes[pythonLower(testCase.input)]
+		_, goSays := blockerTypes[pythonparity.Lower(testCase.input)]
 		_, pythonSays := blockerTypes[testCase.python]
 		if goSays != pythonSays {
 			t.Errorf("%s: blocker membership differs (go=%v python=%v) for %q",
@@ -112,7 +113,7 @@ json.dump(out, sys.stdout)
 		if _, err := parseCodePoint(codePoint, &value); err != nil {
 			t.Fatalf("bad code point %q: %v", codePoint, err)
 		}
-		if got := pythonLower(string(value)); got != expected {
+		if got := pythonparity.Lower(string(value)); got != expected {
 			t.Errorf(
 				"U+%04X lowercases to %q in Python but %q here; pythonLower does not handle it, "+
 					"so a relationship_type containing it would take a different branch than Python",
@@ -164,8 +165,8 @@ func TestPythonLowerHandlesContextSensitiveFinalSigma(t *testing.T) {
 		{"ΑΣ.", "ας.", "final followed by a case-ignorable period"},
 		{"ΑΣ'", "ας'", "final followed by a case-ignorable apostrophe"},
 	} {
-		if got := pythonLower(testCase.input); got != testCase.python {
-			t.Errorf("%s: pythonLower(%q) = %q, python .lower() gives %q",
+		if got := pythonparity.Lower(testCase.input); got != testCase.python {
+			t.Errorf("%s: pythonparity.Lower(%q) = %q, python .lower() gives %q",
 				testCase.position, testCase.input, got, testCase.python)
 		}
 	}
@@ -288,7 +289,7 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 			want = string(runes)
 		}
 		_, isKnown := expected[codePoint]
-		if pythonLower(string(codePoint)) != want {
+		if pythonparity.Lower(string(codePoint)) != want {
 			if !isKnown {
 				unexpected = append(unexpected, codePoint)
 			}
@@ -301,7 +302,7 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 		t.Errorf("U+%04X: pythonLower gives %q, live python maps it to %v — a NEW disagreement, so "+
 			"either this port drifted or x/text's Unicode table moved. It is not in the pinned "+
 			"skew set and must not be added without measuring why",
-			codePoint, pythonLower(string(codePoint)), live.Mapping[strconv.Itoa(int(codePoint))])
+			codePoint, pythonparity.Lower(string(codePoint)), live.Mapping[strconv.Itoa(int(codePoint))])
 	}
 	for _, codePoint := range missing {
 		t.Errorf("U+%04X is pinned as a version-skew divergence but the two planes now AGREE — "+

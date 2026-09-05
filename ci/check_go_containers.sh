@@ -309,13 +309,26 @@ reproducible() {
     done
   done
 
+  # CODEX ROUND 2 (P3): the previous form called `die()` (exit) on the
+  # FIRST mismatch, so if two or more targets were simultaneously
+  # non-reproducible, only the first one's diagnostic was ever printed --
+  # accurate but incomplete. Every target is now compared and reported
+  # before any exit, so a run with multiple failures names all of them in
+  # one pass instead of costing a re-run per failure discovered.
+  local -a mismatches=()
   for target in "${ALL_TARGETS[@]}"; do
     first_id="$(docker image inspect --format '{{.Id}}' "${IMAGE_PREFIX}-${target}:repro-first")"
     second_id="$(docker image inspect --format '{{.Id}}' "${IMAGE_PREFIX}-${target}:repro-second")"
-    [ "${first_id}" = "${second_id}" ] \
-      || die "${target} image is not reproducible: ${first_id} != ${second_id}"
-    printf 'container reproducibility: %s %s\n' "${target}" "${first_id}"
+    if [ "${first_id}" = "${second_id}" ]; then
+      printf 'container reproducibility: %s %s\n' "${target}" "${first_id}"
+    else
+      printf 'ERROR: %s image is not reproducible: %s != %s\n' \
+        "${target}" "${first_id}" "${second_id}" >&2
+      mismatches+=("${target}")
+    fi
   done
+  [ "${#mismatches[@]}" -eq 0 ] \
+    || die "not reproducible: ${mismatches[*]}"
 }
 
 case "${1:-all}" in

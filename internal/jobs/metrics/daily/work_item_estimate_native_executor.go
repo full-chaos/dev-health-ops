@@ -85,13 +85,19 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 			workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
 		)
 
+		// #2276 confirmation-pass P1: WriteEstimateCoverageMetricsDaily's
+		// own batch.Send() branch already reports its TRUE row count on an
+		// ambiguous network error (the F1 sweep) -- `total` must be updated
+		// with that count BEFORE the error check, not only after a
+		// confirmed success, or the failing write's own truthful count is
+		// discarded a second time.
 		written, err := WriteEstimateCoverageMetricsDaily(
 			ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,
 		)
+		total += written
 		if err != nil {
 			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
 		}
-		total += written
 	}
 	return total, nil
 }

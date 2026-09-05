@@ -161,11 +161,17 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		if len(rows) == 0 {
 			continue
 		}
+		// #2276 confirmation-pass P1: WriteWorkItemStateDurationsDaily's own
+		// batch.Send() branch already reports its TRUE row count on an
+		// ambiguous network error (the F1 sweep) -- `total` must be updated
+		// with that count BEFORE the error check, not only after a
+		// confirmed success, or the failing write's own truthful count is
+		// discarded a second time.
 		written, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
+		total += written
 		if err != nil {
 			return wrapWorkItemStatePartialWrite(total, repoID, err)
 		}
-		total += written
 	}
 	return total, nil
 }

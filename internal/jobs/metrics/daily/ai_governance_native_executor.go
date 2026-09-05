@@ -130,7 +130,12 @@ func (executor *AIGovernanceExecutor) ComputeFamily(
 	// Pinned by TestGovernanceWritesTheMergeableTableFirst.
 	writtenCoverage, err := WriteAIGovernanceCoverageDaily(ctx, executor.conn, coverage, computedAt)
 	if err != nil {
-		return 0, err
+		// #2276 confirmation-pass P1: WriteAIGovernanceCoverageDaily's own
+		// Send() branch already reports its true row count on an ambiguous
+		// network error (the F1 sweep) -- `return 0, err` here discarded
+		// that count a second time, exactly the class this whole PR closes,
+		// one layer up.
+		return wrapAIGovernanceCoverageWritePartialWrite(writtenCoverage, err)
 	}
 	writtenEvents, err := WriteAIPolicyEvents(ctx, executor.conn, violations, computedAt)
 	if err != nil {
@@ -164,6 +169,22 @@ func wrapAIGovernancePartialWrite(writtenCoverage int, err error) (int, error) {
 	return writtenCoverage, fmt.Errorf(
 		"%w: ai_governance failed writing ai_policy_events after %d ai_governance_coverage_daily row(s) already landed: %w",
 		ErrPartialWrite, writtenCoverage, err)
+}
+
+// wrapAIGovernanceCoverageWritePartialWrite mirrors wrapAIGovernancePartialWrite's
+// exact shape, for the OTHER failure site: the ai_governance_coverage_daily
+// write itself failing (its own batch.Send() ambiguity), rather than the
+// ai_policy_events write that follows it. written==0 returns the error
+// unwrapped (ordinary refusal, nothing landed); written>0 wraps
+// ErrPartialWrite naming the true row count already durable on
+// ai_governance_coverage_daily.
+func wrapAIGovernanceCoverageWritePartialWrite(written int, err error) (int, error) {
+	if written == 0 {
+		return 0, err
+	}
+	return written, fmt.Errorf(
+		"%w: ai_governance failed writing ai_governance_coverage_daily itself after %d row(s) potentially already landed: %w",
+		ErrPartialWrite, written, err)
 }
 
 var _ NativeFamilyExecutor = (*AIGovernanceExecutor)(nil)

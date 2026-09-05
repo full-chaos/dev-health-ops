@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
@@ -415,5 +416,83 @@ func TestAIGovernanceComputeFamilyReportsPartialWriteAtTheCallSite(t *testing.T)
 	if len(conn.targets) != 2 || conn.targets[0] != "ai_governance_coverage_daily" {
 		t.Fatalf("write order/targets = %v, want [ai_governance_coverage_daily, ai_policy_events] "+
 			"(coverage must land before the policy-events failure)", conn.targets)
+	}
+}
+
+// sendAmbiguousGovernanceConn/sendAmbiguousGovernanceBatch: unlike
+// orderRecordingConn (which fails at PrepareBatch, a pre-network failure
+// that correctly reports 0), this fake lets PrepareBatch/Append succeed and
+// fails Send() itself for the named table -- the AMBIGUOUS, post-network
+// failure mode this whole PR's F1 sweep exists to handle correctly.
+type sendAmbiguousGovernanceConn struct {
+	stubDriverConn
+	failSendTable string
+}
+
+func (conn *sendAmbiguousGovernanceConn) Query(_ context.Context, _ string, _ ...any) (chdriver.Rows, error) {
+	return &oneGovernanceArtifactRows{}, nil
+}
+
+func (conn *sendAmbiguousGovernanceConn) PrepareBatch(_ context.Context, query string, _ ...chdriver.PrepareBatchOption) (chdriver.Batch, error) {
+	table := "unknown"
+	switch {
+	case strings.Contains(query, "ai_policy_events"):
+		table = "ai_policy_events"
+	case strings.Contains(query, "ai_governance_coverage_daily"):
+		table = "ai_governance_coverage_daily"
+	}
+	return &sendAmbiguousGovernanceBatch{failSend: table == conn.failSendTable}, nil
+}
+
+type sendAmbiguousGovernanceBatch struct {
+	failSend bool
+	appended [][]any
+	sent     bool
+}
+
+func (batch *sendAmbiguousGovernanceBatch) Append(values ...any) error {
+	batch.appended = append(batch.appended, values)
+	return nil
+}
+func (batch *sendAmbiguousGovernanceBatch) Send() error {
+	if batch.failSend {
+		return errors.New("simulated ambiguous ClickHouse Send() failure")
+	}
+	batch.sent = true
+	return nil
+}
+func (batch *sendAmbiguousGovernanceBatch) Abort() error                    { return nil }
+func (batch *sendAmbiguousGovernanceBatch) AppendStruct(any) error          { return errors.New("unused") }
+func (batch *sendAmbiguousGovernanceBatch) Column(int) chdriver.BatchColumn { return nil }
+func (batch *sendAmbiguousGovernanceBatch) Flush() error                    { return nil }
+func (batch *sendAmbiguousGovernanceBatch) IsSent() bool                    { return batch.sent }
+func (batch *sendAmbiguousGovernanceBatch) Rows() int                       { return len(batch.appended) }
+func (batch *sendAmbiguousGovernanceBatch) Columns() []column.Interface     { return nil }
+func (batch *sendAmbiguousGovernanceBatch) Close() error                    { return nil }
+
+// TestAIGovernanceComputeFamilyReportsCoverageWritesOwnCountOnSendAmbiguity is
+// the #2276 confirmation-pass P1 fix (team-lead-required live proof before
+// any fix): unlike TestAIGovernanceComputeFamilyReportsPartialWriteAtTheCallSite
+// above (which exercises the SECOND write, ai_policy_events, failing after
+// the FIRST already landed), this exercises the FIRST write itself --
+// ai_governance_coverage_daily -- failing on its OWN batch.Send() ambiguity.
+// WriteAIGovernanceCoverageDaily's own Send() branch already reports its
+// true row count correctly; ComputeFamily's call site used to discard it
+// with a bare `return 0, err`.
+func TestAIGovernanceComputeFamilyReportsCoverageWritesOwnCountOnSendAmbiguity(t *testing.T) {
+	conn := &sendAmbiguousGovernanceConn{failSendTable: "ai_governance_coverage_daily"}
+	executor := &AIGovernanceExecutor{conn: conn, nowUTC: func() time.Time { return time.Unix(0, 0).UTC() }}
+	run := Run{OrganizationID: "org-42", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+
+	written, err := executor.ComputeFamily(context.Background(), run, Partition{ID: "p1"})
+	if !errors.Is(err, ErrPartialWrite) {
+		t.Fatalf("ComputeFamily error = %v, want it to wrap ErrPartialWrite -- "+
+			"a call-site revert to `return 0, err` for the coverage write's own "+
+			"failure would not be caught by this test failing", err)
+	}
+	if written != 1 {
+		t.Fatalf("ComputeFamily written = %d, want 1 (the one coverage row this ambiguous "+
+			"Send() failure may have already landed) -- reporting 0 here is exactly the "+
+			"bug this confirmation pass exists to catch", written)
 	}
 }

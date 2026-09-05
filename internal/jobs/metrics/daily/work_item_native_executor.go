@@ -124,27 +124,34 @@ func (executor *WorkItemExecutor) ComputeFamily(
 			workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
 		)
 
+		// #2276 confirmation-pass P1: each Write* call's own batch.Send()
+		// branch already reports its TRUE row count on an ambiguous network
+		// error (the F1 sweep) -- `total` must be updated with that count
+		// BEFORE the error check, not only after a confirmed success, or
+		// the failing write's own truthful count is discarded a second
+		// time. Mirrors work_graph_edges_native_executor.go's established
+		// idiom (`written += writtenX` before the error check, every time).
 		written, err := WriteWorkItemMetricsDaily(
 			ctx, executor.conn, run.OrganizationID, scope.day, triplet.MetricsDaily, computedAt,
 		)
+		total += written
 		if err != nil {
 			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
-		total += written
 		written, err = WriteWorkItemUserMetricsDaily(
 			ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
 		)
+		total += written
 		if err != nil {
 			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
-		total += written
 		written, err = WriteWorkItemCycleTimes(
 			ctx, executor.conn, run.OrganizationID, triplet.CycleTimes, computedAt,
 		)
+		total += written
 		if err != nil {
 			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
 		}
-		total += written
 	}
 	return total, nil
 }

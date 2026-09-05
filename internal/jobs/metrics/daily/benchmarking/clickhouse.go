@@ -305,16 +305,26 @@ func (writer *Writer) WriteOutputs(ctx context.Context, outputs Outputs, orgID s
 	for index, step := range steps {
 		written, err := step.write()
 		if err != nil {
-			if total == 0 {
+			// #2276 confirmation-pass P1: `written` is this step's OWN true
+			// count -- each write's own batch.Send() branch already reports
+			// it correctly on an ambiguous network error (the F1 sweep), so
+			// it must be added to `total` on the FAILURE path too, not only
+			// after a confirmed success. Discarding it here would silently
+			// re-introduce the exact bug this whole PR closes, one layer
+			// up. Mirrors work_graph_edges_native_executor.go's idiom
+			// (`written += writtenX` before the error check, every time).
+			if total+written == 0 {
 				// Nothing landed: no duplication is possible, so the caller's
 				// ordinary fail-open to the Python bridge is still correct.
 				return 0, fmt.Errorf("benchmarking: write %s: %w", step.table, err)
 			}
-			// Rows are already on disk in append-only tables. The caller must
-			// NOT fail open, and it needs the real count.
+			// Rows may already be on disk in append-only tables (either from
+			// earlier steps, or from this step's own ambiguous Send()). The
+			// caller must NOT fail open, and it needs the real count.
+			total += written
 			recordRowsWritten(total, orgID != "")
 			return total, fmt.Errorf(
-				"benchmarking: write %s (table %d of %d, %d row(s) already written to %d earlier table(s)): %w: %v",
+				"benchmarking: write %s (table %d of %d, %d row(s) potentially landed across %d earlier table(s) plus this one): %w: %v",
 				step.table, index+1, len(steps), total, index,
 				familyerr.ErrPartialWrite, err,
 			)

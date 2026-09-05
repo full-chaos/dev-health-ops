@@ -144,6 +144,65 @@ func TestAnalyzeFileFailsClosedOnLizardLanguages(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFileWithAcceptsAnAdditionalLanguageAnalyzer(t *testing.T) {
+	// The seam CHAOS-5156 (PR2, lizard's 20 languages) consumes. Registering a
+	// language must require NO change to the dispatch, the extension map, the
+	// result type, or the derived-field maths -- otherwise the two ports drift
+	// and the same file scores differently depending on which analyzer ran.
+	analyzers := DefaultAnalyzers()
+	analyzers["typescript"] = func(path, source string) ([]int, bool, error) {
+		return []int{3, 20, 30}, false, nil
+	}
+
+	got, err := AnalyzeFileWith("app.ts", "irrelevant\nsource\n", DefaultThresholds(), analyzers)
+	if err != nil {
+		t.Fatalf("AnalyzeFileWith: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected a row for a registered language")
+	}
+	if got.Language != "typescript" {
+		t.Errorf("language: got %q, want typescript", got.Language)
+	}
+	if got.FunctionsCount != 3 || got.CyclomaticTotal != 53 {
+		t.Errorf("derived totals: got count=%d total=%d, want 3/53",
+			got.FunctionsCount, got.CyclomaticTotal)
+	}
+	// Thresholds are strict `>`: 20 and 30 exceed 15; only 30 exceeds 25.
+	if got.HighComplexityFunctions != 2 {
+		t.Errorf("high: got %d, want 2", got.HighComplexityFunctions)
+	}
+	if got.VeryHighComplexityFunctions != 1 {
+		t.Errorf("very_high: got %d, want 1", got.VeryHighComplexityFunctions)
+	}
+	// python must still work through the same call.
+	if _, err := AnalyzeFileWith("x.py", "def f():\n    pass\n",
+		DefaultThresholds(), analyzers); err != nil {
+		t.Errorf("registering a language broke the python path: %v", err)
+	}
+}
+
+func TestBuildFileResultIsStrictlyAboveThreshold(t *testing.T) {
+	// Python: `sum(1 for c in complexities if c > threshold)`. A block exactly
+	// AT the threshold is not counted; using >= would over-report every repo.
+	got := BuildFileResult("a.py", "python", 10, []int{15, 16, 25, 26}, DefaultThresholds())
+	if got.HighComplexityFunctions != 3 {
+		t.Errorf("high (>15): got %d, want 3", got.HighComplexityFunctions)
+	}
+	if got.VeryHighComplexityFunctions != 1 {
+		t.Errorf("very_high (>25): got %d, want 1", got.VeryHighComplexityFunctions)
+	}
+}
+
+func TestBuildFileResultZeroFunctionsHasZeroAverage(t *testing.T) {
+	// Python: `cyclomatic_total / functions_count if functions_count > 0 else 0.0`.
+	// Without the guard this is 0/0 -> NaN.
+	got := BuildFileResult("empty.py", "python", 3, nil, DefaultThresholds())
+	if got.CyclomaticAvg != 0.0 || math.IsNaN(got.CyclomaticAvg) {
+		t.Fatalf("cyclomatic_avg: got %v, want 0.0", got.CyclomaticAvg)
+	}
+}
+
 func TestAnalyzeFileSkipsUnparseableSource(t *testing.T) {
 	// _analyze_python catches every exception from cc_visit and returns None,
 	// so a file Go cannot lex must be dropped, NOT recorded as zero.

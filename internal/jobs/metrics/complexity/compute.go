@@ -100,55 +100,132 @@ func LanguageFor(path string) (string, bool) {
 	return lang, ok
 }
 
-// AnalyzeFile computes one file's complexity.
+// AnalyzerFunc computes the per-function cyclomatic complexities of one file.
 //
-// Return contract, matching Python's three outcomes exactly:
+// It returns the RAW per-function numbers, not a FileComplexity: every derived
+// field (the total, the average, the two threshold counters) is computed once,
+// language-agnostically, by BuildFileResult -- exactly as Python computes them
+// once in _build_result for both the radon and lizard paths. An analyzer that
+// derived its own would be free to drift from the other language's.
 //
-//	(nil, nil)   the extension is not analysed at all -- _analyze_content
-//	             returns None, and the file contributes nothing.
-//	(nil, nil)   the source could not be parsed -- _analyze_python catches
-//	             every exception from cc_visit and returns None, dropping the
-//	             file. A parse failure is a SKIP, never a zero row.
-//	(result,nil) analysed.
-//
-// plus one outcome Python does not have:
-//
-//	(nil, ErrLanguageNotPorted) a lizard language, deferred to PR2.
-func AnalyzeFile(path, source string, thresholds Thresholds) (*FileComplexity, error) {
-	language, known := LanguageFor(path)
-	if !known {
-		return nil, nil
-	}
-	if language != "python" {
-		return nil, fmt.Errorf("%w: %s (%s)", ErrLanguageNotPorted, path, language)
-	}
+// skipped=true means "analysed nothing, and that is correct" -- Python's
+// analyzers return None when the source cannot be parsed, which drops the file
+// from the scan. It is NOT an error and must NOT become a zero row.
+type AnalyzerFunc func(path, source string) (complexities []int, skipped bool, err error)
 
+// PythonAnalyzer is the radon-equivalent analyzer (CHAOS-4971a).
+func PythonAnalyzer(path, source string) ([]int, bool, error) {
 	blocks, err := pycc.Visit(source, pycc.Options{})
 	if err != nil {
-		// Deliberately swallowed, to match _analyze_python's bare
-		// `except Exception: return None`. The file is dropped from the
-		// day's scan, exactly as Python drops it -- reporting an error here
-		// would make Go fail a partition that Python completes.
-		return nil, nil
+		// Matches _analyze_python's bare `except Exception: return None`.
+		// Surfacing this as an error would fail a partition Python completes.
+		return nil, true, nil
 	}
+	complexities := make([]int, 0, len(blocks))
+	for _, b := range blocks {
+		complexities = append(complexities, b.Complexity)
+	}
+	return complexities, false, nil
+}
 
-	count := len(blocks)
-	total := pycc.TotalComplexity(blocks)
+// DefaultAnalyzers returns the analyzers available natively, keyed by the
+// language name LanguageFor reports.
+//
+// PR1 (CHAOS-4971a) registers `python` only. PR2 (CHAOS-5156) adds the 20
+// lizard languages by returning a map with more entries -- it does not need to
+// modify this function, the dispatch, the result type, or the extension map.
+func DefaultAnalyzers() map[string]AnalyzerFunc {
+	return map[string]AnalyzerFunc{"python": PythonAnalyzer}
+}
+
+// BuildFileResult ports _build_result (analytics/complexity.py:240-259).
+//
+// Language-agnostic on purpose: radon and lizard produce different per-function
+// numbers, but the derivation from those numbers to a stored row is identical,
+// and Python does it in one place for both. Both threshold comparisons are
+// STRICT `>`, so a function exactly at the threshold is not counted.
+func BuildFileResult(
+	filePath, language string, loc int, complexities []int, thresholds Thresholds,
+) FileComplexity {
+	count := len(complexities)
+	total := 0
+	high := 0
+	veryHigh := 0
+	for _, c := range complexities {
+		total += c
+		if c > thresholds.High {
+			high++
+		}
+		if c > thresholds.VeryHigh {
+			veryHigh++
+		}
+	}
 	avg := 0.0
 	if count > 0 {
 		avg = float64(total) / float64(count)
 	}
-
-	return &FileComplexity{
-		FilePath:                    path,
+	return FileComplexity{
+		FilePath:                    filePath,
 		Language:                    language,
-		LOC:                         pycc.LineCount(source),
+		LOC:                         loc,
 		FunctionsCount:              count,
 		CyclomaticTotal:             total,
 		CyclomaticAvg:               avg,
-		HighComplexityFunctions:     pycc.CountAbove(blocks, thresholds.High),
-		VeryHighComplexityFunctions: pycc.CountAbove(blocks, thresholds.VeryHigh),
-	}, nil
+		HighComplexityFunctions:     high,
+		VeryHighComplexityFunctions: veryHigh,
+	}
+}
+
+// AnalyzeFile computes one file's complexity using the natively available
+// analyzers. See AnalyzeFileWith for the injectable form.
+func AnalyzeFile(path, source string, thresholds Thresholds) (*FileComplexity, error) {
+	return AnalyzeFileWith(path, source, thresholds, DefaultAnalyzers())
+}
+
+// AnalyzeFileWith is the dispatch seam: extension -> language -> analyzer.
+//
+// Return contract, matching Python's outcomes exactly:
+//
+//	(nil, nil)   the extension is not analysed at all -- _analyze_content
+//	             returns None, and the file contributes nothing.
+//	(nil, nil)   the analyzer skipped it (unparseable source). A parse failure
+//	             is a SKIP, never a zero row: zero and absent are different
+//	             rows downstream.
+//	(result,nil) analysed.
+//
+// plus one outcome Python does not have:
+//
+//	(nil, ErrLanguageNotPorted) the extension IS analysed by Python, but no
+//	native analyzer is registered for its language yet.
+//
+// That last case fails closed rather than skipping, deliberately. Skipping
+// would emit a clean, plausible, badly-undercounted row for a TypeScript repo
+// -- the silent-zero shape of CHAOS-4243 -- and would let this be routed
+// before every language Python handles is covered.
+func AnalyzeFileWith(
+	path, source string, thresholds Thresholds, analyzers map[string]AnalyzerFunc,
+) (*FileComplexity, error) {
+	language, known := LanguageFor(path)
+	if !known {
+		return nil, nil
+	}
+	analyze, ok := analyzers[language]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s (%s)", ErrLanguageNotPorted, path, language)
+	}
+
+	complexities, skipped, err := analyze(path, source)
+	if err != nil {
+		return nil, err
+	}
+	if skipped {
+		return nil, nil
+	}
+
+	// LOC is counted the same way for every language: Python's `loc` is
+	// len(code.splitlines()) in _build_result, regardless of analyzer.
+	result := BuildFileResult(path, language, pycc.LineCount(source), complexities, thresholds)
+	return &result, nil
 }
 
 // FileSnapshot is one file_complexity_snapshots row.

@@ -873,15 +873,22 @@ func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMet
 // SetNativeFamilies stored -- deterministic so a failure in one family never
 // makes another family's inclusion depend on Go map iteration order.
 //
-// FAIL-OPEN BY DESIGN (chris's ruling relayed via team-lead, CHAOS-4276): a
-// native family's runtime failure is NOT a partition failure. It is excluded
-// from the returned skip list, which means the compatibility bridge computes
-// and writes that family for this partition exactly as it would have before
-// any native executor existed -- one family degrading to Python must never
-// take the other 22 down with it, and must never turn a transient ClickHouse
-// hiccup into a Permanent partition failure.
+// FAIL LOUD BY DESIGN (CHAOS-5243, chris: "it should fail loudly so we find
+// it" -- supersedes the CHAOS-4276 fail-open ruling below for this,
+// pre_bridge, phase). A native family's runtime failure IS a partition
+// failure: the family is added to both `skipFamilies` and `incomplete`, the
+// partition is held out of CompletePartition, and the CHAOS-4276
+// fail-open-to-Python-bridge path is deleted outright for an ordinary
+// (non-partial) refusal -- not gated behind a marker, not conditional on
+// anything. The original CHAOS-4276 rationale (one family degrading to
+// Python must never take the other 22 down with it) traded correctness for
+// availability: a family failing silently, forever, with the partition
+// still completing 'succeeded' and only an anonymous counter incremented,
+// is exactly the failure mode this closes. Scope: pre_bridge only --
+// computePostBridgeNativeFamilies's post_bridge phase is unaffected here,
+// see CHAOS-5190/#2276 for its own (separate, more thorough) fix.
 //
-// FAIL-OPEN DOES NOT MEAN "RUN ANYWAY" FOR A FAMILY'S OWN DEPENDENTS
+// THIS DOES NOT MEAN "RUN ANYWAY" FOR A FAMILY'S OWN DEPENDENTS
 // (CHAOS-5078 codex round 2 F3, on the PR that first put work_item_attribution
 // into this SAME loop ahead of its three readers): before this fix, a
 // dependency's runtime failure did not stop this loop from still calling
@@ -907,9 +914,11 @@ func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMet
 // nothing in redrive.go or postgres.go ever inspected PartialWrite, so that
 // was never true. Work now surfaces this error to hold the partition
 // 'failed' (re-dispatchable) instead of letting it complete over the gap.
-// An ORDINARY (non-partial) refusal is UNAFFECTED: the returned error is
-// nil for it, and it stays fail-open to the bridge exactly as before, since
-// nothing was written for it yet.
+// An ORDINARY (non-partial) refusal is NO LONGER treated differently
+// (CHAOS-5243): it also holds the partition incomplete now, reported with
+// outcome Refused and rows=0 (genuinely nothing written) rather than
+// PartialWrite's true count -- the outcome/row-count distinction is
+// preserved, but neither case falls open to the bridge any more.
 func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) ([]string, error) {
 	if handler == nil || len(handler.nativeFamilyNames) == 0 {
 		return nil, nil

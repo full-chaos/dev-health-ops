@@ -81,8 +81,11 @@ _GO_MERGE_JOB = "go-merge"
 
 _SELF_HOSTED_CONDITION = (
     "vars.SELF_HOSTED_RUNNERS == 'enabled' && "
-    "(github.event_name != 'pull_request' || "
-    "github.event.pull_request.head.repo.full_name == github.repository)"
+    "((github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name == github.repository) || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+    "github.event_name == 'workflow_dispatch' || "
+    "github.event_name == 'release')"
 )
 
 _ELIGIBILITY_CONDITION = (
@@ -96,9 +99,7 @@ _ELIGIBILITY_CONDITION = (
 # the build/go-build matrix arm64 legs: ARC when SELF_HOSTED_RUNNERS is
 # enabled and this isn't a fork PR, else ubuntu-latest (x64, QEMU-assisted).
 _ROUTING_EXPRESSION = (
-    "${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && "
-    "(github.event_name != 'pull_request' || "
-    "github.event.pull_request.head.repo.full_name == github.repository)) "
+    "${{ (" + _SELF_HOSTED_CONDITION + ") "
     '&& fromJSON(\'["self-hosted","oci-arc-runners"]\') '
     "|| 'ubuntu-latest' }}"
 )

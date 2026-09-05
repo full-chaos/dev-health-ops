@@ -294,7 +294,10 @@ jobs:
     name: go-arm64-numeric-parity
     if: >-
       vars.SELF_HOSTED_RUNNERS == 'enabled' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release')
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     env:
@@ -403,7 +406,7 @@ jobs:
   # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
   # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
-    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.event_name == 'release')
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
     # here and on go-container-reproducibility-self-hosted, then REVERTED
@@ -676,8 +679,11 @@ jobs:
   go-container-reproducibility:
     name: go-container-reproducibility
     if: >-
-      vars.SELF_HOSTED_RUNNERS != 'enabled' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
+      !(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -691,7 +697,10 @@ jobs:
     needs: dind-smoke-test
     if: >-
       vars.SELF_HOSTED_RUNNERS == 'enabled' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release')
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): a job-level `concurrency:` group was added here
     # the same day to serialize pool access (two concurrent

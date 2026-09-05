@@ -72,14 +72,18 @@ _REPRO_RUN_STEP = "Verify reproducible Go images"
 
 _SELF_HOSTED_CONDITION = (
     "vars.SELF_HOSTED_RUNNERS == 'enabled' && "
-    "(github.event_name != 'pull_request' || "
-    "github.event.pull_request.head.repo.full_name == github.repository)"
+    "((github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name == github.repository) || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+    "github.event_name == 'workflow_dispatch' || "
+    "github.event_name == 'release')"
 )
-_HOSTED_CONDITION = (
-    "vars.SELF_HOSTED_RUNNERS != 'enabled' || "
-    "(github.event_name == 'pull_request' && "
-    "github.event.pull_request.head.repo.full_name != github.repository)"
-)
+# CHAOS-5197 (#2242) r1 F1: the hosted twin's `if:` is now the LITERAL `!(...)`
+# negation of the self-hosted condition above (was previously an independently
+# hand-typed complement, the exact shape that let the two drift) -- derived
+# here rather than hand-typed again, so this test cannot silently re-diverge
+# from the same allow-list condition the self-hosted leg asserts against.
+_HOSTED_CONDITION = "!(" + _SELF_HOSTED_CONDITION + ")"
 
 
 def _document() -> dict[str, object]:

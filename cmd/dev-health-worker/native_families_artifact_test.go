@@ -368,11 +368,19 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 9
-// native + 1 post_bridge daily split this page's reconciliation work found,
-// so a future accidental wiring change is caught here even if someone forgot
-// to regenerate the artifact (that case is ALSO caught by the drift test
-// above, but this one names the expected shape explicitly for a reviewer).
+// control: it pins the exact remaining and daily splits, so an accidental
+// wiring change is caught even if someone forgot to regenerate the artifact
+// (that case is ALSO caught by the drift test above, but this one names the
+// expected shape explicitly for a reviewer).
+//
+// The expected shape lives in the four want* slices below and NOWHERE ELSE.
+// This comment used to restate it as "9 native + 1 post_bridge", and that
+// prose went stale in silence: CHAOS-4283 added two post_bridge families and
+// left the sentence saying one, and CHAOS-4285 then added a native family
+// which made the "9" accidentally true again for the wrong reason. A count
+// written in a comment cannot be asserted, so it is not written here -- the
+// cardinality check below derives every total with len(), and the slices are
+// the single source of truth a reviewer should read.
 func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 

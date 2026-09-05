@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -454,12 +455,47 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 // golden comparator) while the ACTUAL Rust behavior silently regressed
 // (measured got=[1] vs lizard's real [2] for a bare `catch` identifier in
 // a Rust fn, completely undetected).
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r3 on #2266): this used
+// cLikeTokenPattern (the plain base pattern) for EVERY suffix, but
+// cLikeTokenPattern has no per-language addition -- it does not know Go's
+// backtick raw strings, Rust's lifetimes, C#'s `??`, etc. A `?` inside a
+// Go backtick string (basic.go.txt's own negative-test fixture,
+// deliberately containing "if"/"&&"/"||"/"?" as a string literal so a
+// real miscount would be caught) is glued into ONE token by Go's own
+// goTokenPattern (correctly excluded from coverage) but split into
+// separate real-looking tokens by cLikeTokenPattern, so the coverage
+// scan falsely counted goConditions["?"] as covered by a STRING LITERAL,
+// not real code -- confirmed directly: a synthetic corpus containing
+// ONLY a backtick string with a "?" inside (no other "?" anywhere)
+// passed the coverage check before this fix. Fixed: pick each suffix's
+// OWN token pattern (matching what that language's real analyzer uses),
+// falling back to cLikeTokenPattern only for an unrecognised suffix.
+// NOTE for downstream PRs (#2268/#2269): this switch only knows the
+// suffixes THIS PR's own corpus uses (.go.txt/.rs.txt) -- add a case
+// here for each new suffix a later PR's own corpus introduces
+// (.cs.txt/.kt.txt/.scala.txt/.swift.txt/.java.txt), pointing at that
+// language's own *TokenPattern var, rather than letting it silently fall
+// back to cLikeTokenPattern (which would reopen this exact bug for that
+// language's own backtick/raw-string/lifetime syntax).
+func filteredCorpusTokenPattern(suffix string) *regexp.Regexp {
+	switch suffix {
+	case ".go.txt":
+		return goTokenPattern
+	case ".rs.txt":
+		return rustTokenPattern
+	default:
+		return cLikeTokenPattern
+	}
+}
+
 func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[string]bool, corpusDir, suffix string) {
 	t.Helper()
 	entries, err := os.ReadDir(corpusDir)
 	if err != nil {
 		t.Fatalf("read corpus dir: %v", err)
 	}
+	pattern := filteredCorpusTokenPattern(suffix)
 	seen := map[string]bool{}
 	matched := 0
 	for _, entry := range entries {
@@ -471,8 +507,8 @@ func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
-		for _, tok := range cLikeTokenPattern.FindAllString(string(raw), -1) {
-			if isComment(tok) || strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") {
+		for _, tok := range pattern.FindAllString(string(raw), -1) {
+			if isComment(tok) || strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") || strings.HasPrefix(tok, "`") {
 				continue
 			}
 			seen[tok] = true

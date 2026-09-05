@@ -134,13 +134,19 @@ ORDER BY repo_id, number, review_id`,
 }
 
 // LoadWorkGraphEdgeDeployments ports the wf_deployment_rows query
-// (job_daily.py:408), replacing its `FROM deployments FINAL` with the argMax
-// dedup this codebase uses everywhere else.
+// (job_daily.py:408) and KEEPS its `FROM deployments FINAL` verbatim.
+//
+// An earlier revision of this comment claimed the FINAL was "replaced with the
+// argMax dedup this codebase uses everywhere else". That was false in two ways
+// at once: the code below never stopped saying FINAL, and argMax is not
+// equivalent to it -- argMax is unspecified when several rows share the max
+// version, and measurably varies run to run. See the DEDUP note at the top of
+// this file. Mirroring Python's FINAL is mandatory here, not stylistic.
 //
 // The window predicate is on coalesce(deployed_at, finished_at, started_at,
 // last_synced) -- the SAME coalesce chain the extractor later uses to pick
-// observed_at. It is applied AFTER the dedup, because Python applies it to the
-// FINAL-collapsed row, not to pre-merge versions.
+// observed_at. FINAL is a table-level modifier, so the predicate sees the
+// collapsed row, which is where Python applies it too.
 func LoadWorkGraphEdgeDeployments(
 	ctx context.Context, conn repositoryRows, organizationID string,
 	repoIDs []uuid.UUID, dayStart, dayEnd time.Time,

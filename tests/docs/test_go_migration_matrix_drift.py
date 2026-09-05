@@ -304,11 +304,11 @@ def test_finalize_ledger_rejects_a_stale_dormant_entry() -> None:
     naming a call that no longer exists in run_daily_metrics_finalize's body
     must refuse to render, not silently stop mattering."""
     gen = _load_gen_module()
-    original = set(gen.FINALIZE_CALL_DORMANT_SKIP_GATED)
+    original = dict(gen.FINALIZE_CALL_DORMANT_SKIP_GATED)
     try:
-        gen.FINALIZE_CALL_DORMANT_SKIP_GATED.add(
+        gen.FINALIZE_CALL_DORMANT_SKIP_GATED[
             "_write_a_call_that_does_not_exist_for_day"
-        )
+        ] = ("daily", "team_cognitive_load")
         try:
             gen._assert_no_stale_finalize_ledger_entries(
                 {f["name"] for f in gen.load_daily_families()},
@@ -337,7 +337,7 @@ def test_dormant_skip_gated_call_never_enters_the_compat_set() -> None:
     gen = _load_gen_module()
     daily_names = {f["name"] for f in gen.load_daily_families()}
     remaining_names = {f["name"] for f in gen.load_remaining_families()}
-    original = set(gen.FINALIZE_CALL_DORMANT_SKIP_GATED)
+    original = dict(gen.FINALIZE_CALL_DORMANT_SKIP_GATED)
     try:
         # Sanity/positive control: WITHOUT the force-dormant entry, this call
         # genuinely does resolve via the naming convention (proves the test
@@ -352,7 +352,10 @@ def test_dormant_skip_gated_call_never_enters_the_compat_set() -> None:
             "premise is stale, re-derive it"
         )
 
-        gen.FINALIZE_CALL_DORMANT_SKIP_GATED.add("_write_team_cognitive_load_for_day")
+        gen.FINALIZE_CALL_DORMANT_SKIP_GATED["_write_team_cognitive_load_for_day"] = (
+            "daily",
+            "team_cognitive_load",
+        )
         resolved_with_gate = gen._finalize_call_family(
             "_write_team_cognitive_load_for_day", daily_names, remaining_names
         )
@@ -361,6 +364,56 @@ def test_dormant_skip_gated_call_never_enters_the_compat_set() -> None:
             "call named in FINALIZE_CALL_DORMANT_SKIP_GATED -- the force-"
             "dormant check is not actually short-circuiting the naming-"
             "convention branch"
+        )
+    finally:
+        gen.FINALIZE_CALL_DORMANT_SKIP_GATED.clear()
+        gen.FINALIZE_CALL_DORMANT_SKIP_GATED.update(original)
+
+
+def test_dormant_skip_gated_entry_rejects_a_family_no_longer_live() -> None:
+    """#2255 confirmation-pass finding (P2, CHAOS-5141): the reviewer's repro
+    turned into a red/green test. FINALIZE_CALL_DORMANT_SKIP_GATED forces a
+    call dormant by NAME, but the (namespace, family) it names must still be
+    checked against the live family set -- exactly like
+    FINALIZE_CALL_IRREGULAR_FAMILY already is. Without that check, renaming
+    or removing team_cognitive_load from families.json while job_daily.py's
+    call kept its old name would silently keep resolving to None (looks
+    correct, for the wrong reason) instead of raising. Both call sites --
+    _finalize_call_family (the per-call resolver) and
+    _assert_no_stale_finalize_ledger_entries (the completeness sweep) --
+    must refuse when the mapped family is not live in its namespace."""
+    gen = _load_gen_module()
+    daily_names = {f["name"] for f in gen.load_daily_families()}
+    remaining_names = {f["name"] for f in gen.load_remaining_families()}
+    original = dict(gen.FINALIZE_CALL_DORMANT_SKIP_GATED)
+    try:
+        gen.FINALIZE_CALL_DORMANT_SKIP_GATED["_write_team_cognitive_load_for_day"] = (
+            "daily",
+            "a_family_that_does_not_exist",
+        )
+
+        try:
+            gen._finalize_call_family(
+                "_write_team_cognitive_load_for_day", daily_names, remaining_names
+            )
+            raised_in_resolver = False
+        except SystemExit:
+            raised_in_resolver = True
+        assert raised_in_resolver, (
+            "_finalize_call_family did not refuse a FINALIZE_CALL_DORMANT_SKIP_GATED "
+            "entry mapping to a family that is not live -- a renamed/removed family "
+            "would silently stay dormant instead of raising"
+        )
+
+        try:
+            gen._assert_no_stale_finalize_ledger_entries(daily_names, remaining_names)
+            raised_in_sweep = False
+        except SystemExit:
+            raised_in_sweep = True
+        assert raised_in_sweep, (
+            "_assert_no_stale_finalize_ledger_entries did not refuse a "
+            "FINALIZE_CALL_DORMANT_SKIP_GATED entry mapping to a family that is "
+            "not live"
         )
     finally:
         gen.FINALIZE_CALL_DORMANT_SKIP_GATED.clear()

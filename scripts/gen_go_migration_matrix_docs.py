@@ -490,12 +490,25 @@ FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
 # uses. Left unhandled, the naming-convention match alone would render the
 # same misleading "NATIVE (repo) / COMPAT-Python (finalize)" split label
 # ic_finalize used to get -- implying a repo-scope component that does not
-# exist for a family whose ENTIRE scope is finalize. This set names calls
+# exist for a family whose ENTIRE scope is finalize. This dict names calls
 # that WOULD resolve via the naming convention but must be forced dormant
 # instead; checked in `_finalize_call_family` before the naming-convention
 # branch runs.
-FINALIZE_CALL_DORMANT_SKIP_GATED: set[str] = {
-    "_write_team_cognitive_load_for_day",
+#
+# #2255 confirmation-pass finding (P2, CHAOS-5141): the first version of
+# this was a bare `set[str]` -- forcing a call dormant with NO check that
+# its (namespace, family) is still a LIVE family name, unlike
+# FINALIZE_CALL_IRREGULAR_FAMILY's dict shape, which validates exactly that
+# in both _finalize_call_family and _assert_no_stale_finalize_ledger_entries.
+# A rename/removal of team_cognitive_load from families.json while
+# job_daily.py's call kept its old name would have silently kept returning
+# None here -- correct-looking output for the wrong reason, no signal that
+# the mapping had gone stale. Now a dict, mapping call name to the exact
+# (namespace, family) it forces dormant, validated the same way the
+# irregular ledger is (see both call sites below): renaming/removing the
+# family raises SystemExit instead of staying silently dormant.
+FINALIZE_CALL_DORMANT_SKIP_GATED: dict[str, tuple[str, str]] = {
+    "_write_team_cognitive_load_for_day": ("daily", "team_cognitive_load"),
 }
 
 
@@ -862,6 +875,15 @@ def _finalize_call_family(
     or is an irregular-ledger mapping that fails the plausibility check.
     """
     if call_name in FINALIZE_CALL_DORMANT_SKIP_GATED:
+        namespace, family = FINALIZE_CALL_DORMANT_SKIP_GATED[call_name]
+        live = daily_names if namespace == "daily" else remaining_names
+        if namespace not in ("daily", "remaining") or family not in live:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED maps "
+                f"{call_name!r} to ({namespace!r}, {family!r}), which is not a live "
+                f"{namespace} family name -- family renamed/removed, or namespace typo? "
+                "Update or drop the entry."
+            )
         # Forced dormant BEFORE the naming-convention branch below ever runs
         # -- this call WOULD otherwise resolve via that convention (see
         # FINALIZE_CALL_DORMANT_SKIP_GATED's own comment), but is proven
@@ -987,13 +1009,22 @@ def _assert_no_stale_finalize_ledger_entries(
     call of the OLD name lingers nowhere -- i.e. proving the set names
     exactly the calls actually present, not a stale leftover."""
     present_calls = load_finalize_write_calls()
-    stale_dormant = FINALIZE_CALL_DORMANT_SKIP_GATED - present_calls
+    stale_dormant = set(FINALIZE_CALL_DORMANT_SKIP_GATED) - present_calls
     if stale_dormant:
         raise SystemExit(
             f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED names "
             f"call(s) {sorted(stale_dormant)} that no longer appear in "
             f"{DAILY_FINALIZE_FN}'s body -- renamed or removed? Update or drop the entry."
         )
+    for call_name, (namespace, family) in FINALIZE_CALL_DORMANT_SKIP_GATED.items():
+        live = daily_names if namespace == "daily" else remaining_names
+        if namespace not in ("daily", "remaining") or family not in live:
+            raise SystemExit(
+                f"gen_go_migration_matrix_docs: FINALIZE_CALL_DORMANT_SKIP_GATED maps "
+                f"{call_name!r} to ({namespace!r}, {family!r}), which is not a live "
+                f"{namespace} family name -- family renamed/removed, or namespace typo? "
+                "Update or drop the entry."
+            )
     stale = set(FINALIZE_CALL_IRREGULAR_FAMILY) - present_calls
     if stale:
         raise SystemExit(

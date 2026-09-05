@@ -1,0 +1,9 @@
+// CHAOS-5156: lizard 1.23.0 MEASURED quirk, not a bug -- do not "fix" this
+// fixture's expected complexity if it ever looks wrong. `override final`
+// after `const` overflows _state_old_c_params' buffer (more than the one
+// token it tolerates before `{`), triggering a replay through
+// _state_global that never re-confirms `f` -- real lizard reports ZERO
+// functions for this struct, not one. See clike.go's stateOldCParams doc.
+struct S {
+  virtual int f() const override final { return 0; }
+};

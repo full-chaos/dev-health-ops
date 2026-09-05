@@ -1,0 +1,81 @@
+#include <vector>
+#include <string>
+
+// A plain function exercising if/elif/else, &&, || and the ternary.
+int classify(int score, bool bonus) {
+    if (score > 90) {
+        return 4;
+    } else if (score > 75 && bonus) {
+        return 3;
+    } else if (score > 50 || bonus) {
+        return 2;
+    }
+    return score > 0 ? 1 : 0;
+}
+
+#if defined(FEATURE_X)
+// A whole preprocessor-guarded function, including its own #if bump.
+int feature_x_value() {
+    if (FEATURE_X_STRICT) {
+        return 1;
+    }
+    return 0;
+}
+#endif
+
+#ifdef LEGACY_LOOP
+int legacy_total(int n) {
+    return n;
+}
+#elif defined(NEW_LOOP)
+int new_total(int n) {
+    return n * 2;
+}
+#endif
+
+// for / switch-case / while, exercising every control-flow condition token
+// except catch (there is no exception handling in this file).
+int loop_and_switch(int n) {
+    int total = 0;
+    for (int i = 0; i < n; ++i) {
+        switch (i % 3) {
+            case 0:
+                total += 1;
+                break;
+            case 1:
+                total += 2;
+                break;
+            default:
+                total += 3;
+        }
+    }
+    while (total > 100 && n > 0) {
+        total -= n;
+        n--;
+    }
+    return total;
+}
+
+// A preprocessor conditional written INSIDE a function's body -- unlike the
+// two guards above (which sit between functions, at global scope, and so
+// bump a condition nobody ever reads), this one lands on a real function's
+// counter while it is current.
+int guarded_body(int n) {
+#if defined(STRICT_MODE)
+    if (n < 0) {
+        return -1;
+    }
+#endif
+    return n;
+}
+
+int try_catch_example(int n) {
+    try {
+        if (n < 0) {
+            throw n;
+        }
+    } catch (int e) {
+        return -1;
+    }
+    return n;
+}

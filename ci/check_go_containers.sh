@@ -73,7 +73,24 @@ assert_cache_mounts_not_copied_out() {
   # as a legitimate mount) -- it strips only the mount clause's own token
   # before checking whether the path is ALSO referenced elsewhere by a
   # copy verb in that same instruction.
-  joined="$(awk '{ if (sub(/\\[[:space:]]*$/, "")) { printf "%s ", $0; next } print }' "${DOCKERFILE}")"
+  #
+  # CONFIRMATION PASS (P2): the join above inserted a SPACE at every join
+  # point regardless of what was actually there. Real Dockerfile line
+  # continuation does not add anything -- it removes the backslash+newline
+  # and concatenates the two spans EXACTLY as written, so a continuation
+  # that splits the cache path's own TEXT mid-word (no whitespace on
+  # either side of the join, e.g. `cp /go/pkg/\` + `mod/.leak ...`)
+  # reconstructs to the real, single-word path `/go/pkg/mod/.leak` in an
+  # actual build, but the space-inserting join produced `/go/pkg/ mod/.leak`
+  # -- two words -- which the literal-substring check on `/go/pkg/mod`
+  # never matches. This is not a new heuristic, it's the join finally
+  # matching Dockerfile's actual continuation semantics: concatenate
+  # verbatim, add nothing. Ordinary multi-line style (each token on its
+  # own line, a space already present before the trailing backslash) is
+  # unaffected, since that space is part of the line's own text and is
+  # preserved by the join either way -- only the artificial EXTRA space
+  # this fix removes was ever wrong.
+  joined="$(awk '{ if (sub(/\\[[:space:]]*$/, "")) { printf "%s", $0; next } print }' "${DOCKERFILE}")"
   for path in /go/pkg/mod /root/.cache/go-build; do
     residual="$(printf '%s\n' "${joined}" | sed -E 's/--mount=type=cache[^[:space:]]*//g')"
     leaked="$(printf '%s\n' "${residual}" | grep -F -- "${path}" | grep -E 'COPY|cp |mv ')" || true

@@ -255,6 +255,12 @@ func buildDailyWorker(
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
 					}
+					// CHAOS-5139: the per-partition refusal counter alone
+					// never says WHY a native family fell back to Python --
+					// CHAOS-5138 hit exactly this, cicd's runtime error was
+					// unrecoverable from any CI artifact. *slog.Logger
+					// satisfies daily.NativeFamilyRefusalLogger directly.
+					handler.SetNativeFamilyLogger(logger)
 				}
 				if len(nativeFamilies) > 0 {
 					handler.SetNativeFamilies(nativeFamilies)

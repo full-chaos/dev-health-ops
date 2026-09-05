@@ -325,6 +325,99 @@ func TestPostBridgeNativeFamilyFailureIsFailOpenWithNarrowerSafetyNet(t *testing
 	}
 }
 
+// TestNativeFamilyRefusalIsLogged proves a native family's runtime refusal
+// -- pre_bridge (computeNativeFamilies) and post_bridge
+// (computePostBridgeNativeFamilies) -- is logged with the family name and
+// the WRAPPED ERROR, not just counted (CHAOS-5139). Before this, the only
+// trace of a refusal anywhere was an anonymous
+// DailyMetricsNativeFamilyOutcomeRefused counter increment; CHAOS-5138 hit
+// exactly this gap live: cicd's runtime error was unrecoverable from any CI
+// artifact because nothing ever logged it.
+func TestNativeFamilyRefusalIsLogged(t *testing.T) {
+	refusalErr := errors.New("transient clickhouse failure: cicd-5139")
+	targetDay := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		wire func(handler *PartitionHandler, executor *fakeNativeFamilyExecutor)
+	}{
+		{
+			name: "pre_bridge",
+			wire: func(handler *PartitionHandler, executor *fakeNativeFamilyExecutor) {
+				handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
+			},
+		},
+		{
+			name: "post_bridge",
+			wire: func(handler *PartitionHandler, executor *fakeNativeFamilyExecutor) {
+				handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStore{
+				partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+				run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running", TargetDay: targetDay},
+			}
+			handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := &fakeNativeFamilyExecutor{err: refusalErr}
+			logger := &recordingRefusalLogger{}
+			handler.SetNativeFamilyLogger(logger)
+			tc.wire(handler, executor)
+
+			if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+				t.Fatalf("a native family refusal must not fail the partition: %v", err)
+			}
+			if len(logger.calls) != 1 {
+				t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+			}
+			call := logger.calls[0]
+			if !call.hasArg("family", "cicd") {
+				t.Fatalf("log call %#v does not carry family=cicd", call)
+			}
+			if !call.hasArg("organization_id", testOrgID) {
+				t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
+			}
+			if !call.hasArg("target_day", targetDay) {
+				t.Fatalf("log call %#v does not carry target_day=%v", call, targetDay)
+			}
+			if !call.hasArg("partition_id", testPartitionID) {
+				t.Fatalf("log call %#v does not carry partition_id=%s", call, testPartitionID)
+			}
+			if !call.hasArg("run_id", testRunID) {
+				t.Fatalf("log call %#v does not carry run_id=%s", call, testRunID)
+			}
+			if !call.hasArg("error", refusalErr) {
+				t.Fatalf("log call %#v does not carry the wrapped error %v -- a counter increment alone is CHAOS-5138's whole root cause", call, refusalErr)
+			}
+		})
+	}
+}
+
+// TestNativeFamilyLoggerIsOptional proves a nil logger (the default -- no
+// SetNativeFamilyLogger call) never panics and never gates fail-open
+// behavior, same discipline as every other optional observer on
+// PartitionHandler.
+func TestNativeFamilyLoggerIsOptional(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{err: errors.New("transient clickhouse failure")}
+	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"cicd": executor})
+	// Deliberately no SetNativeFamilyLogger call.
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatalf("a nil logger must not affect fail-open behavior: %v", err)
+	}
+}
+
 // TestPartitionWithNoNativeFamiliesIsANoop proves the default (no
 // SetNativeFamilies call) behaves exactly as before this capability existed:
 // compatibility receives a nil/empty skipFamilies.
@@ -1375,6 +1468,37 @@ func (observer *recordingNativeFamilyObserver) ObserveDailyMetricsNativeFamily(
 	defer observer.mu.Unlock()
 	observer.calls = append(observer.calls, recordingNativeFamilyObservation{family: family, outcome: outcome, rowsWritten: rowsWritten})
 	return nil
+}
+
+// recordingRefusalLogger captures every Error call so a test can assert the
+// wrapped error and family are actually present in the log line (CHAOS-5139)
+// -- a counter increment alone was CHAOS-5138's whole root cause: it could
+// never say WHY a family was refused.
+type recordingRefusalLogger struct {
+	mu    sync.Mutex
+	calls []recordingRefusalLogCall
+}
+
+type recordingRefusalLogCall struct {
+	msg  string
+	args []any
+}
+
+func (logger *recordingRefusalLogger) Error(msg string, args ...any) {
+	logger.mu.Lock()
+	defer logger.mu.Unlock()
+	logger.calls = append(logger.calls, recordingRefusalLogCall{msg: msg, args: append([]any(nil), args...)})
+}
+
+// hasArg reports whether the call's args contain the consecutive
+// key/value pair (slog-style key/value logging).
+func (call recordingRefusalLogCall) hasArg(key string, value any) bool {
+	for i := 0; i+1 < len(call.args); i += 2 {
+		if call.args[i] == key && call.args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 type recordingCompatRetryObserver struct {

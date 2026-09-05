@@ -426,8 +426,16 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
 	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
 	// those three, does not touch this one.
+	// CHAOS-4288: benchmarking is post_bridge for a THIRD distinct reason. Not a
+	// stale attribution snapshot (the CHAOS-4283 three) and not sorted-order
+	// execution (compounding_risk): its metric window ENDS ON THE TARGET DAY --
+	// asOfDay = run.TargetDay and every fetch is Fetch(startDay, asOfDay) -- so
+	// day D's own rows are INSIDE the window, and Python writes them
+	// (job_daily.py:1919) before calling the family (:2091). A pre_bridge
+	// registration benchmarks day D against a window missing day D.
 	wantDailyPostBridge := []string{
 		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
+		"benchmarking",
 	}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")

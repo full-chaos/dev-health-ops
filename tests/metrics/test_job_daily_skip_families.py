@@ -254,9 +254,9 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     )
     monkeypatch.setattr(job_daily, "load_identity_resolver", lambda *a, **k: None)
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
-    monkeypatch.setattr(
-        job_daily, "build_governance_rows_for_day", lambda *a, **k: ([], [])
-    )
+    # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
+    # here anymore -- job_daily.py no longer calls it at all (deleted, not
+    # skip-gated; see CHAOS-5233's shape for work_item_attribution).
     monkeypatch.setattr(
         job_daily, "_extract_ai_workflow_for_day", lambda **k: ([], [], [], [], [], [])
     )
@@ -1243,3 +1243,40 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
         # output.
         assert "write_work_item_metrics" in sink.write_calls
         assert "write_estimate_coverage_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5234/CHAOS-3092 close condition 3.
+
+    ai_governance's daily compute is DELETED from job_daily.py, not
+    skip-gated -- same rule as CHAOS-5233's work_item_attribution. Unlike
+    that case, build_governance_rows_for_day itself is ALSO deleted (from
+    audit/ai_governance/loaders.py): job_daily.py was its only real caller.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    assert not hasattr(job_daily, "build_governance_rows_for_day"), (
+        "build_governance_rows_for_day must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+
+    for skip_families in (None, {"ai_governance"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
+        assert "write_ai_policy_events" not in sink.write_calls
+        assert "write_ai_governance_coverage_daily" not in sink.write_calls
+        # cicd (unrelated family, same partition) must be entirely
+        # unaffected by the deletion.
+        assert "write_cicd_metrics" in sink.write_calls

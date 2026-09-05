@@ -30,7 +30,7 @@ jobs:
     # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
     # hosted runner with no code change. Fork PRs always stay hosted -- same
     # safety condition as go.yml's dual-leg jobs.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -173,7 +173,7 @@ jobs:
     # hosted ARM label to fall back to -- the disabled/fork-PR leg now runs
     # x64 (this suite has no arm64-specific assertions, unlike
     # go-arm64-numeric-parity in go.yml).
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # Test matrix needs package read access for dependency installs.
     permissions:
       contents: read
@@ -246,7 +246,7 @@ jobs:
         # go-quality.yml's self-hosted leg -- setup-go's default cache would
         # otherwise restore/save a GitHub Actions cache tarball into this
         # concurrently-shared path. Only set on the self-hosted leg.
-        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')
+        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
         run: |
           echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
@@ -260,7 +260,7 @@ jobs:
           # go-quality.yml's "Set up Go" step: setup-go's own cache defaults
           # to `true`, which would corrupt the pool's shared, concurrently-
           # written hostPath cache.
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) }}
+          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -400,7 +400,7 @@ jobs:
     # not a real enterprise hosted label). This job never runs on
     # pull_request at all (see `if:` above), so the fork-PR clause is inert
     # here; kept for the same textual shape as every other routed job.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # CHAOS-3413: this job has hung indefinitely (1h45m-6h, then auto-cancelled
     # by the next push's `cancel-in-progress` group) instead of failing, for
     # days -- `cancelled` isn't a red check, so it merged silently as routine
@@ -581,7 +581,7 @@ jobs:
     # substantive work". The cost is ~10s on PRs that changed no docs.
     needs: [changes]
     # Same ARC routing as `changes` above.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -608,7 +608,7 @@ jobs:
     if: always()
     needs: [changes, test-matrix, coverage, docs-tests]
     # Same ARC routing as `changes` above.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.ref == '' || github.event.inputs.ref == null)) || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

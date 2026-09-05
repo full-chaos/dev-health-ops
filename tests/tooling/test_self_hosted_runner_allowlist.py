@@ -90,11 +90,33 @@ ALLOWLIST_CONDITION = (
     "vars.SELF_HOSTED_RUNNERS == 'enabled' && "
     "((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || "
     "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
-    "(github.event_name == 'workflow_dispatch' && "
-    "(github.event.inputs.ref == '' || github.event.inputs.ref == null)) || "
+    "(github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || "
     "github.event_name == 'release' || "
     "github.event_name == 'schedule')"
 )
+
+# codex round 3 F1: GitHub Actions' `==` is a LOOSE equality with its own
+# coercion table -- `github.event.inputs.ref == null` was dropped from the
+# workflow_dispatch term entirely (not just narrowed) after codex questioned
+# its coercion behavior against a numeric-looking ref like `'0'`. A
+# workflow_dispatch STRING input with no `default:` always resolves to `''`
+# when the caller omits it (never actually the null type in the expression
+# context), so the `== null` disjunct was dead code to begin with -- removing
+# it changes no real behavior and eliminates the coercion question outright
+# rather than trying to prove a negative about GitHub's own type-coercion
+# table.
+_ROUTING_TERNARY = (
+    "${{ (" + ALLOWLIST_CONDITION + ") "
+    '&& fromJSON(\'["self-hosted","oci-arc-runners"]\') '
+    "|| 'ubuntu-latest' }}"
+)
+_CACHE_NEGATION = "${{ !(" + ALLOWLIST_CONDITION + ") }}"
+
+# codex round 3 F2: every assertion below now checks EXACT equality against
+# the full expected expression, never substring containment -- `in` would
+# still pass if a future edit appended e.g. `|| github.event_name ==
+# 'merge_group'` after the allow-list condition, since the original text
+# would still be present as a substring of the new, unsafe value.
 
 # The old deny-list fragment this fix replaces. Its mere presence anywhere
 # in a routed workflow is the regression this test exists to catch --
@@ -167,9 +189,9 @@ def test_every_required_context_job_uses_the_allowlist_condition() -> None:
                 "this assertion go stale"
             )
             runs_on = str(jobs[job_name].get("runs-on", ""))
-            assert ALLOWLIST_CONDITION in runs_on, (
-                f"{name}:{job_name} runs-on does not contain the allow-list "
-                f"condition verbatim -- got {runs_on!r}"
+            assert runs_on == _ROUTING_TERNARY, (
+                f"{name}:{job_name} runs-on does not EXACTLY match the "
+                f"expected routing ternary -- got {runs_on!r}, want {_ROUTING_TERNARY!r}"
             )
 
 
@@ -202,10 +224,9 @@ def test_self_hosted_go_cache_negation_matches_the_allowlist() -> None:
             f"{name}:{job_name}: no actions/setup-go step with a 'cache' input found -- "
             "update this test's job/step lookup rather than letting this assertion go stale"
         )
-        expected = "!(" + ALLOWLIST_CONDITION + ")"
-        assert expected in str(cache_value), (
-            f"{name}:{job_name} cache negation does not contain the allow-list "
-            f"condition's negation verbatim -- got {cache_value!r}"
+        assert str(cache_value) == _CACHE_NEGATION, (
+            f"{name}:{job_name} cache negation does not EXACTLY match the "
+            f"expected negation -- got {cache_value!r}, want {_CACHE_NEGATION!r}"
         )
 
 
@@ -216,14 +237,11 @@ def test_go_container_reproducibility_twin_is_a_literal_negation() -> None:
     jobs = yaml.safe_load(_read("go.yml"))["jobs"]
     hosted = str(jobs["go-container-reproducibility"]["if"])
     self_hosted = str(jobs["go-container-reproducibility-self-hosted"]["if"])
-    assert ALLOWLIST_CONDITION.replace(" ", "") in self_hosted.replace(
-        "\n", " "
-    ).replace(" ", ""), (
-        f"go-container-reproducibility-self-hosted's if: does not contain the "
-        f"allow-list condition verbatim -- got {self_hosted!r}"
+    assert self_hosted == ALLOWLIST_CONDITION, (
+        f"go-container-reproducibility-self-hosted's if: does not EXACTLY "
+        f"match the allow-list condition -- got {self_hosted!r}, want {ALLOWLIST_CONDITION!r}"
     )
-    normalized_hosted = hosted.replace("\n", " ")
-    assert normalized_hosted.strip().startswith("!("), (
+    assert hosted == "!(" + ALLOWLIST_CONDITION + ")", (
         f"go-container-reproducibility's if: must be the literal negation "
         f"(!(...)) of the self-hosted leg's condition, not an independently "
         f"derived expression -- got {hosted!r}"
@@ -256,17 +274,17 @@ def test_dind_smoke_test_and_integration_use_the_allowlist_condition() -> None:
         jobs = yaml.safe_load(_read(fname))["jobs"]
         assert job_name in jobs, f"{fname}: job {job_name!r} not found"
         value = str(jobs[job_name].get(field, ""))
-        assert ALLOWLIST_CONDITION in value, (
-            f"{fname}:{job_name} {field} does not contain the allow-list "
-            f"condition verbatim -- got {value!r}"
+        assert value == ALLOWLIST_CONDITION, (
+            f"{fname}:{job_name} {field} does not EXACTLY match the "
+            f"allow-list condition -- got {value!r}, want {ALLOWLIST_CONDITION!r}"
         )
     for (fname, job_name), field in _REMAINING_RUNS_ON_SITES.items():
         jobs = yaml.safe_load(_read(fname))["jobs"]
         assert job_name in jobs, f"{fname}: job {job_name!r} not found"
         value = str(jobs[job_name].get(field, ""))
-        assert ALLOWLIST_CONDITION in value, (
-            f"{fname}:{job_name} {field} does not contain the allow-list "
-            f"condition verbatim -- got {value!r}"
+        assert value == _ROUTING_TERNARY, (
+            f"{fname}:{job_name} {field} does not EXACTLY match the "
+            f"expected routing ternary -- got {value!r}, want {_ROUTING_TERNARY!r}"
         )
 
 
@@ -284,7 +302,38 @@ def test_docker_build_matrix_arm64_legs_use_the_allowlist_condition() -> None:
             f"include entry, found {len(arm64_entries)}"
         )
         runner_value = str(arm64_entries[0].get("runner", ""))
-        assert ALLOWLIST_CONDITION in runner_value, (
+        assert runner_value == _ROUTING_TERNARY, (
             f"{fname}:{job_name}'s linux/arm64 matrix runner does not "
-            f"contain the allow-list condition verbatim -- got {runner_value!r}"
+            f"EXACTLY match the expected routing ternary -- got {runner_value!r}, "
+            f"want {_ROUTING_TERNARY!r}"
+        )
+
+
+# codex round 3 F3: three step-level `if:` sites (the "Configure self-hosted
+# Go cache paths" env-var steps) set GOMODCACHE/GOCACHE only on the
+# self-hosted leg -- distinct from the `cache:` field CACHE_NEGATION_JOBS
+# already checks (that's setup-go's own input, this is a separate step's own
+# `if:` gate) -- and were not covered by any test before this addition.
+_CACHE_PATH_STEP_SITES = {
+    "go-quality.yml": ("go-quality", "Configure self-hosted Go cache paths"),
+    "test.yml": ("test-matrix", "Configure self-hosted Go cache paths"),
+    "live-e2e.yml": ("metrics-executed-proof", "Configure self-hosted Go cache paths"),
+}
+
+
+def test_self_hosted_cache_path_steps_use_the_allowlist_condition() -> None:
+    for fname, (job_name, step_name) in _CACHE_PATH_STEP_SITES.items():
+        jobs = yaml.safe_load(_read(fname))["jobs"]
+        assert job_name in jobs, f"{fname}: job {job_name!r} not found"
+        steps = jobs[job_name].get("steps", [])
+        matches = [s for s in steps if s.get("name") == step_name]
+        assert len(matches) == 1, (
+            f"{fname}:{job_name}: expected exactly one step named "
+            f"{step_name!r}, found {len(matches)} -- update this test's "
+            "step name rather than letting this assertion go stale"
+        )
+        step_if = str(matches[0].get("if", ""))
+        assert step_if.endswith(ALLOWLIST_CONDITION), (
+            f"{fname}:{job_name}:{step_name!r} if: does not end with the "
+            f"allow-list condition verbatim -- got {step_if!r}"
         )

@@ -3,6 +3,7 @@ package chquery
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -605,4 +606,125 @@ func decodeClickHouseStrings(values []string) []string {
 		values[index] = pythonparity.DecodeClickHouseStringValue(value)
 	}
 	return values
+}
+
+// InvestmentKey is the (work_unit_id, categorization_input_hash) pair that
+// decides whether a unit needs a fresh LLM call. Both halves matter: the same
+// unit with different evidence is a different key, and that is the whole point
+// of the input hash.
+type InvestmentKey struct {
+	WorkUnitID string
+	InputHash  string
+}
+
+// FetchExistingInvestmentKeys ports materialize.py:700-745
+// _fetch_existing_investment_keys -- the skip-existing lookup that keeps a
+// steady-state run from re-paying for categorizations nothing has invalidated.
+//
+// # WHY THE org_id FILTER IS UNCONDITIONAL HERE
+//
+// Every other fetcher in this package makes the org predicate conditional,
+// faithfully reproducing Python's CHAOS-4804 tenant-fusion shape. This one does
+// not, because the reference does not either: materialize.py binds `org_id`
+// unconditionally (`WHERE org_id = %(org_id)s`, :720), so an unscoped run
+// matches only rows literally written with org_id = ”. Making it conditional
+// here would be a divergence, and a costly one in the safe-looking direction --
+// a cross-tenant match would SKIP a unit that needs categorizing, writing
+// nothing and silently leaving another tenant's answer in place.
+//
+// # WHY THE STATUS FILTER IS INSIDE, NOT OUTSIDE
+//
+// The subquery takes argMax(categorization_status, computed_at) per key and the
+// outer WHERE keeps only ok/repaired. Filtering on status BEFORE the argMax
+// would let a stale successful row outrank a newer invalid_llm_output one, so a
+// unit whose latest categorization FAILED would be treated as fresh and never
+// retried.
+func (reader *Reader) FetchExistingInvestmentKeys(
+	ctx context.Context, organizationID string, keys []InvestmentKey, modelVersion string,
+) (map[InvestmentKey]struct{}, error) {
+	if reader == nil || reader.conn == nil {
+		return nil, ErrUnavailable
+	}
+	// `list(dict.fromkeys(keys))` then two sorted set projections
+	// (materialize.py:707-711). The projections are independent: the query asks
+	// for the CROSS product of the two id sets and the outer key match narrows
+	// it back down, which is the reference's own shape.
+	workUnitIDs := make([]string, 0, len(keys))
+	inputHashes := make([]string, 0, len(keys))
+	seenUnit := make(map[string]struct{}, len(keys))
+	seenHash := make(map[string]struct{}, len(keys))
+	wanted := make(map[InvestmentKey]struct{}, len(keys))
+	for _, key := range keys {
+		wanted[key] = struct{}{}
+		if _, ok := seenUnit[key.WorkUnitID]; !ok {
+			seenUnit[key.WorkUnitID] = struct{}{}
+			workUnitIDs = append(workUnitIDs, key.WorkUnitID)
+		}
+		if _, ok := seenHash[key.InputHash]; !ok {
+			seenHash[key.InputHash] = struct{}{}
+			inputHashes = append(inputHashes, key.InputHash)
+		}
+	}
+	if len(wanted) == 0 {
+		return map[InvestmentKey]struct{}{}, nil
+	}
+	sort.Strings(workUnitIDs)
+	sort.Strings(inputHashes)
+
+	query := `
+        SELECT work_unit_id, categorization_input_hash
+        FROM (
+            SELECT
+                work_unit_id,
+                categorization_input_hash,
+                argMax(categorization_status, computed_at) AS latest_status
+            FROM work_unit_investments
+            WHERE org_id = {org_id:String}
+              AND work_unit_id IN {work_unit_ids:Array(String)}
+              AND categorization_input_hash IN {input_hashes:Array(String)}
+              AND categorization_model_version = {model_version:String}
+            GROUP BY work_unit_id, categorization_input_hash
+        )
+        WHERE latest_status IN {valid_statuses:Array(String)}
+    `
+	rows, err := reader.conn.Query(ctx, query,
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("work_unit_ids", workUnitIDs),
+		clickhouse.Named("input_hashes", inputHashes),
+		clickhouse.Named("model_version", modelVersion),
+		clickhouse.Named("valid_statuses", []string{"ok", "repaired"}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query existing investment keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	existing := make(map[InvestmentKey]struct{}, len(wanted))
+	for rows.Next() {
+		var workUnitID, inputHash string
+		if err := rows.Scan(&workUnitID, &inputHash); err != nil {
+			return nil, fmt.Errorf("scan existing investment key row: %w", err)
+		}
+		workUnitID = pythonparity.DecodeClickHouseStringValue(workUnitID)
+		inputHash = pythonparity.DecodeClickHouseStringValue(inputHash)
+		// Python's comprehension drops a row with either half falsy
+		// (materialize.py:743-744), AFTER the decode substitution.
+		if workUnitID == "" || inputHash == "" {
+			continue
+		}
+		key := InvestmentKey{WorkUnitID: workUnitID, InputHash: inputHash}
+		// The cross-product query can return a (unit, hash) pair that was never
+		// ASKED for -- unit A's hash paired with unit B's. Python is immune by
+		// accident (it intersects against pending_keys' values when building
+		// skipped_existing); intersecting here makes that explicit rather than
+		// relying on the caller to repeat it.
+		if _, ok := wanted[key]; !ok {
+			continue
+		}
+		existing[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate existing investment key rows: %w", err)
+	}
+	return existing, nil
 }

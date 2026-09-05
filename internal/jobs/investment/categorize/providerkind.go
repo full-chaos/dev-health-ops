@@ -245,6 +245,100 @@ var _ Provider = unimplementedProvider{}
 // any other file, and this source file never hardcodes a credential VALUE,
 // only the variable NAMES Python's own config module already uses.
 func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
+	return NewProviderFromEnvWithModel(kind, "")
+}
+
+// modelEnvByKind ports _MODEL_ENV_BY_PROVIDER (llm/providers/__init__.py:25-31),
+// narrowed to the kinds this port can construct.
+var modelEnvByKind = map[ProviderKind][]string{
+	ProviderKindOpenAI: {"LLM_MODEL_OPENAI"},
+	ProviderKindLocal:  {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	ProviderKindOllama: {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
+}
+
+// defaultModelByKind ports DEFAULT_MODEL_BY_PROVIDER (llm/providers/base.py:36-46),
+// narrowed the same way. Python falls back to this when no env var is set;
+// without it a stamp would record an EMPTY model for a run that used the
+// provider's built-in default.
+var defaultModelByKind = map[ProviderKind]string{
+	ProviderKindOpenAI: "gpt-5-mini",
+	ProviderKindLocal:  "llama3.2",
+	ProviderKindOllama: "llama3.2",
+}
+
+// ResolveModelName returns the model that WILL ACTUALLY BE USED for kind, and
+// therefore the model that must be stamped into
+// work_unit_investments.categorization_model_version.
+//
+// # ONE FUNCTION FOR BOTH, DELIBERATELY
+//
+// This is used by BOTH the provider construction below AND the durable stamp
+// (materialize.go's resolvedModelName). That is the whole point: codex r2's P1
+// was that the two disagreed -- the stamp fell back to the PROVIDER NAME while
+// the provider used its env-configured model, so every native row recorded a
+// model that never ran and the skip-existing lookup keyed on it. Two call sites
+// computing "the model" independently is what produced that defect; a single
+// function makes agreement structural rather than a thing to remember.
+//
+// # PRECEDENCE DIVERGES FROM PYTHON, AND THAT IS A RULING, NOT AN ACCIDENT
+//
+// Python checks the provider-specific env FIRST, then generic LLM_MODEL
+// (llm/providers/__init__.py:204-208). This checks generic LLM_MODEL FIRST, per
+// chris's CHAOS-4978 ruling (2026-09-03 13:14): the generic override must be
+// able to force a model on ANY provider without touching each provider-specific
+// var. The two orders differ ONLY when both are set to different values.
+//
+// Following Python's order here instead would re-open the very defect this
+// fixes: the provider path is already ruled generic-first, so a stamp using
+// Python's order would again record a model the run did not use. Matching what
+// RUNS is the invariant that matters; matching Python's precedence is not
+// available while CHAOS-4978 stands.
+//
+// The org-BYO branch (org_byo_provider_matches / resolve_llm_org_settings_model)
+// is omitted -- no Go caller threads an org_id through this package yet
+// (CHAOS-5006).
+func ResolveModelName(kind ProviderKind, requested string) string {
+	if kind == ProviderKindMock {
+		return "mock"
+	}
+	if kind == ProviderKindNone {
+		return ""
+	}
+	if requested != "" {
+		return requested
+	}
+	// Generic first (CHAOS-4978), then the per-kind chain, then the default.
+	names := append([]string{"LLM_MODEL"}, modelEnvByKind[kind]...)
+	if resolved := firstNonEmptyEnv(names...); resolved != "" {
+		return resolved
+	}
+	return defaultModelByKind[kind]
+}
+
+// NewProviderFromEnvWithModel is NewProviderFromEnv with an explicit model
+// override that WINS over every environment variable.
+//
+// This exists because a caller that knows which model it wants -- the
+// investment.materialize executor, which carries the request row's
+// `model_ref` -- must be able to say so. Python does exactly this:
+// materialize_investments passes `model=config.llm_model` into get_provider
+// (materialize.py:1189-1195), and resolve_model_name treats an explicit model
+// as winning over any env lookup (llm/providers/__init__.py's
+// resolve_model_name, mirrored in cmd/query-api's ResolveModelName).
+//
+// Dropping the override is not a cosmetic loss (codex r1 P1-b): the executor
+// stamps the REQUESTED model into work_unit_investments.categorization_model_version
+// and into the skip-existing lookup key, so calling the env-default model
+// while recording the requested one writes a row that the next run will treat
+// as a valid cached result FOR A MODEL THAT NEVER RAN. The error compounds
+// rather than self-correcting.
+//
+// An empty model means "no explicit request", which is the pre-existing
+// env-only behaviour NewProviderFromEnv keeps.
+func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, error) {
+	// Every provider below takes its model from the SAME resolver the durable
+	// stamp uses, so the two cannot drift apart (codex r2 P1).
+	resolved := ResolveModelName(kind, model)
 	switch kind {
 	case ProviderKindMock:
 		return MockProvider{}, nil
@@ -266,7 +360,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 			// on ANY provider -- e.g. pointing everything at one
 			// OpenAI-compatible endpoint/model without touching each
 			// provider-specific var individually.
-			Model: firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OPENAI"),
+			Model: resolved,
 		}), nil
 
 	case ProviderKindLocal:
@@ -278,7 +372,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
 			// Generic-first, same ruling as openai above.
-			Model:  firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"),
+			Model:  resolved,
 			APIKey: firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 
@@ -292,7 +386,7 @@ func NewProviderFromEnv(kind ProviderKind) (Provider, error) {
 		// -- OLLAMA_* stays as the native provider's own override tier.
 		return NewOllamaProvider(OllamaProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
-			Model:   firstNonEmptyEnv("LLM_MODEL", "LLM_MODEL_OLLAMA", "OLLAMA_MODEL"),
+			Model:   resolved,
 			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY"),
 		}), nil
 

@@ -1,0 +1,447 @@
+{
+  "gate_cases": [
+    {
+      "disposition": "fallback:insufficient_evidence",
+      "text_char_count": 0,
+      "text_source_count": 0
+    },
+    {
+      "disposition": "fallback:insufficient_evidence",
+      "text_char_count": 299,
+      "text_source_count": 3
+    },
+    {
+      "disposition": "fallback:no_text_sources",
+      "text_char_count": 300,
+      "text_source_count": 0
+    },
+    {
+      "disposition": "llm",
+      "text_char_count": 300,
+      "text_source_count": 1
+    },
+    {
+      "disposition": "llm",
+      "text_char_count": 301,
+      "text_source_count": 2
+    }
+  ],
+  "min_evidence_chars": 300,
+  "outcome_cases": [
+    {
+      "categorization_errors_json": "[\"weights_normalized:0.9000\"]",
+      "final_evidence_quality": 0.91,
+      "final_evidence_quality_band": "high",
+      "label": "ok_high_quality",
+      "status": "ok",
+      "structural_evidence_quality": 0.91,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 0.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 1.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.0,
+        "maintenance": 0.0,
+        "operational": 0.0,
+        "quality": 1.0,
+        "risk": 0.0
+      }
+    },
+    {
+      "categorization_errors_json": "[]",
+      "final_evidence_quality": 0.62,
+      "final_evidence_quality_band": "moderate",
+      "label": "repaired_moderate_quality",
+      "status": "repaired",
+      "structural_evidence_quality": 0.62,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 1.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.0,
+        "maintenance": 1.0,
+        "operational": 0.0,
+        "quality": 0.0,
+        "risk": 0.0
+      }
+    },
+    {
+      "categorization_errors_json": "[\"missing_top_level_keys:['uncertainty']\", \"subcategories_not_object\", \"weights_normalized:1.2000\"]",
+      "final_evidence_quality": 0.3,
+      "final_evidence_quality_band": "very_low",
+      "label": "invalid_output_clamps_down",
+      "status": "invalid_llm_output",
+      "structural_evidence_quality": 0.87,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.06666666666666667,
+        "feature_delivery.enablement": 0.06666666666666667,
+        "feature_delivery.roadmap": 0.06666666666666667,
+        "maintenance.debt": 0.06666666666666667,
+        "maintenance.refactor": 0.06666666666666667,
+        "maintenance.upgrade": 0.06666666666666667,
+        "operational.incident_response": 0.06666666666666667,
+        "operational.on_call": 0.06666666666666667,
+        "operational.support": 0.06666666666666667,
+        "quality.bugfix": 0.06666666666666667,
+        "quality.reliability": 0.06666666666666667,
+        "quality.testing": 0.06666666666666667,
+        "risk.compliance": 0.06666666666666667,
+        "risk.security": 0.06666666666666667,
+        "risk.vulnerability": 0.06666666666666667
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    },
+    {
+      "categorization_errors_json": "[\"missing_top_level_keys:['uncertainty']\", \"subcategories_not_object\", \"weights_normalized:1.2000\"]",
+      "final_evidence_quality": 0.12,
+      "final_evidence_quality_band": "very_low",
+      "label": "invalid_output_does_not_raise_a_low_score",
+      "status": "invalid_llm_output",
+      "structural_evidence_quality": 0.12,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.06666666666666667,
+        "feature_delivery.enablement": 0.06666666666666667,
+        "feature_delivery.roadmap": 0.06666666666666667,
+        "maintenance.debt": 0.06666666666666667,
+        "maintenance.refactor": 0.06666666666666667,
+        "maintenance.upgrade": 0.06666666666666667,
+        "operational.incident_response": 0.06666666666666667,
+        "operational.on_call": 0.06666666666666667,
+        "operational.support": 0.06666666666666667,
+        "quality.bugfix": 0.06666666666666667,
+        "quality.reliability": 0.06666666666666667,
+        "quality.testing": 0.06666666666666667,
+        "risk.compliance": 0.06666666666666667,
+        "risk.security": 0.06666666666666667,
+        "risk.vulnerability": 0.06666666666666667
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    },
+    {
+      "categorization_errors_json": "[\"insufficient_evidence\"]",
+      "final_evidence_quality": 0.2,
+      "final_evidence_quality_band": "very_low",
+      "label": "insufficient_evidence_fallback",
+      "status": "insufficient_evidence",
+      "structural_evidence_quality": 0.2,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.2,
+        "maintenance.debt": 0.2,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.2,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.2,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.2,
+        "risk.vulnerability": 0.0
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    },
+    {
+      "categorization_errors_json": "[\"no_text_sources\"]",
+      "final_evidence_quality": 0.05,
+      "final_evidence_quality_band": "very_low",
+      "label": "no_text_sources_fallback",
+      "status": "no_text_sources",
+      "structural_evidence_quality": 0.05,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.2,
+        "maintenance.debt": 0.2,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.2,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.2,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.2,
+        "risk.vulnerability": 0.0
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    },
+    {
+      "categorization_errors_json": "[\"llm_task_failed\"]",
+      "final_evidence_quality": 0.44,
+      "final_evidence_quality_band": "low",
+      "label": "llm_task_failed_fallback",
+      "status": "llm_task_failed",
+      "structural_evidence_quality": 0.44,
+      "subcategory_distribution": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.2,
+        "maintenance.debt": 0.2,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.2,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.2,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.2,
+        "risk.vulnerability": 0.0
+      },
+      "theme_distribution": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    }
+  ],
+  "rollup_cases": [
+    {
+      "label": "single_subcategory",
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 0.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 1.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "themes": {
+        "feature_delivery": 0.0,
+        "maintenance": 0.0,
+        "operational": 0.0,
+        "quality": 1.0,
+        "risk": 0.0
+      }
+    },
+    {
+      "label": "one_per_theme",
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.2,
+        "maintenance.debt": 0.2,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.2,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.2,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.2,
+        "risk.vulnerability": 0.0
+      },
+      "themes": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    },
+    {
+      "label": "many_within_one_theme",
+      "subcategories": {
+        "feature_delivery.customer": 0.2,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.1,
+        "maintenance.debt": 0.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.7,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "themes": {
+        "feature_delivery": 0.30000000000000004,
+        "maintenance": 0.0,
+        "operational": 0.0,
+        "quality": 0.7,
+        "risk": 0.0
+      }
+    },
+    {
+      "label": "non_associative_weights",
+      "subcategories": {
+        "feature_delivery.customer": 0.15384615384615385,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.07692307692307693,
+        "maintenance.debt": 0.23076923076923075,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.5384615384615384,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 7.692307692307692e-18,
+        "risk.vulnerability": 0.0
+      },
+      "themes": {
+        "feature_delivery": 0.23076923076923078,
+        "maintenance": 0.23076923076923075,
+        "operational": 0.0,
+        "quality": 0.5384615384615384,
+        "risk": 7.692307692307692e-18
+      }
+    },
+    {
+      "label": "neumaier_vs_naive_summation_differ",
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.17354141082302507,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 0.30859924918086784,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.24680062295485097,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 0.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.06585186139638796,
+        "risk.security": 0.20520685564486812,
+        "risk.vulnerability": 0.0
+      },
+      "themes": {
+        "feature_delivery": 0.17354141082302507,
+        "maintenance": 0.30859924918086784,
+        "operational": 0.24680062295485097,
+        "quality": 0.0,
+        "risk": 0.27105871704125606
+      }
+    },
+    {
+      "label": "all_zero_falls_through_to_uniform",
+      "subcategories": {
+        "feature_delivery.customer": 0.06666666666666667,
+        "feature_delivery.enablement": 0.06666666666666667,
+        "feature_delivery.roadmap": 0.06666666666666667,
+        "maintenance.debt": 0.06666666666666667,
+        "maintenance.refactor": 0.06666666666666667,
+        "maintenance.upgrade": 0.06666666666666667,
+        "operational.incident_response": 0.06666666666666667,
+        "operational.on_call": 0.06666666666666667,
+        "operational.support": 0.06666666666666667,
+        "quality.bugfix": 0.06666666666666667,
+        "quality.reliability": 0.06666666666666667,
+        "quality.testing": 0.06666666666666667,
+        "risk.compliance": 0.06666666666666667,
+        "risk.security": 0.06666666666666667,
+        "risk.vulnerability": 0.06666666666666667
+      },
+      "themes": {
+        "feature_delivery": 0.2,
+        "maintenance": 0.2,
+        "operational": 0.2,
+        "quality": 0.2,
+        "risk": 0.2
+      }
+    },
+    {
+      "label": "unknown_key_is_ignored_not_an_error",
+      "subcategories": {
+        "feature_delivery.customer": 0.0,
+        "feature_delivery.enablement": 0.0,
+        "feature_delivery.roadmap": 0.0,
+        "maintenance.debt": 0.0,
+        "maintenance.refactor": 0.0,
+        "maintenance.upgrade": 0.0,
+        "operational.incident_response": 0.0,
+        "operational.on_call": 0.0,
+        "operational.support": 0.0,
+        "quality.bugfix": 1.0,
+        "quality.reliability": 0.0,
+        "quality.testing": 0.0,
+        "risk.compliance": 0.0,
+        "risk.security": 0.0,
+        "risk.vulnerability": 0.0
+      },
+      "themes": {
+        "feature_delivery": 0.0,
+        "maintenance": 0.0,
+        "operational": 0.0,
+        "quality": 1.0,
+        "risk": 0.0
+      }
+    }
+  ]
+}

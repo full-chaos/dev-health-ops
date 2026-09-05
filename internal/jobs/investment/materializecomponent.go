@@ -84,6 +84,18 @@ type MaterializeComponentResult struct {
 	// Investment.WorkUnitID.
 	RepoEffort []chwrite.RepoEffortRecord
 	Skipped    string
+	// Bundle is the text bundle this component's assembly built.
+	//
+	// Returned rather than recomputed by the caller because the ORCHESTRATOR
+	// needs it too -- materialize.py's preprocess loop reads text_char_count
+	// and text_source_count to decide LLM-vs-fallback (:1363-1381) and hands
+	// source_block/source_texts/handle_map to categorize_text_bundle. Building
+	// it twice would put two BuildTextBundle call sites on the parity path,
+	// and input_hash (which gates every skip-existing lookup, at real LLM cost
+	// when it drifts) is derived from it -- so the two copies would have to
+	// stay byte-identical forever by convention rather than by construction.
+	// Zero value on either Skipped path: no bundle is built there.
+	Bundle units.TextBundle
 }
 
 const (
@@ -102,6 +114,27 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 	if !ok {
 		return MaterializeComponentResult{Skipped: skippedNoTimeBounds}, nil
 	}
+	// NO EMPTY-INTERVAL SKIP -- deliberately, and this is PARITY, not an
+	// oversight.
+	//
+	// The two checks below skip a component lying WHOLLY before or after the
+	// interval, so a component STRADDLING an empty interval is retained and its
+	// row written: with FromTS=Jan20, ToTS=Jan10 and bounds Jan1-Jan30, both
+	// halves are false. That looks wrong, and an earlier version of this file
+	// skipped it on the stated grounds that "Python filters in SQL and returns
+	// nothing". THAT CLAIM WAS FALSE.
+	//
+	// materialize.py:1335 is the ONLY date filter in materialize_investments --
+	// `if bounds.end < config.from_ts or bounds.start >= config.to_ts: continue`
+	// -- and it is structurally identical to the two checks below. Every fetch
+	// feeding it is id/org-scoped, never date-scoped. Python therefore retains
+	// the same straddling component and writes the same row.
+	//
+	// So skipping here would make the port DIVERGE from the plane it replaces.
+	// The zero-width-window behaviour is a real defect, filed as its own ticket
+	// against the Python plane; fixing it inside a faithful port would change
+	// behaviour under cover of a cutover, which is exactly what this PR must not
+	// do.
 	if bounds.End.Before(input.FromTS) || !bounds.Start.Before(input.ToTS) {
 		return MaterializeComponentResult{Skipped: skippedOutOfWindow}, nil
 	}
@@ -189,7 +222,7 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		}
 	}
 
-	return MaterializeComponentResult{Investment: investment, RepoEffort: repoEffortRecords}, nil
+	return MaterializeComponentResult{Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle}, nil
 }
 
 // dedupeNodeKeys is `list(dict.fromkeys(nodes))` (materialize.py:1321) --

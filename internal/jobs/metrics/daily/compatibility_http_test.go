@@ -35,7 +35,7 @@ func TestHTTPCompatibilityExecutorSendsOnlyAuthoritativeIDs(t *testing.T) {
 	if err := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := executor.Finalize(t.Context(), run); err != nil {
+	if err := executor.Finalize(t.Context(), run, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []map[string]string{
@@ -391,5 +391,54 @@ func TestHTTPCompatibilityExecutorAllowsExplicitInternalComposeService(t *testin
 		BearerToken: "token", AllowInsecureInternal: true,
 	}); err == nil || executor != nil {
 		t.Fatal("public HTTP endpoint accepted with internal opt-in")
+	}
+}
+
+// CHAOS-4290. The finalize request gained a SkipFamilies field. This asserts
+// that a finalize with no native families serialises BYTE-IDENTICALLY to what
+// this executor sent before that field existed.
+//
+// It is not cosmetic. The Python bridge REFUSED skip_families on anything but
+// a partition until this change (worker_metrics.py's validate_operation_identity),
+// so a finalize that started sending the field to an older bridge would be
+// rejected outright. And the empty-but-NON-NIL case is the one that actually
+// bites: computeNativeFinalizeFamilies returns make([]string, 0, n), not nil,
+// when families are registered but every one of them fails fail-open. Testing
+// only the nil case would leave exactly the reachable case unproven.
+func TestFinalizeWireShapeIsUnchangedWithoutNativeFamilies(t *testing.T) {
+	const before = `{"operation":"finalize","run_id":"run-1"}`
+
+	for _, testCase := range []struct {
+		name string
+		skip []string
+	}{
+		{name: "nil, no families registered", skip: nil},
+		{name: "empty non-nil, every registered family failed", skip: []string{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			encoded, err := json.Marshal(compatibilityRequest{
+				Operation: "finalize", RunID: "run-1", SkipFamilies: testCase.skip,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != before {
+				t.Fatalf("finalize wire bytes changed:\n got  %s\n want %s", encoded, before)
+			}
+		})
+	}
+
+	// Control: a NON-empty skip list DOES change the bytes. Without this the
+	// assertions above would also pass if the field were never serialised at
+	// all -- i.e. if the feature silently did nothing.
+	withFamily, err := json.Marshal(compatibilityRequest{
+		Operation: "finalize", RunID: "run-1", SkipFamilies: []string{"ic_finalize"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(withFamily) == before {
+		t.Fatal("a non-empty skip list produced the same bytes as none -- " +
+			"SkipFamilies is not reaching the finalize request at all")
 	}
 }

@@ -117,7 +117,7 @@ func TestFindManualBackfillBlockerDetectsWorkItemAttributionCoverageViaScopeKey(
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, orgID, "work_item_attribution", day, "manual-trigger:work_item_attribution:"+orgID+":"+day)
+	blockingRunID, reason, err := store.findManualBackfillBlocker(ctx, tx, orgID, "work_item_attribution", day, "manual-trigger:work_item_attribution:"+orgID+":"+day, json.RawMessage("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}

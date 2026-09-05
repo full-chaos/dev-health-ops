@@ -102,15 +102,19 @@ type dailyMetricsLeaseLabels struct {
 	Result DailyMetricsLeaseResult
 }
 
-// DailyMetricsRunTrigger identifies which of the two entry points created a
-// daily-metrics run: the nightly all-org fixed schedule, or a post-sync
-// re-drive for one completed sync (CHAOS-4263). The set is closed: those are
-// the only two callers of daily.PostgresStore's Start*RunTx methods.
+// DailyMetricsRunTrigger identifies which entry point created a
+// daily-metrics run: the nightly all-org fixed schedule, a post-sync
+// re-drive for one completed sync (CHAOS-4263), or an operator-triggered
+// `metrics daily-start` dispatch with deferred repository discovery
+// (CHAOS-5055). The set is closed to these three -- the only callers that
+// ever leave RepositoryDiscoveryRequired true for daily.PostgresStore's
+// Start*RunTx/StartManualDailyRun methods.
 type DailyMetricsRunTrigger string
 
 const (
 	DailyMetricsRunTriggerScheduledFanout DailyMetricsRunTrigger = "scheduled_fanout"
 	DailyMetricsRunTriggerPostSync        DailyMetricsRunTrigger = "post_sync"
+	DailyMetricsRunTriggerManual          DailyMetricsRunTrigger = "manual"
 )
 
 // DailyMetricsDiscoveryOutcome is the bounded result of resolving live
@@ -442,6 +446,20 @@ type DailyMetricsNativeFamilyOutcome string
 const (
 	DailyMetricsNativeFamilyOutcomeComputed DailyMetricsNativeFamilyOutcome = "computed"
 	DailyMetricsNativeFamilyOutcomeRefused  DailyMetricsNativeFamilyOutcome = "refused"
+	// DailyMetricsNativeFamilyOutcomePartialWrite is a family that FAILED after
+	// already writing at least one row (CHAOS-4288, codex r1 on #2235).
+	//
+	// It is a third outcome rather than a flavour of "refused" because the two
+	// demand opposite responses. "refused" means nothing was written, so the
+	// compatibility bridge can safely compute the family and fail-open is
+	// correct. A partial write means rows are ALREADY in append-only tables, so
+	// letting the bridge run would DUPLICATE them -- the family is added to the
+	// skip list instead and the partition is re-driven.
+	//
+	// It also carries the TRUE rows-written count, not zero: a partial write
+	// that reports zero understates what landed, which is precisely the number
+	// an operator needs to reason about duplication.
+	DailyMetricsNativeFamilyOutcomePartialWrite DailyMetricsNativeFamilyOutcome = "partial_write"
 )
 
 // WorkGraphIssueEdgeOutcome is the bounded per-ROW disposition of one
@@ -501,6 +519,7 @@ func workGraphIssueEdgeOutcomes() []WorkGraphIssueEdgeOutcome {
 func dailyMetricsNativeFamilyOutcomes() []DailyMetricsNativeFamilyOutcome {
 	return []DailyMetricsNativeFamilyOutcome{
 		DailyMetricsNativeFamilyOutcomeComputed, DailyMetricsNativeFamilyOutcomeRefused,
+		DailyMetricsNativeFamilyOutcomePartialWrite,
 	}
 }
 
@@ -604,7 +623,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // This counter is the only operator-visible signal that happened -- an
 // unregistered family would have every ObserveDailyMetricsNativeFamily call
 // silently refused, turning a total write outage into silence.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "ai_governance"}
+//
+// "compounding_risk" (CHAOS-4287) is post_bridge for its own reason and
+// carries the same consequence: unregistered means every observation for it is
+// refused, and the family's absence becomes invisible rather than counted.
+// "ai_governance" (CHAOS-4285) added itself the same way as the families
+// listed above -- included here from merging main forward.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "ai_governance"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
@@ -1904,7 +1929,19 @@ func (collector *MetricsCollector) ObserveDailyMetricsNativeFamily(
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsNativeFamilyOutcome[dailyMetricsNativeFamilyOutcomeLabels{Family: family, Outcome: outcome}]++
-	if outcome == DailyMetricsNativeFamilyOutcomeComputed {
+	// Rows and duration are recorded for PartialWrite as well as Computed
+	// (CHAOS-4290, #2241 r2 Finding 4). Counting the partial_write event while
+	// dropping its row count contradicted this type's own doc, which promises
+	// the outcome "carries the TRUE rows-written count, not zero ... precisely
+	// the number an operator needs to reason about duplication" -- and the rows
+	// a partial write landed are the only number that says how much duplication
+	// a redrive could cause.
+	//
+	// Refused stays excluded: it wrote nothing by definition, and folding a
+	// guaranteed zero into the total would dilute the rate without adding
+	// information.
+	if outcome == DailyMetricsNativeFamilyOutcomeComputed ||
+		outcome == DailyMetricsNativeFamilyOutcomePartialWrite {
 		collector.dailyMetricsNativeFamilyRowsWritten[family] += uint64(rowsWritten)
 		collector.dailyMetricsNativeFamilyDuration[family].observe(duration.Seconds())
 	}
@@ -3440,7 +3477,7 @@ func (collector *MetricsCollector) writeDailyMetricsNativeFamily(output *strings
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyRowsWritten[family])
 	}
 
-	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Only Computed attempts are observed.", "histogram")
+	writeMetadata(output, "worker_daily_metrics_native_family_duration_seconds", "Native metrics.daily family compute duration, by family. Computed and partial_write attempts are observed; refused is not, because it did no work to time.", "histogram")
 	for _, family := range families {
 		writeHistogram(output, "worker_daily_metrics_native_family_duration_seconds",
 			[]metricLabel{{"family", family}}, collector.dailyMetricsNativeFamilyDuration[family])
@@ -3908,9 +3945,9 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 // outcomes. Every series is pre-seeded so a scrape distinguishes "materialized
 // non-empty every time" from "discovery never runs for this trigger".
 func dailyMetricsDiscoverySeries() []dailyMetricsDiscoveryLabels {
-	series := make([]dailyMetricsDiscoveryLabels, 0, 6)
+	series := make([]dailyMetricsDiscoveryLabels, 0, 9)
 	for _, trigger := range []DailyMetricsRunTrigger{
-		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync,
+		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync, DailyMetricsRunTriggerManual,
 	} {
 		for _, outcome := range []DailyMetricsDiscoveryOutcome{
 			DailyMetricsDiscoveryOutcomeMaterialized, DailyMetricsDiscoveryOutcomeNoRepositories,

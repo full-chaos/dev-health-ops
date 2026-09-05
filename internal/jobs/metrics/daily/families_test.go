@@ -142,8 +142,27 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 			t.Fatalf("%s must be phase=post_bridge (CHAOS-4283, pending CHAOS-5078), got %q", family, got)
 		}
 	}
+	// compounding_risk must stay phase=post_bridge until a finalize-side
+	// native-family hook exists (CHAOS-4287, see families.json's phase_note).
+	// Its input, repo_metrics_daily, is written by repo_user_commit in the SAME
+	// partition, and computeNativeFamilies walks nativeFamilyNames in SORTED
+	// order -- "compounding_risk" sorts BEFORE "repo_user_commit", so a
+	// pre_bridge registration reads the table before this partition's rows
+	// land. Same assertion-pair discipline as work_item_state above: this is
+	// the families.json half, cmd/dev-health-worker/daily.go's registration is
+	// the other.
+	//
+	// A DIFFERENT reason from the CHAOS-4283 three above, and deliberately kept
+	// as its own block rather than folded into their loop: theirs is about a
+	// stale attribution snapshot written by the bridge, this one is about
+	// sorted-order execution inside computeNativeFamilies. Merging them would
+	// suggest one fix retires both, and CHAOS-5078 does not touch this one.
+	if got := byPhase["compounding_risk"]; got != "post_bridge" {
+		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
+	}
 	postBridgeFamilies := map[string]struct{}{
 		"work_item_state": {}, "work_item": {}, "work_item_estimate": {},
+		"compounding_risk": {},
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

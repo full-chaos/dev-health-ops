@@ -335,7 +335,11 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
     "release_impact": {
         "citation": (
             "Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, "
-            "`release_impact_native_clickhouse.go`"
+            "`release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute "
+            "orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) "
+            "deleted -- job compute deleted; `release_impact.py`'s `_compute_day` "
+            "survives only as `fixtures/runner.py`'s local/CI fixture-generation "
+            "dependency, fixture-generation path pending CHAOS-5250"
         ),
         "route": "river, native (`daily.go:590-621`)",
         "ticket": "CHAOS-4296 (Done)",

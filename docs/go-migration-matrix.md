@@ -197,7 +197,7 @@ function directly, even for families whose worker kind is now native:
 | ai_governance | NATIVE | Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day` | CHAOS-4285 |
 | ai_impact | NATIVE | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
 | ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`) | CHAOS-4286 |
-| benchmarking | NATIVE, post_bridge | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
+| benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
@@ -247,7 +247,7 @@ Go owns the writes. Deleting the Python path is a deliberate follow-up, not part
 | dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`daily.go:586-598`) | CHAOS-3092 R1 (Done) |
 | membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`daily.go:599-609`) | CHAOS-4282 (Done) |
 | recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`daily.go:610-620`) | CHAOS-4281/CHAOS-3092 (Done) |
-| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go` | river, native (`daily.go:590-621`) | CHAOS-4296 (Done) |
+| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) deleted -- job compute deleted; `release_impact.py`'s `_compute_day` survives only as `fixtures/runner.py`'s local/CI fixture-generation dependency, fixture-generation path pending CHAOS-5250 | river, native (`daily.go:590-621`) | CHAOS-4296 (Done) |
 | work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`daily.go:625-634`) | CHAOS-3092 PR-B (Done) |
 <!-- END GENERATED REMAINING METRICS MATRIX -->
 

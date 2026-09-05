@@ -83,17 +83,15 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # computed_at column, so it needs no new readback shape -- it slots into
     # the repo-keyed family above unchanged.
     "review_edges": "review_edges_daily",
-    # CHAOS-4290: ic_finalize is FINALIZE-scoped (families.json's phase_note --
-    # it runs once per run, after every partition, not once per partition),
-    # but its first write target, user_metrics_daily, is still plain
-    # (repo_id, day, computed_at)-shaped like every other REPO_DAY_FAMILIES
-    # table -- family_readback groups on repo_id/computed_at only, and the
-    # extra author_email granularity here does not change that shape. The
-    # second write, ic_landscape_rolling_30d, is not checked separately for
-    # the same reason no other family here checks every table in its own
-    # `writes` list: one table in a single in-process compute call proves the
-    # call executed.
-    "ic_finalize": "user_metrics_daily",
+    # CHAOS-4290, r2 finding #4: ic_finalize does NOT belong here -- its
+    # first write target, user_metrics_daily, needs the extra author_email
+    # identity column REPO_DAY_FAMILIES' generic (repo_id, day, computed_at)
+    # shape cannot express (it is a per-author, not a per-repo-day, table).
+    # It is correctly classified below, in SYNTHESIZED_REPO_ID_FAMILIES,
+    # only. An entry here as well (this branch's own stale leftover from
+    # before that reclassification landed) would shadow/duplicate the
+    # --families choice -- test_ic_finalize_is_not_double_registered exists
+    # specifically to catch this class of drift.
 }
 
 # uuid5 namespace + payload MUST match

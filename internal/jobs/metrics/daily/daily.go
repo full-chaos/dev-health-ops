@@ -309,6 +309,17 @@ type Store interface {
 	// Named after FailPartitionPermanently, which is the same shape one layer
 	// down: the point at which retrying stops and an operator has to look.
 	FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error
+	// PartitionCompletionCounts reports how many of a run's partitions exist
+	// (total) and how many have reached status='succeeded' (succeeded),
+	// independent of ClaimFinalize's own gating (CHAOS-5194). ClaimFinalize
+	// already refuses to hand out a finalize claim until every partition for
+	// the run has succeeded (its own `NOT EXISTS (... status <> 'succeeded')`
+	// check) -- but a finalize-scope native family must not TRUST that
+	// upstream guarantee blindly (the same discipline CHAOS-5141's own
+	// repoNamesByID gate follows for a different upstream invariant): this
+	// method lets an executor verify the barrier itself, log what it saw, and
+	// refuse loudly if the guarantee it depends on ever silently regresses.
+	PartitionCompletionCounts(ctx context.Context, runID string) (total int, succeeded int, err error)
 }
 
 // RepositoryDiscoverer reads the authoritative repository IDs for one
@@ -1444,7 +1455,7 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 // trusting that whatever string a caller registers happens to be one Python
 // understands. finalizeFamilyGateAgreementTest pins this slice against the
 // Python source, with a negative control, so the copy cannot drift silently.
-var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName}
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, BenchmarkingFamilyName}
 
 // pythonGatedFinalizeFamilies is the STRICT SUBSET of
 // pythonRecognisedFinalizeFamilies whose Python compute still exists behind a
@@ -1452,9 +1463,11 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 // run_daily_metrics_finalize. This is what
 // TestEveryRecognisedFinalizeFamilyHasAPythonGate source-scans job_daily.py
 // for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
-// registration-validation and declared-iteration-order authority for BOTH
-// families above; only the "does Python still gate on this name" question
-// narrows.
+// registration-validation and declared-iteration-order authority for ALL
+// three families above; only the "does Python still gate on this name"
+// question narrows. ic_finalize and benchmarking (CHAOS-5194, moved to
+// finalize scope but its Python compute is still skip_families-gated) both
+// still have a live gate line.
 //
 // CHAOS-5141 deleted team_cognitive_load's Python compute entirely (not just
 // skip-gated it): buildDailyWorker refuses the WHOLE daily worker if the
@@ -1467,7 +1480,7 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 // in pythonRecognisedFinalizeFamilies (it is still a fully valid, always-
 // registerable native finalize family) but drops out of THIS list, since
 // there is no longer a Python gate line for the source-scan to find.
-var pythonGatedFinalizeFamilies = []string{"ic_finalize"}
+var pythonGatedFinalizeFamilies = []string{"ic_finalize", BenchmarkingFamilyName}
 
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.

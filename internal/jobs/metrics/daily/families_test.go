@@ -181,14 +181,17 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
-	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
-	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
-	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
-	// are inside it, and Python writes those rows (job_daily.py:1919) before
-	// calling the family (:2091). It also sorts FIRST of all native families,
-	// so pre_bridge ran it ahead of every Go writer too.
-	if got := byPhase["benchmarking"]; got != "post_bridge" {
-		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	// benchmarking (CHAOS-4288, then CHAOS-5194) used to be a THIRD post_bridge
+	// family in this class -- its metric window ends on the TARGET DAY, so a
+	// pre_bridge registration would benchmark day D against a window missing
+	// day D. CHAOS-5194 (astra F3) relocated it to finalize scope entirely: the
+	// post_bridge anchor-partition mechanism fixed cross-partition duplication
+	// but not the race between the anchor partition finishing and every OTHER
+	// partition for the same org/day having written its own inputs. Finalize
+	// scope's ClaimFinalize barrier (every partition succeeded) closes that
+	// race by construction.
+	if got := byPhase["benchmarking"]; got != "finalize" {
+		t.Fatalf("benchmarking must be phase=finalize (CHAOS-5194), got %q", got)
 	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
@@ -199,12 +202,14 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// ic_finalize is "finalize", not just another post_bridge family, and
 	// would otherwise silently accept ic_finalize declaring post_bridge.
 	// CHAOS-5078 retired work_item_state/work_item/work_item_estimate from
-	// this map -- they are pre_bridge now (asserted in their own loop above),
-	// leaving compounding_risk/benchmarking/ic_finalize/team_cognitive_load
-	// as the families with a deliberate non-default phase.
+	// this map -- they are pre_bridge now (asserted in their own loop above).
+	// CHAOS-5194 moved benchmarking from post_bridge to finalize (see
+	// BenchmarkingFinalizeExecutor). compounding_risk/ic_finalize/
+	// benchmarking/team_cognitive_load are the families left with a
+	// deliberate non-default phase.
 	nonDefaultPhase := map[string]string{
 		"compounding_risk":    "post_bridge",
-		"benchmarking":        "post_bridge",
+		"benchmarking":        "finalize",
 		"ic_finalize":         "finalize",
 		"team_cognitive_load": "finalize",
 	}

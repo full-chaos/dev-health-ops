@@ -223,16 +223,19 @@ def test_remaining_execution_rejects_unknown_persisted_family() -> None:
         )
 
 
-def test_remaining_runner_is_a_closed_six_family_allowlist() -> None:
+def test_remaining_runner_is_a_closed_five_family_allowlist() -> None:
     # extra_metrics/team_metrics were removed by CHAOS-4243 (registered
     # handlers with zero producer, retired rather than left dormant).
+    # release_impact was removed by CHAOS-5234/CHAOS-5244: its native Go
+    # executor (CHAOS-4296) has no Python fallback, so the compatibility
+    # bridge handler and its dispatch entry were deleted entirely rather
+    # than skip-gated.
     assert set(worker_metrics._REMAINING_RUNNERS) == {
         "capacity",
         "complexity",
         "dora",
         "membership_backfill",
         "recommendations",
-        "release_impact",
     }
 
 
@@ -325,14 +328,14 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
 def test_evidence_row_count_extracts_only_mapped_families() -> None:
     assert (
         worker_metrics._evidence_row_count(
-            "release_impact", {"family": "release_impact", "records_written": 3}
+            "capacity", {"family": "capacity", "forecast_count": 3}
         )
         == 3
     )
     # An explicit 0 is a real count, not "not applicable" -- must round-trip.
     assert (
         worker_metrics._evidence_row_count(
-            "release_impact", {"family": "release_impact", "records_written": 0}
+            "capacity", {"family": "capacity", "forecast_count": 0}
         )
         == 0
     )
@@ -347,7 +350,16 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
     # A bool would satisfy isinstance(x, int) in Python; must be excluded.
     assert (
         worker_metrics._evidence_row_count(
-            "release_impact", {"family": "release_impact", "records_written": True}
+            "capacity", {"family": "capacity", "forecast_count": True}
+        )
+        is None
+    )
+    # release_impact was removed from _EVIDENCE_ROW_COUNT_KEYS entirely by
+    # CHAOS-5234/CHAOS-5244 (its runner is deleted) -- confirm it is now an
+    # unmapped family like complexity, never coerced.
+    assert (
+        worker_metrics._evidence_row_count(
+            "release_impact", {"family": "release_impact", "records_written": 3}
         )
         is None
     )
@@ -387,7 +399,7 @@ async def test_run_membership_surfaces_a_flat_rows_written_count(
 
 
 @pytest.mark.asyncio
-async def test_execute_surfaces_rows_written_for_a_zero_row_release_impact_completion() -> (
+async def test_execute_surfaces_rows_written_for_a_zero_row_capacity_completion() -> (
     None
 ):
     """CHAOS-4243: before this, /remaining-metrics/v1/execute's response body
@@ -396,13 +408,17 @@ async def test_execute_surfaces_rows_written_for_a_zero_row_release_impact_compl
     itself never transported the count. This proves the HTTP contract
     actually carries rows_written=0 through to the caller, not just the
     durable output_evidence.
+
+    Uses capacity (not release_impact, CHAOS-5234/CHAOS-5244 deleted that
+    family's runner and its _EVIDENCE_ROW_COUNT_KEYS entry) as the example
+    family that still maps to a genuine row count.
     """
-    execution = _execution(family="release_impact")
+    execution = _execution(family="capacity")
 
     async def zero_row_effect(
         _connection: object, _current: worker_metrics._Execution
     ) -> dict[str, Any]:
-        return {"family": "release_impact", "records_written": 0}
+        return {"family": "capacity", "forecast_count": 0}
 
     with (
         patch.object(

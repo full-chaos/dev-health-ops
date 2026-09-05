@@ -55,7 +55,6 @@ from dev_health_ops.metrics.compute_work_items import (
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
-    compute_file_hotspots,
     compute_file_risk_hotspots,
 )
 from dev_health_ops.metrics.identity import (
@@ -1023,8 +1022,11 @@ async def run_daily_metrics_job(
     before this parameter existed. Only families with a Go native executor
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
-    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
+    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292,
+    ``file_risk_hotspots`` CHAOS-4277 (``file_hotspots`` itself, same
+    ticket, had its Python compute+write deleted outright rather than
+    gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
+    all), ``testops_risk`` CHAOS-4294,
     ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
     ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
     ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
@@ -1346,7 +1348,18 @@ async def run_daily_metrics_job(
         bus_factor_by_repo: dict[uuid.UUID, int] = {}
         gini_by_repo: dict[uuid.UUID, float] = {}
 
-        all_file_metrics = []
+        # CHAOS-5234/CHAOS-3092: file_hotspots's daily compute (formerly
+        # `compute_file_hotspots` -> `all_file_metrics` -> write_file_metrics)
+        # is DELETED here, not skip-gated -- chris's ruling: "once go is in
+        # main that does the same thing, skip flags are pointless." The
+        # native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
+        # writer of file_metrics_daily now; neither all_file_metrics nor
+        # file_hotspots fed anything else downstream in this function (see
+        # the deleted gate comment's own admission), so there is no shared
+        # input to preserve. `compute_file_hotspots` itself is NOT deleted --
+        # it has real, unrelated callers (golden-fixture generators, the
+        # live-Python oracle comparator, and its own dedicated unit tests);
+        # only this call site is gone.
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
                 repo_id=str(r_id), window_stats=h_commit_rows
@@ -1360,13 +1373,6 @@ async def run_daily_metrics_job(
             gini_by_repo[r_id] = compute_code_ownership_gini(
                 repo_id=str(r_id), window_stats=h_commit_rows
             )
-            file_metrics = compute_file_hotspots(
-                repo_id=r_id,
-                day=d,
-                window_stats=h_commit_rows,
-                computed_at=computed_at,
-            )
-            all_file_metrics.extend(file_metrics)
 
         # file_hotspot_daily (risk treemap + hotspot drilldown on /complexity)
         # is computed live here by merging the 30d churn window with the latest
@@ -1794,19 +1800,20 @@ async def run_daily_metrics_job(
         # row's generation -- the same class of gap CHAOS-4275's own guard
         # above exists to close, caught here by codex round 1 on this port.
         skip_deploy_write = "deploy" in skip_families
-        # CHAOS-4277: file_hotspots/file_risk_hotspots have native Go
-        # executors (FileHotspotsExecutor/FileRiskHotspotsExecutor). Same
-        # write-only-skip shape as repo_user_commit above: neither
-        # all_file_metrics nor all_file_hotspots feeds anything else
+        # CHAOS-4277: file_risk_hotspots has a native Go executor
+        # (FileRiskHotspotsExecutor). Same write-only-skip shape as
+        # repo_user_commit above: all_file_hotspots feeds nothing else
         # downstream in this function, so compute could also be skipped,
         # but is left unconditional to match the established, reviewed
         # precedent with the smallest possible diff. Missing this gate is
         # exactly the defect repo_user_commit's own comment warns about --
         # the native executor and this unconditional write would otherwise
-        # BOTH fire for every partition, doubling every row in both
-        # append-only tables (file_metrics_daily, file_hotspot_daily) on
-        # every single run, not just on a recompute.
-        skip_file_hotspots_write = "file_hotspots" in skip_families
+        # BOTH fire for every partition, doubling every row in
+        # file_hotspot_daily on every single run, not just on a recompute.
+        # (file_hotspots itself -- FileHotspotsExecutor's own family -- is no
+        # longer gated here at all: CHAOS-5234/CHAOS-3092 deleted its compute
+        # and write call sites entirely, see the comment a few lines above
+        # this loop.)
         skip_file_risk_hotspots_write = "file_risk_hotspots" in skip_families
         # CHAOS-4283: work_item and work_item_estimate have native Go
         # executors (WorkItemExecutor/WorkItemEstimateExecutor). This is the
@@ -1820,8 +1827,12 @@ async def run_daily_metrics_job(
         #     empty work-item contribution for every user on every partition
         #     the Go executor handled -- a wrong number, not a missing one.
         #   * `estimate_coverage_metrics` feeds nothing else here, so its
-        #     compute COULD be skipped, but is left unconditional to match the
-        #     established file_hotspots precedent and keep the diff minimal.
+        #     compute COULD be skipped, but is left unconditional to keep this
+        #     diff minimal (work_item_estimate is its own separate deletion
+        #     target under CHAOS-5234/CHAOS-3092, not yet done as of this
+        #     comment -- file_hotspots, which this comment used to cite as
+        #     precedent for "unconditional is fine," has since had its own
+        #     compute+write deleted outright rather than left unconditional).
         #
         # CHAOS-4286: work_graph_edges has a native Go executor
         # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
@@ -1956,8 +1967,11 @@ async def run_daily_metrics_job(
                 s.write_work_graph_deployment_incident_edges(
                     ai_deployment_incident_edges
                 )
-            if all_file_metrics and not skip_file_hotspots_write:
-                s.write_file_metrics(all_file_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_file_metrics call here -- the
+            # file_hotspots compute+write is deleted entirely (see the
+            # comment above the deleted `compute_file_hotspots` call site);
+            # the native Go executor is the only writer of
+            # file_metrics_daily now.
             if (
                 all_file_hotspots
                 and hasattr(s, "write_file_hotspot_daily")
@@ -2079,31 +2093,40 @@ async def run_daily_metrics_job(
         _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
-        # correlations, insights). Reads from ClickHouse via the sink.
+        # correlations, insights) MOVED to run_daily_metrics_finalize
+        # (CHAOS-5194, astra design-review finding F3), skip_families gate and
+        # all -- necessary PLUMBING, not a compute fix. It used to run HERE,
+        # once per partition (run_benchmarking_for_day takes no repo_id, so an
+        # org with N repos appended N identical row sets to six append-only
+        # tables), deduplicated on the Go side by an anchor-partition trick
+        # (fixed duplication, not the race F3 found: the anchor partition's
+        # own post_bridge phase could complete before every OTHER partition
+        # for the org/day had written its own inputs).
         #
-        # CHAOS-4288: benchmarking has a native Go executor
-        # (BenchmarkingExecutor). When the Go dispatcher names it in
-        # skip_families it has already computed and written this org/day, so
-        # skip the whole call -- nothing else in this function consumes its
-        # output, which makes this the cicd/team_wellbeing shape.
+        # The move is required for the skip_families MECHANISM to keep
+        # working, not optional: partition-scope skip_families (built by
+        # computeNativeFamilies/computePostBridgeNativeFamilies) and
+        # finalize-scope skip_families (built by
+        # computeNativeFinalizeFamilies) are TWO INDEPENDENT lists sent to
+        # TWO INDEPENDENT bridge calls. Once the Go executor registers
+        # "benchmarking" as a FINALIZE family instead of a post_bridge one,
+        # the partition-scope skip_families sent here would never contain it
+        # again -- leaving the OLD gate at this call site permanently open
+        # and duplicating Python's own compute on top of the native
+        # executor's correct one, a WORSE bug than before. Moving the call to
+        # where the matching skip_families list actually lives is what keeps
+        # "the Go executor computed it, so Python must not" true.
         #
-        # NOTE the native side computes ONCE PER ORG/DAY, on the partition
-        # holding the org's lexicographically-first repo, whereas this call
-        # runs on EVERY partition: run_benchmarking_for_day takes no repo_id,
-        # so an org with N repos appends N identical row sets to six
-        # append-only tables here. That divergence is deliberate and ruled --
-        # see BenchmarkingExecutor's doc comment.
-        if "benchmarking" not in skip_families:
-            for s in sinks:
-                try:
-                    run_benchmarking_for_day(
-                        s,
-                        as_of_day=d,
-                        computed_at=computed_at,
-                        org_id=org_id,
-                    )
-                except Exception as exc:
-                    logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        # This move does NOT fix Python's own compute logic (no ordering
+        # change, no query change) -- team-lead ruling, CHAOS-5194: Python's
+        # race stays exactly as buggy as it always was WHEN THIS CODE PATH
+        # ACTUALLY RUNS. In practice it incidentally runs behind the same
+        # partition barrier as the Go executor now (both live in
+        # run_daily_metrics_finalize, which only runs once every partition
+        # for the day has succeeded), and it runs at all only when the
+        # native executor is absent (skip_families gate below), which is the
+        # existing fail-open-to-Python contract every other native family
+        # already has.
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(
@@ -2275,7 +2298,8 @@ async def run_daily_metrics_finalize(
         )
 
     # CHAOS-4290: same gate shape as run_daily_metrics_job's families
-    # (`"file_hotspots" in skip_families` at :1875 and its siblings). When a
+    # (`"file_risk_hotspots" in skip_families` a few hundred lines up, and
+    # its siblings). When a
     # native Go executor already computed and wrote ic_finalize for this run,
     # recomputing here would append a SECOND generation of the same rows --
     # and user_metrics_daily is append-only, deduped
@@ -2301,6 +2325,28 @@ async def run_daily_metrics_finalize(
         for s in sinks_list:
             s.write_ic_landscape_rolling(ic_landscape)
 
+    computed_at = datetime.now(timezone.utc)
+
+    # CHAOS-5194 (astra F3): benchmarking, relocated here from
+    # run_daily_metrics_job -- see this function's sibling comment at the old
+    # call site for why the move is required plumbing, not a compute fix.
+    # Same skip_families gate shape as ic_finalize above: when the Go
+    # dispatcher names "benchmarking" in skip_families, the native
+    # BenchmarkingFinalizeExecutor already computed and wrote this org/day,
+    # so skip the whole call -- nothing else in this function consumes its
+    # output.
+    if "benchmarking" not in skip_families:
+        for s in sinks_list:
+            try:
+                run_benchmarking_for_day(
+                    s,
+                    as_of_day=day,
+                    computed_at=computed_at,
+                    org_id=org_id,
+                )
+            except Exception as exc:
+                logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
+
     # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily is
     # written exactly ONCE here, per org/day, after every repo's own
     # partition has landed -- never in-process inside a single per-repo
@@ -2310,7 +2356,6 @@ async def run_daily_metrics_finalize(
     # Python compute entirely once it was confirmed unreachable in
     # production -- it is now written ONLY by the Go worker's native
     # FinalizeHandler, never from this Python path.
-    computed_at = datetime.now(timezone.utc)
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
     discovered_repos = discover_repos(

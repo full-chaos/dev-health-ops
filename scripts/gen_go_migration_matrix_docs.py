@@ -391,14 +391,25 @@ def render_daily_metrics_block() -> str:
         set(DAILY_CITATION_LEDGER),
         "Add a DAILY_CITATION_LEDGER row for it.",
     )
-    artifact_daily = load_native_families_artifact()["daily"]
-    unknown_artifact_names = set(artifact_daily) - live_names
+    artifact = load_native_families_artifact()
+    artifact_daily = artifact["daily"]
+    # CHAOS-5084 codex r2 (P2, confirmed): a family whose native executor
+    # runs at FINALIZE scope (ic_finalize, benchmarking as of CHAOS-5194, and
+    # compounding_risk_team here) still has a families.json entry in the
+    # DAILY family list -- families.json's list is "every metrics.daily
+    # family", independent of which seam its executor is registered under --
+    # but its artifact entry lives in the artifact's "finalize" section, not
+    # "daily". Reading ONLY artifact["daily"] silently defaulted every such
+    # family to "compat" (COMPAT-Python), understating three families that
+    # are actually native, not just this PR's compounding_risk_team.
+    artifact_finalize = artifact.get("finalize", {})
+    unknown_artifact_names = (set(artifact_daily) | set(artifact_finalize)) - live_names
     if unknown_artifact_names:
         raise SystemExit(
             f"gen_go_migration_matrix_docs: contracts/native-families/v1/native-families.json's "
-            f'"daily" section names family(ies) {sorted(unknown_artifact_names)} that no longer '
-            "exist in internal/jobs/metrics/daily/families.json -- regenerate the artifact "
-            "(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
+            f'"daily"/"finalize" sections name family(ies) {sorted(unknown_artifact_names)} that '
+            "no longer exist in internal/jobs/metrics/daily/families.json -- regenerate the "
+            "artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run "
             "TestNativeFamiliesArtifactUpToDate)."
         )
     lines = [
@@ -408,10 +419,17 @@ def render_daily_metrics_block() -> str:
     ]
     for family in sorted(families, key=lambda f: f["name"]):
         name = family["name"]
-        artifact_value = artifact_daily.get(name, "compat")
+        # "daily" takes precedence when (hypothetically) a name appeared in
+        # both -- the two sections are otherwise disjoint in practice, one
+        # native seam per family.
+        artifact_value = artifact_daily.get(name) or artifact_finalize.get(
+            name, "compat"
+        )
         executor = "COMPAT-Python" if artifact_value == "compat" else "NATIVE"
         if artifact_value == "post_bridge":
             executor += ", post_bridge"
+        elif artifact_value == "finalize":
+            executor += ", finalize"
         row = DAILY_CITATION_LEDGER[name]
         lines.append(f"| {name} | {executor} | {row['citation']} | {row['ticket']} |")
     lines.append(DAILY_END)

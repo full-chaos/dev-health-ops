@@ -375,11 +375,19 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 9
-// native + 5 post_bridge daily split,
-// so a future accidental wiring change is caught here even if someone forgot
-// to regenerate the artifact (that case is ALSO caught by the drift test
-// above, but this one names the expected shape explicitly for a reviewer).
+// control: it pins the exact remaining and daily splits, so an accidental
+// wiring change is caught even if someone forgot to regenerate the artifact
+// (that case is ALSO caught by the drift test above, but this one names the
+// expected shape explicitly for a reviewer).
+//
+// The expected shape lives in the four want* slices below and NOWHERE ELSE.
+// This comment used to restate it as "9 native + 1 post_bridge", and that
+// prose went stale in silence: CHAOS-4283 added two post_bridge families and
+// left the sentence saying one, and CHAOS-4285 then added a native family
+// which made the "9" accidentally true again for the wrong reason. A count
+// written in a comment cannot be asserted, so it is not written here -- the
+// cardinality check below derives every total with len(), and the slices are
+// the single source of truth a reviewer should read.
 func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
@@ -395,6 +403,14 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-4285. This entry was MISSING on this branch until the
+		// merge-forward of main exposed it. The branch registered
+		// ai_governance as a native daily executor and updated the generated
+		// artifact, but never updated this expected split -- and the test
+		// still passed, because at that point both halves were one-way SUBSET
+		// checks. Main's own codex r1 (P3) added the cardinality check below,
+		// and that check is what turned this silent gap into a failure.
+		"ai_governance",
 		// CHAOS-4279: review_edges is pre_bridge, not post_bridge -- both its
 		// inputs are RAW SYNC tables, not another daily family's output, so
 		// nothing in this partition has to run before it.

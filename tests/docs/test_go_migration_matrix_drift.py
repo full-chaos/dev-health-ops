@@ -223,10 +223,10 @@ def test_daily_finalize_compat_families_matches_known_calls() -> None:
         daily_names, remaining_names
     )
     assert compat_families == {
-        "compounding_risk",
-        "team_cognitive_load",
-        "ic_finalize",
-        "complexity",
+        ("daily", "compounding_risk"),
+        ("daily", "team_cognitive_load"),
+        ("daily", "ic_finalize"),
+        ("remaining", "complexity"),
     }
 
 
@@ -270,11 +270,14 @@ def test_finalize_ledger_rejects_a_stale_irregular_entry() -> None:
     gen = _load_gen_module()
     original = dict(gen.FINALIZE_CALL_IRREGULAR_FAMILY)
     try:
-        gen.FINALIZE_CALL_IRREGULAR_FAMILY["a_call_that_does_not_exist"] = "complexity"
+        gen.FINALIZE_CALL_IRREGULAR_FAMILY["a_call_that_does_not_exist"] = (
+            "remaining",
+            "complexity",
+        )
         try:
             gen._assert_no_stale_finalize_ledger_entries(
-                {f["name"] for f in gen.load_daily_families()}
-                | {f["name"] for f in gen.load_remaining_families()}
+                {f["name"] for f in gen.load_daily_families()},
+                {f["name"] for f in gen.load_remaining_families()},
             )
             raised = False
         except SystemExit:

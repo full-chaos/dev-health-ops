@@ -810,3 +810,33 @@ def test_load_finalize_write_calls_allows_an_annotated_literal_declaration(
         )
     finally:
         setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_allows_a_subscript_or_attribute_target(
+    tmp_path,
+) -> None:
+    """Positive control: `d[k] = v` / `obj.attr = v` mutate something that
+    already exists and introduce NO new bare local name -- unlike a
+    destructured Tuple/List/Starred target, they can never be the thing a
+    later bare `name()` call resolves through. Real code does this
+    routinely (job_daily.py: `team_metrics_params["org_id"] = org_id`), so
+    this must be skipped, not refused as an unmodeled destructuring shape.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    params['org_id'] = org_id\n"
+        "    obj.attr = org_id\n"
+        "    _write_compounding_risk_team_rows_for_day()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls wrongly refused a Subscript/Attribute "
+            f"assignment target: {calls!r}"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)

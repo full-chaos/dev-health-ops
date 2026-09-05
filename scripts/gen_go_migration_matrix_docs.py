@@ -508,24 +508,32 @@ def load_finalize_write_calls() -> set[str]:
     scope.
 
     Confirmation-pass findings F1+F3 (codex, CHAOS-5118, on the r3 fix
-    above): a DESTRUCTURED binding target (`for (writer,) in ...`,
+    above): a DESTRUCTURED binding target -- a `Tuple`/`List`/`Starred`
+    target that introduces new bare names, e.g. `for (writer,) in ...`,
     `a, b = ...`, `with f() as (a, b):`, a destructured comprehension
-    target) and an `AnnAssign` (`writer: object = real_fn`) both matched
+    target -- and an `AnnAssign` (`writer: object = real_fn`) both matched
     none of the per-shape branches above and so were never added to
     raw_next/aliases at all -- silently falling through as an ordinary,
     presumably-irrelevant call name instead of refusing, the exact
     silent-loss failure mode every branch above exists to avoid. Every
-    destructured-target shape now REFUSES outright (named error, no
-    attempt to resolve). `AnnAssign` to a plain `Name` target is instead
+    such destructuring target now REFUSES outright (named error, no
+    attempt to resolve). An `Attribute`/`Subscript` target (`obj.attr = v`,
+    `d[k] = v`) is a DIFFERENT, harmless case -- it mutates something that
+    already exists and introduces no new bare name at all, so it is
+    skipped rather than refused (real code does this routinely, e.g.
+    job_daily.py's `team_metrics_params["org_id"] = org_id`; refusing on
+    it would blanket-break unrelated code, exactly what the first
+    AnnAssign attempt did). `AnnAssign` to a plain `Name` target is
     resolved exactly like `Assign` -- real code (job_daily.py itself) uses
     it for ordinary literal-valued declarations (`x: Any = None`) that a
     blanket refusal would break; only a call through an unresolvable one
-    (as in the finding's own example) still refuses. An `AnnAssign` to any
-    other target shape (`self.x: T = v`) refuses, same as the other
-    destructured/non-Name cases. (Confirmation-pass finding F2 -- a
-    comprehension target that shadows an outer alias name wrongly poisons
-    that outer alias, a fail-closed false positive on valid code, not a
-    silent miss -- is a known, ticketed risk, not fixed here.)
+    (as in the finding's own example) still refuses. `AnnAssign`'s target
+    is never a Tuple/List (Python's grammar forbids destructuring an
+    annotated assignment), so its only other shape is Attribute/Subscript,
+    which is skipped the same harmless way. (Confirmation-pass finding F2
+    -- a comprehension target that shadows an outer alias name wrongly
+    poisons that outer alias, a fail-closed false positive on valid code,
+    not a silent miss -- is a known, ticketed risk, not fixed here.)
     """
     tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
     target = next(
@@ -592,12 +600,24 @@ def load_finalize_write_calls() -> set[str]:
             "explicitly."
         )
 
+    def _binds_no_name(elt: ast.expr) -> bool:
+        # `obj.attr = v` / `d[k] = v` mutate something that already exists;
+        # they introduce NO new bare local name a later `Call(func=Name(...))`
+        # could ever reference, so unlike a destructured Tuple/List/Starred
+        # target (which DOES introduce new bare names this walker must
+        # track), these are harmless to skip outright. Real code uses this
+        # shape routinely (job_daily.py: `team_metrics_params["org_id"] =
+        # org_id`) -- treating it as an unmodeled-and-therefore-refused shape
+        # would blanket-break on ordinary, unrelated code the same way the
+        # first AnnAssign attempt did.
+        return isinstance(elt, (ast.Attribute, ast.Subscript))
+
     for node in ast.walk(target):
         if isinstance(node, ast.Assign):
             for element in node.targets:
                 if isinstance(element, ast.Name):
                     _bind(element.id, _one_hop_value(node.value))
-                else:
+                elif not _binds_no_name(element):
                     _refuse_unmodeled_binding(node, "a destructured Assign target")
         elif isinstance(node, ast.AnnAssign):
             # A bare annotation with no value (`primary_sink: Any`) binds
@@ -612,15 +632,15 @@ def load_finalize_write_calls() -> set[str]:
             # `writer: object = get_writer()` resolves the same way a
             # plain `writer = get_writer()` would -- unresolvable, so a
             # later bare `writer()` still refuses (confirmation-pass F3).
-            if node.value is not None:
-                if isinstance(node.target, ast.Name):
-                    _bind(node.target.id, _one_hop_value(node.value))
-                else:
-                    _refuse_unmodeled_binding(node, "an AnnAssign to a non-Name target")
+            # An AnnAssign target is Name/Attribute/Subscript only (Python's
+            # grammar forbids destructuring here), so the non-Name case is
+            # always the harmless attribute/subscript shape -- never refuse.
+            if node.value is not None and isinstance(node.target, ast.Name):
+                _bind(node.target.id, _one_hop_value(node.value))
         elif isinstance(node, ast.AugAssign):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)
-            else:
+            elif not _binds_no_name(node.target):
                 _refuse_unmodeled_binding(node, "a destructured AugAssign target")
         elif isinstance(node, (ast.For, ast.AsyncFor)):
             if isinstance(node.target, ast.Name):
@@ -631,7 +651,7 @@ def load_finalize_write_calls() -> set[str]:
                 ):
                     resolved = _one_hop_value(node.iter.elts[0])
                 _bind(node.target.id, resolved)
-            else:
+            elif not _binds_no_name(node.target):
                 _refuse_unmodeled_binding(node, "a destructured For/AsyncFor target")
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
@@ -641,14 +661,14 @@ def load_finalize_write_calls() -> set[str]:
                     # `with x as y:` binds y to x.__enter__()'s return, not
                     # to x itself -- never resolvable from source alone.
                     _bind(item.optional_vars.id, None)
-                else:
+                elif not _binds_no_name(item.optional_vars):
                     _refuse_unmodeled_binding(
                         node, "a destructured With/AsyncWith target"
                     )
         elif isinstance(node, ast.comprehension):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)
-            else:
+            elif not _binds_no_name(node.target):
                 _refuse_unmodeled_binding(node, "a destructured comprehension target")
 
     def _resolve_chain(name: str, seen: set[str]) -> str | None:

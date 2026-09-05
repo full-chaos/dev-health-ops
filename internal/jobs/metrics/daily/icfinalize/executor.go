@@ -125,11 +125,23 @@ func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day 
 	var metrics []GitUserMetric
 	for rows.Next() {
 		var metric GitUserMetric
-		if err := rows.Scan(&metric.AuthorEmail, &metric.TeamID, &metric.LOCAdded,
-			&metric.LOCDeleted, &metric.PRsAuthored, &metric.PRsMerged,
+		// user_metrics_daily's loc_added/loc_deleted/prs_authored/prs_merged are
+		// UInt32 (001_metrics_v2.sql) -- the clickhouse-go driver refuses to scan
+		// a UInt32 column straight into a Go int64 destination ("converting
+		// UInt32 to *int64 is unsupported"), so scan into the matching uint32
+		// width first. GitUserMetric itself stays int64: the wider type is what
+		// every downstream sum/merge in this package (and MergeICUserMetrics'
+		// SUM aggregation) actually wants.
+		var locAdded, locDeleted, prsAuthored, prsMerged uint32
+		if err := rows.Scan(&metric.AuthorEmail, &metric.TeamID, &locAdded,
+			&locDeleted, &prsAuthored, &prsMerged,
 			&metric.MedianPRCycleHours, &metric.PRCycleP90Hours); err != nil {
 			return nil, err
 		}
+		metric.LOCAdded = int64(locAdded)
+		metric.LOCDeleted = int64(locDeleted)
+		metric.PRsAuthored = int64(prsAuthored)
+		metric.PRsMerged = int64(prsMerged)
 		metrics = append(metrics, metric)
 	}
 	return metrics, rows.Err()
@@ -146,11 +158,19 @@ func (executor *Executor) loadWorkItemMetrics(ctx context.Context, orgID string,
 	var metrics []WorkItemUserMetric
 	for rows.Next() {
 		var metric WorkItemUserMetric
+		// Same class as loadGitMetrics above: work_item_user_metrics_daily's
+		// items_started/items_completed/wip_count_end_of_day are UInt32
+		// (001_metrics_v2.sql), not the Go int64 WorkItemUserMetric models them
+		// as -- scan into the matching width, then widen.
+		var itemsStarted, itemsCompleted, wipCountEndOfDay uint32
 		if err := rows.Scan(&metric.UserIdentity, &metric.Provider, &metric.WorkScopeID,
-			&metric.TeamID, &metric.TeamName, &metric.ItemsStarted, &metric.ItemsCompleted,
-			&metric.WIPCountEndOfDay, &metric.CycleTimeP50Hrs, &metric.CycleTimeP90Hrs); err != nil {
+			&metric.TeamID, &metric.TeamName, &itemsStarted, &itemsCompleted,
+			&wipCountEndOfDay, &metric.CycleTimeP50Hrs, &metric.CycleTimeP90Hrs); err != nil {
 			return nil, err
 		}
+		metric.ItemsStarted = int64(itemsStarted)
+		metric.ItemsCompleted = int64(itemsCompleted)
+		metric.WIPCountEndOfDay = int64(wipCountEndOfDay)
 		metrics = append(metrics, metric)
 	}
 	return metrics, rows.Err()

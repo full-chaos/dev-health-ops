@@ -6,8 +6,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// GitUserMetric is the subset of UserMetricsDailyRecord compute_ic_metrics_daily
-// reads or rewrites. Fields it passes through untouched are not modelled here.
+// GitUserMetric mirrors UserMetricsDailyRecord as compute_ic_metrics_daily sees
+// it -- EVERY column of the identity's already-written user_metrics_daily row,
+// not just the ones this family's own derivation reads. CHAOS-5151's third
+// class: compute_ic.py:143 sets `base = g`, and `dataclasses.replace(base,
+// ...)` at compute_ic.py:169 carries every field of `base` FORWARD UNCHANGED
+// except the ones explicitly named (identity_id, team_id, loc_touched,
+// prs_opened, work_items_completed, work_items_active, delivery_units,
+// cycle_p50_hours, cycle_p90_hours). A Go port that reads back only the
+// columns it needs for derivation and writes back only the derived ones drops
+// every OTHER column to its ClickHouse table default on the newly-inserted
+// (later computed_at) row -- and since user_metrics_daily's dedup reads
+// `ORDER BY computed_at DESC LIMIT 1 BY (...)`, that later row is the one
+// every downstream reader sees. The column list here is
+// repouser.UserMetric's own write list (internal/jobs/metrics/daily/repouser/
+// clickhouse.go) -- the two are the SAME table row at two different points in
+// its life, repouser writes it first per partition, this family reads it back
+// and re-writes it with only the IC-derived fields changed.
 type GitUserMetric struct {
 	AuthorEmail string
 	TeamID      string
@@ -16,13 +31,34 @@ type GitUserMetric struct {
 	// OUTPUT row keeps the INPUT row's own repo_id verbatim -- it is never
 	// replaced with a placeholder. See ICUserMetric.SynthesizedRepoID for the
 	// other half: an identity with NO git record gets a synthesized one instead.
-	RepoID             uuid.UUID
-	LOCAdded           int64
-	LOCDeleted         int64
-	PRsAuthored        int64
-	PRsMerged          int64
-	MedianPRCycleHours float64
-	PRCycleP90Hours    float64
+	RepoID                uuid.UUID
+	LOCAdded              int64
+	LOCDeleted            int64
+	PRsAuthored           int64
+	PRsMerged             int64
+	MedianPRCycleHours    float64
+	PRCycleP90Hours       float64
+	CommitsCount          int64
+	FilesChanged          int64
+	LargeCommitsCount     int64
+	AvgCommitSizeLOC      float64
+	AvgPRCycleHours       float64
+	PRCycleP75Hours       float64
+	PRsWithFirstReview    int64
+	PRFirstReviewP50Hours *float64
+	PRFirstReviewP90Hours *float64
+	PRReviewTimeP50Hours  *float64
+	PRPickupTimeP50Hours  *float64
+	ReviewsGiven          int64
+	ChangesRequestedGiven int64
+	ReviewsReceived       int64
+	ReviewReciprocity     float64
+	PRInterruptionLoad    int64
+	ContextSpreadCount    int64
+	ReviewRequestLoad     int64
+	TeamName              string
+	ActiveHours           float64
+	WeekendDays           int64
 }
 
 // WorkItemUserMetric is the subset of WorkItemUserMetricsDailyRecord read here.
@@ -63,6 +99,15 @@ type ICUserMetric struct {
 	// invents `repo_id=uuid.uuid4()`. The caller supplies the UUID so this
 	// function stays deterministic and testable; see the doc comment.
 	SynthesizedRepoID bool
+	// PassThrough carries every user_metrics_daily column this family does not
+	// itself derive, verbatim from the git-backed identity's own row (Python's
+	// `replace(base, ...)`, see GitUserMetric's doc comment). Zero-valued for a
+	// synthesized (work-item-only) identity, matching the reference's
+	// zero-filled synthesized UserMetricsDailyRecord (compute_ic.py's else
+	// branch) field-for-field -- Go's zero value and the reference's explicit
+	// `=0`/`=0.0` literals agree on every field the reference sets, and on
+	// every field it leaves to the dataclass's own default (also 0/0.0/None).
+	PassThrough GitUserMetric
 }
 
 // AggregateWorkItems ports the multi-provider fold at compute_ic.py:96-124.
@@ -132,7 +177,7 @@ func maxFloat(a, b float64) float64 {
 func MergeICUserMetrics(
 	gitMetrics []GitUserMetric,
 	workItems []WorkItemUserMetric,
-	teamMap map[string]string,
+	resolveTeam TeamResolver,
 ) []ICUserMetric {
 	gitByIdentity := map[string]GitUserMetric{}
 	for _, metric := range gitMetrics {
@@ -159,8 +204,10 @@ func MergeICUserMetrics(
 		// team_map wins over the base record's team_id, matching
 		// `team_id = team_map.get(identity) or base.team_id`.
 		teamID := git.TeamID
-		if mapped, ok := teamMap[identity]; ok && mapped != "" {
-			teamID = mapped
+		if resolveTeam != nil {
+			if mapped, ok := resolveTeam(identity); ok && mapped != "" {
+				teamID = mapped
+			}
 		}
 
 		var completed, active int64
@@ -180,6 +227,9 @@ func MergeICUserMetrics(
 			CycleP90Hours:     git.PRCycleP90Hours,
 			RepoID:            git.RepoID,
 			SynthesizedRepoID: !hasGit,
+			// Zero-valued when !hasGit, matching the reference's zero-filled
+			// synthesized base -- see PassThrough's doc comment.
+			PassThrough: git,
 		})
 	}
 	return results

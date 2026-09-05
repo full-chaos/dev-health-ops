@@ -83,9 +83,15 @@ func TestMergeDerivesTheReferenceFields(t *testing.T) {
 
 // team_map WINS over the git record's own team_id.
 func TestTeamMapOverridesTheGitTeam(t *testing.T) {
+	resolver := TeamResolver(func(identity string) (string, bool) {
+		if identity == "d" {
+			return "from-map", true
+		}
+		return "", false
+	})
 	merged := MergeICUserMetrics(
 		[]GitUserMetric{{AuthorEmail: "d", TeamID: "from-git"}},
-		nil, map[string]string{"d": "from-map"},
+		nil, resolver,
 	)
 	if got := metricFor(merged, "d").TeamID; got != "from-map" {
 		t.Fatalf("TeamID = %q, want from-map -- team_map takes precedence", got)

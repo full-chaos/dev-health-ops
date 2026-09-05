@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
@@ -190,8 +191,11 @@ func buildWorkItemDerivedSurfacesForProvider(
 	end := dayUTC.AddDate(0, 0, 1)
 	computedAt = computedAt.UTC()
 
+	// `end` is deliberately NOT passed: ComputeEstimateCoverage derives the
+	// window from dayUTC itself, so handing it a second, independently-computed
+	// bound would create two sources of truth for the same edge.
 	coverage, err := buildGitHubEstimateCoverageMetricsDaily(
-		claim, rows, dayUTC, end, computedAt, derived,
+		claim, rows, dayUTC, computedAt, derived,
 	)
 	if err != nil {
 		return githubWorkItemDerivedSurfaces{}, err
@@ -215,112 +219,67 @@ func buildWorkItemDerivedSurfacesForProvider(
 	}, nil
 }
 
-type githubEstimateCoverageKey struct {
-	provider, workScopeID, teamID string
-}
-
-type githubEstimateCoverageBucket struct {
-	teamName                         string
-	estimatedCount, unestimatedCount int
-}
-
-// buildGitHubEstimateCoverageMetricsDaily mirrors
-// compute_estimate_coverage_metrics_daily (compute_work_items.py:1116).
+// buildGitHubEstimateCoverageMetricsDaily adapts providersync's row shape onto
+// the shared compute_estimate_coverage_metrics_daily port
+// (internal/jobs/metrics/workitemmetrics.ComputeEstimateCoverage). The
+// arithmetic moved there under CHAOS-4283 so the metrics.daily_partition native
+// executor and this sync-time deriver cannot drift apart; the oracle pairs
+// {github,gitlab,jira,linear}_work-items_estimate-coverage.py continuing to pass
+// unchanged is the proof the move was behaviour-neutral.
+//
+// Two things stay HERE, deliberately: tenancy assertion (a providersync
+// concern), and the millisecond computed_at stamp -- that truncation exists so
+// effect READBACK compares equal against a DateTime64(3) column, which is a
+// property of this write path, not of the Python computation.
 func buildGitHubEstimateCoverageMetricsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
-	dayUTC, end, computedAt time.Time,
+	dayUTC, computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
 ) ([]githubEstimateCoverageMetricsDailyRow, error) {
-	buckets := make(map[githubEstimateCoverageKey]*githubEstimateCoverageBucket)
-	order := make([]githubEstimateCoverageKey, 0, len(rows.WorkItems))
-
-	for _, item := range rows.WorkItems {
+	items := make([]workitemmetrics.Item, 0, len(rows.WorkItems))
+	for index, item := range rows.WorkItems {
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
 			return nil, err
 		}
-		createdAt := item.CreatedAt.UTC()
-		terminalAt := earliestGitHubWorkItemDerivedTime(item.CompletedAt, item.ClosedAt)
-		if !createdAt.Before(end) {
-			continue
-		}
-		subject := githubWorkItemDerivationSubjectFromRow(item)
-		teamID, teamName, _ := derived.Resolve(subject)
-		key := githubEstimateCoverageKey{
-			provider:    item.Provider,
-			workScopeID: teamattribution.WorkItemDerivationScope(subject),
-			teamID:      normalizeGitHubWorkItemDerivedTeamID(teamID),
-		}
-		bucket := buckets[key]
-		if bucket == nil {
-			// Python creates the bucket BEFORE the terminal-item skip below, so
-			// an item that reached a terminal state before the window end still
-			// materialises an all-zero group (backlog_size 0, ratio None). D16:
-			// pinned by the terminal_only_group oracle case, not corrected. The
-			// team_name recorded here is the FIRST contributing item's — later
-			// items resolving a different name do not overwrite it, which is the
-			// opposite of the state-duration builder's last-wins rule below.
-			bucket = &githubEstimateCoverageBucket{
-				teamName: normalizeGitHubWorkItemDerivedTeamName(teamName),
-			}
-			buckets[key] = bucket
-			order = append(order, key)
-		}
-		if terminalAt != nil && terminalAt.Before(end) {
-			continue
-		}
-		if item.StoryPoints == nil {
-			bucket.unestimatedCount++
-			continue
-		}
-		bucket.estimatedCount++
+		items = append(items, workitemmetrics.Item{
+			SourceIndex: index,
+			WorkItemID:  item.WorkItemID,
+			Provider:    item.Provider,
+			Type:        item.Type,
+			Status:      item.Status,
+			Assignee:    workitemmetrics.FirstAssignee(item.Assignees),
+			CreatedAt:   item.CreatedAt,
+			StartedAt:   item.StartedAt,
+			CompletedAt: item.CompletedAt,
+			ClosedAt:    item.ClosedAt,
+			StoryPoints: item.StoryPoints,
+		})
 	}
 
-	// Python sorts by (provider, work_scope_id, str(team_id or "")). team_id is
-	// already normalised to a non-empty string by this point, so the `or ""`
-	// arm is unreachable here; sorting on the normalised value matches.
-	sort.SliceStable(order, func(left, right int) bool {
-		return githubEstimateCoverageKeyLess(order[left], order[right])
-	})
-
-	result := make([]githubEstimateCoverageMetricsDailyRow, 0, len(order))
-	for _, key := range order {
-		bucket := buckets[key]
-		backlogSize := bucket.estimatedCount + bucket.unestimatedCount
-		var ratio *float64
-		if backlogSize != 0 {
-			value := float64(bucket.estimatedCount) / float64(backlogSize)
-			ratio = &value
-		}
-		teamID := key.teamID
-		teamName := bucket.teamName
+	computed := workitemmetrics.ComputeEstimateCoverage(
+		dayUTC, items,
+		workitemmetrics.AssertAligned(len(rows.WorkItems), items, workItemMetricResolver(rows, derived)),
+	)
+	stamp := githubWorkItemDerivedStamp(computedAt, githubEstimateCoverageStampPrecision)
+	result := make([]githubEstimateCoverageMetricsDailyRow, 0, len(computed))
+	for _, row := range computed {
+		teamID, teamName := row.TeamID, row.TeamName
 		result = append(result, githubEstimateCoverageMetricsDailyRow{
-			Day:              newGitHubWorkItemDerivedDay(dayUTC),
-			Provider:         key.provider,
-			WorkScopeID:      key.workScopeID,
+			Day:              newGitHubWorkItemDerivedDay(row.Day),
+			Provider:         row.Provider,
+			WorkScopeID:      row.WorkScopeID,
 			TeamID:           &teamID,
 			TeamName:         &teamName,
-			EstimatedCount:   bucket.estimatedCount,
-			UnestimatedCount: bucket.unestimatedCount,
-			BacklogSize:      backlogSize,
-			Ratio:            ratio,
-			ComputedAt: githubWorkItemDerivedStamp(
-				computedAt, githubEstimateCoverageStampPrecision,
-			),
-			OrgID: claim.OrgID,
+			EstimatedCount:   row.EstimatedCount,
+			UnestimatedCount: row.UnestimatedCount,
+			BacklogSize:      row.BacklogSize,
+			Ratio:            row.Ratio,
+			ComputedAt:       stamp,
+			OrgID:            claim.OrgID,
 		})
 	}
 	return result, nil
-}
-
-func githubEstimateCoverageKeyLess(left, right githubEstimateCoverageKey) bool {
-	if left.provider != right.provider {
-		return left.provider < right.provider
-	}
-	if left.workScopeID != right.workScopeID {
-		return left.workScopeID < right.workScopeID
-	}
-	return left.teamID < right.teamID
 }
 
 // buildGitHubWorkItemTeamAttributions mirrors

@@ -78,12 +78,18 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 
 // IsLLMAvailable ports is_llm_available (llm/providers/__init__.py:
 // 224-229), narrowed to categorize.ResolveProviderKind's own platform-
-// default scope: org_id is accepted for signature parity with the
-// eventual real caller but is not yet threaded into any BYO check here
-// (no Go port of that resolution exists to call). A resolution error
-// (no provider configured, matching Python's LLMAuthError branch) is
-// "not available", never a propagated error -- mirroring
-// is_llm_available's own try/except LLMAuthError: return False.
+// default scope: org_id is accepted for signature parity but deliberately
+// NOT threaded into any BYO check here -- CHAOS-5006 (#2223) added the org
+// BYO resolution path (categorize.ResolveProviderKindForOrg), but this
+// function is kept as the org-UNAWARE half of the seam on purpose (see
+// availabilityFromIsLLMAvailable's own doc comment in provider_org.go for
+// why an org-unaware entry point still needs to exist). The real request
+// path uses IsLLMAvailableForOrg (provider_org.go), which DOES call the
+// org-aware resolver -- confirmed wired at investment_explain_route.go's
+// `available` closure. A resolution error (no provider configured,
+// matching Python's LLMAuthError branch) is "not available", never a
+// propagated error -- mirroring is_llm_available's own try/except
+// LLMAuthError: return False.
 func IsLLMAvailable(requested string, _ string) bool {
 	kind, err := categorize.ResolveProviderKind(requested)
 	if err != nil {

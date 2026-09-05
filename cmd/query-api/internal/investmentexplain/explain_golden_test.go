@@ -182,7 +182,7 @@ func TestExplainInvestmentMixMockProviderMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("NewReader: %v", err)
 	}
 
-	got, err := reader.ExplainInvestmentMix(context.Background(), nil, CompleteInvestmentMixExplanation, ExplainInvestmentMixOptions{
+	got, err := reader.ExplainInvestmentMix(context.Background(), nil, availabilityFromIsLLMAvailable, CompleteInvestmentMixExplanation, ExplainInvestmentMixOptions{
 		OrgID:        "org-golden-4977",
 		StartTS:      time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC),
 		EndTS:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -227,7 +227,7 @@ func TestExplainInvestmentMixRecordedFixtureProviderMatchesPythonGolden(t *testi
 		t.Fatalf("NewCacheWriter: %v", err)
 	}
 
-	got, err := reader.ExplainInvestmentMix(context.Background(), writer, recordedComplete, ExplainInvestmentMixOptions{
+	got, err := reader.ExplainInvestmentMix(context.Background(), writer, availabilityFromIsLLMAvailable, recordedComplete, ExplainInvestmentMixOptions{
 		OrgID:              "org-golden-4977",
 		StartTS:            time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC),
 		EndTS:              time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),

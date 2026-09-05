@@ -469,9 +469,24 @@ type fileMetricsBatchConn interface {
 // here (Refused, falls back to the Python bridge, which fails identically)
 // is fidelity-correct, not merely defensive.
 func uint32ColumnValue(value int, table, column string, repoID uuid.UUID, key string) (uint32, error) {
+	return checkUint32Range(value, table, column, fmt.Sprintf("repo %s %q", repoID, key))
+}
+
+// checkUint32Range is the single range check behind every UInt32 narrowing in
+// this package. uint32ColumnValue is the repo-keyed spelling of it; families
+// whose rows are not keyed by a repo UUID (the work_item families group by
+// provider/work_scope_id/team) call this directly with their own subject
+// string.
+//
+// It exists as a separate function so there is exactly ONE definition of "does
+// this int fit in a UInt32". Adding a second range-checker beside this one --
+// which is what a new family needing a different key would otherwise do -- is
+// how the two drift, and drift here is silent: a wrapped counter is a
+// plausible number, not an error.
+func checkUint32Range(value int, table, column, subject string) (uint32, error) {
 	if value < 0 || value > math.MaxUint32 {
-		return 0, fmt.Errorf("%w: %s.%s %d for repo %s %q exceeds UInt32 range",
-			ErrInvalidState, table, column, value, repoID, key)
+		return 0, fmt.Errorf("%w: %s.%s %d for %s exceeds UInt32 range",
+			ErrInvalidState, table, column, value, subject)
 	}
 	return uint32(value), nil
 }

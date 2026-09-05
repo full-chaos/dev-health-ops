@@ -20,7 +20,7 @@
 #     an apt dependency, so it needs no image change) -- installed here too
 #     so a future job that genuinely needs `tar -xJf`/`xz` directly is not
 #     surprised a second time.
-#   - docker-compose-plugin: `ci/check_river_compat_static.sh` runs `docker
+#   - docker-compose-plugin (CHAOS-5134): `ci/check_river_compat_static.sh` runs `docker
 #     compose` (v2 CLI plugin syntax) directly against the River
 #     compatibility harness's compose file -- a real dependency, not a
 #     format choice like shellcheck's tarball, so there is no script-level

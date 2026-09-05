@@ -124,16 +124,21 @@ def _replace_engine_with_rmt(ddl: str) -> str:
 
 
 def _table_exists(client, table: str) -> bool:
-    try:
-        res = client.query(
-            "SELECT count() FROM system.tables "
-            "WHERE database = currentDatabase() AND name = {name:String}",
-            parameters={"name": table},
-        )
-        rows = getattr(res, "result_rows", None) or []
-        return bool(rows and rows[0] and rows[0][0] > 0)
-    except Exception:
-        return False
+    # A table genuinely absent from system.tables returns zero rows -- that is
+    # NOT an exception, so there is no legitimate reason for this probe to ever
+    # need to swallow one. A bare `except Exception: return False` here would
+    # silently treat a real query/connection failure as "table doesn't exist,
+    # skip it" (codex r1 finding 1, CHAOS-4296/#2262): the caller's fail-open
+    # skip path would fire on infrastructure trouble, not just absence, and the
+    # migration runner would still record the migration as applied. Let any
+    # real failure propagate.
+    res = client.query(
+        "SELECT count() FROM system.tables "
+        "WHERE database = currentDatabase() AND name = {name:String}",
+        parameters={"name": table},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    return bool(rows and rows[0] and rows[0][0] > 0)
 
 
 def _engine_name(client, table: str) -> str:

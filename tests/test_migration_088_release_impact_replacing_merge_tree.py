@@ -193,6 +193,26 @@ def test_already_rmt_with_leftover_shadow_converges(migration) -> None:
     assert SHADOW not in client.tables
 
 
+def test_table_exists_probe_failure_propagates_instead_of_reading_as_absent(
+    migration,
+) -> None:
+    """codex r1 finding 1 (CHAOS-4296/#2262): a genuine query/connection failure
+    on the system.tables probe must NOT be swallowed and read as "table
+    doesn't exist" -- that would silently skip the whole rebuild while the
+    migration runner still records it as applied."""
+
+    class FailingClient(FakeClient):
+        def query(self, query: str, parameters: dict | None = None):
+            if "count() FROM system.tables" in query:
+                raise RuntimeError("connection reset by peer")
+            return super().query(query, parameters)
+
+    client = FailingClient({TABLE: {"ddl": OLD_DDL, "sorting_key": OLD_KEY}})
+    with pytest.raises(RuntimeError, match="connection reset by peer"):
+        migration._rebuild_table(client, TABLE, SHADOW)
+    assert client.commands == []
+
+
 def test_sorting_key_mismatch_aborts_and_drops_shadow(migration) -> None:
     client = FakeClient(
         {TABLE: {"ddl": OLD_DDL, "sorting_key": OLD_KEY}},

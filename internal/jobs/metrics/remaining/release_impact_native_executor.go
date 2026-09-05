@@ -71,7 +71,7 @@ func NewReleaseImpactExecutor(
 		return nil, errReleaseImpactUnavailable
 	}
 	return &ReleaseImpactExecutor{
-		reader:   NewReleaseImpactReader(conn),
+		reader:   NewReleaseImpactReader(conn, logger),
 		observer: observer,
 		logger:   logger,
 		nowUTC:   func() time.Time { return time.Now().UTC() },
@@ -200,6 +200,10 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 
 	computedAt, err := e.nowOrRefuse()
 	if err != nil {
+		if e.logger != nil {
+			e.logger.Error("release_impact: nowOrRefuse failed",
+				"org_id", run.OrganizationID, "partition_id", partition.ID, "error", err)
+		}
 		return CompatibilityOutcome{}, err
 	}
 
@@ -216,6 +220,12 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 		for _, current := range RecomputationWindow(trigger, scope.RecomputationWindowDays) {
 			written, err := e.computeOneDay(ctx, run.OrganizationID, current, computedAt)
 			if err != nil {
+				if e.logger != nil {
+					e.logger.Error("release_impact: computeOneDay failed",
+						"org_id", run.OrganizationID, "partition_id", partition.ID,
+						"trigger_day", trigger.Format("2006-01-02"),
+						"day", current.Format("2006-01-02"), "error", err)
+				}
 				return CompatibilityOutcome{}, err
 			}
 			rowsWritten += written
@@ -225,8 +235,15 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 	if e.observer != nil {
 		// Telemetry failure never fails the partition: the work is already
 		// durably written, and losing a counter must not cause a retry that
-		// writes it a second time (same discipline DORAExecutor uses).
-		_ = e.observer.ObserveReleaseImpactPartition(len(triggerDays), rowsWritten)
+		// writes it a second time (same discipline DORAExecutor uses). But a
+		// swallowed observer error must still be logged (codex r1 finding 4,
+		// CHAOS-4296/#2262) -- discarding it silently left no trace at all
+		// that the counter was ever lost.
+		if obsErr := e.observer.ObserveReleaseImpactPartition(len(triggerDays), rowsWritten); obsErr != nil && e.logger != nil {
+			e.logger.Error("release_impact: ObserveReleaseImpactPartition failed",
+				"org_id", run.OrganizationID, "partition_id", partition.ID,
+				"days", len(triggerDays), "rows_written", rowsWritten, "error", obsErr)
+		}
 	}
 	return CompatibilityOutcome{RowsWritten: &rowsWritten}, nil
 }
@@ -242,8 +259,15 @@ func (e *ReleaseImpactExecutor) computeOneDay(
 		return 0, err
 	}
 	// Telemetry failure never fails the partition -- the same discipline
-	// DORAExecutor.ComputePartition uses for its observer call.
-	_ = e.ReportDegraded(orgID, day, scope)
+	// DORAExecutor.ComputePartition uses for its observer call. The observer
+	// error itself is still logged, not just discarded (codex r1 finding 4):
+	// ReportDegraded already logs the CHAOS-4258 signal it is TRYING to
+	// record; this covers the separate case of the observer call itself
+	// failing to record it.
+	if err := e.ReportDegraded(orgID, day, scope); err != nil && e.logger != nil {
+		e.logger.Error("release_impact: ReportDegraded observer call failed",
+			"org_id", orgID, "day", day.Format("2006-01-02"), "error", err)
+	}
 	if len(scope.Pairs) == 0 {
 		// Both the quiet day and the degraded day return zero rows here,
 		// matching _compute_day's `if not release_env_pairs: return []`

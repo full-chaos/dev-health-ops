@@ -2,6 +2,9 @@ package remaining
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -32,12 +35,35 @@ func dateArgument(value time.Time) string {
 
 // ReleaseImpactReader owns the ClickHouse side of the family.
 type ReleaseImpactReader struct {
-	conn driver.Conn
+	conn   driver.Conn
+	logger *slog.Logger
 }
 
-// NewReleaseImpactReader builds a reader over an existing connection.
-func NewReleaseImpactReader(conn driver.Conn) *ReleaseImpactReader {
-	return &ReleaseImpactReader{conn: conn}
+// NewReleaseImpactReader builds a reader over an existing connection. logger
+// is optional; when set, an absence-tolerant reader (DeployTimestamp,
+// FirstFrictionSpike, RepoIDForRelease) logs any error OTHER than
+// sql.ErrNoRows before folding it into the "no row" return -- codex r1 finding
+// 2 (CHAOS-4296/#2262): the original `if err != nil { return nil, nil }` shape
+// could not tell "no matching row" (Python's None, silent) apart from a real
+// query/scan failure (a dropped connection, a malformed result), so a genuine
+// failure read as an ordinary absence with nothing in the logs to find it by.
+func NewReleaseImpactReader(conn driver.Conn, logger *slog.Logger) *ReleaseImpactReader {
+	return &ReleaseImpactReader{conn: conn, logger: logger}
+}
+
+// logNonAbsenceError logs err with the caller's identifiers UNLESS it is
+// sql.ErrNoRows (the expected "no matching row" case, which every caller
+// below folds into its Python-matching nil/zero-value return). Returns true
+// when err is the genuine failure case, so callers can decide whether to
+// still propagate it.
+func (r *ReleaseImpactReader) logNonAbsenceError(err error, msg string, args ...any) bool {
+	if errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	if r.logger != nil {
+		r.logger.Error(msg, append(args, "error", err)...)
+	}
+	return true
 }
 
 // ReleaseEnvPair is one (release_ref, environment) scope entry.
@@ -69,7 +95,12 @@ ORDER BY release_ref, environment`,
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && r.logger != nil {
+			r.logger.Error("release_impact: FindReleaseEnvPairs rows.Close failed",
+				"org_id", orgID, "day", day.Format("2006-01-02"), "error", closeErr)
+		}
+	}()
 
 	var out []ReleaseEnvPair
 	for rows.Next() {
@@ -137,8 +168,12 @@ LIMIT 1`,
 			"release_ref": releaseRef, "environment": environment, "org_id": orgID,
 		})...).Scan(&ts)
 	if err != nil {
+		if r.logNonAbsenceError(err, "release_impact: DeployTimestamp query/scan failed",
+			"org_id", orgID, "release_ref", releaseRef, "environment", environment) {
+			return nil, err
+		}
 		// No row is not an error condition in Python -- it returns None.
-		return nil, nil //nolint:nilerr // absence is a value here, matching _get_deploy_timestamp
+		return nil, nil
 	}
 	return ts, nil
 }
@@ -205,7 +240,11 @@ WHERE org_id = {org_id:String}
 			"spike_end": dateTime64Argument(spikeEnd, millisecondPrecision),
 		})...).Scan(&first)
 	if err != nil {
-		return nil, nil //nolint:nilerr // absence is a value here, matching Python's None
+		if r.logNonAbsenceError(err, "release_impact: FirstFrictionSpike query/scan failed",
+			"org_id", orgID, "release_ref", releaseRef, "environment", environment) {
+			return nil, err
+		}
+		return nil, nil // absence is a value here, matching Python's None
 	}
 	return first, nil
 }
@@ -277,7 +316,11 @@ LIMIT 1`,
 			"release_ref": releaseRef, "environment": environment, "org_id": orgID,
 		})...).Scan(&repoID)
 	if err != nil {
-		return "", nil //nolint:nilerr // absence is a value here, matching Python's None
+		if r.logNonAbsenceError(err, "release_impact: RepoIDForRelease query/scan failed",
+			"org_id", orgID, "release_ref", releaseRef, "environment", environment) {
+			return "", err
+		}
+		return "", nil // absence is a value here, matching Python's None
 	}
 	return repoID, nil
 }

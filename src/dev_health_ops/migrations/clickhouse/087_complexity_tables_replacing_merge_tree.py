@@ -344,11 +344,36 @@ def _acquire_lock(client, table: str) -> bool:
         raise
 
 
-def _release_lock(client, table: str) -> None:
+def _release_lock(client, table: str) -> bool:
+    """Best-effort lock release. Returns True if the lock is confirmed
+    gone, False if the DROP itself failed.
+
+    Called from `_rebuild_table`'s `finally`, so this must NEVER raise: a
+    release failure while a real exception (e.g. a failed catch-up) is
+    already propagating must not MASK that original exception -- Python's
+    own finally-raises-eats-the-original-exception semantics is exactly
+    the failure mode this swallow avoids. But swallowing silently was
+    itself a gap (r3 P2): a release failure on its OWN (no other exception
+    in flight -- e.g. the migration otherwise succeeded) used to log only
+    a WARNING and let `_rebuild_table` return normally, leaving the lock
+    stuck forever with no signal beyond a log line an operator would have
+    to already be looking for. The caller now raises when this returns
+    False and no other exception is in flight -- see `_rebuild_table`.
+    """
     try:
         client.command(f"DROP TABLE IF EXISTS `{table}{_LOCK_SUFFIX}`")
+        return True
     except Exception as exc:  # pragma: no cover - best effort
-        log.warning(f"  {table}: failed to release migration 087 lock: {exc}")
+        log.warning(
+            f"  {table}: failed to release migration 087 lock "
+            f"(`{table}{_LOCK_SUFFIX}`): {exc}. If this is the ONLY error "
+            f"reported for this run, every future run/retry against this "
+            f"table will wait out _wait_for_concurrent_conversion's "
+            f"timeout and fail until the lock is removed manually: confirm "
+            f"no other runner is genuinely converting this table, then "
+            f"`DROP TABLE IF EXISTS {table}{_LOCK_SUFFIX}`."
+        )
+        return False
 
 
 def _wait_for_concurrent_conversion(client, table: str) -> None:
@@ -384,6 +409,14 @@ def _wait_for_concurrent_conversion(client, table: str) -> None:
         engine_is_rmt = _engine_name(client, table) == "ReplacingMergeTree"
         shadow_exists = _table_exists(client, shadow)
         if engine_is_rmt and not shadow_exists:
+            # r3 P1: a waiting runner declaring victory must apply the same
+            # version-column check `_rebuild_table`'s own skip paths do --
+            # otherwise a table another runner converted (or that was
+            # already RMT some other way) with the wrong version column is
+            # accepted here too.
+            _assert_expected_version_column(
+                table, _replacing_merge_tree_version_column(client, table)
+            )
             return
         if not _table_exists(client, f"{table}{_LOCK_SUFFIX}"):
             raise RuntimeError(
@@ -396,7 +429,14 @@ def _wait_for_concurrent_conversion(client, table: str) -> None:
         time.sleep(_LOCK_POLL_INTERVAL_SECS)
     raise RuntimeError(
         f"{table}: timed out after {_LOCK_WAIT_TIMEOUT_SECS}s waiting for a "
-        f"concurrent runner to finish converting this table"
+        f"concurrent runner to finish converting this table. This is NOT "
+        f"self-healing (r3 P2): there is no owner-liveness signal on the "
+        f"lock table, so a runner that crashed rather than finished leaves "
+        f"this waiting forever on every retry. Manual recovery: confirm no "
+        f"other process is genuinely still converting `{table}` right now, "
+        f"then `DROP TABLE IF EXISTS {table}{_LOCK_SUFFIX}` -- a rerun of "
+        f"this migration will then correctly converge any leftover "
+        f"`{table}_new` shadow (see the skip path's own convergence branch)."
     )
 
 
@@ -408,6 +448,59 @@ def _engine_name(client, table: str) -> str:
     )
     rows = getattr(res, "result_rows", None) or []
     return str(rows[0][0]) if rows and rows[0] else ""
+
+
+def _replacing_merge_tree_version_column(client, table: str) -> str | None:
+    """Return the version-column ARGUMENT of table's ReplacingMergeTree
+    engine (e.g. `"computed_at"` from `ReplacingMergeTree(computed_at)`),
+    or `None` if the argument cannot be determined (not RMT, or a bare
+    `ReplacingMergeTree()` with no explicit version column).
+
+    `system.tables.engine` (what `_engine_name` reads) is deliberately just
+    the bare engine NAME -- there is no way to tell
+    `ReplacingMergeTree(computed_at)` apart from `ReplacingMergeTree(other_col)`
+    or a bare `ReplacingMergeTree()` from that column alone (codex review,
+    2026-09-05, CHAOS-4291 r3 P1). `engine_full` carries the complete
+    expression including the version-column argument, and is what a caller
+    accepting a table as "already correctly converted" must check --
+    otherwise a table that reads back as RMT with the WRONG (or no)
+    version column is accepted as done, and duplicate rows then collapse
+    ARBITRARILY instead of by `computed_at`: the exact defect this
+    migration exists to prevent, silently reintroduced through its own
+    skip path.
+    """
+    res = client.query(
+        "SELECT engine_full FROM system.tables "
+        "WHERE database = currentDatabase() AND name = {name:String}",
+        parameters={"name": table},
+    )
+    rows = getattr(res, "result_rows", None) or []
+    if not rows or not rows[0]:
+        return None
+    match = re.search(r"ReplacingMergeTree\(\s*`?([^`\s)]+)`?\s*\)", str(rows[0][0]))
+    return match.group(1) if match else None
+
+
+def _assert_expected_version_column(
+    table: str, actual_version_column: str | None
+) -> None:
+    """Fail closed if a table already reading as ReplacingMergeTree does
+    not use `RMT_VERSION_COLUMN` as its dedup version (r3 P1).
+
+    Mirrors `_assert_expected_sort_key`'s reasoning exactly: a mismatched
+    version column means duplicate rows on this table collapse by an
+    arbitrary or nonexistent ordering instead of "the row with the latest
+    `computed_at` wins" -- there is no safe way to proceed automatically,
+    so this raises rather than silently accepting the table as converted.
+    """
+    if actual_version_column != RMT_VERSION_COLUMN:
+        raise RuntimeError(
+            f"{table}: already reads as ReplacingMergeTree but its version "
+            f"column is {actual_version_column!r}, not the required "
+            f"{RMT_VERSION_COLUMN!r}; refusing to treat this table as "
+            f"already converted -- proceeding could let duplicate rows "
+            f"collapse arbitrarily instead of by {RMT_VERSION_COLUMN!r}"
+        )
 
 
 def _has_column(client, table: str, column: str) -> bool:
@@ -487,6 +580,9 @@ def _rebuild_table(client, table: str) -> None:
 
     if _engine_name(client, table) == "ReplacingMergeTree":
         _assert_expected_sort_key(table, _key_columns(_sorting_key(client, table)))
+        _assert_expected_version_column(
+            table, _replacing_merge_tree_version_column(client, table)
+        )
         if not _table_exists(client, shadow):
             log.info(f"  {table}: already ReplacingMergeTree, skipping")
             return
@@ -507,11 +603,15 @@ def _rebuild_table(client, table: str) -> None:
         _wait_for_concurrent_conversion(client, table)
         return
 
+    succeeded = False
     try:
         # Re-check under the lock: the state above may be stale by the time
         # the lock was won (this runner may have lost a race to acquire it
         # while another runner completed a full conversion in between).
         if _engine_name(client, table) == "ReplacingMergeTree":
+            _assert_expected_version_column(
+                table, _replacing_merge_tree_version_column(client, table)
+            )
             if _table_exists(client, shadow):
                 log.info(
                     f"  {table}: already ReplacingMergeTree but leftover "
@@ -520,6 +620,7 @@ def _rebuild_table(client, table: str) -> None:
                 _catch_up_and_drop(client, table, shadow)
             else:
                 log.info(f"  {table}: already ReplacingMergeTree, skipping")
+            succeeded = True
             return
 
         old_key = _normalize_sorting_key(_sorting_key(client, table))
@@ -595,8 +696,32 @@ def _rebuild_table(client, table: str) -> None:
         _catch_up_and_drop(client, table, shadow)
 
         log.info(f"  {table}: done")
+        succeeded = True
     finally:
-        _release_lock(client, table)
+        # `succeeded` distinguishes two very different situations for a
+        # lock-release failure (r3 P2): if the mutating work above raised,
+        # `succeeded` is still False here, and this release is best-effort
+        # -- its own warning log carries the manual-recovery command, and
+        # raising a SECOND exception from a `finally` would REPLACE the
+        # original propagating exception, which is worse than a logged
+        # compounding failure. But if the mutating work (including an
+        # early `return` on an already-converted table) completed
+        # cleanly, a release failure here is NOT a side effect of
+        # something else already broken -- it is now the ONLY problem,
+        # and letting it pass as a mere warning let this migration report
+        # success while silently leaving the lock stuck forever, blocking
+        # every future run/retry against this table with no signal beyond
+        # a log line nobody was necessarily looking for. Note: `succeeded
+        # = True` is set BEFORE the early `return`s above, and a `raise`
+        # here correctly supersedes that pending return (finally always
+        # has the final say over how the function actually exits).
+        lock_released = _release_lock(client, table)
+        if succeeded and not lock_released:
+            raise RuntimeError(
+                f"{table}: conversion succeeded but its migration 087 lock "
+                f"(`{table}{_LOCK_SUFFIX}`) could not be released -- see "
+                f"the preceding warning log for the manual recovery command"
+            )
 
 
 def upgrade(client):

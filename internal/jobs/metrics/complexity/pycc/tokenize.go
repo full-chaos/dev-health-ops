@@ -579,6 +579,23 @@ func (t *tokenizer) consumeString() error {
 			continue
 		}
 		if c == '\n' {
+			if isFString && braceDepth > 0 {
+				// PEP 701 explicitly permits a literal newline inside a
+				// replacement field's `{...}`, even in a NON-triple-quoted
+				// f-string -- one of the headline relaxations PEP 701
+				// makes over the pre-3.12 grammar. The `!triple` check
+				// below still applies to a newline in the OUTER literal
+				// text (braceDepth == 0), which remains illegal for a
+				// short string regardless of f-string-ness (codex review,
+				// 2026-09-05, CHAOS-4291 r3 P2: this file previously
+				// rejected `f"{\n  x if x else 0\n}"` as an unterminated
+				// string literal, skipping the whole file instead of
+				// scoring it like radon does).
+				t.pos++
+				t.line++
+				t.col = 0
+				continue
+			}
 			if !triple {
 				return &ErrTokenize{
 					Line: startLine, Msg: "unterminated string literal",

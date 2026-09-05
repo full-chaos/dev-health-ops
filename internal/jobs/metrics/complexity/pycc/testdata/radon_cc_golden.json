@@ -367,6 +367,24 @@
       "skipped": false,
       "very_high_complexity_functions": 0
     },
+    "rules_r3_fstring_multiline.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
     "rules_softkeywords.py.txt": {
       "blocks": [
         {

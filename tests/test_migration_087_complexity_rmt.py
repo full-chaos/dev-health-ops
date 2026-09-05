@@ -146,6 +146,27 @@ class FakeClient:
         if "count() FROM system.tables" in query:
             assert parameters is not None
             return _FakeResult([[1 if parameters["name"] in self.tables else 0]])
+        if "engine_full FROM system.tables" in query:
+            # r3 P1: engine_full carries the version-column ARGUMENT that
+            # bare `engine` cannot -- defaults to the correct
+            # ReplacingMergeTree(computed_at) for any catalog entry that
+            # says engine=="ReplacingMergeTree" and doesn't explicitly
+            # override "engine_full", so every EXISTING test (which never
+            # sets engine_full) keeps exercising the "correctly converted"
+            # case unchanged. A test proving the wrong-version-column bug
+            # sets "engine_full" explicitly to something else.
+            assert parameters is not None
+            spec = self.tables.get(parameters["name"])
+            if not spec:
+                return _FakeResult([])
+            engine_full = spec.get("engine_full")
+            if engine_full is None:
+                engine_full = (
+                    "ReplacingMergeTree(computed_at)"
+                    if spec["engine"] == "ReplacingMergeTree"
+                    else spec["engine"]
+                )
+            return _FakeResult([[engine_full]])
         if "engine FROM system.tables" in query:
             assert parameters is not None
             spec = self.tables.get(parameters["name"])
@@ -905,6 +926,173 @@ def test_lock_absent_shadow_present_still_runs_catch_up(migration) -> None:
         cmd.startswith("INSERT INTO") and f"`{table}_new`" in cmd
         for cmd in client.commands
     ), "catch-up must copy the shadow's rows forward before dropping it"
+
+
+# ---------------------------------------------------------------------------
+# r3: version-column check on the "already RMT" paths, lock-release telemetry
+# ---------------------------------------------------------------------------
+
+
+def test_already_rmt_table_with_wrong_version_column_is_refused(migration) -> None:
+    """PROVE-BY-FAILURE for r3 P1: a table that reads back as
+    ReplacingMergeTree, with the RIGHT sorting key, but the WRONG (or no)
+    version-column argument must be REFUSED, not silently accepted as
+    already converted -- codex's own exact repro construction
+    (ReplacingMergeTree(other_version)).
+    """
+    table = "repo_complexity_daily"
+    catalog = _catalog(table)
+    catalog[table]["engine"] = "ReplacingMergeTree"
+    catalog[table]["sorting_key"] = LIVE_KEYS[table]
+    catalog[table]["engine_full"] = "ReplacingMergeTree(other_version)"
+    client = FakeClient(catalog)
+
+    with pytest.raises(RuntimeError, match="version column"):
+        migration._rebuild_table(client, table)
+    assert client.commands == [], (
+        "must refuse before issuing any mutating command, not attempt a rebuild"
+    )
+
+
+def test_already_rmt_table_with_bare_engine_no_version_column_is_refused(
+    migration,
+) -> None:
+    """Same finding, the OTHER shape codex named: a bare
+    `ReplacingMergeTree()` with no explicit version-column argument at all.
+    """
+    table = "repo_complexity_daily"
+    catalog = _catalog(table)
+    catalog[table]["engine"] = "ReplacingMergeTree"
+    catalog[table]["sorting_key"] = LIVE_KEYS[table]
+    catalog[table]["engine_full"] = "ReplacingMergeTree()"
+    client = FakeClient(catalog)
+
+    with pytest.raises(RuntimeError, match="version column"):
+        migration._rebuild_table(client, table)
+
+
+def test_already_rmt_table_with_correct_version_column_is_still_accepted(
+    migration,
+) -> None:
+    """Positive control for r3 P1's fix: the ORDINARY already-converted
+    case (ReplacingMergeTree(computed_at), FakeClient's own default) must
+    still be accepted as done -- the new check must not reject the
+    common, correct case.
+    """
+    table = "repo_complexity_daily"
+    catalog = _catalog(table)
+    catalog[table]["engine"] = "ReplacingMergeTree"
+    catalog[table]["sorting_key"] = LIVE_KEYS[table]
+    client = FakeClient(catalog)
+
+    migration._rebuild_table(client, table)  # must not raise
+
+    assert client.commands == []
+
+
+def test_wait_for_concurrent_conversion_also_checks_the_version_column(
+    migration, monkeypatch
+) -> None:
+    """r3 P1's fix applies to the WAITING runner's success path too, not
+    just `_rebuild_table`'s own skip branches -- a table another runner
+    left with the wrong version column must not be accepted here either.
+    """
+    monkeypatch.setattr(migration, "_LOCK_WAIT_TIMEOUT_SECS", 0.05)
+    monkeypatch.setattr(migration, "_LOCK_POLL_INTERVAL_SECS", 0.01)
+
+    table = "repo_complexity_daily"
+    catalog = _catalog(table)
+    catalog[table]["engine"] = "ReplacingMergeTree"
+    catalog[table]["sorting_key"] = LIVE_KEYS[table]
+    catalog[table]["engine_full"] = "ReplacingMergeTree(other_version)"
+    # No shadow, no lock: the loop's very first iteration must hit the
+    # version-column check, not spin until timeout.
+    client = FakeClient(catalog)
+
+    with pytest.raises(RuntimeError, match="version column"):
+        migration._wait_for_concurrent_conversion(client, table)
+
+
+def test_release_lock_failure_after_a_clean_conversion_now_raises(migration) -> None:
+    """PROVE-BY-FAILURE for r3 P2: before this fix, a lock-release failure
+    on an otherwise-SUCCESSFUL conversion was swallowed into a bare
+    warning log, and `_rebuild_table` returned normally -- silently
+    leaving the lock stuck forever with no signal in the migration's own
+    control flow. It must now raise.
+    """
+    table = "repo_complexity_daily"
+    lock_name = f"{table}{migration._LOCK_SUFFIX}"
+    client = FakeClient(
+        _catalog(table),
+        fail_on=f"DROP TABLE IF EXISTS `{lock_name}`",
+    )
+
+    with pytest.raises(RuntimeError, match="lock"):
+        migration._rebuild_table(client, table)
+
+
+def test_release_lock_failure_on_the_in_lock_convergence_skip_path_also_raises(
+    migration,
+) -> None:
+    """The SAME finding, but on the in-lock re-check's early `return`
+    (the "already ReplacingMergeTree but leftover shadow -- converging"
+    branch) specifically -- this is the path a naive `try/except/else`
+    fix would have missed entirely (an early `return` inside a `try`
+    skips `else`), so it gets its own direct test rather than trusting
+    the fall-through happy-path test above to cover it. (The OTHER
+    already-RMT skip branch, with no leftover shadow, returns before the
+    lock is ever acquired at all, so it has nothing to test here.)
+    """
+    table = "repo_complexity_daily"
+    lock_name = f"{table}{migration._LOCK_SUFFIX}"
+    client = FakeClient(
+        {
+            table: {
+                "ddl": _ddl(
+                    table, LIVE_KEYS[table], engine="ReplacingMergeTree(computed_at)"
+                ),
+                "engine": "ReplacingMergeTree",
+                "sorting_key": LIVE_KEYS[table],
+            },
+            f"{table}_new": {
+                "ddl": _ddl(f"{table}_new", LIVE_KEYS[table]),
+                "engine": "MergeTree",
+                "sorting_key": LIVE_KEYS[table],
+            },
+        },
+        fail_on=f"DROP TABLE IF EXISTS `{lock_name}`",
+    )
+
+    with pytest.raises(RuntimeError, match="lock"):
+        migration._rebuild_table(client, table)
+
+
+def test_release_lock_failure_during_a_real_error_does_not_mask_it(migration) -> None:
+    """The lock-release failure must NEVER replace a real, already-
+    propagating exception (e.g. a failed catch-up) -- Python's own
+    finally-raises-eats-the-original-exception semantics is exactly the
+    failure mode `_release_lock`'s internal swallow (still in force on
+    this path) exists to avoid. The ORIGINAL error must be what the
+    caller sees.
+    """
+    table = "repo_complexity_daily"
+    lock_name = f"{table}{migration._LOCK_SUFFIX}"
+    client = FakeClient(
+        _catalog(table),
+        fail_on=f"INSERT INTO `{table}` SELECT * FROM `{table}_new`",
+    )
+    # Also make the lock-release fail, on top of the catch-up failure.
+    real_command = client.command
+
+    def command_with_lock_release_also_failing(cmd: str) -> None:
+        if cmd == f"DROP TABLE IF EXISTS `{lock_name}`":
+            raise RuntimeError("injected lock-release failure")
+        return real_command(cmd)
+
+    client.command = command_with_lock_release_also_failing  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="injected failure on"):
+        migration._rebuild_table(client, table)
 
 
 def test_upgrade_processes_every_table(migration) -> None:

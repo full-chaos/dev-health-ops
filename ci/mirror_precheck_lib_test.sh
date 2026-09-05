@@ -16,25 +16,47 @@ source "${ROOT}/ci/mirror_precheck_lib.sh"
 declare -A FAKE_DIGEST=()   # dest -> digest string docker would report present
 declare -A FAKE_EXISTS=()   # dest -> set (any value) means --raw succeeds
 
+# Codex round 2, P3: the first version of this stub dispatched on `$4` alone
+# (--format / --raw), never checking argument COUNT or the `--format`
+# template string itself. A future edit to the library that quietly changed
+# `--format '{{ .Manifest.Digest }}'` to a different (wrong) template would
+# still hit the `--format)` branch and get back the fake digest as if
+# nothing had changed -- the test would keep passing while the library
+# silently stopped extracting a real digest. Worse: any invocation this stub
+# does NOT recognize falls through to `return 99` with a stderr message, but
+# the library's own callers run it inside `dest_digest=$(docker ... 2>/dev/null)`
+# -- that redirect applies to the WHOLE command substitution, including this
+# function's own `echo ... >&2`, so a genuinely unstubbed shape was silently
+# swallowed and converted into a plausible-looking `reason=absent` instead of
+# failing the suite. A file-based marker survives that subshell (a variable
+# assignment made inside `$(...)` does not); checked once at the end.
+STUB_VIOLATIONS_FILE="$(mktemp)"
+trap 'rm -f "${STUB_VIOLATIONS_FILE}"' EXIT
+
 docker() {
   if [ "${1:-}" = buildx ] && [ "${2:-}" = imagetools ] && [ "${3:-}" = inspect ]; then
     case "${4:-}" in
       --format)
-        local dest="${6:-}"
-        if [ -n "${FAKE_DIGEST[${dest}]+set}" ]; then
-          printf '%s\n' "${FAKE_DIGEST[${dest}]}"
-          return 0
+        if [ "$#" -eq 6 ] && [ "${5}" = '{{ .Manifest.Digest }}' ]; then
+          local dest="${6}"
+          if [ -n "${FAKE_DIGEST[${dest}]+set}" ]; then
+            printf '%s\n' "${FAKE_DIGEST[${dest}]}"
+            return 0
+          fi
+          return 1
         fi
-        return 1
         ;;
       --raw)
-        local dest="${5:-}"
-        [ -n "${FAKE_EXISTS[${dest}]+set}" ]
-        return
+        if [ "$#" -eq 5 ]; then
+          local dest="${5}"
+          [ -n "${FAKE_EXISTS[${dest}]+set}" ]
+          return
+        fi
         ;;
     esac
   fi
   echo "TEST BUG: unstubbed docker invocation: $*" >&2
+  printf '%s\n' "$*" >> "${STUB_VIOLATIONS_FILE}"
   return 99
 }
 
@@ -102,6 +124,12 @@ assert_case "unpinned-tag-present" "${OWNER}" \
 unset 'FAKE_EXISTS[ghcr.io/full-chaos/valkey/valkey:8-alpine]'
 assert_case "unpinned-tag-absent" "${OWNER}" \
   'valkey/valkey:8-alpine' missing presence-only-tag-absent
+
+if [ -s "${STUB_VIOLATIONS_FILE}" ]; then
+  echo "FAIL: docker stub received at least one invocation it did not recognize (exact argument count/template mismatch -- see the TEST BUG lines above); a library change that stopped matching the stub must not pass silently:" >&2
+  sed 's/^/  /' "${STUB_VIOLATIONS_FILE}" >&2
+  failures=$((failures + 1))
+fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${failures}"
 [ "${failures}" -eq 0 ]

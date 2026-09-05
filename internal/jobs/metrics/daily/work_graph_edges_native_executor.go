@@ -136,31 +136,37 @@ func (executor *WorkGraphEdgesExecutor) ComputeFamily(
 	// for a partition that really does have review edges in ClickHouse. The
 	// count below is what actually landed, whatever happens after it.
 	//
-	// PENDING DEPENDENCY, tracked in this PR's RISK-NOTES: the other half of
-	// the ruling -- wrapping this error in `ErrPartialWrite` so
-	// computeNativeFamilies adds the family to skipFamilies (suppressing the
-	// Python fallback) and emits the PartialWrite outcome -- needs the shared
-	// sentinel and observer constant that lane-port-review-bench owns as the
-	// first commit of #2235's F2 work. Both names are fixed by ruling, so this
-	// wrap is a one-line change once that lands and this PR restacks onto it.
-	// Until then a partial write still fails open to Python, exactly as before;
-	// nothing here makes that worse, and the honest count makes it visible.
+	// A failure AFTER anything has landed wraps ErrPartialWrite, so
+	// computeNativeFamilies adds this family to skipFamilies and the bridge
+	// does NOT rewrite the tables. These three tables are ReplacingMergeTrees
+	// keyed without edge_id, so a bridge rewrite would in fact merge cleanly --
+	// but the skip is still correct: the partition is re-driven with a truthful
+	// row count rather than papered over, and the family must not depend on its
+	// output tables' engine for the fallback decision to be safe.
+	//
+	// THE GUARD IS `written > 0` AND THAT IS THE WHOLE POINT (partialwrite.go:29):
+	// wrapping a failure BEFORE the first write would suppress the bridge's
+	// LEGITIMATE fallback and lose the family for the partition -- the opposite
+	// mistake, equally silent. The natural refactor here is one error path for
+	// the whole function; that refactor is wrong. Keep the condition explicit.
 	written := 0
+
+	partial := func(err error) (int, error) { return wrapWorkGraphEdgesPartialWrite(written, err) }
 
 	writtenReviews, err := WriteWorkGraphPRReviewOutcomeEdges(ctx, executor.conn, result.ReviewOutcomeEdges, computedAt)
 	written += writtenReviews
 	if err != nil {
-		return written, err
+		return partial(err)
 	}
 	writtenDeployments, err := WriteWorkGraphPRDeploymentEdges(ctx, executor.conn, result.PRDeploymentEdges, computedAt)
 	written += writtenDeployments
 	if err != nil {
-		return written, err
+		return partial(err)
 	}
 	writtenIncidents, err := WriteWorkGraphDeploymentIncidentEdges(ctx, executor.conn, result.DeploymentIncidentEdges, computedAt)
 	written += writtenIncidents
 	if err != nil {
-		return written, err
+		return partial(err)
 	}
 	return written, nil
 }
@@ -252,4 +258,25 @@ func extractPerProvider(
 		combined.DeploymentIncidentEdges = append(combined.DeploymentIncidentEdges, result.DeploymentIncidentEdges...)
 	}
 	return combined, nil
+}
+
+// wrapWorkGraphEdgesPartialWrite decides whether a write failure is a PARTIAL
+// write or an ordinary one, and is a named function rather than an inline
+// closure so both directions can be tested without faking a ClickHouse
+// connection and three loader queries.
+//
+// Both directions matter equally. Wrapping when nothing was written suppresses
+// the compatibility bridge's legitimate fallback and loses the family for the
+// partition (partialwrite.go:29). NOT wrapping when something was written
+// leaves the bridge to add a second copy of the rows that already landed. The
+// two mistakes are symmetric and both are silent, which is why
+// TestWorkGraphEdgesPartialWriteGuardPinsBothDirections asserts each one -- a
+// test covering only the ErrPartialWrite path would still pass if ordinary
+// failures had quietly stopped failing open.
+func wrapWorkGraphEdgesPartialWrite(written int, err error) (int, error) {
+	if written > 0 {
+		return written, fmt.Errorf("%w: work_graph_edges wrote %d row(s) before failing: %w",
+			ErrPartialWrite, written, err)
+	}
+	return 0, err
 }

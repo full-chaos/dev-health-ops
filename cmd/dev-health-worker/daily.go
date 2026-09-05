@@ -989,6 +989,22 @@ func dailyNativeFamilyRegistrations(
 			"error", workGraphEdgesErr,
 		)
 	}
+	// CHAOS-4280 part B / CHAOS-4286 part B: ai_workflow. Same fail-open
+	// construction policy, and PRE-BRIDGE: it reads git_pull_requests and
+	// work_graph_issue_pr, never another compat family's daily output.
+	// Shares the SAME "auto" job-provider convention as work_graph_edges
+	// above for the identical reason (discover_repos' own default).
+	if aiWorkflowExecutor, aiWorkflowErr := daily.NewAIWorkflowExecutor(clickhouseConnection, "auto"); aiWorkflowErr == nil {
+		native["ai_workflow"] = aiWorkflowExecutor
+	} else {
+		logger.Error(
+			"ai_workflow native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiWorkflowErr,
+		)
+	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as
 	// every other native family above.
 	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {

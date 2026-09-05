@@ -1,0 +1,59 @@
+namespace shapes {
+
+class Rectangle {
+public:
+    Rectangle(int w, int h) : width_(w), height_(h) {
+        if (w < 0 || h < 0) {
+            width_ = 0;
+            height_ = 0;
+        }
+    }
+
+    int area() const {
+        return width_ * height_;
+    }
+
+    bool contains(int x, int y) const {
+        if (x >= 0 && x < width_) {
+            if (y >= 0 && y < height_) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    Rectangle operator+(const Rectangle& other) const {
+        return Rectangle(width_ + other.width_, height_ + other.height_);
+    }
+
+private:
+    int width_;
+    int height_;
+};
+
+namespace nested {
+
+class Circle {
+public:
+    double area() const {
+        return radius_ > 0 ? 3.14159 * radius_ * radius_ : 0.0;
+    }
+
+private:
+    double radius_ = 0.0;
+};
+
+}  // namespace nested
+
+}  // namespace shapes
+
+class OuterOnly {
+public:
+    int pick(int a, int b, int c) {
+        switch (a) {
+            case 1: return b;
+            case 2: return c;
+            default: return a;
+        }
+    }
+};

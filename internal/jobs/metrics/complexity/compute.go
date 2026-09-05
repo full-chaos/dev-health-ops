@@ -10,8 +10,11 @@
 //
 // SCOPE, PR1 (CHAOS-4971a): only `.py` is computed natively, through the pycc
 // subpackage's port of radon. The other 20 languages Python routes to lizard
-// are PR2 (CHAOS-4971b). This package FAILS CLOSED on them rather than
-// skipping them -- see AnalyzeFile.
+// are PR2 (CHAOS-4971b / CHAOS-5156), landing in three stacked PRs: 2a (this
+// one) adds C and C++ through the lizardcc subpackage's port of lizard's
+// CLikeReader; 2b and 2c add the rest. This package FAILS CLOSED on every
+// language not yet registered in DefaultAnalyzers rather than skipping it --
+// see AnalyzeFile.
 package complexity
 
 import (
@@ -21,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/complexity/lizardcc"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/complexity/pycc"
 )
 
@@ -128,14 +132,28 @@ func PythonAnalyzer(path, source string) ([]int, bool, error) {
 	return complexities, false, nil
 }
 
+// CFamilyAnalyzer is the lizard-equivalent analyzer for C and C++
+// (CHAOS-5156 PR2a). Python's LANGUAGE_BY_EXTENSION maps both `.c`/`.h` and
+// `.cpp`/`.cc`/`.hpp` to lizard's single CLikeReader (clike.py:24-28), so
+// both languages share this one Go analyzer too -- there is no separate
+// "C-only" or "C++-only" behaviour to diverge on.
+func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
+	return lizardcc.Analyze(path, source)
+}
+
 // DefaultAnalyzers returns the analyzers available natively, keyed by the
 // language name LanguageFor reports.
 //
-// PR1 (CHAOS-4971a) registers `python` only. PR2 (CHAOS-5156) adds the 20
-// lizard languages by returning a map with more entries -- it does not need to
-// modify this function, the dispatch, the result type, or the extension map.
+// PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) adds `c` and
+// `cpp`. The remaining lizard languages land in PR2b/2c by adding more
+// entries here -- no other function, the dispatch, the result type, or the
+// extension map needs to change for them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
-	return map[string]AnalyzerFunc{"python": PythonAnalyzer}
+	return map[string]AnalyzerFunc{
+		"python": PythonAnalyzer,
+		"c":      CFamilyAnalyzer,
+		"cpp":    CFamilyAnalyzer,
+	}
 }
 
 // BuildFileResult ports _build_result (analytics/complexity.py:240-259).

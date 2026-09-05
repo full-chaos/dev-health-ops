@@ -98,6 +98,11 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 
 	inputs, err := service.loader.Load(ctx, orgID, window)
 	if err != nil {
+		service.logger.Error("issue-pr links: load failed",
+			slog.String("organization_id", orgID),
+			slog.Any("window_from", window.From), slog.Any("window_to", window.To),
+			slog.Any("error", err),
+		)
 		return Outcome{OrganizationID: orgID}, err
 	}
 	result := Derive(inputs)
@@ -115,6 +120,11 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 	}
 
 	if err := service.writer.Write(ctx, result.Links); err != nil {
+		service.logger.Error("issue-pr links: write failed",
+			slog.String("organization_id", orgID),
+			slog.Int("links_derived", len(result.Links)),
+			slog.Any("error", err),
+		)
 		return Outcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr links: %w", err)
 	}
 

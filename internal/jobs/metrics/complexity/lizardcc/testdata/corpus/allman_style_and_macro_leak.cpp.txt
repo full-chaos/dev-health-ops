@@ -1,0 +1,40 @@
+// Regression fixture for two real bugs found while building CHAOS-5156
+// PR2b (both fixed in this PR, since PR2b's own tests caught them first):
+//
+//  1. Allman-style braces (opening brace on its own line) abandoned the
+//     enclosing function declaration entirely -- a bare "\n" token was
+//     being forwarded to the state machines when real lizard's own
+//     pipeline drops it before they ever see it.
+//  2. `#if defined(X)` tokenized as separate "#"/"if"/"defined"/"("/"X"/
+//     ")" tokens instead of one directive, so "if" leaked out as a real
+//     condition token and "defined(X)" got parsed as if it were a
+//     function declaration, corrupting everything that followed until
+//     something coincidentally resynced it.
+int allman_style(int n)
+{
+    if (n > 0)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+#if defined(STRICT_MODE)
+int guarded_allman(int n)
+{
+    if (n > 0 && n < 100)
+    {
+        return n;
+    }
+    return -1;
+}
+#endif
+
+int after_guard(int n)
+{
+    if (n > 0)
+    {
+        return 1;
+    }
+    return 0;
+}

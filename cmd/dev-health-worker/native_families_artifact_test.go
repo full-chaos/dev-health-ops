@@ -519,6 +519,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// every input is a raw sync table plus the shared incident
 		// projection, so nothing else in the partition has to precede it.
 		"work_graph_edges",
+		// CHAOS-4286 part B: ai_workflow is pre_bridge for the same reason --
+		// its inputs (git_pull_requests, work_graph_issue_pr) are raw sync
+		// tables, not another daily family's own output.
+		"ai_workflow",
 	}
 	// CHAOS-5078 retired the CHAOS-4283 three (work_item_state, work_item,
 	// work_item_estimate) from post_bridge -- they moved to native/pre_bridge

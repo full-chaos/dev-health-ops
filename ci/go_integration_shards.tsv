@@ -111,6 +111,17 @@
 # re-time it if a faster reference becomes available, and re-time
 # regardless if tests are added (weight scales with TEST COUNT here, same
 # as its container-plus-migration siblings above).
+# internal/jobs/workgraph/operationaledges (CHAOS-4924): FIVE
+# Testcontainers-backed tests in incidents_golden_integration_test.go, each
+# taking a fresh ClickHouse container plus the real migration chain -- same
+# container-plus-migration shape as internal/jobs/workgraph/edges above,
+# weight scales with TEST COUNT per the header's own rule. Measured
+# DIRECTLY on bigboy (not a local run needing the 2x scale-up other entries
+# apply): `go test -tags=integration -coverprofile=... ./internal/jobs/workgraph/operationaledges/...`,
+# 59.749s package time (12.95s + 12.57s + 11.71s + 10.26s + 12.14s across
+# the five tests). Rounded up to 65 for headroom, same reasoning as every
+# other entry in this file -- re-time if a faster reference becomes
+# available, and re-time regardless if the file gains more tests.
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
@@ -140,6 +151,7 @@ internal/jobs/system	12
 internal/jobs/workgraph	7
 internal/jobs/workgraph/edges	20
 internal/jobs/workgraph/issueprlinks	20
+internal/jobs/workgraph/operationaledges	65
 internal/llmorgsettings	15
 internal/providerfoundation	12
 internal/providersync	1166

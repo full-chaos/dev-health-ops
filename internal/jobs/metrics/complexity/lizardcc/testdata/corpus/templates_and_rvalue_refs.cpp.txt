@@ -1,0 +1,47 @@
+template<typename T>
+T maxOf(T a, T b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+template <typename T, typename U>
+bool bothPositive(T a, U b) {
+    return a > 0 && b > 0;
+}
+
+// A move constructor: "T&&" here is a reference qualifier, not a
+// logical-and, and must not inflate this function's complexity.
+class Buffer {
+public:
+    Buffer(Buffer&& other) {
+        if (other.size > 0) {
+            size = other.size;
+        }
+        other.size = 0;
+    }
+
+private:
+    int size = 0;
+};
+
+// A plain function mixing a real "&&" alongside an unrelated rvalue-ref
+// local declaration, so the correction must apply to the declaration only.
+int mix(int a, int b) {
+    int&& tmp = compute(a, b);
+    if (a > 0 && b > 0) {
+        return tmp;
+    }
+    return 0;
+}
+
+typedef int&& IntRvalueRef;
+typedef void (*Callback)(int&& payload);
+
+int afterTypedefs(int a, int b) {
+    if (a > 0 && b > 0) {
+        return 1;
+    }
+    return 0;
+}

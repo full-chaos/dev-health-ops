@@ -512,6 +512,35 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/jobs/metrics/aiworkflow (ai_workflow port vs live Python, CHAOS-4280/CHAOS-4286)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestAIWorkflowMatchesLivePythonProduction$' \
+        ./internal/jobs/metrics/aiworkflow
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  # Own marker, checked separately, for the same reason as the siblings
+  # above: a shared marker would be satisfied by whichever oracle happened
+  # to run. This one is the ONLY guard proving Go's strongestSignal keeps
+  # the FIRST maximal element on a tie against production's real
+  # extract_ai_workflow_from_pull_requests, not a synthetic fixture in this
+  # repo's own Go test.
+  proof_file="${proof_dir}/ai-workflow-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: ai_workflow live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/testops (compute_testops.py port vs live Python, CHAOS-4294/CHAOS-4284)\n'
   if ! (
     cd "${ROOT}"

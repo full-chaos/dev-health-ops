@@ -258,12 +258,26 @@ func TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved(t 
 		familyObserver.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite {
 		t.Fatalf("family observations=%#v, want the PartialWrite observation unaffected", familyObserver.calls)
 	}
-	if len(logger.calls) != 1 {
-		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	// #2276 pre-pass sweep: computeNativeFamilies' own ErrPartialWrite branch
+	// now ALSO logs (previously metric-only, team-lead-requested fix) -- so
+	// this fixture's single partial-write family produces TWO log calls: the
+	// earlier per-family partial-write log, then this test's own subject,
+	// the later release-with-reason failure. Find the release-with-reason
+	// call by content rather than assuming index 0/only-one-call, so this
+	// test's OWN assertions stay scoped to what it's actually testing.
+	if len(logger.calls) != 2 {
+		t.Fatalf("logger.calls=%d, want exactly 2 (the per-family partial-write log, "+
+			"then the release-with-reason failure log) -- got %#v", len(logger.calls), logger.calls)
 	}
-	call := logger.calls[0]
-	if !strings.Contains(call.msg, "release-with-reason failed") {
-		t.Fatalf("log message %q does not describe the release-with-reason failure", call.msg)
+	var call *recordingRefusalLogCall
+	for i := range logger.calls {
+		if strings.Contains(logger.calls[i].msg, "release-with-reason failed") {
+			call = &logger.calls[i]
+			break
+		}
+	}
+	if call == nil {
+		t.Fatalf("no log call describes the release-with-reason failure; got %#v", logger.calls)
 	}
 	if !call.hasArg("organization_id", testOrgID) {
 		t.Fatalf("log call %#v does not carry organization_id=%s", call, testOrgID)
@@ -550,6 +564,12 @@ func TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete(t *testing.T) {
 	observer := &recordingNativeFamilyObserver{}
 	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": postExecutor})
 	handler.SetNativeFamilyObserver(observer)
+	// #2276 pre-pass sweep (team-lead-requested): this branch used to record
+	// ONLY the metric above -- the rich error (rows landed, the underlying
+	// cause) was never logged. Assert the log call fires with the true row
+	// count, mirroring the pre_bridge sibling's own test.
+	logger := &recordingRefusalLogger{}
+	handler.SetNativeFamilyLogger(logger)
 
 	workErr := handler.Work(context.Background(), partitionExecution())
 	if !errors.Is(workErr, ErrPostBridgeFamilyIncomplete) {
@@ -562,11 +582,67 @@ func TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete(t *testing.T) {
 		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite || observer.calls[0].rowsWritten != 42 {
 		t.Fatalf("observations=%#v, want PartialWrite with the TRUE row count preserved", observer.calls)
 	}
+	if len(logger.calls) != 1 {
+		t.Fatalf("logger.calls=%d, want exactly 1 -- got %#v", len(logger.calls), logger.calls)
+	}
+	if !logger.calls[0].hasArg("family", "work_item_state") || !logger.calls[0].hasArg("rows", 42) {
+		t.Fatalf("log call %#v does not carry family/rows for the partial write", logger.calls[0])
+	}
 }
 
 // TestPostBridgeNilExecutorDoesNotComplete proves the CHAOS-5190 codex round
 // 1 P1 fix: skipFamiliesForBridge tells Python to skip every REGISTERED
 // post_bridge NAME unconditionally, independent of whether an executor was
+// TestBothPreAndPostBridgePartialWriteLogsBothErrors is the #2276 pre-pass
+// item 4 fix (team-lead-requested): when a partition hits BOTH a pre_bridge
+// AND a post_bridge partial write in the same run, Work() returns only the
+// post_bridge error (precedence is arbitrary, see the comment at the call
+// site) -- but the pre_bridge error must not be SILENTLY discarded just
+// because it lost that precedence. A revert of the added log call here
+// would not be caught by TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved
+// or TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete individually --
+// each only ever exercises ONE of the two failing at a time.
+func TestBothPreAndPostBridgePartialWriteLogsBothErrors(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preExecutor := &fakeNativeFamilyExecutor{rowsWritten: 3, err: fmt.Errorf("%w: wrote 3 rows before failing", ErrPartialWrite)}
+	postExecutor := &fakeNativeFamilyExecutor{rowsWritten: 9, err: fmt.Errorf("%w: wrote 9 rows before failing", ErrPartialWrite)}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": preExecutor}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": postExecutor})
+	logger := &recordingRefusalLogger{}
+	handler.SetNativeFamilyLogger(logger)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPostBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want post_bridge to win precedence over pre_bridge when both fail", workErr)
+	}
+	if errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, must not ALSO wrap ErrPreBridgeFamilyIncomplete -- only one disposition per Work() call", workErr)
+	}
+	var sawBoth bool
+	for _, call := range logger.calls {
+		if strings.Contains(call.msg, "hit BOTH a pre_bridge and a post_bridge") {
+			sawBoth = true
+			if !call.hasArg("organization_id", testOrgID) {
+				t.Fatalf("both-failed log call %#v missing organization_id", call)
+			}
+			break
+		}
+	}
+	if !sawBoth {
+		t.Fatalf("no log call reported BOTH failures; got %#v -- the pre_bridge failure was silently swallowed", logger.calls)
+	}
+}
+
 // actually wired for it -- so a nil executor (e.g. a registry lookup that
 // found the name but not a live implementation) used to fall through this
 // loop's old bare `continue` silently, exactly like a genuine failure would

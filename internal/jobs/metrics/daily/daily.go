@@ -993,6 +993,29 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			if errors.Is(err, ErrPartialWrite) {
 				skipFamilies = append(skipFamilies, name)
 				incomplete = append(incomplete, name)
+				// #2280 r3 (sweep item, team-lead-requested): this branch used
+				// to record ONLY the metric below -- the rich error (which
+				// table/step failed, how many rows actually landed) was never
+				// logged anywhere, leaving an operator with a counter increment
+				// and no way to diagnose WHY without re-deriving it from source.
+				// Mirrors the sibling "refused" branch's log call just below,
+				// scoped to the partial-write case specifically.
+				if handler.nativeFamilyLogger != nil {
+					handler.nativeFamilyLogger.Error(
+						"native metrics.daily pre_bridge family partially wrote "+
+							"rows before failing for this partition; excluded from "+
+							"the compatibility bridge to avoid duplicating an "+
+							"append-only write (CHAOS-5190)",
+						"family", name,
+						"organization_id", run.OrganizationID,
+						"target_day", run.TargetDay,
+						"partition_id", partition.ID,
+						"repo_ids", partition.RepoIDs,
+						"run_id", run.ID,
+						"rows", rows,
+						"error", err,
+					)
+				}
 				if handler.nativeObserver != nil {
 					_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
 						name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rows, duration,
@@ -1191,6 +1214,26 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 			// is distinguished here even though the skip decision is not.
 			if errors.Is(err, ErrPartialWrite) {
 				outcome = jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite
+				// #2280 r3 (sweep item, same class as computeNativeFamilies'
+				// pre_bridge sibling above): the outcome was distinguished
+				// correctly, but nothing here ever logged the rich error --
+				// which table/step failed, how many rows landed -- leaving an
+				// operator with only a counter increment.
+				if handler.nativeFamilyLogger != nil {
+					handler.nativeFamilyLogger.Error(
+						"native metrics.daily post_bridge family partially wrote "+
+							"rows before failing for this partition; no fallback "+
+							"writer exists for a post_bridge family (CHAOS-5190)",
+						"family", name,
+						"organization_id", run.OrganizationID,
+						"target_day", run.TargetDay,
+						"partition_id", partition.ID,
+						"repo_ids", partition.RepoIDs,
+						"run_id", run.ID,
+						"rows", rows,
+						"error", err,
+					)
+				}
 			} else {
 				rows = 0
 				outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
@@ -1301,6 +1344,28 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// is no shared code path where both are expected to fire
 			// together in practice.
 			if err := handler.computePostBridgeNativeFamilies(workCtx, run, claim.Partition); err != nil {
+				// team-lead ruling (#2276 pre-pass items): the post_bridge
+				// error wins arbitrarily below, but a genuinely concurrent
+				// pre_bridge failure must not be SILENTLY swallowed just
+				// because it lost that precedence -- log it here, before
+				// discarding it, so an operator sees BOTH failures rather
+				// than only whichever one happened to win the return value.
+				if preBridgeErr != nil && handler.nativeFamilyLogger != nil {
+					handler.nativeFamilyLogger.Error(
+						"daily metrics partition hit BOTH a pre_bridge and a "+
+							"post_bridge native family failure in the same run; "+
+							"the post_bridge failure is returned (wins arbitrarily, "+
+							"see the comment above) and this pre_bridge failure "+
+							"would otherwise be swallowed entirely (CHAOS-5190/CHAOS-5078)",
+						"organization_id", run.OrganizationID,
+						"target_day", run.TargetDay,
+						"partition_id", claim.Partition.ID,
+						"repo_ids", claim.Partition.RepoIDs,
+						"run_id", claim.Partition.RunID,
+						"pre_bridge_error", preBridgeErr,
+						"post_bridge_error", err,
+					)
+				}
 				return err
 			}
 			return preBridgeErr

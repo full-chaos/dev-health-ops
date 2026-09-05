@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 // The three native testops families read ClickHouse differently from the
 // row-at-a-time loaders CHAOS-4294 wrote next door: case rows are reduced to
 // one row per case_name in-database, coverage is reduced to one snapshot, and
-// dedup is argMax-over-a-tuple instead of FINAL. Each of those is a place the
+// dedup is FINAL, read-for-read with Python. Each of those is a place the
 // new readers could silently disagree with the oracle-proved path.
 //
 // So this test runs BOTH paths over the SAME seeded ClickHouse and asserts the
@@ -110,7 +111,14 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 
 	seedTestopsDifferentialFixture(ctx, t, conn, orgID, repoID, day)
 
-	assertTieFixtureActuallyTies(ctx, t, conn, orgID, repoID)
+	// One positive control PER TABLE. Previously only ci_pipeline_runs was
+	// checked, and an executed mutation proved the consequence: FINAL could be
+	// deleted from the four test_suite_results reads and the coverage_snapshots
+	// read -- 5 of 10 sites -- with the whole suite still GREEN.
+	assertTieFixtureActuallyTies(ctx, t, conn, orgID, repoID, "ci_pipeline_runs", "run_id")
+	assertTieFixtureActuallyTies(ctx, t, conn, orgID, repoID, "test_suite_results", "run_id, suite_id")
+	assertTieFixtureActuallyTies(ctx, t, conn, orgID, repoID, "test_case_results", "run_id, suite_id, case_id")
+	assertTieFixtureActuallyTies(ctx, t, conn, orgID, repoID, "coverage_snapshots", "run_id, snapshot_id")
 
 	// ---------------- testops_pipeline ----------------
 	pushAccumulator := testops.NewPipelineAccumulator(repoID, repoID.String(), nil)
@@ -149,6 +157,24 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 			"so a bare-argMax regression (which would resolve the NULL winner to a stale non-NULL status) " +
 			"could not be detected")
 	}
+	// TOTAL-ORDER both sides before comparing index-by-index.
+	//
+	// PipelineAccumulator.Finish sorts by (teamID, serviceValue), but a NIL
+	// service and a non-nil EMPTY-STRING service both map to serviceValue "" --
+	// and this fixture deliberately contains both (see the >=2 groups guard
+	// above). So that key is NOT TOTAL for this data, sort.SliceStable falls
+	// back to INSERTION order for the tie, and insertion order is the order rows
+	// arrived from the loader. The two loaders read different queries, so their
+	// arrival orders need not agree.
+	//
+	// This made the differential silently ORDER-DEPENDENT: it passed only while
+	// both loaders happened to surface the tied groups in the same sequence.
+	// Adding duplicate rows to the fixtures changed the physical layout, changed
+	// the raw loader's arrival order, and flipped the tie -- surfacing a latent
+	// defect rather than introducing one. Sorting both sides by a key that
+	// SEPARATES nil from "" removes the dependency entirely.
+	sortPipelineMetricsForComparison(rawPipeline)
+	sortPipelineMetricsForComparison(pushPipeline)
 	for index := range rawPipeline {
 		if !samePipelineMetric(rawPipeline[index], pushPipeline[index]) {
 			t.Fatalf("pipeline row %d diverges:\nrowloader=%+v\npushdown =%+v", index, rawPipeline[index], pushPipeline[index])
@@ -468,6 +494,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 	// --- test_suite_results: today's suite, a NEXT-DAY suite sharing run-1's
 	// id (the day-boundary guard), and a historical suite for recurrence.
+	// Every suite row is seeded THREE times: a stale version, a TIE-loser
+	// sharing the winner's last_synced, and the winner LAST. Insertion order is
+	// load-bearing -- ReplacingMergeTree resolves a version tie to the
+	// last-inserted row, which is the determinism the FINAL revert relies on.
+	//
+	// The losers carry a deliberately wrong passed_count. After FINAL the table
+	// is byte-identical to the single-row fixture this replaced, so every
+	// pre-existing assertion still holds; WITHOUT FINAL the wrong counts leak.
 	type suiteSeed struct {
 		runID, suiteID string
 		started        time.Time
@@ -477,16 +511,25 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		{runID: "run-1", suiteID: "suite-next-day", started: nextDay},
 		{runID: "run-hist", suiteID: "suite-hist", started: historyDay},
 	} {
-		if err := conn.Exec(ctx, `INSERT INTO test_suite_results
+		for _, v := range []struct {
+			lastSync time.Time
+			passed   uint32
+		}{
+			{synced.Add(-2 * time.Hour), 99}, // stale
+			{synced, 98},                     // TIE-loser: identical last_synced
+			{synced, 3},                      // winner, inserted LAST
+		} {
+			if err := conn.Exec(ctx, `INSERT INTO test_suite_results
 (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count,
  error_count, quarantined_count, duration_seconds, started_at, finished_at,
  team_id, service_id, org_id, last_synced)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			repoID, seed.runID, seed.suiteID, "suite", uint32(6), uint32(3), uint32(2), uint32(1),
-			uint32(1), uint32(1), 12.5, seed.started, seed.started.Add(time.Minute),
-			nil, nil, orgID, synced,
-		); err != nil {
-			t.Fatalf("seed test_suite_results %s/%s: %v", seed.runID, seed.suiteID, err)
+				repoID, seed.runID, seed.suiteID, "suite", uint32(6), v.passed, uint32(2), uint32(1),
+				uint32(1), uint32(1), 12.5, seed.started, seed.started.Add(time.Minute),
+				nil, nil, orgID, v.lastSync,
+			); err != nil {
+				t.Fatalf("seed test_suite_results %s/%s: %v", seed.runID, seed.suiteID, err)
+			}
 		}
 	}
 
@@ -513,12 +556,20 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		// Historical failure for "recurring".
 		{runID: "run-hist", suiteID: "suite-hist", caseID: "c6", caseName: "recurring", winnerStatus: "error", staleStatus: "passed"},
 	}
+	// SIX copies now, not five. Copies 0-3 are the ascending-last_synced stale
+	// shape (CHAOS-5045). Copy 4 is a TIE-LOSER carrying the winner's exact
+	// last_synced with a contradictory status, and copy 5 is the winner,
+	// inserted LAST so the tie resolves to it. Without copy 4 the table had
+	// duplicates but no TIE, so the version-tie path was never exercised here.
 	for _, seed := range caseSeeds {
-		for copyIndex := 0; copyIndex < 5; copyIndex++ {
+		for copyIndex := 0; copyIndex < 6; copyIndex++ {
 			status := seed.staleStatus
 			retry := uint32(0)
-			lastSync := synced.Add(-time.Duration(5-copyIndex) * time.Hour)
-			if copyIndex == 4 { // newest copy wins
+			lastSync := synced.Add(-time.Duration(6-copyIndex) * time.Hour)
+			if copyIndex == 4 { // TIE-loser: winner's version, wrong status
+				lastSync = synced
+			}
+			if copyIndex == 5 { // newest copy wins, inserted LAST
 				status = seed.winnerStatus
 				retry = seed.winnerRetry
 				lastSync = synced
@@ -543,19 +594,30 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		linesTotal        uint32
 		linesCovered      uint32
 	}
+	// Same three-version shape as test_suite_results: stale, TIE-loser sharing
+	// the winner's last_synced, winner LAST. Losers carry a wrong coverage pct.
 	for _, seed := range []coverageSeed{
 		{runID: "run-1", snapshotID: "snap-a", linePct: 70.0, linesTotal: 1000, linesCovered: 700},
 		{runID: "run-1", snapshotID: "snap-b", linePct: 81.5, linesTotal: 1000, linesCovered: 815},
 		{runID: "run-prior", snapshotID: "snap-p", linePct: 61.5, linesTotal: 900, linesCovered: 553},
 	} {
-		if err := conn.Exec(ctx, `INSERT INTO coverage_snapshots
+		for _, v := range []struct {
+			lastSync time.Time
+			pct      float64
+		}{
+			{synced.Add(-2 * time.Hour), 1.5}, // stale
+			{synced, 2.5},                     // TIE-loser
+			{synced, seed.linePct},            // winner, inserted LAST
+		} {
+			if err := conn.Exec(ctx, `INSERT INTO coverage_snapshots
 (repo_id, run_id, snapshot_id, lines_total, lines_covered, line_coverage_pct, branch_coverage_pct,
  team_id, service_id, org_id, last_synced)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			repoID, seed.runID, seed.snapshotID, seed.linesTotal, seed.linesCovered,
-			seed.linePct, seed.linePct-5.0, nil, nil, orgID, synced,
-		); err != nil {
-			t.Fatalf("seed coverage_snapshots %s/%s: %v", seed.runID, seed.snapshotID, err)
+				repoID, seed.runID, seed.snapshotID, seed.linesTotal, seed.linesCovered,
+				v.pct, v.pct-5.0, nil, nil, orgID, v.lastSync,
+			); err != nil {
+				t.Fatalf("seed coverage_snapshots %s/%s: %v", seed.runID, seed.snapshotID, err)
+			}
 		}
 	}
 }
@@ -638,34 +700,64 @@ func sameStrPtr(a, b *string) bool {
 	return *a == *b
 }
 
-// assertTieFixtureActuallyTies is the POSITIVE CONTROL for the tie fixture.
+// sortPipelineMetricsForComparison imposes a TOTAL order on pipeline metrics.
+//
+// nilServiceSentinel/setServicePrefix keep a NIL pointer and a pointer to the
+// EMPTY STRING in distinct buckets. Collapsing them with a plain
+// `if p != nil { v = *p }` would reproduce the exact ambiguity this exists to
+// remove, since *p may itself be "".
+func sortPipelineMetricsForComparison(metrics []testops.PipelineMetric) {
+	key := func(m testops.PipelineMetric) string {
+		return pipelineSortComponent(m.TeamID) + "\x1f" + pipelineSortComponent(m.ServiceID)
+	}
+	sort.SliceStable(metrics, func(i, j int) bool { return key(metrics[i]) < key(metrics[j]) })
+}
+
+// pipelineSortComponent renders a *string so that nil and "" never collide.
+func pipelineSortComponent(p *string) string {
+	if p == nil {
+		return "\x00" // nil sorts before every set value, including ""
+	}
+	return "\x01" + *p
+}
+
+// assertTieFixtureActuallyTies is the POSITIVE CONTROL for the tie fixture,
+// PARAMETRISED BY TABLE.
 //
 // A test that asserts "the readers handle a version tie" proves nothing if the
-// table never actually contains one -- and the previous fixture did not, because
-// every seeded row carried a distinct last_synced. So before any tie assertion
-// runs, this checks the table itself: some (run_id) under this org/repo must
-// have TWO physical rows sharing ONE last_synced value.
+// table never actually contains one. It must be applied to EVERY table whose
+// dedup the test claims to cover, not just one:
+//
+// This control was originally ci_pipeline_runs-only, and an executed mutation
+// proved what that cost. test_suite_results and coverage_snapshots had no
+// duplicate rows at all, so FINAL was a NO-OP on them -- deleting FINAL from
+// their five reads (of the ten in this PR) left the entire suite GREEN. The
+// differential could not detect the removal of half of what it exists to test.
+// A per-table control is the fix: a table with no tie now fails loudly here,
+// rather than silently making its assertions vacuous.
 //
 // It queries WITHOUT FINAL on purpose. FINAL would collapse the duplicate and
 // report one row, which is precisely the state this control exists to rule out.
 func assertTieFixtureActuallyTies(
 	ctx context.Context, t *testing.T, conn driver.Conn, orgID string, repoID uuid.UUID,
+	table, keyCols string,
 ) {
 	t.Helper()
 	var tied uint64
-	if err := conn.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 SELECT count() FROM (
-  SELECT run_id, last_synced, count() AS n
-  FROM ci_pipeline_runs
+  SELECT %s, last_synced, count() AS n
+  FROM %s
   WHERE org_id = ? AND repo_id = ?
-  GROUP BY run_id, last_synced
+  GROUP BY %s, last_synced
   HAVING n > 1
-)`, orgID, repoID).Scan(&tied); err != nil {
-		t.Fatalf("tie-fixture positive control: %v", err)
+)`, keyCols, table, keyCols)
+	if err := conn.QueryRow(ctx, query, orgID, repoID).Scan(&tied); err != nil {
+		t.Fatalf("tie-fixture positive control for %s: %v", table, err)
 	}
 	if tied == 0 {
-		t.Fatal("tie fixture is absent: no (run_id, last_synced) has more than one physical row, " +
-			"so nothing in this test exercises version-tie resolution and a green result would " +
-			"prove nothing about it")
+		t.Fatalf("tie fixture is absent for %s: no (%s, last_synced) has more than one physical "+
+			"row, so nothing in this test exercises version-tie resolution for that table and a "+
+			"green result would prove nothing about it", table, keyCols)
 	}
 }

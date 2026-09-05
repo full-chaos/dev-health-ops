@@ -22,13 +22,20 @@
 # absolute: zero writable paths exist under it, period. `workspace-write` was
 # then probed the same way and makes both the worktree AND plain /tmp paths
 # (no extra grants needed) writable on Linux, exactly as it already does on
-# macOS. So the sandbox mode picked by default is now host-dependent: Linux
-# defaults to workspace-write (the only mode under which Go can run there at
-# all); macOS keeps read-only (still proven sufficient, see v4.3/v4.4 above).
-# CODEX_REVIEW_SANDBOX, when set explicitly, still overrides this on either
-# host. The GOCACHE/GOTMPDIR/TMPDIR paths themselves are UNCHANGED -- they
-# already sit under /tmp, which workspace-write also permits without needing
-# to move them inside the worktree.
+# macOS. So the sandbox mode picked by default was, AT THE TIME, host-dependent:
+# Linux defaulted to workspace-write (the only mode under which Go could run
+# there at all); macOS kept read-only (still proven sufficient, see v4.3/v4.4
+# above). The GOCACHE/GOTMPDIR/TMPDIR paths themselves are UNCHANGED by any of
+# this -- they already sit under /tmp, which workspace-write also permits
+# without needing to move them inside the worktree.
+#
+# SUPERSEDED v4.8.7 (chris's ruling, 09-04, round-3 confirmation-pass P3 --
+# this whole paragraph was left describing the OLD default after the code
+# changed, exactly the stale-doc trap this file warns against elsewhere):
+# read-only is now the default on BOTH platforms, unconditionally -- a review
+# round is meant to read code, not execute it, so Linux no longer needs
+# workspace-write as its default. `CODEX_REVIEW_SANDBOX`, set explicitly by a
+# caller, still overrides the default on either host, same as always.
 #
 # CORRECTED 2026-09-03 (CHAOS-4925). The claim below used to read "under
 # read-only NOTHING is writable -- not $TMPDIR, not /tmp, ...". That is FALSE
@@ -61,9 +68,22 @@
 #
 # The per-lane warm GOCACHE is preserved rather than moved into the per-round
 # worktree (which would make it cold every round, the exact failure the GOCACHE
-# comment below warns about). It stays at its stable path and is granted write
-# access explicitly via `sandbox_workspace_write.writable_roots`. Verified: the
-# cache is genuinely populated through the sandbox and survives outside it.
+# comment below warns about). It stays at its stable path.
+#
+# CORRECTED, uncounted confirmation pass on codex-review-wrapper-v487 (P3,
+# source-checked): this paragraph used to claim, unconditionally, that the
+# cache "is granted write access explicitly via
+# `sandbox_workspace_write.writable_roots`" and "is genuinely populated
+# through the sandbox" -- both false as stated. The warm step that actually
+# populates this cache ALWAYS runs entirely outside codex's sandbox (the
+# wrapper's own `env`+`bash -c` subshell, before `codex exec` ever starts --
+# see the warm-step block further below); nothing about it is
+# sandbox-mediated, in any sandbox mode. The `writable_roots` grant referenced
+# here is a real mechanism, but a SEPARATE one: it exists only so the
+# REVIEWER's own exec blocks (if any) can write into this same cache path
+# during the round itself, and it is added ONLY when `RSANDBOX` is
+# `workspace-write` -- which is no longer the default (read-only is, since
+# v4.8.7). By default, no such grant is added at all.
 #
 # The sandbox mode is OPT-IN and still defaults to read-only, because widening
 # it is a policy change (the reviewer gains write access to the throwaway review
@@ -372,7 +392,9 @@
 #        or pass -w; background the SCRIPT, not pieces of it)
 #   -w DIR    lane worktree (default: $PWD)
 #   -n NAME   round name prefix (default: worktree basename) -> NAME-<ts>.md/.log
-#   -m MODEL  model (default: $CODEX_REVIEW_MODEL, else gpt-5.6-terra)
+#   -m MODEL  model (default: $CODEX_REVIEW_MODEL, else gpt-5.6-luna --
+#             chris's ruling 09-04 15:32 PDT: reverted from gpt-5.6-terra,
+#             unclear terra was giving more review accuracy)
 #   -e EFF    reasoning effort (default: $CODEX_REVIEW_EFFORT, else xhigh)
 #   -p FILE   prompt file (default: prompt.md in the lane worktree)
 #   -t SHA    tip to review (default: HEAD of the lane worktree)
@@ -394,7 +416,7 @@
 
 set -euo pipefail
 
-VERSION="4.8.6"
+VERSION="4.8.7"
 
 warn() { printf 'codex-review: %s\n' "$*" >&2; }
 die()  { warn "$*"; exit 1; }
@@ -558,7 +580,7 @@ case "${1:-}" in
     ;;
 esac
 
-WT="$PWD" NAME="" MODEL="${CODEX_REVIEW_MODEL:-gpt-5.6-terra}" EFF="${CODEX_REVIEW_EFFORT:-xhigh}"
+WT="$PWD" NAME="" MODEL="${CODEX_REVIEW_MODEL:-gpt-5.6-luna}" EFF="${CODEX_REVIEW_EFFORT:-xhigh}"
 PROMPT="" TIP="" OUTDIR="" KEEP=0 ALLOW_UNPUSHED=0
 while getopts 'w:n:m:e:p:t:o:kU' f; do
   case "$f" in
@@ -622,6 +644,31 @@ NAME_ALLOWLIST_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
 if ! (LC_ALL=C; [[ "$NAME" =~ $NAME_ALLOWLIST_RE ]]); then
   die "-n/round name '$NAME' is not a safe path/filename component -- must be non-empty, start with a letter or digit, and contain only letters, digits, '.', '_', '-' afterward, with NO embedded newline (this also rejects '.', '..', and anything containing '/' or a line break). Refusing to guess a substitute."
 fi
+# v4.8.7 (bigboy codex-auth incident, same day; PLACEMENT and MECHANISM both
+# fixed by confirmation-pass round #1 on this branch -- P1/P2, both EXECUTED):
+# the first version of this guard lived right before the `codex exec`
+# launch (search RC=0 below) -- by then the review worktree was already
+# created (git worktree add) and the warm step had already run, so it did
+# NOT prevent the wasted work it was written to prevent; it only produced a
+# clearer error message after the fact. Moved here, right after NAME
+# resolution, before ANY mktemp/worktree/warm work below. The first
+# version also equated "usable Codex credentials" with a non-empty
+# $CODEX_HOME/auth.json -- codex also supports keyring-backed credential
+# storage (cli_auth_credentials_store="keyring" in its own config, no
+# auth.json involved at all), which the file check would have wrongly
+# rejected, and a non-empty-but-malformed auth.json would have PASSED the
+# check only to fail later inside codex anyway. Fixed: ask codex itself,
+# via its own `login status` subcommand (measured: ~40ms, no network
+# round-trip observed, purely local credential-store inspection) --
+# whatever storage mechanism is actually configured, this is the same
+# check `codex exec` itself would effectively make. Output is discarded
+# (never parsed -- only the exit code matters); CODEX_HOME_EFFECTIVE is
+# still resolved, for the die message only, so a caller gets an actionable
+# hint about WHERE codex looked without this script re-deriving codex's
+# own auth-validity logic.
+CODEX_HOME_EFFECTIVE="${CODEX_HOME:-$HOME/.codex}"
+codex login status >/dev/null 2>&1 \
+  || die "codex reports not logged in (checked via 'codex login status', CODEX_HOME resolves to $CODEX_HOME_EFFECTIVE) -- refusing to launch a round that would fail mid-way with an HTTP 401 instead of failing loudly now. If this is bigboy, run under 'bash -lc' (so ~/.profile sets CODEX_HOME) or export CODEX_HOME=/home/ubuntu/agents/codex explicitly before retrying."
 PROMPT=${PROMPT:-$WT/prompt.md}
 OUTDIR=${OUTDIR:-$WT}
 # v4.8.4: OUTDIR (and the log dir, which is the same directory -- see V/L
@@ -837,20 +884,29 @@ fi
 RGOFLAGS="${GOFLAGS_STRIPPED:+$GOFLAGS_STRIPPED }${CODEX_REVIEW_GOFLAGS:--p=2}"
 RGOMAXPROCS="${CODEX_REVIEW_GOMAXPROCS:-4}"
 
-# Sandbox mode. read-only is the historical default and stays the default on
-# macOS, where /tmp is proven writable under it (see v4.3/v4.4 above).
+# Sandbox mode. read-only is the historical default on macOS, where /tmp is
+# proven writable under it (see v4.3/v4.4 above).
 #
-# On Linux it cannot be the default: probed on bigboy (v4.8 note above),
-# read-only there grants ZERO writable paths, so every Go command dies before
-# it can create its work dir or build cache -- there is no path this wrapper
-# could point GOTMPDIR/GOCACHE at that would help, because none exists.
-# workspace-write is therefore the Linux default; it is not a widening choice,
-# it is the only mode in which Go executes there at all. CODEX_REVIEW_SANDBOX,
-# when the caller sets it explicitly, always wins over this host default.
-case "$HOST_OS" in
-  Linux) RSANDBOX="${CODEX_REVIEW_SANDBOX:-workspace-write}" ;;
-  *)     RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}" ;;
-esac
+# Linux USED TO default to workspace-write here: probed on bigboy (v4.8 note
+# above), read-only there grants ZERO writable paths, so every Go command
+# dies before it can create its work dir or build cache -- there was no path
+# this wrapper could point GOTMPDIR/GOCACHE at that would help, because none
+# existed. That was the right call when the goal was letting the REVIEWER
+# run Go itself inside the round.
+#
+# CHANGED 09-04 (chris's ruling, 15:26 PDT): "codex should not be running
+# tests and go lang like it's been doing" -- a review round is a code-READING
+# exercise now, not a code-EXECUTING one (see the STANDING RULES read-only
+# policy appended to every prompt, below). read-only is therefore the default
+# on BOTH platforms: on Linux this deliberately means the reviewer's own `go
+# test`/`go build` CANNOT run inside the round any more -- that is the
+# intended effect, not a regression of the v4.8 finding above. The wrapper's
+# OWN pre-round warm step (further below) is unaffected either way: it runs
+# entirely OUTSIDE this sandbox, via the wrapper's own `env`+bash, before
+# codex ever starts. CODEX_REVIEW_SANDBOX, when a caller sets it explicitly
+# (e.g. a launcher that still wants workspace-write for a specific reason),
+# always wins over this default -- opt-in, not opt-out.
+RSANDBOX="${CODEX_REVIEW_SANDBOX:-read-only}"
 case "$RSANDBOX" in
   read-only | workspace-write) ;;
   *) die "CODEX_REVIEW_SANDBOX must be read-only or workspace-write, got '$RSANDBOX'" ;;
@@ -894,23 +950,171 @@ if [ "$HOST_OS" = Linux ]; then
   # no local re-sanitization needed, and there's only one place left that
   # can ever get this wrong.
   LANE_SCRATCH_ROOT="/var/lib/oci-cache/lane-scratch/$NAME"
+  # v4.8.7, found by confirmation-pass round #4 on bigboy (P1, mechanism
+  # EXECUTED, independently reproduced by the lane in an isolated temp
+  # dir -- never against the real shared /var/lib path): NAME passing
+  # NAME_ALLOWLIST_RE proves the STRING is safe, not that the FILESYSTEM
+  # PATH built from it is safe to use. /var/lib/oci-cache/lane-scratch/ is
+  # a SHARED parent every lane on this host writes into. If anything --
+  # another lane's bug, a leftover from an incident, or a hostile actor
+  # with write access to that shared parent -- pre-plants
+  # lane-scratch/$NAME as a SYMLINK to some other writable directory
+  # before this script runs, `mkdir -p` follows it silently (standard
+  # POSIX behaviour for an existing symlink-to-a-directory), and every
+  # mktemp call below (RW/RGOTMPDIR/RTMPDIR) then physically writes
+  # through the symlink, entirely outside the mandated lane root, with no
+  # error and nothing in this script's own output that would ever reveal
+  # it happened. Measured directly: `mkdir -p` on a pre-planted symlink
+  # resolves and writes through it every time.
+  #
+  # Fixed: refuse a lane-scratch/$NAME that is ALREADY a symlink, checked
+  # both BEFORE and AFTER the mkdir -p (a symlink could be planted in the
+  # gap between the two) -- this is meant to be exclusively this lane's
+  # own directory, reused round over round, so a symlink there is never
+  # something to silently follow, regardless of where it points. Then
+  # resolve the REAL physical path and verify it is actually CONTAINED
+  # under the real, resolved lane-scratch PARENT (both sides resolved via
+  # `pwd -P`, never compared to a hardcoded lexical string -- an ancestor
+  # symlink, if this host ever legitimately had one, would move both
+  # sides identically and never trip this check; only a redirection AT
+  # the final `$NAME` component itself does). From here on, every
+  # subsequent scratch dir is built from the RESOLVED path
+  # (LANE_SCRATCH_ROOT_REAL), not the lexical one, so a symlink planted at
+  # the lexical path AFTER this point can no longer redirect anything --
+  # the remaining TOCTOU window (someone replacing the REAL directory
+  # itself) is a materially smaller, harder-to-target attack than
+  # replacing a predictable, lexically-named symlink.
+  if [ -L "$LANE_SCRATCH_ROOT" ]; then
+    die "the mandated Linux scratch root $LANE_SCRATCH_ROOT already exists as a SYMLINK -- refusing to follow it (this is meant to be exclusively this lane's own directory; a pre-existing symlink here is never expected and never safe to trust)"
+  fi
   mkdir -p "$LANE_SCRATCH_ROOT" \
     || die "cannot create/find the mandated Linux scratch root $LANE_SCRATCH_ROOT -- refusing to silently fall back to /tmp or \$HOME"
-  RW_BASE="$LANE_SCRATCH_ROOT"
-  RGOTMPDIR_BASE="$LANE_SCRATCH_ROOT"
-  RTMPDIR_BASE="$LANE_SCRATCH_ROOT"
+  if [ -L "$LANE_SCRATCH_ROOT" ]; then
+    die "the mandated Linux scratch root $LANE_SCRATCH_ROOT became a SYMLINK between the check above and mkdir -p -- refusing to use it (this looks like a race, not an accident)"
+  fi
+  LANE_SCRATCH_PARENT_REAL=$(cd /var/lib/oci-cache/lane-scratch && pwd -P) \
+    || die "cannot resolve the physical path of the shared /var/lib/oci-cache/lane-scratch parent"
+  LANE_SCRATCH_ROOT_REAL=$(cd "$LANE_SCRATCH_ROOT" && pwd -P) \
+    || die "cannot resolve the physical path of $LANE_SCRATCH_ROOT after creating it"
+  case "$LANE_SCRATCH_ROOT_REAL" in
+    "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
+    *) die "the mandated Linux scratch root $LANE_SCRATCH_ROOT resolves to '$LANE_SCRATCH_ROOT_REAL', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it" ;;
+  esac
+  RW_BASE="$LANE_SCRATCH_ROOT_REAL"
+  RGOTMPDIR_BASE="$LANE_SCRATCH_ROOT_REAL"
+  RTMPDIR_BASE="$LANE_SCRATCH_ROOT_REAL"
 else
   RW_BASE="${TMPDIR:-/tmp}"
   RGOTMPDIR_BASE="/tmp"
   RTMPDIR_BASE="/tmp"
 fi
+# v4.8.7 (confirmation-pass round #1 on this branch, P1, EXECUTED): the
+# LANE_SCRATCH_ROOT containment check above only proves the path was safe
+# AT CHECK TIME -- each `mktemp` call below re-resolves its base path
+# fresh, so a replacement (the lane dir removed and a symlink planted in
+# its place, in the gap between the check and a specific mktemp call)
+# would still be followed silently, unverified. Close it the same way the
+# root itself is closed: verify EVERY path this wrapper creates under the
+# lane root, immediately after creating it -- not a symlink, and its real
+# path is still contained under the real lane parent. A no-op on macOS
+# (LANE_SCRATCH_PARENT_REAL is never set there; nothing to verify against).
+# v4.8.7 (confirmation-pass round #2 on this branch, P1, EXECUTED,
+# INDEPENDENTLY re-verified by the lane): the round found TWO gaps in this
+# helper's original prefix-based form -- (a) a check performed once, right
+# after creation, proves nothing by the time a path is actually USED much
+# later (RGOTMPDIR/RTMPDIR aren't touched again until the warm step,
+# ~300 lines and real wall-clock time downstream -- a swap in that gap is
+# followed silently), and (b) the check's OWN two steps (the `-L` test,
+# then the separate `cd`+`pwd -P`) are not atomic, and the comparison
+# itself was too PERMISSIVE: "resolves to somewhere under the shared
+# lane-scratch parent" is true for every lane's own directory, so a race
+# landing on a SIBLING lane's real directory sailed through unnoticed
+# (reproduced: split the two steps, interposed a swap to a sibling lane's
+# directory in between, watched the old prefix check accept it).
+#
+# CHRIS'S RULING (2026-09-04, after this finding): tighten the comparison
+# from prefix-containment to EXACT-PATH EQUALITY -- capture the expected
+# real path ONCE, immediately after the mktemp/mkdir that creates it
+# (before anything else runs), and require the LATER re-check to resolve
+# to that exact same real path, not merely "somewhere under the parent".
+# This closes gap (b): a race can no longer redirect to a sibling lane's
+# directory and have it accepted, since a sibling's real path can never
+# equal what was captured for THIS lane's own path. It does NOT close gap
+# (a) -- no POSIX-shell path-based check can, since there is no atomic
+# "check and use" primitive available to a bash script; a genuine attacker
+# racing a specific mktemp call in real time could still, in principle,
+# win a window between this check and code far downstream that uses the
+# same variable again. True prevention needs the created directory pinned
+# to a file descriptor (`exec {fd}<"$dir"`, then every subsequent
+# operation goes through `/proc/self/fd/$fd/...` instead of the original
+# path string, since a later path replacement cannot redirect an
+# already-open fd) -- filed as a v4.8.8 candidate, not attempted here.
+#
+# ACCEPTED RESIDUAL, deliberately not closed further right now: every lane
+# in this fleet runs as the same `ubuntu` user, cooperatively scheduled,
+# not a hostile multi-tenant boundary. The realistic threat this whole
+# symlink/containment class defends against is a BUGGY lane or an
+# incident LEFTOVER -- a pre-existing bad symlink sitting at a path before
+# this script ever touches it -- which a single check-right-after-creation
+# already catches completely, exact-equality or not. An attacker
+# deliberately racing a specific mktemp call in the few-line window before
+# its own verification runs is a materially different, much narrower
+# threat that this fix does not claim to close, and closing it fully
+# (fd-pinning) is a real rework deferred to v4.8.8 rather than rushed here
+# under round pressure. The post-`git worktree add` check a few hundred
+# lines below has the identical prefix-permissiveness shape and is
+# DELIBERATELY left as-is for the same reason (that path is vacated then
+# recreated by git, so there is no pre-existing "expected real path" to
+# capture the same way) -- also part of this accepted residual, also
+# closed for real only by the same v4.8.8 fd-pinning work.
+verify_scratch_containment() {
+  local created="$1" label="$2" expected_real="$3"
+  [ "$HOST_OS" = Linux ] || return 0
+  if [ -L "$created" ]; then
+    die "$label ($created) is a SYMLINK immediately after creation -- refusing to use it (this looks like a race, not an accident)"
+  fi
+  local real
+  real=$(cd "$created" && pwd -P) \
+    || die "cannot resolve the physical path of $label ($created) after creating it"
+  # BOTH checks, deliberately, not either alone: parent-containment catches
+  # a corruption that happened BEFORE `expected_real` was ever captured (the
+  # equality check alone would see the SAME corrupted value on both sides
+  # and silently agree with itself -- measured directly: a symlink planted
+  # before the expected-path capture escapes entirely undetected by
+  # equality alone, since there is nothing earlier to disagree with).
+  # Exact equality catches a corruption AFTER the capture that still lands
+  # under the parent (a swap to a sibling lane's own real directory, which
+  # the parent-containment check alone accepts, since every lane's
+  # directory legitimately sits under the same shared parent).
+  case "$real" in
+    "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
+    *) die "$label ($created) resolves to '$real', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it" ;;
+  esac
+  if [ "$real" != "$expected_real" ]; then
+    die "$label ($created) resolves to '$real', which does NOT match the path captured immediately after creation ('$expected_real') -- refusing to use it (this looks like a race -- possibly a swap to a DIFFERENT lane's own directory, which the parent-containment check alone would not have caught)"
+  fi
+}
 RW=$(mktemp -d "$RW_BASE/codex-review-worktree-$LANE_KEY-$TS-XXXXXX")
+if [ "$HOST_OS" = Linux ]; then
+  RW_EXPECTED_REAL=$(cd "$RW" && pwd -P) \
+    || die "cannot resolve the physical path of review worktree scratch dir (RW) ($RW) immediately after creating it"
+else
+  RW_EXPECTED_REAL=""
+fi
+verify_scratch_containment "$RW" "review worktree scratch dir (RW)" "$RW_EXPECTED_REAL"
 # Go's work dir. Deliberately a SIBLING of the review worktree, not a directory
 # inside it: anything inside $RW shows up as untracked and would be swept into
 # the preserved residue, burying the reviewer's actual findings under build
 # droppings. Removed by cleanup() alongside the worktree.
 # /tmp (macOS) / lane-scratch (Linux) for the same reason as RGOCACHE above.
 RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
+if [ "$HOST_OS" = Linux ]; then
+  RGOTMPDIR_EXPECTED_REAL=$(cd "$RGOTMPDIR" && pwd -P) \
+    || die "cannot resolve the physical path of Go work dir (RGOTMPDIR) ($RGOTMPDIR) immediately after creating it"
+else
+  RGOTMPDIR_EXPECTED_REAL=""
+fi
+verify_scratch_containment "$RGOTMPDIR" "Go work dir (RGOTMPDIR)" "$RGOTMPDIR_EXPECTED_REAL"
 
 # TMPDIR ITSELF, and this is broader than the Go bounds.
 #
@@ -925,6 +1129,13 @@ RGOTMPDIR=$(mktemp -d "$RGOTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-XXXXXX")
 # sees a shell that cannot run ordinary constructs. I did not notice it in my
 # own round because I read the verdict and not the log.
 RTMPDIR=$(mktemp -d "$RTMPDIR_BASE/codex-review-gotmp-$LANE_KEY-$TS-shell-XXXXXX")
+if [ "$HOST_OS" = Linux ]; then
+  RTMPDIR_EXPECTED_REAL=$(cd "$RTMPDIR" && pwd -P) \
+    || die "cannot resolve the physical path of shell TMPDIR (RTMPDIR) ($RTMPDIR) immediately after creating it"
+else
+  RTMPDIR_EXPECTED_REAL=""
+fi
+verify_scratch_containment "$RTMPDIR" "shell TMPDIR (RTMPDIR)" "$RTMPDIR_EXPECTED_REAL"
 
 # v4.8.4 introduced a per-round GOPATH because bigboy's ~/go and ~/go/pkg
 # used to be root:root 755, and an unset GOPATH defaulting to $HOME/go made
@@ -1165,6 +1376,34 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add failed"
+# v4.8.7 (confirmation-pass round #1 on this branch, P1, EXECUTED,
+# PRE-EXISTING pattern since v4.8.2, now closed at point of use): $RW is
+# `mktemp -d`'d, then `rmdir`'d a few lines above ("git worktree add wants
+# to create it"), leaving a vacant, but real, path for potentially a
+# while before this line runs (cache resolution, GOPATH setup, etc. all
+# happen in between). An actor able to create entries in the lane
+# directory in that window can plant a symlink at that exact vacant path;
+# `git worktree add` follows it and writes the whole worktree outside the
+# lane, unverified. This is DETECTION at point of use, not prevention of
+# the race itself -- actually preventing it would need a private staging
+# directory `git worktree add` never has to `rmdir` its way into (flagged
+# as a v4.8.8+ redesign candidate, not attempted here). Verify immediately
+# after: not a symlink, and `git rev-parse --show-toplevel` from inside it
+# (git's OWN notion of where this worktree actually lives, not our own
+# assumption) resolves under the real lane-scratch parent.
+if [ "$HOST_OS" = Linux ]; then
+  if [ -L "$RW" ]; then
+    die "the review worktree $RW is a SYMLINK immediately after 'git worktree add' -- refusing to use it (this looks like a race, not an accident: a symlink was likely planted in the vacant slot between the earlier rmdir and this worktree add)"
+  fi
+  RW_TOPLEVEL=$(cd "$RW" && git rev-parse --show-toplevel 2>/dev/null) \
+    || die "cannot resolve the review worktree's own toplevel via 'git rev-parse --show-toplevel' after worktree add"
+  RW_TOPLEVEL_REAL=$(cd "$RW_TOPLEVEL" && pwd -P) \
+    || die "cannot resolve the physical path of the review worktree toplevel ($RW_TOPLEVEL)"
+  case "$RW_TOPLEVEL_REAL" in
+    "$LANE_SCRATCH_PARENT_REAL"/*) : ;;
+    *) die "the review worktree's own toplevel (per git rev-parse --show-toplevel) resolves to '$RW_TOPLEVEL_REAL', which is NOT contained under the real lane-scratch parent '$LANE_SCRATCH_PARENT_REAL' -- refusing to use it (git worktree add may have followed a symlink planted in the vacant slot)" ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------
 # v4.8.3 WARM STEP -- runs OUTSIDE the codex sandbox, in this wrapper's own
@@ -1204,9 +1443,38 @@ git -C "$WT" worktree add --detach "$RW" "$TIP" >/dev/null || die "worktree add 
 # with a go.mod at the reviewed tip has any. Gate on the ACTUAL TIP CONTENT
 # ($RW/go.mod, populated by the `git worktree add` above), never the repo
 # name or a flag -- a repo with no go.mod (dev-health-web, acr-frontend)
-# skips the entire step and exports no Go env to codex; a repo WITH go.mod
-# is unaffected and keeps the full warm step, including its loud abort.
-if [ -f "$RW/go.mod" ]; then
+# skips the entire warm-step subshell (no `go` command runs); a repo WITH
+# go.mod is unaffected and keeps the full warm step, including its loud
+# abort. CORRECTED, round-3 confirmation-pass (P2, source-checked): this
+# used to also claim "exports no Go env to codex" -- false, the
+# GOCACHE/GOMODCACHE/GOTMPDIR/GOPATH exports further below into `codex exec`
+# are unconditional regardless of this branch. Harmless in practice (an
+# unused, possibly-cold cache path is inert for a non-Go repo, and the new
+# read-only sandbox default denies writes there anyway), but the comment
+# should not claim otherwise.
+#
+# v4.8.7 addendum (chris, 09-04 15:26 PDT): the warm step's own Go execution
+# happens outside codex's sandbox regardless, so it was never the thing chris
+# flagged ("codex should not be running tests and go lang") -- that concern is
+# the REVIEWER's own exec blocks, closed above by the read-only sandbox
+# default and the STANDING RULES read-only policy below. This override is a
+# separate, narrower ask: an operator-controlled way to skip the warm step
+# ENTIRELY (e.g. a docs-only round where warming Go serves no reviewer that
+# will never run it), without waiting on the v4.8.8 no-Go-in-diff auto-skip.
+# WARM_OK tracks whether the warm step actually ran and proved the module
+# cache offline-resolvable -- round-3 confirmation-pass finding: the prompt
+# text injected further below used to unconditionally claim "already warmed
+# and offline-resolve-proven" regardless of which of these three branches
+# ran (a pre-existing gap for the no-go.mod branch, now ALSO reachable via
+# the new operator skip). Read below, at the point this is consumed, for
+# why that mattered.
+WARM_OK=0
+WARM_SKIP_REASON=""
+if [ "${CODEX_REVIEW_SKIP_WARM:-0}" = "1" ]; then
+  printf 'warm-step: SKIPPED (operator)\n' >>"$L"
+  warn "warm: SKIPPED -- CODEX_REVIEW_SKIP_WARM=1, no warm build ran (Go env is still exported to codex exec, unconditionally, further below) -- proceeding straight to codex"
+  WARM_SKIP_REASON="the operator set CODEX_REVIEW_SKIP_WARM=1 for this round"
+elif [ -f "$RW/go.mod" ]; then
   WARM_LOG="$L.warm"
   WARM_OUT="$RGOTMPDIR/warmbuild"
   WARM_START=$(date +%s)
@@ -1287,9 +1555,11 @@ if [ -f "$RW/go.mod" ]; then
   printf 'warm-step: OK duration=%ss modules=%s modcache=%s gocache=%s resolve=ok\n' \
     "$WARM_DURATION" "$WARM_MODULES" "$WARM_MODCACHE_SIZE" "$WARM_GOCACHE_SIZE" >>"$L"
   warn "warm: OK duration=${WARM_DURATION}s modules=$WARM_MODULES modcache=$WARM_MODCACHE_SIZE gocache=$WARM_GOCACHE_SIZE cached in $RGOMODCACHE"
+  WARM_OK=1
 else
   printf 'warm-step: SKIPPED reason=no-go.mod\n' >>"$L"
-  warn "warm: SKIPPED -- no go.mod at $TIP, nothing to warm, no Go env exported -- proceeding straight to codex"
+  warn "warm: SKIPPED -- no go.mod at $TIP, nothing to warm (Go env is still exported to codex exec, unconditionally, further below) -- proceeding straight to codex"
+  WARM_SKIP_REASON="there is no go.mod at $TIP -- nothing to warm"
 fi
 
 cp "$PROMPT" "$RW/prompt.md"
@@ -1305,6 +1575,16 @@ cat >> "$RW/prompt.md" <<'STANDING_RULES'
 ---
 
 STANDING RULES FOR EVERY ROUND (appended by the wrapper; not optional):
+
+READ-ONLY REVIEW POLICY (chris's ruling, 09-04): this round is a code-READING
+exercise, not a code-EXECUTING one. Do not run `go test`, `go build`, `go
+run`, `go vet`, or any other language build/test/run command, regardless of
+whether the sandbox you are given would technically permit it. Your exec
+blocks should be limited to inspection commands: `git`, `rg`/`grep`, `cat`,
+`sed`, `awk`, `ls`, `diff`, and similar read-only tools against the files
+already in this worktree. If verifying a claim genuinely requires executing
+code, name the specific proof you would need and label it ARGUED/unrun in
+your verdict -- do not run it yourself in this round, even if you could.
 
 Never run docker or compose commands, and never connect to a running service.
 The shared stack (containers named `dev-health-*`, the shared compose project,
@@ -1329,6 +1609,12 @@ passes on arm64 while the x86 case it was meant to catch is still broken
 (CHAOS-4818 / #2142's NaN sign-bit reds appeared ONLY in CI). A green from the
 wrong architecture is worse than no green, because it is indistinguishable
 from a real one in your verdict. Say the check is CI-only and move on.
+
+The next two paragraphs are LEGACY and apply only on a round where an
+operator has explicitly opted this round into `workspace-write` (the READ-ONLY
+REVIEW POLICY above governs the default): if that is not this round, running
+`go test` is out of scope regardless of what the sandbox would technically
+allow, and you should not attempt it.
 
 If `go test` is unavailable to you in this sandbox for any reason (module
 download blocked, a denied cache path, anything else), say so explicitly and
@@ -1381,12 +1667,30 @@ if [ "$HOST_OS" = Linux ]; then
 else
   MODCACHE_FALLBACK_LINE="If \`go test\` still fails on a module lookup once you are inside the sandbox, retry ONCE with GOMODCACHE=$RGOMODCACHE GOPROXY=off (read-only intent -- never write there; this is the SAME cache named above, not a different one -- a first-attempt sandbox hiccup, not a missing module, is the more likely cause here) before falling back to a source-trace verdict, and say explicitly whether the retry succeeded."
 fi
-cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
+# v4.8.7, confirmation-pass round #3 (P2, mechanism EXECUTED): this text used
+# to be appended UNCONDITIONALLY, regardless of whether the warm step above
+# actually ran -- both the pre-existing no-go.mod branch and the new
+# CODEX_REVIEW_SKIP_WARM branch would still inject "already warmed and
+# offline-resolve-proven", which is simply untrue when nothing was warmed.
+# WARM_OK (set above, alongside the branch that actually ran the proof) now
+# gates which claim gets made -- the reviewer is told the true state either
+# way, never told a proof happened when it did not.
+if [ "$WARM_OK" = "1" ]; then
+  cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
 
 This round's own module cache -- already warmed and offline-resolve-proven
 (via \`GOPROXY=off go test -count=1 -run '^\$' ./...\`) before you started --
 is at $RGOMODCACHE. $MODCACHE_FALLBACK_LINE
 PROMPT_MODCACHE_INFO
+else
+  cat >> "$RW/prompt.md" <<PROMPT_MODCACHE_INFO
+
+No Go module cache was warmed for this round ($WARM_SKIP_REASON) -- do not
+assume \`go test\`/\`go build\` will succeed, or succeed quickly, if you
+attempt them (see the READ-ONLY REVIEW POLICY above: you should not be
+running them at all in this round regardless).
+PROMPT_MODCACHE_INFO
+fi
 for aux in .codex-review-context.md LEDGER.md; do
   [ -f "$WT/$aux" ] && cp "$WT/$aux" "$RW/$aux"
 done

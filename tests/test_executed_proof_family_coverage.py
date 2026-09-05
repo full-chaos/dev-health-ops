@@ -34,12 +34,64 @@ LOCAL_VALIDATE_SH = REPO_ROOT / "ci/local_validate.sh"
 # Native golden-required families NOT yet named in both gates. Every entry is a
 # real coverage gap, not an exemption -- shrinking this set is the goal.
 KNOWN_UNCOVERED = {
-    "team_wellbeing",
+    # team_wellbeing was here and is GONE, removed 2026-09-05: #2247
+    # (CHAOS-4794) added it to local_validate.sh's --families, and the proof
+    # gate already named it, so it is covered by both and the reverse assertion
+    # required its removal. That is the guard working in the direction that
+    # matters -- coverage improved, and the pin was not allowed to keep
+    # claiming a gap that had been closed. work_item_state came in the same
+    # commit but only reached local_validate, so it stays below.
     "file_hotspots",
     "file_risk_hotspots",
     "work_item_state",
     "incident",
     "testops_risk",
+    # --- added 2026-09-05, when merging main forward and porting two more
+    # families made four more natives golden-required. Each entry is a GAP,
+    # not an exemption; the reason says what would close it.
+    #
+    # Owned by CHAOS-4283 / #2246. The coverage decision belongs to that lane,
+    # which can see whether its own E2E run produces the rows. Naming another
+    # lane's families in this gate from here would assert rows this lane has no
+    # evidence for, and would block this PR on their backlog.
+    "work_item",
+    "work_item_estimate",
+    # MINE, and pinning them is the part of this change I like least: these are
+    # the two families this stack ports, and pinning leaves them unchecked by
+    # the very gate that exists to prove a native family ran. It is a gap, not
+    # coverage, and it is recorded as one.
+    #
+    # What would close it is evidence, not a decision: does the executed-proof
+    # E2E seed actually produce `review_edges_daily` rows, and does it carry the
+    # ~30 days of history benchmarking's window needs on the org's ANCHOR
+    # partition (it writes on exactly one partition per org/day)? Adding either
+    # without that evidence makes the gate assert rows the fixture may never
+    # create, which turns a green gate red for a reason unrelated to the port.
+    "review_edges",
+    "benchmarking",
+    # --- added 2026-09-05 by CHAOS-4285 / CHAOS-4280 / CHAOS-4286a (#2229,
+    # #2236, #2240), for the same reason and with the same discomfort as the
+    # two above. These three are the families THIS stack ports, and pinning
+    # them leaves them unchecked by the gate that exists to prove a native
+    # family ran. Recorded as a gap, not as coverage.
+    #
+    # What would close it is EVIDENCE, not a decision: the executed-proof E2E
+    # scenario has no evidence of rows for these families, so naming them in
+    # the two --families lists would assert rows the fixture may never create
+    # and turn the gate red for a reason unrelated to the port.
+    #
+    # The evidence route now exists and is concrete: the unconditional
+    # per-family outcome dump added to ci/run_metrics_executed_proof.sh prints
+    # `computed=/refused=/rows=` for every family on EVERY run, pass or fail.
+    # Extending that dump's coverage to these three -- i.e. reading their
+    # counters from a green E2E, exactly as `cicd computed=8 refused=0 rows=8`
+    # was read tonight -- is what turns each of these pins into a --families
+    # entry. `rows_written` sitting beside the outcome counters is what makes
+    # "computed but wrote nothing" distinguishable from "computed and wrote N"
+    # without a readback.
+    "ai_governance",
+    "ai_impact",
+    "work_graph_edges",
 }
 
 
@@ -87,8 +139,20 @@ def test_native_golden_required_families_are_named_in_both_gates() -> None:
         "lists in ci/run_metrics_executed_proof.sh and ci/local_validate.sh."
     )
 
-    now_covered = KNOWN_UNCOVERED - uncovered
+    # Intersect with native_required FIRST. `uncovered` is computed only over
+    # families that are native here, so a pinned family that is NOT native on
+    # this branch is absent from it -- and a bare `KNOWN_UNCOVERED - uncovered`
+    # then reports that family as "now covered", which is false and actively
+    # misleading: it is not covered, it is not even ported yet.
+    #
+    # This bites on a STACKED branch specifically. KNOWN_UNCOVERED is shared and
+    # merges forward, but which families are `port: go` differs per branch: on
+    # the compounding_risk branch `benchmarking` is still `pending`, so pinning
+    # it there is inert, not a regression. The first version of this assertion
+    # failed exactly that way and claimed benchmarking "IS covered by both
+    # gates" on a branch whose gate lists never mention it.
+    now_covered = (KNOWN_UNCOVERED & native_required) - uncovered
     assert not now_covered, (
-        f"{sorted(now_covered)} now IS covered by both gates -- remove it from "
-        "KNOWN_UNCOVERED so the coverage cannot silently regress later."
+        f"{sorted(now_covered)} is native here AND named in both gates -- remove it "
+        "from KNOWN_UNCOVERED so the coverage cannot silently regress later."
     )

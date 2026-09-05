@@ -38,7 +38,7 @@ type recordingRemainingStore struct {
 }
 
 func (store *recordingRemainingStore) HasSucceededPartition(
-	_ context.Context, _ pgx.Tx, organizationID, _, _ string,
+	_ context.Context, _ pgx.Tx, organizationID, _, _ string, _ json.RawMessage,
 ) (bool, error) {
 	return store.covered[organizationID], nil
 }
@@ -351,27 +351,27 @@ func TestDoraDailyFanoutSkipsAnOrganizationAlreadyCoveredByPostSync(t *testing.T
 	}
 }
 
-// TestNonDoraFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt is the
+// TestNonCoveredFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt is the
 // negative half: every OTHER remainingFamilyBinding leaves SkipIfCovered
 // false, so even a store that reports every organization as "covered" must
-// not skip complexity/release_impact/recommendations/membership_backfill/
-// capacity -- those kinds have no second trigger to collide with, and this
-// pins that the new check does not accidentally widen past dora.
+// not skip complexity/membership_backfill/work_item_attribution -- those
+// kinds have no second trigger to collide with, and this pins that the
+// check does not accidentally widen past the families that actually need it.
 //
-// Table-driven across all five (codex round 2, medium): the original
-// version only constructed complexity_daily_fanout, so a SkipIfCovered typo
-// on any of the other four bindings would have passed silently -- capacity
-// especially, since it is weekly work a missed skip would starve for a week.
-func TestNonDoraFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt(t *testing.T) {
+// CHAOS-5055 (codex adversarial review round 2): release_impact,
+// recommendations, and capacity moved OUT of this negative list and into
+// TestCoveredFanoutsSkipAnOrganizationAlreadyCovered below -- they gained
+// their own manual trigger-backstop entry points in that diff, which
+// creates exactly the same manual-vs-scheduled collision dora already
+// guarded against, so they now carry SkipIfCovered too.
+func TestNonCoveredFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt(t *testing.T) {
 	cases := []struct {
 		scheduleID   string
 		scheduledFor string
 	}{
 		{"complexity_daily_fanout", "2026-08-25T00:45:00Z"},
-		{"release_impact_daily_fanout", "2026-08-25T01:30:00Z"},
-		{"recommendations_daily_fanout", "2026-08-25T02:00:00Z"},
 		{"membership_backfill_daily_fanout", "2026-08-25T03:30:00Z"},
-		{"capacity_forecast_weekly_fanout", "2026-08-24T04:00:00Z"}, // a Monday
+		{"work_item_attribution_daily_fanout", "2026-08-25T04:15:00Z"},
 	}
 	for _, test := range cases {
 		t.Run(test.scheduleID, func(t *testing.T) {
@@ -393,6 +393,62 @@ func TestNonDoraFanoutsIgnoreCoverageEvenWhenTheStoreImplementsIt(t *testing.T) 
 						"and must run regardless of what the store reports",
 					outcome, len(store.requests), test.scheduleID,
 				)
+			}
+		})
+	}
+}
+
+// TestCoveredFanoutsSkipAnOrganizationAlreadyCovered is
+// TestDoraDailyFanoutSkipsAnOrganizationAlreadyCoveredByPostSync's positive
+// case generalized to the three families CHAOS-5055 (codex adversarial
+// review round 2, P1) newly gave SkipIfCovered: release_impact,
+// recommendations, and capacity each gained a manual trigger-backstop entry
+// point in that diff that persists through the SAME remaining_metric_runs
+// table this schedule does, under a DIFFERENT generation -- without this
+// wiring, a manual trigger immediately followed by the family's own
+// scheduled occurrence would insert a second, genuinely duplicate run.
+func TestCoveredFanoutsSkipAnOrganizationAlreadyCovered(t *testing.T) {
+	cases := []struct {
+		scheduleID   string
+		scheduledFor string
+		family       string
+	}{
+		{"release_impact_daily_fanout", "2026-08-25T01:30:00Z", "release_impact"},
+		{"recommendations_daily_fanout", "2026-08-25T02:00:00Z", "recommendations"},
+		{"capacity_forecast_weekly_fanout", "2026-08-24T04:00:00Z", "capacity"}, // a Monday
+	}
+	for _, test := range cases {
+		t.Run(test.scheduleID, func(t *testing.T) {
+			schedule := scheduleByID(t, test.scheduleID)
+			producer, store, _ := fanoutProducer(t, fixedOrganizationLister{
+				identifiers: []string{testOrgA, testOrgB},
+			})
+			// testOrgA already has a succeeded partition for this occurrence's
+			// exact scope (simulating a manual trigger-backstop run that beat
+			// the fixed schedule to it); testOrgB has none.
+			store.covered = map[string]bool{testOrgA: true}
+			scheduledFor := mustTime(t, test.scheduledFor)
+			occurrence := NewOccurrence(schedule, scheduledFor, scheduledFor.Add(5*time.Second))
+
+			outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
+			if err != nil {
+				t.Fatalf("Produce() = %v", err)
+			}
+			if outcome.Handoffs != 1 || len(store.requests) != 1 {
+				t.Fatalf(
+					"outcome=%+v requests=%d -- want exactly ONE run started, for the "+
+						"uncovered organization only",
+					outcome, len(store.requests),
+				)
+			}
+			if store.requests[0].OrganizationID != testOrgB {
+				t.Fatalf(
+					"the covered organization's run was started instead of skipped: %+v",
+					store.requests,
+				)
+			}
+			if store.requests[0].Family != test.family {
+				t.Fatalf("family = %s, want %s", store.requests[0].Family, test.family)
 			}
 		})
 	}

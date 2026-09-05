@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -68,6 +69,27 @@ var (
 	// doc comment on StartManualDailyRun).
 	ErrDayAlreadyCovered = errors.New("daily metrics day is already covered by a succeeded run")
 )
+
+// ErrPreBridgeFamilyIncomplete means computeNativeFamilies hit an
+// ErrPartialWrite for at least one pre_bridge family this partition
+// (CHAOS-5078 codex round 3, astra scale review F1's pre_bridge twin -- see
+// lane-ci-required-to-arc's CHAOS-5190/#2276 for the post_bridge sibling,
+// same reason-code shape, no code dependency between the two PRs). Work
+// uses it to hold the partition out of CompletePartition instead of letting
+// it complete 'succeeded' over a silent gap.
+//
+// The comment this error's introduction replaces claimed a partial write
+// meant "the partition is re-driven" -- that was never backed by any code:
+// neither redrive.go nor postgres.go ever inspected PartialWrite, so nothing
+// automatic re-drove anything. This error is what actually closes that gap.
+//
+// An ORDINARY (non-partial) pre_bridge refusal is UNAFFECTED by this error
+// and stays fail-open exactly as before: nothing was written for that
+// family yet, so the compatibility bridge remains a safe, correct fallback
+// -- this error exists ONLY for the partial-write case, where the bridge is
+// deliberately excluded (skipFamiliesForBridge's own contract, unchanged)
+// because re-running it would duplicate the rows already written.
+var ErrPreBridgeFamilyIncomplete = errors.New("daily metrics pre_bridge native family did not complete")
 
 // ErrRepositoryCapExceeded means live ClickHouse repository discovery
 // (MaterializeScheduledFanout) resolved more repositories than
@@ -853,11 +875,35 @@ func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMet
 // team-derived output. Every family is still attempted exactly once and a
 // failure still degrades only that one family plus its transitive
 // dependents to the bridge -- see blockedNativeDependency.
-func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) []string {
+//
+// A PARTIAL WRITE IS NOT FAIL-OPEN AT THE PARTITION LEVEL EITHER (CHAOS-5078
+// codex round 3, astra scale review F1's pre_bridge twin -- see
+// lane-ci-required-to-arc's CHAOS-5190/#2276 for the post_bridge sibling).
+// The returned error is non-nil exactly when at least one family failed
+// AFTER already writing rows (ErrPartialWrite): that family is excluded from
+// the bridge's own recompute (skipFamiliesForBridge's contract, unchanged --
+// re-running it would duplicate the rows already written to an append-only
+// table), so nothing completes its rows for this partition at all. The
+// comment this replaces claimed the partition was "re-driven" in that case;
+// nothing in redrive.go or postgres.go ever inspected PartialWrite, so that
+// was never true. Work now surfaces this error to hold the partition
+// 'failed' (re-dispatchable) instead of letting it complete over the gap.
+// An ORDINARY (non-partial) refusal is UNAFFECTED: the returned error is
+// nil for it, and it stays fail-open to the bridge exactly as before, since
+// nothing was written for it yet.
+func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) ([]string, error) {
 	if handler == nil || len(handler.nativeFamilyNames) == 0 {
-		return nil
+		return nil, nil
 	}
 	skipFamilies := make([]string, 0, len(handler.nativeFamilyNames))
+	// incomplete (CHAOS-5078 codex r3) names every family that failed AFTER
+	// already writing rows this pass -- the partition-level signal Work uses
+	// to decide whether to hold the partition out of CompletePartition.
+	// Deliberately separate from `blocked`: blocked also includes ordinary
+	// (non-partial) refusals, which must NOT hold the partition (they stay
+	// fail-open to the bridge), so `blocked`'s membership is not the right
+	// set to report here.
+	var incomplete []string
 	// blocked (CHAOS-5078 codex r2 F3) accumulates every family that did NOT
 	// successfully compute this pass -- both an outright ComputeFamily error
 	// and a family skipped here because ITS dependency is already in this
@@ -915,7 +961,16 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			// let the bridge write the same family again, and the output tables
 			// are append-only MergeTrees with no version column, so the earlier
 			// batches are not replaced -- they DUPLICATE. The family joins the
-			// skip list instead and the partition is re-driven.
+			// skip list instead.
+			//
+			// CHAOS-5078 codex round 3 (astra scale review F1's pre_bridge
+			// twin): this comment used to say "the partition is re-driven"
+			// here. That was false -- nothing in redrive.go or postgres.go
+			// ever inspected PartialWrite, so no automatic re-drive existed.
+			// `incomplete` below is what actually closes the gap: it makes
+			// Work hold the partition 'failed' (re-dispatchable) instead of
+			// letting it complete over a family with no writer for this
+			// partition's rows.
 			//
 			// The rows count reported is the executor's TRUE count, not zero:
 			// zero would understate what landed, which is exactly the number an
@@ -926,10 +981,10 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			// partial write is an INCOMPLETE result for this partition, not a
 			// trustworthy one. A family declaring `after` on it must not run
 			// natively either, even though the partially-written family itself
-			// is excluded from fail-open -- the partition redrive fixes both
-			// together on the next attempt.
+			// is excluded from fail-open.
 			if errors.Is(err, ErrPartialWrite) {
 				skipFamilies = append(skipFamilies, name)
+				incomplete = append(incomplete, name)
 				if handler.nativeObserver != nil {
 					_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
 						name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rows, duration,
@@ -964,7 +1019,10 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			)
 		}
 	}
-	return skipFamilies
+	if len(incomplete) > 0 {
+		return skipFamilies, fmt.Errorf("%w: %s", ErrPreBridgeFamilyIncomplete, strings.Join(incomplete, ","))
+	}
+	return skipFamilies, nil
 }
 
 // blockedNativeDependency reports whether `name` has a registered `after`
@@ -998,12 +1056,17 @@ func (handler *PartitionHandler) blockedNativeDependency(name string, blocked ma
 // already told to skip it) -- see computePostBridgeNativeFamilies's doc
 // comment for why that tradeoff is inherent to the phase itself, not an
 // oversight.
-func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run Run, partition Partition) []string {
-	skipFamilies := handler.computeNativeFamilies(ctx, run, partition)
+//
+// The returned error (CHAOS-5078 codex round 3) is computeNativeFamilies'
+// own ErrPreBridgeFamilyIncomplete, passed through unchanged -- the
+// post_bridge names appended below never produce an error here, since they
+// have not run yet at this point in the partition.
+func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run Run, partition Partition) ([]string, error) {
+	skipFamilies, err := handler.computeNativeFamilies(ctx, run, partition)
 	if handler == nil || len(handler.postBridgeFamilyNames) == 0 {
-		return skipFamilies
+		return skipFamilies, err
 	}
-	return append(skipFamilies, handler.postBridgeFamilyNames...)
+	return append(skipFamilies, handler.postBridgeFamilyNames...), err
 }
 
 // computePostBridgeNativeFamilies runs every registered POST_BRIDGE native
@@ -1129,7 +1192,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			return handler.store.RenewPartition(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			skipFamilies := handler.skipFamiliesForBridge(workCtx, run, claim.Partition)
+			skipFamilies, preBridgeErr := handler.skipFamiliesForBridge(workCtx, run, claim.Partition)
 			// CHAOS-4316: bound only the compatibility bridge call, not the
 			// native-family compute above (or the post_bridge native
 			// compute below, CHAOS-4278, for the SAME reason -- a separate,
@@ -1142,6 +1205,15 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 				bridgeCtx, cancel = context.WithTimeout(bridgeCtx, ceiling)
 				defer cancel()
 			}
+			// preBridgeErr (CHAOS-5078 codex round 3) is deliberately NOT
+			// returned here: the bridge call must still run normally for
+			// every OTHER family regardless of one pre_bridge family's
+			// partial write, exactly as it already does for an ordinary
+			// pre_bridge refusal. It is returned at the end of this closure
+			// instead (below), once the bridge and post_bridge computes have
+			// both had their normal chance to run -- mirroring how a
+			// post_bridge failure is only ever discovered after its own
+			// full loop completes.
 			if err := handler.compatibility.ComputePartition(bridgeCtx, run, claim.Partition, skipFamilies); err != nil {
 				return err
 			}
@@ -1151,9 +1223,30 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// phase, and why it never returns an error here (fail-open,
 			// narrower safety net than pre_bridge).
 			handler.computePostBridgeNativeFamilies(workCtx, run, claim.Partition)
-			return nil
+			return preBridgeErr
 		},
 	); err != nil {
+		if errors.Is(err, ErrPreBridgeFamilyIncomplete) {
+			// CHAOS-5078 codex round 3 (astra scale review F1's pre_bridge
+			// twin -- see lane-ci-required-to-arc's CHAOS-5190/#2276 for the
+			// post_bridge sibling, same shape, no code dependency): a
+			// pre_bridge family failed AFTER already writing rows, and that
+			// family was deliberately excluded from the bridge's own
+			// recompute (skipFamiliesForBridge's contract, unchanged) to
+			// avoid duplicating an append-only write. Nothing else produces
+			// this family's rows for this partition, so it is released
+			// 'failed' (re-dispatchable) instead of completed -- a retry can
+			// still fill the gap rather than a silently-incomplete partition
+			// reading as succeeded. Not wired through retryCompatibilityError
+			// and NOT observed via observeCompatRetry: this is not a
+			// compatibility bridge error (the bridge call already returned
+			// successfully) -- reusing either would misclassify a pre_bridge
+			// native failure as a compat-bridge one. Per-family detail
+			// (which family, how many rows) already landed via
+			// nativeObserver inside computeNativeFamilies.
+			_ = releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPreBridgeFamilyIncomplete)
+		}
 		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
 			// CHAOS-4319: this ledger row will refuse every future attempt
 			// identically until a human /repair call moves it -- releasing

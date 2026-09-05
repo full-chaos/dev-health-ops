@@ -146,6 +146,55 @@ func TestPartitionNativeFamilyFailureFallsOpenToCompatibility(t *testing.T) {
 	}
 }
 
+// TestPreBridgePartialWriteHoldsPartitionIncomplete is CHAOS-5078 codex
+// round 3's RED-ON-BASELINE proof (astra scale review F1's pre_bridge twin,
+// mirroring lane-ci-required-to-arc's post_bridge
+// TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete in #2276): a
+// pre_bridge family that fails AFTER already writing rows must hold the
+// WHOLE PARTITION out of CompletePartition -- before this fix, the family
+// was correctly excluded from the bridge's own recompute (skipFamilies), but
+// nothing stopped the partition from completing 'succeeded' anyway over that
+// silent gap, because the comment claiming "the partition is re-driven" was
+// never backed by any code.
+func TestPreBridgePartialWriteHoldsPartitionIncomplete(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeNativeFamilyExecutor{rowsWritten: 42, err: fmt.Errorf("%w: wrote 42 rows before failing", ErrPartialWrite)}
+	observer := &recordingNativeFamilyObserver{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": executor}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(observer)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete", workErr)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0 -- a partial write must never let the partition complete", store.partitionCompletions)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != jobruntime.ReasonPreBridgeFamilyIncomplete.String() {
+		t.Fatalf("releasesWithReason=%d reason=%q, want 1/%q", store.releasesWithReason, store.releaseReason, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+	}
+	// The bridge is still told to skip the family (unchanged contract: a
+	// partial write must not be recomputed by the bridge, only held).
+	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "team_wellbeing" {
+		t.Fatalf("skipFamilies=%v, want [team_wellbeing]", got)
+	}
+	// Per-family telemetry (CHAOS-4288) is unchanged by this fix.
+	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite || observer.calls[0].rowsWritten != 42 {
+		t.Fatalf("observations=%#v, want PartialWrite with the TRUE row count preserved", observer.calls)
+	}
+}
+
 // TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttribution
 // is CHAOS-5078 codex round 2 F3's RED-ON-BASELINE proof. work_item_attribution
 // and work_item_state are registered natively with their REAL families.json

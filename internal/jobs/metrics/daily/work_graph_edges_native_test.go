@@ -177,7 +177,7 @@ func TestWorkGraphEdgesPartialWriteGuardPinsBothDirections(t *testing.T) {
 	cause := errors.New("simulated ClickHouse send failure")
 
 	t.Run("failure AFTER a write is a partial write", func(t *testing.T) {
-		rows, err := wrapWorkGraphEdgesPartialWrite(7, cause)
+		rows, err := wrapWorkGraphEdgesPartialWrite(7, 2, cause)
 		if !errors.Is(err, ErrPartialWrite) {
 			t.Errorf("a failure after 7 rows landed must wrap ErrPartialWrite so the bridge is "+
 				"skipped; got %v", err)
@@ -193,7 +193,7 @@ func TestWorkGraphEdgesPartialWriteGuardPinsBothDirections(t *testing.T) {
 	})
 
 	t.Run("failure BEFORE any write is an ordinary failure", func(t *testing.T) {
-		rows, err := wrapWorkGraphEdgesPartialWrite(0, cause)
+		rows, err := wrapWorkGraphEdgesPartialWrite(0, 1, cause)
 		if errors.Is(err, ErrPartialWrite) {
 			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: doing so " +
 				"suppresses the bridge's legitimate fallback and loses the family for this " +

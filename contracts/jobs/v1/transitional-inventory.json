@@ -1709,7 +1709,7 @@
         "line": 300
       },
       "queue_or_cadence": "metrics / heavy",
-      "dispatches": "run_release_impact_job",
+      "dispatches": "ReleaseImpactExecutor.ComputePartition",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -1717,12 +1717,12 @@
         "value": "metrics.remaining.release_impact"
       },
       "target_kind_id": "kind:metrics.remaining.release_impact",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.remaining.release_impact` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None -- CHAOS-4296 (#2262) ported the daily compute to internal/jobs/metrics/remaining/release_impact_native_executor.go with no Python fallback in daily.go's worker registration; CHAOS-5234/CHAOS-5244 then deleted the former HTTP compatibility bridge runner (job_release_impact.py, worker_metrics.py's _run_release_impact) once nothing dispatched to it anymore.",
+      "deletion_evidence_requirement": "Met: registry.json kind `metrics.remaining.release_impact` passes Registry.ValidateStartup with the concrete native handler, the former compatibility runner import is removed from the Python API (CHAOS-5244), and CHAOS-4296's parity evidence matched product data before merge.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": ""
+      "notes": "CORRECTION (CHAOS-5244): this row previously read python_compatibility / dispatches=run_release_impact_job, unchanged since before CHAOS-4296 (#2262) ported this family to native Go -- codex round chaos-5244-2288-r1 (F3) caught the drift. run_release_impact_job/job_release_impact.py is now deleted entirely; release_impact.py's per-day helper (_compute_day) survives only as fixtures/runner.py's local/CI fixture-data-generation dependency, an unrelated non-job caller (CHAOS-5250 tracks porting that path to Go too)."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:332",

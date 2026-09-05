@@ -56,7 +56,6 @@ from dev_health_ops.metrics.remaining_scope_contract import (
     DoraScope,
     MembershipBackfillScope,
     RecommendationsScope,
-    ReleaseImpactScope,
     parse_scope,
 )
 
@@ -1848,21 +1847,6 @@ async def _run_dora(execution: _Execution, scope: DoraScope) -> dict[str, Any]:
     return {"family": execution.family, "day": scope.day}
 
 
-async def _run_release_impact(
-    execution: _Execution, scope: ReleaseImpactScope
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_release_impact import run_release_impact_job
-
-    written = await run_release_impact_job(
-        db_url=require_clickhouse_uri(),
-        day=date.fromisoformat(scope.day),
-        backfill_days=scope.backfill_days,
-        recomputation_window_days=scope.recomputation_window_days,
-        org_id=execution.organization_id,
-    )
-    return {"family": execution.family, "records_written": written}
-
-
 async def _run_recommendations(
     execution: _Execution, scope: RecommendationsScope
 ) -> dict[str, Any]:
@@ -1921,7 +1905,6 @@ _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
     "capacity": _run_capacity,
     "complexity": _run_complexity,
     "dora": _run_dora,
-    "release_impact": _run_release_impact,
     "recommendations": _run_recommendations,
     "membership_backfill": _run_membership,
 }
@@ -2655,9 +2638,12 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     # worker_kind == "daily" AND operation == "partition" (codex R2 + R3):
     # only _run_daily_direct's "partition" branch wires on_write_starting
     # through job_daily.py, so it is the only path with real per-scope
-    # write evidence. Every remaining-metrics family (capacity/complexity/
-    # dora/release_impact/recommendations/membership_backfill) never
-    # reports progress at all -- treating that silence as "definitely wrote
+    # write evidence. Every remaining-metrics family this file still
+    # dispatches (capacity/complexity/dora/recommendations/
+    # membership_backfill -- release_impact deleted, CHAOS-5234: its
+    # native Go executor is the only writer now, this endpoint never
+    # reaches it) never reports progress at all -- treating that silence
+    # as "definitely wrote
     # nothing" would be a fabricated safety claim, not an observed one
     # (codex R2). The daily "finalize" branch is the same trap (codex R3):
     # run_daily_metrics_finalize writes user_metrics_daily and
@@ -2810,7 +2796,6 @@ async def _run_until_client_disconnect(
 # as a separate, larger change.
 _EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
     "capacity": "forecast_count",
-    "release_impact": "records_written",
     "membership_backfill": "memberships_written",
 }
 

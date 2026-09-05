@@ -151,6 +151,24 @@ type Run struct {
 	// generation while it has no durable partitions. A metrics-queue worker owns the
 	// ClickHouse read and resolves this state before it can publish a partition.
 	RepositoryDiscoveryRequired bool
+	// DiscoveredRepoIDs is the UNION of this run's partition scopes -- the
+	// set the partitions were actually cut from, read back from
+	// daily_metrics_partitions rather than re-derived from a live source.
+	//
+	// CHAOS-4288, codex r1 on #2235. benchmarking computes ONCE per org/day and
+	// picks an anchor partition to do it in. That anchor used to come from a
+	// live `min(id)` read of the `repos` table, which is a DIFFERENT set from
+	// the one partitions were cut from: a run over a subset of the org's repos,
+	// or a repo inserted between discovery and execution, could name an anchor
+	// that no partition contains. Every partition then answered "not mine",
+	// returned zero rows and SUCCESS, and the org silently got no benchmarking
+	// output at all.
+	//
+	// Choosing the anchor from this field makes anchor-and-partition agreement
+	// true BY CONSTRUCTION rather than by two reads happening to agree, which
+	// is the invariant that was missing. An empty union means the caller built
+	// a Run without partitions and is a bug, not a quiet no-op.
+	DiscoveredRepoIDs []RepositoryID
 	// TargetDay is the UTC calendar day this run computes metrics for
 	// (`daily_metrics_runs.target_day`). CHAOS-4276: a native family
 	// executor needs this to scope its own ClickHouse reads/writes -- the

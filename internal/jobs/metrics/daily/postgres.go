@@ -538,6 +538,47 @@ func dailyPartitionID(runID string, ordinal int) string {
 	return uuid.NewSHA1(uuid.MustParse(runID), []byte("partition:"+strconv.Itoa(ordinal))).String()
 }
 
+// runDiscoveredRepoIDs returns the union of a run's partition scopes, ordered
+// and de-duplicated.
+//
+// This is deliberately read from daily_metrics_partitions and NOT from the
+// repository discoverer: it is the set the partitions were cut from, as
+// persisted, so a consumer choosing from it cannot pick something no partition
+// holds. Re-deriving it from a live source is the defect this replaces
+// (CHAOS-4288).
+func (store *PostgresStore) runDiscoveredRepoIDs(ctx context.Context, runID string) ([]RepositoryID, error) {
+	rows, err := store.pool.Query(ctx, `
+SELECT repo_ids::text FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+	seen := map[RepositoryID]bool{}
+	var union []RepositoryID
+	for rows.Next() {
+		var encoded string
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, ErrUnavailable
+		}
+		scope, err := parsePartitionRepoIDs(encoded)
+		if err != nil {
+			return nil, ErrInvalidState
+		}
+		for _, repoID := range scope {
+			if seen[repoID] {
+				continue
+			}
+			seen[repoID] = true
+			union = append(union, repoID)
+		}
+	}
+	if rows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	return union, nil
+}
+
 func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, error) {
 	if !store.valid() || !validUUID(runID) {
 		return Run{}, ErrUnavailable
@@ -556,6 +597,11 @@ FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
 	}
 	if run.TargetDay, err = time.Parse("2006-01-02", targetDay); err != nil {
 		return Run{}, ErrInvalidState
+	}
+	// The union of this run's partition scopes. Read from the partitions
+	// themselves, so it cannot disagree with them -- see Run.DiscoveredRepoIDs.
+	if run.DiscoveredRepoIDs, err = store.runDiscoveredRepoIDs(ctx, runID); err != nil {
+		return Run{}, err
 	}
 	return run, nil
 }

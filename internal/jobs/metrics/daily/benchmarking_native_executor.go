@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
@@ -74,17 +73,43 @@ func NewBenchmarkingExecutor(conn driver.Conn, logger *slog.Logger) (*Benchmarki
 	}, nil
 }
 
-// orgAnchorRepositoryQuery is ClickHouseRepositoryDiscoverer.RepositoryIDs'
-// query reduced to its minimum id. Deriving the anchor from the same source of
-// truth is what makes "the org's first repo" mean the same thing here as in
-// partition fan-out and in ci/assert_metrics_executed_proof.py's live_repo_ids.
-const orgAnchorRepositoryQuery = `
-SELECT min(id) FROM (
-    SELECT id, argMax(tuple(repo, settings, provider), last_synced) AS latest
-    FROM repos
-    WHERE org_id = {org_id:String}
-    GROUP BY org_id, id
-)`
+// anchorFromDiscoveredSet picks the org/day's single benchmarking partition:
+// the lexicographically smallest repository id in the RUN's discovered set.
+//
+// An EMPTY discovered set is an ERROR, not a no-op. By the time this is called
+// the partition under execution has already been shown to carry repositories,
+// and the discovered set is the UNION of the run's partition scopes -- so it
+// must contain at least those. Empty therefore means the Run was built without
+// its partitions being read, which is a caller bug, and returning zero rows
+// with a nil error would reproduce exactly the silent-success failure this
+// change exists to remove (CHAOS-4288).
+//
+// An unparseable id is an ERROR for the same reason: silently dropping one
+// could move the minimum and hand the run to a different partition, or to none.
+func anchorFromDiscoveredSet(run Run) (uuid.UUID, error) {
+	if len(run.DiscoveredRepoIDs) == 0 {
+		return uuid.Nil, fmt.Errorf(
+			"%w: run %s has an empty discovered repository set while executing a "+
+				"partition that carries repositories -- Run was built without its "+
+				"partitions", ErrInvalidState, run.ID)
+	}
+	discovered, err := parseRepositoryUUIDs(run.DiscoveredRepoIDs)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf(
+			"%w: run %s discovered repo_ids: %v", ErrInvalidState, run.ID, err)
+	}
+	if len(discovered) == 0 {
+		return uuid.Nil, fmt.Errorf(
+			"%w: run %s discovered repository set parsed to nothing", ErrInvalidState, run.ID)
+	}
+	anchor := discovered[0]
+	for _, candidate := range discovered[1:] {
+		if candidate.String() < anchor.String() {
+			anchor = candidate
+		}
+	}
+	return anchor, nil
+}
 
 // ComputeFamily implements NativeFamilyExecutor.
 func (executor *BenchmarkingExecutor) ComputeFamily(
@@ -105,17 +130,37 @@ func (executor *BenchmarkingExecutor) ComputeFamily(
 		return 0, nil
 	}
 
-	anchor, err := executor.orgAnchorRepository(ctx, run.OrganizationID)
+	// The anchor comes from the RUN's discovered set -- the union of this run's
+	// partition scopes -- never from a live `min(id)` read of `repos`
+	// (CHAOS-4288, codex r1 on #2235).
+	//
+	// The live read consulted a DIFFERENT set from the one partitions were cut
+	// from. A run over a subset of the org's repos, or a repo inserted between
+	// discovery and execution, could name an anchor that no partition contained;
+	// every partition then answered "not mine", returned zero rows AND SUCCESS,
+	// and the org silently produced no benchmarking output. Success with zero
+	// rows is indistinguishable from "correctly nothing to do", which is why
+	// nothing downstream could notice.
+	//
+	// Choosing from Run.DiscoveredRepoIDs makes "some partition holds the
+	// anchor" true BY CONSTRUCTION -- the anchor is the minimum of the union of
+	// the partition scopes, so it lies in one of them by definition. The
+	// "not mine" branch below therefore stays the NORMAL path for every
+	// non-anchor partition; it is not an error and never was.
+	anchor, err := anchorFromDiscoveredSet(run)
 	if err != nil {
 		return 0, err
 	}
 	if anchor == uuid.Nil {
-		// The org has no repos in ClickHouse: nothing to benchmark, and not an
-		// error.
+		// Defensive only: anchorFromDiscoveredSet returns an error rather than
+		// uuid.Nil for every empty/unparseable case, so this is unreachable
+		// today. Kept as a guard against a future change making it returnable
+		// again -- silently benchmarking against the nil UUID would be worse
+		// than a no-op.
 		return 0, nil
 	}
 	if !containsRepository(repoIDs, anchor) {
-		// Another partition owns this org/day's single benchmarking run.
+		// Another partition owns this org/day's single benchmarking run. Normal.
 		return 0, nil
 	}
 
@@ -145,28 +190,6 @@ func (executor *BenchmarkingExecutor) ComputeFamily(
 		return 0, err
 	}
 	return rowsWritten, nil
-}
-
-func (executor *BenchmarkingExecutor) orgAnchorRepository(ctx context.Context, orgID string) (uuid.UUID, error) {
-	rows, err := executor.conn.Query(ctx, orgAnchorRepositoryQuery, clickhouse.Named("org_id", orgID))
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("resolve org anchor repository: %w", err)
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return uuid.Nil, err
-		}
-		return uuid.Nil, nil
-	}
-	var anchor uuid.UUID
-	if err := rows.Scan(&anchor); err != nil {
-		return uuid.Nil, fmt.Errorf("scan org anchor repository: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return uuid.Nil, err
-	}
-	return anchor, nil
 }
 
 func containsRepository(repoIDs []uuid.UUID, target uuid.UUID) bool {

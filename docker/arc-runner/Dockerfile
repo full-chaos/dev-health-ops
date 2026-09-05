@@ -8,6 +8,37 @@
 # growing into a general toolbox; add it in a follow-up if a job actually
 # needs it.
 #
+# TWO MORE GAPS, diagnosed 2026-09-04/05 by go-quality's first live runs on
+# this pool (ops PR #2242, which routes go-quality here for the first time --
+# these gaps were always latent, just never exercised before, since
+# go-quality's prior `runs-on` named a hosted label this enterprise doesn't
+# actually offer):
+#   - xz-utils (CHAOS-5130): `tar -xJf` on a pinned shellcheck .tar.xz release failed
+#     `xz: Cannot exec: No such file or directory`. GitHub-hosted
+#     ubuntu-latest ships xz-utils by default; this image never needed it.
+#     Worked around in the PR by switching that download to .tar.gz (gzip is
+#     an apt dependency, so it needs no image change) -- installed here too
+#     so a future job that genuinely needs `tar -xJf`/`xz` directly is not
+#     surprised a second time.
+#   - docker-compose-plugin: `ci/check_river_compat_static.sh` runs `docker
+#     compose` (v2 CLI plugin syntax) directly against the River
+#     compatibility harness's compose file -- a real dependency, not a
+#     format choice like shellcheck's tarball, so there is no script-level
+#     workaround. This base image already carries `docker-ce-cli` (proven:
+#     `docker build`/`docker run`/`docker buildx imagetools` all already
+#     work in jobs routed here, including this very Dockerfile's own build
+#     job), which Ubuntu's own archives do not distribute -- only Docker's
+#     official apt repo (download.docker.com) does, so that repo should
+#     already be registered in this base layer. Installing just the plugin
+#     package (not `docker-ce`/`containerd.io`) is deliberate: this runner
+#     talks to a Docker daemon over a DinD SIDECAR, not a locally-managed
+#     engine, so only the CLI-side plugin is needed. UNVERIFIED ahead of
+#     this PR's own build (which is the actual test): if `apt-get install
+#     docker-compose-plugin` fails with "unable to locate package", the
+#     repo is NOT already present and needs adding per Docker's own install
+#     docs (docs.docker.com/engine/install/ubuntu/, "Set up Docker's apt
+#     repository") before this package name resolves.
+#
 # gcc + libc6-dev, not build-essential: measured directly against this exact
 # base image (2026-09-03, `apt-get install -y <set>` on a fresh container
 # each), not assumed -- gcc+libc6-dev pulls 59 packages/59.3MB download/199MB
@@ -36,12 +67,19 @@ USER root
 # `go test -race` and anything else that needs cgo. Go itself is NOT baked
 # into this image; the job's own actions/setup-go step provides it, same as
 # on any other runner.
+# xz-utils: `tar -xJf` (.tar.xz decompression) -- see the header comment.
+# docker-compose-plugin: `docker compose` (v2 CLI syntax) -- see the header
+# comment. Deliberately NOT `docker-ce`/`docker-ce-cli`/`containerd.io`:
+# this base image already carries those (it talks to a DinD sidecar), so
+# installing them again would be redundant at best.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         make \
         postgresql-client \
         gcc \
         libc6-dev \
+        xz-utils \
+        docker-compose-plugin \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

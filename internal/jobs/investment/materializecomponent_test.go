@@ -195,3 +195,79 @@ func TestMaterializeComponentMultipleReposLeavesRepoIDUnset(t *testing.T) {
 		t.Errorf("RepoID = %v, want nil (edges name two different repos)", result.Investment.RepoID)
 	}
 }
+
+// TestMaterializeComponentEmptyWindowRetainsStraddlingComponent pins PARITY
+// with materialize.py:1335 for a window that contains no time at all.
+//
+// This test previously asserted the OPPOSITE -- that an empty window writes
+// nothing -- and it passed, because a fix had been written to satisfy it. Both
+// were wrong together. The justification was that "Python filters in SQL and
+// returns nothing", a claim never checked against the Python source. It is
+// false: materialize.py:1335 is the ONLY date filter in materialize_investments
+//
+//	if bounds.end < config.from_ts or bounds.start >= config.to_ts: continue
+//
+// which is structurally identical to MaterializeComponent's own two checks, and
+// every fetch feeding it (edges, work items, PRs, commits, churn, active hours,
+// parent titles) is id/org-scoped, never date-scoped. Python retains the same
+// straddling component and writes the same row.
+//
+// So the porting-correct behaviour is to RETAIN, and this test now pins that.
+// The rows themselves are questionable in both planes -- a component attributed
+// to a window of zero duration -- but that is a defect in the plane being
+// ported, filed separately. Changing it here would alter behaviour under cover
+// of a cutover.
+//
+// The component spans Jan 1-30 deliberately: only a STRADDLING component
+// reaches this predicate at all. One wholly before or after is skipped by the
+// ordinary bounds checks and would prove nothing about empty windows.
+func TestMaterializeComponentEmptyWindowRetainsStraddlingComponent(t *testing.T) {
+	jan10 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	jan20 := time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC)
+
+	for _, testCase := range []struct {
+		name   string
+		fromTS time.Time
+		toTS   time.Time
+	}{
+		// Reachable in production: `window_days: 0` is an accepted scope key
+		// (worker_workgraph.py:82-95), so this needs no hand-written scope.
+		{name: "zero width", fromTS: jan10, toTS: jan10},
+		// Requires a hand-written from > to scope; the executor accepts it,
+		// because _parse_materialize_window has no ordering check either.
+		{name: "inverted", fromTS: jan20, toTS: jan10},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			issueID := "issue-straddling-the-window"
+			start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			end := time.Date(2026, 1, 30, 0, 0, 0, 0, time.UTC)
+
+			input := MaterializeComponentInput{FromTS: testCase.fromTS, ToTS: testCase.toTS}
+			input.Component = units.Component{Nodes: []units.NodeKey{{Type: "issue", ID: issueID}}}
+			input.WorkItems = map[string]chquery.WorkItem{
+				issueID: {WorkItemID: issueID, CreatedAt: start, UpdatedAt: end},
+			}
+
+			result, err := MaterializeComponent(input)
+			if err != nil {
+				t.Fatalf("MaterializeComponent: %v", err)
+			}
+
+			// POSITIVE CONTROL: without it this test would also pass if the
+			// component were skipped for having NO TIME BOUNDS -- a different
+			// code path that proves nothing about the window predicate.
+			if result.Skipped == skippedNoTimeBounds {
+				t.Fatalf("fixture is wrong: component has no time bounds, so the window predicate was never reached")
+			}
+
+			if result.Skipped != "" {
+				t.Fatalf("Skipped = %q, want \"\" -- materialize.py:1335 retains a straddling "+
+					"component under an empty window, and this port must match it",
+					result.Skipped)
+			}
+			if result.Investment.WorkUnitID == "" {
+				t.Fatalf("no work unit produced; Python produces one here (materialize.py:1335 does not skip it)")
+			}
+		})
+	}
+}

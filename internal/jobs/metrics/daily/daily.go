@@ -1207,7 +1207,7 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 // trusting that whatever string a caller registers happens to be one Python
 // understands. finalizeFamilyGateAgreementTest pins this slice against the
 // Python source, with a negative control, so the copy cannot drift silently.
-var pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName}
 
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.

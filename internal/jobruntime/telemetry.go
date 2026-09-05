@@ -642,7 +642,11 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // "ai_governance" (CHAOS-4285), "review_edges" (CHAOS-4279), "benchmarking"
 // (CHAOS-4288), "ai_impact" (CHAOS-4280), and "work_graph_edges" (CHAOS-4286)
 // all added themselves the same way as the families listed above.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ic_finalize"}
+//
+// "team_cognitive_load" (CHAOS-5141) is finalize-scope like ic_finalize
+// (co-registered with it at construction) and carries the same redrive-
+// visibility argument ic_finalize's own paragraph above makes.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ic_finalize", "team_cognitive_load"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

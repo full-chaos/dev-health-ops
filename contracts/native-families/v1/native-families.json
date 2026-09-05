@@ -24,7 +24,8 @@
     "work_item_state": "post_bridge"
   },
   "finalize": {
-    "ic_finalize": "finalize"
+    "ic_finalize": "finalize",
+    "team_cognitive_load": "finalize"
   },
   "remaining": {
     "capacity": "native",

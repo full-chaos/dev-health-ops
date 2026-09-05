@@ -116,6 +116,92 @@ func OwnedRepoIDs(
 	return repoIDs, nil
 }
 
+// AuthoritativeOwnerByRepo answers the HARDER question OwnedRepoIDs
+// deliberately does not: for every repo team_repo_ownership claims in orgID,
+// active as of asOf, which ONE team is its authoritative owner. Mirrors
+// `load_team_repo_ownership_map` (src/dev_health_ops/providers/teams.py:281,
+// query at :375-:395) exactly, including its ranking: rows are ordered
+// `is_primary DESC, specificity DESC, updated_at DESC, team_id ASC`, and the
+// FIRST row per repo_id wins -- a `setdefault` in Python, a
+// first-write-wins map build here.
+//
+// CHAOS-5141, #2255 r1 finding 2: resolveDailyFinalizeRepoToTeam previously
+// called per-team OwnedRepoIDs in a loop and kept whichever team happened to
+// be encountered FIRST as if it were the sole owner -- OwnedRepoIDs' own doc
+// comment says it answers membership, not precedence, and was never meant to
+// settle a multi-claimed repo's canonical owner. A repo claimed by both a
+// low-ranked team and its actual primary owner could silently resolve to the
+// low-ranked one depending on team iteration order. This function is the
+// fix: the SAME query, ranking, and tie-break Python already uses, so a
+// multi-claimed repo resolves identically in both languages.
+func AuthoritativeOwnerByRepo(
+	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
+) (map[string]string, error) {
+	if orgID == "" {
+		return nil, fmt.Errorf("AuthoritativeOwnerByRepo: orgID is required")
+	}
+	rows, err := conn.Query(ctx, `
+        SELECT
+            toString(coalesce(o.repo_id, r.id)) AS repo_id,
+            o.team_id AS team_id
+        FROM team_repo_ownership AS o FINAL
+        LEFT JOIN (
+            SELECT org_id, provider, id, repo, 1 AS matched
+            FROM repos FINAL
+        ) AS r
+            ON r.org_id = o.org_id
+               AND r.provider = o.provider
+               AND lower(r.repo) = lower(o.repo_full_name)
+        WHERE o.org_id = ?
+          AND (o.repo_id IS NOT NULL OR r.matched = 1)
+          AND o.valid_from <= ?
+          AND (o.valid_to IS NULL OR o.valid_to > ?)
+        ORDER BY o.is_primary DESC, o.specificity DESC, o.updated_at DESC, o.team_id ASC
+    `, orgID, asOf, asOf)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	owners := map[string]string{}
+	for rows.Next() {
+		var repoIDText, teamID string
+		if err := rows.Scan(&repoIDText, &teamID); err != nil {
+			return nil, err
+		}
+		repoID, err := uuid.Parse(repoIDText)
+		if err != nil || repoID == uuid.Nil {
+			// Same defense-in-depth as OwnedRepoIDs: an unresolvable or zero
+			// repo id can never scope a repo-keyed metrics row, skip it
+			// rather than let it enter the map under a bogus key.
+			continue
+		}
+		if teamID == "" {
+			// CHAOS-5141, #2255 r2 finding 1: the schema permits an empty
+			// team_id (051_team_attribution_dimensions.sql has no NOT NULL /
+			// non-empty constraint on it), and Python's
+			// load_team_repo_ownership_map skips this row entirely --
+			// `if not repo_id or not team_id: continue` (teams.py:411) --
+			// rather than let an empty string win a repo. Skipping here (not
+			// just failing to overwrite) matters: it lets a LOWER-ranked row
+			// for the SAME repo, if one exists with a real team_id, still
+			// win via the setdefault-equivalent check below -- an empty
+			// authoritative owner must never suppress a real one further
+			// down the ranked order, and must never suppress the
+			// pattern-resolver fallback the caller applies when this map
+			// has no entry for a repo at all.
+			continue
+		}
+		// ORDER BY already put the best (is_primary, specificity, updated_at)
+		// row for a given repo first -- keep only the FIRST team seen per
+		// repo, exactly matching Python's setdefault semantics.
+		if _, exists := owners[repoIDText]; !exists {
+			owners[repoIDText] = teamID
+		}
+	}
+	return owners, rows.Err()
+}
+
 // ownedRepoIDText runs the owned-repo query and returns the RAW scanned
 // repo_id strings, before uuid.Parse or the uuid.Nil defense-in-depth filter
 // OwnedRepoIDs applies on top. Exists so a test can assert on the SQL

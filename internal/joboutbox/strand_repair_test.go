@@ -773,3 +773,62 @@ func TestStrandRepairStepPreservesShapeResultOnObserveRetiredKindsError(t *testi
 		)
 	}
 }
+
+// TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState is
+// the reproduction + fix for confirmation pass 2's finding (P3, codex,
+// CHAOS-4438), found by a whole-package sweep for the discard-on-error class
+// after filterByClaim (this test's target) turned out to be a third instance
+// of the same shape: filterByClaim's own classification loop increments
+// liveCount/settledCount for an earlier candidate, then discarded them by
+// returning a fresh 0, 0 when a LATER candidate's claim state matched none of
+// claim_live/claim_settled/""/claim_reclaimable. Unlike rearm()'s or
+// TerminalDeliveryRepair.Step()'s internal write loops (which correctly
+// return zero on error because their whole transaction rolls back and
+// nothing they counted was ever committed), filterByClaim does a pure
+// in-memory read with no transaction to roll back -- there is no
+// state-consistency reason to discard an already-observed count here.
+func TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState(t *testing.T) {
+	surveyCall := 0
+	queryQueue := func(context.Context, string, ...any) (pgx.Rows, error) {
+		surveyCall++
+		if surveyCall != 1 {
+			t.Fatalf("unexpected queryQueue call #%d", surveyCall)
+		}
+		return &fakeStrandSurveyRows{rows: [][]any{
+			{"11111111-1111-1111-8111-111111111111", int64(1), "workgraph.build", "dedupe-a", dispositionRearm},
+			{"22222222-2222-2222-8222-222222222222", int64(2), "workgraph.build", "dedupe-b", dispositionRearm},
+		}}, nil
+	}
+	domainCall := 0
+	queryDomain := func(context.Context, string, ...any) (pgx.Rows, error) {
+		domainCall++
+		if domainCall != 1 {
+			t.Fatalf("unexpected queryDomain call #%d", domainCall)
+		}
+		return &fakeStrandSurveyRows{rows: [][]any{
+			{"workgraph.build", "dedupe-a", claimLive},
+			{"workgraph.build", "dedupe-b", "unexpected-claim-state"},
+		}}, nil
+	}
+	repair := &StrandRepair{
+		beginQueue:  func(context.Context) (pgx.Tx, error) { return nil, errors.New("unused") },
+		queryQueue:  queryQueue,
+		queryDomain: queryDomain,
+		client:      riverDeleteAdapter{},
+	}
+	shape := strandShape{name: "a", survey: "SELECT 1", lock: "SELECT 1"}
+
+	result, err := repair.stepShape(context.Background(), shape, time.Now(), 2)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("stepShape() error = %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), `shape "a"`) || !strings.Contains(err.Error(), "dedupe-b") {
+		t.Fatalf("stepShape() error = %v, want it to name shape %q and the offending dedupe key", err, "a")
+	}
+	if result.SkippedClaimLive != 1 {
+		t.Fatalf(
+			"stepShape() result = %+v, want candidate a's claim_live count preserved despite candidate b's unexpected claim state",
+			result,
+		)
+	}
+}

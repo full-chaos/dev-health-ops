@@ -378,11 +378,17 @@ func (repair *StrandRepair) stepShape(
 	// phase 1's classification above -- a phase 2 error must not discard
 	// those.
 	approved, live, settled, err := repair.filterByClaim(ctx, eligible, now)
+	// confirmation pass 2 finding (P3, codex, CHAOS-4438): filterByClaim can
+	// now return a non-zero live/settled alongside its own default-branch
+	// error (an earlier candidate's counts, preserved for the same reason as
+	// every other seam here) -- accumulate BEFORE checking err, not after,
+	// or this call site silently re-introduces the exact discard the callee
+	// was just fixed to avoid, one layer up.
+	result.SkippedClaimLive += live
+	result.SkippedClaimSettled += settled
 	if err != nil {
 		return result, fmt.Errorf("shape %q: filterByClaim: %w", shape.name, err)
 	}
-	result.SkippedClaimLive += live
-	result.SkippedClaimSettled += settled
 	if len(approved) == 0 {
 		return result, nil
 	}
@@ -473,7 +479,20 @@ func (repair *StrandRepair) filterByClaim(
 			// duplicate.
 			approved = append(approved, candidate)
 		default:
-			return nil, 0, 0, ErrUnavailable
+			// confirmation pass 2 finding (P3, codex, CHAOS-4438): an EARLIER
+			// candidate in this same loop can already have incremented
+			// liveCount/settledCount before a LATER candidate hits this
+			// default branch -- unlike stepShape's phase-1 survey error, this
+			// is a pure in-memory read-derived observation with no
+			// transaction to roll back, so there is no state-consistency
+			// reason to zero it. Return the accumulated counts, not a fresh
+			// zero, same fix shape as every other seam in this file. approved
+			// is still discarded (nil): the caller never processes it once
+			// err != nil, and phase 3 must not run on an unclassified claim
+			// state.
+			return nil, liveCount, settledCount, fmt.Errorf(
+				"job_kind=%q dedupe_key=%q: %w", candidate.jobKind, candidate.dedupeKey, ErrUnavailable,
+			)
 		}
 	}
 	return approved, liveCount, settledCount, nil

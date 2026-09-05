@@ -506,6 +506,21 @@ def load_finalize_write_calls() -> set[str]:
     case above, for the same reason: a call this walker cannot resolve
     must never be treated as though it were already known to be out of
     scope.
+
+    Confirmation-pass findings F1+F3 (codex, CHAOS-5118, on the r3 fix
+    above): a DESTRUCTURED binding target (`for (writer,) in ...`,
+    `a, b = ...`, `with f() as (a, b):`, a destructured comprehension
+    target) and an `AnnAssign` (`writer: object = real_fn`) both matched
+    none of the per-shape branches above and so were never added to
+    raw_next/aliases at all -- silently falling through as an ordinary,
+    presumably-irrelevant call name instead of refusing, the exact
+    silent-loss failure mode every branch above exists to avoid. Every
+    binding branch below now REFUSES outright (named error, no attempt to
+    resolve) for any target shape it does not specifically model, rather
+    than silently doing nothing. (Confirmation-pass finding F2 -- a
+    comprehension target that shadows an outer alias name wrongly poisons
+    that outer alias, a fail-closed false positive on valid code, not a
+    silent miss -- is a known, ticketed risk, not fixed here.)
     """
     tree = ast.parse(JOB_DAILY_PY.read_text(encoding="utf-8"))
     target = next(
@@ -545,14 +560,47 @@ def load_finalize_write_calls() -> set[str]:
             return value.attr
         return None
 
+    def _refuse_unmodeled_binding(node: ast.AST, shape: str) -> None:
+        # Confirmation-pass findings F1+F3 (codex, CHAOS-5118): a binding
+        # form this walker does not specifically model -- a destructured
+        # target (`for (writer,) in ...`, `a, b = ...`, `with f() as (a,
+        # b):`, `[x for (a, b) in ...]`) or an `AnnAssign`
+        # (`writer: object = real_fn`) -- used to fall through EVERY
+        # branch below silently, leaving the bound name entirely absent
+        # from raw_next/aliases. A later call through that name was then
+        # treated as an ordinary direct module-level reference instead of
+        # an unresolvable local binding -- the same silent-loss shape F1
+        # (round-3) already fixed for the loop-alias/chain case, just for
+        # a binding shape nothing here ever looked at. Refusing outright
+        # for any such shape, rather than attempting to resolve it, is the
+        # same fail-closed contract every other branch already keeps: a
+        # binding this walker cannot specifically account for must never
+        # be silently treated as though it weren't there.
+        lineno = getattr(node, "lineno", "?")
+        raise SystemExit(
+            f"gen_go_migration_matrix_docs: {DAILY_FINALIZE_FN} in {JOB_DAILY_PY} "
+            f"binds a name at line {lineno} via a shape this walker does not "
+            f"model ({shape}) -- a call reached only through that binding "
+            "could be silently missed by the completeness check. Rewrite it "
+            "as a plain, single `name = some_function` binding before the "
+            "call, or teach load_finalize_write_calls to resolve this shape "
+            "explicitly."
+        )
+
     for node in ast.walk(target):
         if isinstance(node, ast.Assign):
             for element in node.targets:
                 if isinstance(element, ast.Name):
                     _bind(element.id, _one_hop_value(node.value))
+                else:
+                    _refuse_unmodeled_binding(node, "a destructured Assign target")
+        elif isinstance(node, ast.AnnAssign):
+            _refuse_unmodeled_binding(node, "an AnnAssign")
         elif isinstance(node, ast.AugAssign):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)
+            else:
+                _refuse_unmodeled_binding(node, "a destructured AugAssign target")
         elif isinstance(node, (ast.For, ast.AsyncFor)):
             if isinstance(node.target, ast.Name):
                 resolved = None
@@ -562,15 +610,25 @@ def load_finalize_write_calls() -> set[str]:
                 ):
                     resolved = _one_hop_value(node.iter.elts[0])
                 _bind(node.target.id, resolved)
+            else:
+                _refuse_unmodeled_binding(node, "a destructured For/AsyncFor target")
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
+                if item.optional_vars is None:
+                    continue
                 if isinstance(item.optional_vars, ast.Name):
                     # `with x as y:` binds y to x.__enter__()'s return, not
                     # to x itself -- never resolvable from source alone.
                     _bind(item.optional_vars.id, None)
+                else:
+                    _refuse_unmodeled_binding(
+                        node, "a destructured With/AsyncWith target"
+                    )
         elif isinstance(node, ast.comprehension):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)
+            else:
+                _refuse_unmodeled_binding(node, "a destructured comprehension target")
 
     def _resolve_chain(name: str, seen: set[str]) -> str | None:
         if name in seen:

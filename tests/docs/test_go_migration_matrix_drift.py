@@ -711,3 +711,67 @@ def test_load_finalize_write_calls_rejects_a_with_statement_alias(tmp_path) -> N
         )
     finally:
         setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_a_r3_destructured_for_alias(
+    tmp_path,
+) -> None:
+    """Negative control for confirmation-pass finding F1: a `for` loop whose
+    target is DESTRUCTURED (`for (writer,) in get_writers(): writer()`)
+    matched none of the r3 fix's per-shape branches (only a bare `Name`
+    target was handled) and so was never added to raw_next/aliases at all --
+    the call fell through as an ordinary, presumably-irrelevant call name
+    instead of refusing. Must now refuse outright.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    for (writer,) in get_writers():\n"
+        "        writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse a call through a "
+            "destructured for-loop target"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_rejects_an_annotated_alias(tmp_path) -> None:
+    """Negative control for confirmation-pass finding F3: an `AnnAssign`
+    (`writer: object = get_writer()`) matched no branch in the r3 fix at
+    all (only `ast.Assign` was modeled), so `writer` was never added to
+    raw_next/aliases -- the later call fell through as an ordinary,
+    presumably-irrelevant call name instead of refusing. Must now refuse
+    outright.
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    writer: object = get_writer()\n"
+        "    writer()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        try:
+            gen.load_finalize_write_calls()
+            raised = False
+        except SystemExit:
+            raised = True
+        assert raised, (
+            "load_finalize_write_calls did not refuse a call through an "
+            "annotated-assignment alias"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)

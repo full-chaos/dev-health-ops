@@ -254,16 +254,36 @@ reproducible() {
   # that whole ancestor stage, so building each of the 7 target images with
   # --no-cache separately recompiled every binary 7 times per pass -- 14 full
   # compiles for a check that only needs 2. Fix: force exactly one fresh
-  # (--no-cache) compile of the `build` stage per pass, then build the 7
-  # target stages in that SAME pass with NORMAL caching -- identical inputs
-  # (same source, same --build-arg values) give the just-built `build`
-  # stage's layer the same cache key, so each target build hits that cache
-  # and only runs its own cheap COPY/final-stage instructions instead of
-  # recompiling. The per-target image-ID comparison below is unchanged.
+  # (--no-cache) compile of the `build` stage per pass, tagged, then build
+  # each of the 7 target stages in that SAME pass with an EXPLICIT named
+  # build-context override (`--build-context build=docker-image://<tag>`)
+  # pointing at that exact tag.
+  #
+  # A first version of this fix let the target builds resolve the `build`
+  # stage via NORMAL (ambient) BuildKit cache instead of an explicit
+  # override, on the theory that identical inputs give the just-built
+  # stage's layer the same cache key. A mutation proof (embedding a
+  # per-pass nonce in the build stage, `date +%s%N`) caught this as WRONG:
+  # BuildKit's cache entry for that RUN layer was written once on pass
+  # "first" and never overwritten by pass "second"'s own --no-cache
+  # rebuild, so every target's pass-"second" image silently carried
+  # pass-"first"'s stage content -- a false PASS that never actually
+  # re-verified anything past the first compile. Confirmed directly:
+  # `docker cp`-extracting the nonce file from the two `build`-stage
+  # TAGS themselves showed genuinely different values, but the same
+  # extraction from a downstream (ambient-cache) target build showed the
+  # SAME value for both passes. The explicit `--build-context` override
+  # resolves the stage by the exact tag given, not by cache-key guessing,
+  # and re-measuring with it showed the correct, differing nonces.
+  #
+  # The per-target image-ID comparison below is unchanged; timeout and
+  # job routing untouched.
   for pass in first second; do
     build_target build "${IMAGE_PREFIX}-build:repro-${pass}" --no-cache --provenance=false
     for target in "${ALL_TARGETS[@]}"; do
-      build_target "${target}" "${IMAGE_PREFIX}-${target}:repro-${pass}" --provenance=false
+      build_target "${target}" "${IMAGE_PREFIX}-${target}:repro-${pass}" \
+        --build-context "build=docker-image://${IMAGE_PREFIX}-build:repro-${pass}" \
+        --provenance=false
     done
   done
 

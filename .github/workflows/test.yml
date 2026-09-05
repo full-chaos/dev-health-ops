@@ -220,6 +220,61 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # CHAOS-5130-class gap: this job moved to the oci-arc-runners pool
+      # (chris 2026-09-04 16:59), whose custom image (docker/arc-runner/
+      # Dockerfile) is a minimal addition over the upstream actions-runner
+      # image, not a GitHub-hosted-runner drop-in -- ubuntu-latest ships go,
+      # helm, uuidgen and docker-compose by default; this image ships none
+      # of them. #2242's first live test-matrix run on the pool failed 37
+      # tests: 18 helm (`helm: command not found`), 11 go (tests/api/graphql's
+      # dual-run suite shells out to `go build`/`go run` against the live Go
+      # API server), 6 docker-compose (`docker compose: command not found` --
+      # this one clears once #2245 (CHAOS-5134, docker-compose-plugin) merges
+      # into the shared image), 1 uuidgen (see below), and 1 pre-existing
+      # hygiene finding unrelated to this pool move
+      # (test_image_pulling_action_steps_are_allowlisted_or_ticketed).
+      # go/helm are fixed here at the JOB level rather than the shared image:
+      # both are already provided per-job by a pinned setup action on every
+      # other Go/Python job in this repo, so adding them to the base image
+      # would just be a second, driftable source of the same version.
+      - name: Configure self-hosted Go cache paths
+        # CHAOS-4906: the oci-arc-runners pool exports GOMODCACHE/GOCACHE to a
+        # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
+        # filesystem). tests/api/graphql's dual-run suite does real `go
+        # build`/`go run` work against this job's own go.mod, not a trivial
+        # version check, so it needs the same shared-cache pointing as
+        # go-quality.yml's self-hosted leg -- setup-go's default cache would
+        # otherwise restore/save a GitHub Actions cache tarball into this
+        # concurrently-shared path. Only set on the self-hosted leg.
+        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
+          echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+          # `false` on the self-hosted leg -- same reasoning as
+          # go-quality.yml's "Set up Go" step: setup-go's own cache defaults
+          # to `true`, which would corrupt the pool's shared, concurrently-
+          # written hostPath cache.
+          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          # No Helm version was ever pinned in this repo before this job had
+          # its own runner (ubuntu-latest's bundled helm satisfied it
+          # silently). deploy/helm/dev-health/Chart.yaml is `apiVersion: v2`
+          # (Helm 3+) with no version-specific feature in tests/test_helm_*.py
+          # (checked: no `lookup`, no `--dry-run=server`, nothing gated past
+          # Helm 3's baseline `helm template`/`helm lint`), so this pins the
+          # latest stable Helm 3 release rather than following Helm 4 (GA'd
+          # 2026-08) with an untested major-version jump on a routing PR.
+          version: 'v3.21.4'
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

@@ -748,11 +748,15 @@ def test_load_finalize_write_calls_rejects_a_r3_destructured_for_alias(
 
 def test_load_finalize_write_calls_rejects_an_annotated_alias(tmp_path) -> None:
     """Negative control for confirmation-pass finding F3: an `AnnAssign`
-    (`writer: object = get_writer()`) matched no branch in the r3 fix at
-    all (only `ast.Assign` was modeled), so `writer` was never added to
-    raw_next/aliases -- the later call fell through as an ordinary,
-    presumably-irrelevant call name instead of refusing. Must now refuse
-    outright.
+    (`writer: object = get_writer()`) originally matched no branch in the
+    r3 fix at all (only `ast.Assign` was modeled), so `writer` was never
+    added to raw_next/aliases -- the later call fell through as an
+    ordinary, presumably-irrelevant call name instead of refusing.
+    `AnnAssign` to a `Name` target is now resolved the same way `Assign`
+    is (a call's value, like here, is unresolvable via `_one_hop_value`),
+    so the later bare call still refuses -- just via the same path
+    `writer = get_writer(); writer()` already took, not a hardcoded
+    AnnAssign-specific refusal.
     """
     gen = _load_gen_module()
     synthetic = tmp_path / "job_daily.py"
@@ -772,6 +776,37 @@ def test_load_finalize_write_calls_rejects_an_annotated_alias(tmp_path) -> None:
         assert raised, (
             "load_finalize_write_calls did not refuse a call through an "
             "annotated-assignment alias"
+        )
+    finally:
+        setattr(gen, "JOB_DAILY_PY", original)
+
+
+def test_load_finalize_write_calls_allows_an_annotated_literal_declaration(
+    tmp_path,
+) -> None:
+    """Positive control: an `AnnAssign` to a `Name` target whose value is an
+    ordinary literal (`ch_client: Any = None`) is real, common code --
+    job_daily.py itself declares `ch_client: Any = None` and
+    `git_metrics: list[Any] = []` this way -- and must NOT be refused just
+    because it has a value. It resolves to an unresolvable alias exactly
+    like a plain `Assign` to a literal would, which is harmless unless
+    something later calls it bare (see the sibling
+    rejects_an_annotated_alias test for that case).
+    """
+    gen = _load_gen_module()
+    synthetic = tmp_path / "job_daily.py"
+    synthetic.write_text(
+        "def run_daily_metrics_finalize():\n"
+        "    ch_client: object = None\n"
+        "    _write_compounding_risk_team_rows_for_day()\n"
+    )
+    original = getattr(gen, "JOB_DAILY_PY")
+    try:
+        setattr(gen, "JOB_DAILY_PY", synthetic)
+        calls = gen.load_finalize_write_calls()
+        assert calls == {"_write_compounding_risk_team_rows_for_day"}, (
+            "load_finalize_write_calls wrongly refused/misbehaved on an "
+            f"annotated literal declaration that is never called: {calls!r}"
         )
     finally:
         setattr(gen, "JOB_DAILY_PY", original)

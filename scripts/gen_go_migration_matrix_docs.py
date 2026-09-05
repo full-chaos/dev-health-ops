@@ -515,9 +515,14 @@ def load_finalize_write_calls() -> set[str]:
     raw_next/aliases at all -- silently falling through as an ordinary,
     presumably-irrelevant call name instead of refusing, the exact
     silent-loss failure mode every branch above exists to avoid. Every
-    binding branch below now REFUSES outright (named error, no attempt to
-    resolve) for any target shape it does not specifically model, rather
-    than silently doing nothing. (Confirmation-pass finding F2 -- a
+    destructured-target shape now REFUSES outright (named error, no
+    attempt to resolve). `AnnAssign` to a plain `Name` target is instead
+    resolved exactly like `Assign` -- real code (job_daily.py itself) uses
+    it for ordinary literal-valued declarations (`x: Any = None`) that a
+    blanket refusal would break; only a call through an unresolvable one
+    (as in the finding's own example) still refuses. An `AnnAssign` to any
+    other target shape (`self.x: T = v`) refuses, same as the other
+    destructured/non-Name cases. (Confirmation-pass finding F2 -- a
     comprehension target that shadows an outer alias name wrongly poisons
     that outer alias, a fail-closed false positive on valid code, not a
     silent miss -- is a known, ticketed risk, not fixed here.)
@@ -561,21 +566,21 @@ def load_finalize_write_calls() -> set[str]:
         return None
 
     def _refuse_unmodeled_binding(node: ast.AST, shape: str) -> None:
-        # Confirmation-pass findings F1+F3 (codex, CHAOS-5118): a binding
-        # form this walker does not specifically model -- a destructured
-        # target (`for (writer,) in ...`, `a, b = ...`, `with f() as (a,
-        # b):`, `[x for (a, b) in ...]`) or an `AnnAssign`
-        # (`writer: object = real_fn`) -- used to fall through EVERY
-        # branch below silently, leaving the bound name entirely absent
-        # from raw_next/aliases. A later call through that name was then
-        # treated as an ordinary direct module-level reference instead of
-        # an unresolvable local binding -- the same silent-loss shape F1
-        # (round-3) already fixed for the loop-alias/chain case, just for
-        # a binding shape nothing here ever looked at. Refusing outright
-        # for any such shape, rather than attempting to resolve it, is the
-        # same fail-closed contract every other branch already keeps: a
-        # binding this walker cannot specifically account for must never
-        # be silently treated as though it weren't there.
+        # Confirmation-pass finding F1 (codex, CHAOS-5118): a DESTRUCTURED
+        # binding target (`for (writer,) in ...`, `a, b = ...`,
+        # `with f() as (a, b):`, `[x for (a, b) in ...]`) -- or, per F3, an
+        # `AnnAssign` to a non-Name target (`self.x: T = real_fn`) -- used
+        # to fall through EVERY branch below silently, leaving the bound
+        # name entirely absent from raw_next/aliases. A later call through
+        # that name was then treated as an ordinary direct module-level
+        # reference instead of an unresolvable local binding -- the same
+        # silent-loss shape F1 (round-3) already fixed for the
+        # loop-alias/chain case, just for a binding shape nothing here
+        # ever looked at. Refusing outright for any such shape, rather
+        # than attempting to resolve it, is the same fail-closed contract
+        # every other branch already keeps: a binding this walker cannot
+        # specifically account for must never be silently treated as
+        # though it weren't there.
         lineno = getattr(node, "lineno", "?")
         raise SystemExit(
             f"gen_go_migration_matrix_docs: {DAILY_FINALIZE_FN} in {JOB_DAILY_PY} "
@@ -596,9 +601,22 @@ def load_finalize_write_calls() -> set[str]:
                     _refuse_unmodeled_binding(node, "a destructured Assign target")
         elif isinstance(node, ast.AnnAssign):
             # A bare annotation with no value (`primary_sink: Any`) binds
-            # nothing at all -- only `x: T = value` actually assigns.
+            # nothing at all -- only `x: T = value` actually assigns, and
+            # real code in job_daily.py does this with harmless literals
+            # (`git_metrics: list[Any] = []`, `ch_client: Any = None`), so
+            # this cannot blanket-refuse the way the destructured-target
+            # cases do without breaking on real, unrelated code. Resolved
+            # exactly like a plain `Assign` to a `Name` target instead
+            # (`_one_hop_value`): a literal resolves to None (unresolvable
+            # but harmless unless something later calls it bare), while
+            # `writer: object = get_writer()` resolves the same way a
+            # plain `writer = get_writer()` would -- unresolvable, so a
+            # later bare `writer()` still refuses (confirmation-pass F3).
             if node.value is not None:
-                _refuse_unmodeled_binding(node, "an AnnAssign")
+                if isinstance(node.target, ast.Name):
+                    _bind(node.target.id, _one_hop_value(node.value))
+                else:
+                    _refuse_unmodeled_binding(node, "an AnnAssign to a non-Name target")
         elif isinstance(node, ast.AugAssign):
             if isinstance(node.target, ast.Name):
                 _bind(node.target.id, None)

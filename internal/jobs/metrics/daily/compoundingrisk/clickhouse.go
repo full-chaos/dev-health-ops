@@ -44,6 +44,30 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // partition.RepoIDs reproduces the primary path exactly and makes the
 // degenerate path emit zero rows instead of N copies.
 //
+// CHAOS-5122. codex r2 on #2230 challenged this as a parity break rather than a
+// product choice, which was the right challenge to make -- the family is
+// `golden: required`. The evidence settles it as a PYTHON DEFECT that this port
+// declines to reproduce, and all four parts were read rather than inferred:
+//
+//	job_daily.py:592-594      on an empty partition, fall back to
+//	                          _fetch_repo_metrics_for_day(sink, org_id, day)
+//	job_compounding_risk.py:49  that helper takes NO repo argument; its query is
+//	                          WHERE org_id AND day GROUP BY repo_id -- org-wide
+//	job_daily.py:598-609      the write that follows is UNCONDITIONAL; nothing
+//	                          checks whether another partition already wrote
+//	                          this org/day
+//	040_compounding_risk_daily.sql:56  plain MergeTree, computed_at in the
+//	                          ORDER BY, so each write is a DISTINCT physical row
+//
+// So an org with N empty partitions performs N org-wide writes of the same row
+// set. It is invisible to readers that argMax(computed_at) -- they still get a
+// sane latest value -- and shows up only as row-count growth, which is why it
+// has survived. It is the same defect shape CHAOS-4365 already fixed one scope
+// up, for team rows, in this file's sibling.
+//
+// Bit-exactness for this family is therefore asserted on the COMPUTE, not on
+// physical row counts under a Python defect.
+//
 // SECOND: it carries an explicit ORDER BY. Python's has none, so its row order
 // -- and therefore its output row order -- is whatever ClickHouse's GROUP BY
 // happened to return. Nothing in the repo scope is order-sensitive (each row's

@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
@@ -763,6 +764,58 @@ func TestDispatchMetricsDailyRedriveRequiresReviewEvidence(t *testing.T) {
 	}
 }
 
+// TestDispatchMetricsDailyStartValidatesFlagsBeforeTouchingTheBackend pins
+// CHAOS-5055's `metrics daily-start` verb (the replacement backing
+// `dev-hops metrics daily`/`rebuild`): every flag-shape rejection must
+// return invalid_request before ever reaching runtime.pools/registry (an
+// empty &operatorRuntime{} would otherwise panic or report a misleading
+// operator_backend_unavailable for what is really a bad request).
+func TestDispatchMetricsDailyStartValidatesFlagsBeforeTouchingTheBackend(t *testing.T) {
+	const org = "00000000-0000-4000-8000-000000000001"
+	cases := map[string][]string{
+		"invalid org": {
+			"daily-start", "--org", "not-a-uuid", "--day", "2026-08-01",
+		},
+		"invalid day": {
+			"daily-start", "--org", org, "--day", "not-a-date",
+		},
+		"invalid to": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--to", "not-a-date",
+		},
+		"to before day": {
+			"daily-start", "--org", org, "--day", "2026-08-10", "--to", "2026-08-01",
+		},
+		"range exceeds manualBackfillMaxDays": {
+			"daily-start", "--org", org, "--day", "2026-01-01", "--to", "2026-12-31",
+		},
+		"invalid repo-id": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--repo-id", "not-a-uuid",
+		},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, args, &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+// TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid
+// distinguishes a bad request (above) from a genuinely unconfigured operator
+// runtime once the request itself is well-formed.
+func TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-start", "--org", "00000000-0000-4000-8000-000000000001", "--day", "2026-08-01",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 const invalidRequestJSON = "{\"error\":{\"code\":\"invalid_request\"}}\n"
 
 // TestDispatchProvidersyncUnknownSubcommandIsInvalidRequest pins the
@@ -1333,11 +1386,194 @@ func TestDispatchMetricsRemainingUnknownSubcommandIsInvalidRequest(t *testing.T)
 	}
 }
 
+// TestCanonicalUUIDNormalizesCaseAndRejectsInvalid is the regression test for
+// codex adversarial review round 2, P1: canonicalUUID is what
+// dispatchMetricsDailyStart and dispatchMetricsRemainingTriggerBackstop now
+// call BEFORE folding --org/--repo-id/--team's text into a generation string
+// or persisted scope JSON, closing the case-spelling duplicate-write class
+// (see canonicalUUID's own doc comment for the full mechanism).
+func TestCanonicalUUIDNormalizesCaseAndRejectsInvalid(t *testing.T) {
+	lower := "00000000-0000-4000-8000-000000000001"
+	upper := "00000000-0000-4000-8000-000000000001"
+	upper = strings.ToUpper(upper)
+
+	gotLower, err := canonicalUUID(lower)
+	if err != nil {
+		t.Fatalf("canonicalUUID(%q) = %v", lower, err)
+	}
+	gotUpper, err := canonicalUUID(upper)
+	if err != nil {
+		t.Fatalf("canonicalUUID(%q) = %v", upper, err)
+	}
+	if gotLower != gotUpper {
+		t.Fatalf("canonicalUUID must normalize case: lower=%q upper=%q", gotLower, gotUpper)
+	}
+	if gotLower != lower {
+		t.Fatalf("canonicalUUID(%q) = %q, want the already-canonical lowercase form unchanged", lower, gotLower)
+	}
+	if _, err := canonicalUUID("not-a-uuid"); err == nil {
+		t.Fatal("canonicalUUID(\"not-a-uuid\") did not error")
+	}
+}
+
+// TestManualDailyRunGenerationIsCaseInsensitiveOnceCanonicalized is the
+// end-to-end regression test for the same finding, composed from the two
+// pure functions dispatchMetricsDailyStart actually calls in order
+// (canonicalUUID then daily.ManualDailyRunGeneration) -- proving that two
+// callers of the identical logical (org, day, repo scope) differing only in
+// UUID case now mint the SAME generation, where before this fix they would
+// not have (daily.ManualDailyRunGeneration hashes its input verbatim, with
+// no case normalization of its own).
+func TestManualDailyRunGenerationIsCaseInsensitiveOnceCanonicalized(t *testing.T) {
+	const day = "2026-08-26"
+	lowerOrg := "00000000-0000-4000-8000-000000000001"
+	upperOrg := strings.ToUpper(lowerOrg)
+	lowerRepo := "00000000-0000-4000-8000-000000000002"
+	upperRepo := strings.ToUpper(lowerRepo)
+
+	canonicalLowerOrg, err := canonicalUUID(lowerOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperOrg, err := canonicalUUID(upperOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalLowerRepo, err := canonicalUUID(lowerRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperRepo, err := canonicalUUID(upperRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := daily.ManualDailyRunGeneration(canonicalLowerOrg, day, []daily.RepositoryID{daily.RepositoryID(canonicalLowerRepo)})
+	second := daily.ManualDailyRunGeneration(canonicalUpperOrg, day, []daily.RepositoryID{daily.RepositoryID(canonicalUpperRepo)})
+	if first != second {
+		t.Fatalf("case-variant org/repo-id spellings of the SAME UUIDs produced different generations after canonicalization: %q vs %q", first, second)
+	}
+}
+
+// TestCanonicalDedupedRepositoryIDsDeduplicatesAndCanonicalizes is the
+// regression test for codex adversarial review round 3, P1:
+// canonicalDedupedRepositoryIDs must both canonicalize AND de-duplicate, or
+// `--repo-id R --repo-id R` (same UUID, repeated) produces a longer,
+// DIFFERENT slice than a single `--repo-id R` -- and since
+// ManualDailyRunGeneration hashes that slice before
+// daily.normalizeRepositoryPartitions deduplicates it downstream, the two
+// invocations would mint different generations for the identical persisted
+// scope.
+func TestCanonicalDedupedRepositoryIDsDeduplicatesAndCanonicalizes(t *testing.T) {
+	repoA := "00000000-0000-4000-8000-000000000002"
+	repoAUpper := strings.ToUpper(repoA)
+	repoB := "00000000-0000-4000-8000-000000000003"
+
+	single, err := canonicalDedupedRepositoryIDs([]string{repoA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := canonicalDedupedRepositoryIDs([]string{repoA, repoA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repeated) != len(single) || len(repeated) != 1 {
+		t.Fatalf("repeated identical --repo-id was not deduplicated: single=%v repeated=%v", single, repeated)
+	}
+
+	// A case-variant repeat must also collapse to one entry (canonicalize
+	// happens BEFORE the dedup check, not after).
+	caseVariantRepeat, err := canonicalDedupedRepositoryIDs([]string{repoA, repoAUpper})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caseVariantRepeat) != 1 {
+		t.Fatalf("case-variant repeat of the same UUID was not deduplicated: %v", caseVariantRepeat)
+	}
+
+	// Two genuinely distinct repositories must both survive.
+	distinct, err := canonicalDedupedRepositoryIDs([]string{repoA, repoB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(distinct) != 2 {
+		t.Fatalf("two distinct repository ids were incorrectly collapsed: %v", distinct)
+	}
+
+	if _, err := canonicalDedupedRepositoryIDs([]string{"not-a-uuid"}); err == nil {
+		t.Fatal("canonicalDedupedRepositoryIDs did not reject an invalid uuid")
+	}
+}
+
+// TestManualDailyRunGenerationIsStableAcrossDuplicateRepositoryIDs is the
+// end-to-end regression test composed from the two functions
+// dispatchMetricsDailyStart actually calls in order
+// (canonicalDedupedRepositoryIDs then daily.ManualDailyRunGeneration):
+// proves a request with a repeated --repo-id mints the SAME generation as
+// the equivalent single --repo-id request, where before this fix it would
+// not have.
+func TestManualDailyRunGenerationIsStableAcrossDuplicateRepositoryIDs(t *testing.T) {
+	const day = "2026-08-26"
+	const org = "00000000-0000-4000-8000-000000000001"
+	repo := "00000000-0000-4000-8000-000000000002"
+
+	single, err := canonicalDedupedRepositoryIDs([]string{repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := canonicalDedupedRepositoryIDs([]string{repo, repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := daily.ManualDailyRunGeneration(org, day, single)
+	second := daily.ManualDailyRunGeneration(org, day, repeated)
+	if first != second {
+		t.Fatalf("a repeated --repo-id produced a different generation than the single-flag equivalent: %q vs %q", first, second)
+	}
+}
+
+// TestManualBackstopTriggerGenerationIsCaseInsensitiveOnceCanonicalized
+// mirrors the daily-start regression above for
+// dispatchMetricsRemainingTriggerBackstop's own org/team canonicalization.
+func TestManualBackstopTriggerGenerationIsCaseInsensitiveOnceCanonicalized(t *testing.T) {
+	const day = "2026-09-04"
+	lowerOrg := "00000000-0000-4000-8000-000000000001"
+	upperOrg := strings.ToUpper(lowerOrg)
+	lowerTeam := "00000000-0000-4000-8000-000000000002"
+	upperTeam := strings.ToUpper(lowerTeam)
+
+	canonicalLowerOrg, err := canonicalUUID(lowerOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperOrg, err := canonicalUUID(upperOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalLowerTeam, err := canonicalUUID(lowerTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalUpperTeam, err := canonicalUUID(upperTeam)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	discriminator1 := manualBackstopTriggerScopeDiscriminator("capacity", &canonicalLowerTeam, false, 0)
+	discriminator2 := manualBackstopTriggerScopeDiscriminator("capacity", &canonicalUpperTeam, false, 0)
+	first := manualBackstopTriggerGeneration("capacity", canonicalLowerOrg, day, discriminator1)
+	second := manualBackstopTriggerGeneration("capacity", canonicalUpperOrg, day, discriminator2)
+	if first != second {
+		t.Fatalf("case-variant org/team spellings of the SAME UUIDs produced different generations after canonicalization: %q vs %q", first, second)
+	}
+}
+
 // --- CHAOS-5016: `metrics remaining trigger-backstop` ---
 
 func TestManualBackstopTriggerGenerationIsDeterministicAndInputSensitive(t *testing.T) {
-	first := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03")
-	second := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03")
+	first := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03", "")
+	second := manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-03", "")
 	if first != second {
 		t.Fatalf("same inputs produced different generations: %q vs %q", first, second)
 	}
@@ -1351,13 +1587,73 @@ func TestManualBackstopTriggerGenerationIsDeterministicAndInputSensitive(t *test
 		t.Fatalf("generation collides with an existing trigger-source prefix: %q", first)
 	}
 	variants := []string{
-		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000002", "2026-09-03"),
-		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-02"),
+		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000002", "2026-09-03", ""),
+		manualBackstopTriggerGeneration("work_item_attribution", "00000000-0000-4000-8000-000000000001", "2026-09-02", ""),
 	}
 	for _, variant := range variants {
 		if variant == first {
 			t.Fatalf("a different request produced the SAME generation as the baseline: %q", variant)
 		}
+	}
+}
+
+// TestManualBackstopTriggerScopeDiscriminatorDistinguishesTeamAndWindow is
+// the regression test for codex adversarial review round 1, P1: capacity and
+// recommendations trigger-backstop requests used to derive their generation
+// from family+org+day alone, so two genuinely distinct requests (different
+// team, or -- for recommendations -- different window) collided onto the
+// SAME deterministic run identity (remaining.deterministicRunID hashes
+// (org, family, generation, scope_key), and scope_key is unconditionally the
+// day for these families). A second team's/window's request would then read
+// back as "already_covered" or "already_ran" without ever having computed
+// anything.
+func TestManualBackstopTriggerScopeDiscriminatorDistinguishesTeamAndWindow(t *testing.T) {
+	teamA := "00000000-0000-4000-8000-000000000002"
+	teamB := "00000000-0000-4000-8000-000000000003"
+
+	// Day-scoped families never widen -- day IS their complete scope.
+	for _, family := range []string{"complexity", "dora", "release_impact", "work_item_attribution"} {
+		if got := manualBackstopTriggerScopeDiscriminator(family, &teamA, false, 14); got != "" {
+			t.Fatalf("family=%q: scope discriminator = %q, want \"\" (day-scoped families never widen)", family, got)
+		}
+	}
+
+	capacityTeamA := manualBackstopTriggerScopeDiscriminator("capacity", &teamA, false, 0)
+	capacityTeamB := manualBackstopTriggerScopeDiscriminator("capacity", &teamB, false, 0)
+	capacityAllTeams := manualBackstopTriggerScopeDiscriminator("capacity", nil, true, 0)
+	if capacityTeamA == "" || capacityTeamA == capacityTeamB || capacityTeamA == capacityAllTeams {
+		t.Fatalf("capacity discriminators must all differ: team-A=%q team-B=%q all-teams=%q",
+			capacityTeamA, capacityTeamB, capacityAllTeams)
+	}
+
+	recoTeamAWindow7 := manualBackstopTriggerScopeDiscriminator("recommendations", &teamA, false, 7)
+	recoTeamAWindow30 := manualBackstopTriggerScopeDiscriminator("recommendations", &teamA, false, 30)
+	recoTeamBWindow7 := manualBackstopTriggerScopeDiscriminator("recommendations", &teamB, false, 7)
+	recoAllTeamsWindow7 := manualBackstopTriggerScopeDiscriminator("recommendations", nil, true, 7)
+	seen := map[string]string{
+		recoTeamAWindow7:    "team-A/window-7",
+		recoTeamAWindow30:   "team-A/window-30",
+		recoTeamBWindow7:    "team-B/window-7",
+		recoAllTeamsWindow7: "all-teams/window-7",
+	}
+	if len(seen) != 4 {
+		t.Fatalf("recommendations discriminators collided: %#v", seen)
+	}
+
+	// End to end: the full generation must differ too, for the same org/day.
+	org, day := "00000000-0000-4000-8000-000000000001", "2026-09-04"
+	genTeamA := manualBackstopTriggerGeneration("capacity", org, day, capacityTeamA)
+	genTeamB := manualBackstopTriggerGeneration("capacity", org, day, capacityTeamB)
+	if genTeamA == genTeamB {
+		t.Fatalf("capacity generations for two different teams, same org/day, collided: %q", genTeamA)
+	}
+	if len(genTeamA) > 128 || len(genTeamB) > 128 {
+		t.Fatalf("capacity generation exceeds remaining.maxGenerationLength (128 runes): %q / %q", genTeamA, genTeamB)
+	}
+	genReco7 := manualBackstopTriggerGeneration("recommendations", org, day, recoTeamAWindow7)
+	genReco30 := manualBackstopTriggerGeneration("recommendations", org, day, recoTeamAWindow30)
+	if genReco7 == genReco30 {
+		t.Fatalf("recommendations generations for two different windows, same org/day/team, collided: %q", genReco7)
 	}
 }
 
@@ -1373,8 +1669,8 @@ func TestManualBackstopTriggerReadbackHintCoversEveryAllowedFamily(t *testing.T)
 			t.Fatalf("family %q is in remaining.ManualBackstopTriggerFamilies but has no readback hint", family)
 		}
 	}
-	if _, ok := manualBackstopTriggerReadbackHint("dora", "00000000-0000-4000-8000-000000000001"); ok {
-		t.Fatal("dora unexpectedly has a trigger-backstop readback hint -- it is not in ManualBackstopTriggerFamilies")
+	if _, ok := manualBackstopTriggerReadbackHint("membership_backfill", "00000000-0000-4000-8000-000000000001"); ok {
+		t.Fatal("membership_backfill unexpectedly has a trigger-backstop readback hint -- it is not in ManualBackstopTriggerFamilies")
 	}
 }
 
@@ -1389,21 +1685,104 @@ func TestDispatchMetricsRemainingTriggerBackstopRequiresReviewEvidence(t *testin
 	}
 }
 
-// TestDispatchMetricsRemainingTriggerBackstopRejectsDayScopedFamily proves
-// dora (a real manualBackfillDayScope family) is refused here even though
-// it is accepted by `start` -- ManualBackstopTriggerFamilies is a
-// deliberately separate, narrower allowlist precisely so this verb's
-// --today override can never reach dora and reopen the race `start`'s
-// today-exclusion exists to prevent.
-func TestDispatchMetricsRemainingTriggerBackstopRejectsDayScopedFamily(t *testing.T) {
+// TestDispatchMetricsRemainingTriggerBackstopAcceptsDayScopedFamiliesUniformly
+// (CHAOS-5055, superseding the prior day-scoped-family exclusion this test
+// used to assert): team-lead's final ruling is ONE uniform flag policy for
+// every family trigger-backstop accepts, not a per-family fork -- dora,
+// complexity, and release_impact now reach exactly the same
+// operator_backend_unavailable a zero-value &operatorRuntime{} produces for
+// any other valid, well-formed request (proving they cleared the
+// family/org/evidence/day gates, the only things this layer can prove
+// without a real backend). The --today gate itself (still required to
+// target today, unconditionally for every family) is unchanged --
+// dispatchMetricsRemainingTriggerBackstop's gating code was never
+// family-conditional.
+func TestDispatchMetricsRemainingTriggerBackstopAcceptsDayScopedFamiliesUniformly(t *testing.T) {
+	for _, family := range []string{"dora", "complexity", "release_impact"} {
+		t.Run(family, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+				"remaining", "trigger-backstop", "--family", family,
+				"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+			}, &stdout, &stderr)
+			if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopStillRequiresTodayExplicitly
+// pins that the uniform policy still refuses a same-day dispatch without
+// --today, for a family added under CHAOS-5055 exactly as it already did
+// for work_item_attribution.
+func TestDispatchMetricsRemainingTriggerBackstopStillRequiresTodayExplicitly(t *testing.T) {
+	todayUTC := time.Now().UTC().Truncate(24 * time.Hour).Format("2006-01-02")
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
-		"remaining", "trigger-backstop", "--family", "dora",
+		"remaining", "trigger-backstop", "--family", "dora", "--day", todayUTC,
 		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != invalidRequestJSON {
-		t.Fatalf("dora not rejected by trigger-backstop: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		t.Fatalf("today without --today not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+}
+
+// TestDispatchMetricsRemainingTriggerBackstopRequiresExactlyOneTeamFlagForCapacityAndRecommendations
+// pins capacityScope's own all_teams-XOR-team_id requirement (scopes.go) at
+// the CLI layer: neither flag, or both, must be invalid_request before ever
+// reaching the store -- for capacity AND recommendations, but NOT for any
+// other family (which ignores both flags entirely).
+func TestDispatchMetricsRemainingTriggerBackstopRequiresExactlyOneTeamFlagForCapacityAndRecommendations(t *testing.T) {
+	baseArgs := func(family string, extra ...string) []string {
+		return append([]string{
+			"remaining", "trigger-backstop", "--family", family,
+			"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		}, extra...)
+	}
+	for _, family := range []string{"capacity", "recommendations"} {
+		t.Run(family+"/neither flag", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(family), &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+		t.Run(family+"/both flags", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(
+				family, "--team", "00000000-0000-4000-8000-000000000002", "--all-teams",
+			), &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+		t.Run(family+"/invalid team uuid", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(
+				family, "--team", "not-a-uuid",
+			), &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+		t.Run(family+"/--all-teams alone reaches the backend", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs(family, "--all-teams"), &stdout, &stderr)
+			if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+	// A day-scoped family must ignore both flags entirely -- neither given is
+	// its normal, already-covered case (see AcceptsDayScopedFamiliesUniformly).
+	t.Run("dora ignores missing team flags", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := dispatchMetrics(context.Background(), &operatorRuntime{}, baseArgs("dora"), &stdout, &stderr)
+		if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+	})
 }
 
 func TestDispatchMetricsRemainingTriggerBackstopRejectsUnknownFamily(t *testing.T) {

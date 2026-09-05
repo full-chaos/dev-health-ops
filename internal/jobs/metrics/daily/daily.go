@@ -47,6 +47,25 @@ var (
 	// execution identity (a ledger repair or a fresh run/partition), which is
 	// a separate, larger change than this ticket's scope.
 	ErrZeroRowsWithSourceData = errors.New("daily metrics family produced zero rows despite source data")
+	// ErrDayAlreadyCovered means a deferred-discovery `metrics daily-start`
+	// request (no --repo-id) found an ALREADY-succeeded run for the same
+	// (org, day) under a DIFFERENT generation -- a prior scheduled fan-out,
+	// post-sync re-drive, or earlier manual trigger. Refused rather than
+	// dispatched (CHAOS-5055, codex adversarial review round 2, P1):
+	// StartRunTx's (org_id, target_day, generation) uniqueness constraint
+	// only makes ONE trigger idempotent against ITS OWN replays -- it does
+	// nothing to stop a genuinely DIFFERENT trigger from inserting a second,
+	// independent all-repository run for the same org+day, which would
+	// recompute and duplicate-write every native daily family (file_hotspots
+	// included -- an append-only table with no dedup on replay, see
+	// 083_dedup_file_hotspots_windowed_view.sql) a second time. Scoped to the
+	// deferred-discovery (all-repository) case only, and to StartManualDailyRun
+	// only: this is the operator-facing surface CHAOS-5055 added, not a
+	// change to the scheduled fan-out or post-sync triggers' own behavior
+	// (which have carried this same cross-generation gap since CHAOS-4263,
+	// unrelated to this diff, and are out of this fix's scope -- see the
+	// doc comment on StartManualDailyRun).
+	ErrDayAlreadyCovered = errors.New("daily metrics day is already covered by a succeeded run")
 )
 
 // ErrRepositoryCapExceeded means live ClickHouse repository discovery

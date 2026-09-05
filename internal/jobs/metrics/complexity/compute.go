@@ -280,24 +280,56 @@ func BuildSnapshots(
 	files []FileComplexity,
 	computedAt time.Time,
 	orgID string,
-) Result {
+) (Result, error) {
 	snapshots := make([]FileSnapshot, 0, len(files))
 
 	var totalLOC, totalCC, totalHigh, totalVeryHigh int
 
 	for _, f := range files {
+		// FAIL CLOSED on the uint32 conversion. Every one of these fields is
+		// a count derived from LineCount/len()/a strict-`>` threshold tally
+		// in AnalyzeFile/BuildFileResult, so it can legitimately be 0 (an
+		// empty file, a file with no functions) but can NEVER be negative.
+		// A negative value here means a bug upstream produced impossible
+		// data -- and `uint32(negative)` in Go does not error, it silently
+		// WRAPS to a value near 4 billion. Writing that wrapped number to
+		// file_complexity_snapshots would be a wildly wrong row that reads
+		// as a real (if bizarre) measurement, not a visible failure -- the
+		// same silent-corruption shape this family's other fail-closed
+		// checks exist to prevent (see ErrLanguageNotPorted above).
+		loc, err := nonNegativeUint32(f.LOC, "LOC", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		functionsCount, err := nonNegativeUint32(f.FunctionsCount, "FunctionsCount", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		cyclomaticTotal, err := nonNegativeUint32(f.CyclomaticTotal, "CyclomaticTotal", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		high, err := nonNegativeUint32(f.HighComplexityFunctions, "HighComplexityFunctions", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+		veryHigh, err := nonNegativeUint32(f.VeryHighComplexityFunctions, "VeryHighComplexityFunctions", f.FilePath)
+		if err != nil {
+			return Result{}, err
+		}
+
 		snapshots = append(snapshots, FileSnapshot{
 			RepoID:                      repoID,
 			AsOfDay:                     day,
 			Ref:                         ref,
 			FilePath:                    f.FilePath,
 			Language:                    f.Language,
-			LOC:                         uint32(f.LOC),
-			FunctionsCount:              uint32(f.FunctionsCount),
-			CyclomaticTotal:             uint32(f.CyclomaticTotal),
+			LOC:                         loc,
+			FunctionsCount:              functionsCount,
+			CyclomaticTotal:             cyclomaticTotal,
 			CyclomaticAvg:               f.CyclomaticAvg,
-			HighComplexityFunctions:     uint32(f.HighComplexityFunctions),
-			VeryHighComplexityFunctions: uint32(f.VeryHighComplexityFunctions),
+			HighComplexityFunctions:     high,
+			VeryHighComplexityFunctions: veryHigh,
 			ComputedAt:                  computedAt,
 			OrgID:                       orgID,
 		})
@@ -317,18 +349,66 @@ func BuildSnapshots(
 		perKLOC = float64(totalCC) / (float64(totalLOC) / 1000.0)
 	}
 
+	// The repo-level totals go through the same fail-closed conversion,
+	// widened to uint64 (a summed field can exceed uint32's range even
+	// though no single file's count can).
+	locTotal, err := nonNegativeUint64(totalLOC, "LOCTotal", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+	cyclomaticTotalAll, err := nonNegativeUint64(totalCC, "CyclomaticTotal", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+	highAll, err := nonNegativeUint64(totalHigh, "HighComplexityFunctions", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+	veryHighAll, err := nonNegativeUint64(totalVeryHigh, "VeryHighComplexityFunctions", repoID)
+	if err != nil {
+		return Result{}, err
+	}
+
 	return Result{
 		Snapshots: snapshots,
 		Repo: RepoDaily{
 			RepoID:                      repoID,
 			Day:                         day,
-			LOCTotal:                    uint64(totalLOC),
-			CyclomaticTotal:             uint64(totalCC),
+			LOCTotal:                    locTotal,
+			CyclomaticTotal:             cyclomaticTotalAll,
 			CyclomaticPerKLOC:           perKLOC,
-			HighComplexityFunctions:     uint64(totalHigh),
-			VeryHighComplexityFunctions: uint64(totalVeryHigh),
+			HighComplexityFunctions:     highAll,
+			VeryHighComplexityFunctions: veryHighAll,
 			ComputedAt:                  computedAt,
 			OrgID:                       orgID,
 		},
+	}, nil
+}
+
+// nonNegativeUint32 converts a count to uint32, failing closed on a
+// negative input rather than letting Go's implicit conversion wrap it into
+// a large positive value near the top of uint32's range.
+func nonNegativeUint32(v int, field, filePath string) (uint32, error) {
+	if v < 0 {
+		return 0, fmt.Errorf(
+			"complexity: %s=%d is negative for %q; refusing to convert to "+
+				"uint32 (would silently wrap to a huge value instead of erroring)",
+			field, v, filePath,
+		)
 	}
+	return uint32(v), nil
+}
+
+// nonNegativeUint64 is nonNegativeUint32's counterpart for the repo-level
+// summed totals, which are widened to uint64 because a sum across many
+// files can exceed uint32's range even though no single file's count can.
+func nonNegativeUint64(v int, field, repoID string) (uint64, error) {
+	if v < 0 {
+		return 0, fmt.Errorf(
+			"complexity: %s=%d is negative for repo %q; refusing to convert "+
+				"to uint64 (would silently wrap to a huge value instead of erroring)",
+			field, v, repoID,
+		)
+	}
+	return uint64(v), nil
 }

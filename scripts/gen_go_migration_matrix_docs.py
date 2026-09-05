@@ -242,8 +242,15 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4285 (Done)",
     },
     "ai_impact": {
-        "citation": "Python: `ai_impact.py:312 compute_ai_impact_metrics_daily`",
-        "ticket": "CHAOS-4280",
+        # CHAOS-5234/CHAOS-3092: this citation was already stale before this
+        # PR -- AIImpactExecutor (native Go) has computed this family since
+        # CHAOS-4280, but the citation here still described the old Python
+        # compute path. This PR deletes job_daily.py's own reference to
+        # compute_ai_impact_metrics_daily (not the function itself, which
+        # keeps real other callers -- the Go oracle comparator and its own
+        # dedicated tests), same shape as CHAOS-5233's work_item_attribution.
+        "citation": "Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`) -- pre_bridge; ports `ai_impact.py:312 compute_ai_impact_metrics_daily`, still called by the Go oracle comparator and its own dedicated tests, just no longer by job_daily.py",
+        "ticket": "CHAOS-4280 (Done)",
     },
     "ai_workflow": {
         # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212

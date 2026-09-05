@@ -20,7 +20,6 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
     deduplicate_active_incidents,
 )
-from dev_health_ops.metrics.ai_impact import compute_ai_impact_metrics_daily
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
@@ -312,7 +311,10 @@ def _extract_ai_workflow_for_day(
 
     # Row-local hygiene: drop rows whose repo_id/number cannot parse instead
     # of letting one malformed row abort the whole day (the extractor calls
-    # UUID() on every row). Mirrors the pr_commit_stats per-row handling.
+    # UUID() on every row). CHAOS-5234/CHAOS-3092: this comment used to say
+    # "mirrors the pr_commit_stats per-row handling" -- that block (built
+    # solely for ai_impact) was deleted from run_daily_metrics_job, so this
+    # is now the only per-row UUID-hygiene pattern left in this file.
     def _valid_rows(rows: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
         valid: list[dict[str, Any]] = []
         dropped = 0
@@ -1137,11 +1139,11 @@ async def run_daily_metrics_job(
     gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
     all), ``testops_risk`` CHAOS-4294,
     ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
-    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
-    chaos-4280-r3, finding 5 -- this doc had not been updated when
-    ``ai_impact`` was wired below); naming any other family here has no
-    effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``benchmarking`` CHAOS-4288 (``ai_impact`` CHAOS-4280 had the same
+    write-only-skip shape as file_hotspots above until CHAOS-5234/CHAOS-3092
+    -- its Python compute+write was deleted outright, so it no longer checks
+    this set at all); naming any other family here has no effect.
 
     The three CHAOS-4284 names gate WRITES ONLY: their computed values still
     feed ``compute_release_confidence``/``compute_quality_drag``/
@@ -1734,14 +1736,12 @@ async def run_daily_metrics_job(
         # comparator at internal/jobs/metrics/aigovernance/testdata/
         # python_governance_oracle.py, the GraphQL API resolver, and their
         # own dedicated tests).
-        ai_attribution_rows = []
-        ai_loader: Any = loader
-        if hasattr(ai_loader, "load_ai_pr_attributions"):
-            ai_attribution_rows = await ai_loader.load_ai_pr_attributions(
-                start=start,
-                end=end,
-                repo_id=repo_id,
-            )
+        # CHAOS-5234/CHAOS-3092: no ai_attribution_rows load here anymore --
+        # it existed solely to feed compute_ai_impact_metrics_daily's
+        # ai_attribution_rows parameter, deleted below alongside the compute
+        # call and the pr_commit_stats build; verified via rg that
+        # ai_attribution_rows was never read by anything else in this
+        # function.
 
         # CHAOS-2187: extract AI workflow runs + Work Graph edges from today's
         # PRs/reviews so ai_workflow_issue_edges, ai_workflow_artifact_edges,
@@ -1750,8 +1750,11 @@ async def run_daily_metrics_job(
         # the job: there is no persisted job-health table to record a partial
         # day, and empty edge tables are indistinguishable from "no AI
         # activity today" — swallowing here would be silent partial data.
-        # Row-local issues (malformed repo ids) are skipped inside the helper,
-        # mirroring the per-row handling in the pr_commit_stats build below.
+        # Row-local issues (malformed repo ids) are skipped inside the helper
+        # (CHAOS-5234/CHAOS-3092: this comment used to say "below" -- the
+        # pr_commit_stats build it referred to, built solely for ai_impact,
+        # is deleted; _valid_rows above is now the only sibling of this
+        # pattern in this file).
         (
             ai_workflow_runs,
             ai_workflow_artifact_edges,
@@ -1768,122 +1771,25 @@ async def run_daily_metrics_job(
             repo_provider_by_id=repo_provider_by_id,
         )
 
-        # Build pr_commit_stats: {(repo_id, pr_number) -> [{"file_path": ...}]} so that
-        # compute_ai_impact_metrics_daily can determine which PRs touched test files.
-        #
-        # Design notes (CHAOS-2183):
-        #  • We join work_graph_pr_commit with git_commit_stats rather than using the
-        #    day-scoped commit_rows — a PR merged today may have test commits from prior
-        #    days (window-mismatch false-gap bug).
-        #  • Query is bounded to today's in-window PR numbers (not all-time), so the
-        #    scan is proportional to the batch size, not the full table.
-        #  • LEFT JOIN ensures PRs whose commits have no file-stat rows still appear in
-        #    the result (they get file_path=NULL → has_test_change=False, a real gap).
-        #  • UUID parsing is per-row so one malformed row is skipped, not fatal.
-        #  • On any outer exception, pr_commit_stats stays None and ai_impact treats
-        #    test_gap as unavailable (None), preventing the 100%-inflation false alarm.
-        pr_commit_stats: dict[tuple[uuid.UUID, int], list[Any]] | None = None
-        try:
-            # Identify which PRs fall inside today's UTC window (mirrors the logic in
-            # compute_ai_impact_metrics_daily so the sets are consistent).
-            in_window_prs: set[tuple[str, int]] = set()
-            for pr in pr_rows:
-                merged_at_raw = pr.get("merged_at")
-                event_at = _to_utc(
-                    merged_at_raw if merged_at_raw is not None else pr["created_at"]
-                )
-                if start <= event_at < end:
-                    in_window_prs.add((str(pr["repo_id"]), int(pr["number"])))
-
-            if in_window_prs:
-                # Scope to just today's PR numbers (+ optional repo filter).
-                pr_numbers: list[int] = list({pr_num for _, pr_num in in_window_prs})
-                pc_params: dict[str, Any] = {
-                    "org_id": org_id,
-                    "pr_numbers": pr_numbers,
-                }
-                pc_repo_filter = ""
-                if repo_id is not None:
-                    pc_params["repo_id"] = str(repo_id)
-                    pc_repo_filter = " AND p.repo_id = {repo_id:UUID}"
-
-                # LEFT JOIN so PRs with commits that have no file stats still appear
-                # (file_path=NULL → not a test path → has_test_change=False for that PR).
-                # commit_hash + committer_when (from git_commits, org-scoped) feed
-                # follow-up-commit derivation (CHAOS-2437); committer_when is
-                # de-duplicated per commit downstream so RMT version rows are
-                # harmless. git_commit_stats carries no org_id column, so its join
-                # stays on (repo_id, commit_hash) -- p is already org-scoped by the
-                # WHERE clause.
-                raw_link_rows = primary_sink.query_dicts(
-                    "SELECT p.repo_id, p.pr_number, p.commit_hash, p.evidence,"
-                    " c.committer_when, s.file_path"
-                    " FROM work_graph_pr_commit AS p"
-                    " LEFT JOIN git_commit_stats AS s"
-                    "   ON s.repo_id = p.repo_id AND s.commit_hash = p.commit_hash"
-                    " LEFT JOIN git_commits AS c"
-                    "   ON c.repo_id = p.repo_id AND c.hash = p.commit_hash"
-                    "   AND c.org_id = p.org_id"
-                    f" WHERE p.org_id = {{org_id:String}}{pc_repo_filter}"
-                    "   AND p.pr_number IN {pr_numbers:Array(UInt32)}",
-                    pc_params,
-                )
-
-                built: dict[tuple[uuid.UUID, int], list[Any]] = {}
-                for link in raw_link_rows:
-                    rid_str = str(link.get("repo_id") or "")
-                    pr_num_raw = link.get("pr_number")
-                    if not rid_str or pr_num_raw is None:
-                        continue
-                    pr_num = int(pr_num_raw)
-                    # Filter cross-repo collisions (pr_number is per-repo, not global).
-                    if (rid_str, pr_num) not in in_window_prs:
-                        continue
-                    try:
-                        rid = uuid.UUID(rid_str)
-                    except (ValueError, AttributeError):
-                        # One malformed row → skip it, don't abort the whole build.
-                        logger.debug(
-                            "Skipping malformed repo_id in work_graph_pr_commit: %r",
-                            rid_str,
-                        )
-                        continue
-                    built.setdefault((rid, pr_num), []).append(
-                        {
-                            "file_path": link.get("file_path"),
-                            "commit_hash": link.get("commit_hash"),
-                            "committer_when": link.get("committer_when"),
-                            "evidence": link.get("evidence"),
-                        }
-                    )
-                pr_commit_stats = built
-            else:
-                pr_commit_stats = {}
-
-        except Exception as exc:
-            logger.warning(
-                "pr_commit_stats build failed, test_gap_rate unavailable for day=%s: %s",
-                d,
-                exc,
-            )
-            # pr_commit_stats stays None → _test_changes_by_pr returns {} → every PR
-            # gets has_test_change=None → test_gap_rate=None (unavailable, not 100%).
-
-        ai_impact_metrics = compute_ai_impact_metrics_daily(
-            day=d,
-            org_id=org_id,
-            pull_request_rows=pr_rows,
-            pull_request_review_rows=review_rows,
-            ai_attribution_rows=ai_attribution_rows,
-            incident_rows=incident_rows,
-            commit_stat_rows=commit_rows,
-            computed_at=computed_at,
-            team_resolver=lambda _repo_id, repo_name, _identity: (
-                repo_team_resolver.resolve(repo_name)
-            ),
-            repo_names_by_id=repo_names_by_id,
-            pr_commit_stats=pr_commit_stats,
-        )
+        # CHAOS-5234/CHAOS-3092: ai_impact's daily compute is DELETED here,
+        # not skip-gated -- chris's standing rule (CHAOS-5233): once a
+        # family's Go executor is on main, its Python compute is deleted,
+        # never skip-gated. AIImpactExecutor (native Go, CHAOS-4280) is now
+        # the only writer of ai_impact_metrics_daily for a daily partition.
+        # This deletion also removes the pr_commit_stats build this comment
+        # replaces (a ~100-line work_graph_pr_commit/git_commit_stats/
+        # git_commits join, CHAOS-2183) and the ai_attribution_rows load
+        # above -- both existed SOLELY to feed compute_ai_impact_metrics_
+        # daily's own parameters (verified via rg: neither name is read
+        # anywhere else in this function). Like CHAOS-5233's
+        # work_item_attribution, compute_ai_impact_metrics_daily ITSELF is
+        # NOT deleted from the codebase -- it has real, separate callers:
+        # the Go oracle comparator
+        # (internal/jobs/metrics/aiimpact/testdata/python_ai_impact_oracle.py)
+        # and its own dedicated tests (tests/metrics/test_ai_impact.py).
+        # pr_rows/review_rows/incident_rows/commit_rows themselves are NOT
+        # touched -- they are shared inputs other, still-Python
+        # computations in this function also read.
 
         # CHAOS-4264: this is the FIRST write for (repo_id, d) in the whole
         # function -- everything above is loading/compute, no sink writes.
@@ -1980,22 +1886,9 @@ async def run_daily_metrics_job(
         skip_work_item_estimate_write = "work_item_estimate" in skip_families
         # CHAOS-5234/CHAOS-3092: no skip_ai_governance_write here -- deleted
         # alongside the compute call above, not skip-gated.
-        # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
-        # Same write-only-skip shape as repo_user_commit above --
-        # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
-        # below (verified by grep, not assumed), so compute stays unconditional
-        # and only the write is gated.
-        #
-        # ai_impact_metrics_daily is a ReplacingMergeTree whose ORDER BY key
-        # (org_id, team_id, repo_id, work_type, day, attribution_bucket) fully
-        # covers the producer's grouping, so an ungated double-write would
-        # eventually collapse rather than accumulate. The gate is still
-        # required: until a merge runs, both versions are live, and readers
-        # that do not dedup would double-count -- and the two paths disagree
-        # wherever the Go port's fixes apply (the uint64 revert-rule widening,
-        # and the incident reader's CHAOS-4269 valid_from guard), so which copy
-        # wins would decide the answer.
-        skip_ai_impact_write = "ai_impact" in skip_families
+        # CHAOS-5234/CHAOS-3092: no skip_ai_impact_write here either -- same
+        # deletion, not skip-gated. AIImpactExecutor (native Go) is the only
+        # writer of ai_impact_metrics_daily now.
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -2047,8 +1940,9 @@ async def run_daily_metrics_job(
             # write_ai_governance_coverage_daily call here -- deleted
             # alongside the compute call above; AIGovernanceExecutor (native
             # Go) is the only writer now.
-            if ai_impact_metrics and not skip_ai_impact_write:
-                s.write_ai_impact_metrics(ai_impact_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_ai_impact_metrics call here
+            # either -- deleted alongside the compute call above;
+            # AIImpactExecutor (native Go) is the only writer now.
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
                 s.write_ai_workflow_runs(ai_workflow_runs)
             if ai_workflow_artifact_edges and hasattr(

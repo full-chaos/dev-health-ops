@@ -196,7 +196,7 @@ function directly, even for families whose worker kind is now native:
 | Family | Executor | Citation | Ticket |
 | --- | --- | --- | --- |
 | ai_governance | NATIVE | Go: `internal/jobs/metrics/daily/ai_governance_native_executor.go` (`AIGovernanceExecutor`) | CHAOS-4285 (Done) |
-| ai_impact | NATIVE | Python: `ai_impact.py:312 compute_ai_impact_metrics_daily` | CHAOS-4280 |
+| ai_impact | NATIVE | Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`) -- pre_bridge; ports `ai_impact.py:312 compute_ai_impact_metrics_daily`, still called by the Go oracle comparator and its own dedicated tests, just no longer by job_daily.py | CHAOS-4280 (Done) |
 | ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`) | CHAOS-4286 |
 | benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |

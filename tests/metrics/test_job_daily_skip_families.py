@@ -269,7 +269,9 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     monkeypatch.setattr(
         job_daily, "_extract_ai_workflow_for_day", lambda **k: ([], [], [], [], [], [])
     )
-    monkeypatch.setattr(job_daily, "compute_ai_impact_metrics_daily", lambda **k: [])
+    # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
+    # here anymore -- job_daily.py no longer calls it at all (deleted, not
+    # skip-gated; see CHAOS-5233's shape for work_item_attribution).
     monkeypatch.setattr(job_daily, "run_benchmarking_for_day", lambda *a, **k: None)
     monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", lambda **k: 0)
 
@@ -1239,6 +1241,47 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
         )
         assert "write_ai_policy_events" not in sink.write_calls
         assert "write_ai_governance_coverage_daily" not in sink.write_calls
+        # cicd (unrelated family, same partition) must be entirely
+        # unaffected by the deletion.
+        assert "write_cicd_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5234/CHAOS-3092 close condition 3.
+
+    ai_impact's daily compute is DELETED from job_daily.py, not skip-gated --
+    same rule as CHAOS-5233's work_item_attribution. Same shape as that case
+    (not ai_governance's): compute_ai_impact_metrics_daily itself is NOT
+    deleted from the codebase -- the Go oracle comparator
+    (internal/jobs/metrics/aiimpact/testdata/python_ai_impact_oracle.py) and
+    its own dedicated tests (tests/metrics/test_ai_impact.py) still call it
+    directly. Only run_daily_metrics_job's own call is gone, along with the
+    pr_commit_stats build and ai_attribution_rows load that existed solely
+    to feed it.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    assert not hasattr(job_daily, "compute_ai_impact_metrics_daily"), (
+        "compute_ai_impact_metrics_daily must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+
+    for skip_families in (None, {"ai_impact"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
+        assert "write_ai_impact_metrics" not in sink.write_calls
         # cicd (unrelated family, same partition) must be entirely
         # unaffected by the deletion.
         assert "write_cicd_metrics" in sink.write_calls

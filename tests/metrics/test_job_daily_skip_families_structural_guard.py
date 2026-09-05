@@ -68,6 +68,16 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # directly, as do its own dedicated unit tests), only job_daily.py's own
     # reference to it.
     "file_hotspots": "compute_file_hotspots",
+    # CHAOS-5234: ai_impact's daily compute deleted from job_daily.py -- the
+    # native Go executor (AIImpactExecutor, CHAOS-4280) is the only writer
+    # of ai_impact_metrics_daily for a daily partition now. Same shape as
+    # work_item_attribution: compute_ai_impact_metrics_daily itself is NOT
+    # deleted from the codebase (the Go oracle comparator at
+    # internal/jobs/metrics/aiimpact/testdata/python_ai_impact_oracle.py and
+    # its own dedicated tests still call it directly), only job_daily.py's
+    # own reference to it -- along with the pr_commit_stats build and
+    # ai_attribution_rows load that existed solely to feed it.
+    "ai_impact": "compute_ai_impact_metrics_daily",
 }
 
 

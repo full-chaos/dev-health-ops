@@ -292,6 +292,9 @@ type Dispatcher struct {
 	store      Store
 	publisher  Publisher
 	discoverer RepositoryDiscoverer
+	// blockedObserver counts CHAOS-5040 blocked-run marker transitions.
+	// Optional: nil is a silent no-op.
+	blockedObserver jobruntime.DailyMetricsBlockedRunObserver
 }
 
 func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscoverer) (*Dispatcher, error) {
@@ -299,6 +302,80 @@ func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscov
 		return nil, ErrUnavailable
 	}
 	return &Dispatcher{store: store, publisher: publisher, discoverer: discoverer}, nil
+}
+
+// SetBlockedRunObserver attaches the CHAOS-5040 blocked-run counters. Nil is
+// a silent no-op, matching every other observer here.
+func (handler *Dispatcher) SetBlockedRunObserver(observer jobruntime.DailyMetricsBlockedRunObserver) {
+	if handler != nil {
+		handler.blockedObserver = observer
+	}
+}
+
+// blockedRunReconciler is the narrow, OPTIONAL capability the dispatch
+// fan-out uses to keep the blocked marker current. It is deliberately NOT on
+// the Store interface: this is a visibility concern, and putting it there
+// would force every implementation -- including the test fakes that have
+// nothing to do with it -- to carry a method they never call. The type
+// assertion below mirrors how the observers in this package are wired.
+type blockedRunReconciler interface {
+	ReconcileBlockedRuns(ctx context.Context, orgID string) (BlockedReconcileOutcome, error)
+}
+
+// SupportsBlockedRunReconcile reports whether store carries the optional
+// blocked-run reconcile capability (CHAOS-5040). It exists so the wiring can
+// say so ONCE at construction rather than counting a wiring fact on every
+// pass: a store lacking the method is a permanent, deployment-constant
+// condition, and a per-pass counter for it would be noise that never changes.
+//
+// Exported deliberately rather than duplicating the interface at the call
+// site: a second copy of the method set in another package is free to drift
+// from this one, and the drift would be silent -- the assertion would simply
+// stop matching and the reconcile would disable itself with nobody noticing.
+// One definition, asked from outside.
+func SupportsBlockedRunReconcile(store Store) bool {
+	_, ok := store.(blockedRunReconciler)
+	return ok
+}
+
+// reconcileBlockedRuns keeps this organization's blocked markers in step with
+// live partition state. It runs at the END of the fan-out and is FAIL-OPEN by
+// construction: the marker exists to make a wedged run visible, and a
+// visibility mechanism must never be able to fail the job that computes the
+// day's metrics. Every error path here returns without touching the caller's
+// result -- the same rule the lease observers in this package follow, for the
+// same reason.
+//
+// This is the periodic tick. The daily fan-out is genuinely scheduled
+// (fixed-scheduler entry daily_metrics_fanout, DailyAt(1, 0), per
+// organization), whereas the stranded-finalize sweep it might otherwise have
+// hung off is NOT periodic -- FindStrandedFinalizeRuns has exactly one
+// non-test caller, the workerctl CLI, so hanging this off it would mean a
+// wedged run only becomes visible once an operator already went looking,
+// which is the situation the marker exists to end.
+func (handler *Dispatcher) reconcileBlockedRuns(ctx context.Context, organizationID string) {
+	reconciler, ok := handler.store.(blockedRunReconciler)
+	if !ok {
+		return
+	}
+	outcome, err := reconciler.ReconcileBlockedRuns(ctx, organizationID)
+	if handler.blockedObserver == nil {
+		return
+	}
+	if err != nil {
+		// Silent to the JOB, never silent to METRICS. Swallowing the error
+		// here is deliberate, but a fail-open path with no counter is
+		// indistinguishable from one that is working: "marked" and "cleared"
+		// would both sit at zero, which reads exactly like a healthy fleet
+		// with nothing wedged.
+		_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("failed", 1)
+		return
+	}
+	// Both are reported every pass, including zeros: a series that
+	// disappears when nothing changed cannot be told apart from a reconcile
+	// that stopped running.
+	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("marked", outcome.Marked)
+	_ = handler.blockedObserver.ObserveDailyMetricsBlockedRun("cleared", outcome.Cleared)
 }
 
 func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsDispatchArgs]) error {
@@ -322,6 +399,24 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	if run.ID != runID || run.Status != "running" || execution.OrganizationID == nil || run.OrganizationID != *execution.OrganizationID {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
+	// codex review round 3 (P2). This used to run LAST, after the publish loop,
+	// on the reasoning that a visibility mechanism must never affect what the job
+	// had to do. The ordering was right; placing it after the early returns was
+	// not. Every failure path between here and the end -- a publish error, a
+	// DispatchablePartitions error, an invalid partition -- returned before the
+	// reconcile, so the marker sweep silently stopped running for that
+	// organization for as long as those failures lasted.
+	//
+	// The reasoning error was conflating the run being DISPATCHED with the runs
+	// being MARKED. I argued this was benign because a run I would mark has only
+	// terminal partitions, so its publish loop cannot fail. True, and irrelevant:
+	// the reconcile is ORG-scoped, so a DIFFERENT, already-wedged historical run
+	// in the same organization goes unmarked because THIS run's publish failed.
+	//
+	// A defer covers every exit including the panic path, and keeps the
+	// "cannot affect the job's outcome" property: reconcileBlockedRuns is
+	// fail-open and returns nothing.
+	defer handler.reconcileBlockedRuns(ctx, run.OrganizationID)
 	if run.RepositoryDiscoveryRequired {
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {

@@ -107,6 +107,15 @@ func (p *parser) parseStatement(parent *suite) *stmt {
 
 	header := make([]Token, 0, 8)
 	colonAt := -1
+	// depth tracks bracket nesting WITHIN this header. The tokenizer emits
+	// every bracket and colon flatly regardless of nesting (it only uses
+	// depth to decide whether a physical newline is significant), so this
+	// parser must track it itself: a parameter annotation's colon in
+	// `def f(x: int):` sits inside the `(...)`, and picking the FIRST
+	// colon in the flat header without depth-awareness selects it, then
+	// treats `):`'s trailing colon as garbage and drops the entire
+	// function body -- CHAOS-4291 r1 P1.
+	depth := 0
 	for {
 		tok := p.peek()
 		if tok.Kind == TokenEOF || tok.Kind == TokenNewline {
@@ -115,13 +124,23 @@ func (p *parser) parseStatement(parent *suite) *stmt {
 		if tok.Kind == TokenIndent || tok.Kind == TokenDedent {
 			break
 		}
-		// The FIRST top-level colon opens the suite. Colons inside
-		// brackets belong to a dict, a slice or an annotation, and a
-		// lambda's colon opens no suite -- the tokenizer's bracket depth
-		// already suppressed the former, and lambda is handled by
-		// requiring the colon to be the last token on the line.
-		if tok.Kind == TokenOp && tok.Text == ":" && colonAt < 0 {
-			colonAt = len(header)
+		if tok.Kind == TokenOp {
+			switch tok.Text {
+			case "(", "[", "{":
+				depth++
+			case ")", "]", "}":
+				if depth > 0 {
+					depth--
+				}
+			case ":":
+				// The FIRST top-level (depth 0) colon opens the suite.
+				// A colon inside brackets belongs to a dict, a slice, a
+				// parameter/variable annotation, or a lambda used as an
+				// argument -- never a suite opener.
+				if depth == 0 && colonAt < 0 {
+					colonAt = len(header)
+				}
+			}
 		}
 		header = append(header, tok)
 		p.pos++
@@ -143,8 +162,12 @@ func (p *parser) parseStatement(parent *suite) *stmt {
 	classify(st, parent)
 
 	// A suite follows either as an INDENT block, or inline after the colon
-	// on the same line (`if x: return y`).
-	if colonAt >= 0 && colonAt == len(header)-1 && p.peek().Kind == TokenIndent {
+	// on the same line (`if x: return y`). Both branches also require
+	// opensSuite(st.kind): a top-level colon that ends a header line by
+	// coincidence (this parser does not fully validate every construct)
+	// must never be treated as a suite opener for a statement kind that
+	// cannot legally open one.
+	if colonAt >= 0 && colonAt == len(header)-1 && opensSuite(st.kind) && p.peek().Kind == TokenIndent {
 		p.pos++
 		st.body = p.parseSuite()
 		if p.peek().Kind == TokenDedent {

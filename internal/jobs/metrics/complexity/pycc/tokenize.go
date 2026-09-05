@@ -145,14 +145,24 @@ type tokenizer struct {
 	col    int
 	tokens []Token
 	// indents is the indentation stack, exactly as CPython's tokenizer
-	// keeps it: a column wider than the top pushes one INDENT, a narrower
-	// one pops until it matches, and failing to match is an error.
-	indents []int
+	// keeps it, EXCEPT each level records TWO widths -- indents[i][0] is
+	// the column with tabs expanded to the next multiple of 8,
+	// indents[i][1] is the column with every tab counted as width 1.
+	// CPython compares indentation using both metrics and raises TabError
+	// the moment they disagree on ordering (tokenizer.c's `indstack`/
+	// `altindstack`); a single-metric comparison accepts inputs CPython
+	// rejects, such as a dedent that lands on the same tabsize-8 column a
+	// tab-indented line used but was reached with spaces instead of tabs.
+	indents [][2]int
 	// depth is bracket nesting. Inside brackets, newlines are implicit
 	// continuations and indentation is not significant -- this is what
 	// makes a multi-line call signature or a wrapped boolean expression
 	// lex correctly.
 	depth int
+	// brackets is the stack of closers each open bracket expects, so
+	// `(1]` is rejected instead of silently treated as balanced (Python
+	// requires each closer to match its own opener, not just any closer).
+	brackets []rune
 	// atLineStart is true when the scanner is positioned where indentation
 	// would be measured, i.e. after a logical newline and not inside
 	// brackets.
@@ -174,7 +184,7 @@ func Tokenize(src string) ([]Token, error) {
 	t := &tokenizer{
 		src:         []rune(src),
 		line:        1,
-		indents:     []int{0},
+		indents:     [][2]int{{0, 0}},
 		atLineStart: true,
 	}
 	if err := t.run(); err != nil {
@@ -211,6 +221,31 @@ func (t *tokenizer) run() error {
 			t.pos += 2
 			t.line++
 			t.col = 0
+			if t.pos >= len(t.src) {
+				// A continuation promises MORE tokens complete the
+				// logical line; EOF right after it means the file ends
+				// mid-statement (an empty continued line, in the given
+				// repro). CPython raises "unexpected EOF while parsing"
+				// here -- a plain trailing-newline close (the case just
+				// above, with nothing after it) is fine because it isn't
+				// promising a continuation.
+				return &ErrTokenize{
+					Line: t.line,
+					Msg:  "unexpected EOF while parsing",
+				}
+			}
+		case c == '\\':
+			// A backslash NOT immediately followed by a newline (including
+			// one sitting right at EOF) is not a valid continuation.
+			// CPython raises "unexpected character after line continuation
+			// character" / a SyntaxError at EOF; radon's caller turns that
+			// into a skipped file, so this must be a hard error rather
+			// than falling through to consumeOp and being lexed as a
+			// stray operator token that quietly contributes nothing.
+			return &ErrTokenize{
+				Line: t.line,
+				Msg:  "unexpected character after line continuation character",
+			}
 		case c == ' ' || c == '\t' || c == '\f':
 			t.pos++
 			t.col++
@@ -223,8 +258,20 @@ func (t *tokenizer) run() error {
 		case isIdentStart(c):
 			t.consumeName()
 		default:
-			t.consumeOp()
+			if err := t.consumeOp(); err != nil {
+				return err
+			}
 		}
+	}
+
+	// An unclosed bracket at EOF is the same class of defect as the
+	// continuation-then-EOF case above: input that promises more tokens
+	// (here, a matching closer) and never delivers them. CPython raises
+	// "unexpected EOF while parsing" for `x = (1, 2` with no close; without
+	// this check the file would silently parse as if the paren had closed
+	// at EOF, scoring a row for invalid Python.
+	if len(t.brackets) > 0 {
+		return &ErrTokenize{Line: t.line, Msg: "unexpected EOF while parsing"}
 	}
 
 	// A file that ends mid-line still ends a logical line, and every open
@@ -248,17 +295,24 @@ func (t *tokenizer) run() error {
 // close that suite.
 func (t *tokenizer) handleLineStart() (bool, error) {
 	start := t.pos
-	width := 0
+	// width8 expands tabs to the next multiple of 8 (what a naive
+	// single-metric tokenizer would compare). width1 counts every tab as
+	// exactly one column. CPython requires BOTH metrics to agree on the
+	// ordering between a line and the enclosing indent level; a mix of
+	// tabs and spaces that only LOOKS consistent under one metric is a
+	// TabError, not a silently-accepted indentation change.
+	width8, width1 := 0, 0
 	for t.pos < len(t.src) {
 		c := t.src[t.pos]
 		if c == ' ' {
-			width++
+			width8++
+			width1++
 		} else if c == '\t' {
-			// CPython expands tabs to the next multiple of 8 when
-			// comparing indentation levels.
-			width += 8 - (width % 8)
+			width8 += 8 - (width8 % 8)
+			width1++
 		} else if c == '\f' {
-			width = 0
+			width8 = 0
+			width1 = 0
 		} else {
 			break
 		}
@@ -266,7 +320,7 @@ func (t *tokenizer) handleLineStart() (bool, error) {
 	}
 
 	if t.pos >= len(t.src) {
-		t.col = width
+		t.col = width8
 		t.atLineStart = false
 		return false, nil
 	}
@@ -287,20 +341,29 @@ func (t *tokenizer) handleLineStart() (bool, error) {
 		return true, nil
 	}
 
-	t.col = width
+	t.col = width8
 	t.atLineStart = false
 
 	top := t.indents[len(t.indents)-1]
 	switch {
-	case width > top:
-		t.indents = append(t.indents, width)
+	case width8 > top[0]:
+		if width1 <= top[1] {
+			// width8 says deeper, width1 says not deeper (or equal) --
+			// the two metrics disagree on direction.
+			return false, &ErrTokenize{
+				Line: t.line,
+				Msg:  "inconsistent use of tabs and spaces in indentation",
+			}
+		}
+		t.indents = append(t.indents, [2]int{width8, width1})
 		t.emit(TokenIndent, string(t.src[start:t.pos]))
-	case width < top:
-		for len(t.indents) > 1 && t.indents[len(t.indents)-1] > width {
+	case width8 < top[0]:
+		for len(t.indents) > 1 && t.indents[len(t.indents)-1][0] > width8 {
 			t.indents = t.indents[:len(t.indents)-1]
 			t.emit(TokenDedent, "")
 		}
-		if t.indents[len(t.indents)-1] != width {
+		newTop := t.indents[len(t.indents)-1]
+		if newTop[0] != width8 {
 			// CPython raises IndentationError here. radon's caller
 			// turns any exception into a skipped file, so surfacing
 			// this as an error keeps the two sides agreeing on which
@@ -308,6 +371,19 @@ func (t *tokenizer) handleLineStart() (bool, error) {
 			return false, &ErrTokenize{
 				Line: t.line,
 				Msg:  "unindent does not match any outer indentation level",
+			}
+		}
+		if newTop[1] != width1 {
+			return false, &ErrTokenize{
+				Line: t.line,
+				Msg:  "inconsistent use of tabs and spaces in indentation",
+			}
+		}
+	default: // width8 == top[0]
+		if width1 != top[1] {
+			return false, &ErrTokenize{
+				Line: t.line,
+				Msg:  "inconsistent use of tabs and spaces in indentation",
 			}
 		}
 	}
@@ -409,9 +485,13 @@ func (t *tokenizer) consumeString() error {
 	startLine := t.line
 
 	raw := false
+	isFString := false
 	for t.pos < len(t.src) && isIdentPart(t.src[t.pos]) {
-		if t.src[t.pos] == 'r' || t.src[t.pos] == 'R' {
+		switch t.src[t.pos] {
+		case 'r', 'R':
 			raw = true
+		case 'f', 'F':
+			isFString = true
 		}
 		t.pos++
 		t.col++
@@ -430,6 +510,9 @@ func (t *tokenizer) consumeString() error {
 		t.pos++
 		t.col++
 	}
+	bodyStart := t.pos
+	bodyStartLine := t.line
+	bodyStartCol := t.col
 
 	for {
 		if t.pos >= len(t.src) {
@@ -478,18 +561,208 @@ func (t *tokenizer) consumeString() error {
 		t.col++
 	}
 
+	closeLen := 1
+	if triple {
+		closeLen = 3
+	}
+	bodyEnd := t.pos - closeLen
+
 	t.tokens = append(t.tokens, Token{
 		Kind: TokenString, Text: string(t.src[start:t.pos]), Line: startLine, Col: startCol,
 	})
+
+	if isFString && bodyEnd > bodyStart {
+		// f-strings embed real expressions inside `{...}` replacement
+		// fields (PEP 498/701) -- radon's AST sees a JoinedStr containing
+		// FormattedValue nodes and its generic_visit walks straight into
+		// them, so an `if`/`else`/`and`/`or`/comprehension inside a
+		// formatted value is a genuine decision point, not inert text.
+		// Splicing the field expressions' own tokens in right after the
+		// opaque STRING token lets cc.go's flat keyword scan see them
+		// without needing to understand string literals at all. Line/Col
+		// on the spliced tokens are approximate (pinned to where the
+		// string began) -- nothing downstream uses a nested token's
+		// position, only its Kind/Text.
+		t.tokens = append(t.tokens, expandFString(t.src[bodyStart:bodyEnd], bodyStartLine, bodyStartCol)...)
+	}
 	return nil
 }
 
-func (t *tokenizer) consumeOp() {
+// expandFString extracts the real expression tokens out of an f-string's
+// replacement fields (`{expr}`, `{expr!conv}`, `{expr:spec}`), recursing
+// into a format spec's own nested fields (`{expr:{width}}`). Literal text
+// outside `{...}` and an escaped `{{`/`}}` contribute no tokens, matching
+// radon: JoinedStr's plain Constant/str pieces carry no complexity.
+func expandFString(body []rune, line, col int) []Token {
+	var out []Token
+	n := len(body)
+	i := 0
+	for i < n {
+		c := body[i]
+		if c == '{' {
+			if i+1 < n && body[i+1] == '{' {
+				i += 2
+				continue
+			}
+			exprEnd, specStart, fieldEnd := findFieldEnd(body, i+1)
+			if exprEnd > i+1 {
+				if toks, err := tokenizeFStringExpr(body[i+1:exprEnd], line, col); err == nil {
+					out = append(out, toks...)
+				}
+			}
+			if specStart >= 0 && specStart < fieldEnd {
+				out = append(out, expandFString(body[specStart:fieldEnd], line, col)...)
+			}
+			i = fieldEnd + 1
+			continue
+		}
+		if c == '}' && i+1 < n && body[i+1] == '}' {
+			i += 2
+			continue
+		}
+		i++
+	}
+	return out
+}
+
+// findFieldEnd scans one replacement field starting right after its opening
+// `{`, returning: exprEnd (exclusive end of the expression portion),
+// specStart (start of a format-spec, or -1 if there is none), and fieldEnd
+// (the index of the field's closing `}`). It tracks bracket depth and skips
+// over nested string literals so a `:` or `!` inside them, or inside a
+// nested call/subscript/dict/set, is never mistaken for the field's own
+// conversion or format-spec marker.
+func findFieldEnd(body []rune, exprStart int) (exprEnd, specStart, fieldEnd int) {
+	depth := 0
+	i := exprStart
+	n := len(body)
+	exprEnd, specStart = -1, -1
+	for i < n {
+		c := body[i]
+		switch {
+		case c == '\'' || c == '"':
+			i = skipNestedString(body, i)
+		case c == '(' || c == '[' || c == '{':
+			depth++
+			i++
+		case c == ')' || c == ']':
+			if depth > 0 {
+				depth--
+			}
+			i++
+		case c == '}':
+			if depth == 0 {
+				if exprEnd < 0 {
+					exprEnd = i
+				}
+				return exprEnd, specStart, i
+			}
+			depth--
+			i++
+		case c == '!' && depth == 0 && exprEnd < 0 && i+2 < n &&
+			(body[i+1] == 's' || body[i+1] == 'r' || body[i+1] == 'a') &&
+			(body[i+2] == '}' || body[i+2] == ':'):
+			exprEnd = i
+			i += 2
+		case c == ':' && depth == 0 && exprEnd < 0:
+			exprEnd = i
+			specStart = i + 1
+			i++
+		case c == ':' && depth == 0 && exprEnd >= 0 && specStart < 0:
+			// A format-spec colon following a `!conversion`.
+			specStart = i + 1
+			i++
+		default:
+			i++
+		}
+	}
+	if exprEnd < 0 {
+		exprEnd = n
+	}
+	return exprEnd, specStart, n
+}
+
+// skipNestedString skips one quoted literal (short or triple, any prefix
+// already excluded by the caller) starting at a quote character, honouring
+// backslash escapes, and returns the index right after it. It does not
+// require the quote to match the OUTER f-string's quote character: Python
+// 3.12+ (PEP 701) allows reusing the same quote inside a replacement field,
+// and this repository's CI runs Python 3.14.
+func skipNestedString(body []rune, i int) int {
+	quote := body[i]
+	n := len(body)
+	triple := i+2 < n && body[i+1] == quote && body[i+2] == quote
+	if triple {
+		i += 3
+	} else {
+		i++
+	}
+	for i < n {
+		if body[i] == '\\' && i+1 < n {
+			i += 2
+			continue
+		}
+		if body[i] == quote {
+			if triple {
+				if i+2 < n && body[i+1] == quote && body[i+2] == quote {
+					return i + 3
+				}
+				i++
+				continue
+			}
+			return i + 1
+		}
+		i++
+	}
+	return n
+}
+
+// tokenizeFStringExpr lexes one replacement field's expression text with
+// the same rules as the outer source, so a nested `if`/`and`/`or`/`for`
+// inside an f-string is counted instead of vanishing into an opaque
+// string. depth is seeded at 1 so a raw newline inside the fragment (legal
+// inside `{}` under PEP 701) is treated as a continuation rather than
+// triggering indentation handling, which has no meaning inside an
+// expression; atLineStart stays false for the same reason.
+func tokenizeFStringExpr(src []rune, line, col int) ([]Token, error) {
+	sub := &tokenizer{
+		src:     src,
+		line:    line,
+		col:     col,
+		indents: [][2]int{{0, 0}},
+		depth:   1,
+	}
+	if err := sub.run(); err != nil {
+		return nil, err
+	}
+	toks := sub.tokens
+	// run() unconditionally appends a closing NEWLINE (and always an EOF)
+	// for what it thinks is a whole file; strip both since they describe
+	// the fragment's own end, not a boundary in the outer statement.
+	for len(toks) > 0 && (toks[len(toks)-1].Kind == TokenEOF || toks[len(toks)-1].Kind == TokenNewline) {
+		toks = toks[:len(toks)-1]
+	}
+	return toks, nil
+}
+
+func (t *tokenizer) consumeOp() error {
 	c := t.src[t.pos]
 	switch c {
 	case '(', '[', '{':
 		t.depth++
+		t.brackets = append(t.brackets, matchingCloser(c))
 	case ')', ']', '}':
+		if len(t.brackets) == 0 || t.brackets[len(t.brackets)-1] != c {
+			// CPython's parser rejects `(1]` outright ("closing parenthesis
+			// ']' does not match opening parenthesis '('"). Accepting any
+			// closer for any opener would let invalid Python through as a
+			// scored row instead of the required skip.
+			return &ErrTokenize{
+				Line: t.line,
+				Msg:  fmt.Sprintf("closing bracket %q does not match the most recent opening bracket", string(c)),
+			}
+		}
+		t.brackets = t.brackets[:len(t.brackets)-1]
 		if t.depth > 0 {
 			t.depth--
 		}
@@ -500,6 +773,20 @@ func (t *tokenizer) consumeOp() {
 	t.tokens = append(t.tokens, Token{
 		Kind: TokenOp, Text: string(c), Line: t.line, Col: startCol,
 	})
+	return nil
+}
+
+// matchingCloser returns the closing bracket rune an opener requires.
+func matchingCloser(open rune) rune {
+	switch open {
+	case '(':
+		return ')'
+	case '[':
+		return ']'
+	case '{':
+		return '}'
+	}
+	return 0
 }
 
 func (t *tokenizer) emit(kind TokenKind, text string) {

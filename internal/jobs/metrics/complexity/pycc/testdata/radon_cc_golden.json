@@ -228,6 +228,76 @@
       "skipped": false,
       "very_high_complexity_functions": 0
     },
+    "rules_r1_findings.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "annotated_def"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 7,
+          "name": "fstring_ternary"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 11,
+          "name": "match_guard"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 6,
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 16,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r1_formfeed_loc.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 1,
+          "name": "formfeed_loc"
+        }
+      ],
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r1_mismatched_brackets.py.txt": {
+      "detail": "closing parenthesis ']' does not match opening parenthesis '(' (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r1_mixed_tabs.py.txt": {
+      "detail": "inconsistent use of tabs and spaces in indentation (<unknown>, line 4)",
+      "reason": "TabError",
+      "skipped": true
+    },
+    "rules_r1_trailing_backslash.py.txt": {
+      "detail": "unexpected EOF while parsing (<unknown>, line 3)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r1_unclosed_bracket.py.txt": {
+      "detail": "'(' was never closed (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
     "rules_softkeywords.py.txt": {
       "blocks": [
         {

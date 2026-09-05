@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 from types import ModuleType
 
@@ -38,8 +40,44 @@ MIGRATIONS_DIR = (
     / "migrations"
     / "clickhouse"
 )
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MIGRATION_087 = "087_complexity_tables_replacing_merge_tree.py"
+
+# codex r1's reviewed tip (chaos-4291-2250-r1-20260905T052512), frozen per the
+# push-recipe rule: this sha is NEVER amended, only built on top of. A few
+# tests below load this EXACT commit's copy of the migration (via `git show`,
+# not a checkout) to prove a fix's test would have FAILED against the
+# pre-fix code, rather than only ever having been run against the fix.
+FROZEN_R1_TIP = "5f3533b8531aa37df21f18fdf9959cb089a9ceb6"
+
+
+def _load_migration_at_ref(ref: str, filename: str) -> ModuleType:
+    """Load a migration file as it existed at a specific git commit.
+
+    Reads the blob via `git show <ref>:<path>` (no checkout, no working-tree
+    mutation) and loads it standalone under a ref-qualified module name so it
+    never collides with the current `migration` fixture's module.
+    """
+    rel_path = Path("src") / "dev_health_ops" / "migrations" / "clickhouse" / filename
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{rel_path.as_posix()}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", prefix=f"migration_at_{ref[:8]}_", delete=False
+    ) as f:
+        f.write(result.stdout)
+        temp_path = f.name
+    spec = importlib.util.spec_from_file_location(f"migration_at_{ref[:8]}", temp_path)
+    assert spec is not None and spec.loader is not None, f"cannot load {filename}@{ref}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 # The live sorting keys, read from system.tables (NOT from migration 007, whose
 # ORDER BY has since been amended to be org_id-first).
@@ -95,6 +133,8 @@ class FakeClient:
         key_counts: dict[str, int] | None = None,
         columns: set[str] | None = None,
         fail_on: str | None = None,
+        fail_query_on: str | None = None,
+        projections: dict[str, list[str]] | None = None,
     ) -> None:
         self.tables = {name: dict(spec) for name, spec in tables.items()}
         self.created_sorting_key = created_sorting_key
@@ -102,9 +142,18 @@ class FakeClient:
         self.key_counts = key_counts or {}
         self.columns = columns if columns is not None else {"computed_at"}
         self.fail_on = fail_on
+        # r1 P1 (fail-open existence probe): a query() failure must propagate,
+        # never be swallowed. Substring-matched against the query text, like
+        # fail_on is for command().
+        self.fail_query_on = fail_query_on
+        self.projections = {
+            name: list(names) for name, names in (projections or {}).items()
+        }
         self.commands: list[str] = []
 
     def query(self, query: str, parameters: dict | None = None) -> _FakeResult:
+        if self.fail_query_on and self.fail_query_on in query:
+            raise RuntimeError(f"injected query failure on: {query}")
         if "count() FROM system.tables" in query:
             assert parameters is not None
             return _FakeResult([[1 if parameters["name"] in self.tables else 0]])
@@ -119,6 +168,11 @@ class FakeClient:
         if "count() FROM system.columns" in query:
             assert parameters is not None
             return _FakeResult([[1 if parameters["c"] in self.columns else 0]])
+        if "name FROM system.projections" in query:
+            assert parameters is not None
+            return _FakeResult(
+                [[name] for name in self.projections.get(parameters["table"], [])]
+            )
         if query.startswith("SHOW CREATE TABLE"):
             name = query.split("`")[1]
             return _FakeResult([[self.tables[name]["ddl"]]])
@@ -136,6 +190,11 @@ class FakeClient:
             self.tables.pop(cmd.split("`")[1], None)
         elif cmd.startswith("CREATE TABLE"):
             name = re.search(r"CREATE TABLE\s+`?(\w+)`?", cmd).group(1)  # type: ignore[union-attr]
+            if name in self.tables:
+                # Real ClickHouse CREATE TABLE (without IF NOT EXISTS) fails
+                # on a name collision -- this atomicity is exactly what
+                # _acquire_lock relies on to act as a mutex.
+                raise RuntimeError(f"table already exists: {name}")
             source = re.search(r"ORDER BY \(([^)]*)\)", cmd)
             self.tables[name] = {
                 "ddl": cmd,
@@ -372,6 +431,310 @@ def test_missing_table_is_skipped_not_an_error(migration) -> None:
     client = FakeClient({})
     migration._rebuild_table(client, "repo_complexity_daily")
     assert client.commands == []
+
+
+def test_refuses_to_convert_a_table_with_the_wrong_sorting_key(migration) -> None:
+    """r1 P1: the pre-existing key must itself be the org-scoped key this
+    migration requires, not just internally consistent with its own
+    shadow. A table someone created with a non-org-prefixed key must never
+    be silently "converted" with that wrong key preserved."""
+    table = "repo_complexity_daily"
+    client = FakeClient(
+        {
+            table: {
+                "ddl": _ddl(table, "repo_id, day"),
+                "engine": "MergeTree",
+                "sorting_key": "repo_id, day",
+            }
+        }
+    )
+
+    with pytest.raises(
+        RuntimeError, match="does not match the required org-scoped key"
+    ):
+        migration._rebuild_table(client, table)
+
+    assert not any(c.startswith("EXCHANGE TABLES") for c in client.commands)
+    assert not any(
+        c.startswith("CREATE TABLE") and "_new" in c for c in client.commands
+    )
+
+
+def test_refuses_to_treat_a_wrong_key_replacing_merge_tree_table_as_done(
+    migration,
+) -> None:
+    """r1 P1: the 'already ReplacingMergeTree, skip' path checked engine
+    name only. A table that reached RMT some other way, with the wrong
+    key, must not be silently accepted as safe -- two tenants' rows could
+    already be colliding on that key."""
+    table = "repo_complexity_daily"
+    client = FakeClient(
+        {
+            table: {
+                "ddl": _ddl(
+                    table, "repo_id, day", engine="ReplacingMergeTree(computed_at)"
+                ),
+                "engine": "ReplacingMergeTree",
+                "sorting_key": "repo_id, day",
+            }
+        }
+    )
+
+    with pytest.raises(
+        RuntimeError, match="does not match the required org-scoped key"
+    ):
+        migration._rebuild_table(client, table)
+
+
+def test_table_projections_reads_from_system_projections(migration) -> None:
+    """team-lead 09-05: projection presence is read from the live catalog
+    (system.projections), not pattern-matched out of DDL text."""
+    table = "file_complexity_snapshots"
+    client = FakeClient(
+        _catalog(table), projections={table: ["prj_acr_file_complexity_runs"]}
+    )
+    assert migration._table_projections(client, table) == [
+        "prj_acr_file_complexity_runs"
+    ]
+    assert migration._table_projections(client, "repo_complexity_daily") == []
+
+
+def test_ensure_projection_dedup_setting_is_a_no_op_without_a_projection(
+    migration,
+) -> None:
+    ddl = _ddl("repo_complexity_daily", LIVE_KEYS["repo_complexity_daily"])
+    assert migration._ensure_projection_dedup_setting(ddl, []) == ddl
+
+
+def test_ensure_projection_dedup_setting_adds_a_settings_clause(migration) -> None:
+    # ClickHouse code 344 SUPPORT_IS_DISABLED: a ReplacingMergeTree table
+    # with a PROJECTION and no explicit deduplicate_merge_projection_mode
+    # fails at CREATE time. Measured live against file_complexity_snapshots.
+    ddl = (
+        "CREATE TABLE file_complexity_snapshots (`org_id` String, "
+        "`computed_at` DateTime, PROJECTION p (SELECT count())) "
+        "ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id)"
+    )
+    rewritten = migration._ensure_projection_dedup_setting(ddl, ["p"])
+    assert "deduplicate_merge_projection_mode = 'rebuild'" in rewritten
+
+
+def test_ensure_projection_dedup_setting_extends_an_existing_settings_clause(
+    migration,
+) -> None:
+    ddl = (
+        "CREATE TABLE file_complexity_snapshots (`org_id` String, "
+        "`computed_at` DateTime, PROJECTION p (SELECT count())) "
+        "ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id) "
+        "SETTINGS index_granularity = 8192"
+    )
+    rewritten = migration._ensure_projection_dedup_setting(ddl, ["p"])
+    assert "deduplicate_merge_projection_mode = 'rebuild'" in rewritten
+    assert "index_granularity = 8192" in rewritten
+    # Both settings must survive as one clause, not two.
+    assert rewritten.count("SETTINGS") == 1
+
+
+def test_rebuild_applies_the_projection_setting_to_the_shadow_ddl(migration) -> None:
+    """End-to-end: a table whose live system.projections carries a row gets
+    the dedup-mode setting on the CREATE actually issued for its shadow --
+    driven by the catalog read, not by the DDL text containing the word
+    PROJECTION (it does here too, but that is not what gates the setting)."""
+    table = "file_complexity_snapshots"
+    key = LIVE_KEYS[table]
+    ddl_with_projection = (
+        f"CREATE TABLE {table} (`org_id` String, `repo_id` UUID, "
+        f"`as_of_day` Date, `file_path` String, `computed_at` DateTime, "
+        f"PROJECTION p (SELECT count())) ENGINE = MergeTree "
+        f"ORDER BY ({key})"
+    )
+    client = FakeClient(
+        {
+            table: {
+                "ddl": ddl_with_projection,
+                "engine": "MergeTree",
+                "sorting_key": key,
+            }
+        },
+        projections={table: ["p"]},
+    )
+
+    migration._rebuild_table(client, table)
+
+    create_shadow = next(
+        c
+        for c in client.commands
+        if c.startswith("CREATE TABLE") and f"{table}_new" in c
+    )
+    assert "deduplicate_merge_projection_mode = 'rebuild'" in create_shadow
+
+
+def test_rebuild_does_not_apply_the_setting_when_system_projections_is_empty(
+    migration,
+) -> None:
+    """The inverse of the test above: even DDL text that happens to mention
+    the word PROJECTION must NOT trigger the setting if system.projections
+    reports none for this table -- the catalog is authoritative, not the
+    DDL string."""
+    table = "repo_complexity_daily"
+    key = LIVE_KEYS[table]
+    ddl_mentioning_the_word = (
+        f"CREATE TABLE {table} (`org_id` String, `repo_id` UUID, `day` Date, "
+        f"`computed_at` DateTime, `notes` String COMMENT 'no PROJECTION here') "
+        f"ENGINE = MergeTree ORDER BY ({key})"
+    )
+    client = FakeClient(
+        {
+            table: {
+                "ddl": ddl_mentioning_the_word,
+                "engine": "MergeTree",
+                "sorting_key": key,
+            }
+        },
+        projections={},
+    )
+
+    migration._rebuild_table(client, table)
+
+    create_shadow = next(
+        c
+        for c in client.commands
+        if c.startswith("CREATE TABLE") and f"{table}_new" in c
+    )
+    assert "deduplicate_merge_projection_mode" not in create_shadow
+
+
+def test_table_exists_fails_closed_not_open_on_a_query_exception(migration) -> None:
+    """r1 P1, proven against BOTH sides: on the frozen r1 tip, an exception
+    from the `system.tables` existence probe was swallowed into `False`
+    (fail-OPEN) -- `_rebuild_table` then logged "table does not exist,
+    skipping" and issued ZERO commands, even though the table is real and a
+    real error occurred. This lane's fix makes the same scenario raise.
+
+    BEFORE (FROZEN_R1_TIP): the assertion below on `old_client.commands ==
+    []` with NO exception PASSES -- reproducing the bug live, not just
+    quoting the finding.
+    AFTER (this fix): the equivalent call on `new_client` RAISES the
+    injected error instead of swallowing it -- proven with pytest.raises.
+    """
+    table = "repo_complexity_daily"
+
+    old_migration = _load_migration_at_ref(FROZEN_R1_TIP, MIGRATION_087)
+    old_client = FakeClient(_catalog(table), fail_query_on="count() FROM system.tables")
+    old_migration._rebuild_table(old_client, table)  # must NOT raise -- that's the bug
+    assert old_client.commands == [], (
+        f"expected the r1 tip ({FROZEN_R1_TIP}) to reproduce the fail-open "
+        f"bug (silently do nothing on a query exception) -- if this now "
+        f"fails, the frozen tip reference sha may be wrong, or the bug was "
+        f"already different there than believed"
+    )
+
+    new_client = FakeClient(_catalog(table), fail_query_on="count() FROM system.tables")
+    with pytest.raises(RuntimeError, match="injected query failure"):
+        migration._rebuild_table(new_client, table)
+
+
+def test_concurrent_runner_lock_did_not_exist_before_this_fix(migration) -> None:
+    """r1 P1, proven against BOTH sides: the frozen r1 tip had NO mutual-
+    exclusion mechanism at all -- `_acquire_lock` did not exist as a name in
+    that module, so nothing could have stopped two runners from both passing
+    every check, both building a shadow, and interleaving their EXCHANGEs
+    (the exact scenario the finding describes: the live table ends up back
+    on MergeTree despite the migration being recorded as applied).
+
+    BEFORE (frozen r1 tip): `hasattr(old_migration, "_acquire_lock")` is
+    False -- there is no lock to even attempt acquiring twice.
+    AFTER (this fix): a second concurrent `_acquire_lock` call, while the
+    first is still held, is refused.
+    """
+    old_migration = _load_migration_at_ref(FROZEN_R1_TIP, MIGRATION_087)
+    assert not hasattr(old_migration, "_acquire_lock"), (
+        f"expected the r1 tip ({FROZEN_R1_TIP}) to have NO lock mechanism -- "
+        f"if this now fails, the frozen tip reference sha may be wrong"
+    )
+
+    table = "repo_complexity_daily"
+    client = FakeClient(_catalog(table))
+    assert migration._acquire_lock(client, table) is True
+    assert migration._acquire_lock(client, table) is False, (
+        "a second concurrent acquire must be refused while the first "
+        "runner's lock is still held -- this is the actual mechanism that "
+        "did not exist before this fix"
+    )
+
+
+def test_acquire_lock_fails_when_a_lock_is_already_held(migration) -> None:
+    """r1 P1: two concurrent runners must not both proceed to build a
+    shadow -- the second `CREATE TABLE ..._087_lock` must fail because the
+    first runner's lock table already exists."""
+    table = "repo_complexity_daily"
+    client = FakeClient(
+        {
+            f"{table}{migration._LOCK_SUFFIX}": {
+                "ddl": f"CREATE TABLE {table}{migration._LOCK_SUFFIX} (x UInt8) ENGINE = Memory",
+                "engine": "Memory",
+                "sorting_key": "",
+            }
+        }
+    )
+
+    assert migration._acquire_lock(client, table) is False
+
+
+def test_wait_for_concurrent_conversion_returns_once_the_other_runner_finishes(
+    migration, monkeypatch
+) -> None:
+    """The wait loop must notice the OTHER runner's success rather than
+    only ever timing out or only ever checking once."""
+    table = "repo_complexity_daily"
+    lock_name = f"{table}{migration._LOCK_SUFFIX}"
+    client = FakeClient(
+        {
+            table: {
+                "ddl": _ddl(table, LIVE_KEYS[table]),
+                "engine": "MergeTree",
+                "sorting_key": LIVE_KEYS[table],
+            },
+            lock_name: {"ddl": "", "engine": "Memory", "sorting_key": ""},
+        }
+    )
+    monkeypatch.setattr(migration, "_LOCK_POLL_INTERVAL_SECS", 0)
+
+    calls = {"n": 0}
+    real_engine_name = migration._engine_name
+
+    def flipping_engine_name(c, t):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            client.tables[table]["engine"] = "ReplacingMergeTree"
+        return real_engine_name(c, t)
+
+    monkeypatch.setattr(migration, "_engine_name", flipping_engine_name)
+
+    migration._wait_for_concurrent_conversion(client, table)  # must not raise/time out
+    assert calls["n"] >= 2
+
+
+def test_wait_for_concurrent_conversion_raises_if_lock_vanishes_without_success(
+    migration, monkeypatch
+) -> None:
+    """If the other runner's lock disappears without the table ever
+    reaching ReplacingMergeTree, its attempt failed -- this must be raised,
+    not treated as an implicit skip."""
+    table = "repo_complexity_daily"
+    client = FakeClient(
+        {
+            table: {
+                "ddl": _ddl(table, LIVE_KEYS[table]),
+                "engine": "MergeTree",
+                "sorting_key": LIVE_KEYS[table],
+            }
+        }
+    )
+    monkeypatch.setattr(migration, "_LOCK_POLL_INTERVAL_SECS", 0)
+
+    with pytest.raises(RuntimeError, match="lock was released"):
+        migration._wait_for_concurrent_conversion(client, table)
 
 
 def test_upgrade_processes_every_table(migration) -> None:

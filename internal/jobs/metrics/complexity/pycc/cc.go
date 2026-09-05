@@ -1,7 +1,5 @@
 package pycc
 
-import "strings"
-
 // This file ports radon 6.0.1's cyclomatic-complexity rules
 // (radon/visitors.py:225-330) to Go. Every rule below cites the radon line
 // it reproduces, because the acceptance test for this package is numeric
@@ -318,12 +316,25 @@ func stmtComplexity(st *stmt, opts Options) int {
 // token run: its opening keyword plus anything in its expressions.
 func inlineComplexity(st *stmt, opts Options) int {
 	total := 0
-	for i, tok := range st.tokens {
+	// `case pattern if guard:` (PEP 634) uses the bare keyword `if` for
+	// its guard clause. That `if` is grammar, not an IfExp/If node -- it
+	// contributes nothing on its own in radon's AST, only whatever
+	// decision points the guard EXPRESSION itself contains do (a ternary
+	// or `and`/`or` inside the guard still counts normally). Exactly one
+	// `if` per case clause is the guard marker, and it is always the
+	// FIRST one in the header (a pattern cannot itself contain a bare
+	// `if` keyword), so skip only that single occurrence.
+	skipNextGuardIf := st.kind == stmtCase
+	for _, tok := range st.tokens {
 		if tok.Kind != TokenName {
 			continue
 		}
 		switch tok.Text {
 		case "if", "elif":
+			if skipNextGuardIf && tok.Text == "if" {
+				skipNextGuardIf = false
+				continue
+			}
 			// Covers the If statement, an elif, a ternary IfExp, and a
 			// comprehension's ifs -- all +1 each, all the same rule.
 			total++
@@ -346,7 +357,6 @@ func inlineComplexity(st *stmt, opts Options) int {
 			// `else` on a for/while/try adds 1; on an if/elif it adds
 			// nothing. Which one this is was decided when the suite tree
 			// was built, so the token itself is inert here.
-			_ = i
 		}
 	}
 	if st.kind == stmtElse && st.elseOwner != stmtIf {
@@ -393,14 +403,27 @@ func matchComplexity(st *stmt) int {
 	return n
 }
 
-// isBareCapturePattern reports whether a `case` clause is an irrefutable
-// capture: `case _:` or `case name:` and nothing more. Any dot, bracket,
-// comma, literal, guard or class pattern makes it refutable.
+// isBareCapturePattern reports whether a `case` clause's PATTERN (not
+// counting a trailing guard) is an irrefutable capture: `case _:` or
+// `case name:`, with or without `if guard`. Any dot, bracket, comma,
+// literal, or class pattern makes it refutable.
+//
+// A guard does not change whether the CAPTURE itself is irrefutable --
+// `case value if value:` still binds `value` unconditionally; the guard
+// only decides whether the body RUNS, which is exactly what its own `if`
+// token already scores separately in inlineComplexity. Stopping only at
+// the colon and never at `if` under-counted `bareCapture` for every
+// guarded case, which double-counted the case in Match's
+// `len(cases) - contain_underscore` term.
 func isBareCapturePattern(tokens []Token) bool {
-	// tokens[0] is the soft keyword `case`; the pattern runs to the colon.
+	// tokens[0] is the soft keyword `case`; the pattern runs to the first
+	// top-level `if` (a guard) or the colon, whichever comes first.
 	body := make([]Token, 0, len(tokens))
 	for _, tok := range tokens[1:] {
 		if tok.Kind == TokenOp && tok.Text == ":" {
+			break
+		}
+		if tok.Kind == TokenName && tok.Text == "if" {
 			break
 		}
 		body = append(body, tok)
@@ -435,18 +458,50 @@ func CountAbove(blocks []Block, threshold int) int {
 }
 
 // LineCount reproduces `len(code.splitlines())`, which is what the Python
-// side stores as `loc`. Go's strings.Split would report one extra field for
-// a trailing newline, so this is written to match splitlines exactly: a
-// trailing line terminator does NOT create an empty final line.
+// side stores as `loc`. This is NOT just "\n" / "\r\n": CPython's
+// str.splitlines() treats several other characters as line boundaries too
+// -- \v, \f, \x1c, \x1d, \x1e, \x85 (NEL), U+2028 (LINE SEPARATOR) and
+// U+2029 (PARAGRAPH SEPARATOR) -- and, like \r\n, a trailing terminator of
+// any kind does NOT create an extra empty final line. Counting only
+// "\n" undercounts `loc` (and therefore inflates cyclomatic_per_kloc) for
+// any file containing one of these less-common breaks, such as a stray
+// form feed.
 func LineCount(code string) int {
 	if code == "" {
 		return 0
 	}
-	normalized := strings.ReplaceAll(code, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	n := strings.Count(normalized, "\n")
-	if !strings.HasSuffix(normalized, "\n") {
-		n++
+	runes := []rune(code)
+	n := len(runes)
+	count := 0
+	sawContent := false
+	for i := 0; i < n; {
+		c := runes[i]
+		if isSplitlinesBreak(c) {
+			count++
+			sawContent = false
+			if c == '\r' && i+1 < n && runes[i+1] == '\n' {
+				i += 2
+			} else {
+				i++
+			}
+			continue
+		}
+		sawContent = true
+		i++
 	}
-	return n
+	if sawContent {
+		count++
+	}
+	return count
+}
+
+// isSplitlinesBreak reports whether c is one of the line boundaries
+// str.splitlines() recognizes (CPython's Objects/stringlib/split.h /
+// _PyUnicode_IsLineBreak plus the ASCII controls it also splits on).
+func isSplitlinesBreak(c rune) bool {
+	switch c {
+	case '\n', '\r', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, '\u2028', '\u2029':
+		return true
+	}
+	return false
 }

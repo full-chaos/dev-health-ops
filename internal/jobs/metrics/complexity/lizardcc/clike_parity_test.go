@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -355,9 +356,43 @@ func TestEveryConditionIsExercisedByTheCorpus(t *testing.T) {
 //     TOKENIZE the corpus with this package's own shared tokenizer
 //     (cLikeTokenPattern -- a real token stream, not a text scan) and
 //     check for an EXACT token match, skipping every comment token
-//     (isComment) and every string/char-literal token (tokens starting
-//     with `"` or `'`) -- a coordinated mutation now has nowhere left
-//     to hide the keyword except inside genuinely executable code.
+//     (isComment) and every string-literal token (isStringLikeToken) --
+//     a coordinated mutation now has nowhere left to hide the keyword
+//     except inside genuinely executable code.
+//
+// BUG FIXED HERE (CHAOS-5156, found live wiring #2268's own invocation,
+// before any codex round -- moved here from #2268's own copy once
+// #2253's r3 fix needed another commit anyway): the shared
+// cLikeTokenPattern used for this scan has no per-language ADDITION
+// (e.g. csharp.go's `??`), so a compound symbolic operator not in the
+// base pattern gets split into separate single-char tokens ("??"
+// tokenizes here as two "?" tokens) and never matches as one exact
+// token, even though the real fixture genuinely uses it
+// (basic.cs.txt:51's `x ?? -1`).
+//
+// BUG FIXED HERE (CHAOS-5156, cfamily confirmation pass, team-lead's
+// ruling): the FIRST fix for that gap re-joined every surviving token
+// into one string and used strings.Contains as a fallback for symbolic
+// (non-alphabetic) keywords -- a workable idea, but string
+// concatenation is not the same claim as token ADJACENCY. Two concrete
+// gaps that shape allowed, both closed by replacing it with a per-file
+// TOKEN SEQUENCE and a direct adjacency check instead:
+//  1. C++ raw-string tokens (`R"(...)"`, optionally prefixed
+//     u8/u/U/L) start with `R"`, not `"` or `'` -- isStringLikeToken
+//     now also recognises this shape, so a `?` living only inside a
+//     raw string's CONTENTS (e.g. `R"(?)"`) no longer satisfies
+//     coverage for the `?` condition. Verified directly: a corpus
+//     containing ONLY `R"(?)"` (no real ternary anywhere) used to pass
+//     assertEveryConditionExercisedByCorpus(t, {"?":true}, dir).
+//  2. A COMMENT sitting between two otherwise-adjacent symbolic
+//     tokens (e.g. `? /* x */ ?`) used to be silently dropped from the
+//     concatenation (comments are excluded), so the two `?` tokens
+//     looked adjacent in the rebuilt string even though real source
+//     had a comment between them -- a coordinated mutation could
+//     "cover" `??` this way despite lizard's own tokenizer never
+//     gluing across a comment. Now: comment/string tokens leave a
+//     SENTINEL in the per-file sequence rather than vanishing, so
+//     adjacency is checked against the position they actually held.
 func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]bool, corpusDir string) {
 	t.Helper()
 	entries, err := os.ReadDir(corpusDir)
@@ -365,7 +400,7 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 		t.Fatalf("read corpus dir: %v", err)
 	}
 	seen := map[string]bool{}
-	var codeOnly strings.Builder
+	var adjacentPairs = map[string]bool{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
 			continue
@@ -374,32 +409,19 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
+		var seq []string
 		for _, tok := range cLikeTokenPattern.FindAllString(string(raw), -1) {
-			if isComment(tok) || strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") {
+			if isComment(tok) || isStringLikeToken(tok) {
+				seq = append(seq, "\x00") // sentinel: breaks adjacency, never matches anything
 				continue
 			}
 			seen[tok] = true
-			// BUG FIXED HERE (found live wiring #2268's own invocation,
-			// before any codex round -- moved here from #2268's own copy
-			// once #2253's r3 fix needed another commit anyway, per
-			// team-lead's ruling, so every downstream PR inherits it by
-			// merge-forward instead of carrying a duplicate): the shared
-			// cLikeTokenPattern used for this scan has no per-language
-			// ADDITION (e.g. csharp.go's `??`), so a compound symbolic
-			// operator not in the base pattern gets split into separate
-			// single-char tokens ("??" tokenizes here as two "?" tokens)
-			// and never matches as one exact token, even though the real
-			// fixture genuinely uses it (basic.cs.txt:51's `x ?? -1`).
-			// codeOnly re-joins every non-comment, non-string token in
-			// original order (so a keyword hiding in a comment/string is
-			// still excluded) and backs a substring fallback below for
-			// symbolic keywords only -- alphabetic keywords stay on the
-			// stricter exact-token match, since a substring match risks
-			// false-matching inside an unrelated longer identifier.
-			codeOnly.WriteString(tok)
+			seq = append(seq, tok)
+		}
+		for i := 0; i+1 < len(seq); i++ {
+			adjacentPairs[seq[i]+seq[i+1]] = true
 		}
 	}
-	code := codeOnly.String()
 
 	keys := make([]string, 0, len(conditions))
 	for k, v := range conditions {
@@ -423,7 +445,7 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 		if seen[k] {
 			continue
 		}
-		if !isAlphabetic(k) && strings.Contains(code, k) {
+		if !isAlphabetic(k) && adjacentPairs[k] {
 			continue
 		}
 		uncovered = append(uncovered, k)
@@ -454,12 +476,63 @@ func assertEveryConditionExercisedByCorpus(t *testing.T, conditions map[string]b
 // golden comparator) while the ACTUAL Rust behavior silently regressed
 // (measured got=[1] vs lizard's real [2] for a bare `catch` identifier in
 // a Rust fn, completely undetected).
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r3 on #2266): this used
+// cLikeTokenPattern (the plain base pattern) for EVERY suffix, but
+// cLikeTokenPattern has no per-language addition -- it does not know Go's
+// backtick raw strings, Rust's lifetimes, C#'s `??`, etc. A `?` inside a
+// Go backtick string (basic.go.txt's own negative-test fixture,
+// deliberately containing "if"/"&&"/"||"/"?" as a string literal so a
+// real miscount would be caught) is glued into ONE token by Go's own
+// goTokenPattern (correctly excluded from coverage) but split into
+// separate real-looking tokens by cLikeTokenPattern, so the coverage
+// scan falsely counted goConditions["?"] as covered by a STRING LITERAL,
+// not real code -- confirmed directly: a synthetic corpus containing
+// ONLY a backtick string with a "?" inside (no other "?" anywhere)
+// passed the coverage check before this fix. Fixed: pick each suffix's
+// OWN token pattern (matching what that language's real analyzer uses),
+// falling back to cLikeTokenPattern only for an unrecognised suffix.
+// BUG FIXED HERE (CHAOS-5156, go-rust confirmation pass): this used to
+// FAIL OPEN for any suffix not in the switch (`default: return
+// cLikeTokenPattern`) -- a future PR adding a new suffix without adding
+// a case here would silently tokenize that language's fixtures with the
+// PLAIN base pattern, reopening the exact backtick/raw-string/lifetime
+// class of bug this whole mechanism exists to close, with no test
+// failure to catch the omission (the comment warned about this but
+// enforced nothing). Fixed: fail CLOSED -- an unregistered suffix is a
+// test-authoring bug, not a legitimate "use the generic pattern" signal,
+// so it fails loudly via t.Fatalf instead of silently choosing a
+// pattern that might be wrong for that language.
+//
+// NOTE for downstream PRs (#2268/#2269): add a case here for each new
+// suffix a later PR's own corpus introduces
+// (.cs.txt/.kt.txt/.scala.txt/.swift.txt/.java.txt), pointing at that
+// language's own *TokenPattern var (or cLikeTokenPattern ONLY if that
+// language genuinely has no per-language addition at all, e.g. Scala --
+// state that explicitly in the case, don't let it fall through the
+// default).
+func filteredCorpusTokenPattern(t *testing.T, suffix string) *regexp.Regexp {
+	t.Helper()
+	switch suffix {
+	case ".go.txt":
+		return goTokenPattern
+	case ".rs.txt":
+		return rustTokenPattern
+	default:
+		t.Fatalf("filteredCorpusTokenPattern: no token pattern registered for suffix %q -- "+
+			"add a case pointing at that language's own *TokenPattern var (see this "+
+			"function's doc); do not let an unregistered suffix fall through silently", suffix)
+		return nil
+	}
+}
+
 func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[string]bool, corpusDir, suffix string) {
 	t.Helper()
 	entries, err := os.ReadDir(corpusDir)
 	if err != nil {
 		t.Fatalf("read corpus dir: %v", err)
 	}
+	pattern := filteredCorpusTokenPattern(t, suffix)
 	seen := map[string]bool{}
 	matched := 0
 	for _, entry := range entries {
@@ -471,8 +544,8 @@ func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
-		for _, tok := range cLikeTokenPattern.FindAllString(string(raw), -1) {
-			if isComment(tok) || strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") {
+		for _, tok := range pattern.FindAllString(string(raw), -1) {
+			if isComment(tok) || isStringLikeToken(tok) {
 				continue
 			}
 			seen[tok] = true
@@ -503,6 +576,29 @@ func assertEveryConditionExercisedByFilteredCorpus(t *testing.T, conditions map[
 			"number) so a future regression in that specific keyword's handling has "+
 			"something to catch it", suffix, corpusDir, uncovered)
 	}
+}
+
+// rawStringPrefixPattern matches a C++ raw-string token's OPENING shape
+// (tokenize.go's cLikeAddition: `(?:u8|u|U|L)?R"\(`) -- enough to
+// recognise the token as a string literal without re-deriving the whole
+// raw-string regex here.
+var rawStringPrefixPattern = regexp.MustCompile(`^(?:u8|u|U|L)?R"\(`)
+
+// isStringLikeToken reports whether tok is a string/char-literal token
+// that assertEveryConditionExercisedByCorpus (and its filtered sibling,
+// assertEveryConditionExercisedByFilteredCorpus) must exclude from
+// coverage -- a condition keyword's TEXT appearing only inside a string
+// literal is not the keyword being exercised as a real token. Ordinary
+// `"..."`/`'...'` tokens are covered by their literal opening character;
+// a C++ raw string opens with `R"` (or a u8/u/U/L prefix before it,
+// which neither prefix check catches), and Go's backtick-quoted string
+// opens with a backtick, which also needs its own check -- MERGED here
+// (during go-rust's confirmation-pass merge-forward from cfamily) so
+// both the shared and the filtered variant use the SAME literal-shape
+// check instead of two copies that can drift apart.
+func isStringLikeToken(tok string) bool {
+	return strings.HasPrefix(tok, `"`) || strings.HasPrefix(tok, "'") ||
+		strings.HasPrefix(tok, "`") || rawStringPrefixPattern.MatchString(tok)
 }
 
 // TestNoUnexpectedDisabledConditions closes the residual gap codex round

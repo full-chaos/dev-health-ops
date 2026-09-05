@@ -22,7 +22,16 @@ var kotlinAlphaConditions = []string{"if", "for", "while", "catch"}
 // kotlinAddition is KotlinReader.generate_tokens's addition (kotlin.py:24-31):
 // backtick-quoted identifiers, `?`/`!!`-suffixed identifiers (nullable /
 // non-null-asserted types), `??`, and the Elvis `?:`.
-const kotlinAddition = "|`" + `\w+` + "`" + `|\w+\?` + `|\w+\!!` + `|\?\?` + `|\?:`
+//
+// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2268): all three `\w+`
+// alternatives here were still RE2's ASCII-only `\w`, unlike the shared
+// identifier class (tokenize.go) fixed earlier -- a Unicode identifier
+// (`Café?`) was never glued into one token here, so its `?` reached
+// condition_counter as a real ternary. Confirmed against real lizard
+// 1.23.0: `fun f(): Café? { if (true) {...} }` measures [2] (glued);
+// this port measured [3] before this fix. `[\p{L}\p{N}_]+` matches this
+// package's shared identifier class.
+const kotlinAddition = "|`" + `[\p{L}\p{N}_]+` + "`" + `|[\p{L}\p{N}_]+\?` + `|[\p{L}\p{N}_]+\!!` + `|\?\?` + `|\?:`
 
 var kotlinTokenPattern = buildTokenPattern(kotlinAddition)
 
@@ -30,7 +39,15 @@ var kotlinTokenPattern = buildTokenPattern(kotlinAddition)
 func AnalyzeKotlin(path, source string) ([]int, bool, error) {
 	ctx := NewContext()
 	ctx.SetPath(path)
-	raw := kotlinTokenPattern.FindAllString(source, -1)
+	// BUG FIXED HERE (CHAOS-5156, codex round r2 on #2268, class sweep):
+	// this used to skip mergeTemplateQuestionRuns entirely, the same gap
+	// found independently in go_lang.go/rust.go (#2266 r2) and csharp.go
+	// (#2268 r2) -- a generic containing a `?` (e.g. `List<Foo?>`) never
+	// got glued into one token, so its `?` reached condition_counter as
+	// a real ternary/Elvis operand. Ordered first, before
+	// preprocessSwiftLabel, matching every other reader's "merge right
+	// after tokenization" placement.
+	raw := mergeTemplateQuestionRuns(kotlinTokenPattern.FindAllString(source, -1))
 	tokens := preprocessSwiftLabel(raw, kotlinAlphaConditions)
 	root := newKotlinMachine(ctx, false)
 	return runGoLikeFamily(tokens, kotlinConditions, root, ctx)

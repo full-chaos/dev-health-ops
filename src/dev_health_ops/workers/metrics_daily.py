@@ -117,12 +117,44 @@ def run_daily_metrics(
         )
         # CHAOS-5194 codex r1 (P1, #2277): see the skip_finalize comment
         # above -- this call is what that gate exists to route to instead.
-        # Idempotent to call even for a single-repo/repo_name-scoped
-        # recompute: finalize reads the WHOLE org's already-persisted state
-        # back from ClickHouse, so it reflects every repo's current data,
-        # not just this task's repo scope (same idempotency
-        # _cmd_metrics_daily's docstring already establishes for this
-        # exact function).
+        #
+        # CHAOS-5194 codex r2 (P1, confirmed): recompute.py's dispatch_recompute
+        # fans OUT one independent Celery chain PER repo_id for a multi-repo
+        # recompute plan (external_ingest/recompute.py:355, "fan out N
+        # independent chains, one per repo") -- there is no fan-IN/join
+        # afterward, so N sibling invocations of THIS task, one per repo, each
+        # independently reach this call for the SAME org/day. That is fine for
+        # a family that is idempotent to duplicate (_cmd_metrics_daily's own
+        # docstring already establishes ic_finalize/compounding_risk_team/
+        # team_cognitive_load are safe to call more than once for the same
+        # day -- their output tables are read with a dedup pattern, e.g.
+        # user_metrics_daily's "ORDER BY computed_at DESC LIMIT 1 BY (...)",
+        # so the LATER write simply wins). It is NOT fine for benchmarking:
+        # its six output tables are plain MergeTree with no version column
+        # and no established read-time dedup (see benchmarking/types.go's own
+        # package doc comment) -- every one of the N sibling task's finalize
+        # calls would independently compute and APPEND a full row set,
+        # duplicating N times instead of the single org-wide write this
+        # family is supposed to produce. This is the exact
+        # once-per-org-not-once-per-repo problem CHAOS-5194's own barrier
+        # exists to prevent, reintroduced through THIS invocation surface,
+        # which has no cross-repo join and so cannot itself guarantee
+        # "exactly one caller" the way ClaimFinalize's transactional barrier
+        # does for the Go-orchestrated path.
+        #
+        # Fix: always exclude "benchmarking" from this call. The corrected
+        # claim (the ABOVE PARAGRAPH corrects the WRONG "idempotent... same
+        # idempotency _cmd_metrics_daily's docstring already establishes for
+        # this exact function" comment that used to be here -- that claim is
+        # true for ic_finalize/compounding_risk_team/team_cognitive_load, but
+        # was wrongly generalized to benchmarking, which is not idempotent to
+        # duplicate) means benchmarking is left to the Go-orchestrated native
+        # path (BenchmarkingFinalizeExecutor, gated by ClaimFinalize's real
+        # barrier) or a future single, explicitly-synchronized caller for the
+        # recompute path specifically -- neither of which this task can be,
+        # since it is inherently one-task-per-repo by construction and has no
+        # way to know whether a sibling repo's recompute is still in flight
+        # for the same org/day.
         for finalize_day in _date_range(target_day, backfill_days):
             run_async(
                 run_daily_metrics_finalize(
@@ -130,6 +162,7 @@ def run_daily_metrics(
                     day=finalize_day,
                     org_id=org_id or "",
                     sink=sink,
+                    skip_families={"benchmarking"},
                 )
             )
         # Invalidate GraphQL cache after successful metrics update

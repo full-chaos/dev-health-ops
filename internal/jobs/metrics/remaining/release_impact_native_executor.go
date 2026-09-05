@@ -62,10 +62,14 @@ type ReleaseImpactExecutor struct {
 // incompatible schema, matching the sibling native executors (dora/capacity):
 // a database this code cannot read or write against safely must refuse the
 // kind once and loudly rather than claim partitions and fail (or silently
-// corrupt) each one. logger is optional; when set it carries the CHAOS-4258
-// degraded-signal log line (org_id/day/deployments), which is deliberately
-// NOT a metric label -- see releaseImpactDegradedMissingTelemetry's field
-// comment in telemetry.go.
+// corrupt) each one. logger is optional at the call site -- a nil logger
+// defaults to slog.Default() here, at construction, so every logging call
+// site in this file can call e.logger.Error/Warn unconditionally instead of
+// guarding on e.logger != nil first. Codex r3 (CHAOS-4296/#2262) found the
+// old "log only if non-nil" guards meant a caller passing nil (an explicitly
+// supported configuration per this function's own signature) got the
+// CHAOS-4258 degraded-signal log line AND every observer-failure log silently
+// dropped, with nothing to indicate telemetry had stopped firing.
 func NewReleaseImpactExecutor(
 	ctx context.Context, conn driver.Conn, observer ReleaseImpactObserver, logger *slog.Logger,
 ) (*ReleaseImpactExecutor, error) {
@@ -79,6 +83,9 @@ func NewReleaseImpactExecutor(
 	// other collapse mechanism.
 	if err := verifyReleaseImpactSchema(ctx, conn); err != nil {
 		return nil, err
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 	return &ReleaseImpactExecutor{
 		reader:   NewReleaseImpactReader(conn, logger),
@@ -158,12 +165,10 @@ func (e *ReleaseImpactExecutor) ReportDegraded(orgID string, day time.Time, scop
 	if !scope.DegradedNoTelem {
 		return nil
 	}
-	if e.logger != nil {
-		e.logger.Warn(
-			"release_impact: deployments exist but telemetry produced no scope (CHAOS-4258)",
-			"org_id", orgID, "day", day.Format("2006-01-02"), "deployments", scope.TotalReleases,
-		)
-	}
+	e.logger.Warn(
+		"release_impact: deployments exist but telemetry produced no scope (CHAOS-4258)",
+		"org_id", orgID, "day", day.Format("2006-01-02"), "deployments", scope.TotalReleases,
+	)
 	if e.observer == nil {
 		return nil
 	}
@@ -210,10 +215,8 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 
 	computedAt, err := e.nowOrRefuse()
 	if err != nil {
-		if e.logger != nil {
-			e.logger.Error("release_impact: nowOrRefuse failed",
-				"org_id", run.OrganizationID, "partition_id", partition.ID, "error", err)
-		}
+		e.logger.Error("release_impact: nowOrRefuse failed",
+			"org_id", run.OrganizationID, "partition_id", partition.ID, "error", err)
 		return CompatibilityOutcome{}, err
 	}
 
@@ -230,12 +233,10 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 		for _, current := range RecomputationWindow(trigger, scope.RecomputationWindowDays) {
 			written, err := e.computeOneDay(ctx, run.OrganizationID, current, computedAt)
 			if err != nil {
-				if e.logger != nil {
-					e.logger.Error("release_impact: computeOneDay failed",
-						"org_id", run.OrganizationID, "partition_id", partition.ID,
-						"trigger_day", trigger.Format("2006-01-02"),
-						"day", current.Format("2006-01-02"), "error", err)
-				}
+				e.logger.Error("release_impact: computeOneDay failed",
+					"org_id", run.OrganizationID, "partition_id", partition.ID,
+					"trigger_day", trigger.Format("2006-01-02"),
+					"day", current.Format("2006-01-02"), "error", err)
 				return CompatibilityOutcome{}, err
 			}
 			rowsWritten += written
@@ -249,7 +250,7 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 		// swallowed observer error must still be logged (codex r1 finding 4,
 		// CHAOS-4296/#2262) -- discarding it silently left no trace at all
 		// that the counter was ever lost.
-		if obsErr := e.observer.ObserveReleaseImpactPartition(len(triggerDays), rowsWritten); obsErr != nil && e.logger != nil {
+		if obsErr := e.observer.ObserveReleaseImpactPartition(len(triggerDays), rowsWritten); obsErr != nil {
 			e.logger.Error("release_impact: ObserveReleaseImpactPartition failed",
 				"org_id", run.OrganizationID, "partition_id", partition.ID,
 				"days", len(triggerDays), "rows_written", rowsWritten, "error", obsErr)
@@ -274,7 +275,7 @@ func (e *ReleaseImpactExecutor) computeOneDay(
 	// ReportDegraded already logs the CHAOS-4258 signal it is TRYING to
 	// record; this covers the separate case of the observer call itself
 	// failing to record it.
-	if err := e.ReportDegraded(orgID, day, scope); err != nil && e.logger != nil {
+	if err := e.ReportDegraded(orgID, day, scope); err != nil {
 		e.logger.Error("release_impact: ReportDegraded observer call failed",
 			"org_id", orgID, "day", day.Format("2006-01-02"), "error", err)
 	}

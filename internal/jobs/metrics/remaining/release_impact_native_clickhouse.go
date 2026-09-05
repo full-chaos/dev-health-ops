@@ -55,11 +55,54 @@ WHERE database = currentDatabase() AND name = {table:String}`,
 	return engine, nil
 }
 
+// releaseImpactExpectedSortingKey is migration 034's ORDER BY for
+// release_impact_daily, unchanged by migration 088 (088 converts the ENGINE
+// only; the shadow-table rewrite explicitly asserts the sorting key survives
+// the swap unchanged -- see the Python migration's own shadow_key != old_key
+// check). A table with ANY other sorting key is a different table shape this
+// executor's writer was never designed against, regardless of what engine it
+// reports.
+const releaseImpactExpectedSortingKey = "org_id, release_ref, environment, day"
+
+// releaseImpactTableEngineFull reports the FULL engine expression (including
+// constructor arguments, e.g. "ReplacingMergeTree(computed_at)") -- unlike
+// releaseImpactTableEngine's system.tables.engine, which is only ever the
+// bare family name and cannot reveal the version column.
+func releaseImpactTableEngineFull(ctx context.Context, conn driver.Conn, table string) (string, error) {
+	var engineFull string
+	if err := conn.QueryRow(ctx, `
+SELECT engine_full FROM system.tables
+WHERE database = currentDatabase() AND name = {table:String}`,
+		namedArguments(map[string]any{"table": table})...).Scan(&engineFull); err != nil {
+		return "", fmt.Errorf("inspect %s engine_full: %w", table, err)
+	}
+	return engineFull, nil
+}
+
+// releaseImpactSortingKey reports a table's sorting key, normalized the same
+// way dora_native_clickhouse.go's classifySortingKey does (backticks and
+// ClickHouse's own rendering variance stripped) -- ORDER MATTERS and is not
+// sorted away, matching classifySortingKey's own reasoning: a differently
+// ORDERED sorting key is a different table, not an equivalent one.
+func releaseImpactSortingKey(ctx context.Context, conn driver.Conn, table string) (string, error) {
+	var sortingKey string
+	if err := conn.QueryRow(ctx, `
+SELECT sorting_key FROM system.tables
+WHERE database = currentDatabase() AND name = {table:String}`,
+		namedArguments(map[string]any{"table": table})...).Scan(&sortingKey); err != nil {
+		return "", fmt.Errorf("inspect %s sorting_key: %w", table, err)
+	}
+	normalized := strings.Join(strings.Fields(strings.ReplaceAll(sortingKey, "`", " ")), " ")
+	return strings.ReplaceAll(normalized, " ,", ","), nil
+}
+
 // verifyReleaseImpactSchema is checked at CONSTRUCTION, matching the sibling
 // native executors' discipline (dora/capacity): a database this code cannot
 // write against safely refuses the kind once and loudly, rather than
 // recomputing partitions job after job that quietly double (triple, ...)
-// every metric.
+// every metric, or -- codex r3's finding (CHAOS-4296/#2262) -- silently
+// collapse DISTINCT rows into each other under a wrong sorting key or version
+// column.
 //
 // Migration 088 converts release_impact_daily from MergeTree to
 // ReplacingMergeTree(computed_at) specifically so a RECOMPUTED day's rows
@@ -67,12 +110,17 @@ WHERE database = currentDatabase() AND name = {table:String}`,
 // day loop (ComputePartition -> RecomputationWindow) deliberately
 // re-processes the same (org_id, release_ref, environment, day) on every run
 // within the recomputation window, by design (CHAOS-4258's degraded-signal
-// window needs the re-read). On a stale plain-MergeTree table, codex r2
-// (CHAOS-4296/#2262) correctly flagged that nothing else in this file's write
-// path (writeReleaseImpactRows does a plain INSERT, no reader applies
-// FINAL/argMax to release_impact_daily itself -- that table is write-only
-// from this executor's own perspective) would ever catch or collapse the
-// resulting duplicates.
+// window needs the re-read). On a stale plain-MergeTree table, nothing else
+// in this file's write path (writeReleaseImpactRows does a plain INSERT, no
+// reader applies FINAL/argMax to release_impact_daily itself -- that table is
+// write-only from this executor's own perspective) would ever catch or
+// collapse the resulting duplicates. Checking ONLY the engine family name
+// (codex r2's fix) is not enough on its own, per r3: a table converted to
+// `ReplacingMergeTree()` with the WRONG version column, or with a sorting key
+// that does not include environment/day, would pass an engine-only check
+// while silently collapsing DISTINCT rows -- exactly the failure mode
+// dora_native_clickhouse.go's classifySortingKey exists to catch for its own
+// table, applied here to release_impact_daily.
 func verifyReleaseImpactSchema(ctx context.Context, conn driver.Conn) error {
 	const table = "release_impact_daily"
 	engine, err := releaseImpactTableEngine(ctx, conn, table)
@@ -85,6 +133,34 @@ func verifyReleaseImpactSchema(ctx context.Context, conn driver.Conn) error {
 				"not been applied, and every recomputed day would append "+
 				"duplicate rows instead of collapsing them",
 			ErrReleaseImpactSchemaIncompatible, table, engine)
+	}
+
+	engineFull, err := releaseImpactTableEngineFull(ctx, conn, table)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(engineFull, "ReplacingMergeTree(computed_at)") &&
+		!strings.Contains(engineFull, "ReplacingMergeTree(`computed_at`)") {
+		return fmt.Errorf(
+			"%w: %s is %s, expected the ReplacingMergeTree version column to "+
+				"be computed_at -- a different (or missing) version column "+
+				"collapses rows by the WRONG field, silently discarding "+
+				"distinct metric rows instead of superseding stale ones",
+			ErrReleaseImpactSchemaIncompatible, table, engineFull)
+	}
+
+	sortingKey, err := releaseImpactSortingKey(ctx, conn, table)
+	if err != nil {
+		return err
+	}
+	if sortingKey != releaseImpactExpectedSortingKey {
+		return fmt.Errorf(
+			"%w: %s is ordered by (%s), expected (%s) -- refusing rather "+
+				"than guessing, because a shorter or reordered sorting key "+
+				"collapses distinct (org_id, release_ref, environment, day) "+
+				"rows into each other",
+			ErrReleaseImpactSchemaIncompatible, table, sortingKey,
+			releaseImpactExpectedSortingKey)
 	}
 	return nil
 }

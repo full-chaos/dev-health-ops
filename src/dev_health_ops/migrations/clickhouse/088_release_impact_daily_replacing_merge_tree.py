@@ -215,6 +215,20 @@ def _rebuild_table(client, table: str, shadow: str) -> None:
         return
 
     if _engine_name(client, table) == "ReplacingMergeTree":
+        # codex r3 (CHAOS-4296/#2262): the engine NAME alone does not prove
+        # the table was converted correctly -- a table someone converted by
+        # hand (or a partial/interrupted run) could be ReplacingMergeTree
+        # with the wrong (or no) version column, and this branch used to
+        # treat that as "already converged, skip" without checking. The
+        # fresh-conversion path below already validates this column before
+        # ever creating the shadow table; the already-RMT path must too,
+        # rather than trusting the engine name to imply everything else.
+        if not _has_column(client, table, RMT_VERSION_COLUMN):
+            raise ValueError(
+                f"{table}: already ReplacingMergeTree but missing the "
+                f"required version column '{RMT_VERSION_COLUMN}' -- refusing "
+                f"to treat this as converged"
+            )
         # Convergence: a previous run may have crashed after EXCHANGE but
         # before its catch-up/DROP.
         if _table_exists(client, shadow):

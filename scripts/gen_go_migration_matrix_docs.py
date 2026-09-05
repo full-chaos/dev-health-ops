@@ -227,8 +227,15 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4295 (Done)",
     },
     "ai_governance": {
-        "citation": "Python: `audit/ai_governance/loaders.py:113 build_governance_rows_for_day`",
-        "ticket": "CHAOS-4285",
+        # CHAOS-5234/CHAOS-3092: this citation was already stale before this
+        # PR -- AIGovernanceExecutor (native Go) has computed this family
+        # since CHAOS-4285, but the citation here still described the old
+        # Python compute path. Now doubly wrong to leave: this PR also
+        # DELETES build_governance_rows_for_day itself (CHAOS-5233's
+        # deletion-not-gating rule), so the old citation would point at
+        # code that no longer exists.
+        "citation": "Go: `internal/jobs/metrics/daily/ai_governance_native_executor.go` (`AIGovernanceExecutor`)",
+        "ticket": "CHAOS-4285 (Done)",
     },
     "ai_impact": {
         "citation": "Python: `ai_impact.py:312 compute_ai_impact_metrics_daily`",

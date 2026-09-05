@@ -36,6 +36,14 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # run_work_items_sync_job still calls it for an unrelated full-backfill
     # sync job), only job_daily.py's own reference to it.
     "work_item_attribution": "compute_work_item_team_attributions",
+    # CHAOS-5234: ai_governance's daily compute deleted from job_daily.py --
+    # the native Go executor (AIGovernanceExecutor, CHAOS-4285) is the only
+    # writer of ai_policy_events/ai_governance_coverage_daily for a daily
+    # partition now. Unlike work_item_attribution, build_governance_rows_
+    # for_day itself was ALSO deleted (from audit/ai_governance/loaders.py)
+    # -- codegraph_explore + rg confirmed job_daily.py was its only real
+    # caller.
+    "ai_governance": "build_governance_rows_for_day",
 }
 
 

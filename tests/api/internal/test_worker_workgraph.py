@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import sys
 import uuid
-from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -84,30 +82,21 @@ def test_scope_arguments_reloads_only_allowlisted_workgraph_fields() -> None:
     }
 
 
-def test_scope_arguments_allows_separate_dispatch_build_window() -> None:
+@pytest.mark.parametrize(
+    "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
+)
+def test_scope_arguments_rejects_retired_kinds(kind: str) -> None:
+    # r2 finding F1 (P2, codex, CHAOS-4438): these 3 kinds were removed from
+    # the allowed-fields table outright, so a call that somehow bypasses
+    # execute()'s explicit _RETIRED_KINDS guard still fails closed here
+    # rather than being scoped and dispatched.
     row = {
         "org_id": "00000000-0000-4000-8000-000000000009",
         "model_ref": "gpt-test",
         "llm_concurrency": 2,
     }
-    assert _scope_arguments(
-        "investment.dispatch",
-        {
-            "build_from_date": "2026-07-01T03:04:05Z",
-            "build_to_date": "2026-07-14T23:59:58Z",
-            "from_date": "2026-07-01",
-            "to_date": "2026-07-14",
-        },
-        row,
-    ) == {
-        "build_from_date": "2026-07-01T03:04:05Z",
-        "build_to_date": "2026-07-14T23:59:58Z",
-        "from_date": "2026-07-01",
-        "to_date": "2026-07-14",
-        "org_id": "00000000-0000-4000-8000-000000000009",
-        "llm_model": "gpt-test",
-        "llm_concurrency": 2,
-    }
+    with pytest.raises(ValueError, match="unsupported"):
+        _scope_arguments(kind, {}, row)
 
 
 def test_scope_arguments_rejects_callable_or_credential_injection() -> None:
@@ -148,122 +137,18 @@ def test_compatibility_runner_preserves_canonical_datetime_and_uuid_output() -> 
     }
 
 
-def test_river_investment_dispatch_runs_sequentially_without_celery(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dev_health_ops.workers import work_graph_tasks
-
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def record(name: str) -> Callable[..., dict[str, object]]:
-        def run(**kwargs: object) -> dict[str, object]:
-            calls.append((name, kwargs))
-            return {"status": "success", "operation": name}
-
-        return run
-
-    monkeypatch.setattr(work_graph_tasks.run_work_graph_build, "run", record("build"))
-    monkeypatch.setattr(
-        work_graph_tasks.run_investment_materialize, "run", record("materialize")
-    )
-    monkeypatch.setattr(
-        work_graph_tasks.run_membership_backfill, "run", record("membership")
-    )
-    monkeypatch.setattr(
-        work_graph_tasks.dispatch_investment_materialize_partitioned,
-        "run",
-        lambda **_kwargs: pytest.fail("River dispatch called the Celery chord task"),
-    )
-
-    outcome = _run_sync(
-        "investment.dispatch",
-        {
-            "org_id": "00000000-0000-4000-8000-000000000009",
-            "build_from_date": "2026-07-01T03:04:05Z",
-            "build_to_date": "2026-07-14T23:59:58Z",
-            "from_date": "2026-07-01",
-            "to_date": "2026-07-14",
-            "llm_model": "gpt-test",
-            "llm_concurrency": 2,
-            "run_membership_backfill_after": True,
-        },
-    )
-
-    assert [name for name, _kwargs in calls] == [
-        "build",
-        "materialize",
-        "membership",
-    ]
-    assert calls[0][1] == {
-        "org_id": "00000000-0000-4000-8000-000000000009",
-        "from_date": "2026-07-01T03:04:05Z",
-        "to_date": "2026-07-14T23:59:58Z",
-    }
-    assert "llm_model" in calls[1][1]
-    assert calls[1][1]["from_date"] == "2026-07-01"
-    assert calls[1][1]["to_date"] == "2026-07-14"
-    assert "build_from_date" not in calls[1][1]
-    assert "build_to_date" not in calls[1][1]
-    assert calls[2][1] == {"org_id": "00000000-0000-4000-8000-000000000009"}
-    assert outcome["status"] == "success"
-
-
-def test_large_dispatch_results_produce_bounded_durable_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dev_health_ops.workers import work_graph_tasks
-
-    results: dict[str, dict[str, object]] = {}
-
-    def large_result(name: str) -> Callable[..., dict[str, object]]:
-        def run(**_kwargs: object) -> dict[str, object]:
-            result: dict[str, object] = {
-                "status": "success",
-                "operation": name,
-                "payload": "x" * 5000,
-            }
-            results[name] = result
-            return result
-
-        return run
-
-    monkeypatch.setattr(
-        work_graph_tasks.run_work_graph_build, "run", large_result("build")
-    )
-    monkeypatch.setattr(
-        work_graph_tasks.run_investment_materialize,
-        "run",
-        large_result("materialize"),
-    )
-    monkeypatch.setattr(
-        work_graph_tasks.run_membership_backfill,
-        "run",
-        large_result("membership"),
-    )
-
-    outcome = _run_sync(
-        "investment.dispatch",
-        {
-            "org_id": "00000000-0000-4000-8000-000000000009",
-            "run_membership_backfill_after": True,
-        },
-    )
-    evidence = _evidence({"kind": "investment.dispatch", "outcome": outcome})
-
-    for name, key in (
-        ("build", "build"),
-        ("materialize", "materialize"),
-        ("membership", "membership"),
-    ):
-        result = results[name]
-        encoded = worker_workgraph._canonical(result).encode()
-        assert len(encoded) > 4096
-        assert evidence["outcome"][key] == {
-            "status": "success",
-            "sha256": hashlib.sha256(encoded).hexdigest(),
-            "encoded_bytes": len(encoded),
-        }
-    assert len(worker_workgraph._canonical(evidence).encode()) <= 4096
+@pytest.mark.parametrize(
+    "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
+)
+def test_run_sync_rejects_retired_kinds(kind: str) -> None:
+    # r2 finding F1 (P2, codex, CHAOS-4438): these 3 kinds were removed from
+    # the operations dispatch table outright -- the multi-step build +
+    # materialize + membership orchestration investment.dispatch used to
+    # perform (and investment.chunk/finalize's own partitioned-materialize
+    # operations) no longer exists at all. A call that somehow bypasses
+    # execute()'s explicit _RETIRED_KINDS guard still fails closed here.
+    with pytest.raises(ValueError, match="unsupported"):
+        _run_sync(kind, {"org_id": "00000000-0000-4000-8000-000000000009"})
 
 
 @pytest.mark.asyncio
@@ -275,8 +160,13 @@ async def test_execute_releases_read_transaction_before_long_running_work(
     result.mappings.return_value.first.return_value = {
         "id": uuid.UUID("00000000-0000-4000-8000-000000000101"),
         "org_id": uuid.UUID("00000000-0000-4000-8000-000000000009"),
-        "kind": "investment.dispatch",
-        "scope": {"run_membership_backfill_after": True},
+        # investment.dispatch is retired (r2 finding F1, CHAOS-4438) and
+        # would now be rejected before this test's actual target (the
+        # read-transaction release timing) is ever reached -- any live
+        # kind exercises the same timing, so investment.materialize
+        # stands in for it here.
+        "kind": "investment.materialize",
+        "scope": {},
         "model_ref": None,
         "prompt_ref": None,
         "llm_concurrency": 1,
@@ -311,6 +201,69 @@ async def test_execute_releases_read_transaction_before_long_running_work(
     assert response["status"] == "success"
     statement = str(session.execute.await_args.args[0])
     assert "FOR UPDATE" not in statement
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
+)
+async def test_execute_rejects_a_retired_kind_request_row(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+) -> None:
+    # r2 finding F1 (P2, codex, CHAOS-4438) red/green: a request row naming
+    # a retired kind must be REJECTED -- logged with kind + request id,
+    # marked ambiguous so it does not sit claimed forever, and refused with
+    # a distinct status code -- rather than reaching _scope_arguments/
+    # _run_sync at all. GREEN is this test; RED would be the pre-fix
+    # behavior where such a row ran the retired kind's Python operation
+    # successfully (see the now-deleted test_river_investment_dispatch_
+    # runs_sequentially_without_celery for what that used to look like).
+    request_id = uuid.UUID("00000000-0000-4000-8000-000000000141")
+    org_id = uuid.UUID("00000000-0000-4000-8000-000000000009")
+    claim_token = uuid.UUID("00000000-0000-4000-8000-000000000142")
+    session = AsyncMock()
+    result = MagicMock()
+    result.mappings.return_value.first.return_value = {
+        "id": request_id,
+        "org_id": org_id,
+        "kind": kind,
+        "scope": {},
+        "model_ref": None,
+        "prompt_ref": None,
+        "llm_concurrency": 1,
+        "spend_limit_microunits": 0,
+        "claim_token": claim_token,
+    }
+    session.execute.return_value = result
+    monkeypatch.setattr(worker_workgraph, "authorize_worker_bridge", lambda _auth: None)
+    mark_ambiguous = AsyncMock()
+    monkeypatch.setattr(worker_workgraph, "_mark_ambiguous", mark_ambiguous)
+    run_until_disconnect = AsyncMock()
+    monkeypatch.setattr(
+        worker_workgraph, "_run_until_client_disconnect", run_until_disconnect
+    )
+    request = ExecuteRequest(request_id=request_id, claim_token=claim_token)
+
+    with caplog.at_level("ERROR", logger=worker_workgraph.__name__):
+        with pytest.raises(HTTPException) as exc_info:
+            await worker_workgraph.execute(request, session, MagicMock(), "Bearer test")
+
+    assert exc_info.value.status_code == 410
+    assert kind in exc_info.value.detail
+    mark_ambiguous.assert_awaited_once()
+    await_args = mark_ambiguous.await_args
+    assert await_args is not None
+    assert await_args.args[0] is session
+    assert await_args.args[1] is request
+    assert kind in await_args.args[2]
+    # The retired kind must never reach the actual dispatch path.
+    run_until_disconnect.assert_not_awaited()
+    assert any(
+        kind in record.message and str(request_id) in record.message
+        for record in caplog.records
+    ), f"no log line named both {kind!r} and the request id:\n{caplog.text}"
 
 
 @pytest.mark.asyncio

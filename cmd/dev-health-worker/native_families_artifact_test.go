@@ -375,8 +375,8 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 9
-// native + 1 post_bridge daily split this page's reconciliation work found,
+// control: pins the exact 5-native/2-compat remaining split and the 8
+// native + 4 post_bridge daily split,
 // so a future accidental wiring change is caught here even if someone forgot
 // to regenerate the artifact (that case is ALSO caught by the drift test
 // above, but this one names the expected shape explicitly for a reviewer).
@@ -399,7 +399,16 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
 	// post_bridge -- all three read work_item_team_attributions, which the
 	// still-Python work_item_attribution family writes in the same partition.
-	wantDailyPostBridge := []string{"work_item_state", "work_item", "work_item_estimate"}
+	// CHAOS-4287: compounding_risk is post_bridge for a DIFFERENT reason from
+	// the three above -- not a stale attribution snapshot, but execution order.
+	// Its input repo_metrics_daily is written by repo_user_commit in the SAME
+	// partition, and computeNativeFamilies walks families in SORTED order,
+	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
+	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
+	// those three, does not touch this one.
+	wantDailyPostBridge := []string{
+		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
+	}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half

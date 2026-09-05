@@ -116,6 +116,24 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
     "recommendations": "recommendations_daily",
 }
 
+# Scope-keyed families (CHAOS-4287): a THIRD shape, needed because
+# compounding_risk_daily is keyed (org_id, scope, scope_id, day, computed_at)
+# and has no repo_id column at all. Its repo-scope rows carry the repo id in
+# `scope_id`, but as a String rather than a UUID, alongside team-scope rows
+# under the same table -- so neither family_readback (typed repo_id, no scope
+# discriminator) nor team_readback (would silently count team rows as proof
+# the repo path ran) is correct here.
+#
+# The value is the table; the readback below pins scope='repo' and cross-checks
+# scope_id against live_repo_ids, so this shape keeps the SAME dead-id oracle
+# family_readback has (CHAOS-4263) rather than trading it away for a looser
+# org-only check. Team-scope rows are deliberately NOT proven here: they are
+# still written by Python from run_daily_metrics_finalize, so counting them
+# would make this gate pass on the Python path alone.
+SCOPE_ID_REPO_FAMILIES: dict[str, str] = {
+    "compounding_risk": "compounding_risk_daily",
+}
+
 
 def live_repo_ids(client, org_id: str) -> set[str]:
     """The org's real ClickHouse repo ids.
@@ -222,6 +240,56 @@ def team_readback(
     }
 
 
+def scope_id_repo_readback(
+    client, table: str, org_id: str, repo_ids: set[str], run_start: datetime
+) -> dict[str, FamilyRowCount]:
+    """family_readback's counterpart for scope/scope_id-keyed tables (CHAOS-4287).
+
+    Two differences from family_readback, both load-bearing:
+
+    * ``scope = 'repo'`` is pinned. The table holds team-scope rows too, and
+      those are still written by Python from ``run_daily_metrics_finalize`` --
+      counting them would let this gate pass with the native repo path dead.
+    * ``scope_id`` is a String, not a UUID, so the repo-id set is bound as
+      ``Array(String)`` rather than ``Array(UUID)``.
+
+    The cross-check against ``live_repo_ids`` is otherwise identical, which is
+    what keeps the CHAOS-4263 dead-id oracle intact for this shape.
+    """
+    if not repo_ids:
+        return {}
+    result = client.query(
+        f"""
+        SELECT scope_id, count() AS n, max(computed_at) AS latest
+        FROM {table}
+        WHERE org_id = {{org_id:String}}
+          AND scope = 'repo'
+          AND scope_id IN {{repo_ids:Array(String)}}
+          AND computed_at >= {{run_start:DateTime64(6)}}
+        GROUP BY scope_id
+        """,
+        parameters={
+            "org_id": org_id,
+            "repo_ids": sorted(repo_ids),
+            "run_start": run_start,
+        },
+    )
+    return {
+        str(row[0]): {"rows": int(row[1]), "latest_computed_at": str(row[2])}
+        for row in result.result_rows
+    }
+
+
+def unscoped_scope_ids(client, table: str, run_start: datetime) -> set[str]:
+    """unscoped_repo_ids' counterpart for scope/scope_id-keyed tables."""
+    result = client.query(
+        f"SELECT DISTINCT scope_id FROM {table} "
+        f"WHERE scope = 'repo' AND computed_at >= {{run_start:DateTime64(6)}}",
+        parameters={"run_start": run_start},
+    )
+    return {str(row[0]) for row in result.result_rows}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     # Defaults from the environment so a caller never has to put a
@@ -242,13 +310,20 @@ def main() -> int:
         "with computed_at before this are stale evidence, not proof this run "
         "computed anything.",
     )
-    all_families = sorted(REPO_DAY_FAMILIES) + sorted(TEAM_DAY_FAMILIES)
+    all_families = (
+        sorted(REPO_DAY_FAMILIES)
+        + sorted(TEAM_DAY_FAMILIES)
+        + sorted(SCOPE_ID_REPO_FAMILIES)
+    )
     parser.add_argument(
         "--families",
         nargs="+",
         default=all_families,
         choices=all_families,
-        help="Subset of families to check (default: all, repo-keyed and team-keyed).",
+        help=(
+            "Subset of families to check (default: all -- repo-keyed, "
+            "team-keyed, and scope-keyed)."
+        ),
     )
     parser.add_argument(
         "--summary-json",
@@ -307,6 +382,35 @@ def main() -> int:
                         f"{family} ({table}): zero_rows_with_source_data -- no "
                         f"row with computed_at >= {args.run_start} for "
                         f"org {args.org_id}."
+                    )
+                continue
+
+            if family in SCOPE_ID_REPO_FAMILIES:
+                table = SCOPE_ID_REPO_FAMILIES[family]
+                scope_rows = scope_id_repo_readback(
+                    client, table, args.org_id, repo_ids, run_start
+                )
+                total_rows = sum(int(v["rows"]) for v in scope_rows.values())
+                stray = unscoped_scope_ids(client, table, run_start) - repo_ids
+                summary[family] = {
+                    "table": table,
+                    "org_id": args.org_id,
+                    "rows_written": total_rows,
+                    "repos_with_rows": sorted(scope_rows),
+                    "repo_ids_outside_org": sorted(stray),
+                }
+                if total_rows == 0:
+                    failures.append(
+                        f"{family} ({table}): zero_rows_with_source_data -- no "
+                        f"scope='repo' row with computed_at >= {args.run_start} "
+                        f"for any of org {args.org_id}'s {len(repo_ids)} live "
+                        "repo(s)."
+                    )
+                if stray:
+                    failures.append(
+                        f"{family} ({table}): wrote scope_id(s) {sorted(stray)} "
+                        "that are not in ClickHouse repos for any org at all -- "
+                        "the exact CHAOS-4263 dead-id shape."
                     )
                 continue
 

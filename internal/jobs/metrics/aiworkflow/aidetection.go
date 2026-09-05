@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/textrefs"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Signal ports providers/_ai_detection.py's AIAttributionSignal, the pure
@@ -335,22 +336,17 @@ func DetectFromPRBody(body string) *Signal {
 // exclusion (see isPythonWordRune's own doc). Return the FIRST candidate
 // (leftmost start position) that passes both boundary checks, matching
 // re.search's leftmost-match semantics.
-// pythonUnicodeWhitespaceClassBody is the BODY of the Unicode-whitespace
-// bracket expression -- deliberately not wrapped in its own `[...]` here, so
-// callers can either wrap it standalone (a bare `\s` in the source pattern)
-// or splice it into an EXISTING bracket expression alongside other members
-// (`[\s\-]` in the source pattern, which already provides the enclosing
-// `[`/`]`). Two callers, two different targets: see unicodeWordBoundaryFind.
-//
-// codex round chaos-5220 r2, P2: this class was missing U+001C-U+001F (FILE/
-// GROUP/RECORD/UNIT SEPARATOR) -- the entire, exhaustively-measured
-// difference between Python's `\s` and Go's unicode.IsSpace, per
-// textrefs.pythonIsSpace's own doc comment (internal/jobs/workgraph/textrefs/
-// charclass.go) and pythonparity.IsSpace's identical finding
-// (internal/pythonparity/whitespace.go) -- both already document and rely on
-// this exact four-codepoint set elsewhere in this repo. `\x{001C}-\x{001F}`
-// added to close the gap.
-const pythonUnicodeWhitespaceClassBody = `\t-\r \x{001C}-\x{001F}\x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
+// codex round chaos-5220 r3 (folding in the CLASS, not just the site, per
+// team-lead's ruling): this package used to define its own copy of the
+// Unicode-whitespace bracket-expression body -- a THIRD hand-rolled copy of
+// a class internal/pythonparity/whitespace.go and
+// internal/jobs/workgraph/textrefs/charclass.go's pythonIsSpace each already
+// carried once (and the local copy here initially SHIPPED WRONG, missing
+// U+001C-U+001F, which is exactly the risk of a third independent copy).
+// That local copy is deleted; every caller here now uses
+// pythonparity.WhitespaceClassBody, the one canonical definition, verified
+// exhaustively against pythonparity.IsSpace by
+// TestWhitespaceClassBodyAgreesWithIsSpace.
 
 func unicodeWordBoundaryFind(corePattern string) func(string) (string, bool) {
 	// Order matters: `[\s\-]` must be rewritten as ONE merged bracket
@@ -362,8 +358,8 @@ func unicodeWordBoundaryFind(corePattern string) func(string) (string, bool) {
 	// neither a Unicode space NOR a literal hyphen (measured: this exact bug
 	// broke `ai[\s\-]assisted` and `agent[\s\-]created` outright -- neither
 	// matched "ai-assisted" nor "ai assisted" until this fix).
-	rewritten := strings.ReplaceAll(corePattern, `[\s\-]`, `[`+pythonUnicodeWhitespaceClassBody+`\-]`)
-	rewritten = strings.ReplaceAll(rewritten, `\s`, `[`+pythonUnicodeWhitespaceClassBody+`]`)
+	rewritten := strings.ReplaceAll(corePattern, `[\s\-]`, `[`+pythonparity.WhitespaceClassBody+`\-]`)
+	rewritten = strings.ReplaceAll(rewritten, `\s`, `[`+pythonparity.WhitespaceClassBody+`]`)
 	re := regexp.MustCompile(`(?i)` + rewritten)
 	return func(text string) (string, bool) {
 		for _, loc := range re.FindAllStringIndex(text, -1) {

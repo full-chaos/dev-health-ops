@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode"
@@ -114,6 +115,40 @@ func TestGoUnicodeIsSpaceIsAStrictSubset(t *testing.T) {
 		if !IsSpace(rune(codePoint)) {
 			t.Errorf("IsSpace(U+%04X) must be true to match CPython", codePoint)
 		}
+	}
+}
+
+// TestWhitespaceClassBodyAgreesWithIsSpace sweeps every code point (except
+// the surrogate range, which holds no valid Unicode scalar values and cannot
+// round-trip through string(rune)) rather than sampling -- same discipline as
+// TestIsSpaceMatchesCPythonExhaustively above, for the regex-class form of
+// the identical rune set.
+//
+// codex round chaos-5220: WhitespaceClassBody exists specifically so a
+// caller building a regex pattern never re-derives this set by hand (the
+// exact mistake that shipped once, in aiworkflow's own first version of this
+// class, missing the four codepoints IsSpace adds). This test is what makes
+// that promise checkable, not just documented.
+func TestWhitespaceClassBodyAgreesWithIsSpace(t *testing.T) {
+	classMatcher := regexp.MustCompile(`^[` + WhitespaceClassBody + `]$`)
+
+	var disagreements int
+	for codePoint := rune(0); codePoint <= 0x10FFFF; codePoint++ {
+		if codePoint >= 0xD800 && codePoint <= 0xDFFF {
+			continue // surrogate range: not a valid Unicode scalar value
+		}
+		got := classMatcher.MatchString(string(codePoint))
+		want := IsSpace(codePoint)
+		if got != want {
+			if disagreements < 20 {
+				t.Errorf("WhitespaceClassBody match(U+%04X) = %v, IsSpace = %v",
+					codePoint, got, want)
+			}
+			disagreements++
+		}
+	}
+	if disagreements > 20 {
+		t.Errorf("... and %d further disagreements", disagreements-20)
 	}
 }
 

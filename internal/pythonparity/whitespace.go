@@ -45,6 +45,26 @@ func IsSpace(r rune) bool {
 	return unicode.IsSpace(r)
 }
 
+// WhitespaceClassBody is IsSpace's exact rune set, expressed as an RE2
+// bracket-expression BODY (no enclosing `[...]`), for callers that need to
+// splice Python's `\s` into a larger regex pattern before compiling it with
+// Go's regexp package (RE2 has no way to reference a Go predicate directly,
+// only an explicit class).
+//
+// codex round chaos-5220, aiworkflow package: a first version of this class
+// was hand-rolled locally in that package and initially omitted the four
+// separators IsSpace adds over unicode.IsSpace -- the exact class this
+// repository already had, twice (this file and
+// internal/jobs/workgraph/textrefs/charclass.go's pythonIsSpace), before that
+// duplication existed. This is now the ONE canonical copy; do not re-derive
+// a third.
+//
+// Must stay in exact agreement with IsSpace --
+// TestWhitespaceClassBodyAgreesWithIsSpace verifies this exhaustively over
+// every rune 0..0x10FFFF (skipping the surrogate range, which holds no valid
+// Unicode scalar values), not sampled.
+const WhitespaceClassBody = `\t-\r\x{001C}-\x{001F} \x{0085}\x{00A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
+
 // Strip is CPython's `str.strip()` with no argument.
 func Strip(value string) string {
 	return strings.TrimFunc(value, IsSpace)

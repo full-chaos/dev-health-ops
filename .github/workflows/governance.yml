@@ -61,7 +61,10 @@ jobs:
                 | jq -r '.[0].data.repository.pullRequest.mergeQueueEntry as $current | [.[].data.repository.pullRequest.mergeQueueEntry.mergeQueue.entries.nodes[] | select(.position <= $current.position) | (.pullRequest.body // "")] | join("\n")'
             )"
           fi
-          delimiter="pr_body_$(uuidgen)"
+          # CHAOS-5166: `uuidgen` (uuid-runtime) is not on the ARC pool's
+          # image -- PID + nanosecond timestamp is unique enough for a
+          # heredoc delimiter and needs no new package on either runner leg.
+          delimiter="pr_body_$$-$(date +%s%N)"
           {
             echo "pr_body<<$delimiter"
             echo "$body"

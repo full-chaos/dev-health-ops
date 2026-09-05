@@ -78,6 +78,10 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # awareness -- a repo with either churn OR a complexity snapshot in the
     # window produces rows here.
     "file_risk_hotspots": "file_hotspot_daily",
+    # CHAOS-4279: review_edges_daily is (repo_id, day)-shaped with a
+    # computed_at column, so it needs no new readback shape -- it slots into
+    # the repo-keyed family above unchanged.
+    "review_edges": "review_edges_daily",
 }
 
 # Team-keyed families (CHAOS-4276): unlike REPO_DAY_FAMILIES, these tables are

@@ -431,8 +431,16 @@ func writeTestopsPipelineMetrics(
 			return 0, fmt.Errorf("append testops_pipeline_metrics_daily row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_pipeline_metrics_daily batch: %w", err)
+		return len(metrics), fmt.Errorf("send testops_pipeline_metrics_daily batch: %w", err)
 	}
 	return len(metrics), nil
 }
@@ -465,8 +473,16 @@ func writeTestopsTestMetrics(
 			return 0, fmt.Errorf("append testops_test_metrics_daily row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_test_metrics_daily batch: %w", err)
+		return len(metrics), fmt.Errorf("send testops_test_metrics_daily batch: %w", err)
 	}
 	return len(metrics), nil
 }
@@ -496,8 +512,16 @@ func writeTestopsCoverageMetrics(
 			return 0, fmt.Errorf("append testops_coverage_metrics_daily row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send testops_coverage_metrics_daily batch: %w", err)
+		return len(metrics), fmt.Errorf("send testops_coverage_metrics_daily batch: %w", err)
 	}
 	return len(metrics), nil
 }

@@ -433,14 +433,23 @@ func (writer *Writer) WriteResult(ctx context.Context, result Result, orgID stri
 	if orgID == "" {
 		return 0, 0, 0, fmt.Errorf("repouser: organization id is required to write repo_metrics_daily/user_metrics_daily/commit_metrics")
 	}
+	// #2276 confirmation-pass P1 (team-lead-required live proof, see
+	// TestWriteResultReportsTheFailingWritesOwnCountOnSendAmbiguity): each
+	// of the three write calls below already correctly reports ITS OWN true
+	// row count on a batch.Send() ambiguity (repoRows/userRows/commitRows
+	// are the named return values, already assigned by the `x, err = ...`
+	// statement even when err != nil) -- returning a literal 0 instead of
+	// that just-assigned variable discarded the failing write's own
+	// truthful count a second time. Mirrors
+	// work_graph_edges_native_executor.go's established idiom.
 	if repoRows, err = writer.writeRepoMetrics(ctx, result.RepoMetrics, orgID); err != nil {
-		return 0, 0, 0, fmt.Errorf("write repo metrics: %w", err)
+		return repoRows, 0, 0, fmt.Errorf("write repo metrics: %w", err)
 	}
 	if userRows, err = writer.writeUserMetrics(ctx, result.UserMetrics, orgID); err != nil {
-		return repoRows, 0, 0, fmt.Errorf("write user metrics: %w", err)
+		return repoRows, userRows, 0, fmt.Errorf("write user metrics: %w", err)
 	}
 	if commitRows, err = writer.writeCommitMetrics(ctx, result.CommitMetrics, orgID); err != nil {
-		return repoRows, userRows, 0, fmt.Errorf("write commit metrics: %w", err)
+		return repoRows, userRows, commitRows, fmt.Errorf("write commit metrics: %w", err)
 	}
 	recordRowsWritten(repoRows+userRows+commitRows, orgID != "")
 	return repoRows, userRows, commitRows, nil
@@ -480,8 +489,16 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 			return 0, fmt.Errorf("append repo_metrics_daily row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send repo_metrics_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send repo_metrics_daily batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -522,8 +539,16 @@ func (writer *Writer) writeUserMetrics(ctx context.Context, rows []UserMetric, o
 			return 0, fmt.Errorf("append user_metrics_daily row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send user_metrics_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send user_metrics_daily batch: %w", err)
 	}
 	return len(rows), nil
 }
@@ -547,8 +572,16 @@ func (writer *Writer) writeCommitMetrics(ctx context.Context, rows []CommitMetri
 			return 0, fmt.Errorf("append commit_metrics row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send commit_metrics batch: %w", err)
+		return len(rows), fmt.Errorf("send commit_metrics batch: %w", err)
 	}
 	return len(rows), nil
 }

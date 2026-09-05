@@ -36,6 +36,14 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # run_work_items_sync_job still calls it for an unrelated full-backfill
     # sync job), only job_daily.py's own reference to it.
     "work_item_attribution": "compute_work_item_team_attributions",
+    # CHAOS-5234: file_hotspots's daily compute deleted from job_daily.py --
+    # the native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
+    # writer of file_metrics_daily for a daily partition now.
+    # compute_file_hotspots itself is NOT deleted from the codebase (golden-
+    # fixture generators and the live-Python oracle comparator still call it
+    # directly, as do its own dedicated unit tests), only job_daily.py's own
+    # reference to it.
+    "file_hotspots": "compute_file_hotspots",
 }
 
 

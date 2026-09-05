@@ -3,6 +3,7 @@ package workgraph
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -19,11 +20,13 @@ type handler struct {
 	// A step belongs here rather than in preSteps when the Python stage would
 	// OVERWRITE what it writes; see NativePostStep.
 	postSteps []NativePostStep
+	logger    *slog.Logger
 }
 
 func newHandler(
 	store Store, compatibility CompatibilityExecutor,
 	preSteps []NativePreStep, postSteps []NativePostStep,
+	logger *slog.Logger,
 ) (*handler, error) {
 	if store == nil || compatibility == nil {
 		return nil, ErrUnavailable
@@ -43,9 +46,14 @@ func newHandler(
 			return nil, ErrUnavailable
 		}
 	}
+	// A nil logger falls back to slog.Default() so a permanent-cancel below
+	// is never silently unlogged -- same convention as issueprlinks.Service.
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &handler{
 		store: store, compatibility: compatibility,
-		preSteps: preSteps, postSteps: postSteps,
+		preSteps: preSteps, postSteps: postSteps, logger: logger,
 	}, nil
 }
 
@@ -119,6 +127,14 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
 			return jobruntime.Retryable(err)
 		}
+		// Loud, not just recorded on the ambiguous ledger row: this is the
+		// permanent-cancel path, and the underlying error (e.g. a pre-step's
+		// ClickHouse bind failure) is exactly what an operator needs to see
+		// without having to correlate a ledger detail string back to a cause.
+		handler.logger.Error("workgraph handler: permanent cancel after ambiguous compatibility outcome",
+			slog.String("request_id", requestID), slog.String("kind", string(kind)),
+			slog.String("organization_id", *organizationID), slog.Any("error", err),
+		)
 		_ = releaseAmbiguous(handler.store, ctx, *claim, compatibilityAmbiguousDetail(err))
 		return jobruntime.Permanent(err)
 	}
@@ -209,24 +225,25 @@ type FinalizeHandler struct{ *handler }
 func NewBuildHandler(
 	store Store, executor CompatibilityExecutor,
 	preSteps []NativePreStep, postSteps []NativePostStep,
+	logger *slog.Logger,
 ) (*BuildHandler, error) {
-	h, err := newHandler(store, executor, preSteps, postSteps)
+	h, err := newHandler(store, executor, preSteps, postSteps, logger)
 	return &BuildHandler{h}, err
 }
-func NewMaterializeHandler(store Store, executor CompatibilityExecutor) (*MaterializeHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
+func NewMaterializeHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*MaterializeHandler, error) {
+	h, err := newHandler(store, executor, nil, nil, logger)
 	return &MaterializeHandler{h}, err
 }
-func NewDispatchHandler(store Store, executor CompatibilityExecutor) (*DispatchHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
+func NewDispatchHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*DispatchHandler, error) {
+	h, err := newHandler(store, executor, nil, nil, logger)
 	return &DispatchHandler{h}, err
 }
-func NewChunkHandler(store Store, executor CompatibilityExecutor) (*ChunkHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
+func NewChunkHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*ChunkHandler, error) {
+	h, err := newHandler(store, executor, nil, nil, logger)
 	return &ChunkHandler{h}, err
 }
-func NewFinalizeHandler(store Store, executor CompatibilityExecutor) (*FinalizeHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
+func NewFinalizeHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*FinalizeHandler, error) {
+	h, err := newHandler(store, executor, nil, nil, logger)
 	return &FinalizeHandler{h}, err
 }
 

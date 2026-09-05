@@ -530,7 +530,15 @@ type PartitionHandler struct {
 	zeroRowsObserver    jobruntime.DailyMetricsZeroRowsObserver
 	nativeFamilies      map[string]NativeFamilyExecutor
 	nativeFamilyNames   []string
-	nativeObserver      jobruntime.DailyMetricsNativeFamilyObserver
+	// nativeFamilyDependencies (CHAOS-5078 codex r2 F3) is each pre_bridge
+	// native family's DIRECT `after` dependencies, restricted to the
+	// registered subset -- see registeredDependencies. computeNativeFamilies
+	// uses it to block a family's runtime execution when its dependency
+	// already failed or was itself blocked this same pass, so a reader can
+	// never run natively against a stale/absent snapshot its writer failed
+	// to produce THIS partition.
+	nativeFamilyDependencies map[string][]string
+	nativeObserver           jobruntime.DailyMetricsNativeFamilyObserver
 	nativeFamilyLogger  NativeFamilyRefusalLogger
 	nativeFamiliesNow   func() time.Time
 	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
@@ -692,10 +700,12 @@ func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFam
 	if err != nil {
 		handler.nativeFamilies = nil
 		handler.nativeFamilyNames = nil
+		handler.nativeFamilyDependencies = nil
 		return err
 	}
 	handler.nativeFamilies = families
 	handler.nativeFamilyNames = ordered
+	handler.nativeFamilyDependencies = registeredDependencies(registry, names)
 	return nil
 }
 
@@ -811,20 +821,77 @@ func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMet
 // any native executor existed -- one family degrading to Python must never
 // take the other 22 down with it, and must never turn a transient ClickHouse
 // hiccup into a Permanent partition failure.
+//
+// FAIL-OPEN DOES NOT MEAN "RUN ANYWAY" FOR A FAMILY'S OWN DEPENDENTS
+// (CHAOS-5078 codex round 2 F3, on the PR that first put work_item_attribution
+// into this SAME loop ahead of its three readers): before this fix, a
+// dependency's runtime failure did not stop this loop from still calling
+// ComputeFamily on the families declaring `after` on it. A reader that then
+// succeeded (reading the PREVIOUS partition's attribution snapshot, since
+// today's write never landed) was added to skipFamilies -- excluding it from
+// the bridge's own recompute -- while its failed dependency was NOT added,
+// so the bridge WOULD recompute the dependency. The correction never reaches
+// the reader: the partition reports success with a stale or absent
+// team-derived output. Every family is still attempted exactly once and a
+// failure still degrades only that one family plus its transitive
+// dependents to the bridge -- see blockedNativeDependency.
 func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) []string {
 	if handler == nil || len(handler.nativeFamilyNames) == 0 {
 		return nil
 	}
 	skipFamilies := make([]string, 0, len(handler.nativeFamilyNames))
+	// blocked (CHAOS-5078 codex r2 F3) accumulates every family that did NOT
+	// successfully compute this pass -- both an outright ComputeFamily error
+	// and a family skipped here because ITS dependency is already in this
+	// set. Checked before every family runs, so a failure propagates
+	// transitively through the run order for free: work_item_attribution
+	// fails -> added here -> work_item_state (after: work_item_attribution)
+	// is blocked and added here in turn -> anything declaring `after:
+	// work_item_state` would be blocked by IT, without needing to walk the
+	// dependency graph more than one edge at a time.
+	blocked := make(map[string]struct{}, len(handler.nativeFamilyNames))
 	for _, name := range handler.nativeFamilyNames {
 		executor := handler.nativeFamilies[name]
 		if executor == nil {
+			continue
+		}
+		if dependency, isBlocked := handler.blockedNativeDependency(name, blocked); isBlocked {
+			// The dependency failed or was itself blocked THIS pass -- the
+			// table this family reads may be stale (still holding an
+			// earlier partition's snapshot) or entirely unwritten today.
+			// Running anyway and then being added to skipFamilies (as
+			// "computed") would permanently exclude this family from the
+			// Python bridge's own recompute, so the correction the bridge
+			// makes to the dependency is never propagated to this reader.
+			// Not attempting it at all -- and leaving it OFF skipFamilies,
+			// exactly like a direct refusal -- keeps the bridge as the
+			// safety net for both the dependency AND this family together.
+			if handler.nativeFamilyLogger != nil {
+				handler.nativeFamilyLogger.Error(
+					"native metrics.daily family blocked for this partition because its "+
+						"declared dependency failed or was blocked; falling back to the "+
+						"Python compatibility bridge for both (CHAOS-5078 codex r2 F3)",
+					"family", name,
+					"blocked_by", dependency,
+					"organization_id", run.OrganizationID,
+					"target_day", run.TargetDay,
+					"partition_id", partition.ID,
+					"run_id", run.ID,
+				)
+			}
+			if handler.nativeObserver != nil {
+				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+				)
+			}
+			blocked[name] = struct{}{}
 			continue
 		}
 		started := handler.nativeFamiliesNow()
 		rows, err := executor.ComputeFamily(ctx, run, partition)
 		duration := handler.nativeFamiliesNow().Sub(started)
 		if err != nil {
+			blocked[name] = struct{}{}
 			if handler.nativeFamilyLogger != nil {
 				handler.nativeFamilyLogger.Error(
 					"native metrics.daily family refused for this partition; "+
@@ -853,6 +920,21 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 		}
 	}
 	return skipFamilies
+}
+
+// blockedNativeDependency reports whether `name` has a registered `after`
+// dependency present in `blocked` (already failed, or itself blocked
+// transitively earlier in this same pass), and if so, which one -- naming
+// ONE culprit is enough for an operator to start looking, and
+// nativeFamilyDependencies's declaration order makes the choice
+// deterministic run to run.
+func (handler *PartitionHandler) blockedNativeDependency(name string, blocked map[string]struct{}) (string, bool) {
+	for _, dependency := range handler.nativeFamilyDependencies[name] {
+		if _, ok := blocked[dependency]; ok {
+			return dependency, true
+		}
+	}
+	return "", false
 }
 
 // skipFamiliesForBridge is what the compatibility bridge call is told NOT to

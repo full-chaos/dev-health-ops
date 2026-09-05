@@ -3618,6 +3618,34 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	}
 
 	// Emitted for EVERY reason, including zeros -- same reasoning as the dora
+	// refusal counter above (CHAOS-5078 codex round 2 F4): the collector had
+	// carried these counters since CHAOS-3092 PR-B, but nothing ever wrote
+	// them here, so the work item attribution backstop's own refusal/run
+	// telemetry was invisible to /metrics regardless of how faithfully
+	// ObserveWorkItemAttributionRefused/Run were called.
+	writeMetadata(output, "worker_work_item_attribution_native_refused_total", "Native work item attribution backstop construction refusals, by reason.", "counter")
+	for _, reason := range workItemAttributionRefusalReasons {
+		writeUintSample(output, "worker_work_item_attribution_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.workItemAttributionRefusals[reason])
+	}
+	writeMetadata(output, "worker_work_item_attribution_native_runs_total", "Completed native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_runs_total", nil, collector.workItemAttributionRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_org_wide_runs_total", "Native work item attribution backstop runs that were org-wide (no repo/project scope).", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_org_wide_runs_total", nil, collector.workItemAttributionOrgWideRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_scoped_runs_total", "Native work item attribution backstop runs scoped to specific repos/projects.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_scoped_runs_total", nil, collector.workItemAttributionScopedRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_noop_runs_total", "Native work item attribution backstop runs that found nothing to change.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_noop_runs_total", nil, collector.workItemAttributionNoopRuns)
+	writeMetadata(output, "worker_work_item_attribution_native_repo_scopes_total", "Repo scopes considered across native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_repo_scopes_total", nil, collector.workItemAttributionRepoScopes)
+	writeMetadata(output, "worker_work_item_attribution_native_project_scopes_total", "Project scopes considered across native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_project_scopes_total", nil, collector.workItemAttributionProjectScopes)
+	writeMetadata(output, "worker_work_item_attribution_native_items_seen_total", "Work items considered across native work item attribution backstop runs.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_items_seen_total", nil, collector.workItemAttributionItemsSeen)
+	writeMetadata(output, "worker_work_item_attribution_native_rows_written_total", "Attribution rows written by the native work item attribution backstop.", "counter")
+	writeUintSample(output, "worker_work_item_attribution_native_rows_written_total", nil, collector.workItemAttributionRowsWritten)
+
+	// Emitted for EVERY reason, including zeros -- same reasoning as the dora
 	// counter above.
 	writeMetadata(output, "worker_recommendations_native_refused_total", "Native recommendations executor construction refusals, by reason.", "counter")
 	for _, reason := range recommendationsRefusalReasons {

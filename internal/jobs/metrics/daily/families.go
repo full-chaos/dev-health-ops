@@ -153,6 +153,38 @@ func declaredGraphHasCycle(registry Registry) ([]string, bool) {
 	return nil, false
 }
 
+// registeredDependencies returns, for each name in `names`, its DIRECT
+// `after` dependencies restricted to the registered subset (mirrors
+// FamilyRunOrder's own vacuous-satisfaction rule: a dependency pointing
+// outside `names` is not returned, since a family that is not running this
+// pass cannot be waited for or blocked on).
+//
+// CHAOS-5078 codex r2 F3: exposed as its own function (previously inlined in
+// FamilyRunOrder only) so computeNativeFamilies can gate a family's RUNTIME
+// execution on whether its dependency already failed or was itself blocked
+// THIS pass -- FamilyRunOrder only proves a safe static ORDER, it says
+// nothing about what happens when a family earlier in that order fails at
+// runtime.
+func registeredDependencies(registry Registry, names []string) map[string][]string {
+	registered := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		registered[name] = struct{}{}
+	}
+	dependencies := make(map[string][]string, len(names))
+	for _, family := range registry.Families {
+		for _, after := range family.After {
+			if _, ok := registered[family.Name]; !ok {
+				continue
+			}
+			if _, ok := registered[after]; !ok {
+				continue
+			}
+			dependencies[family.Name] = append(dependencies[family.Name], after)
+		}
+	}
+	return dependencies
+}
+
 func FamilyRunOrder(registry Registry, names []string) ([]string, error) {
 	known := make(map[string]struct{}, len(registry.Families))
 	for _, family := range registry.Families {
@@ -176,23 +208,7 @@ func FamilyRunOrder(registry Registry, names []string) ([]string, error) {
 		return nil, fmt.Errorf("%w: unresolvable among %v (declared graph, independent of "+
 			"which families are registered this run)", ErrFamilyOrderCycle, unresolved)
 	}
-	registered := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		registered[name] = struct{}{}
-	}
-
-	dependencies := make(map[string][]string, len(names))
-	for _, family := range registry.Families {
-		for _, after := range family.After {
-			if _, ok := registered[family.Name]; !ok {
-				continue
-			}
-			if _, ok := registered[after]; !ok {
-				continue
-			}
-			dependencies[family.Name] = append(dependencies[family.Name], after)
-		}
-	}
+	dependencies := registeredDependencies(registry, names)
 
 	remaining := make([]string, len(names))
 	copy(remaining, names)

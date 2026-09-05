@@ -146,6 +146,59 @@ func TestPartitionNativeFamilyFailureFallsOpenToCompatibility(t *testing.T) {
 	}
 }
 
+// TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttribution
+// is CHAOS-5078 codex round 2 F3's RED-ON-BASELINE proof. work_item_attribution
+// and work_item_state are registered natively with their REAL families.json
+// `after` edge (work_item_state declares "after":["work_item_attribution"]),
+// so this reaches the real dependency-blocking path through SetNativeFamilies
+// -> FamilyRunOrder/registeredDependencies -> computeNativeFamilies, not a
+// synthetic family name. When attribution's executor fails, work_item_state's
+// executor must NEVER be called natively -- calling it would read whatever
+// snapshot the table already held (this partition's own write never landed),
+// then exclude it from the bridge's recompute by adding it to skipFamilies.
+func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttribution(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	compatibility := &recordingCompatibility{}
+	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attribution := &fakeNativeFamilyExecutor{err: errors.New("dependency edge load failed")}
+	reader := &fakeNativeFamilyExecutor{rowsWritten: 9}
+	observer := &recordingNativeFamilyObserver{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{
+		"work_item_attribution": attribution,
+		"work_item_state":       reader,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(observer)
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatalf("a blocked dependent must not fail the partition either: %v", err)
+	}
+	if attribution.calls != 1 {
+		t.Fatalf("attribution executor calls=%d, want 1", attribution.calls)
+	}
+	if reader.calls != 0 {
+		t.Fatalf("work_item_state executor calls=%d, want 0 -- it must never run natively when its "+
+			"work_item_attribution dependency failed this pass", reader.calls)
+	}
+	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
+		t.Fatalf("skipFamilies=%v, want empty -- BOTH the failed dependency and its blocked reader "+
+			"must stay on the compatibility path so the bridge can compute them consistently", got)
+	}
+	sort.Slice(observer.calls, func(i, j int) bool { return observer.calls[i].family < observer.calls[j].family })
+	if len(observer.calls) != 2 ||
+		observer.calls[0].family != "work_item_attribution" || observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused ||
+		observer.calls[1].family != "work_item_state" || observer.calls[1].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+		t.Fatalf("observations=%#v", observer.calls)
+	}
+}
+
 // sharedOrderingState lets a test observe whether a family's ComputeFamily
 // call sees data the compatibility bridge writes DURING the same partition
 // -- CHAOS-4278's whole reason for the post_bridge phase existing. Mirrors,

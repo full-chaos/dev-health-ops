@@ -52,21 +52,45 @@ MIGRATION_087 = "087_complexity_tables_replacing_merge_tree.py"
 FROZEN_R1_TIP = "5f3533b8531aa37df21f18fdf9959cb089a9ceb6"
 
 
+def _git_show(ref: str, rel_path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "show", f"{ref}:{rel_path.as_posix()}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _load_migration_at_ref(ref: str, filename: str) -> ModuleType:
     """Load a migration file as it existed at a specific git commit.
 
     Reads the blob via `git show <ref>:<path>` (no checkout, no working-tree
     mutation) and loads it standalone under a ref-qualified module name so it
     never collides with the current `migration` fixture's module.
+
+    CI's checkout is SHALLOW (actions/checkout defaults to fetch-depth: 1 --
+    only the tip commit, no ancestor history), so `ref` -- an ancestor a few
+    commits back -- is genuinely absent locally even though it reached
+    GitHub long ago. bigboy/Mac clones are full, so this never reproduces
+    there. Fall back to a targeted `git fetch --depth=1 origin <ref>` (fetch
+    just this one commit, not full history) and retry once before giving up.
     """
     rel_path = Path("src") / "dev_health_ops" / "migrations" / "clickhouse" / filename
-    result = subprocess.run(
-        ["git", "show", f"{ref}:{rel_path.as_posix()}"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _git_show(ref, rel_path)
+    if result.returncode != 0:
+        fetch = subprocess.run(
+            ["git", "fetch", "--depth=1", "origin", ref],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        result = _git_show(ref, rel_path)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"cannot read {filename}@{ref}: git show failed even after "
+                f"`git fetch --depth=1 origin {ref}` (fetch stderr: "
+                f"{fetch.stderr.strip()!r}; show stderr: {result.stderr.strip()!r})"
+            )
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", prefix=f"migration_at_{ref[:8]}_", delete=False
     ) as f:

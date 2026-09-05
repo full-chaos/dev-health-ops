@@ -94,6 +94,17 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
                 "investment.chunk",
                 "investment.finalize",
             }
+            # r1 finding F4 (P3, codex, CHAOS-4438): retired_since_0064 was
+            # used ONLY as an exclusion filter below -- a name removed or
+            # misspelled here would still make the loop pass, because the
+            # excluded kind's live-resolution assertion would simply never
+            # run. This subset assertion is the missing positive check
+            # (test_river_route_activation_migration.py's retired_since_0066
+            # already has the equivalent for migration 0066): every retired
+            # kind must actually be present in the historical migration's own
+            # pinned set, so removing or misspelling an entry here fails
+            # loudly instead of silently narrowing what gets checked.
+            assert retired_since_0064 <= set(migration._KINDS)
             with Session(bind=connection) as session:
                 for kind in migration._KINDS:
                     if kind in retired_since_0064:

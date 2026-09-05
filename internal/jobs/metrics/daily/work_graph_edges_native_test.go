@@ -1,55 +1,95 @@
 package daily
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workgraphedges"
 	"github.com/google/uuid"
 )
 
-// TestResolveRepoProviderFollowsDiscoverReposFallbackChain pins the rule that
-// decides the `provider` column of all three edge tables.
+// providerRowsStub feeds LoadWorkGraphEdgeRepoProviders rows whose provider
+// COLUMN is deliberately populated, so a test can prove the column is ignored.
+type providerRowsStub struct {
+	ids       []uuid.UUID
+	providers []string
+	position  int
+}
+
+func (rows *providerRowsStub) Next() bool { return rows.position < len(rows.ids) }
+func (rows *providerRowsStub) Scan(destinations ...any) error {
+	if len(destinations) != 2 {
+		return fmt.Errorf("expected 2 scan destinations, got %d", len(destinations))
+	}
+	id, ok := destinations[0].(*uuid.UUID)
+	if !ok {
+		return fmt.Errorf("destination 0 is %T, want *uuid.UUID", destinations[0])
+	}
+	provider, ok := destinations[1].(*string)
+	if !ok {
+		return fmt.Errorf("destination 1 is %T, want *string", destinations[1])
+	}
+	*id = rows.ids[rows.position]
+	*provider = rows.providers[rows.position]
+	rows.position++
+	return nil
+}
+func (rows *providerRowsStub) Err() error                         { return nil }
+func (rows *providerRowsStub) Close() error                       { return nil }
+func (rows *providerRowsStub) ScanStruct(any) error               { return errors.New("unused") }
+func (rows *providerRowsStub) ColumnTypes() []chdriver.ColumnType { return nil }
+func (rows *providerRowsStub) Totals(...any) error                { return nil }
+func (rows *providerRowsStub) Columns() []string                  { return []string{"id", "provider"} }
+func (rows *providerRowsStub) HasData() bool                      { return len(rows.ids) > 0 }
+
+type providerConnStub struct{ rows *providerRowsStub }
+
+func (conn *providerConnStub) Query(context.Context, string, ...any) (chdriver.Rows, error) {
+	return conn.rows, nil
+}
+
+// TestRepoProvidersAreTheJobProviderNotTheColumn pins the rule codex r1 (P1)
+// on #2240 was right about and this branch originally got wrong.
 //
-// This is worth a dedicated test because `provider` is in NONE of the three
-// sorting keys. A wrong value splits no rows, changes no counts and trips no
-// dedup assertion -- it just mislabels every edge, silently. Structural checks
-// cannot see it; only this test and the live oracle can.
+// On the daily worker path discover_repos NEVER reads the repos table:
 //
-// The chain (discover_repos, job_daily.py:194, then :1200):
+//	worker_metrics.py:1729  one repo_id per run_daily_metrics_job call
+//	job_daily.py:1198       discover_repos(repo_id=repo_id, ...) with NO provider=
+//	job_daily.py:126        so the parameter default provider="auto" applies
+//	job_daily.py:129-136    if repo_id: return [DiscoveredRepo(source=provider)]
 //
-//	source = r[3] if r[3] != "unknown" else <job provider>
-//	provider = source or "unknown"
-func TestResolveRepoProviderFollowsDiscoverReposFallbackChain(t *testing.T) {
-	for _, testCase := range []struct {
-		name         string
-		repoProvider string
-		jobProvider  string
-		want         string
-	}{
-		{"a real provider wins", "github", "auto", "github"},
-		{"gitlab likewise", "gitlab", "auto", "gitlab"},
-		{
-			// The counter-intuitive one. A repo whose provider column
-			// literally reads "unknown" does NOT get "unknown" -- Python
-			// treats that string as absent and falls back to the job's
-			// provider, so "auto" lands in the column.
-			name:         "the literal \"unknown\" falls back to the job provider",
-			repoProvider: "unknown", jobProvider: "auto", want: "auto",
-		},
-		{"empty falls back to the job provider", "", "auto", "auto"},
-		{"job provider is honoured when set", "unknown", "github", "github"},
-		{"both empty ends at \"unknown\"", "", "", "unknown"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := resolveRepoProvider(testCase.repoProvider, testCase.jobProvider); got != testCase.want {
-				t.Errorf("resolveRepoProvider(%q, %q) = %q, want %q",
-					testCase.repoProvider, testCase.jobProvider, got, testCase.want)
-			}
-		})
+// so repo_provider_by_id is {repo: "auto"} for every repo, on every run.
+//
+// The stub supplies "github" and "gitlab" in the provider COLUMN. If the loader
+// ever reads that column again this test fails, which is the point: the column
+// is present, populated, and must be ignored.
+func TestRepoProvidersAreTheJobProviderNotTheColumn(t *testing.T) {
+	repoA := uuid.MustParse("d4f322ad-2102-1fbf-8425-7400573194f7")
+	repoB := uuid.MustParse("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d")
+	conn := &providerConnStub{rows: &providerRowsStub{
+		ids:       []uuid.UUID{repoA, repoB},
+		providers: []string{"github", "gitlab"},
+	}}
+
+	providers, err := LoadWorkGraphEdgeRepoProviders(
+		context.Background(), conn, "70d529e0-3c06-4597-8480-794fd02328b6", "auto")
+	if err != nil {
+		t.Fatalf("load providers: %v", err)
+	}
+	for _, repo := range []uuid.UUID{repoA, repoB} {
+		if got := providers[repo.String()]; got != "auto" {
+			t.Errorf("repo %s: got provider %q, want \"auto\" -- the JOB provider, not "+
+				"the repos.provider column. Reading the column splits these two repos "+
+				"across two extractPerProvider passes, which Python never does.", repo, got)
+		}
+	}
+	if len(providers) != 2 {
+		t.Errorf("expected 2 mapped repos, got %d", len(providers))
 	}
 }
 

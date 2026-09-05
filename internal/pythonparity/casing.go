@@ -108,3 +108,45 @@ var upperPool = sync.Pool{New: func() any {
 	caser := cases.Upper(language.Und)
 	return &caser
 }}
+
+// Fold is a CASE-INSENSITIVE COMPARISON KEY, not str.lower() -- do not use it
+// anywhere Python's exact lowered BYTES are the contract (a persisted column,
+// a hash input, anything compared against a value Python itself lowered and
+// stored). It exists for the one case Lower's doc comment calls out as
+// needing either a containment proof or a direct Final_Sigma
+// implementation: a call site that lowercases a value ONLY to build an
+// equality/prefix-match key, never to reproduce or persist Python's output.
+//
+// Case FOLDING (Unicode's CaseFolding.txt, what cases.Fold implements) has no
+// position-dependent branching at all -- unlike lowering's Final_Sigma rule,
+// every spelling of sigma (Σ, σ, ς) folds to the SAME value regardless of
+// what follows. So Fold cannot exhibit Lower's measured 31-case-ignorable-
+// rune Final_Sigma boundary (casing.go's own doc comment): there is no
+// lookahead to bound in the first place.
+//
+// This trades one narrow divergence for a narrower one, not zero: Python's
+// `.lower()` leaves an ALREADY-lowercase final sigma "ς" and an already-
+// lowercase medial sigma "σ" as two DISTINCT strings (lowering a
+// already-lowercase character is a no-op), so a Python comparison can tell
+// them apart. Fold merges both to one value, so two inputs Python would
+// treat as different could compare EQUAL here. Reaching this requires a
+// LITERAL lowercase final-sigma character already present in the input
+// (not one Python derived by lowering an uppercase Σ) -- narrower than the
+// 31-rune bug it replaces, and worth stating rather than declaring zero risk.
+//
+// CHAOS-4280 (codex round chaos-4280-r1, finding 6): promoted here instead of
+// living only in aiimpact/repoteams.go, so a second caller with the same
+// "key-only, never persisted" shape does not reinvent this pool.
+func Fold(value string) string {
+	if value == "" {
+		return ""
+	}
+	caser := foldPool.Get().(*cases.Caser)
+	defer foldPool.Put(caser)
+	return caser.String(value)
+}
+
+var foldPool = sync.Pool{New: func() any {
+	caser := cases.Fold()
+	return &caser
+}}

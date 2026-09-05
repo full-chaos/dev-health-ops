@@ -266,13 +266,13 @@ FROM (
         pr.merged_at AS merged_at
     FROM git_pull_requests AS pr
     INNER JOIN work_graph_issue_pr AS link
-        ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
+        ON link.org_id = pr.org_id AND link.repo_id = pr.repo_id AND link.pr_number = pr.number
     INNER JOIN ai_attribution_resolved AS attr
         ON attr.subject_type = 'pull_request'
         AND attr.subject_id = link.work_item_id
         AND attr.kind IN ('ai_assisted', 'agent_created', 'ai_review')
     LEFT JOIN work_items AS wi FINAL
-        ON wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
+        ON wi.org_id = link.org_id AND wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
     WHERE pr.repo_id IN ?
       AND pr.org_id = ?
       AND toString(attr.org_id) = ?
@@ -353,9 +353,13 @@ ORDER BY merged_at DESC NULLS LAST, repo_id, number DESC, work_type`,
 // caller must pass that distinction through, because nil means "unknown" and
 // makes test_gap_rate null rather than 100% (CHAOS-2183).
 //
-// git_commit_stats carries no org_id column, so its join stays on
-// (repo_id, commit_hash); the work_graph_pr_commit side is already org-scoped
-// by the WHERE clause, exactly as in Python.
+// git_commit_stats gained org_id in its current sorting key
+// (027_add_org_id_to_sorting_keys.py:61: "(org_id, repo_id, commit_hash,
+// file_path)") -- an earlier version of this comment said it had none, which
+// was stale even at the time it was written and let a cross-tenant join
+// fan-out ship (codex round chaos-4280-r1, finding 2): two orgs sharing a
+// repo_id/commit_hash pair could join the WRONG org's file_path into this
+// org's linkage. The join below is now scoped by org_id on every table.
 func LoadAIImpactPRCommitLinkage(
 	ctx context.Context, conn repositoryRows, organizationID string,
 	repoIDs []uuid.UUID, prNumbers []uint32,
@@ -374,7 +378,7 @@ func LoadAIImpactPRCommitLinkage(
 SELECT p.repo_id, p.pr_number, p.commit_hash, p.evidence, c.committer_when, s.file_path
 FROM work_graph_pr_commit AS p
 LEFT JOIN git_commit_stats AS s
-    ON s.repo_id = p.repo_id AND s.commit_hash = p.commit_hash
+    ON s.org_id = p.org_id AND s.repo_id = p.repo_id AND s.commit_hash = p.commit_hash
 LEFT JOIN git_commits AS c
     ON c.repo_id = p.repo_id AND c.hash = p.commit_hash AND c.org_id = p.org_id
 WHERE p.org_id = ? AND p.repo_id IN ? AND p.pr_number IN ?`,

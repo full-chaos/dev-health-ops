@@ -3,12 +3,16 @@
 package daily
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -412,4 +416,422 @@ INSERT INTO git_pull_request_reviews (repo_id, number, review_id, reviewer, stat
 				tenant.org, reviews[0].State, tenant.wantRevState)
 		}
 	}
+}
+
+// TestAIImpactAttributionTenantIsolation is codex round chaos-4280-r1's
+// finding 1: LoadAIImpactAttributions joined work_graph_issue_pr and
+// work_items on (repo_id, ...) alone, with no org_id in either ON clause.
+//
+// Two orgs share a repo_id and PR number and, by coincidence (work_item_id is
+// an opaque provider string, not globally unique), the SAME work_item_id
+// value -- org A links it to a "task", org B to a "bug". Org A's PR is the
+// only row in git_pull_requests, so the outer WHERE org filter alone cannot
+// catch the leak; only the join condition can.
+//
+// Before the fix this is deterministic, not merely possible: the query's own
+// ORDER BY ends in `work_type` ascending, and "bug" < "task" lexically, so
+// org B's row always sorts first and always wins the `seen`-map dedup --
+// org A's answer is org B's classification on every run, not a coin flip.
+func TestAIImpactAttributionTenantIsolation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, created_at DateTime64(3, 'UTC'),
+    merged_at Nullable(DateTime64(3, 'UTC')),
+    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
+    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE ai_attribution (
+    record_id UUID, org_id UUID, provider LowCardinality(String),
+    subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
+    kind LowCardinality(String), source LowCardinality(String), confidence Float32,
+    actor Nullable(String), evidence String,
+    observed_at DateTime64(3, 'UTC'), ingested_at DateTime64(3, 'UTC'),
+    superseded_by Nullable(UUID), computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
+SETTINGS allow_nullable_key = 1`,
+		`CREATE VIEW ai_attribution_resolved AS
+SELECT record_id, org_id, provider, subject_type, subject_id, repo_id, kind,
+       source, confidence, actor, evidence, observed_at, ingested_at,
+       superseded_by, computed_at
+FROM (
+    SELECT *, multiIf(
+        source = 'manual', 1, source = 'pr_label', 2, source = 'bot_author', 3,
+        source = 'commit_trailer', 4, source = 'ci_annotation', 5,
+        source = 'branch_name', 6, source = 'pr_body', 7, 8) AS _source_priority
+    FROM ai_attribution FINAL WHERE superseded_by IS NULL
+)
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY org_id, subject_type, repo_id, subject_id
+    ORDER BY _source_priority ASC, confidence DESC) = 1`,
+		`CREATE TABLE work_graph_issue_pr (
+    repo_id UUID, pr_number UInt32, work_item_id String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, work_item_id)`,
+		`CREATE TABLE work_items (
+    repo_id UUID, work_item_id String, type Nullable(String),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v\nstatement: %s", err, statement)
+		}
+	}
+
+	const (
+		orgA        = "00000000-0000-4000-8000-0000000000e0"
+		orgB        = "00000000-0000-4000-8000-0000000000e1"
+		sharedRepo  = "00000000-0000-4000-8000-0000000000e2"
+		sharedWIID  = "shared-wi"
+		wantWorkTyp = "task"
+	)
+
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
+    changed_files, changes_requested_count, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 7, toDateTime64('2026-09-03 01:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 05:00:00', 3, 'UTC'), 1, 1, 1, 0, 0,
+ toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// Both orgs' link rows point at the SAME work_item_id string -- opaque
+	// provider ids collide across tenants by construction, not by mistake.
+	if err := conn.Exec(ctx, `
+INSERT INTO work_graph_issue_pr (repo_id, pr_number, work_item_id, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 7, '`+sharedWIID+`', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), 7, '`+sharedWIID+`', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO work_items (repo_id, work_item_id, type, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), '`+sharedWIID+`', 'task', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), '`+sharedWIID+`', 'bug', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// One attribution row, owned by org A, referencing the shared work-item id.
+	if err := conn.Exec(ctx, `
+INSERT INTO ai_attribution (record_id, org_id, provider, subject_type, subject_id, repo_id,
+    kind, source, confidence, actor, evidence, observed_at, ingested_at, superseded_by, computed_at) VALUES
+(generateUUIDv4(), toUUID('`+orgA+`'), 'github', 'pull_request', '`+sharedWIID+`', toUUID('`+sharedRepo+`'),
+ 'ai_assisted', 'pr_label', 0.95, NULL, '{}',
+ toDateTime64('2026-09-03 05:00:00', 3, 'UTC'), now64(3), NULL, now64(3))`); err != nil {
+		t.Fatal(err)
+	}
+
+	repoIDs := []uuid.UUID{uuid.MustParse(sharedRepo)}
+	start := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 1)
+
+	rows, err := LoadAIImpactAttributions(ctx, conn, orgA, repoIDs, start, end)
+	if err != nil {
+		t.Fatalf("load attributions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d attribution rows for org A, want exactly 1 -- org B's link/work_items rows "+
+			"leaked into org A's join", len(rows))
+	}
+	if rows[0].WorkType == nil || *rows[0].WorkType != wantWorkTyp {
+		t.Fatalf("org A's work_type = %v, want %q -- org B's work_items row (type=\"bug\") won the "+
+			"join because it lacked org_id; before the fix this is deterministic (\"bug\" < \"task\" "+
+			"in the query's own ORDER BY tiebreak), not a flaky race",
+			rows[0].WorkType, wantWorkTyp)
+	}
+}
+
+// TestAIImpactPRCommitLinkageTenantIsolation is codex round chaos-4280-r1's
+// finding 2: LoadAIImpactPRCommitLinkage joined git_commit_stats on
+// (repo_id, commit_hash) alone. git_commit_stats gained org_id in its current
+// sorting key (027:61); the join predated that migration and was never
+// updated, so two orgs sharing a repo_id and commit hash leak each other's
+// file paths into the SAME PR's linkage slice.
+func TestAIImpactPRCommitLinkageTenantIsolation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE work_graph_pr_commit (
+    repo_id UUID, pr_number UInt32, commit_hash String, evidence String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, commit_hash)`,
+		`CREATE TABLE git_commits (
+    repo_id UUID, hash String, committer_when DateTime64(3, 'UTC'),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`,
+		`CREATE TABLE git_commit_stats (
+    repo_id UUID, commit_hash String, file_path String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v\nstatement: %s", err, statement)
+		}
+	}
+
+	const (
+		orgA         = "00000000-0000-4000-8000-0000000000f0"
+		orgB         = "00000000-0000-4000-8000-0000000000f1"
+		sharedRepo   = "00000000-0000-4000-8000-0000000000f2"
+		sharedHash   = "cccccccccccccccccccccccccccccccccccccccc"
+		wantFilePath = "src/thing.go"
+		leakFilePath = "tests/other_org_secret.spec.ts"
+	)
+
+	if err := conn.Exec(ctx, `
+INSERT INTO work_graph_pr_commit (repo_id, pr_number, commit_hash, evidence, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), 9, '`+sharedHash+`', 'native', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO git_commits (repo_id, hash, committer_when, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), '`+sharedHash+`', toDateTime64('2026-09-03 04:00:00', 3, 'UTC'),
+ toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// Same repo_id + commit_hash, two DIFFERENT tenants -- a coincidence the
+	// current schema's org_id column exists precisely to disambiguate.
+	if err := conn.Exec(ctx, `
+INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, last_synced, org_id) VALUES
+(toUUID('`+sharedRepo+`'), '`+sharedHash+`', '`+wantFilePath+`', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgA+`'),
+(toUUID('`+sharedRepo+`'), '`+sharedHash+`', '`+leakFilePath+`', toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgB+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	linkage, err := LoadAIImpactPRCommitLinkage(
+		ctx, conn, orgA, []uuid.UUID{uuid.MustParse(sharedRepo)}, []uint32{9})
+	if err != nil {
+		t.Fatalf("load pr commit linkage: %v", err)
+	}
+	stats := linkage[aiimpact.PRKey{RepoID: uuid.MustParse(sharedRepo), Number: 9}]
+	if len(stats) != 1 {
+		var paths []string
+		for _, s := range stats {
+			if s.FilePath != nil {
+				paths = append(paths, *s.FilePath)
+			}
+		}
+		t.Fatalf("org A's linkage has %d file(s), want exactly 1 (%v) -- org B's git_commit_stats "+
+			"row leaked in because the join lacked org_id", len(stats), paths)
+	}
+	if stats[0].FilePath == nil || *stats[0].FilePath != wantFilePath {
+		t.Fatalf("org A's linked file = %v, want %q -- got org B's file instead",
+			stats[0].FilePath, wantFilePath)
+	}
+}
+
+// TestAIImpactLinkageQueryFailureIsObservable is codex round chaos-4280-r1's
+// finding 5. The swallow-to-unavailable behavior itself is correct,
+// deliberate Python parity (CHAOS-2183, see ai_impact_native_executor.go) and
+// this test does NOT change that: ComputeFamily must still succeed and still
+// write rows. What it proves is the fix -- that the condition is no longer
+// SILENT: aiimpact.RecordLinkageUnavailable fires exactly once.
+//
+// The failure is a REAL ClickHouse error, not an injected fake: this fixture
+// omits work_graph_pr_commit's `evidence` column, so
+// LoadAIImpactPRCommitLinkage's own SELECT list fails schema validation.
+func TestAIImpactLinkageQueryFailureIsObservable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, title Nullable(String), body Nullable(String),
+    created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
+    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
+    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_request_reviews (
+    repo_id UUID, number UInt32, review_id String, reviewer String, state String,
+    submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
+		`CREATE TABLE ai_attribution (
+    record_id UUID, org_id UUID, provider LowCardinality(String),
+    subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
+    kind LowCardinality(String), source LowCardinality(String), confidence Float32,
+    actor Nullable(String), evidence String,
+    observed_at DateTime64(3, 'UTC'), ingested_at DateTime64(3, 'UTC'),
+    superseded_by Nullable(UUID), computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
+SETTINGS allow_nullable_key = 1`,
+		`CREATE VIEW ai_attribution_resolved AS
+SELECT record_id, org_id, provider, subject_type, subject_id, repo_id, kind,
+       source, confidence, actor, evidence, observed_at, ingested_at,
+       superseded_by, computed_at
+FROM (
+    SELECT *, multiIf(
+        source = 'manual', 1, source = 'pr_label', 2, source = 'bot_author', 3,
+        source = 'commit_trailer', 4, source = 'ci_annotation', 5,
+        source = 'branch_name', 6, source = 'pr_body', 7, 8) AS _source_priority
+    FROM ai_attribution FINAL WHERE superseded_by IS NULL
+)
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY org_id, subject_type, repo_id, subject_id
+    ORDER BY _source_priority ASC, confidence DESC) = 1`,
+		`CREATE TABLE work_graph_issue_pr (
+    repo_id UUID, pr_number UInt32, work_item_id String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, work_item_id)`,
+		`CREATE TABLE work_items (
+    repo_id UUID, work_item_id String, type Nullable(String),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id)`,
+		// `evidence` DELIBERATELY OMITTED -- LoadAIImpactPRCommitLinkage selects
+		// it, so this table shape makes that query fail real schema validation.
+		`CREATE TABLE work_graph_pr_commit (
+    repo_id UUID, pr_number UInt32, commit_hash String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, commit_hash)`,
+		`CREATE TABLE git_commits (
+    repo_id UUID, hash String, committer_when DateTime64(3, 'UTC'),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, hash)`,
+		`CREATE TABLE git_commit_stats (
+    repo_id UUID, commit_hash String, file_path String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
+		`CREATE TABLE teams (
+    id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
+    updated_at DateTime64(6), org_id String
+) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
+		`CREATE TABLE repos (
+    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+		`CREATE TABLE ai_impact_metrics_daily (
+    org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
+    day Date, attribution_bucket LowCardinality(String),
+    prs_total UInt32, prs_merged UInt32, ai_assisted_prs UInt32, agent_created_prs UInt32,
+    human_prs UInt32, unknown_prs UInt32, ai_assisted_pr_ratio Nullable(Float64),
+    agent_created_pr_count UInt32,
+    cycle_time_avg_hours Nullable(Float64), baseline_cycle_time_avg_hours Nullable(Float64),
+    ai_cycle_time_delta_hours Nullable(Float64),
+    reviews_per_pr Nullable(Float64), baseline_reviews_per_pr Nullable(Float64),
+    ai_review_amplification Nullable(Float64), changes_requested_per_pr Nullable(Float64),
+    rework_prs UInt32, rework_drag_rate Nullable(Float64), followup_commits_count UInt32,
+    revert_prs UInt32, revert_rate Nullable(Float64),
+    incidents_count UInt32, incident_drag_rate Nullable(Float64),
+    test_gap_prs UInt32, test_gap_rate Nullable(Float64),
+    leverage_prs_component Float64, leverage_cycle_time_component Nullable(Float64),
+    leverage_review_component Nullable(Float64), leverage_rework_component Nullable(Float64),
+    leverage_test_component Nullable(Float64), leverage_incident_component Nullable(Float64),
+    computed_at DateTime64(3, 'UTC') DEFAULT now64()
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day)
+ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
+		`CREATE TABLE operational_incidents (
+    id String, org_id String, service_id String, normalized_status String,
+    started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
+    is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+		`CREATE TABLE operational_service_repository_mappings (
+    org_id String, service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
+    valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, service_id)
+SETTINGS allow_nullable_key = 1`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v\nstatement: %s", err, statement)
+		}
+	}
+
+	const (
+		orgID  = "00000000-0000-4000-8000-0000000000f9"
+		repoID = "00000000-0000-4000-8000-0000000000fa"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
+    changed_files, changes_requested_count, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 1, toDateTime64('2026-09-03 01:00:00', 3, 'UTC'), NULL,
+ NULL, NULL, NULL, 0, 0, toDateTime64('2026-09-03 09:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO repos (id, repo, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 'acme/alpha', toDateTime64('2026-09-01 00:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+
+	var before bytes.Buffer
+	if err := aiimpact.LinkageMetricsSource().WritePrometheus(&before); err != nil {
+		t.Fatalf("read linkage metric before: %v", err)
+	}
+
+	executor, err := NewAIImpactExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(repoID)}}
+
+	written, err := executor.ComputeFamily(ctx, run, partition)
+	if err != nil {
+		t.Fatalf("ComputeFamily must still succeed on a linkage failure (Python parity, CHAOS-2183): %v", err)
+	}
+	if written == 0 {
+		t.Fatal("wrote zero rows; a linkage failure must degrade test_gap_rate to null, not abort the family")
+	}
+
+	var after bytes.Buffer
+	if err := aiimpact.LinkageMetricsSource().WritePrometheus(&after); err != nil {
+		t.Fatalf("read linkage metric after: %v", err)
+	}
+	beforeCount := parseLinkageUnavailableCounter(t, before.String())
+	afterCount := parseLinkageUnavailableCounter(t, after.String())
+	if afterCount != beforeCount+1 {
+		t.Fatalf("dev_health_ai_impact_linkage_unavailable_total went %d -> %d, want +1 -- "+
+			"the linkage failure was NOT recorded, so it is silent again", beforeCount, afterCount)
+	}
+}
+
+func parseLinkageUnavailableCounter(t *testing.T, prometheusText string) uint64 {
+	t.Helper()
+	const prefix = "dev_health_ai_impact_linkage_unavailable_total "
+	for _, line := range strings.Split(prometheusText, "\n") {
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			var n uint64
+			if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &n); err != nil {
+				t.Fatalf("parse counter value %q: %v", value, err)
+			}
+			return n
+		}
+	}
+	t.Fatalf("no %q line in prometheus output: %s", prefix, prometheusText)
+	return 0
 }

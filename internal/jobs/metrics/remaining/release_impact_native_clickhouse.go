@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -31,6 +33,60 @@ import (
 // dateTime64Argument, never a raw time.Time.
 func dateArgument(value time.Time) string {
 	return value.UTC().Format("2006-01-02")
+}
+
+// ErrReleaseImpactSchemaIncompatible reports a deployed schema this executor
+// cannot write against safely.
+var ErrReleaseImpactSchemaIncompatible = errors.New(
+	"deployed release_impact schema does not support what this executor writes")
+
+// releaseImpactTableEngine reports the engine backing one table, the same way
+// capacityTableEngine (capacity_native_clickhouse.go) does: system.tables
+// rather than SHOW CREATE TABLE, since the engine column is already the bare
+// family name and needs no DDL parsing.
+func releaseImpactTableEngine(ctx context.Context, conn driver.Conn, table string) (string, error) {
+	var engine string
+	if err := conn.QueryRow(ctx, `
+SELECT engine FROM system.tables
+WHERE database = currentDatabase() AND name = {table:String}`,
+		namedArguments(map[string]any{"table": table})...).Scan(&engine); err != nil {
+		return "", fmt.Errorf("inspect %s engine: %w", table, err)
+	}
+	return engine, nil
+}
+
+// verifyReleaseImpactSchema is checked at CONSTRUCTION, matching the sibling
+// native executors' discipline (dora/capacity): a database this code cannot
+// write against safely refuses the kind once and loudly, rather than
+// recomputing partitions job after job that quietly double (triple, ...)
+// every metric.
+//
+// Migration 088 converts release_impact_daily from MergeTree to
+// ReplacingMergeTree(computed_at) specifically so a RECOMPUTED day's rows
+// collapse to the latest version instead of accumulating -- this executor's
+// day loop (ComputePartition -> RecomputationWindow) deliberately
+// re-processes the same (org_id, release_ref, environment, day) on every run
+// within the recomputation window, by design (CHAOS-4258's degraded-signal
+// window needs the re-read). On a stale plain-MergeTree table, codex r2
+// (CHAOS-4296/#2262) correctly flagged that nothing else in this file's write
+// path (writeReleaseImpactRows does a plain INSERT, no reader applies
+// FINAL/argMax to release_impact_daily itself -- that table is write-only
+// from this executor's own perspective) would ever catch or collapse the
+// resulting duplicates.
+func verifyReleaseImpactSchema(ctx context.Context, conn driver.Conn) error {
+	const table = "release_impact_daily"
+	engine, err := releaseImpactTableEngine(ctx, conn, table)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(engine, "ReplacingMergeTree") {
+		return fmt.Errorf(
+			"%w: %s is %s, expected ReplacingMergeTree -- migration 088 has "+
+				"not been applied, and every recomputed day would append "+
+				"duplicate rows instead of collapsing them",
+			ErrReleaseImpactSchemaIncompatible, table, engine)
+	}
+	return nil
 }
 
 // ReleaseImpactReader owns the ClickHouse side of the family.

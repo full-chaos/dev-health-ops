@@ -58,17 +58,27 @@ type ReleaseImpactExecutor struct {
 	nowUTC   func() time.Time
 }
 
-// NewReleaseImpactExecutor fails closed on a nil connection, matching the
-// sibling native executors: a database this code cannot read must refuse the
-// kind once and loudly rather than claim partitions and fail each one.
-// logger is optional; when set it carries the CHAOS-4258 degraded-signal log
-// line (org_id/day/deployments), which is deliberately NOT a metric label --
-// see releaseImpactDegradedMissingTelemetry's field comment in telemetry.go.
+// NewReleaseImpactExecutor fails closed on a nil connection or an
+// incompatible schema, matching the sibling native executors (dora/capacity):
+// a database this code cannot read or write against safely must refuse the
+// kind once and loudly rather than claim partitions and fail (or silently
+// corrupt) each one. logger is optional; when set it carries the CHAOS-4258
+// degraded-signal log line (org_id/day/deployments), which is deliberately
+// NOT a metric label -- see releaseImpactDegradedMissingTelemetry's field
+// comment in telemetry.go.
 func NewReleaseImpactExecutor(
-	conn driver.Conn, observer ReleaseImpactObserver, logger *slog.Logger,
+	ctx context.Context, conn driver.Conn, observer ReleaseImpactObserver, logger *slog.Logger,
 ) (*ReleaseImpactExecutor, error) {
 	if conn == nil {
 		return nil, errReleaseImpactUnavailable
+	}
+	// Checked at CONSTRUCTION (codex r2, CHAOS-4296/#2262): a stale
+	// plain-MergeTree release_impact_daily silently doubles every metric on
+	// each recomputation-window run instead of refusing to start -- see
+	// verifyReleaseImpactSchema's own doc comment for why this table has no
+	// other collapse mechanism.
+	if err := verifyReleaseImpactSchema(ctx, conn); err != nil {
+		return nil, err
 	}
 	return &ReleaseImpactExecutor{
 		reader:   NewReleaseImpactReader(conn, logger),

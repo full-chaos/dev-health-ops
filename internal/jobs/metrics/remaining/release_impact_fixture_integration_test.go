@@ -158,7 +158,7 @@ func TestReleaseImpactParityClassBattery(t *testing.T) {
 			class.seed(t, ctx, conn, orgID, day)
 
 			observer := &spyReleaseImpactObserver{}
-			executor, err := NewReleaseImpactExecutor(conn, observer, nil)
+			executor, err := NewReleaseImpactExecutor(ctx, conn, observer, nil)
 			if err != nil {
 				t.Fatalf("construct executor: %v", err)
 			}
